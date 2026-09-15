@@ -96,9 +96,13 @@ func TestCapabilityManifestDigestHTTPMapping(t *testing.T) {
 	if err := json.Unmarshal(body, &request); err != nil {
 		t.Fatal(err)
 	}
-	if request.Payload.CapabilityManifestDigest == nil ||
-		*request.Payload.CapabilityManifestDigest != "sha256:capability" {
-		t.Fatalf("capability manifest digest = %v", request.Payload.CapabilityManifestDigest)
+	var arm decisionPayloadRequest
+	if err := json.Unmarshal(request.Payload, &arm); err != nil {
+		t.Fatal(err)
+	}
+	if arm.CapabilityManifestDigest == nil ||
+		*arm.CapabilityManifestDigest != "sha256:capability" {
+		t.Fatalf("capability manifest digest = %v", arm.CapabilityManifestDigest)
 	}
 }
 

@@ -349,17 +349,19 @@ import Testing
     @Test func commandResultMustMatchTheSubmittedCommandBeforeItIsTrusted() {
         let command = makeCommand(itemID: "item-spec_approval")
         let valid = Components.Schemas.CommandResult(
-            record: .init(
-                command_id: command.command_id,
-                device_id: command.device_id,
-                item_id: command.payload.item_id,
-                item_version: command.payload.item_version,
-                pr_head_sha: command.payload.pr_head_sha,
-                artifact_digests: [],
-                action: command.payload.action,
-                message: "",
-                attachments: []
-            ),
+            record: .decision(
+                .init(
+                    kind: .decision,
+                    command_id: command.command_id,
+                    device_id: command.device_id,
+                    item_id: command.payload.asDecision.item_id,
+                    item_version: command.payload.asDecision.item_version,
+                    pr_head_sha: command.payload.asDecision.pr_head_sha,
+                    artifact_digests: [],
+                    action: command.payload.asDecision.action,
+                    message: "",
+                    attachments: []
+                )),
             revision: 2
         )
         #expect(DecisionModel.commandResultIsValid(valid, for: command))
@@ -369,31 +371,31 @@ import Testing
         #expect(!DecisionModel.commandResultIsValid(invalid, for: command))
 
         invalid = valid
-        invalid.record.command_id = "other-command"
+        invalid.record.asDecision.command_id = "other-command"
         #expect(!DecisionModel.commandResultIsValid(invalid, for: command))
         invalid = valid
-        invalid.record.device_id = "other-device"
+        invalid.record.asDecision.device_id = "other-device"
         #expect(!DecisionModel.commandResultIsValid(invalid, for: command))
         invalid = valid
-        invalid.record.item_id = "other-item"
+        invalid.record.asDecision.item_id = "other-item"
         #expect(!DecisionModel.commandResultIsValid(invalid, for: command))
         invalid = valid
-        invalid.record.item_version += 1
+        invalid.record.asDecision.item_version += 1
         #expect(!DecisionModel.commandResultIsValid(invalid, for: command))
         invalid = valid
-        invalid.record.pr_head_sha = "other-head"
+        invalid.record.asDecision.pr_head_sha = "other-head"
         #expect(!DecisionModel.commandResultIsValid(invalid, for: command))
         invalid = valid
-        invalid.record.artifact_digests = ["sha256:other"]
+        invalid.record.asDecision.artifact_digests = ["sha256:other"]
         #expect(!DecisionModel.commandResultIsValid(invalid, for: command))
         invalid = valid
-        invalid.record.action = .decline
+        invalid.record.asDecision.action = .decline
         #expect(!DecisionModel.commandResultIsValid(invalid, for: command))
         invalid = valid
-        invalid.record.message = "unexpected"
+        invalid.record.asDecision.message = "unexpected"
         #expect(!DecisionModel.commandResultIsValid(invalid, for: command))
         invalid = valid
-        invalid.record.attachments = ["sha256:other"]
+        invalid.record.asDecision.attachments = ["sha256:other"]
         #expect(!DecisionModel.commandResultIsValid(invalid, for: command))
     }
 
@@ -412,7 +414,7 @@ import Testing
 
         await server.setCommandResultTransform { result in
             var mismatched = result
-            mismatched.record.item_id = "other-item"
+            mismatched.record.asDecision.item_id = "other-item"
             mismatched.revision = .max
             return mismatched
         }
@@ -1487,13 +1489,15 @@ import Testing
                     device_id: "device-other",
                     expected_entity_version: current.entity_version,
                     expected_bindings: .init(additionalProperties: [:]),
-                    payload: .init(
-                        item_id: "item-spec_approval",
-                        action: .approve,
-                        item_version: current.item.item_version,
-                        pr_head_sha: current.item.pr_head_sha,
-                        artifact_digests: current.item.artifact_digests
-                    )
+                    payload: .decision(
+                        .init(
+                            kind: .decision,
+                            item_id: "item-spec_approval",
+                            action: .approve,
+                            item_version: current.item.item_version,
+                            pr_head_sha: current.item.pr_head_sha,
+                            artifact_digests: current.item.artifact_digests
+                        ))
                 ))
         ).ok.body.json
 
@@ -1550,14 +1554,14 @@ import Testing
             if operationID == "submitCommand" { try await lostResponses.consume() }
         }
         await model.submit(.acknowledge)
-        #expect(model.pendingCommand?.payload.action == .acknowledge)
+        #expect(model.pendingCommand?.payload.asDecision.action == .acknowledge)
         #expect(!model.actionsEnabled)
         #expect(model.canRetryLostResponse)
 
         // Blocked: the guard refuses a new command outright.
         await model.submit(.stop_unattended)
         #expect(model.appliedRecord == nil)
-        #expect(model.pendingCommand?.payload.action == .acknowledge)
+        #expect(model.pendingCommand?.payload.asDecision.action == .acknowledge)
 
         await model.retryLostResponse()
         #expect(model.appliedRecord?.action == .acknowledge)
@@ -1682,14 +1686,14 @@ import Testing
 
         await model.submit(.stop_unattended)
         #expect(model.appliedRecord == nil)
-        #expect(model.pendingCommand?.payload.action == .stop_unattended)
+        #expect(model.pendingCommand?.payload.asDecision.action == .stop_unattended)
 
         await release.open()
         await acknowledge.value
         // The stale acknowledge completion wrote nothing: the newer
         // command still owns the slot and stays recoverable.
         #expect(model.appliedRecord == nil)
-        #expect(model.pendingCommand?.payload.action == .stop_unattended)
+        #expect(model.pendingCommand?.payload.asDecision.action == .stop_unattended)
         #expect(model.canRetryLostResponse)
 
         await model.retryLostResponse()
@@ -1716,7 +1720,7 @@ import Testing
             if operationID == "submitCommand" { throw InjectedFailure() }
         }
         await second.submit(.stop_unattended)
-        #expect(second.pendingCommand?.payload.action == .stop_unattended)
+        #expect(second.pendingCommand?.payload.asDecision.action == .stop_unattended)
 
         // The first instance still shows its old record, but the pending
         // command belongs to a different decision: Retry stays offered.

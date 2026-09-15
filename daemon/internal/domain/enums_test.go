@@ -28,6 +28,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["DisplayNameSource"] = append(valids["DisplayNameSource"], v.valid)
 	}
 	invalids["DisplayNameSource"] = DisplayNameSource("").valid
+	for _, v := range AllCommandKinds {
+		valids["CommandKind"] = append(valids["CommandKind"], v.valid)
+	}
+	invalids["CommandKind"] = CommandKind("").valid
 	for _, v := range AllBlockedWaitKinds {
 		valids["BlockedWaitKind"] = append(valids["BlockedWaitKind"], v.valid)
 	}

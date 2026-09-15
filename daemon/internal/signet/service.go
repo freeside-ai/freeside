@@ -61,6 +61,11 @@ type Service struct {
 	// it names that run here. Never nil; a discard handler is the default so a
 	// composition that supplies none stays silent.
 	logger *slog.Logger
+	// taskSubmitter performs the engine-side work of a submit_task command
+	// (WithTaskSubmitter). Nil means task submission is unavailable and fails
+	// closed; it is injected because the engine imports signet, so signet
+	// cannot call the engine directly.
+	taskSubmitter TaskSubmitter
 }
 
 // Option configures a Service. The clock and randomness sources exist so
@@ -130,6 +135,13 @@ func WithLogger(logger *slog.Logger) Option {
 	}
 }
 
+// WithTaskSubmitter supplies the engine-backed submitter a submit_task command
+// delegates its task creation to. Without it, submit_task commands fail closed;
+// the decision command path is unaffected.
+func WithTaskSubmitter(submitter TaskSubmitter) Option {
+	return func(s *Service) { s.taskSubmitter = submitter }
+}
+
 func NewService(st *store.Store, opts ...Option) *Service {
 	s := &Service{store: st, now: time.Now, rand: rand.Reader, logger: slog.New(slog.DiscardHandler)}
 	for _, opt := range opts {
@@ -192,6 +204,24 @@ var errReplay = errors.New("idempotent replay: original result captured")
 // one Write, one revision, no window where the command exists without its
 // resolution.
 func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, error) {
+	switch in.Kind {
+	case domain.CommandKindSubmitTask:
+		return s.submitTask(ctx, in)
+	case domain.CommandKindDecision, "":
+		// The empty zero value is the intentional legacy decision default, so
+		// existing decision callers stay unchanged (ClientCommand.Kind).
+		return s.submitDecision(ctx, in)
+	}
+	// No default: the exhaustive linter forces a newly registered CommandKind
+	// to be handled here rather than silently routed to a decision. A nonempty
+	// invalid kind (already rejected at the HTTP boundary) fails closed.
+	return CommandResult{}, fmt.Errorf("submit command %q: %w", in.CommandID, domain.ErrInvalidCommandKind)
+}
+
+// submitDecision accepts one decision ClientCommand and applies it in the
+// accepting transaction. Command-id replay and durable item policy take
+// precedence over per-action content policy.
+func (s *Service) submitDecision(ctx context.Context, in ClientCommand) (CommandResult, error) {
 	if err := s.convergeProposalSnoozes(ctx, s.now().UTC()); err != nil {
 		return CommandResult{}, fmt.Errorf("submit command %q proposal snoozes: %w", in.CommandID, err)
 	}

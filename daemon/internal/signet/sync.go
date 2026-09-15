@@ -2062,6 +2062,11 @@ func normalizeConversation(conversation domain.Conversation) domain.Conversation
 }
 
 func normalizeCommandResult(result CommandResult) CommandResult {
+	// A submit_task result carries a TaskSubmission, not a decision record, so
+	// the decision-record array normalization does not apply.
+	if result.Submission != nil {
+		return result
+	}
 	result.Record.ArtifactDigests = nonNilSlice(result.Record.ArtifactDigests)
 	return result
 }

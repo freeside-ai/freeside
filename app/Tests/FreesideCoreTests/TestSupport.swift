@@ -73,13 +73,15 @@ func makeCommand(
         device_id: deviceID,
         expected_entity_version: 1,
         expected_bindings: .init(additionalProperties: [:]),
-        payload: .init(
-            item_id: itemID,
-            action: .approve,
-            item_version: 1,
-            pr_head_sha: "",
-            artifact_digests: []
-        )
+        payload: .decision(
+            .init(
+                kind: .decision,
+                item_id: itemID,
+                action: .approve,
+                item_version: 1,
+                pr_head_sha: "",
+                artifact_digests: []
+            ))
     )
 }
 

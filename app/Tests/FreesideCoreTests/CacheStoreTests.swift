@@ -116,6 +116,47 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         #expect(migrated.pendingCommands == state.pendingCommands)
     }
 
+    @Test func aLegacyLedgerWithoutPayloadKindDecodesAsDecision() throws {
+        // Before the client-command payload became a kind-discriminated union
+        // (submit_task), a persisted decision command encoded a bare, kind-less
+        // payload. The generated decoder now requires the discriminator, so the
+        // load path injects it (defaulting to decision) rather than dropping the
+        // whole ledger and its retryable command IDs (plan §5.14 sync test 4).
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var state = sampleState()
+        state.pendingCommands = [
+            "item-a": .init(command: makeCommand(itemID: "item-a"), state: .unresolved)
+        ]
+        try store.save(state)
+
+        let file = directory.appendingPathComponent("cache.json")
+        var object = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        var persistedState = try #require(object["state"] as? [String: Any])
+        var pending = try #require(persistedState["pendingCommands"] as? [String: Any])
+        var entry = try #require(pending["item-a"] as? [String: Any])
+        var command = try #require(entry["command"] as? [String: Any])
+        var payload = try #require(command["payload"] as? [String: Any])
+        payload.removeValue(forKey: "kind")
+        command["payload"] = payload
+        entry["command"] = command
+        pending["item-a"] = entry
+        persistedState["pendingCommands"] = pending
+        object["state"] = persistedState
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+
+        let migrated = try #require(store.load())
+        #expect(migrated.pendingCommands == state.pendingCommands)
+        guard case .decision(let decoded)? = migrated.pendingCommands?["item-a"]?.command.payload
+        else {
+            Issue.record("expected a decision command")
+            return
+        }
+        #expect(decoded.kind == .decision)
+        #expect(decoded.item_id == "item-a")
+    }
+
     @Test func aPreTasksFormatFourCacheKeepsTheLedgerAndTelemetrySections() throws {
         // Format 4 predates task snapshots and task timelines. Its cursors
         // must not make an upgraded client consider an empty task list

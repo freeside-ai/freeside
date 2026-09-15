@@ -125,7 +125,7 @@ func (c claudeDriverConfig) validate() error {
 		return fmt.Errorf("-base-sha must be a full lowercase commit SHA")
 	case c.AuthIdentityID == "":
 		return fmt.Errorf("-auth-identity is required in claude driver mode")
-	case !explicitAllowedPaths(c.AllowedPaths):
+	case !engine.ExplicitAllowedPaths(c.AllowedPaths):
 		// The importer's declared-path scope is a containment control (§5.6,
 		// §5.8), so unattended work states it explicitly; inheriting a
 		// match-everything default would let an agent rewrite any path in the
@@ -174,27 +174,6 @@ func (c claudeDriverConfig) validate() error {
 		return fmt.Errorf("shadow review model configuration must be NUL-free")
 	}
 	return nil
-}
-
-// explicitAllowedPaths requires every pattern to name a literal top-level
-// repository path. A leading glob segment (for example **/*, */**, or ?*)
-// can be semantically match-all even when it is not the literal "**"; such a
-// pattern does not declare a containment boundary.
-func explicitAllowedPaths(patterns []string) bool {
-	if len(patterns) == 0 {
-		return false
-	}
-	if err := importer.ValidatePathPatterns(patterns); err != nil {
-		return false
-	}
-	for _, pattern := range patterns {
-		first, _, _ := strings.Cut(pattern, "/")
-		if first == "" || first == "." || first == ".." ||
-			strings.ContainsAny(first, `*?[\`) {
-			return false
-		}
-	}
-	return true
 }
 
 // admissionCapabilitySnapshot is the selected mode's engine floor as a
@@ -425,29 +404,6 @@ func (a storeAdmissionAuthority) admission(
 	return admission, allowedPaths, nil
 }
 
-// submittedPathBoundary refuses a policy that names no enforceable declared
-// paths. It is the submission-time half of resolvedPathAllowlist: that gate
-// compares the policy against one daemon's configuration and so must hold
-// rather than fail, which leaves a policy carrying no usable boundary at all
-// held forever. Refusing it at submission keeps that state out of the store.
-func submittedPathBoundary(policy domain.ResolvedPolicy) error {
-	for _, key := range policy.Keys {
-		if key.Key != "paths" {
-			continue
-		}
-		if !explicitAllowedPaths(splitNonEmpty(key.Value)) {
-			return fmt.Errorf(
-				"resolved policy paths %q are not an explicit declared-path allowlist: %w",
-				key.Value, domain.ErrPathBoundaryMismatch,
-			)
-		}
-		return nil
-	}
-	return fmt.Errorf(
-		"resolved policy declares no paths key: %w", domain.ErrPathBoundaryMismatch,
-	)
-}
-
 // resolvedPathAllowlist binds the submitted, digest-addressed policy to the
 // manually configured Phase 1A.2 containment boundary. Until per-run ward
 // configuration exists, accepting a different path set would make the
@@ -471,8 +427,8 @@ func resolvedPathAllowlist(
 		if key.Key != "paths" {
 			continue
 		}
-		paths := splitNonEmpty(key.Value)
-		if !explicitAllowedPaths(paths) {
+		paths := engine.SplitNonEmpty(key.Value)
+		if !engine.ExplicitAllowedPaths(paths) {
 			return nil, fmt.Errorf(
 				"resolved paths policy is not an explicit allowlist: %w",
 				domain.ErrPathBoundaryMismatch,
@@ -505,8 +461,8 @@ func recordedPathAllowlist(
 		if key.Key != "paths" {
 			continue
 		}
-		paths := splitNonEmpty(key.Value)
-		if !explicitAllowedPaths(paths) {
+		paths := engine.SplitNonEmpty(key.Value)
+		if !engine.ExplicitAllowedPaths(paths) {
 			return nil, fmt.Errorf(
 				"recorded resolved paths are not an explicit allowlist: %w",
 				domain.ErrPathBoundaryMismatch,

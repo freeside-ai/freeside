@@ -1,5 +1,6 @@
 {
   "record": {
+    "kind": "decision",
     "command_id": "command-569",
     "device_id": "device-569",
     "item_id": "item-569",

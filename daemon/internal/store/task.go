@@ -79,6 +79,21 @@ func (tx *ReadTx) GetTask(ctx context.Context, id domain.TaskID) (domain.Task, e
 	return snapshot.Value, err
 }
 
+// GetTaskByIntakeKey returns the task registered under a project-scoped intake
+// key, or a wrapped ErrNotFound when none is. It is the client task-submission
+// path's idempotency guard: the same source in one project fetches the same
+// task, so a second submission records the existing task and starts no second
+// run. The key is derived by the caller (for a submitted source, "source:"
+// plus the source digest) to match taskIntakeKey.
+func (tx *ReadTx) GetTaskByIntakeKey(ctx context.Context, projectID domain.ProjectID, key string) (domain.Task, error) {
+	var id domain.TaskID
+	if err := tx.tx.QueryRowContext(ctx,
+		`SELECT task_id FROM task_intake_keys WHERE project_id = ? AND intake_key = ?`, projectID, key).Scan(&id); err != nil {
+		return domain.Task{}, notFoundOr(err)
+	}
+	return tx.GetTask(ctx, id)
+}
+
 func (tx *ReadTx) GetTaskSnapshot(ctx context.Context, id domain.TaskID) (Snapshotted[domain.Task], error) {
 	var projectID domain.ProjectID
 	var body []byte

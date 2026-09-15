@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -15,7 +14,6 @@ import (
 	"reflect"
 	"slices"
 	"syscall"
-	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -289,7 +287,7 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 			CompletionCriterion: declared.CompletionCriterion,
 			BoundIssue:          declared.BoundIssue,
 			DependsOnIssues:     declared.DependsOnIssues,
-			DeclaredPaths:       declaredPathScope(keys),
+			DeclaredPaths:       engine.DeclaredPathScope(keys),
 			ContractSerialized:  declared.ContractSerialized,
 		}
 		canonicalBody, err := json.Marshal(declared)
@@ -307,7 +305,7 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		// metadata, or under a different work-unit declaration remain
 		// distinct implementation runs. An undeclared submission keeps the
 		// pre-capture derivation byte-for-byte.
-		implementationRunID = defaultSubmissionRunID(
+		implementationRunID = engine.SubmissionRunID(
 			cfg.ProjectID, spec.digest, policyDigest, publicationFile.digest, workUnitDigest)
 	}
 	var composition submissionFile
@@ -340,7 +338,7 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 	// it here instead: submission is the operator's door and can still say
 	// no, while a run durable without one is a task the daemon holds
 	// with no configuration change that could ever release it.
-	if err := submittedPathBoundary(resolvedPolicy); err != nil {
+	if err := engine.SubmittedPathBoundary(resolvedPolicy); err != nil {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
 	}
 	policyBody, err := json.Marshal(resolvedPolicy.Keys)
@@ -380,21 +378,21 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		return submitResult{}, fmt.Errorf("submit: store policy bytes: %w", err)
 	}
 
-	specArtifact, err := submissionArtifact(
+	specArtifact, err := engine.SubmissionArtifact(
 		domain.ArtifactKindSpecification, spec.digest, domain.EvidenceMediaTextMarkdown, int64(len(spec.body)))
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
 	}
-	policyArtifact, err := submissionArtifact(
+	policyArtifact, err := engine.SubmissionArtifact(
 		domain.ArtifactKindPolicy, policy.digest, domain.EvidenceMediaApplicationJSON, int64(len(policy.body)))
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
 	}
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
-		if err := registerSubmissionArtifact(ctx, tx, specArtifact); err != nil {
+		if err := engine.RegisterSubmissionArtifact(ctx, tx, specArtifact); err != nil {
 			return err
 		}
-		return registerSubmissionArtifact(ctx, tx, policyArtifact)
+		return engine.RegisterSubmissionArtifact(ctx, tx, policyArtifact)
 	}); err != nil {
 		return submitResult{}, fmt.Errorf("submit: register artifacts: %w", err)
 	}
@@ -587,83 +585,4 @@ func legacyProductionReplay(
 		result.WorkUnitID = domain.WorkUnitIDForRun(runID)
 	}
 	return result, true, nil
-}
-
-// declaredPathScope extracts the resolved policy's paths key as the unit's
-// declared path scope, through the domain's single canonical definition —
-// the same one the store's declaration re-gate re-derives with, so the
-// recorded scope and the re-gate can never disagree. The submission gate
-// (submittedPathBoundary) has already refused a policy without an explicit
-// allowlist, so a declared unit always carries the scope the runner
-// enforces.
-func declaredPathScope(keys []domain.PolicyKey) []string {
-	return domain.CanonicalDeclaredPaths(domain.ResolvedPolicy{Keys: keys})
-}
-
-func defaultSubmissionRunID(
-	projectID domain.ProjectID, specDigest, policyDigest, publicationDigest, workUnitDigest domain.Digest,
-) domain.RunID {
-	bindings := string(projectID) + "\x00" + string(specDigest) + "\x00" +
-		string(policyDigest) + "\x00" + string(publicationDigest)
-	if workUnitDigest != "" {
-		bindings += "\x00" + string(workUnitDigest)
-	}
-	sum := sha256.Sum256([]byte(bindings))
-	return domain.RunID("run-" + hex.EncodeToString(sum[:]))
-}
-
-// submissionArtifact is the digest-addressed registration of one submitted
-// input. Identity and provenance are both content-derived (never
-// run-derived), so two runs submitting the same bytes converge on one
-// write-once artifact row instead of conflicting; the daemon-produced
-// provenance carries no recipe, so the artifact is never publish-eligible.
-//
-// The evidence metadata's created_at is the host clock at registration, so a
-// re-registration of the same content produces a byte-different row; callers
-// that persist go through registerSubmissionArtifact, which keeps the existing
-// write-once row and never re-puts, preserving the convergence guarantee.
-func submissionArtifact(
-	role domain.ArtifactKind, digest domain.Digest, mediaType domain.EvidenceMediaType, sizeBytes int64,
-) (domain.Artifact, error) {
-	hexDigits := string(digest[len("sha256:"):])
-	return domain.NewArtifact(domain.ArtifactInput{
-		ID:     domain.ArtifactID("artifact-" + string(role) + "-" + hexDigits),
-		Type:   role,
-		Digest: digest,
-		Provenance: domain.Provenance{
-			ProducerClass:        domain.ProducerDaemon,
-			ProducerInvocationID: domain.InvocationID("submit-" + string(role) + "-" + hexDigits),
-			HeadBinding:          domain.HeadIndependent,
-			SensitivityClass:     domain.SensitivityNormal,
-		},
-		Metadata: domain.EvidenceMetadata{
-			MediaType: mediaType, SizeBytes: sizeBytes, CreatedAt: time.Now().UTC(),
-			Source: domain.EvidenceSourceRun, Availability: domain.EvidenceAvailable,
-		},
-	}, nil)
-}
-
-// registerSubmissionArtifact write-once registers a content-addressed input
-// artifact idempotently. The artifact ID embeds the content digest, so an
-// existing row with the same ID names the same bytes and provenance; only the
-// recorded created_at could differ across a replayed submit or a repeated
-// reconcile pass, so the original row stays authoritative and is never re-put
-// (a plain PutArtifact would reject the byte-different re-registration). A row
-// whose digest diverges from the submission is a restored or corrupted
-// inconsistency, not this input, so it is refused fail-closed rather than
-// silently binding the run to different bytes than were submitted (mirrors
-// putArtifactIdempotent).
-func registerSubmissionArtifact(ctx context.Context, tx *store.WriteTx, a domain.Artifact) error {
-	existing, err := tx.GetArtifact(ctx, a.ID)
-	if errors.Is(err, store.ErrNotFound) {
-		return tx.PutArtifact(ctx, a)
-	}
-	if err != nil {
-		return err
-	}
-	if existing.Digest != a.Digest {
-		return fmt.Errorf("artifact %s digest %s, existing row %s: %w",
-			a.ID, a.Digest, existing.Digest, store.ErrImmutableConflict)
-	}
-	return nil
 }

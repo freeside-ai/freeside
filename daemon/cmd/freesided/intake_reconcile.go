@@ -82,6 +82,43 @@ type intakeInitiator struct {
 	ComponentCount    int
 }
 
+// manualInitiatorLookup adapts the configured label initiators into the
+// per-project submission-policy resolver the client task-submission path needs.
+// It reuses the same policy keys and commit author the label intake holds. When
+// two initiators for one project disagree on either, it refuses rather than
+// guess which policy a client submission should run under.
+func manualInitiatorLookup(initiators []intakeInitiator) func(domain.ProjectID) (engine.ManualInitiator, bool) {
+	return func(projectID domain.ProjectID) (engine.ManualInitiator, bool) {
+		var found *engine.ManualInitiator
+		for _, init := range initiators {
+			if init.ProjectID != projectID {
+				continue
+			}
+			candidate := engine.ManualInitiator{PolicyKeys: init.PolicyKeys, CommitAuthor: init.CommitAuthor}
+			if found == nil {
+				resolved := candidate
+				found = &resolved
+				continue
+			}
+			// Compare policies by their order-independent digest, the same
+			// identity a resolved policy carries downstream
+			// (domain.NewResolvedPolicy sorts keys before hashing): two
+			// initiators listing identical keys in a different order are the
+			// same policy, not a conflict. Fail closed on a digest error.
+			foundDigest, foundErr := (domain.ResolvedPolicy{Keys: found.PolicyKeys}).ComputeDigest()
+			candidateDigest, candidateErr := (domain.ResolvedPolicy{Keys: candidate.PolicyKeys}).ComputeDigest()
+			if foundErr != nil || candidateErr != nil ||
+				foundDigest != candidateDigest || found.CommitAuthor != candidate.CommitAuthor {
+				return engine.ManualInitiator{}, false
+			}
+		}
+		if found == nil {
+			return engine.ManualInitiator{}, false
+		}
+		return *found, true
+	}
+}
+
 func (i intakeInitiator) validate() error {
 	switch {
 	case i.Repo == "":
@@ -267,7 +304,7 @@ func (r *intakeReconciler) admit(
 		return domain.IntakeOccurrence{}, fmt.Errorf("resolve policy: %w", err)
 	}
 	workItemBody := intakeWorkItemDocument(occurrence)
-	workItem, err := submissionArtifact(domain.ArtifactKindSpecification,
+	workItem, err := engine.SubmissionArtifact(domain.ArtifactKindSpecification,
 		domain.Digest(contentaddr.Sum(workItemBody)), domain.EvidenceMediaTextMarkdown, int64(len(workItemBody)))
 	if err != nil {
 		return domain.IntakeOccurrence{}, err
@@ -276,7 +313,7 @@ func (r *intakeReconciler) admit(
 	if err != nil {
 		return domain.IntakeOccurrence{}, fmt.Errorf("encode policy keys: %w", err)
 	}
-	policyArtifact, err := submissionArtifact(domain.ArtifactKindPolicy,
+	policyArtifact, err := engine.SubmissionArtifact(domain.ArtifactKindPolicy,
 		resolvedPolicy.Digest, domain.EvidenceMediaApplicationJSON, int64(len(policyBody)))
 	if err != nil {
 		return domain.IntakeOccurrence{}, err
@@ -304,10 +341,10 @@ func (r *intakeReconciler) admit(
 	reservedRun.CampaignID = campaignID
 	reservedRun.AttemptNumber = 1
 	if err := r.store.Write(ctx, func(tx *store.WriteTx) error {
-		if err := registerSubmissionArtifact(ctx, tx, workItem); err != nil {
+		if err := engine.RegisterSubmissionArtifact(ctx, tx, workItem); err != nil {
 			return err
 		}
-		if err := registerSubmissionArtifact(ctx, tx, policyArtifact); err != nil {
+		if err := engine.RegisterSubmissionArtifact(ctx, tx, policyArtifact); err != nil {
 			return err
 		}
 		if err := tx.PutProductionAttempt(ctx, domain.ProductionAttempt{
@@ -580,7 +617,7 @@ func (r *intakeReconciler) startSpec(
 		return engine.SpecificationRunSpec{}, err
 	}
 	workItemDoc := intakeWorkItemDocument(occurrence)
-	workItem, err := submissionArtifact(domain.ArtifactKindSpecification,
+	workItem, err := engine.SubmissionArtifact(domain.ArtifactKindSpecification,
 		domain.Digest(contentaddr.Sum(workItemDoc)), domain.EvidenceMediaTextMarkdown, int64(len(workItemDoc)))
 	if err != nil {
 		return engine.SpecificationRunSpec{}, err
@@ -703,7 +740,7 @@ func (r *intakeReconciler) subjectInputStatus(
 ) (missing, stale bool, err error) {
 	specificationRunID := occurrence.Admission.Subject.SpecificationRunID
 	workItemDoc := intakeWorkItemDocument(occurrence)
-	workItem, err := submissionArtifact(domain.ArtifactKindSpecification,
+	workItem, err := engine.SubmissionArtifact(domain.ArtifactKindSpecification,
 		domain.Digest(contentaddr.Sum(workItemDoc)), domain.EvidenceMediaTextMarkdown, int64(len(workItemDoc)))
 	if err != nil {
 		return false, false, err

@@ -191,19 +191,24 @@ public protocol APIProtocol: Sendable {
     func getActionSurface(_ input: Operations.getActionSurface.Input) async throws -> Operations.getActionSurface.Output
     /// Submit a client command
     ///
-    /// The single mutation surface for judgment-bearing decisions on
-    /// synchronized domain state: every such client mutation is a
-    /// ClientCommand (plan §5.14); only the credential control surface
-    /// (pairing, revocation), attachment upload, and the delivery opened
-    /// receipt (monotonic telemetry, reportDeliveryOpened) sit outside
+    /// The single mutation surface for client decisions on synchronized
+    /// domain state: every such client mutation is a ClientCommand (plan
+    /// §5.14), discriminated by its payload kind. A `decision` command
+    /// decides an attention item; a `submit_task` command creates or fetches
+    /// a task from source text (plan §5.11). Only the credential control
+    /// surface (pairing, revocation), attachment upload, and the delivery
+    /// opened receipt (monotonic telemetry, reportDeliveryOpened) sit outside
     /// it. Submission is idempotent by
     /// `command_id`: the daemon records each command's result in the same
     /// transaction that applies it, and a retry of an already-committed
     /// `command_id` returns the original recorded result without applying
     /// anything again (a lost HTTP response is recovered by retrying, sync
-    /// test 4). Optimistic concurrency: a command prepared against a stale
-    /// `expected_entity_version` (or stale bindings) is rejected with the
-    /// replacement state and no side effect (sync test 2).
+    /// test 4). A `command_id` is unique across command kinds. Optimistic
+    /// concurrency applies to a `decision` command: one prepared against a
+    /// stale `expected_entity_version` (or stale bindings) is rejected with
+    /// the replacement state and no side effect (sync test 2). A `submit_task`
+    /// command carries no such envelope and is serialized only by its
+    /// project-scoped intake key.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.
@@ -588,19 +593,24 @@ extension APIProtocol {
     }
     /// Submit a client command
     ///
-    /// The single mutation surface for judgment-bearing decisions on
-    /// synchronized domain state: every such client mutation is a
-    /// ClientCommand (plan §5.14); only the credential control surface
-    /// (pairing, revocation), attachment upload, and the delivery opened
-    /// receipt (monotonic telemetry, reportDeliveryOpened) sit outside
+    /// The single mutation surface for client decisions on synchronized
+    /// domain state: every such client mutation is a ClientCommand (plan
+    /// §5.14), discriminated by its payload kind. A `decision` command
+    /// decides an attention item; a `submit_task` command creates or fetches
+    /// a task from source text (plan §5.11). Only the credential control
+    /// surface (pairing, revocation), attachment upload, and the delivery
+    /// opened receipt (monotonic telemetry, reportDeliveryOpened) sit outside
     /// it. Submission is idempotent by
     /// `command_id`: the daemon records each command's result in the same
     /// transaction that applies it, and a retry of an already-committed
     /// `command_id` returns the original recorded result without applying
     /// anything again (a lost HTTP response is recovered by retrying, sync
-    /// test 4). Optimistic concurrency: a command prepared against a stale
-    /// `expected_entity_version` (or stale bindings) is rejected with the
-    /// replacement state and no side effect (sync test 2).
+    /// test 4). A `command_id` is unique across command kinds. Optimistic
+    /// concurrency applies to a `decision` command: one prepared against a
+    /// stale `expected_entity_version` (or stale bindings) is rejected with
+    /// the replacement state and no side effect (sync test 2). A `submit_task`
+    /// command carries no such envelope and is serialized only by its
+    /// project-scoped intake key.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.
@@ -4116,12 +4126,12 @@ public enum Components {
         ///
         /// - Remark: Generated from `#/components/schemas/EntityVersion`.
         public typealias EntityVersion = Swift.Int64
-        /// Every client mutation. Carries exactly these five fields. The payload is now typed for the decision command (the first exercised command type); other command types are typed as the signet/saddle pair exercises the surface, via kind:contract changes.
+        /// Every client mutation. The payload's kind discriminates the command type: a decision command (the first exercised type) decides an attention item and carries expected_entity_version and expected_bindings; a submit_task command creates or fetches a task from source text and binds to no entity, so it carries neither envelope field and is rejected as malformed if it does. New command types are typed as the signet/saddle pair exercises the surface, via kind:contract changes.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/ClientCommand`.
         public struct ClientCommand: Codable, Hashable, Sendable {
-            /// Client-generated idempotency key; a retry with the same command_id returns the original recorded result.
+            /// Client-generated idempotency key; a retry with the same command_id returns the original recorded result. A command_id is unique across command kinds.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/ClientCommand/command_id`.
@@ -4130,12 +4140,12 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/ClientCommand/device_id`.
             public var device_id: Swift.String
-            /// The entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state.
+            /// Required for a decision command; absent for a submit_task command. The entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/ClientCommand/expected_entity_version`.
-            public var expected_entity_version: Swift.Int64
-            /// Provisional. The digest-bound inputs the command was prepared against, keyed by binding name; checked with expected_entity_version. For a decision command the authoritative binding set is the payload's item_version, pr_head_sha, and artifact_digests (the daemon cross-checks those against the live item); this map stays for command types that name individual bindings.
+            public var expected_entity_version: Swift.Int64?
+            /// Required for a decision command; absent for a submit_task command. The digest-bound inputs the command was prepared against, keyed by binding name; checked with expected_entity_version. For a decision command the authoritative binding set is the payload's item_version, pr_head_sha, and artifact_digests (the daemon cross-checks those against the live item); this map stays for command types that name individual bindings.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/ClientCommand/expected_bindings`.
@@ -4156,27 +4166,64 @@ public enum Components {
                     try encoder.encodeAdditionalProperties(additionalProperties)
                 }
             }
-            /// Provisional. The digest-bound inputs the command was prepared against, keyed by binding name; checked with expected_entity_version. For a decision command the authoritative binding set is the payload's item_version, pr_head_sha, and artifact_digests (the daemon cross-checks those against the live item); this map stays for command types that name individual bindings.
+            /// Required for a decision command; absent for a submit_task command. The digest-bound inputs the command was prepared against, keyed by binding name; checked with expected_entity_version. For a decision command the authoritative binding set is the payload's item_version, pr_head_sha, and artifact_digests (the daemon cross-checks those against the live item); this map stays for command types that name individual bindings.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/ClientCommand/expected_bindings`.
-            public var expected_bindings: Components.Schemas.ClientCommand.expected_bindingsPayload
+            public var expected_bindings: Components.Schemas.ClientCommand.expected_bindingsPayload?
             /// - Remark: Generated from `#/components/schemas/ClientCommand/payload`.
-            public var payload: Components.Schemas.DecisionPayload
+            @frozen public enum payloadPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/ClientCommand/payload/DecisionPayload`.
+                case decision(Components.Schemas.DecisionPayload)
+                /// - Remark: Generated from `#/components/schemas/ClientCommand/payload/SubmitTaskPayload`.
+                case submit_task(Components.Schemas.SubmitTaskPayload)
+                public enum CodingKeys: String, CodingKey {
+                    case kind
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    let container = try decoder.container(keyedBy: CodingKeys.self)
+                    let discriminator = try container.decode(
+                        Swift.String.self,
+                        forKey: .kind
+                    )
+                    switch discriminator {
+                    case "decision":
+                        self = .decision(try .init(from: decoder))
+                    case "submit_task":
+                        self = .submit_task(try .init(from: decoder))
+                    default:
+                        throw Swift.DecodingError.unknownOneOfDiscriminator(
+                            discriminatorKey: CodingKeys.kind,
+                            discriminatorValue: discriminator,
+                            codingPath: decoder.codingPath
+                        )
+                    }
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    switch self {
+                    case let .decision(value):
+                        try value.encode(to: encoder)
+                    case let .submit_task(value):
+                        try value.encode(to: encoder)
+                    }
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/ClientCommand/payload`.
+            public var payload: Components.Schemas.ClientCommand.payloadPayload
             /// Creates a new `ClientCommand`.
             ///
             /// - Parameters:
-            ///   - command_id: Client-generated idempotency key; a retry with the same command_id returns the original recorded result.
+            ///   - command_id: Client-generated idempotency key; a retry with the same command_id returns the original recorded result. A command_id is unique across command kinds.
             ///   - device_id: The paired device submitting the command.
-            ///   - expected_entity_version: The entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state.
-            ///   - expected_bindings: Provisional. The digest-bound inputs the command was prepared against, keyed by binding name; checked with expected_entity_version. For a decision command the authoritative binding set is the payload's item_version, pr_head_sha, and artifact_digests (the daemon cross-checks those against the live item); this map stays for command types that name individual bindings.
+            ///   - expected_entity_version: Required for a decision command; absent for a submit_task command. The entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state.
+            ///   - expected_bindings: Required for a decision command; absent for a submit_task command. The digest-bound inputs the command was prepared against, keyed by binding name; checked with expected_entity_version. For a decision command the authoritative binding set is the payload's item_version, pr_head_sha, and artifact_digests (the daemon cross-checks those against the live item); this map stays for command types that name individual bindings.
             ///   - payload:
             public init(
                 command_id: Swift.String,
                 device_id: Swift.String,
-                expected_entity_version: Swift.Int64,
-                expected_bindings: Components.Schemas.ClientCommand.expected_bindingsPayload,
-                payload: Components.Schemas.DecisionPayload
+                expected_entity_version: Swift.Int64? = nil,
+                expected_bindings: Components.Schemas.ClientCommand.expected_bindingsPayload? = nil,
+                payload: Components.Schemas.ClientCommand.payloadPayload
             ) {
                 self.command_id = command_id
                 self.device_id = device_id
@@ -4201,16 +4248,16 @@ public enum Components {
                     Swift.String.self,
                     forKey: .device_id
                 )
-                self.expected_entity_version = try container.decode(
+                self.expected_entity_version = try container.decodeIfPresent(
                     Swift.Int64.self,
                     forKey: .expected_entity_version
                 )
-                self.expected_bindings = try container.decode(
+                self.expected_bindings = try container.decodeIfPresent(
                     Components.Schemas.ClientCommand.expected_bindingsPayload.self,
                     forKey: .expected_bindings
                 )
                 self.payload = try container.decode(
-                    Components.Schemas.DecisionPayload.self,
+                    Components.Schemas.ClientCommand.payloadPayload.self,
                     forKey: .payload
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
@@ -4227,6 +4274,12 @@ public enum Components {
         ///
         /// - Remark: Generated from `#/components/schemas/DecisionPayload`.
         public struct DecisionPayload: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/DecisionPayload/kind`.
+            @frozen public enum kindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case decision = "decision"
+            }
+            /// - Remark: Generated from `#/components/schemas/DecisionPayload/kind`.
+            public var kind: Components.Schemas.DecisionPayload.kindPayload
             /// The attention item being decided.
             ///
             /// - Remark: Generated from `#/components/schemas/DecisionPayload/item_id`.
@@ -4353,6 +4406,7 @@ public enum Components {
             /// Creates a new `DecisionPayload`.
             ///
             /// - Parameters:
+            ///   - kind:
             ///   - item_id: The attention item being decided.
             ///   - action:
             ///   - item_version: The accepted item_version the decision was rendered against.
@@ -4367,6 +4421,7 @@ public enum Components {
             ///   - alternative_choices: Per-finding offered routes selected by choose_alternative_route. Findings omitted from this list retain their recommended route. Absent for every other action; finding IDs must be distinct.
             ///   - decision_action_surface_digest: The digest of the DecisionActionSurface the client rendered the decision from (plan §8). Optional comprehension telemetry: the daemon revalidates it against the live device, item decision surface, capability contract, and offered-action set, and stamps it onto the command's decision_evidence. It never widens the offered actions; it can only reject. Absent for a client build that does not adopt the action surface.
             public init(
+                kind: Components.Schemas.DecisionPayload.kindPayload,
                 item_id: Swift.String,
                 action: Components.Schemas.Action,
                 item_version: Swift.Int,
@@ -4381,6 +4436,7 @@ public enum Components {
                 alternative_choices: [Components.Schemas.AlternativeChoice]? = nil,
                 decision_action_surface_digest: Swift.String? = nil
             ) {
+                self.kind = kind
                 self.item_id = item_id
                 self.action = action
                 self.item_version = item_version
@@ -4396,6 +4452,7 @@ public enum Components {
                 self.decision_action_surface_digest = decision_action_surface_digest
             }
             public enum CodingKeys: String, CodingKey {
+                case kind
                 case item_id
                 case action
                 case item_version
@@ -4412,6 +4469,10 @@ public enum Components {
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Components.Schemas.DecisionPayload.kindPayload.self,
+                    forKey: .kind
+                )
                 self.item_id = try container.decode(
                     Swift.String.self,
                     forKey: .item_id
@@ -4465,6 +4526,7 @@ public enum Components {
                     forKey: .decision_action_surface_digest
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
                     "item_id",
                     "action",
                     "item_version",
@@ -4481,11 +4543,91 @@ public enum Components {
                 ])
             }
         }
+        /// The payload of a submit_task command (plan §5.11): the project to submit into, the source text of the task, and an optional operator name. It binds to no attention item and to no other entity, so it carries no expected_entity_version and no expected_bindings. The project-scoped intake key (project_id plus the source digest) is the command's only concurrency control: the same source in one project fetches the same task, so a distinct command_id starts no second specification run, while the same source in another project creates a distinct task. The operator name applies only when the command creates the task; a fetch of an existing task ignores it.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/SubmitTaskPayload`.
+        public struct SubmitTaskPayload: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/SubmitTaskPayload/kind`.
+            @frozen public enum kindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case submit_task = "submit_task"
+            }
+            /// - Remark: Generated from `#/components/schemas/SubmitTaskPayload/kind`.
+            public var kind: Components.Schemas.SubmitTaskPayload.kindPayload
+            /// The project the task is submitted into.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SubmitTaskPayload/project_id`.
+            public var project_id: Swift.String
+            /// The task's source text, registered as a digest-addressed artifact.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SubmitTaskPayload/source`.
+            public var source: Swift.String
+            /// Optional operator-chosen task name, stored with source operator so the namer never runs for it. Applied only on creation; ignored when the command fetches an existing task.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/SubmitTaskPayload/name`.
+            public var name: Swift.String?
+            /// Creates a new `SubmitTaskPayload`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - project_id: The project the task is submitted into.
+            ///   - source: The task's source text, registered as a digest-addressed artifact.
+            ///   - name: Optional operator-chosen task name, stored with source operator so the namer never runs for it. Applied only on creation; ignored when the command fetches an existing task.
+            public init(
+                kind: Components.Schemas.SubmitTaskPayload.kindPayload,
+                project_id: Swift.String,
+                source: Swift.String,
+                name: Swift.String? = nil
+            ) {
+                self.kind = kind
+                self.project_id = project_id
+                self.source = source
+                self.name = name
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case project_id
+                case source
+                case name
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Components.Schemas.SubmitTaskPayload.kindPayload.self,
+                    forKey: .kind
+                )
+                self.project_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .project_id
+                )
+                self.source = try container.decode(
+                    Swift.String.self,
+                    forKey: .source
+                )
+                self.name = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .name
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
+                    "project_id",
+                    "source",
+                    "name"
+                ])
+            }
+        }
         /// The durable, immutable record of one accepted decision (domain.Command; plan §4 lifecycle, §5.14). It pins the exact bindings the decision was accepted against; the daemon keys it by command_id and a retry returns it unchanged (sync test 4).
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/CommandRecord`.
         public struct CommandRecord: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/CommandRecord/kind`.
+            @frozen public enum kindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case decision = "decision"
+            }
+            /// - Remark: Generated from `#/components/schemas/CommandRecord/kind`.
+            public var kind: Components.Schemas.CommandRecord.kindPayload
             /// - Remark: Generated from `#/components/schemas/CommandRecord/command_id`.
             public var command_id: Swift.String
             /// - Remark: Generated from `#/components/schemas/CommandRecord/device_id`.
@@ -4565,6 +4707,7 @@ public enum Components {
             /// Creates a new `CommandRecord`.
             ///
             /// - Parameters:
+            ///   - kind:
             ///   - command_id:
             ///   - device_id:
             ///   - item_id:
@@ -4577,6 +4720,7 @@ public enum Components {
             ///   - answer_route: The route an implementation-stage answer named; null for every other command. Always rendered, so the record keeps one byte-form.
             ///   - decision_evidence: The daemon-stamped decision context (plan §8): the accepted action surface digest and the item's recommendation at acceptance. Comprehension telemetry read by the §9 override query; never an authorization input. Null when the command referenced no surface and the item had no recommendation.
             public init(
+                kind: Components.Schemas.CommandRecord.kindPayload,
                 command_id: Swift.String,
                 device_id: Swift.String,
                 item_id: Swift.String,
@@ -4589,6 +4733,7 @@ public enum Components {
                 answer_route: Components.Schemas.CommandRecord.answer_routePayload? = nil,
                 decision_evidence: Components.Schemas.CommandRecord.decision_evidencePayload? = nil
             ) {
+                self.kind = kind
                 self.command_id = command_id
                 self.device_id = device_id
                 self.item_id = item_id
@@ -4602,6 +4747,7 @@ public enum Components {
                 self.decision_evidence = decision_evidence
             }
             public enum CodingKeys: String, CodingKey {
+                case kind
                 case command_id
                 case device_id
                 case item_id
@@ -4616,6 +4762,10 @@ public enum Components {
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Components.Schemas.CommandRecord.kindPayload.self,
+                    forKey: .kind
+                )
                 self.command_id = try container.decode(
                     Swift.String.self,
                     forKey: .command_id
@@ -4661,6 +4811,7 @@ public enum Components {
                     forKey: .decision_evidence
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
                     "command_id",
                     "device_id",
                     "item_id",
@@ -4672,6 +4823,167 @@ public enum Components {
                     "attachments",
                     "answer_route",
                     "decision_evidence"
+                ])
+            }
+        }
+        /// The durable, immutable record of one accepted submit_task command (domain.TaskSubmission; plan §5.11, §5.14). It names the task the command created or fetched and its specification run, keyed by command_id; a retry returns it unchanged. The name is the task's stored name, so a fetch reports the name the first submission won.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord`.
+        public struct TaskSubmissionRecord: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/kind`.
+            @frozen public enum kindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case submit_task = "submit_task"
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/kind`.
+            public var kind: Components.Schemas.TaskSubmissionRecord.kindPayload
+            /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/command_id`.
+            public var command_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/device_id`.
+            public var device_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/project_id`.
+            public var project_id: Swift.String
+            /// The sha256 digest of the submitted source text.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/source_digest`.
+            public struct source_digestPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/source_digest/value1`.
+                public var value1: Components.Schemas.Digest
+                /// Creates a new `source_digestPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.Digest) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// The sha256 digest of the submitted source text.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/source_digest`.
+            public var source_digest: Components.Schemas.TaskSubmissionRecord.source_digestPayload
+            /// The task the command created or fetched by the intake key.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/task_id`.
+            public var task_id: Swift.String
+            /// The task's specification run started (or already present).
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/specification_run_id`.
+            public var specification_run_id: Swift.String
+            /// The task's stored display name; the operator name when this command created the task, otherwise the name the first submission recorded.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/name`.
+            public struct namePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/name/value1`.
+                public var value1: Components.Schemas.DisplayName
+                /// Creates a new `namePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.DisplayName) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The task's stored display name; the operator name when this command created the task, otherwise the name the first submission recorded.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/name`.
+            public var name: Components.Schemas.TaskSubmissionRecord.namePayload
+            /// Creates a new `TaskSubmissionRecord`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - command_id:
+            ///   - device_id:
+            ///   - project_id:
+            ///   - source_digest: The sha256 digest of the submitted source text.
+            ///   - task_id: The task the command created or fetched by the intake key.
+            ///   - specification_run_id: The task's specification run started (or already present).
+            ///   - name: The task's stored display name; the operator name when this command created the task, otherwise the name the first submission recorded.
+            public init(
+                kind: Components.Schemas.TaskSubmissionRecord.kindPayload,
+                command_id: Swift.String,
+                device_id: Swift.String,
+                project_id: Swift.String,
+                source_digest: Components.Schemas.TaskSubmissionRecord.source_digestPayload,
+                task_id: Swift.String,
+                specification_run_id: Swift.String,
+                name: Components.Schemas.TaskSubmissionRecord.namePayload
+            ) {
+                self.kind = kind
+                self.command_id = command_id
+                self.device_id = device_id
+                self.project_id = project_id
+                self.source_digest = source_digest
+                self.task_id = task_id
+                self.specification_run_id = specification_run_id
+                self.name = name
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case command_id
+                case device_id
+                case project_id
+                case source_digest
+                case task_id
+                case specification_run_id
+                case name
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Components.Schemas.TaskSubmissionRecord.kindPayload.self,
+                    forKey: .kind
+                )
+                self.command_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .command_id
+                )
+                self.device_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .device_id
+                )
+                self.project_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .project_id
+                )
+                self.source_digest = try container.decode(
+                    Components.Schemas.TaskSubmissionRecord.source_digestPayload.self,
+                    forKey: .source_digest
+                )
+                self.task_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .task_id
+                )
+                self.specification_run_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .specification_run_id
+                )
+                self.name = try container.decode(
+                    Components.Schemas.TaskSubmissionRecord.namePayload.self,
+                    forKey: .name
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
+                    "command_id",
+                    "device_id",
+                    "project_id",
+                    "source_digest",
+                    "task_id",
+                    "specification_run_id",
+                    "name"
                 ])
             }
         }
@@ -4782,7 +5094,44 @@ public enum Components {
         /// - Remark: Generated from `#/components/schemas/CommandResult`.
         public struct CommandResult: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/CommandResult/record`.
-            public var record: Components.Schemas.CommandRecord
+            @frozen public enum recordPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/CommandResult/record/CommandRecord`.
+                case decision(Components.Schemas.CommandRecord)
+                /// - Remark: Generated from `#/components/schemas/CommandResult/record/TaskSubmissionRecord`.
+                case submit_task(Components.Schemas.TaskSubmissionRecord)
+                public enum CodingKeys: String, CodingKey {
+                    case kind
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    let container = try decoder.container(keyedBy: CodingKeys.self)
+                    let discriminator = try container.decode(
+                        Swift.String.self,
+                        forKey: .kind
+                    )
+                    switch discriminator {
+                    case "decision":
+                        self = .decision(try .init(from: decoder))
+                    case "submit_task":
+                        self = .submit_task(try .init(from: decoder))
+                    default:
+                        throw Swift.DecodingError.unknownOneOfDiscriminator(
+                            discriminatorKey: CodingKeys.kind,
+                            discriminatorValue: discriminator,
+                            codingPath: decoder.codingPath
+                        )
+                    }
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    switch self {
+                    case let .decision(value):
+                        try value.encode(to: encoder)
+                    case let .submit_task(value):
+                        try value.encode(to: encoder)
+                    }
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/CommandResult/record`.
+            public var record: Components.Schemas.CommandResult.recordPayload
             /// The server revision of the transaction that applied the command.
             ///
             /// - Remark: Generated from `#/components/schemas/CommandResult/revision`.
@@ -4793,7 +5142,7 @@ public enum Components {
             ///   - record:
             ///   - revision: The server revision of the transaction that applied the command.
             public init(
-                record: Components.Schemas.CommandRecord,
+                record: Components.Schemas.CommandResult.recordPayload,
                 revision: Swift.Int64
             ) {
                 self.record = record
@@ -4806,7 +5155,7 @@ public enum Components {
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
                 self.record = try container.decode(
-                    Components.Schemas.CommandRecord.self,
+                    Components.Schemas.CommandResult.recordPayload.self,
                     forKey: .record
                 )
                 self.revision = try container.decode(
@@ -13981,19 +14330,24 @@ public enum Operations {
     }
     /// Submit a client command
     ///
-    /// The single mutation surface for judgment-bearing decisions on
-    /// synchronized domain state: every such client mutation is a
-    /// ClientCommand (plan §5.14); only the credential control surface
-    /// (pairing, revocation), attachment upload, and the delivery opened
-    /// receipt (monotonic telemetry, reportDeliveryOpened) sit outside
+    /// The single mutation surface for client decisions on synchronized
+    /// domain state: every such client mutation is a ClientCommand (plan
+    /// §5.14), discriminated by its payload kind. A `decision` command
+    /// decides an attention item; a `submit_task` command creates or fetches
+    /// a task from source text (plan §5.11). Only the credential control
+    /// surface (pairing, revocation), attachment upload, and the delivery
+    /// opened receipt (monotonic telemetry, reportDeliveryOpened) sit outside
     /// it. Submission is idempotent by
     /// `command_id`: the daemon records each command's result in the same
     /// transaction that applies it, and a retry of an already-committed
     /// `command_id` returns the original recorded result without applying
     /// anything again (a lost HTTP response is recovered by retrying, sync
-    /// test 4). Optimistic concurrency: a command prepared against a stale
-    /// `expected_entity_version` (or stale bindings) is rejected with the
-    /// replacement state and no side effect (sync test 2).
+    /// test 4). A `command_id` is unique across command kinds. Optimistic
+    /// concurrency applies to a `decision` command: one prepared against a
+    /// stale `expected_entity_version` (or stale bindings) is rejected with
+    /// the replacement state and no side effect (sync test 2). A `submit_task`
+    /// command carries no such envelope and is serialized only by its
+    /// project-scoped intake key.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.

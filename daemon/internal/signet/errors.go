@@ -104,6 +104,18 @@ var ErrAttachmentNotStored = errors.New("referenced attachment is not in the art
 // rather than accepting references it cannot verify.
 var ErrAttachmentsUnavailable = errors.New("attachment store is not configured")
 
+// ErrInvalidSubmitTaskPayload rejects a submit_task command whose payload is
+// malformed: no project, no source, or the decision envelope
+// (expected_entity_version or expected_bindings) present where a task
+// submission carries neither.
+var ErrInvalidSubmitTaskPayload = errors.New("submit_task payload is invalid")
+
+// ErrTaskSubmissionUnavailable is returned when a submit_task command reaches a
+// service composed without a task submitter or blob store (the dev CLI, a
+// composition that wires neither); it fails closed rather than accepting a
+// command it cannot apply.
+var ErrTaskSubmissionUnavailable = errors.New("task submission is not available")
+
 // ErrAgentReplyPending is returned for a discuss against a conversation whose
 // prior agent turn is still in flight or, for finding adjudication, whose
 // accepted reply has not yet been consumed into its append-only successor.

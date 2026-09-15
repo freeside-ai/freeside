@@ -70,7 +70,7 @@ import Testing
             path: .init(conversation_id: conversationID)
         ).ok.body.json
 
-        #expect(first.record.action == .discuss)
+        #expect(first.record.asDecision.action == .discuss)
         #expect(updated.item.status == .open)
         #expect(updated.item.item_version == before.item.item_version + 1)
         #expect(awaiting.conversation.status == .awaiting_agent)
@@ -225,13 +225,15 @@ import Testing
             device_id: "device-mock",
             expected_entity_version: snapshot.entity_version,
             expected_bindings: .init(additionalProperties: [:]),
-            payload: .init(
-                item_id: snapshot.item.id,
-                action: action,
-                item_version: snapshot.item.item_version,
-                pr_head_sha: snapshot.item.pr_head_sha,
-                artifact_digests: snapshot.item.artifact_digests,
-                message: message,
-                attachments: attachments))
+            payload: .decision(
+                .init(
+                    kind: .decision,
+                    item_id: snapshot.item.id,
+                    action: action,
+                    item_version: snapshot.item.item_version,
+                    pr_head_sha: snapshot.item.pr_head_sha,
+                    artifact_digests: snapshot.item.artifact_digests,
+                    message: message,
+                    attachments: attachments)))
     }
 }

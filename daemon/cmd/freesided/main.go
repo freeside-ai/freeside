@@ -304,7 +304,7 @@ func main() {
 			Repo:                           *repo, RepositoryID: id,
 			BaseRef: *baseRef, BaseSHA: *baseSHA,
 			AuthIdentityID: domain.AuthIdentityID(*authIdentity),
-			AllowedPaths:   splitNonEmpty(*allowedPaths),
+			AllowedPaths:   engine.SplitNonEmpty(*allowedPaths),
 			RunConformance: *runConformance,
 			StateRoot:      *publicationStateDir, CredentialsDir: *publicationCredentialsDir,
 			OperatingMode: mode,
@@ -366,18 +366,6 @@ func serve(ctx context.Context, stop func(), h *daemon) error {
 	waitErr := h.Wait(ctx)
 	stop()
 	return errors.Join(waitErr, h.Close())
-}
-
-// splitNonEmpty splits a comma-separated flag into its non-empty members,
-// so an unset flag yields no members rather than one empty one.
-func splitNonEmpty(value string) []string {
-	out := []string{}
-	for _, part := range strings.Split(value, ",") {
-		if trimmed := strings.TrimSpace(part); trimmed != "" {
-			out = append(out, trimmed)
-		}
-	}
-	return out
 }
 
 type config struct {
@@ -694,6 +682,11 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		signet.WithLogger(cfg.Logger),
 		signet.WithDoctorSchedule(doctorScheduleID, doctorAvailable.Load),
 		signet.WithBlobStore(blobs),
+		// Client task submission (plan §5.11) resolves each project's policy from
+		// its configured initiator. The list is empty on the host until the rein
+		// resolver populates it, so submission is refused there and works in
+		// test compositions that supply initiators directly.
+		signet.WithTaskSubmitter(engine.NewTaskSubmitter(blobs, manualInitiatorLookup(cfg.IntakeInitiators))),
 		signet.WithNtfy(signet.NtfyConfig{
 			BaseURL: cfg.NtfyURL, TopicKey: topicKey,
 			ClickBaseURL: "http://" + listener.Addr().String(),

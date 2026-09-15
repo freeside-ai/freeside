@@ -433,13 +433,15 @@ import Testing
             device_id: "device-mock",
             expected_entity_version: snapshot.entity_version,
             expected_bindings: .init(additionalProperties: [:]),
-            payload: .init(
-                item_id: "item-spec_approval",
-                action: .approve,
-                item_version: snapshot.item.item_version,
-                pr_head_sha: snapshot.item.pr_head_sha,
-                artifact_digests: snapshot.item.artifact_digests
-            )
+            payload: .decision(
+                .init(
+                    kind: .decision,
+                    item_id: "item-spec_approval",
+                    action: .approve,
+                    item_version: snapshot.item.item_version,
+                    pr_head_sha: snapshot.item.pr_head_sha,
+                    artifact_digests: snapshot.item.artifact_digests
+                ))
         )
         #expect(store.registerPendingCommand(older) == .registered)
         store.clearPendingCommand(itemID: "item-spec_approval", commandID: "cmd-older")
@@ -466,13 +468,15 @@ import Testing
             device_id: "device-mock",
             expected_entity_version: snapshot.entity_version,
             expected_bindings: .init(additionalProperties: [:]),
-            payload: .init(
-                item_id: snapshot.item.id,
-                action: .open_pr,
-                item_version: snapshot.item.item_version,
-                pr_head_sha: snapshot.item.pr_head_sha,
-                artifact_digests: snapshot.item.artifact_digests
-            )
+            payload: .decision(
+                .init(
+                    kind: .decision,
+                    item_id: snapshot.item.id,
+                    action: .open_pr,
+                    item_version: snapshot.item.item_version,
+                    pr_head_sha: snapshot.item.pr_head_sha,
+                    artifact_digests: snapshot.item.artifact_digests
+                ))
         )
 
         #expect(store.reserveNavigation(itemID: snapshot.item.id))

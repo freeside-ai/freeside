@@ -1,0 +1,12 @@
+{
+  "command_id": "cmd-2",
+  "device_id": "device-1",
+  "project_id": "proj-1",
+  "source_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "task_id": "task-1",
+  "specification_run_id": "run-1",
+  "name": {
+    "text": "Improve task navigation",
+    "source": "operator"
+  }
+}

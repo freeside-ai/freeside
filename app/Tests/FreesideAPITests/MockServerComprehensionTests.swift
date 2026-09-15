@@ -47,12 +47,14 @@ import Testing
             command_id: id, device_id: "device-1",
             expected_entity_version: snapshot.entity_version,
             expected_bindings: .init(additionalProperties: [:]),
-            payload: .init(
-                item_id: snapshot.item.id, action: action,
-                item_version: snapshot.item.item_version,
-                pr_head_sha: snapshot.item.pr_head_sha,
-                artifact_digests: snapshot.item.artifact_digests,
-                decision_action_surface_digest: surfaceDigest))
+            payload: .decision(
+                .init(
+                    kind: .decision,
+                    item_id: snapshot.item.id, action: action,
+                    item_version: snapshot.item.item_version,
+                    pr_head_sha: snapshot.item.pr_head_sha,
+                    artifact_digests: snapshot.item.artifact_digests,
+                    decision_action_surface_digest: surfaceDigest)))
     }
 
     @Test func registerIsIdempotentByContent() async throws {
@@ -108,7 +110,7 @@ import Testing
         let ok = try await p.client.submitCommand(
             body: .json(command(snapshot, id: "cmd-1", action: action, surfaceDigest: surface.digest))
         ).ok.body.json
-        #expect(ok.record.decision_evidence?.value1.action_surface_digest == surface.digest)
+        #expect(ok.record.asDecision.decision_evidence?.value1.action_surface_digest == surface.digest)
 
         // An unknown surface digest is rejected (400), never widening.
         let bogus = "sha256:" + String(repeating: "a", count: 64)

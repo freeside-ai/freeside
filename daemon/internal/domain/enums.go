@@ -177,6 +177,33 @@ func (s DisplayNameSource) valid() bool {
 	}
 }
 
+// CommandKind discriminates a ClientCommand's payload (plan §5.14). A decision
+// command decides an attention item (domain.Command); a submit_task command
+// creates or fetches a task from source text (domain.TaskSubmission, plan
+// §5.11). The wire contract keys a command_id uniquely across kinds.
+type CommandKind string
+
+const (
+	CommandKindDecision   CommandKind = "decision"
+	CommandKindSubmitTask CommandKind = "submit_task"
+)
+
+// AllCommandKinds lists every valid CommandKind; it is the single registration
+// point a new kind is added to.
+var AllCommandKinds = []CommandKind{
+	CommandKindDecision,
+	CommandKindSubmitTask,
+}
+
+func (k CommandKind) valid() bool {
+	switch k {
+	case CommandKindDecision, CommandKindSubmitTask:
+		return true
+	default:
+		return false
+	}
+}
+
 // BlockedWaitKind identifies the authority a blocked card is waiting on.
 type BlockedWaitKind string
 

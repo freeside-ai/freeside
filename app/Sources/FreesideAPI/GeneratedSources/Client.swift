@@ -1423,19 +1423,24 @@ public struct Client: APIProtocol {
     }
     /// Submit a client command
     ///
-    /// The single mutation surface for judgment-bearing decisions on
-    /// synchronized domain state: every such client mutation is a
-    /// ClientCommand (plan §5.14); only the credential control surface
-    /// (pairing, revocation), attachment upload, and the delivery opened
-    /// receipt (monotonic telemetry, reportDeliveryOpened) sit outside
+    /// The single mutation surface for client decisions on synchronized
+    /// domain state: every such client mutation is a ClientCommand (plan
+    /// §5.14), discriminated by its payload kind. A `decision` command
+    /// decides an attention item; a `submit_task` command creates or fetches
+    /// a task from source text (plan §5.11). Only the credential control
+    /// surface (pairing, revocation), attachment upload, and the delivery
+    /// opened receipt (monotonic telemetry, reportDeliveryOpened) sit outside
     /// it. Submission is idempotent by
     /// `command_id`: the daemon records each command's result in the same
     /// transaction that applies it, and a retry of an already-committed
     /// `command_id` returns the original recorded result without applying
     /// anything again (a lost HTTP response is recovered by retrying, sync
-    /// test 4). Optimistic concurrency: a command prepared against a stale
-    /// `expected_entity_version` (or stale bindings) is rejected with the
-    /// replacement state and no side effect (sync test 2).
+    /// test 4). A `command_id` is unique across command kinds. Optimistic
+    /// concurrency applies to a `decision` command: one prepared against a
+    /// stale `expected_entity_version` (or stale bindings) is rejected with
+    /// the replacement state and no side effect (sync test 2). A `submit_task`
+    /// command carries no such envelope and is serialized only by its
+    /// project-scoped intake key.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.

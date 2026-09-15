@@ -325,19 +325,29 @@ func (h httpHandler) getAttachment(w http.ResponseWriter, r *http.Request, _ dom
 }
 
 type clientCommandRequest struct {
-	CommandID             string                   `json:"command_id"`
-	DeviceID              domain.DeviceID          `json:"device_id"`
-	ExpectedEntityVersion int64                    `json:"expected_entity_version"`
-	ExpectedBindings      map[string]domain.Digest `json:"expected_bindings"`
-	Payload               decisionPayloadRequest   `json:"payload"`
+	CommandID string          `json:"command_id"`
+	DeviceID  domain.DeviceID `json:"device_id"`
+	// The envelope fields are pointers so their presence can be detected: a
+	// decision command requires both, a submit_task command carries neither and
+	// is rejected as malformed if it does. Payload is decoded per kind below,
+	// so it is captured raw here and the kind is probed before the strict arm
+	// decode (strictjson rejects unknown fields, so the shared kind cannot be
+	// decoded into either arm before the payload is routed).
+	ExpectedEntityVersion *int64                    `json:"expected_entity_version"`
+	ExpectedBindings      *map[string]domain.Digest `json:"expected_bindings"`
+	Payload               json.RawMessage           `json:"payload"`
 }
 
 type decisionPayloadRequest struct {
-	ItemID          domain.ItemID    `json:"item_id"`
-	Action          domain.Action    `json:"action"`
-	ItemVersion     int              `json:"item_version"`
-	PRHeadSHA       *string          `json:"pr_head_sha"`
-	ArtifactDigests *[]domain.Digest `json:"artifact_digests"`
+	// Kind is the payload discriminator; accepted here so the strict arm decode
+	// does not reject a decision payload that carries it. A missing kind is
+	// treated as a decision for older clients.
+	Kind            domain.CommandKind `json:"kind"`
+	ItemID          domain.ItemID      `json:"item_id"`
+	Action          domain.Action      `json:"action"`
+	ItemVersion     int                `json:"item_version"`
+	PRHeadSHA       *string            `json:"pr_head_sha"`
+	ArtifactDigests *[]domain.Digest   `json:"artifact_digests"`
 	// Message and Attachments are optional on the wire (api/openapi.yaml:
 	// pure decisions omit them); the service's per-action content policy
 	// decides whether their presence or absence is an error, so nil maps to
@@ -352,6 +362,13 @@ type decisionPayloadRequest struct {
 	DecisionActionSurfaceDigest *domain.Digest            `json:"decision_action_surface_digest"`
 }
 
+type submitTaskPayloadRequest struct {
+	Kind      domain.CommandKind `json:"kind"`
+	ProjectID domain.ProjectID   `json:"project_id"`
+	Source    string             `json:"source"`
+	Name      *string            `json:"name"`
+}
+
 func (h httpHandler) submitCommand(w http.ResponseWriter, r *http.Request, authenticatedDevice domain.DeviceID) {
 	var request clientCommandRequest
 	if err := decodeRequest(w, r, &request); err != nil {
@@ -363,58 +380,137 @@ func (h httpHandler) submitCommand(w http.ResponseWriter, r *http.Request, authe
 		writeJSON(w, http.StatusBadRequest, errorResponse{Message: err.Error()})
 		return
 	}
+	if request.DeviceID != authenticatedDevice {
+		writeJSON(w, http.StatusForbidden, errorResponse{Message: "device_id does not match the authenticated device"})
+		return
+	}
+	if len(request.Payload) == 0 {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: "payload is required"})
+		return
+	}
+	// The payload's kind selects the arm. It is probed from the raw payload
+	// before the strict arm decode: strictjson rejects unknown fields, so the
+	// shared kind cannot be decoded into either typed arm first.
+	var kindProbe struct {
+		Kind domain.CommandKind `json:"kind"`
+	}
+	if err := json.Unmarshal(request.Payload, &kindProbe); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: "payload.kind is invalid"})
+		return
+	}
+	switch kindProbe.Kind {
+	case domain.CommandKindSubmitTask:
+		h.submitTaskCommand(w, r, request)
+	case domain.CommandKindDecision, "":
+		// A missing kind is treated as a decision for clients that predate the
+		// discriminator; the decision arm is otherwise unchanged.
+		h.submitDecisionCommand(w, r, request)
+	default:
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: "payload.kind is not a known command kind"})
+	}
+}
+
+func (h httpHandler) submitDecisionCommand(w http.ResponseWriter, r *http.Request, request clientCommandRequest) {
+	var arm decisionPayloadRequest
+	if err := strictjson.Decode(request.Payload, &arm, strictjson.TolerateInvalidUTF8, strictjson.Limit(maxCommandBodyBytes)); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: err.Error()})
+		return
+	}
+	if request.ExpectedEntityVersion == nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: "expected_entity_version is required"})
+		return
+	}
 	if request.ExpectedBindings == nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Message: "expected_bindings is required"})
 		return
 	}
-	for _, digest := range request.ExpectedBindings {
+	for _, digest := range *request.ExpectedBindings {
 		if digest == "" {
 			writeJSON(w, http.StatusBadRequest, errorResponse{Message: "expected_bindings values must be non-empty digests"})
 			return
 		}
 	}
-	if request.Payload.PRHeadSHA == nil {
+	if arm.PRHeadSHA == nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Message: "payload.pr_head_sha is required"})
 		return
 	}
-	if request.Payload.ArtifactDigests == nil {
+	if arm.ArtifactDigests == nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Message: "payload.artifact_digests is required"})
 		return
 	}
-	if request.DeviceID != authenticatedDevice {
-		writeJSON(w, http.StatusForbidden, errorResponse{Message: "device_id does not match the authenticated device"})
-		return
-	}
 	payload := DecisionPayload{
-		ItemID: request.Payload.ItemID, Action: request.Payload.Action,
-		ItemVersion: request.Payload.ItemVersion, PRHeadSHA: *request.Payload.PRHeadSHA,
-		ArtifactDigests:     *request.Payload.ArtifactDigests,
-		RunProposalRevision: request.Payload.RunProposalRevision,
-		SnoozeUntil:         request.Payload.SnoozeUntil,
-		AlternativeChoices:  request.Payload.AlternativeChoices,
+		ItemID: arm.ItemID, Action: arm.Action,
+		ItemVersion: arm.ItemVersion, PRHeadSHA: *arm.PRHeadSHA,
+		ArtifactDigests:     *arm.ArtifactDigests,
+		RunProposalRevision: arm.RunProposalRevision,
+		SnoozeUntil:         arm.SnoozeUntil,
+		AlternativeChoices:  arm.AlternativeChoices,
 	}
-	if request.Payload.CapabilityManifestDigest != nil {
-		digest := *request.Payload.CapabilityManifestDigest
+	if arm.CapabilityManifestDigest != nil {
+		digest := *arm.CapabilityManifestDigest
 		payload.CapabilityManifestDigest = &digest
 	}
-	if request.Payload.AnswerRoute != nil {
-		route := *request.Payload.AnswerRoute
+	if arm.AnswerRoute != nil {
+		route := *arm.AnswerRoute
 		payload.AnswerRoute = &route
 	}
-	if request.Payload.DecisionActionSurfaceDigest != nil {
-		digest := *request.Payload.DecisionActionSurfaceDigest
+	if arm.DecisionActionSurfaceDigest != nil {
+		digest := *arm.DecisionActionSurfaceDigest
 		payload.DecisionActionSurfaceDigest = &digest
 	}
-	if request.Payload.Message != nil {
-		payload.Message = *request.Payload.Message
+	if arm.Message != nil {
+		payload.Message = *arm.Message
 	}
-	if request.Payload.Attachments != nil {
-		payload.Attachments = *request.Payload.Attachments
+	if arm.Attachments != nil {
+		payload.Attachments = *arm.Attachments
 	}
 	result, err := h.service.Submit(r.Context(), ClientCommand{
 		CommandID: request.CommandID, DeviceID: request.DeviceID,
-		ExpectedEntityVersion: request.ExpectedEntityVersion,
+		Kind:                  domain.CommandKindDecision,
+		ExpectedEntityVersion: *request.ExpectedEntityVersion,
 		Payload:               payload,
+	})
+	if err != nil {
+		writeCommandError(w, h.service.blobs, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, normalizeCommandResult(result))
+}
+
+func (h httpHandler) submitTaskCommand(w http.ResponseWriter, r *http.Request, request clientCommandRequest) {
+	// A submit_task command binds to no entity, so the decision envelope must be
+	// absent; carrying it is malformed (api/openapi.yaml).
+	if request.ExpectedEntityVersion != nil || request.ExpectedBindings != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{
+			Message: "submit_task command must not carry expected_entity_version or expected_bindings",
+		})
+		return
+	}
+	var arm submitTaskPayloadRequest
+	if err := strictjson.Decode(request.Payload, &arm, strictjson.TolerateInvalidUTF8, strictjson.Limit(maxCommandBodyBytes)); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: err.Error()})
+		return
+	}
+	if arm.ProjectID == "" {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: "payload.project_id is required"})
+		return
+	}
+	if arm.Source == "" {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: "payload.source is required"})
+		return
+	}
+	name := ""
+	if arm.Name != nil {
+		if *arm.Name == "" {
+			writeJSON(w, http.StatusBadRequest, errorResponse{Message: "payload.name must be non-empty when present"})
+			return
+		}
+		name = *arm.Name
+	}
+	result, err := h.service.Submit(r.Context(), ClientCommand{
+		CommandID: request.CommandID, DeviceID: request.DeviceID,
+		Kind:       domain.CommandKindSubmitTask,
+		SubmitTask: SubmitTaskPayload{ProjectID: arm.ProjectID, Source: arm.Source, Name: name},
 	})
 	if err != nil {
 		writeCommandError(w, h.service.blobs, err)
@@ -712,6 +808,7 @@ func isCommandRequestError(err error) bool {
 		// it, so it is a request error like the unstored-digest case.
 		ErrInvalidDigest,
 		store.ErrActionNotOffered, store.ErrImmutableConflict,
+		ErrInvalidSubmitTaskPayload,
 		domain.ErrEmptyID, domain.ErrEmptyField, domain.ErrInvalidAction, domain.ErrInvalidAnswerRoute,
 		domain.ErrNonPositive, domain.ErrDigestsNotCanonical, domain.ErrDuplicate,
 	} {

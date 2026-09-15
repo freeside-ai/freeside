@@ -183,6 +183,19 @@ func TestSignetWireGoldens(t *testing.T) {
 			}),
 		},
 		{
+			name: "task-submission-result",
+			value: normalizeCommandResult(CommandResult{
+				Submission: &domain.TaskSubmission{
+					CommandID: "cmd-570", DeviceID: "device-569", ProjectID: "project-569",
+					SourceDigest:       domain.Digest("sha256:" + strings.Repeat("6", 64)),
+					TaskID:             "task-570",
+					SpecificationRunID: "run-570",
+					Name:               domain.DisplayName{Text: "Add a health endpoint", Source: domain.DisplayNameSourceOperator},
+				},
+				Revision: 26,
+			}),
+		},
+		{
 			name: "stale-version-409",
 			value: staleVersionResponse{
 				Message: "stale item version",

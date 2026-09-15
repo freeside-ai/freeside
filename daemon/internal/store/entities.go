@@ -1954,6 +1954,14 @@ func (tx *WriteTx) PutCommand(ctx context.Context, command domain.Command) error
 		}
 		return fmt.Errorf("put command %q: %w", command.CommandID, ErrImmutableConflict)
 	}
+	// The command_id is unique across command kinds: a task-submission command
+	// already recorded under this id makes this decision an immutable conflict.
+	if conflict, err := tx.existingBody(ctx,
+		`SELECT body FROM task_submission_commands WHERE command_id = ?`, command.CommandID); err != nil {
+		return fmt.Errorf("put command %q: %w", command.CommandID, err)
+	} else if conflict != nil {
+		return fmt.Errorf("put command %q: %w", command.CommandID, ErrImmutableConflict)
+	}
 	// GetAttentionItem returns a wrapped ErrNotFound when the bound item does not
 	// exist (a command can only decide an item that is present), and re-runs the
 	// evidence gate so the item compared against is itself well-formed.

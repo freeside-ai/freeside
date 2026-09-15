@@ -176,7 +176,8 @@ public struct DiskCacheStore: CacheStore {
 
     public func load() -> CachedState? {
         guard let data = try? Data(contentsOf: fileURL),
-            let file = try? Self.decoder.decode(CacheFile.self, from: data)
+            let file = try? Self.decoder.decode(
+                CacheFile.self, from: Self.migratingLegacyCommandKinds(data))
         else { return nil }
         switch file.format {
         case Self.format:
@@ -201,6 +202,40 @@ public struct DiskCacheStore: CacheStore {
         default:
             return nil
         }
+    }
+
+    /// Injects the client-command payload discriminator into legacy ledger
+    /// entries so they survive the upgrade that added it. Before the payload
+    /// became a `kind`-discriminated union (submit_task), a persisted decision
+    /// command encoded a bare, `kind`-less payload; the generated decoder now
+    /// requires the discriminator, so one such entry would fail
+    /// `PendingCommandEntry` decoding and drop the whole ledger with its
+    /// retryable command IDs (plan §5.14 sync test 4, #115). Decision was the
+    /// only pre-union kind, so a missing discriminator is `decision`. The bytes
+    /// are returned unchanged when nothing needs migrating or they are not the
+    /// expected object shape (a corrupt file still fails the normal decode).
+    private static func migratingLegacyCommandKinds(_ data: Data) -> Data {
+        guard var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+            var state = root["state"] as? [String: Any],
+            var pending = state["pendingCommands"] as? [String: Any]
+        else { return data }
+        var changed = false
+        for (itemID, entryValue) in pending {
+            guard var entry = entryValue as? [String: Any],
+                var command = entry["command"] as? [String: Any],
+                var payload = command["payload"] as? [String: Any],
+                payload["kind"] == nil
+            else { continue }
+            payload["kind"] = "decision"
+            command["payload"] = payload
+            entry["command"] = command
+            pending[itemID] = entry
+            changed = true
+        }
+        guard changed else { return data }
+        state["pendingCommands"] = pending
+        root["state"] = state
+        return (try? JSONSerialization.data(withJSONObject: root)) ?? data
     }
 
     public func save(_ state: CachedState) throws {

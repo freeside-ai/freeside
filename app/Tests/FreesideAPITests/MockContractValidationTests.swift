@@ -1046,7 +1046,7 @@ import Testing
     @Test func retiredChooseAlternateProfileFailsCommandDecode() throws {
         let snapshot = AttentionFixtures.fixture(type: .publish_blocked)
         var valid = command(against: snapshot)
-        valid.payload.action = .rerun_trust_evaluation
+        valid.payload.asDecision.action = .rerun_trust_evaluation
         let encoded = try JSONEncoder().encode(valid)
         _ = try JSONDecoder().decode(Components.Schemas.ClientCommand.self, from: encoded)
 
@@ -1074,12 +1074,12 @@ import Testing
         }
         expectMalformed(reason: "empty item_id") {
             var c = command(against: snapshot)
-            c.payload.item_id = ""
+            c.payload.asDecision.item_id = ""
             return c
         }
         expectMalformed(reason: "non-positive item_version") {
             var c = command(against: snapshot)
-            c.payload.item_version = 0
+            c.payload.asDecision.item_version = 0
             return c
         }
         expectMalformed(reason: "non-positive expected_entity_version") {
@@ -1089,38 +1089,38 @@ import Testing
         }
         expectMalformed(reason: "empty artifact digest") {
             var c = command(against: snapshot)
-            c.payload.artifact_digests = [""]
+            c.payload.asDecision.artifact_digests = [""]
             return c
         }
         expectMalformed(reason: "empty attachment digest") {
             var c = command(against: snapshot)
-            c.payload.attachments = [""]
+            c.payload.asDecision.attachments = [""]
             return c
         }
         expectMalformed(reason: "duplicate attachment digest") {
             var c = command(against: snapshot)
-            c.payload.attachments = ["sha256:a", "sha256:a"]
+            c.payload.asDecision.attachments = ["sha256:a", "sha256:a"]
             return c
         }
 
         let adjudication = AttentionFixtures.fixture(type: .finding_adjudication)
         expectMalformed(reason: "invalid alternative_choices") {
             var c = command(against: adjudication)
-            c.payload.action = .choose_alternative_route
+            c.payload.asDecision.action = .choose_alternative_route
             return c
         }
         expectMalformed(reason: "finding adjudication input on accept") {
             var c = command(against: adjudication)
-            c.payload.action = .accept_recommended_route
-            c.payload.alternative_choices = [
+            c.payload.asDecision.action = .accept_recommended_route
+            c.payload.asDecision.alternative_choices = [
                 .init(finding_id: "review-finding-17", route: ._defer)
             ]
             return c
         }
         expectMalformed(reason: "invalid run_proposal_revision") {
             var c = command(against: AttentionFixtures.fixture(type: .run_proposal))
-            c.payload.action = .start_with_changes
-            c.payload.run_proposal_revision = .init(
+            c.payload.asDecision.action = .start_with_changes
+            c.payload.asDecision.run_proposal_revision = .init(
                 value1: .init(
                     intent: .implement_subject,
                     expected_cost_units: 25,
@@ -1131,16 +1131,16 @@ import Testing
                     )
                 )
             )
-            c.payload.alternative_choices = [
+            c.payload.asDecision.alternative_choices = [
                 .init(finding_id: "review-finding-17", route: .dispute)
             ]
             return c
         }
         expectMalformed(reason: "invalid snooze_until") {
             var c = command(against: AttentionFixtures.fixture(type: .run_proposal))
-            c.payload.action = .snooze
-            c.payload.snooze_until = Date(timeIntervalSince1970: 1_786_506_245)
-            c.payload.alternative_choices = [
+            c.payload.asDecision.action = .snooze
+            c.payload.asDecision.snooze_until = Date(timeIntervalSince1970: 1_786_506_245)
+            c.payload.asDecision.alternative_choices = [
                 .init(finding_id: "review-finding-17", route: .dispute)
             ]
             return c
@@ -1311,13 +1311,15 @@ import Testing
             device_id: "device-mock",
             expected_entity_version: snapshot.entity_version,
             expected_bindings: .init(additionalProperties: [:]),
-            payload: .init(
-                item_id: snapshot.item.id,
-                action: snapshot.item.requested_decision[0],
-                item_version: snapshot.item.item_version,
-                pr_head_sha: snapshot.item.pr_head_sha,
-                artifact_digests: snapshot.item.artifact_digests
-            )
+            payload: .decision(
+                .init(
+                    kind: .decision,
+                    item_id: snapshot.item.id,
+                    action: snapshot.item.requested_decision[0],
+                    item_version: snapshot.item.item_version,
+                    pr_head_sha: snapshot.item.pr_head_sha,
+                    artifact_digests: snapshot.item.artifact_digests
+                ))
         )
     }
 

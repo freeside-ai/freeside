@@ -782,3 +782,42 @@ func TestIntakeRegistersOwnProjectAndAdmits(t *testing.T) {
 		t.Fatalf("project repository = %d, want %d", project.RepositoryID, intakeTestRepoID)
 	}
 }
+
+func TestManualInitiatorLookup(t *testing.T) {
+	t.Parallel()
+	prov := domain.KeyProvenance{Source: domain.ProvenancePreset, Digest: domain.Digest(contentaddr.Sum([]byte("initiator-lookup-test")))}
+	keysA := []domain.PolicyKey{{Key: "paths", Value: "daemon/**", Provenance: prov}}
+	keysB := []domain.PolicyKey{{Key: "paths", Value: "app/**", Provenance: prov}}
+	author := engine.ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 1}
+	lookup := manualInitiatorLookup([]intakeInitiator{
+		{ProjectID: "project-1", PolicyKeys: keysA, CommitAuthor: author},
+		{ProjectID: "project-1", PolicyKeys: keysA, CommitAuthor: author}, // agreeing duplicate resolves
+		{ProjectID: "project-2", PolicyKeys: keysA, CommitAuthor: author},
+		{ProjectID: "project-2", PolicyKeys: keysB, CommitAuthor: author}, // disagreement refuses
+	})
+	if got, ok := lookup("project-1"); !ok || !slices.Equal(got.PolicyKeys, keysA) || got.CommitAuthor != author {
+		t.Fatalf("project-1 lookup = %+v ok=%v, want the agreed initiator", got, ok)
+	}
+	if _, ok := lookup("project-2"); ok {
+		t.Fatal("project-2 has disagreeing initiators; lookup must refuse")
+	}
+	if _, ok := lookup("project-unknown"); ok {
+		t.Fatal("unconfigured project must be absent")
+	}
+
+	// Two initiators for one project whose policy keys are identical but listed
+	// in a different order are the same policy, not a conflict: the resolved
+	// policy is order-independent, so the lookup resolves rather than refusing.
+	keysMulti := []domain.PolicyKey{
+		{Key: "paths", Value: "daemon/**", Provenance: prov},
+		{Key: "wip_cap", Value: "3", Provenance: prov},
+	}
+	keysReordered := []domain.PolicyKey{keysMulti[1], keysMulti[0]}
+	reordered := manualInitiatorLookup([]intakeInitiator{
+		{ProjectID: "project-3", PolicyKeys: keysMulti, CommitAuthor: author},
+		{ProjectID: "project-3", PolicyKeys: keysReordered, CommitAuthor: author},
+	})
+	if _, ok := reordered("project-3"); !ok {
+		t.Fatal("reordered but identical policy keys must resolve, not refuse")
+	}
+}

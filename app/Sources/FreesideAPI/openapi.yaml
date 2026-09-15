@@ -513,19 +513,24 @@ paths:
       tags: [commands]
       summary: Submit a client command
       description: |
-        The single mutation surface for judgment-bearing decisions on
-        synchronized domain state: every such client mutation is a
-        ClientCommand (plan §5.14); only the credential control surface
-        (pairing, revocation), attachment upload, and the delivery opened
-        receipt (monotonic telemetry, reportDeliveryOpened) sit outside
+        The single mutation surface for client decisions on synchronized
+        domain state: every such client mutation is a ClientCommand (plan
+        §5.14), discriminated by its payload kind. A `decision` command
+        decides an attention item; a `submit_task` command creates or fetches
+        a task from source text (plan §5.11). Only the credential control
+        surface (pairing, revocation), attachment upload, and the delivery
+        opened receipt (monotonic telemetry, reportDeliveryOpened) sit outside
         it. Submission is idempotent by
         `command_id`: the daemon records each command's result in the same
         transaction that applies it, and a retry of an already-committed
         `command_id` returns the original recorded result without applying
         anything again (a lost HTTP response is recovered by retrying, sync
-        test 4). Optimistic concurrency: a command prepared against a stale
-        `expected_entity_version` (or stale bindings) is rejected with the
-        replacement state and no side effect (sync test 2).
+        test 4). A `command_id` is unique across command kinds. Optimistic
+        concurrency applies to a `decision` command: one prepared against a
+        stale `expected_entity_version` (or stale bindings) is rejected with
+        the replacement state and no side effect (sync test 2). A `submit_task`
+        command carries no such envelope and is serialized only by its
+        project-scoped intake key.
       requestBody:
         required: true
         description: The command to apply, prepared against canonical state.
@@ -2268,15 +2273,17 @@ components:
     ClientCommand:
       type: object
       description: >
-        Every client mutation. Carries exactly these five fields. The
-        payload is now typed for the decision command (the first exercised
-        command type); other command types are typed as the signet/saddle
-        pair exercises the surface, via kind:contract changes.
+        Every client mutation. The payload's kind discriminates the command
+        type: a decision command (the first exercised type) decides an
+        attention item and carries expected_entity_version and
+        expected_bindings; a submit_task command creates or fetches a task
+        from source text and binds to no entity, so it carries neither
+        envelope field and is rejected as malformed if it does. New command
+        types are typed as the signet/saddle pair exercises the surface, via
+        kind:contract changes.
       required:
         - command_id
         - device_id
-        - expected_entity_version
-        - expected_bindings
         - payload
       additionalProperties: false
       properties:
@@ -2285,7 +2292,8 @@ components:
           minLength: 1
           description: >
             Client-generated idempotency key; a retry with the same
-            command_id returns the original recorded result.
+            command_id returns the original recorded result. A command_id is
+            unique across command kinds.
         device_id:
           type: string
           minLength: 1
@@ -2295,7 +2303,8 @@ components:
           format: int64
           minimum: 1
           description: >
-            The entity_version of the target entity the command was
+            Required for a decision command; absent for a submit_task
+            command. The entity_version of the target entity the command was
             prepared against; a mismatch rejects the command with the
             replacement state.
         expected_bindings:
@@ -2303,15 +2312,22 @@ components:
           additionalProperties:
             $ref: "#/components/schemas/Digest"
           description: >
-            Provisional. The digest-bound inputs the command was prepared
-            against, keyed by binding name; checked with
-            expected_entity_version. For a decision command the authoritative
-            binding set is the payload's item_version, pr_head_sha, and
-            artifact_digests (the daemon cross-checks those against the live
-            item); this map stays for command types that name individual
-            bindings.
+            Required for a decision command; absent for a submit_task command.
+            The digest-bound inputs the command was prepared against, keyed by
+            binding name; checked with expected_entity_version. For a decision
+            command the authoritative binding set is the payload's
+            item_version, pr_head_sha, and artifact_digests (the daemon
+            cross-checks those against the live item); this map stays for
+            command types that name individual bindings.
         payload:
-          $ref: "#/components/schemas/DecisionPayload"
+          oneOf:
+            - $ref: "#/components/schemas/DecisionPayload"
+            - $ref: "#/components/schemas/SubmitTaskPayload"
+          discriminator:
+            propertyName: kind
+            mapping:
+              decision: "#/components/schemas/DecisionPayload"
+              submit_task: "#/components/schemas/SubmitTaskPayload"
       example:
         command_id: "cmd-1"
         device_id: "device-1"
@@ -2319,6 +2335,7 @@ components:
         expected_bindings:
           evidence: "sha256:log"
         payload:
+          kind: "decision"
           item_id: "item-1"
           action: "open_pr"
           item_version: 1
@@ -2335,9 +2352,12 @@ components:
         approval cannot commit against inputs that changed after it was
         rendered (the stale-approval class, plan §3.1; §4 "approvals bind to
         digests"). Mirrors the binding fields of domain.Command.
-      required: [item_id, action, item_version, pr_head_sha, artifact_digests]
+      required: [kind, item_id, action, item_version, pr_head_sha, artifact_digests]
       additionalProperties: false
       properties:
+        kind:
+          type: string
+          enum: [decision]
         item_id:
           type: string
           minLength: 1
@@ -2435,11 +2455,52 @@ components:
             offered actions; it can only reject. Absent for a client build
             that does not adopt the action surface.
       example:
+        kind: "decision"
         item_id: "item-1"
         action: "open_pr"
         item_version: 1
         pr_head_sha: "cafebabe"
         artifact_digests: ["sha256:img", "sha256:log"]
+
+    SubmitTaskPayload:
+      type: object
+      description: >
+        The payload of a submit_task command (plan §5.11): the project to
+        submit into, the source text of the task, and an optional operator
+        name. It binds to no attention item and to no other entity, so it
+        carries no expected_entity_version and no expected_bindings. The
+        project-scoped intake key (project_id plus the source digest) is the
+        command's only concurrency control: the same source in one project
+        fetches the same task, so a distinct command_id starts no second
+        specification run, while the same source in another project creates a
+        distinct task. The operator name applies only when the command creates
+        the task; a fetch of an existing task ignores it.
+      required: [kind, project_id, source]
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum: [submit_task]
+        project_id:
+          type: string
+          minLength: 1
+          description: The project the task is submitted into.
+        source:
+          type: string
+          minLength: 1
+          description: The task's source text, registered as a digest-addressed artifact.
+        name:
+          type: string
+          minLength: 1
+          description: >
+            Optional operator-chosen task name, stored with source operator so
+            the namer never runs for it. Applied only on creation; ignored when
+            the command fetches an existing task.
+      example:
+        kind: "submit_task"
+        project_id: "project-1"
+        source: "Add a health endpoint to the API."
+        name: "Health endpoint"
 
     CommandRecord:
       type: object
@@ -2449,6 +2510,7 @@ components:
         bindings the decision was accepted against; the daemon keys it by
         command_id and a retry returns it unchanged (sync test 4).
       required:
+        - kind
         - command_id
         - device_id
         - item_id
@@ -2462,6 +2524,9 @@ components:
         - decision_evidence
       additionalProperties: false
       properties:
+        kind:
+          type: string
+          enum: [decision]
         command_id:
           type: string
           minLength: 1
@@ -2514,6 +2579,7 @@ components:
             query; never an authorization input. Null when the command
             referenced no surface and the item had no recommendation.
       example:
+        kind: "decision"
         command_id: "cmd-1"
         device_id: "device-1"
         item_id: "item-1"
@@ -2525,6 +2591,68 @@ components:
         attachments: []
         answer_route: null
         decision_evidence: null
+
+    TaskSubmissionRecord:
+      type: object
+      description: >
+        The durable, immutable record of one accepted submit_task command
+        (domain.TaskSubmission; plan §5.11, §5.14). It names the task the
+        command created or fetched and its specification run, keyed by
+        command_id; a retry returns it unchanged. The name is the task's
+        stored name, so a fetch reports the name the first submission won.
+      required:
+        - kind
+        - command_id
+        - device_id
+        - project_id
+        - source_digest
+        - task_id
+        - specification_run_id
+        - name
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum: [submit_task]
+        command_id:
+          type: string
+          minLength: 1
+        device_id:
+          type: string
+          minLength: 1
+        project_id:
+          type: string
+          minLength: 1
+        source_digest:
+          allOf:
+            - $ref: "#/components/schemas/Digest"
+          description: The sha256 digest of the submitted source text.
+        task_id:
+          type: string
+          minLength: 1
+          description: The task the command created or fetched by the intake key.
+        specification_run_id:
+          type: string
+          minLength: 1
+          description: The task's specification run started (or already present).
+        name:
+          allOf:
+            - $ref: "#/components/schemas/DisplayName"
+          description: >
+            The task's stored display name; the operator name when this
+            command created the task, otherwise the name the first submission
+            recorded.
+      example:
+        kind: "submit_task"
+        command_id: "cmd-2"
+        device_id: "device-1"
+        project_id: "project-1"
+        source_digest: "sha256:src"
+        task_id: "task-1"
+        specification_run_id: "run-1"
+        name:
+          text: "Health endpoint"
+          source: "operator"
 
     CommandDecisionEvidence:
       type: object
@@ -2569,7 +2697,14 @@ components:
       additionalProperties: false
       properties:
         record:
-          $ref: "#/components/schemas/CommandRecord"
+          oneOf:
+            - $ref: "#/components/schemas/CommandRecord"
+            - $ref: "#/components/schemas/TaskSubmissionRecord"
+          discriminator:
+            propertyName: kind
+            mapping:
+              decision: "#/components/schemas/CommandRecord"
+              submit_task: "#/components/schemas/TaskSubmissionRecord"
         revision:
           type: integer
           format: int64
@@ -2577,6 +2712,7 @@ components:
           description: The server revision of the transaction that applied the command.
       example:
         record:
+          kind: "decision"
           command_id: "cmd-1"
           device_id: "device-1"
           item_id: "item-1"

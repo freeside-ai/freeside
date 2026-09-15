@@ -1509,6 +1509,13 @@ func TestGolden(t *testing.T) {
 		{"comprehension_event_action_taken", comprehensionActionTaken},
 		{"comprehension_defect", comprehensionDefect},
 		{"command_with_decision_evidence", commandWithEvidence},
+		{"task_submission", domain.TaskSubmission{
+			CommandID: "cmd-2", DeviceID: "device-1", ProjectID: "proj-1",
+			SourceDigest:       "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+			TaskID:             "task-1",
+			SpecificationRunID: "run-1",
+			Name:               domain.DisplayName{Text: "Improve task navigation", Source: domain.DisplayNameSourceOperator},
+		}},
 		{"conversation", conversation},
 		{"message", msg},
 		{"agent_invocation", invocation},
