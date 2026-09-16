@@ -117,6 +117,39 @@ real_work_bounded_rig() {
 	return "$result"
 }
 
+# The caller holds the rig and owns the EXIT/INT/TERM cleanup traps. Keep the
+# PID in its shell so normal completion and interruption stop the same daemon.
+real_work_recover_codex_credentials() {
+	local workdir=$1 db_path=$2 listen_address=$3
+	shift 3
+	if ! FREESIDE_REAL_RUN_SCHEMA_TEST=1 \
+		FREESIDE_REAL_RUN_STATE_ROOT="$FREESIDE_REAL_RUN_STATE_ROOT" \
+		"$workdir/verify-real-run" -test.run '^TestRealRunRetainedSchema$' -test.count=1 \
+		>"$workdir/verify-schema.log" 2>&1; then
+		echo 'Credential recovery requires a schema-compatible daemon; use the supported runtime upgrade before retrying. No recovery daemon was started.' >&2
+		return 1
+	fi
+	"$workdir/freesided" -listen "$listen_address" -db "$db_path" \
+		-state-dir "$FREESIDE_REAL_RUN_STATE_ROOT" -driver disabled \
+		-approved-recipe "$FREESIDE_REAL_RUN_APPROVED_RECIPE" "$@" >>"$workdir/daemon.log" 2>&1 &
+	daemon_pid=$!
+	local healthy=false
+	for _ in $(seq 1 60); do
+		child_job_exists "$daemon_pid" && require_live_rig || return 1
+		if curl --fail --silent --max-time 2 "http://$listen_address/health" >/dev/null; then
+			healthy=true
+			break
+		fi
+		sleep 1
+	done
+	[[ "$healthy" == true ]] || { echo 'Credential recovery daemon did not become healthy' >&2; return 1; }
+	printf 'Credential recovery endpoint: http://%s (execution disabled)\n' "$listen_address" >&2
+	printf 'Pairing code: %q pairing-code -state-dir %q\n' "$workdir/freesided" "$FREESIDE_REAL_RUN_STATE_ROOT" >&2
+	echo 'Inspect the re-enrollment hold in a paired client and choose Resolve re-enrollment.' >&2
+	printf 'Complete explicitly: bash %q complete %q\n' "$workdir/real-work-session.sh" "$workdir" >&2
+	real_work_walkthrough "$workdir" "$daemon_pid"
+}
+
 # No stdin or deadline can complete a walkthrough. Liveness is checked before
 # the completion request, so a dead service never counts as a successful tour.
 real_work_walkthrough() {
