@@ -1411,11 +1411,11 @@ extension MockServerTests {
         ).ok.body.json
         #expect(replay.record.asSubmitTask.task_id == record.task_id)
 
-        // A distinct command_id with the same source converges on the same task.
+        // A distinct command_id with the same source creates separate work.
         let converged = try await client.submitCommand(
             body: .json(submitTaskCommand("cmd-2", project: "project-1", source: "Add retries."))
         ).ok.body.json
-        #expect(converged.record.asSubmitTask.task_id == record.task_id)
+        #expect(converged.record.asSubmitTask.task_id != record.task_id)
 
         // The same source in another project is a distinct task.
         let other = try await client.submitCommand(

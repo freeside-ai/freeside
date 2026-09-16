@@ -149,6 +149,7 @@ final class FailableTransport: ClientTransport, @unchecked Sendable {
     private let base: any ClientTransport
     private let lock = NSLock()
     private var failingOperations: Set<String> = []
+    private var lostResponseOperations: Set<String> = []
     private var operationCounts: [String: Int] = [:]
 
     init(base: any ClientTransport = URLSessionTransport()) {
@@ -160,7 +161,14 @@ final class FailableTransport: ClientTransport, @unchecked Sendable {
     }
 
     func restore() {
-        lock.withLock { failingOperations = [] }
+        lock.withLock {
+            failingOperations = []
+            lostResponseOperations = []
+        }
+    }
+
+    func loseResponses(operations: Set<String>) {
+        lock.withLock { lostResponseOperations = operations }
     }
 
     func count(for operationID: String) -> Int {
@@ -175,7 +183,9 @@ final class FailableTransport: ClientTransport, @unchecked Sendable {
             return failingOperations.contains(operationID)
         }
         if failing { throw ConvergenceOutage() }
-        return try await base.send(request, body: body, baseURL: baseURL, operationID: operationID)
+        let result = try await base.send(request, body: body, baseURL: baseURL, operationID: operationID)
+        if lock.withLock({ lostResponseOperations.contains(operationID) }) { throw ConvergenceOutage() }
+        return result
     }
 }
 

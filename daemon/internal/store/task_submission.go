@@ -2,10 +2,46 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
+
+// TaskSubmissionRequestDigest is absent only for historical command records,
+// whose submitted optional name was never persisted.
+func (tx *ReadTx) TaskSubmissionRequestDigest(ctx context.Context, commandID string) (domain.Digest, error) {
+	var digest sql.NullString
+	if err := tx.tx.QueryRowContext(ctx, `SELECT request_digest FROM task_submission_commands WHERE command_id = ?`, commandID).Scan(&digest); err != nil {
+		return "", notFoundOr(err)
+	}
+	if digest.Valid && !contentaddr.Valid(digest.String) {
+		return "", errRowInconsistent
+	}
+	return domain.Digest(digest.String), nil
+}
+
+// PutTaskSubmissionRequest records a new command's original decoded request
+// without changing its public response body or historical replay semantics.
+func (tx *WriteTx) PutTaskSubmissionRequest(ctx context.Context, submission domain.TaskSubmission, digest domain.Digest) error {
+	if !contentaddr.Valid(string(digest)) {
+		return domain.ErrInvalidDigest
+	}
+	if existing, err := tx.TaskSubmissionRequestDigest(ctx, submission.CommandID); err == nil {
+		if existing != digest {
+			return ErrImmutableConflict
+		}
+	} else if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	if err := tx.PutTaskSubmission(ctx, submission); err != nil {
+		return err
+	}
+	_, err := tx.tx.ExecContext(ctx, `UPDATE task_submission_commands SET request_digest = ? WHERE command_id = ? AND request_digest IS NULL`, digest, submission.CommandID)
+	return err
+}
 
 const putTaskSubmissionSQL = `
 INSERT INTO task_submission_commands

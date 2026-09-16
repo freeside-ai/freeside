@@ -25,7 +25,7 @@ type ManualInitiator struct {
 }
 
 // TaskSubmitter is the engine-backed implementation of signet.TaskSubmitter: it
-// creates or fetches the task for a submitted source inside the accepting
+// creates a task for a deliberate submission inside the accepting
 // transaction. It holds the shared blob store (for the policy bytes it
 // registers) and a per-project initiator lookup; it needs no *Engine, so the
 // daemon composition can construct it before the engine is wired.
@@ -41,23 +41,19 @@ func NewTaskSubmitter(blobs *signet.BlobStore, initiator func(domain.ProjectID) 
 	return &TaskSubmitter{blobs: blobs, initiator: initiator}
 }
 
-// SubmitTask creates or fetches the task for (project, source) inside the
-// caller's transaction and returns its identity. The project-scoped intake key
-// is the only concurrency control: an existing task is reused (its recorded
-// specification run and name), so a configuration change after creation moves
-// no existing identity; only the first submission composes the policy,
-// publication, and work-unit declaration and starts the specification run. A
+// SubmitTask creates a task for the command identity inside the caller's
+// transaction. The boundary replays recorded commands before invoking it;
+// every new command composes policy, publication, and work-unit bindings. A
 // project with no configured initiator is reported as store.ErrNotFound so the
 // boundary answers 404 without enumerating projects. An operator name that
 // fails the canonical bound is refused as ErrInvalidSubmitTaskPayload before
-// any write, whether the source would create or fetch a task.
+// any write.
 func (t *TaskSubmitter) SubmitTask(ctx context.Context, tx *store.WriteTx, in signet.TaskSubmissionInput) (signet.TaskSubmissionResult, error) {
 	if t.blobs == nil {
 		return signet.TaskSubmissionResult{}, errors.New("task submitter has no blob store")
 	}
 	// Canonicalize the operator name before any write, so an invalid name is
-	// refused whether the source creates a new task or fetches an existing one,
-	// and never leaves a durable row. The error carries no name text (it may be
+	// refused without leaving a durable row. The error carries no name text (it may be
 	// the refused secret) and wraps ErrInvalidSubmitTaskPayload so the boundary
 	// answers 400.
 	operatorName := in.OperatorName
@@ -75,19 +71,6 @@ func (t *TaskSubmitter) SubmitTask(ctx context.Context, tx *store.WriteTx, in si
 	if err := RegisterSubmissionArtifact(ctx, tx, sourceArtifact); err != nil {
 		return signet.TaskSubmissionResult{}, err
 	}
-	// Fetch an existing task by the project-scoped intake key; the same source
-	// in one project always fetches the same task, so no second run starts.
-	intakeKey := "source:" + string(in.SourceDigest)
-	if task, err := tx.GetTaskByIntakeKey(ctx, in.ProjectID, intakeKey); err == nil {
-		runID, err := existingTaskSpecificationRunID(ctx, tx, task)
-		if err != nil {
-			return signet.TaskSubmissionResult{}, err
-		}
-		return signet.TaskSubmissionResult{TaskID: task.ID, SpecificationRunID: runID, Name: task.Name}, nil
-	} else if !errors.Is(err, store.ErrNotFound) {
-		return signet.TaskSubmissionResult{}, err
-	}
-
 	// Create path. Resolve the project's submission policy; an unconfigured
 	// project is refused before any write beyond the idempotent source artifact.
 	if t.initiator == nil {
@@ -117,7 +100,8 @@ func (t *TaskSubmitter) SubmitTask(ctx context.Context, tx *store.WriteTx, in si
 	if err != nil {
 		return signet.TaskSubmissionResult{}, err
 	}
-	implementationRunID := SubmissionRunID(in.ProjectID, in.SourceDigest, policyKeysDigest, publicationDigest, "")
+	identity := "client:" + in.CommandID
+	implementationRunID := ManualSubmissionRunID(identity, in.ProjectID, in.SourceDigest, policyKeysDigest, publicationDigest, "")
 	specificationRunID, err := SpecificationRunIDForImplementation(implementationRunID)
 	if err != nil {
 		return signet.TaskSubmissionResult{}, err
@@ -155,6 +139,10 @@ func (t *TaskSubmitter) SubmitTask(ctx context.Context, tx *store.WriteTx, in si
 		DeclaredPaths:       domain.CanonicalDeclaredPaths(resolvedPolicy),
 	}
 	submitted, err := SubmitSpecificationRunTx(ctx, tx, SpecificationRunSpec{
+		ManualSubmission: &domain.ManualSubmission{
+			Identity: identity, ProjectID: in.ProjectID, SourceArtifactID: sourceArtifact.ID,
+			SourceDigest: in.SourceDigest, RequestDigest: in.RequestDigest, ImplementationRunID: implementationRunID,
+		},
 		SpecificationRunID:  specificationRunID,
 		ImplementationRunID: implementationRunID,
 		ProjectID:           in.ProjectID,
@@ -180,28 +168,6 @@ func (t *TaskSubmitter) SubmitTask(ctx context.Context, tx *store.WriteTx, in si
 		return signet.TaskSubmissionResult{}, err
 	}
 	return signet.TaskSubmissionResult{TaskID: task.ID, SpecificationRunID: submitted.Run.ID, Name: task.Name}, nil
-}
-
-// existingTaskSpecificationRunID resolves the specification run of a task
-// fetched by intake key: the first campaign's initial attempt names it, and a
-// legacy campaign-less task uses its earliest run. A task reachable by a source
-// intake key with neither is surfaced rather than guessed.
-func existingTaskSpecificationRunID(ctx context.Context, tx *store.WriteTx, task domain.Task) (domain.RunID, error) {
-	if len(task.CampaignIDs) > 0 {
-		attempt, err := tx.GetProductionAttempt(ctx, task.CampaignIDs[0], 1)
-		if err != nil {
-			return "", err
-		}
-		return attempt.SpecificationRunID, nil
-	}
-	runIDs, err := tx.TaskRunIDs(ctx, task.ID)
-	if err != nil {
-		return "", err
-	}
-	if len(runIDs) == 0 {
-		return "", fmt.Errorf("task %q reached by a source intake key has no runs: %w", task.ID, domain.ErrParentKeyMismatch)
-	}
-	return runIDs[0], nil
 }
 
 // submissionTitle composes the reviewer-facing publication title: the operator

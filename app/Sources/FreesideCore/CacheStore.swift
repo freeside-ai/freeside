@@ -36,6 +36,8 @@ public struct SyncCursors: Codable, Equatable, Sendable {
 /// never belongs here; it lives in the Keychain alone, and a
 /// ClientCommand carries no token, so the ledger adds no credential.
 public struct CachedState: Codable, Equatable, Sendable {
+    public var pendingTaskSubmissions: [String: Components.Schemas.ClientCommand]?
+    public var submissionDaemonID: String?
     public var cursors: SyncCursors?
     public var attentionItems: [Components.Schemas.AttentionItemSnapshot]
     public var conversations: [Components.Schemas.ConversationSnapshot]
@@ -73,6 +75,8 @@ public struct CachedState: Codable, Equatable, Sendable {
         tasks: [Components.Schemas.TaskSnapshot] = [],
         taskTimelines: [Components.Schemas.TaskTimeline] = [],
         pendingCommands: [String: InboxStore.PendingCommandEntry]? = nil,
+        pendingTaskSubmissions: [String: Components.Schemas.ClientCommand]? = nil,
+        submissionDaemonID: String? = nil,
         comprehensionQueue: [InboxStore.QueuedComprehensionEvent]? = nil,
         comprehensionSequence: Int? = nil,
         registeredCapabilityFingerprint: String? = nil,
@@ -87,6 +91,8 @@ public struct CachedState: Codable, Equatable, Sendable {
         self.tasks = tasks
         self.taskTimelines = taskTimelines
         self.pendingCommands = pendingCommands
+        self.pendingTaskSubmissions = pendingTaskSubmissions
+        self.submissionDaemonID = submissionDaemonID
         self.comprehensionQueue = comprehensionQueue
         self.comprehensionSequence = comprehensionSequence
         self.registeredCapabilityFingerprint = registeredCapabilityFingerprint
@@ -120,6 +126,9 @@ public struct CachedState: Codable, Equatable, Sendable {
         // section loads as absent without failing the whole file.
         pendingCommands = try? container.decodeIfPresent(
             [String: InboxStore.PendingCommandEntry].self, forKey: .pendingCommands)
+        pendingTaskSubmissions = try? container.decodeIfPresent(
+            [String: Components.Schemas.ClientCommand].self, forKey: .pendingTaskSubmissions)
+        submissionDaemonID = try? container.decodeIfPresent(String.self, forKey: .submissionDaemonID)
         // The telemetry queue and its state degrade independently too: an
         // undecodable section loads absent, costing at most queued events.
         comprehensionQueue = try? container.decodeIfPresent(

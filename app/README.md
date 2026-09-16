@@ -83,6 +83,17 @@ Signing needs an `Apple Development` identity, which Xcode mints from the free p
 
 **Sync-contract churn.** When a sync-contract change lands (the app's generated API client changes shape), the installed build is stale against the daemon and must be reinstalled; the weekly re-sign cadence makes that reinstall routine rather than a special step.
 
+## New Task Recovery
+
+Each Submit creates separate work, even with identical
+text. Mac and iPhone save the exact command before sending. After dismissal or
+restart, open **Unconfirmed submissions** from the Tasks toolbar to review
+saved requests and choose **Retry**. Recovery is a separate read-only screen;
+New task always opens a fresh form. Opening or reconnecting never sends a
+saved request automatically. Entries belong to the paired device and daemon;
+switching either does not replay another connection's commands. A failed local
+save prevents sending.
+
 ## Capturing screenshots
 
 The launch inputs above make a capture run deterministic end to end: no System Settings mutation, no accessibility scripting, no clicking. The only host permission involved is Screen Recording for the invoking terminal (a one-time grant `screencapture` prompts for). `-ApplePersistenceIgnoreState YES` skips AppKit saved-state restoration so the window opens at the scene default (960×640) regardless of how it was last resized.

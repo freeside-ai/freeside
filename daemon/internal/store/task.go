@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -118,9 +119,20 @@ func (tx *ReadTx) GetTaskSnapshot(ctx context.Context, id domain.TaskID) (Snapsh
 		if err != nil {
 			return Snapshotted[domain.Task]{}, err
 		}
-		if key != want {
+		if identity, manual := strings.CutPrefix(key, "submission:"); manual {
+			submission, err := tx.GetManualSubmission(ctx, identity)
+			if err != nil {
+				return Snapshotted[domain.Task]{}, err
+			}
+			if submission.ProjectID != projectID || task.Source.Kind != domain.SpecificationSourceWorkItemArtifact ||
+				submission.SourceArtifactID != task.Source.WorkItemArtifactID || want != "source:"+string(submission.SourceDigest) {
+				return Snapshotted[domain.Task]{}, errRowInconsistent
+			}
+		} else if key != want {
 			return Snapshotted[domain.Task]{}, errRowInconsistent
 		}
+	} else if strings.HasPrefix(key, "submission:") {
+		return Snapshotted[domain.Task]{}, errRowInconsistent
 	}
 	// Lifecycle facts live in their own table, not the body. Load them and
 	// re-validate the assembled task: a bad log fails closed at reconstruction

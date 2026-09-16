@@ -92,6 +92,27 @@ with tempfile.TemporaryDirectory() as temp:
     (session / "composition-manifest.json").write_text(json.dumps(composition))
     (session / "rig-acquisition.json").write_text(json.dumps({"manifest": {"resources": {"seed_root": str(session / "seed")}}}))
     module.validate_session(session)
+    # New sessions bind the retained identity across all three artifacts;
+    # the legacy fixture above remains valid without an invented identity.
+    submission = json.loads((session / "submit.json").read_text())
+    submission["submission_id"] = "saved-submission"
+    composition["identity"]["submission_id"] = "saved-submission"
+    (session / "submission-id").write_text("saved-submission\n")
+    (session / "submit.json").write_text(json.dumps(submission))
+    (session / "composition-manifest.json").write_text(json.dumps(composition))
+    module.validate_session(session)
+    for value in ("other-submission", ""):
+        (session / "submission-id").write_text(value + "\n")
+        refuses(lambda: module.validate_session(session))
+    (session / "submission-id").write_text("saved-submission\n")
+    for artifact in ("submit.json", "composition-manifest.json"):
+        saved = (session / artifact).read_text()
+        changed = json.loads(saved)
+        target = changed if artifact == "submit.json" else changed["identity"]
+        target["submission_id"] = "other-submission"
+        (session / artifact).write_text(json.dumps(changed))
+        refuses(lambda: module.validate_session(session))
+        (session / artifact).write_text(saved)
     for file, bad in (("status", "walkthrough"), ("state-root", "/other"),
                       ("listener", "127.0.0.1:9999"), ("implementation-run", "run-other"),
                       ("implementation-invocation", "inv-other")):

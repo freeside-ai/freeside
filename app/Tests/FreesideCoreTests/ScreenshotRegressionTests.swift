@@ -342,6 +342,22 @@
                                 initialName: draftName))))
             }
 
+            let recoveryModel = try TaskSubmissionRecoveryScreenshots.model(client: client)
+            for (name, width, scheme) in [
+                ("new-task-recovery", CGFloat(380), ColorScheme.light),
+                ("new-task-recovery-dark", CGFloat(380), ColorScheme.dark),
+                ("new-task-recovery-phone", CGFloat(390), ColorScheme.light),
+                ("new-task-recovery-phone-dark", CGFloat(390), ColorScheme.dark),
+            ] {
+                surfaces.append(
+                    Surface(
+                        name: name, width: width, colorScheme: scheme,
+                        view: AnyView(
+                            TaskSubmissionRecoverySheet(
+                                model: recoveryModel, onRecovered: { _ in },
+                                rendersInteractiveControls: false))))
+            }
+
             // The Answer-and-retry composer with the route picker (#1083): the
             // operator answers and chooses whether to retry the implementer or
             // revise the specification. Captured on Mac and phone, light and dark.

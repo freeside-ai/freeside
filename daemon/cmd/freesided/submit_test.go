@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -158,7 +159,7 @@ func TestSubmitCommandBindsCompositionManifest(t *testing.T) {
 	cfg := submitCommandConfig{
 		DBPath: filepath.Join(root, "freeside.db"), TaskPath: taskPath,
 		PolicyPath: policyPath, PublicationPath: publicationPath,
-		CompositionPath: manifestPath, RequireComposition: true,
+		CompositionPath: manifestPath, RequireComposition: true, SubmissionID: "composition-test",
 		ProjectID: "proj-submit",
 	}
 	result, err := runSubmitCommand(ctx, cfg)
@@ -181,7 +182,7 @@ func TestSubmitCommandBindsCompositionManifest(t *testing.T) {
 	if err := os.WriteFile(manifestPath, changed, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runSubmitCommand(ctx, cfg); err == nil || !strings.Contains(err.Error(), "passing manifest does not bind") {
+	if _, err := runSubmitCommand(ctx, cfg); !errors.Is(err, store.ErrImmutableConflict) {
 		t.Fatalf("mismatched composition error = %v, want refusal", err)
 	}
 	changedManifest.Identity = identity
@@ -193,14 +194,14 @@ func TestSubmitCommandBindsCompositionManifest(t *testing.T) {
 	if err := os.WriteFile(manifestPath, changed, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runSubmitCommand(ctx, cfg); err == nil || !strings.Contains(err.Error(), "passing manifest does not bind") {
+	if _, err := runSubmitCommand(ctx, cfg); !errors.Is(err, store.ErrImmutableConflict) {
 		t.Fatalf("mismatched input digest error = %v, want refusal", err)
 	}
 	changed = bytes.Replace(manifest, []byte(`"status":"passed"`), []byte(`"status":"failed"`), 1)
 	if err := os.WriteFile(manifestPath, changed, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runSubmitCommand(ctx, cfg); err == nil || !strings.Contains(err.Error(), "passing manifest does not bind") {
+	if _, err := runSubmitCommand(ctx, cfg); !errors.Is(err, store.ErrImmutableConflict) {
 		t.Fatalf("failed composition error = %v, want refusal", err)
 	}
 }
@@ -252,10 +253,10 @@ func submissionCompositionManifest(
 		t.Fatal(err)
 	}
 	identity := compositionIdentity{
-		SourceDigest: spec.digest, PolicyDigest: policyDigest, PublicationDigest: publication.digest,
+		SubmissionID: "composition-test", SourceDigest: spec.digest, PolicyDigest: policyDigest, PublicationDigest: submissionBytes(publicationBody).digest,
 	}
-	identity.ImplementationRunID = engine.SubmissionRunID(
-		projectID, spec.digest, policyDigest, submissionBytes(publicationBody).digest, "",
+	identity.ImplementationRunID = engine.ManualSubmissionRunID(
+		"cli:composition-test", projectID, spec.digest, policyDigest, submissionBytes(publicationBody).digest, "",
 	)
 	identity.ImplementationInvocationID = domain.InvocationID(
 		"inv-implement-" + string(identity.ImplementationRunID),
@@ -275,8 +276,9 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 	root := t.TempDir()
 	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
 	cfg := submitCommandConfig{
-		DBPath:   filepath.Join(root, "freeside.db"),
-		TaskPath: taskPath, PolicyPath: policyPath, PublicationPath: publicationPath,
+		SubmissionID: "convergence-test",
+		DBPath:       filepath.Join(root, "freeside.db"),
+		TaskPath:     taskPath, PolicyPath: policyPath, PublicationPath: publicationPath,
 		ProjectID: "proj-submit",
 	}
 
@@ -325,6 +327,7 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 	}
 
 	otherProject := cfg
+	otherProject.SubmissionID = "other-project"
 	otherProject.ProjectID = "proj-other"
 	otherProjectResult, err := runSubmitCommand(ctx, otherProject)
 	if err != nil {
@@ -336,6 +339,7 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 	}
 
 	otherPolicy := cfg
+	otherPolicy.SubmissionID = "other-policy"
 	otherPolicy.PolicyPath = filepath.Join(root, "other-policy.json")
 	otherPolicyBody := submissionPolicyBody("app/**", strings.Repeat("cd", 32))
 	if err := os.WriteFile(otherPolicy.PolicyPath, []byte(otherPolicyBody), 0o600); err != nil {
@@ -351,6 +355,7 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 	}
 
 	otherPublication := cfg
+	otherPublication.SubmissionID = "other-publication"
 	otherPublication.PublicationPath = filepath.Join(root, "other-publication.json")
 	if err := os.WriteFile(
 		otherPublication.PublicationPath,
@@ -832,6 +837,17 @@ func TestSubmitCommandReplaysMatchingPreSpecificationProductionRun(t *testing.T)
 	if err := json.Unmarshal(policyFile.body, &keys); err != nil {
 		t.Fatal(err)
 	}
+	// A production-only legacy run predates the specification policy gate.
+	keys = slices.DeleteFunc(keys, func(key domain.PolicyKey) bool {
+		return key.Key == "specification.max_iterations"
+	})
+	legacyPolicy, err := json.Marshal(keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(policyPath, legacyPolicy, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	policyDigest, err := (domain.ResolvedPolicy{Keys: keys}).ComputeDigest()
 	if err != nil {
 		t.Fatal(err)
@@ -893,6 +909,7 @@ func TestSubmitCommandReplaysMatchingPreSpecificationProductionRun(t *testing.T)
 		t.Fatalf("seed pre-specification production run: %v", err)
 	}
 
+	cfg.RunID = runID
 	replay, err := runSubmitCommand(ctx, cfg)
 	if err != nil {
 		t.Fatalf("replay pre-specification production run: %v", err)
@@ -1128,7 +1145,7 @@ func TestSubmitCommandRefusesBadInputs(t *testing.T) {
 	// Same run id, different content: the run's fixed bindings refuse the
 	// retarget instead of silently replacing the approved specification.
 	pinned := base
-	pinned.RunID = "run-pinned"
+	pinned.SubmissionID = "run-pinned"
 	if _, err := runSubmitCommand(ctx, pinned); err != nil {
 		t.Fatalf("pinned submit: %v", err)
 	}
@@ -1137,7 +1154,7 @@ func TestSubmitCommandRefusesBadInputs(t *testing.T) {
 	if err := os.WriteFile(changed.TaskPath, []byte("# Different task\n"), 0o600); err != nil {
 		t.Fatalf("write changed spec: %v", err)
 	}
-	if _, err := runSubmitCommand(ctx, changed); !errors.Is(err, domain.ErrImmutableTransition) {
+	if _, err := runSubmitCommand(ctx, changed); !errors.Is(err, store.ErrImmutableConflict) {
 		t.Fatalf("retargeting submit error = %v, want ErrImmutableTransition", err)
 	}
 	changedPublication := pinned
@@ -1149,7 +1166,7 @@ func TestSubmitCommandRefusesBadInputs(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runSubmitCommand(ctx, changedPublication); !errors.Is(err, domain.ErrImmutableTransition) {
+	if _, err := runSubmitCommand(ctx, changedPublication); !errors.Is(err, store.ErrImmutableConflict) {
 		t.Fatalf("publication retargeting error = %v, want ErrImmutableTransition", err)
 	}
 }
@@ -1300,8 +1317,9 @@ func TestSubmitCommandEmptyDependencyDeclarationConverges(t *testing.T) {
 		t.Fatalf("write work-unit declaration: %v", err)
 	}
 	cfg := submitCommandConfig{
-		DBPath:   filepath.Join(root, "freeside.db"),
-		TaskPath: taskPath, PolicyPath: policyPath, PublicationPath: publicationPath,
+		SubmissionID: "empty-dependencies",
+		DBPath:       filepath.Join(root, "freeside.db"),
+		TaskPath:     taskPath, PolicyPath: policyPath, PublicationPath: publicationPath,
 		WorkUnitPath: workUnitPath,
 		ProjectID:    "proj-submit",
 	}

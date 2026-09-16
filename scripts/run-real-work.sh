@@ -432,6 +432,16 @@ trap 'exit 143' TERM
 # and the durable submit consume the same bytes even if the original files
 # change between the two steps.
 submission_inputs="$workdir/submission-inputs"
+submission_id=""
+if [[ -n "$retained_session" ]]; then
+  if [[ -f "$retained_session/submission-id" ]]; then
+    submission_id=$(cat "$retained_session/submission-id")
+    cp "$retained_session/submission-id" "$workdir/submission-id"
+  fi
+else
+  submission_id=$(python3 -c 'import uuid; print(uuid.uuid4())')
+  printf '%s\n' "$submission_id" > "$workdir/submission-id"
+fi
 if [[ "$recover_codex_credentials" == false ]]; then
   mkdir -p "$submission_inputs"
   cp "$spec_file" "$submission_inputs/spec.json"
@@ -579,6 +589,9 @@ preflight_args=(
 	-publication "$publication_file"
 	-project "$FREESIDE_REAL_RUN_PROJECT"
 )
+if [[ -n "$submission_id" ]]; then
+  preflight_args+=(--submission-id "$submission_id")
+fi
 if [[ -n "$work_unit_file" ]]; then
 	preflight_args+=(-work-unit "$work_unit_file")
 fi
@@ -707,6 +720,7 @@ echo "submitting the task" >&2
 require_live_rig
 submit_log="$workdir/submit.json"
 submit_args=(
+  --submission-id "$submission_id"
   -db "$db_path"
   --task "$spec_file"
   --policy "$policy_file"

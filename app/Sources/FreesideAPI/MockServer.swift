@@ -95,11 +95,7 @@ public actor MockServer {
     private var conversationsByID: [String: Components.Schemas.ConversationSnapshot] = [:]
     private var commandsByID: [String: NormalizedCommand] = [:]
     private var resultsByCommandID: [String: Components.Schemas.CommandResult] = [:]
-    // Submitted tasks keyed by project id and source digest: the project-scoped
-    // intake key a second submission of the same source fetches rather than
-    // creating a second task (plan §5.11).
-    private var submittedTasksByKey: [String: (taskID: String, runID: String, name: Components.Schemas.DisplayName)] =
-        [:]
+    private var submissionRequestsByID: [String: Components.Schemas.ClientCommand] = [:]
     private var pendingSpecificationReplacements: [String: Components.Schemas.AttentionItemSnapshot] = [:]
     private var pendingSpecificationComments: [String: String] = [:]
     private var proposalFactsByItemID: [String: Components.Schemas.TaskProposalFactsSnapshot] = [:]
@@ -1726,33 +1722,23 @@ public actor MockServer {
             guard case .submit_task(let record) = recorded.record,
                 record.device_id == command.device_id,
                 record.project_id == payload.project_id,
-                record.source_digest.value1 == digest
+                record.source_digest.value1 == digest,
+                submissionRequestsByID[command.command_id] == command
             else {
                 throw ImmutableConflictError(commandID: command.command_id)
             }
             return .ok(commandResultTransform?(recorded) ?? recorded)
         }
-        let key = payload.project_id + "\u{0}" + digest
-        let taskID: String
-        let runID: String
-        let name: Components.Schemas.DisplayName
-        if let existing = submittedTasksByKey[key] {
-            (taskID, runID, name) = existing
-        } else {
-            // Derive the identity from the whole intake key so the same source
-            // in two projects yields two distinct tasks (the daemon mints a
-            // random id; the mock keeps a stable one per key).
-            let suffix = String(
-                MockContractValidation.sha256Digest(of: key).dropFirst("sha256:".count).suffix(12))
-            taskID = "task-submitted-\(suffix)"
-            runID = "run-submitted-\(suffix)"
-            name = Self.submittedTaskName(operatorName: payload.name, source: payload.source, fallback: taskID)
-            revision += 1
-            materializeSubmittedTask(
-                taskID: taskID, runID: runID, campaignID: "campaign-submitted-\(suffix)",
-                projectID: payload.project_id, name: name, sourceDigest: digest)
-            submittedTasksByKey[key] = (taskID, runID, name)
-        }
+        let key = command.command_id
+        let suffix = String(
+            MockContractValidation.sha256Digest(of: key).dropFirst("sha256:".count).suffix(12))
+        let taskID = "task-submitted-\(suffix)"
+        let runID = "run-submitted-\(suffix)"
+        let name = Self.submittedTaskName(operatorName: payload.name, source: payload.source, fallback: taskID)
+        revision += 1
+        materializeSubmittedTask(
+            taskID: taskID, runID: runID, campaignID: "campaign-submitted-\(suffix)",
+            projectID: payload.project_id, name: name, sourceDigest: digest)
         revision += 1
         let record = Components.Schemas.TaskSubmissionRecord(
             kind: .submit_task, command_id: command.command_id, device_id: command.device_id,
@@ -1760,6 +1746,7 @@ public actor MockServer {
             task_id: taskID, specification_run_id: runID, name: .init(value1: name))
         let result = Components.Schemas.CommandResult(record: .submit_task(record), revision: revision)
         resultsByCommandID[command.command_id] = result
+        submissionRequestsByID[command.command_id] = command
         return .ok(commandResultTransform?(result) ?? result)
     }
 

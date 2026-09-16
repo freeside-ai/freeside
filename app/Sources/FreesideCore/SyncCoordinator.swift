@@ -36,6 +36,8 @@ public final class SyncCoordinator {
     }
 
     public let store: InboxStore
+    public private(set) var pendingTaskSubmissions: [String: Components.Schemas.ClientCommand] = [:]
+    private let submissionDaemonID: String
     public private(set) var cursors: SyncCursors?
     public private(set) var runs: [Components.Schemas.RunSnapshot] = []
     public private(set) var schedules: [Components.Schemas.ScheduleSnapshot] = []
@@ -73,11 +75,21 @@ public final class SyncCoordinator {
         client: any APIProtocol,
         device: DeviceIdentity = .mock,
         cache: CacheStore,
+        submissionDaemonID: String = "mock",
         inboxOrderNow: @escaping () -> Date = Date.init
     ) {
         store = InboxStore(client: client, device: device, now: inboxOrderNow)
         self.cache = cache
+        self.submissionDaemonID = submissionDaemonID
         if let cached = cache.load() {
+            if cached.submissionDaemonID == submissionDaemonID {
+                pendingTaskSubmissions = (cached.pendingTaskSubmissions ?? [:]).filter { id, command in
+                    guard case .submit_task(let payload) = command.payload else { return false }
+                    return id == command.command_id && !id.isEmpty && command.device_id == device.deviceID
+                        && !payload.project_id.isEmpty && !payload.source.isEmpty
+                        && command.expected_entity_version == nil && command.expected_bindings == nil
+                }
+            }
             if let cursors = cached.cursors,
                 (try? ConversationContractValidation.validate(
                     cached.conversations,
@@ -747,12 +759,10 @@ public final class SyncCoordinator {
     }
 
     private func discardCache() {
-        // Evict before re-persisting the ledger: if the save below is
-        // lost, an absent cache is honest, while a lingering file of
-        // dead-epoch rows is not. The ledger survives the discard (#115):
-        // commitment is epoch-independent, and only its verbatim resend
-        // can settle an unresolved command against the restored daemon.
-        cache.discard()
+        // Replace the cache atomically after clearing its snapshots. Never
+        // delete the last durable command copy before its replacement saves.
+        // If saving fails, restored snapshots remain unvalidated until sync;
+        // the epoch-independent commands still survive for manual retry.
         cacheGeneration += 1
         store.discardSnapshots()
         runs = []
@@ -780,7 +790,7 @@ public final class SyncCoordinator {
         // and fingerprint keep a file alive on their own, so a queued event or
         // a registered contract survives a relaunch with no cursors.
         guard
-            cursors != nil || !pending.isEmpty || !comprehensionQueue.isEmpty
+            cursors != nil || !pending.isEmpty || !pendingTaskSubmissions.isEmpty || !comprehensionQueue.isEmpty
                 || fingerprint != nil
         else {
             cache.discard()
@@ -802,6 +812,8 @@ public final class SyncCoordinator {
                     taskTimelines: cursors == nil
                         ? [] : taskTimelinesByTaskID.keys.sorted().compactMap { taskTimelinesByTaskID[$0] },
                     pendingCommands: pending,
+                    pendingTaskSubmissions: pendingTaskSubmissions,
+                    submissionDaemonID: submissionDaemonID,
                     comprehensionQueue: comprehensionQueue,
                     comprehensionSequence: store.comprehensionSequence,
                     registeredCapabilityFingerprint: fingerprint,
@@ -812,5 +824,25 @@ public final class SyncCoordinator {
         } catch {
             return false
         }
+    }
+
+    /// Durability is a precondition for sending, including a manual retry.
+    func retainTaskSubmission(_ command: Components.Schemas.ClientCommand) -> Bool {
+        guard command.device_id == store.device.deviceID,
+            case .submit_task = command.payload
+        else { return false }
+        let previous = pendingTaskSubmissions[command.command_id]
+        guard previous == nil || previous == command else { return false }
+        pendingTaskSubmissions[command.command_id] = command
+        guard persist() else {
+            pendingTaskSubmissions[command.command_id] = previous
+            return false
+        }
+        return true
+    }
+
+    func finishTaskSubmission(_ commandID: String) {
+        pendingTaskSubmissions.removeValue(forKey: commandID)
+        persist()
     }
 }

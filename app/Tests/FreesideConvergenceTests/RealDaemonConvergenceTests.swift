@@ -23,6 +23,36 @@ import Testing
 @Suite(.serialized, .enabled(if: ConvergenceEnvironment.isConfigured))
 @MainActor
 struct RealDaemonConvergenceTests {
+    @Test func taskSubmissionRestoresForManualRetryAndNewWorkStaysDistinct() async throws {
+        let device = try await ConvergenceHarness.pairDevice(displayName: "Submission recovery")
+        let cache = InMemoryCacheStore()
+        let first = ConvergenceHarness.coordinator(for: device, cache: cache)
+        let model = TaskSubmissionModel(coordinator: first)
+        device.transport.loseResponses(operations: ["submitCommand"])
+        #expect(await model.submit(projectID: "submission-convergence", source: "# Same deliberate work") == nil)
+        let saved = try #require(model.pendingSubmissions.first)
+        #expect(model.state == .lost)
+        device.transport.restore()
+
+        let restored = ConvergenceHarness.coordinator(for: device, cache: cache)
+        let recovered = TaskSubmissionModel(coordinator: restored)
+        await restored.refresh()
+        #expect(device.transport.count(for: "submitCommand") == 1)
+        #expect(recovered.selectPending(saved.command_id) != nil)
+        #expect(device.transport.count(for: "submitCommand") == 1)
+        let originalTask = try #require(await recovered.retry())
+        #expect(device.transport.count(for: "submitCommand") == 2)
+        #expect(recovered.pendingSubmissions.isEmpty)
+        let nextTask = try #require(
+            await recovered.submit(projectID: "submission-convergence", source: "# Same deliberate work"))
+        #expect(originalTask != nextTask)
+        let original = try #require(restored.tasks.first { $0.task.id == originalTask })
+        let next = try #require(restored.tasks.first { $0.task.id == nextTask })
+        #expect(original.task.run_ids.count == 1 && next.task.run_ids.count == 1)
+        #expect(original.task.run_ids != next.task.run_ids)
+        #expect(original.task.campaign_ids != next.task.campaign_ids)
+    }
+
     // MARK: - Pairing facts (plan §5.14)
 
     @Test func pairingPreviewReportsHostFactsAndLeavesTheCodeRedeemable() async throws {

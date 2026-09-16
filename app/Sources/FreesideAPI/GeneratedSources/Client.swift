@@ -1426,8 +1426,8 @@ public struct Client: APIProtocol {
     /// The single mutation surface for client decisions on synchronized
     /// domain state: every such client mutation is a ClientCommand (plan
     /// §5.14), discriminated by its payload kind. A `decision` command
-    /// decides an attention item; a `submit_task` command creates or fetches
-    /// a task from source text (plan §5.11). Only the credential control
+    /// decides an attention item; a `submit_task` command creates
+    /// a new task from source text (plan §5.11). Only the credential control
     /// surface (pairing, revocation), attachment upload, and the delivery
     /// opened receipt (monotonic telemetry, reportDeliveryOpened) sit outside
     /// it. Submission is idempotent by
@@ -1439,8 +1439,9 @@ public struct Client: APIProtocol {
     /// concurrency applies to a `decision` command: one prepared against a
     /// stale `expected_entity_version` (or stale bindings) is rejected with
     /// the replacement state and no side effect (sync test 2). A `submit_task`
-    /// command carries no such envelope and is serialized only by its
-    /// project-scoped intake key.
+    /// command carries no such envelope. Each new command_id creates separate
+    /// work. Only explicit manual Retry reuses a saved command; clients never
+    /// resend automatically.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.

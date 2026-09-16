@@ -75,13 +75,13 @@ import Testing
         #expect(coordinator.tasks.contains { $0.task.id == id })
     }
 
-    @Test func sameSourceConvergesOnOneTask() async {
+    @Test func sameSourceCreatesDistinctTasks() async {
         let coordinator = coordinator()
         let model = TaskSubmissionModel(coordinator: coordinator)
         let first = await model.submit(projectID: "project-1", source: "Repeated source.")
         let second = await model.submit(projectID: "project-1", source: "Repeated source.")
         #expect(first != nil)
-        #expect(first == second)
+        #expect(first != second)
     }
 
     @Test func differentProjectsCreateDistinctTasks() async {
@@ -105,11 +105,8 @@ import Testing
         let model = TaskSubmissionModel(coordinator: coordinator(server: server))
         let taskID = await model.submit(projectID: "project-1", source: "Some work.")
         #expect(taskID == nil)
-        guard case .rejected(let reason) = model.state else {
-            Issue.record("expected a rejected state, got \(model.state)")
-            return
-        }
-        #expect(reason.contains("invalid"))
+        #expect(model.state == .lost)
+        #expect(model.pendingSubmissions.count == 1)
     }
 
     @Test func lostResponseRetriesWithTheSameCommandID() async throws {
@@ -138,7 +135,7 @@ import Testing
         #expect(runs.filter { $0.run.task_id == taskID }.count == 1)
     }
 
-    @Test func revokedDeviceIsRejectedAndSetsUnauthenticated() async throws {
+    @Test func revokedDevicePreservesSubmissionAndSetsUnauthenticated() async throws {
         let server = MockServer(authMode: .enforcing)
         await server.seedPairingCode("483911")
         let grant = try await APIClientFactory.mock(server: server).pairDevice(
@@ -156,11 +153,8 @@ import Testing
         let model = TaskSubmissionModel(coordinator: coordinator)
         let taskID = await model.submit(projectID: "project-1", source: "Work after revocation.")
         #expect(taskID == nil)
-        guard case .rejected(let reason) = model.state else {
-            Issue.record("expected a rejected state, got \(model.state)")
-            return
-        }
-        #expect(reason.contains("device"))
+        #expect(model.state == .lost)
+        #expect(model.pendingSubmissions.count == 1)
         // A rejected credential surfaces as device state, the way a decision
         // handles a 401, so the freshness banner leads the operator to re-pair.
         #expect(coordinator.store.freshness == .unauthenticated)

@@ -284,12 +284,11 @@ Attribution syntax and provenance claims do not grant publication authority.
 Production still authenticates the author against the selected GitHub App and
 enforces recipe approval, conformance, admission, and specification approval.
 
-Changing the file requires a daemon restart and affects only new tasks. Both
-command replay and a new command with the same project/source reuse the stored
-task, first name, specification run, and policy/publication bindings, even if
-the configuration changed or was removed. Existing CLI submit flags and
-identity rules are unchanged. For private staging and retained-session
-recovery, use the [production walkthrough](../docs/production-walkthrough.md#submit-a-new-task-from-a-client).
+Changing the file requires a daemon restart and affects only new submissions.
+An explicit manual Retry of a recorded command returns its original result,
+even if configuration changed or was removed. A new command always creates
+new work, including with identical project, source, and name. For private
+staging and retained-session recovery, use the [production walkthrough](../docs/production-walkthrough.md#submit-a-new-task-from-a-client).
 
 ### Enroll A Codex Subscription Identity
 
@@ -463,6 +462,22 @@ the harness's retained endpoint, explicit completion, interrupted-holder
 recovery and verified restoration of the supervised daemon. Final verification
 reads the existing database beside the running daemon; it never seeds identities
 or migrates state. Keep the foreground harness open through the client walkthrough.
+
+Each ordinary `freesided submit` invocation creates a new task and campaign,
+even with identical inputs. Before acceptance, it saves a submission identity
+and the exact input bytes in `<db>.submissions/<identity>.json`, then prints the
+identity and retry command to stderr. After an interrupted or uncertain result,
+use `freesided submit --db <path> --retry-submission-id <identity>` to retry that
+saved submission. Retry needs no original input files and never rereads them.
+The journal contains the submitted task and configuration; keep it with the
+database and its access controls.
+
+For a preflight-bound submission, choose one `--submission-id <identity>` and
+pass it to both `preflight` and `submit`. The real-work harness saves this identity
+before preflight. Reusing it with different input values is refused. Legacy
+`--run-id` is lookup-only: it may recover an existing historical run but cannot
+create work. Attaching to a retained real-work session observes its existing
+identity without submitting again.
 
 `freesided preflight` is the production-composition gate used by
 `scripts/run-real-work.sh` before it submits work. Its deterministic JSON

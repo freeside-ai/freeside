@@ -194,8 +194,8 @@ public protocol APIProtocol: Sendable {
     /// The single mutation surface for client decisions on synchronized
     /// domain state: every such client mutation is a ClientCommand (plan
     /// §5.14), discriminated by its payload kind. A `decision` command
-    /// decides an attention item; a `submit_task` command creates or fetches
-    /// a task from source text (plan §5.11). Only the credential control
+    /// decides an attention item; a `submit_task` command creates
+    /// a new task from source text (plan §5.11). Only the credential control
     /// surface (pairing, revocation), attachment upload, and the delivery
     /// opened receipt (monotonic telemetry, reportDeliveryOpened) sit outside
     /// it. Submission is idempotent by
@@ -207,8 +207,9 @@ public protocol APIProtocol: Sendable {
     /// concurrency applies to a `decision` command: one prepared against a
     /// stale `expected_entity_version` (or stale bindings) is rejected with
     /// the replacement state and no side effect (sync test 2). A `submit_task`
-    /// command carries no such envelope and is serialized only by its
-    /// project-scoped intake key.
+    /// command carries no such envelope. Each new command_id creates separate
+    /// work. Only explicit manual Retry reuses a saved command; clients never
+    /// resend automatically.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.
@@ -596,8 +597,8 @@ extension APIProtocol {
     /// The single mutation surface for client decisions on synchronized
     /// domain state: every such client mutation is a ClientCommand (plan
     /// §5.14), discriminated by its payload kind. A `decision` command
-    /// decides an attention item; a `submit_task` command creates or fetches
-    /// a task from source text (plan §5.11). Only the credential control
+    /// decides an attention item; a `submit_task` command creates
+    /// a new task from source text (plan §5.11). Only the credential control
     /// surface (pairing, revocation), attachment upload, and the delivery
     /// opened receipt (monotonic telemetry, reportDeliveryOpened) sit outside
     /// it. Submission is idempotent by
@@ -609,8 +610,9 @@ extension APIProtocol {
     /// concurrency applies to a `decision` command: one prepared against a
     /// stale `expected_entity_version` (or stale bindings) is rejected with
     /// the replacement state and no side effect (sync test 2). A `submit_task`
-    /// command carries no such envelope and is serialized only by its
-    /// project-scoped intake key.
+    /// command carries no such envelope. Each new command_id creates separate
+    /// work. Only explicit manual Retry reuses a saved command; clients never
+    /// resend automatically.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.
@@ -4126,7 +4128,7 @@ public enum Components {
         ///
         /// - Remark: Generated from `#/components/schemas/EntityVersion`.
         public typealias EntityVersion = Swift.Int64
-        /// Every client mutation. The payload's kind discriminates the command type: a decision command (the first exercised type) decides an attention item and carries expected_entity_version and expected_bindings; a submit_task command creates or fetches a task from source text and binds to no entity, so it carries neither envelope field and is rejected as malformed if it does. New command types are typed as the signet/saddle pair exercises the surface, via kind:contract changes.
+        /// Every client mutation. The payload's kind discriminates the command type: a decision command (the first exercised type) decides an attention item and carries expected_entity_version and expected_bindings; a submit_task command creates a new task from source text and binds to no entity, so it carries neither envelope field and is rejected as malformed if it does. New command types are typed as the signet/saddle pair exercises the surface, via kind:contract changes.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/ClientCommand`.
@@ -4543,7 +4545,7 @@ public enum Components {
                 ])
             }
         }
-        /// The payload of a submit_task command (plan §5.11): the project to submit into, the source text of the task, and an optional operator name. It binds to no attention item and to no other entity, so it carries no expected_entity_version and no expected_bindings. The project-scoped intake key (project_id plus the source digest) is the command's only concurrency control: the same source in one project fetches the same task, so a distinct command_id starts no second specification run, while the same source in another project creates a distinct task. The operator name applies only when the command creates the task; a fetch of an existing task ignores it.
+        /// The payload of a submit_task command (plan §5.11): the project to submit into, the source text of the task, and an optional operator name. It binds to no attention item and to no other entity, so it carries no expected_entity_version and no expected_bindings. The command_id identifies one deliberate submission. Distinct command IDs create distinct tasks, specification runs and campaigns even with identical inputs. Manual Retry reuses the saved exact command and returns its original result and revision. New records reject changed device, project, source or submitted optional name under the same ID; equivalent JSON formatting is allowed. Historical records preserve their original name-insensitive replay checks. Source content is provenance, never a duplicate-work key.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/SubmitTaskPayload`.
@@ -4826,7 +4828,7 @@ public enum Components {
                 ])
             }
         }
-        /// The durable, immutable record of one accepted submit_task command (domain.TaskSubmission; plan §5.11, §5.14). It names the task the command created or fetched and its specification run, keyed by command_id; a retry returns it unchanged. The name is the task's stored name, so a fetch reports the name the first submission won.
+        /// The durable, immutable record of one accepted submit_task command (domain.TaskSubmission; plan §5.11, §5.14). It names the task the command created and its specification run, keyed by command_id. Explicit manual Retry returns this record and its committed revision unchanged, including historical results that reused a source-keyed task. The name is the display name recorded at acceptance, not the requested-name fingerprint.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord`.
@@ -4875,7 +4877,7 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/specification_run_id`.
             public var specification_run_id: Swift.String
-            /// The task's stored display name; the operator name when this command created the task, otherwise the name the first submission recorded.
+            /// The task's display name at acceptance. Manual Retry returns the original recorded name, even if the task has since been renamed.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/name`.
@@ -4896,7 +4898,7 @@ public enum Components {
                     try self.value1.encode(to: encoder)
                 }
             }
-            /// The task's stored display name; the operator name when this command created the task, otherwise the name the first submission recorded.
+            /// The task's display name at acceptance. Manual Retry returns the original recorded name, even if the task has since been renamed.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/name`.
@@ -4911,7 +4913,7 @@ public enum Components {
             ///   - source_digest: The sha256 digest of the submitted source text.
             ///   - task_id: The task the command created or fetched by the intake key.
             ///   - specification_run_id: The task's specification run started (or already present).
-            ///   - name: The task's stored display name; the operator name when this command created the task, otherwise the name the first submission recorded.
+            ///   - name: The task's display name at acceptance. Manual Retry returns the original recorded name, even if the task has since been renamed.
             public init(
                 kind: Components.Schemas.TaskSubmissionRecord.kindPayload,
                 command_id: Swift.String,
@@ -14333,8 +14335,8 @@ public enum Operations {
     /// The single mutation surface for client decisions on synchronized
     /// domain state: every such client mutation is a ClientCommand (plan
     /// §5.14), discriminated by its payload kind. A `decision` command
-    /// decides an attention item; a `submit_task` command creates or fetches
-    /// a task from source text (plan §5.11). Only the credential control
+    /// decides an attention item; a `submit_task` command creates
+    /// a new task from source text (plan §5.11). Only the credential control
     /// surface (pairing, revocation), attachment upload, and the delivery
     /// opened receipt (monotonic telemetry, reportDeliveryOpened) sit outside
     /// it. Submission is idempotent by
@@ -14346,8 +14348,9 @@ public enum Operations {
     /// concurrency applies to a `decision` command: one prepared against a
     /// stale `expected_entity_version` (or stale bindings) is rejected with
     /// the replacement state and no side effect (sync test 2). A `submit_task`
-    /// command carries no such envelope and is serialized only by its
-    /// project-scoped intake key.
+    /// command carries no such envelope. Each new command_id creates separate
+    /// work. Only explicit manual Retry reuses a saved command; clients never
+    /// resend automatically.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.

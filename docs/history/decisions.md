@@ -1762,3 +1762,22 @@ Revision 58 ("Client Task Submission and the Sketch Round"):
    output contract; no flag, field, or attention type. (User decision;
    Section [5.11](../plan.md#511-github-integration-reconciliation-plus-intake);
    #1329; same devlog.)
+
+---
+
+## Revision 59 ("First-Acceptance Task Naming"):
+
+1. **The first accepted specification may name an identifier-only task.** The
+   specifier's `title` replaces an agent-produced name or the identifier
+   fallback once, when the task's first specification is accepted, and never
+   an operator name; a revised specification does not rename. When the approved
+   body opens with a heading, approval still names the task from it, so a task
+   still on its identifier at approval gets its name there, and approval still
+   freezes every name.
+   This amends revision 48, item 3, which let the refinement touch only an
+   agent name and deferred an identifier-only task's first name to approval.
+   The owner's #1208 contract chose the wider rule and PR #1326 shipped it;
+   the plan follows the contract. Rejected: narrowing the code to agent-only
+   refinement, as the PR #1326 review proposed. (User decision;
+   Section [5.12](../plan.md#512-workflow-definition-initiators-and-artifacts); #1208,
+   #1327; devlog 2026-09-15-0914-first-acceptance-naming.md.)

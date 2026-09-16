@@ -74,6 +74,7 @@ type compositionCheck struct {
 }
 
 type compositionIdentity struct {
+	SubmissionID               string                        `json:"submission_id,omitempty"`
 	SourceDigest               domain.Digest                 `json:"source_digest,omitempty"`
 	PolicyDigest               domain.Digest                 `json:"policy_digest,omitempty"`
 	PublicationDigest          domain.Digest                 `json:"publication_digest,omitempty"`
@@ -116,6 +117,7 @@ type compositionManifest struct {
 }
 
 type preflightConfig struct {
+	SubmissionID                string
 	Judgments                   judgmentConfig
 	DBPath                      string
 	RigTokenFile                string
@@ -290,6 +292,7 @@ func parsePreflightConfig(args []string, stderr io.Writer) (preflightConfig, err
 	flags := flag.NewFlagSet("freesided preflight", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	var cfg preflightConfig
+	flags.StringVar(&cfg.SubmissionID, "submission-id", "", "saved submission identity (omit only to inspect a retained legacy run)")
 	flags.StringVar(&cfg.RigTokenFile, "rig-token-file", "", "rig hold acquisition JSON (required)")
 	flags.StringVar(&cfg.ServerURL, "server-url", "", "operator client URL for the leased listener (required)")
 	flags.StringVar(&cfg.ContainerBin, "container-bin", "container", "Apple container CLI path")
@@ -831,6 +834,14 @@ func inspectCompositionIdentity(cfg preflightConfig) (compositionIdentity, error
 	runID := engine.SubmissionRunID(
 		cfg.ProjectID, spec.digest, policyDigest, publicationIdentityDigest, workUnitDigest,
 	)
+	if cfg.SubmissionID != "" {
+		if !validSubmissionID(cfg.SubmissionID) {
+			return compositionIdentity{}, errors.New("invalid submission identity")
+		}
+		publicationDigest = publicationIdentityDigest
+		runID = engine.ManualSubmissionRunID("cli:"+cfg.SubmissionID,
+			cfg.ProjectID, spec.digest, policyDigest, publicationIdentityDigest, workUnitDigest)
+	}
 	specificationRunID, err := engine.SpecificationRunIDForImplementation(runID)
 	if err != nil {
 		return compositionIdentity{}, err
@@ -854,6 +865,7 @@ func inspectCompositionIdentity(cfg preflightConfig) (compositionIdentity, error
 	}
 	return compositionIdentity{
 		SourceDigest: spec.digest, PolicyDigest: policyDigest,
+		SubmissionID:      cfg.SubmissionID,
 		PublicationDigest: publicationDigest, WorkUnitDigest: workUnitDigest,
 		ImplementationRunID:        runID,
 		ImplementationInvocationID: domain.InvocationID("inv-implement-" + string(runID)),

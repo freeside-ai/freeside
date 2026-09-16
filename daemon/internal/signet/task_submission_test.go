@@ -124,7 +124,7 @@ func TestSubmitTaskCommandCreatesAndReplays(t *testing.T) {
 	}
 
 	// A retried command_id returns the recorded result and starts no second run.
-	replay, err := service.Submit(ctx, submitTaskCommand("cmd-1", "Add a health endpoint.", "Ignored on replay"))
+	replay, err := service.Submit(ctx, submitTaskCommand("cmd-1", "Add a health endpoint.", "Health endpoint"))
 	if err != nil {
 		t.Fatalf("replay: %v", err)
 	}
@@ -133,6 +133,56 @@ func TestSubmitTaskCommandCreatesAndReplays(t *testing.T) {
 	}
 	if submitter.calls != 1 {
 		t.Fatalf("submitter calls after replay = %d, want 1", submitter.calls)
+	}
+}
+
+func TestLegacyTaskSubmissionReplayPreservesMissingNameFingerprint(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fake := &fakeTaskSubmitter{}
+	service, s := newSubmitTaskService(t, fake, domain.DeviceActive)
+	const source = "Historical source"
+	var original domain.TaskSubmission
+	var revision int64
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		outcome, err := fake.SubmitTask(ctx, tx, signet.TaskSubmissionInput{ProjectID: "project-1", OperatorName: "Historical display name"})
+		if err != nil {
+			return err
+		}
+		original = domain.TaskSubmission{
+			CommandID: "old-command", DeviceID: "device-1", ProjectID: "project-1",
+			SourceDigest: domain.Digest(contentaddr.Sum([]byte(source))), TaskID: outcome.TaskID,
+			SpecificationRunID: outcome.SpecificationRunID, Name: outcome.Name,
+		}
+		if err := tx.PutTaskSubmission(ctx, original); err != nil {
+			return err
+		}
+		_, snap, err := tx.GetTaskSubmissionSnapshot(ctx, original.CommandID)
+		revision = snap.AsOfRevision
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"", "Another requested name"} {
+		got, err := service.Submit(ctx, submitTaskCommand(original.CommandID, source, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if *got.Submission != original || got.Revision != revision {
+			t.Fatal("legacy result or revision changed")
+		}
+	}
+	if fake.calls != 1 {
+		t.Fatal("legacy replay invoked intake")
+	}
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		fingerprint, err := tx.TaskSubmissionRequestDigest(ctx, original.CommandID)
+		if fingerprint != "" {
+			t.Fatal("fabricated a historical request fingerprint")
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -156,6 +206,8 @@ func TestSubmitTaskCommandRejectsReusedCommandID(t *testing.T) {
 		name string
 		cmd  signet.ClientCommand
 	}{
+		{"different name", submitTaskCommand("cmd-1", "Add a health endpoint.", "Different name")},
+		{"name omitted", submitTaskCommand("cmd-1", "Add a health endpoint.", "")},
 		{"different source", submitTaskCommand("cmd-1", "Add a metrics endpoint.", "Health endpoint")},
 		{"different project", signet.ClientCommand{
 			CommandID: "cmd-1", DeviceID: "device-1", Kind: domain.CommandKindSubmitTask,
