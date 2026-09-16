@@ -9,6 +9,21 @@ enum SpecApprovalReader: String, Identifiable {
     var id: String { rawValue }
 }
 
+/// The pane or sheet owns vertical scrolling, including notices and digests.
+/// Reader bodies retain only their independent horizontal overflow regions.
+struct SpecApprovalReaderViewport<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        ScrollView(.vertical) {
+            content
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
 struct SpecificationReaderView: View {
     let preview: DecisionDetailView.NonImagePreview
     let digest: String
@@ -48,22 +63,11 @@ struct SpecificationReaderView: View {
             }
 
             if preview.text != nil {
-                VStack(alignment: .leading, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Specification (unverified)")
-                            .font(FreesideFont.caption)
-                            .foregroundStyle(Color.inkDim)
-                        Text("Written by the agent, not checked by the daemon.")
-                            .font(FreesideFont.caption)
-                            .foregroundStyle(Color.inkDim)
-                    }
+                Group {
                     if rendersScrollableContent {
-                        ScrollView(.vertical) {
-                            LazyVStack(alignment: .leading, spacing: 10) { blockContent }
-                        }
-                        .frame(minHeight: 280, idealHeight: 420, maxHeight: 600)
+                        LazyVStack(alignment: .leading, spacing: 10) { specificationContent }
                     } else {
-                        VStack(alignment: .leading, spacing: 10) { blockContent }
+                        VStack(alignment: .leading, spacing: 10) { specificationContent }
                     }
                 }
                 .padding()
@@ -80,6 +84,18 @@ struct SpecificationReaderView: View {
                 .foregroundStyle(Color.inkDim)
                 .textSelection(.enabled)
         }
+    }
+
+    @ViewBuilder private var specificationContent: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Specification (unverified)")
+                .font(FreesideFont.caption)
+                .foregroundStyle(Color.inkDim)
+            Text("Written by the agent, not checked by the daemon.")
+                .font(FreesideFont.caption)
+                .foregroundStyle(Color.inkDim)
+        }
+        blockContent
     }
 
     private func byteCount(_ count: Int) -> String {
@@ -224,14 +240,7 @@ struct UnifiedDiffView: View {
     }
 
     var body: some View {
-        if rendersScrollableContent {
-            ScrollView(.vertical) {
-                content
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-            }
-        } else {
-            content
-        }
+        content
     }
 
     private var content: some View {
@@ -315,10 +324,7 @@ struct UnifiedDiffView: View {
     @ViewBuilder
     private func diffRows(_ lines: [Line]) -> some View {
         if rendersScrollableContent {
-            ScrollView(.horizontal) {
-                diffLineStack(lines)
-            }
-            .frame(minHeight: max(CGFloat(lines.count) * 24, 44), alignment: .topLeading)
+            ScrollView(.horizontal) { diffLineStack(lines) }
         } else {
             diffLineStack(lines)
         }
@@ -326,15 +332,34 @@ struct UnifiedDiffView: View {
 
     @ViewBuilder
     private func diffLineStack(_ lines: [Line]) -> some View {
-        if rendersScrollableContent {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                diffLines(lines)
-            }
-        } else {
-            VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
+            if rendersScrollableContent && lines.count > 128 {
+                // Bound the number of native text views even for alternating
+                // line kinds. Each chunk keeps native width/height measurement.
+                ForEach(Array(stride(from: 0, to: lines.count, by: 64)), id: \.self) { start in
+                    Text(chunkText(lines[start..<min(start + 64, lines.count)]))
+                        .font(FreesideFont.mono(.caption))
+                        .lineSpacing(8)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                }
+            } else {
                 diffLines(lines)
             }
         }
+    }
+
+    private func chunkText(_ lines: ArraySlice<Line>) -> AttributedString {
+        var result = AttributedString()
+        for (index, line) in lines.enumerated() {
+            var text = AttributedString((index == 0 ? "" : "\n") + (line.text.isEmpty ? " " : line.text))
+            text.foregroundColor = foreground(for: line.kind)
+            text.backgroundColor = background(for: line.kind)
+            result.append(text)
+        }
+        return result
     }
 
     @ViewBuilder

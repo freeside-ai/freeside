@@ -395,20 +395,56 @@ struct DecisionDetailView: View {
             content
                 .inspector(isPresented: inspectorBinding) {
                     if let item = model.snapshot?.item {
-                        ScrollViewReader { scrollProxy in
-                            ScrollView {
-                                inspectorContent(item)
+                        Group {
+                            if let specApprovalReader {
+                                VStack(spacing: 0) {
+                                    HStack(alignment: .top) {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(
+                                                specApprovalReader == .specification
+                                                    ? "Specification" : "Specification changes"
+                                            )
+                                            .font(FreesideFont.sectionTitle)
+                                            Label("Drag the divider to resize", systemImage: "arrow.left.and.right")
+                                                .font(FreesideFont.caption)
+                                                .foregroundStyle(Color.inkDim)
+                                        }
+                                        Spacer()
+                                        Button {
+                                            self.specApprovalReader = nil
+                                        } label: {
+                                            Label("Close reader", systemImage: "xmark")
+                                                .labelStyle(.iconOnly)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .help("Close reader and show evidence and details")
+                                    }
                                     .padding()
-                            }
-                            .onChange(of: detailsRevealRequest) {
-                                revealTechnicalDetailsInInspectorIfRequested(using: scrollProxy)
-                            }
-                            .onAppear {
-                                revealTechnicalDetailsInInspectorIfRequested(using: scrollProxy)
+                                    Divider()
+                                    SpecApprovalReaderViewport {
+                                        specApprovalReaderContent(specApprovalReader, item: item)
+                                    }
+                                }
+                            } else {
+                                ScrollViewReader { scrollProxy in
+                                    ScrollView {
+                                        inspectorContent(item)
+                                            .padding()
+                                    }
+                                    .onChange(of: detailsRevealRequest) {
+                                        revealTechnicalDetailsInInspectorIfRequested(using: scrollProxy)
+                                    }
+                                    .onAppear {
+                                        revealTechnicalDetailsInInspectorIfRequested(using: scrollProxy)
+                                    }
+                                }
                             }
                         }
                         .background(Color.sidebarGround)
-                        .inspectorColumnWidth(min: 280, ideal: 340, max: 440)
+                        .inspectorColumnWidth(
+                            min: specApprovalReader == nil ? 280 : 320,
+                            ideal: specApprovalReader == nil ? 340 : 480,
+                            max: specApprovalReader == nil ? 440 : 720)
                     } else {
                         UnavailableStateView(
                             title: "No decision selected",
@@ -1185,9 +1221,9 @@ struct DecisionDetailView: View {
             VStack(spacing: 0) {
                 FreesideSheetHeader(
                     title: reader == .specification ? "Specification" : "Specification changes")
-                specApprovalReaderContent(reader, item: item)
-                    .padding(.horizontal)
-                    .padding(.bottom)
+                SpecApprovalReaderViewport {
+                    specApprovalReaderContent(reader, item: item)
+                }
                 FreesideSheetActionRow.done { specApprovalReader = nil }
             }
             .background(Color.ground2)
@@ -1314,63 +1350,44 @@ struct DecisionDetailView: View {
             // bindings. A second copy of the same rows made an open inspector
             // repeat the card beside it.
             VStack(alignment: .leading, spacing: 12) {
-                if let specApprovalReader {
-                    HStack {
-                        Text(
-                            specApprovalReader == .specification
-                                ? "Specification" : "Specification changes"
-                        )
-                        .font(FreesideFont.sectionTitle)
-                        Spacer()
-                        Button {
-                            self.specApprovalReader = nil
-                        } label: {
-                            Label("Close reader", systemImage: "xmark")
-                                .labelStyle(.iconOnly)
-                        }
-                        .buttonStyle(.plain)
+                let attachmentClaims = item.agent_claims.filter {
+                    $0.text == nil && !AgentClaimLabels.isApprovalMaterial($0.label)
+                }
+                if !attachmentClaims.isEmpty {
+                    inspectorSection(
+                        "Agent claims (unverified)",
+                        isExpanded: claimsExpanded,
+                        dashed: true
+                    ) {
+                        claimRows(
+                            attachmentClaims,
+                            rendersInteractiveControls: rendersInteractiveControls)
                     }
-                    specApprovalReaderContent(specApprovalReader, item: item)
-                } else {
-                    let attachmentClaims = item.agent_claims.filter {
-                        $0.text == nil && !AgentClaimLabels.isApprovalMaterial($0.label)
-                    }
-                    if !attachmentClaims.isEmpty {
-                        inspectorSection(
-                            "Agent claims (unverified)",
-                            isExpanded: claimsExpanded,
-                            dashed: true
-                        ) {
-                            claimRows(
-                                attachmentClaims,
+                }
+                if !item.evidence_snapshot.isEmpty {
+                    inspectorSection("Evidence", isExpanded: evidenceExpanded) {
+                        ForEach(item.evidence_snapshot, id: \.id) { artifact in
+                            AttachmentRow(
+                                label: artifact._type.rawValue,
+                                digest: artifact.digest,
+                                metadata: artifact.metadata,
+                                attachments: attachments,
+                                loadsAttachments: loadsAttachments,
                                 rendersInteractiveControls: rendersInteractiveControls)
                         }
                     }
-                    if !item.evidence_snapshot.isEmpty {
-                        inspectorSection("Evidence", isExpanded: evidenceExpanded) {
-                            ForEach(item.evidence_snapshot, id: \.id) { artifact in
-                                AttachmentRow(
-                                    label: artifact._type.rawValue,
-                                    digest: artifact.digest,
-                                    metadata: artifact.metadata,
-                                    attachments: attachments,
-                                    loadsAttachments: loadsAttachments,
-                                    rendersInteractiveControls: rendersInteractiveControls)
-                            }
-                        }
-                    }
-                    inspectorSection("Details", isExpanded: detailsExpanded) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            ForEach(Array(detailRows(item).enumerated()), id: \.offset) { _, row in
-                                factRow(row.label, value: row.value, monospaced: true)
-                            }
-                        }
-                    }
-                    .id(ScrollTarget.technicalDetails)
-                    .font(FreesideFont.caption)
-                    .foregroundStyle(Color.inkDim)
-                    .textSelection(.enabled)
                 }
+                inspectorSection("Details", isExpanded: detailsExpanded) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(Array(detailRows(item).enumerated()), id: \.offset) { _, row in
+                            factRow(row.label, value: row.value, monospaced: true)
+                        }
+                    }
+                }
+                .id(ScrollTarget.technicalDetails)
+                .font(FreesideFont.caption)
+                .foregroundStyle(Color.inkDim)
+                .textSelection(.enabled)
             }
             .environment(\.dynamicTypeSize, dynamicTypeSize)
         }
