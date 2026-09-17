@@ -2257,7 +2257,7 @@ public enum Components {
                 case run
             }
         }
-        /// Recorded task history computed under one server revision. The current name appears once as a source-labeled claim; no name history is inferred. Invocation detail, review facts, and cost remain on the run timeline.
+        /// Recorded task history computed under one server revision. The current name appears once as a source-labeled claim; no name history is inferred. Detailed invocation observations, review evidence, and cost remain on the run timeline.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/TaskTimeline`.
@@ -2274,7 +2274,8 @@ public enum Components {
             public var project_id: Swift.String
             /// - Remark: Generated from `#/components/schemas/TaskTimeline/name`.
             public var name: Components.Schemas.DisplayName
-            /// Task-level events, newest first.
+            /// Task-wide recorded milestones, newest first. Equal instants are ordered by event kind and bound source identifiers. Includes lifecycle, campaign, execution, review, verification and PR facts; detailed nested partitions are retained for run/approval consumers.
+            ///
             ///
             /// - Remark: Generated from `#/components/schemas/TaskTimeline/events`.
             public var events: [Components.Schemas.TaskEvent]
@@ -2291,7 +2292,7 @@ public enum Components {
             ///   - task_id:
             ///   - project_id:
             ///   - name:
-            ///   - events: Task-level events, newest first.
+            ///   - events: Task-wide recorded milestones, newest first. Equal instants are ordered by event kind and bound source identifiers. Includes lifecycle, campaign, execution, review, verification and PR facts; detailed nested partitions are retained for run/approval consumers.
             ///   - sections: Campaign sections ordered by allocation instant, newest first. Legacy runs share a null-campaign section ordered by its newest submission; runs without a submission sort last. Equal instants are ordered by campaign identifier descending, with null last.
             public init(
                 as_of_revision: Components.Schemas.AsOfRevision,
@@ -2576,11 +2577,71 @@ public enum Components {
                 ])
             }
         }
-        /// A recorded fact and its instant, with kind-scoped details. task_created has no details. campaign_allocated requires campaign_id and specification_run_id. specification_approved also requires run_id (the initial implementation) and approved_spec_digest; its instant is that run's submission, committed with approval. Retries reuse approval and emit no new approval event. pr_opened requires run_id and pr_number and uses the daemon's PR binding instant. pr_merged also requires merge_commit_sha and uses the re-gated completion record's instant. All other details are null. Events are observations, never authority.
+        /// A recorded fact and its instant, with kind-scoped details. task_created has no details. campaign_allocated requires campaign_id and specification_run_id. specification_approved also requires run_id (the initial implementation) and approved_spec_digest; its instant is that run's submission, committed with approval. Retries reuse approval and emit no new approval event. pr_opened requires run_id and pr_number and uses the daemon's PR binding instant. pr_merged also requires merge_commit_sha and uses the re-gated completion record's instant. task_started, task_completed and task_abandoned require the recorded run_id and retain campaign_id when the lifecycle fact has one. stop_requested, task_stopped and stop_failed have no details; request acceptance and confirmed stopping are distinct events, including for queued tasks with no run. run_milestone requires run_id and milestone, with matching run and timestamp. review_requested, review_completed and review_failed require run_id and review; outcome is present only for completed, failure only for failed. verification_recorded requires run_id and verification, referring to a dated readiness decision with detailed results. It never establishes current readiness. All other details are null. Events are observations, never authority.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/TaskEvent`.
         public struct TaskEvent: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskEvent/milestone`.
+            public struct milestonePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskEvent/milestone/value1`.
+                public var value1: Components.Schemas.RunMilestone
+                /// Creates a new `milestonePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.RunMilestone) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskEvent/milestone`.
+            public var milestone: Components.Schemas.TaskEvent.milestonePayload?
+            /// - Remark: Generated from `#/components/schemas/TaskEvent/review`.
+            public struct reviewPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskEvent/review/value1`.
+                public var value1: Components.Schemas.TaskEventReview
+                /// Creates a new `reviewPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.TaskEventReview) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskEvent/review`.
+            public var review: Components.Schemas.TaskEvent.reviewPayload?
+            /// - Remark: Generated from `#/components/schemas/TaskEvent/verification`.
+            public struct verificationPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskEvent/verification/value1`.
+                public var value1: Components.Schemas.TaskEventVerification
+                /// Creates a new `verificationPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.TaskEventVerification) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskEvent/verification`.
+            public var verification: Components.Schemas.TaskEvent.verificationPayload?
             /// - Remark: Generated from `#/components/schemas/TaskEvent/kind`.
             public var kind: Components.Schemas.TaskEventKind
             /// - Remark: Generated from `#/components/schemas/TaskEvent/recorded_at`.
@@ -2618,6 +2679,9 @@ public enum Components {
             /// Creates a new `TaskEvent`.
             ///
             /// - Parameters:
+            ///   - milestone:
+            ///   - review:
+            ///   - verification:
             ///   - kind:
             ///   - recorded_at:
             ///   - campaign_id:
@@ -2627,6 +2691,9 @@ public enum Components {
             ///   - pr_number:
             ///   - merge_commit_sha:
             public init(
+                milestone: Components.Schemas.TaskEvent.milestonePayload? = nil,
+                review: Components.Schemas.TaskEvent.reviewPayload? = nil,
+                verification: Components.Schemas.TaskEvent.verificationPayload? = nil,
                 kind: Components.Schemas.TaskEventKind,
                 recorded_at: Foundation.Date,
                 campaign_id: Swift.String? = nil,
@@ -2636,6 +2703,9 @@ public enum Components {
                 pr_number: Swift.Int? = nil,
                 merge_commit_sha: Swift.String? = nil
             ) {
+                self.milestone = milestone
+                self.review = review
+                self.verification = verification
                 self.kind = kind
                 self.recorded_at = recorded_at
                 self.campaign_id = campaign_id
@@ -2646,6 +2716,9 @@ public enum Components {
                 self.merge_commit_sha = merge_commit_sha
             }
             public enum CodingKeys: String, CodingKey {
+                case milestone
+                case review
+                case verification
                 case kind
                 case recorded_at
                 case campaign_id
@@ -2657,6 +2730,18 @@ public enum Components {
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.milestone = try container.decodeIfPresent(
+                    Components.Schemas.TaskEvent.milestonePayload.self,
+                    forKey: .milestone
+                )
+                self.review = try container.decodeIfPresent(
+                    Components.Schemas.TaskEvent.reviewPayload.self,
+                    forKey: .review
+                )
+                self.verification = try container.decodeIfPresent(
+                    Components.Schemas.TaskEvent.verificationPayload.self,
+                    forKey: .verification
+                )
                 self.kind = try container.decode(
                     Components.Schemas.TaskEventKind.self,
                     forKey: .kind
@@ -2690,6 +2775,9 @@ public enum Components {
                     forKey: .merge_commit_sha
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "milestone",
+                    "review",
+                    "verification",
                     "kind",
                     "recorded_at",
                     "campaign_id",
@@ -2701,11 +2789,191 @@ public enum Components {
                 ])
             }
         }
-        /// Closed vocabulary of recorded task history.
+        /// Recorded review identity and result, never parsed from reviewer output.
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskEventReview`.
+        public struct TaskEventReview: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskEventReview/invocation_id`.
+            public var invocation_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskEventReview/round`.
+            public var round: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/TaskEventReview/head_sha`.
+            public var head_sha: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskEventReview/base_sha`.
+            public var base_sha: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskEventReview/outcome`.
+            public struct outcomePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskEventReview/outcome/value1`.
+                public var value1: Components.Schemas.ReviewOutcome
+                /// Creates a new `outcomePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.ReviewOutcome) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskEventReview/outcome`.
+            public var outcome: Components.Schemas.TaskEventReview.outcomePayload?
+            /// - Remark: Generated from `#/components/schemas/TaskEventReview/failure`.
+            public var failure: Swift.String?
+            /// Creates a new `TaskEventReview`.
+            ///
+            /// - Parameters:
+            ///   - invocation_id:
+            ///   - round:
+            ///   - head_sha:
+            ///   - base_sha:
+            ///   - outcome:
+            ///   - failure:
+            public init(
+                invocation_id: Swift.String,
+                round: Swift.Int,
+                head_sha: Swift.String,
+                base_sha: Swift.String,
+                outcome: Components.Schemas.TaskEventReview.outcomePayload? = nil,
+                failure: Swift.String? = nil
+            ) {
+                self.invocation_id = invocation_id
+                self.round = round
+                self.head_sha = head_sha
+                self.base_sha = base_sha
+                self.outcome = outcome
+                self.failure = failure
+            }
+            public enum CodingKeys: String, CodingKey {
+                case invocation_id
+                case round
+                case head_sha
+                case base_sha
+                case outcome
+                case failure
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.invocation_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .invocation_id
+                )
+                self.round = try container.decode(
+                    Swift.Int.self,
+                    forKey: .round
+                )
+                self.head_sha = try container.decode(
+                    Swift.String.self,
+                    forKey: .head_sha
+                )
+                self.base_sha = try container.decode(
+                    Swift.String.self,
+                    forKey: .base_sha
+                )
+                self.outcome = try container.decodeIfPresent(
+                    Components.Schemas.TaskEventReview.outcomePayload.self,
+                    forKey: .outcome
+                )
+                self.failure = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .failure
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "invocation_id",
+                    "round",
+                    "head_sha",
+                    "base_sha",
+                    "outcome",
+                    "failure"
+                ])
+            }
+        }
+        /// Historical detailed-readiness decision binding, not current readiness.
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskEventVerification`.
+        public struct TaskEventVerification: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskEventVerification/item_id`.
+            public var item_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskEventVerification/class`.
+            @frozen public enum _classPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case ready_clean = "ready_clean"
+                case ready_degraded = "ready_degraded"
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskEventVerification/class`.
+            public var _class: Components.Schemas.TaskEventVerification._classPayload
+            /// - Remark: Generated from `#/components/schemas/TaskEventVerification/head_sha`.
+            public var head_sha: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskEventVerification/base_sha`.
+            public var base_sha: Swift.String
+            /// Creates a new `TaskEventVerification`.
+            ///
+            /// - Parameters:
+            ///   - item_id:
+            ///   - _class:
+            ///   - head_sha:
+            ///   - base_sha:
+            public init(
+                item_id: Swift.String,
+                _class: Components.Schemas.TaskEventVerification._classPayload,
+                head_sha: Swift.String,
+                base_sha: Swift.String
+            ) {
+                self.item_id = item_id
+                self._class = _class
+                self.head_sha = head_sha
+                self.base_sha = base_sha
+            }
+            public enum CodingKeys: String, CodingKey {
+                case item_id
+                case _class = "class"
+                case head_sha
+                case base_sha
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.item_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .item_id
+                )
+                self._class = try container.decode(
+                    Components.Schemas.TaskEventVerification._classPayload.self,
+                    forKey: ._class
+                )
+                self.head_sha = try container.decode(
+                    Swift.String.self,
+                    forKey: .head_sha
+                )
+                self.base_sha = try container.decode(
+                    Swift.String.self,
+                    forKey: .base_sha
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "item_id",
+                    "class",
+                    "head_sha",
+                    "base_sha"
+                ])
+            }
+        }
+        /// Closed vocabulary of recorded task-wide milestone history.
         ///
         /// - Remark: Generated from `#/components/schemas/TaskEventKind`.
         @frozen public enum TaskEventKind: String, Codable, Hashable, Sendable, CaseIterable {
             case task_created = "task_created"
+            case task_started = "task_started"
+            case task_completed = "task_completed"
+            case task_abandoned = "task_abandoned"
+            case stop_requested = "stop_requested"
+            case task_stopped = "task_stopped"
+            case stop_failed = "stop_failed"
+            case run_milestone = "run_milestone"
+            case review_requested = "review_requested"
+            case review_completed = "review_completed"
+            case review_failed = "review_failed"
+            case verification_recorded = "verification_recorded"
             case campaign_allocated = "campaign_allocated"
             case specification_approved = "specification_approved"
             case pr_opened = "pr_opened"
