@@ -232,6 +232,9 @@ public struct FreesideRootView: View {
                     }
                 }
                 ToolbarItemGroup {
+                    if selectedTab.wrappedValue == .tasks {
+                        submissionRecoveryButton(coordinator)
+                    }
                     Button {
                         Task { await coordinator.refresh() }
                     } label: {
@@ -252,9 +255,35 @@ public struct FreesideRootView: View {
                 NewTaskSheet(
                     projects: TaskDisplay.knownProjects(in: coordinator.tasks),
                     model: TaskSubmissionModel(coordinator: coordinator),
-                    onSubmitted: { routeToSubmittedTask($0, coordinator: coordinator) })
+                    onSubmitted: { routeToSubmittedTask($0, coordinator: coordinator) }
+                )
+                .dynamicTypeSize(launchDynamicTypeSize ?? systemDynamicTypeSize)
+            }
+            .sheet(isPresented: Bindable(navigation).submissionRecoveryPresented) {
+                submissionRecoverySheet(coordinator)
             }
         #endif
+    }
+
+    @ViewBuilder
+    private func submissionRecoveryButton(_ coordinator: SyncCoordinator) -> some View {
+        if !coordinator.pendingTaskSubmissions.isEmpty {
+            Button {
+                navigation.submissionRecoveryPresented = true
+            } label: {
+                Text("Unconfirmed (\(coordinator.pendingTaskSubmissions.count))")
+            }
+            .accessibilityLabel("Unconfirmed submissions (\(coordinator.pendingTaskSubmissions.count))")
+            .help("Unconfirmed submissions")
+        }
+    }
+
+    private func submissionRecoverySheet(_ coordinator: SyncCoordinator) -> some View {
+        TaskSubmissionRecoverySheet(
+            model: TaskSubmissionModel(coordinator: coordinator),
+            onRecovered: { routeToSubmittedTask($0, coordinator: coordinator) }
+        )
+        .dynamicTypeSize(launchDynamicTypeSize ?? systemDynamicTypeSize)
     }
 
     #if os(iOS)
@@ -330,6 +359,7 @@ public struct FreesideRootView: View {
                         }
                         .disabled(
                             !TaskSubmissionModel.canCompose(freshness: coordinator.store.freshness))
+                        submissionRecoveryButton(coordinator)
                         decisionFlowMenu
                     }
                 }
@@ -337,7 +367,12 @@ public struct FreesideRootView: View {
                     NewTaskSheet(
                         projects: TaskDisplay.knownProjects(in: coordinator.tasks),
                         model: TaskSubmissionModel(coordinator: coordinator),
-                        onSubmitted: { routeToSubmittedTask($0, coordinator: coordinator) })
+                        onSubmitted: { routeToSubmittedTask($0, coordinator: coordinator) }
+                    )
+                    .dynamicTypeSize(launchDynamicTypeSize ?? systemDynamicTypeSize)
+                }
+                .sheet(isPresented: Bindable(navigation).submissionRecoveryPresented) {
+                    submissionRecoverySheet(coordinator)
                 }
                 .navigationDestination(for: String.self) { id in
                     if let task = coordinator.tasks.first(where: { $0.task.id == id }) {

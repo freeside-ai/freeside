@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 59
+revision: 60
 status: active
-updated: 2026-09-15
+updated: 2026-09-16
 ---
 
 # Freeside
@@ -2186,9 +2186,11 @@ Additional rules:
 
 - `rein` resolves into digested per-run policy with per-key provenance.
 - **Manual initiation uses `freesided submit`.** It registers the task's
-  source as a digest-addressed artifact, creates or fetches the task, starts
-  its specification workflow idempotently, and reserves the deterministic
-  implementation identity.
+  source as a digest-addressed artifact, creates a new task and specification
+  run for each deliberate submission, and reserves its implementation identity.
+  The CLI saves a submission identity and exact inputs before attempting
+  acceptance. Only an explicit manual Retry reuses that identity; neither
+  clients nor the CLI automatically resubmit unresolved commands.
   The implementation run starts only after the specification stage accepts
   its specification and, when configured, the operator approves that
   specification's digest. Its result names the source digest and artifact,
@@ -2202,31 +2204,34 @@ Additional rules:
   names a project, a source text, and an optional operator name, one line of
   at most 60 characters. It is the
   same intake path as `freesided submit`, not a parallel one. The daemon
-  registers the source as a digest-addressed artifact, creates or fetches the
-  task by the same project-scoped intake key, starts the specification
-  workflow idempotently, and reserves the implementation identity, all in the
-  transaction that records the command result. The client supplies none of
-  the other immutable run inputs. The daemon resolves the project's
-  configured policy at submission, as Section [3.2](#32-the-interruption-budget) says for any run
-  creation, and composes the reviewer-facing publication metadata itself;
-  their digests bind into the reserved implementation identity beside the
-  project and source digest, and the task records them at creation. A fetch
-  of an existing task reuses what it recorded, so a configuration change
-  after creation moves no existing identity and a retry re-resolves nothing.
-  The exact composition is #1328's. The daemon also records a
-  `bound_pr_merged` work-unit declaration for the task, with declared paths
-  from the resolved policy and no bound issue, so a merged PR completes it
-  and releases its WIP slot; an operator-authored declaration stays a CLI
-  input. The command binds to no entity. It carries no `expected_entity_version` or `expected_bindings`, and
-  nothing rejects it for replacement state. The project-scoped intake key is
-  its only concurrency control (test 17). Making those envelope fields
-  conditional on command type is #1328's work. Idempotency is layered: a
-  retried `command_id` returns the recorded result, and a distinct
-  `command_id` carrying the same source in the same project returns the same
-  committed task. An operator name applies only when the command creates the
-  task. A command that fetches an existing task ignores its name, and the
-  recorded result carries the task's stored name. Device authority is the
-  command surface's; a revoked device cannot submit. The composer offers the
+  registers the source as a digest-addressed artifact and creates a new task,
+  specification run, reserved implementation run, and campaign, in the
+  transaction that records the command result. A fresh `command_id` always
+  means new work, even with identical project, source, and name. Content is
+  provenance, never evidence that the operator intended a retry.
+  The client supplies none of the other immutable run inputs. The daemon
+  resolves the project's configured policy and publication metadata for new
+  work. Their digests and the submission identity bind the reserved run.
+  A manual Retry uses the exact saved command; replay returns its original
+  result and revision before resolving current host configuration. New records
+  bind device, project, source, and the optional name as submitted. Changed
+  fields under an occupied identity are rejected without a committed effect;
+  equivalent JSON formatting is not a changed request. Historical records
+  retain their existing device/project/source checks, including name-insensitive
+  replay, because they never stored the requested name. Their result bodies,
+  revisions, task identities, and approval bindings remain unchanged.
+  The daemon records a `bound_pr_merged` work-unit declaration with declared
+  paths from the resolved policy and no bound issue; an operator-authored
+  declaration stays a CLI input. The command carries no decision envelope.
+  Acceptance serializes by submission identity (test 17), and command IDs stay
+  unique across command kinds. A revoked device cannot create work.
+  Mac and iPhone persist the exact command before sending; failure to save
+  prevents sending. Unconfirmed submissions remain separate across dismissal
+  and restart, under their owning device and daemon. Restore and reconnect
+  never send them. The Tasks screen has a separate Unconfirmed submissions
+  view for reviewing saved requests and explicitly choosing Retry. The New
+  Task form only composes new work; it never doubles as recovery. Retry
+  resolves uncertainty about acceptance; it never restarts execution. The composer offers the
   projects the client already knows from synced entities. A project's first
   task comes from `freesided submit` on the host until the configured-project
   list lands in `/sync/bootstrap` (#1332). Attachments on submission wait
@@ -2252,22 +2257,25 @@ Additional rules:
   conversation outside a task. (#1329.)
 - **Task identity and intake idempotency are separate.** A task receives an
   opaque minted ID at creation. Its deterministic intake key is scoped to the
-  project: `(project_id, source_digest)` for submit, or
+  project: `(project_id, submission_identity)` for manual submit, or
   `(project_id, repository_id, issue_number)` for label intake. The repository
   ID is the canonical repository identity, not a display name. Register the
   task and its unique intake key in one transactional insert-or-fetch.
   Repeated or concurrent intake of the same key returns the same committed
   task, including its original minted ID. A rollback or crash before commit
   leaves neither a task nor its key registered; replay may mint a new ID and
-  commits one pair. Identical sources in different projects have different
-  keys and create distinct tasks. A separate check-then-insert is insufficient.
+  commits one pair. Distinct manual submissions have different keys and tasks
+  even within one project and with identical source bytes. Historical source
+  keys remain readable but are never consulted to reuse work for a new manual
+  submission. A separate check-then-insert is insufficient.
 - **Production acceptance identity is explicit.** Runs and campaigns retain
   content-addressed IDs that self-certify the bindings approvals rely on;
   the opaque task ID does not replace those bindings. The first manual
   submission
-  derives a campaign deterministically from its content-addressed attempt-1
-  implementation identity, so an exact repeat of the same submit stays
-  idempotent. A deliberate retry stays within the task and allocates the
+  derives a campaign deterministically from its attempt-1 implementation
+  identity, including the saved submission identity. Manual submission Retry
+  returns that acceptance unchanged. A deliberate execution retry stays within
+  the task and allocates the
   unchanged-specification campaign's next attempt number,
   which only ever increases. It binds the new implementation run to its exact
   terminal parent, the operator's reason, the original source digest, the
@@ -2593,9 +2601,14 @@ steering wait until Phase 3.
 15. A revoked device cannot submit a prepared but uncommitted command.
 16. Retrying a previously recorded command after revocation may return its
     recorded result but causes no new side effect.
-17. Two concurrent `submit_task` commands carrying one source in one project
-    create one task, and a retried `command_id` returns the committed task
-    without a second specification run.
+17. Two concurrent distinct `submit_task` commands carrying identical inputs
+    create distinct tasks, specification runs, reserved implementation runs,
+    and campaigns. Concurrent delivery of one saved command returns its
+    original result and revision, without another invocation. Manual Retry
+    after lost response and restart uses the saved command; if no attempt
+    committed, it may make the first commit. Changed request fields fail closed.
+    Client restore never sends automatically, keeps distinct pending commands,
+    checks device/daemon ownership, and refuses sending when persistence fails.
 
 ### 5.15 Evidence and Images
 
@@ -3817,7 +3830,7 @@ Build the installer only after the underlying interfaces survive real use. The
 | `freesided onboard <repo>` | Resolves the selected GitHub App installation, creates the trust profile, attests effective authority for one-time human review, detects the verification recipe, and invokes the proven reusable project-image builder. If the installation, organization approval, or repository selection is missing, onboarding records a bounded pending-install-or-expansion intent before routing the operator into GitHub's native flow, then polls. A callback or `--resume` reopens the same review after approval. |
 | `freesided doctor` | Checks conformance, the workspace-handoff gate, checkpoint encryption, backup age, artifact closure, restore-test age, and, from 1B.1, stored-credential integrity (a truncation and corruption probe); the probe rules follow the table. |
 | `freesided auth add`, `auth adopt`, `auth list`, `auth doctor`, `auth re-enroll`, `auth disable`, `auth enable` | Guided identity and enrollment lifecycle (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); each subcommand's rules follow the table. |
-| `freesided submit` | Creates or fetches a task from its project-scoped source key, starts its specification workflow idempotently, and reserves its future implementation run. The `submit_task` client command (Section [5.11](#511-github-integration-reconciliation-plus-intake)) is the same path under the same key. |
+| `freesided submit` | Creates a new task, specification workflow, campaign, and reserved implementation run for each deliberate submission. Only explicit manual Retry reuses a saved submission identity and its original inputs. The `submit_task` client command uses the same acceptance primitives. |
 | `freesided reattempt --task <task>`, `--parent-run <run>`, or `--campaign <campaign>` | Requires an operator reason and allocates the campaign's next attempt from an already approved specification. The task selector resolves to the task's current campaign and its exact parent run; it refuses a live parent. |
 | `freesided resume --task <task>` or `--run <run>` | Reattaches observation to one exact non-terminal run without creating any identity. The task selector resolves to its current run. It refuses terminal runs and points to `reattempt`. |
 
@@ -4469,22 +4482,18 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 59 ("First-Acceptance Task Naming"):
+Revision 60 ("Deliberate Manual Submission Identity"):
 
-1. **The first accepted specification may name an identifier-only task.** The
-   specifier's `title` replaces an agent-produced name or the identifier
-   fallback once, when the task's first specification is accepted, and never
-   an operator name; a revised specification does not rename. When the approved
-   body opens with a heading, approval still names the task from it, so a task
-   still on its identifier at approval gets its name there, and approval still
-   freezes every name.
-   This amends revision 48, item 3, which let the refinement touch only an
-   agent name and deferred an identifier-only task's first name to approval.
-   The owner's #1208 contract chose the wider rule and PR #1326 shipped it;
-   the plan follows the contract. Rejected: narrowing the code to agent-only
-   refinement, as the PR #1326 review proposed. (User decision;
-   Section [5.12](#512-workflow-definition-initiators-and-artifacts); #1208,
-   #1327; devlog 2026-09-15-0914-first-acceptance-naming.md.)
+1. **New Task always creates new work.** Distinct submissions receive distinct
+   tasks, runs, and campaigns even with identical input. Only explicit manual
+   Retry reuses a durably saved submission identity. No automatic resubmission
+   is authorized. Legacy recorded commands retain their original results and
+   replay checks, without inventing missing requested-name data. This reverses
+   the same-source reuse rule in revision 58 after the client exit exercise
+   showed that it reopened old work instead of creating the requested task.
+   (User decision, September 16, 2026; #1366;
+   [decision note](../devlog/2026-09-16-0830-manual-submission-identity.md);
+   separate ADR promotion: [#1387](https://github.com/freeside-ai/freeside/issues/1387).)
 
 ## 14. Risks
 

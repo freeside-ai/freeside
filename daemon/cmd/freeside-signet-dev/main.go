@@ -33,6 +33,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
@@ -209,6 +210,7 @@ func run(ctx context.Context, cfg config) (_ *harness, err error) {
 		return nil, fmt.Errorf("open blob store: %w", err)
 	}
 	options := []signet.Option{
+		signet.WithTaskSubmitter(engine.NewTaskSubmitter(blobs, convergenceManualInitiator)),
 		signet.WithPairingKey(pairingKey),
 		signet.WithBlobStore(blobs),
 		// Fixed dev facts: the harness always listens on loopback

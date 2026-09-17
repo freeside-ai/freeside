@@ -140,6 +140,9 @@ const specificationImplementationClaimKeyPrefix = "claim-specification-implement
 // implementation run. The latter does not exist until its current spec wins
 // a digest-bound approval.
 type SpecificationRunSpec struct {
+	// ManualSubmission binds a new manual intake to its request and own task.
+	// Nil preserves label intake and historical execution/revision semantics.
+	ManualSubmission    *domain.ManualSubmission
 	SpecificationRunID  domain.RunID
 	ImplementationRunID domain.RunID
 	ProjectID           domain.ProjectID
@@ -718,6 +721,18 @@ func submitSpecificationRunTx(
 	if seed != nil {
 		want.TaskID = seed.taskID
 	}
+	if spec.ManualSubmission != nil {
+		m := *spec.ManualSubmission
+		if seed != nil || m.ProjectID != spec.ProjectID || m.SourceArtifactID != source.ID ||
+			m.SourceDigest != source.Digest || m.ImplementationRunID != spec.ImplementationRunID {
+			return domain.Run{}, domain.ErrParentKeyMismatch
+		}
+		task, err := tx.AcceptManualSubmission(ctx, m)
+		if err != nil {
+			return domain.Run{}, err
+		}
+		want.TaskID = task.ID
+	}
 	if existing, err := tx.GetRun(ctx, want.ID); err == nil {
 		expectedPayload := payload
 		legacyCampaignReplay := existing.CampaignID == "" && existing.AttemptNumber == 0 &&
@@ -739,7 +754,7 @@ func submitSpecificationRunTx(
 		storedInvocation, invocationErr := tx.GetAgentInvocation(ctx, invocationID)
 		lineageDisagrees := !legacyCampaignReplay &&
 			(existing.CampaignID != want.CampaignID || existing.AttemptNumber != want.AttemptNumber)
-		if existing.ProjectID != want.ProjectID || existing.SpecDigest != want.SpecDigest ||
+		if (want.TaskID != "" && existing.TaskID != want.TaskID) || existing.ProjectID != want.ProjectID || existing.SpecDigest != want.SpecDigest ||
 			existing.PolicyDigest != want.PolicyDigest || lineageDisagrees ||
 			markerErr != nil || stored.Kind != KindSpecificationInvocationRequested ||
 			!bytes.Equal(stored.Payload, expectedPayload) ||

@@ -7,7 +7,7 @@ import SwiftUI
 /// multi-line source field, an optional name, and a Cancel/Submit footer that
 /// Return and Escape drive, with no navigation bar. The draft lives in this
 /// sheet's own state and no failure clears it: a lost response keeps the text
-/// and offers Retry (the same command id), a daemon rejection keeps the text
+/// and points to separate recovery, a daemon rejection keeps the text
 /// and shows the reason inline. The sheet expects a sentence or a paragraph,
 /// not a document; the follow-up conversation happens on the task's cards.
 struct NewTaskSheet: View {
@@ -20,7 +20,7 @@ struct NewTaskSheet: View {
     /// on every observed `coordinator` change (an iOS heartbeat or a foreground
     /// refresh); holding the passed model as plain state would let such a
     /// recompose swap in a fresh model and discard `lastCommand` and the
-    /// `.lost` state mid-retry. `@State` keeps the first model for the
+    /// `.lost` state. `@State` keeps the first model for the
     /// presentation's lifetime; a re-presentation gets a fresh one.
     @State private var model: TaskSubmissionModel
     /// Called with the created task's id after a successful submit, so the
@@ -35,7 +35,7 @@ struct NewTaskSheet: View {
     @State private var source: String
     @State private var name: String
     @State private var isSubmitting = false
-    /// The in-flight submit or retry, held so dismissing the sheet cancels it
+    /// The in-flight submit, held so dismissing the sheet cancels it
     /// and suppresses the completion's navigation (the submission itself may
     /// still land server-side, which the idempotency key reconciles).
     @State private var submitTask: Task<Void, Never>?
@@ -67,11 +67,8 @@ struct NewTaskSheet: View {
     }
 
     /// A lost response may have committed a task server-side, so the sheet
-    /// waits on the idempotent Retry (same command id) rather than a fresh
-    /// submit: minting a new command id here could start a second task and
-    /// would overwrite `lastCommand`, stranding the first. Retry stays live in
-    /// the status row; once it resolves (submitted and dismissed, or an
-    /// authoritative rejection) this reopens.
+    /// cannot submit the same draft again. Recovery belongs to the separate
+    /// Unconfirmed submissions screen; reopening New Task starts new work.
     private var isLost: Bool {
         if case .lost = model.state { return true }
         return false
@@ -85,26 +82,11 @@ struct NewTaskSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            FreesideSheetHeader(
-                title: "New task",
-                prompt:
-                    "Describe the work in a sentence or a paragraph. The agent asks before it specifies when the source is a sketch."
-            )
-            VStack(alignment: .leading, spacing: 12) {
-                // Frozen while `.lost`: Retry resends the saved command, so the
-                // draft must stay the one that was submitted. The status row
-                // (its Retry button) stays live below.
-                Group {
-                    projectPicker
-                    sourceField
-                    nameField
-                }
-                .disabled(isLost)
-                status
+            if rendersInteractiveControls {
+                ScrollView { composerContent }
+            } else {
+                composerContent
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 16)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
             // The submit lives in the sheet body, not a toolbar, so it carries
             // the design language's primary recipe and the row's Return and
@@ -122,6 +104,32 @@ struct NewTaskSheet: View {
         // while a submit is still in flight; cancel the task so its completion
         // does not route the operator to a task they navigated away from.
         .onDisappear { submitTask?.cancel() }
+    }
+
+    // Keep the form scrollable at large text sizes, with fixed actions.
+    private var composerContent: some View {
+        VStack(spacing: 0) {
+            FreesideSheetHeader(
+                title: "New task",
+                prompt:
+                    "Describe the work in a sentence or a paragraph. The agent asks before it specifies when the source is a sketch."
+            )
+            VStack(alignment: .leading, spacing: 12) {
+                // Freeze an uncertain submission so editing cannot imply
+                // that another Submit would retry the saved request.
+                Group {
+                    projectPicker
+                    sourceField
+                    nameField
+                }
+                .disabled(isLost || isSubmitting)
+                status
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+
+        }
     }
 
     @ViewBuilder private var projectPicker: some View {
@@ -196,18 +204,11 @@ struct NewTaskSheet: View {
     @ViewBuilder private var status: some View {
         switch model.state {
         case .lost:
-            HStack(spacing: 8) {
-                Text("The submission's result was lost. Retry sends the same request.")
-                    .font(FreesideFont.callout)
-                    .foregroundStyle(Color.waxText)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 8)
-                Button("Retry", action: performRetry)
-                    .buttonStyle(FreesideActionButtonStyle(tone: .tertiary))
-                    .disabled(isSubmitting)
-                    .accessibilityLabel("Retry the lost submission")
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            Text("The result couldn't be confirmed. Your request is saved in Unconfirmed submissions in Tasks.")
+                .font(FreesideFont.callout)
+                .foregroundStyle(Color.waxText)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
         case .rejected(let reason):
             Text(reason)
                 .font(FreesideFont.callout)
@@ -225,19 +226,6 @@ struct NewTaskSheet: View {
             let taskID = await model.submit(
                 projectID: projectID, source: trimmedSource,
                 name: trimmedName.isEmpty ? nil : trimmedName)
-            isSubmitting = false
-            guard !Task.isCancelled else { return }
-            if let taskID {
-                onSubmitted(taskID)
-                dismiss()
-            }
-        }
-    }
-
-    private func performRetry() {
-        isSubmitting = true
-        submitTask = Task {
-            let taskID = await model.retry()
             isSubmitting = false
             guard !Task.isCancelled else { return }
             if let taskID {

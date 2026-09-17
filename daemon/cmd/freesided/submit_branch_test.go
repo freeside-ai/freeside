@@ -41,7 +41,7 @@ func TestSubmitDeclaredBranchPersistsAndChangesRunIdentity(t *testing.T) {
 	if initial.RunID == declared.RunID || initial.PublicationDigest == declared.PublicationDigest {
 		t.Fatal("branch did not change submission identity")
 	}
-	retry, err := runSubmitCommand(t.Context(), cfg)
+	retry, err := runSubmitCommand(t.Context(), submitCommandConfig{DBPath: cfg.DBPath, RetrySubmissionID: declared.SubmissionID})
 	if err != nil || retry.RunID != declared.RunID {
 		t.Fatalf("retry = %+v, %v", retry, err)
 	}

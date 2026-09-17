@@ -33,6 +33,16 @@ default to `~/Library/Logs/Freeside/real-work-session.*`; set
 `FREESIDE_REAL_RUN_DIAGNOSTIC_DIR` to an existing directory outside the source
 checkout to use another destination. Each session is private and retains the
 built binary, submission input copies, rig acquisition material and diagnostics.
+
+Each new session saves `submission-id` before preflight and passes that identity
+to both preflight and submit. Identical input in another new session creates
+separate work. If submit's output is lost, its private journal is under
+`<database>.submissions/<submission-id>.json`; manually resolve it with
+`freesided submit --db <database> --retry-submission-id <submission-id>`.
+This loads the saved inputs and never creates a replacement identity. Neither
+the CLI nor the clients automatically resend unresolved submissions. Existing
+retained-session attachment performs no submission. Sessions predating the
+identity field keep their legacy composition checks.
 Do not upload the directory: acquisition material and operator inputs are private.
 
 Before startup, the verifier seeds the two required auth identities. After

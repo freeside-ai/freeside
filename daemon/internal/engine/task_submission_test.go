@@ -136,7 +136,7 @@ func TestSubmitTaskCreatesTaskRunAndRecord(t *testing.T) {
 		if run.TaskID != sub.TaskID {
 			t.Fatalf("run task = %s, want %s", run.TaskID, sub.TaskID)
 		}
-		byKey, err := tx.GetTaskByIntakeKey(ctx, "project-1", "source:"+string(wantDigest))
+		byKey, err := tx.GetTaskByIntakeKey(ctx, "project-1", "submission:client:cmd-1")
 		if err != nil {
 			return err
 		}
@@ -175,7 +175,7 @@ func TestSubmitTaskCreatesTaskRunAndRecord(t *testing.T) {
 	}
 }
 
-func TestSubmitTaskIdempotencyAndConvergence(t *testing.T) {
+func TestSubmitTaskReplayAndDistinctNewTasks(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	service, s, _ := newSubmitTaskHarness(t)
@@ -192,15 +192,14 @@ func TestSubmitTaskIdempotencyAndConvergence(t *testing.T) {
 	if *replay.Submission != *first.Submission || replay.Revision != first.Revision {
 		t.Fatalf("replay = %+v, want %+v", replay, first)
 	}
-	// A distinct command_id with the same source in the same project returns the
-	// same committed task and specification run, and starts no second run.
+	// A distinct command is deliberate new work, even with identical input.
 	second, err := service.Submit(ctx, submitCmd("cmd-2", "project-1", source, ""))
 	if err != nil {
 		t.Fatalf("second: %v", err)
 	}
-	if second.Submission.TaskID != first.Submission.TaskID ||
-		second.Submission.SpecificationRunID != first.Submission.SpecificationRunID {
-		t.Fatalf("second submission = %+v, want same task/run as %+v", *second.Submission, *first.Submission)
+	if second.Submission.TaskID == first.Submission.TaskID ||
+		second.Submission.SpecificationRunID == first.Submission.SpecificationRunID {
+		t.Fatalf("second submission reused identity: %+v vs %+v", *second.Submission, *first.Submission)
 	}
 	if got := taskRunCount(t, s, first.Submission.TaskID); got != 1 {
 		t.Fatalf("task runs after two submissions = %d, want 1", got)
@@ -215,7 +214,7 @@ func TestSubmitTaskIdempotencyAndConvergence(t *testing.T) {
 	}
 }
 
-func TestSubmitTaskConcurrentProducesOneTask(t *testing.T) {
+func TestSubmitTaskConcurrentProducesDistinctTasks(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	service, s, _ := newSubmitTaskHarness(t)
@@ -236,8 +235,8 @@ func TestSubmitTaskConcurrentProducesOneTask(t *testing.T) {
 			t.Fatalf("submission %d: %v", i, err)
 		}
 	}
-	if results[0].Submission.TaskID != results[1].Submission.TaskID {
-		t.Fatalf("concurrent submissions produced distinct tasks: %s vs %s",
+	if results[0].Submission.TaskID == results[1].Submission.TaskID {
+		t.Fatalf("concurrent submissions reused a task: %s vs %s",
 			results[0].Submission.TaskID, results[1].Submission.TaskID)
 	}
 	if got := taskRunCount(t, s, results[0].Submission.TaskID); got != 1 {
@@ -245,7 +244,7 @@ func TestSubmitTaskConcurrentProducesOneTask(t *testing.T) {
 	}
 }
 
-func TestSubmitTaskOperatorNameWinsAndFetchIgnoresName(t *testing.T) {
+func TestSubmitTaskOperatorNamesBelongToSeparateTasks(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	service, _, _ := newSubmitTaskHarness(t)
@@ -257,13 +256,13 @@ func TestSubmitTaskOperatorNameWinsAndFetchIgnoresName(t *testing.T) {
 	if first.Submission.Name != (domain.DisplayName{Text: "Operator chose this", Source: domain.DisplayNameSourceOperator}) {
 		t.Fatalf("name = %+v, want the operator name", first.Submission.Name)
 	}
-	// A fetch of the existing task ignores a later name and reports the stored one.
+	// The next submission owns its own name.
 	second, err := service.Submit(ctx, submitCmd("cmd-2", "project-1", source, "A different name"))
 	if err != nil {
 		t.Fatalf("second: %v", err)
 	}
-	if second.Submission.Name != first.Submission.Name {
-		t.Fatalf("fetched name = %+v, want %+v", second.Submission.Name, first.Submission.Name)
+	if second.Submission.Name.Text != "A different name" || second.Submission.TaskID == first.Submission.TaskID {
+		t.Fatalf("new submission did not own its name: %+v", second.Submission)
 	}
 }
 
@@ -279,7 +278,7 @@ func TestSubmitTaskConfigChangeMovesNoExistingIdentity(t *testing.T) {
 	// Change the project's configured policy: a fresh derivation would produce a
 	// different run id, but the intake-key fetch reuses the recorded task and run.
 	holder.set("project-1", submissionInitiator("app/**"))
-	second, err := service.Submit(ctx, submitCmd("cmd-2", "project-1", source, ""))
+	second, err := service.Submit(ctx, submitCmd("cmd-1", "project-1", source, ""))
 	if err != nil {
 		t.Fatalf("second after config change: %v", err)
 	}
@@ -388,5 +387,50 @@ func TestSubmitTaskUnconfiguredProjectRefusedBeforeWrite(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSubmitTaskConcurrentReplayKeepsOriginalResult(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	service, s, _ := newSubmitTaskHarness(t)
+	const deliveries = 8
+	results := make([]signet.CommandResult, deliveries)
+	errs := make([]error, deliveries)
+	var wg sync.WaitGroup
+	for i := range deliveries {
+		wg.Go(func() {
+			results[i], errs[i] = service.Submit(ctx, submitCmd("same-command", "project-1", "Same work", "Same name"))
+		})
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if *results[i].Submission != *results[0].Submission || results[i].Revision != results[0].Revision {
+			t.Fatalf("delivery %d changed committed result", i)
+		}
+	}
+	if taskRunCount(t, s, results[0].Submission.TaskID) != 1 {
+		t.Fatal("replay created another run")
+	}
+}
+
+func TestSubmitTaskRollbackAllowsFirstCommitWithSameIdentity(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	service, s, holder := newSubmitTaskHarness(t)
+	command := submitCmd("retry-after-refusal", "later-project", "Same work", "Same name")
+	if _, err := service.Submit(ctx, command); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("first = %v", err)
+	}
+	holder.set("later-project", submissionInitiator("daemon/**"))
+	result, err := service.Submit(ctx, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if taskRunCount(t, s, result.Submission.TaskID) != 1 {
+		t.Fatal("manual retry did not commit one run")
 	}
 }

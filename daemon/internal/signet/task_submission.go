@@ -3,6 +3,7 @@ package signet
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -12,8 +13,8 @@ import (
 )
 
 // TaskSubmitter performs the engine-side work of a submit_task command inside
-// the accepting transaction: it creates or fetches the task for a submitted
-// source and returns the task's identity, its specification run, and its stored
+// the accepting transaction: it creates the task for a deliberate
+// submission and returns the task's identity, its specification run, and its stored
 // display name. It is injected (WithTaskSubmitter) because the engine imports
 // signet, so signet cannot call the engine directly. A project with no
 // configured submission policy is reported as store.ErrNotFound, which the HTTP
@@ -26,15 +27,16 @@ type TaskSubmitter interface {
 // source and its digest (already stored in the blob store), and an optional
 // operator-chosen name.
 type TaskSubmissionInput struct {
-	ProjectID    domain.ProjectID
-	Source       []byte
-	SourceDigest domain.Digest
-	OperatorName string
+	CommandID     string
+	RequestDigest domain.Digest
+	ProjectID     domain.ProjectID
+	Source        []byte
+	SourceDigest  domain.Digest
+	OperatorName  string
 }
 
-// TaskSubmissionResult is the submitter's output: the created-or-fetched task,
-// its specification run, and its stored display name (the operator name when
-// this command created the task, otherwise the name the first submission won).
+// TaskSubmissionResult identifies the created task, its specification run,
+// and its stored display name.
 type TaskSubmissionResult struct {
 	TaskID             domain.TaskID
 	SpecificationRunID domain.RunID
@@ -44,7 +46,7 @@ type TaskSubmissionResult struct {
 // submitTask accepts one submit_task ClientCommand and returns its committed
 // result. Idempotency is by CommandID first (a retry returns the recorded
 // result and starts no second run), then the device gate, then the injected
-// submitter creates or fetches the task by the project-scoped intake key. The
+// submitter creates a task keyed by the command identity. The
 // whole command commits in one transaction: the source and policy artifacts,
 // the specification run, and the submission record.
 func (s *Service) submitTask(ctx context.Context, in ClientCommand) (CommandResult, error) {
@@ -63,6 +65,14 @@ func (s *Service) submitTask(ctx context.Context, in ClientCommand) (CommandResu
 	}
 	source := []byte(p.Source)
 	digest := domain.Digest(contentaddr.Sum(source))
+	requestBytes, err := json.Marshal(struct {
+		Device  domain.DeviceID
+		Payload SubmitTaskPayload
+	}{in.DeviceID, p})
+	if err != nil {
+		return CommandResult{}, err
+	}
+	requestDigest := domain.Digest(contentaddr.Sum(requestBytes))
 	// Bytes land before the transaction so an artifact row never names a digest
 	// the blob store cannot serve (the freesided submit / attachment pattern).
 	// The put is content-addressed and idempotent; if the transaction below
@@ -73,20 +83,24 @@ func (s *Service) submitTask(ctx context.Context, in ClientCommand) (CommandResu
 		return CommandResult{}, fmt.Errorf("submit command %q store source: %w", in.CommandID, err)
 	}
 	var result CommandResult
-	err := s.store.Write(ctx, func(tx *store.WriteTx) error {
+	err = s.store.Write(ctx, func(tx *store.WriteTx) error {
 		// Idempotency: a retried command_id returns the recorded result with no
 		// second effect (§5.14 test 4). A command_id reused for a different
 		// submission is an immutable conflict, not a silent replay: the recorded
-		// submission's client-controlled identity (device, project, source digest)
-		// must match this request. Only the optional name is ignored, so a
-		// renamed resubmission still converges. This mirrors the decision path,
+		// device, project, source, and optional name must match this request.
+		// Historical rows lack the requested-name fingerprint and retain their
+		// original name-insensitive replay check. This mirrors the decision path,
 		// where a changed body under an occupied command_id surfaces
 		// store.ErrImmutableConflict from PutCommand (service.go); the fast replay
 		// here returns before PutTaskSubmission would catch it, so the check lives
 		// here. store.ErrImmutableConflict maps to 400 at the HTTP boundary.
 		if recorded, snap, getErr := tx.GetTaskSubmissionSnapshot(ctx, in.CommandID); getErr == nil {
+			original, err := tx.TaskSubmissionRequestDigest(ctx, in.CommandID)
+			if err != nil {
+				return err
+			}
 			if recorded.DeviceID != in.DeviceID || recorded.ProjectID != p.ProjectID ||
-				recorded.SourceDigest != digest {
+				recorded.SourceDigest != digest || (original != "" && original != requestDigest) {
 				return fmt.Errorf("submit command %q: %w", in.CommandID, store.ErrImmutableConflict)
 			}
 			record := recorded
@@ -101,6 +115,7 @@ func (s *Service) submitTask(ctx context.Context, in ClientCommand) (CommandResu
 			return err
 		}
 		outcome, err := s.taskSubmitter.SubmitTask(ctx, tx, TaskSubmissionInput{
+			CommandID: in.CommandID, RequestDigest: requestDigest,
 			ProjectID: p.ProjectID, Source: source, SourceDigest: digest, OperatorName: p.Name,
 		})
 		if err != nil {
@@ -111,7 +126,7 @@ func (s *Service) submitTask(ctx context.Context, in ClientCommand) (CommandResu
 			SourceDigest: digest, TaskID: outcome.TaskID, SpecificationRunID: outcome.SpecificationRunID,
 			Name: outcome.Name,
 		}
-		if err := tx.PutTaskSubmission(ctx, submission); err != nil {
+		if err := tx.PutTaskSubmissionRequest(ctx, submission, requestDigest); err != nil {
 			return err
 		}
 		recorded, snap, err := tx.GetTaskSubmissionSnapshot(ctx, in.CommandID)

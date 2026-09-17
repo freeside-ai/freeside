@@ -589,6 +589,24 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         #expect(coordinator.store.freshness == .fresh)
     }
 
+    @Test func epochChangePreservesDurableSubmissionWhenReplacementSaveFails() async throws {
+        let server = MockServer()
+        let client = APIClientFactory.mock(server: server)
+        let cache = FailingCacheStore(failSaves: false)
+        let coordinator = SyncCoordinator(client: client, cache: cache)
+        await coordinator.refresh()
+        let command = Components.Schemas.ClientCommand(
+            command_id: "saved-before-restore", device_id: "device-mock",
+            payload: .submit_task(.init(kind: .submit_task, project_id: "project-1", source: "Saved work")))
+        #expect(coordinator.retainTaskSubmission(command))
+        cache.failSaves = true
+        await server.rotateEpoch()
+        await coordinator.heartbeat()
+        let restored = SyncCoordinator(client: client, cache: cache)
+        #expect(restored.pendingTaskSubmissions == [command.command_id: command])
+        #expect(restored.store.freshness == .unvalidated)
+    }
+
     @Test func epochChangeDiscardsTheCacheAndBootstraps() async throws {
         // Test 8, client half: a restored daemon issues a new epoch; the
         // client discards its cache and cursors — even though they sit

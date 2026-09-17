@@ -14,11 +14,13 @@ import (
 	"reflect"
 	"slices"
 	"syscall"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
+	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
@@ -81,13 +83,16 @@ func runSubmitMain(args []string) {
 	requireComposition := flags.Bool("require-composition", false, "require trusted production-composition evidence (unattended submission)")
 	workUnitPath := flags.String("work-unit", "", "work-unit declaration JSON file (optional; §5.18 capture)")
 	projectID := flags.String("project", "", "project id the run belongs to (required)")
-	runID := flags.String("run-id", "", "implementation run id (defaults from project, specification, resolved policy, publication metadata, and any work-unit declaration so an exact re-submission converges)")
+	runID := flags.String("run-id", "", "lookup-only legacy implementation run id; never creates work")
+	submissionID := flags.String("submission-id", "", "prepared identity for new work (otherwise generated and saved before submission)")
+	retrySubmissionID := flags.String("retry-submission-id", "", "manually retry a saved submission using its original inputs")
 	if err := flags.Parse(args); err != nil {
 		os.Exit(2)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	result, err := runSubmitCommand(ctx, submitCommandConfig{
+		SubmissionID: *submissionID, RetrySubmissionID: *retrySubmissionID,
 		DBPath: *dbPath, TaskPath: *taskPath, PolicyPath: *policyPath,
 		PublicationPath: *publicationPath, WorkUnitPath: *workUnitPath,
 		CompositionPath:    *compositionPath,
@@ -105,6 +110,9 @@ func runSubmitMain(args []string) {
 }
 
 type submitCommandConfig struct {
+	SubmissionID       string
+	RetrySubmissionID  string
+	SavedInputs        map[string][]byte
 	DBPath             string
 	TaskPath           string
 	PolicyPath         string
@@ -128,6 +136,7 @@ type submittedWorkUnit struct {
 }
 
 type submitResult struct {
+	SubmissionID                  string              `json:"submission_id,omitempty"`
 	RunID                         domain.RunID        `json:"run_id"`
 	SpecificationRunID            domain.RunID        `json:"specification_run_id"`
 	ProjectID                     domain.ProjectID    `json:"project_id"`
@@ -188,9 +197,15 @@ func submissionBytes(body []byte) submissionFile {
 }
 
 func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResult, error) {
-	switch {
-	case cfg.CompositionPath != "" && cfg.RunID != "":
+	if cfg.CompositionPath != "" && cfg.RunID != "" {
 		return submitResult{}, errors.New("submit: --run-id cannot override production composition identity")
+	}
+	var err error
+	cfg, err = prepareSubmission(cfg)
+	if err != nil {
+		return submitResult{}, err
+	}
+	switch {
 	case cfg.DBPath == "":
 		return submitResult{}, errors.New("submit: -db is required")
 	case cfg.TaskPath == "":
@@ -205,15 +220,15 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		return submitResult{}, errors.New("submit: --project is required")
 	}
 
-	spec, err := readSubmissionFile(cfg.TaskPath)
+	spec, err := cfg.input("task", cfg.TaskPath)
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: read specification: %w", err)
 	}
-	policyFile, err := readSubmissionFile(cfg.PolicyPath)
+	policyFile, err := cfg.input("policy", cfg.PolicyPath)
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: read policy: %w", err)
 	}
-	publicationFile, err := readSubmissionFile(cfg.PublicationPath)
+	publicationFile, err := cfg.input("publication", cfg.PublicationPath)
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: read publication metadata: %w", err)
 	}
@@ -238,6 +253,9 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		return submitResult{}, fmt.Errorf("submit: encode publication metadata: %w", err)
 	}
 	publicationFile = submissionBytes(publicationBody)
+	if cfg.RunID == "" {
+		publicationDigest = publicationFile.digest
+	}
 
 	if err := ward.RejectDuplicateJSONKeys(policyFile.body); err != nil {
 		return submitResult{}, fmt.Errorf("submit: decode resolved policy keys: %w", err)
@@ -261,7 +279,7 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		workUnitDigest domain.Digest
 	)
 	if cfg.WorkUnitPath != "" {
-		workUnitFile, err := readSubmissionFile(cfg.WorkUnitPath)
+		workUnitFile, err := cfg.input("work-unit", cfg.WorkUnitPath)
 		if err != nil {
 			return submitResult{}, fmt.Errorf("submit: read work-unit declaration: %w", err)
 		}
@@ -299,22 +317,19 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 
 	implementationRunID := cfg.RunID
 	if implementationRunID == "" {
-		// The default covers every immutable run binding so only an exact
-		// resubmission converges; shared specification bytes in another
-		// project, under another policy, with different reviewer-facing
-		// metadata, or under a different work-unit declaration remain
-		// distinct implementation runs. An undeclared submission keeps the
-		// pre-capture derivation byte-for-byte.
-		implementationRunID = engine.SubmissionRunID(
-			cfg.ProjectID, spec.digest, policyDigest, publicationFile.digest, workUnitDigest)
+		// Both the deliberate submission identity and every immutable run
+		// binding participate. Only redelivery of that saved request converges.
+		implementationRunID = engine.ManualSubmissionRunID(
+			"cli:"+cfg.SubmissionID, cfg.ProjectID, spec.digest, policyDigest, publicationFile.digest, workUnitDigest)
 	}
 	var composition submissionFile
 	if cfg.CompositionPath != "" {
-		composition, err = readSubmissionFile(cfg.CompositionPath)
+		composition, err = cfg.input("composition", cfg.CompositionPath)
 		if err != nil {
 			return submitResult{}, fmt.Errorf("submit: read composition manifest: %w", err)
 		}
 		if err := validateSubmissionComposition(composition.body, implementationRunID, compositionIdentity{
+			SubmissionID: cfg.SubmissionID,
 			SourceDigest: spec.digest, PolicyDigest: policyDigest,
 			PublicationDigest: publicationDigest, WorkUnitDigest: workUnitDigest,
 		}); err != nil {
@@ -346,6 +361,26 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		return submitResult{}, fmt.Errorf("submit: encode resolved policy keys: %w", err)
 	}
 	policy := submissionFile{digest: resolvedPolicy.Digest, body: policyBody}
+	if cfg.RunID == "" {
+		if _, err := specify.ParsePolicy(resolvedPolicy); err != nil {
+			return submitResult{}, fmt.Errorf("submit: validate specification policy: %w", err)
+		}
+		if workUnit != nil {
+			if _, err := domain.NewWorkUnitDeclaration(*workUnit, implementationRunID, cfg.ProjectID, time.Unix(1, 0)); err != nil {
+				return submitResult{}, fmt.Errorf("submit: validate work-unit declaration: %w", err)
+			}
+		}
+	}
+	retained, err := retainSubmission(cfg)
+	if err != nil {
+		return submitResult{}, err
+	}
+	if !reflect.DeepEqual(retained.SavedInputs, cfg.SavedInputs) {
+		// Equivalent redelivery can carry different JSON bytes. Derive all
+		// digests from the first journal, including if another process won
+		// publication while this request was being validated.
+		return runSubmitCommand(ctx, submitCommandConfig{DBPath: cfg.DBPath, RetrySubmissionID: cfg.SubmissionID})
+	}
 
 	st, _, err := openStoreWithTopicKey(ctx, cfg.DBPath, store.Options{})
 	if err != nil {
@@ -388,21 +423,13 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
 	}
-	if err := st.Write(ctx, func(tx *store.WriteTx) error {
-		if err := engine.RegisterSubmissionArtifact(ctx, tx, specArtifact); err != nil {
-			return err
-		}
-		return engine.RegisterSubmissionArtifact(ctx, tx, policyArtifact)
-	}); err != nil {
-		return submitResult{}, fmt.Errorf("submit: register artifacts: %w", err)
-	}
 	specificationStatePresent, err := engine.HasSpecificationIntakeState(
 		ctx, st, specificationRunID, implementationRunID,
 	)
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: inspect specification intake: %w", err)
 	}
-	if !specificationStatePresent {
+	if cfg.RunID != "" && !specificationStatePresent {
 		legacy, found, err := legacyProductionReplay(ctx, st, implementationRunID, cfg.ProjectID,
 			specArtifact, policyArtifact, keys, publication, workUnit, publicationDigest)
 		if err != nil {
@@ -411,20 +438,65 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		if found {
 			return legacy, nil
 		}
+		return submitResult{}, fmt.Errorf("submit: legacy run was not recorded: %w", store.ErrNotFound)
 	}
 
-	submitted, err := engine.SubmitSpecificationRun(ctx, st, engine.SpecificationRunSpec{
-		SpecificationRunID: specificationRunID, ImplementationRunID: implementationRunID,
-		ProjectID: cfg.ProjectID, SourceArtifactID: specArtifact.ID, SourceBytes: spec.body,
-		PolicyArtifactID: policyArtifact.ID, ResolvedPolicy: resolvedPolicy, Publication: publication,
-		PublicationDigest: publicationDigest,
-		WorkUnit:          workUnit, CampaignID: campaignID, AttemptNumber: 1,
+	var manual *domain.ManualSubmission
+	if cfg.RunID == "" {
+		fingerprint, err := json.Marshal(struct {
+			Project                                            domain.ProjectID
+			Source, Policy, Publication, WorkUnit, Composition domain.Digest
+		}{cfg.ProjectID, spec.digest, policyDigest, publicationFile.digest, workUnitDigest, composition.digest})
+		if err != nil {
+			return submitResult{}, err
+		}
+		manual = &domain.ManualSubmission{
+			Identity: "cli:" + cfg.SubmissionID, ProjectID: cfg.ProjectID, SourceArtifactID: specArtifact.ID,
+			SourceDigest: spec.digest, RequestDigest: domain.Digest(contentaddr.Sum(fingerprint)), ImplementationRunID: implementationRunID,
+		}
+	}
+	var submitted engine.SpecificationRun
+	lookupComplete := errors.New("submission lookup complete")
+	err = st.Write(ctx, func(tx *store.WriteTx) error {
+		replay := cfg.RunID != ""
+		if manual != nil {
+			if original, err := tx.GetManualSubmission(ctx, manual.Identity); err == nil {
+				if original != *manual {
+					return store.ErrImmutableConflict
+				}
+				replay = true
+			} else if !errors.Is(err, store.ErrNotFound) {
+				return err
+			}
+		}
+		if cfg.RunID == "" {
+			if err := engine.RegisterSubmissionArtifact(ctx, tx, specArtifact); err != nil {
+				return err
+			}
+			if err := engine.RegisterSubmissionArtifact(ctx, tx, policyArtifact); err != nil {
+				return err
+			}
+		}
+		var submitErr error
+		submitted, submitErr = engine.SubmitSpecificationRunTx(ctx, tx, engine.SpecificationRunSpec{
+			ManualSubmission:   manual,
+			SpecificationRunID: specificationRunID, ImplementationRunID: implementationRunID,
+			ProjectID: cfg.ProjectID, SourceArtifactID: specArtifact.ID, SourceBytes: spec.body,
+			PolicyArtifactID: policyArtifact.ID, ResolvedPolicy: resolvedPolicy, Publication: publication,
+			PublicationDigest: publicationDigest,
+			WorkUnit:          workUnit, CampaignID: campaignID, AttemptNumber: 1,
+		})
+		if submitErr == nil && replay {
+			return lookupComplete // A replay never commits a write.
+		}
+		return submitErr
 	})
-	if err != nil {
+	if err != nil && !errors.Is(err, lookupComplete) {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
 	}
 	result := submitResult{
-		RunID: submitted.ImplementationRunID, SpecificationRunID: submitted.Run.ID,
+		SubmissionID: cfg.SubmissionID,
+		RunID:        submitted.ImplementationRunID, SpecificationRunID: submitted.Run.ID,
 		ProjectID: submitted.Run.ProjectID,
 		// Keep the original fields as implementation aliases for compatibility
 		// while exposing both lanes without ambiguity.
@@ -467,6 +539,7 @@ func validateSubmissionComposition(
 	}
 	wantInvocation := domain.InvocationID("inv-implement-" + string(runID))
 	if manifest.Version != compositionManifestVersion || manifest.Status != compositionPassed ||
+		manifest.Identity.SubmissionID != identity.SubmissionID ||
 		manifest.Identity.SourceDigest != identity.SourceDigest ||
 		manifest.Identity.PolicyDigest != identity.PolicyDigest ||
 		manifest.Identity.PublicationDigest != identity.PublicationDigest ||

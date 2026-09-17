@@ -107,6 +107,14 @@ func SubmissionRunID(
 	return domain.RunID("run-" + hex.EncodeToString(sum[:]))
 }
 
+// ManualSubmissionRunID includes the deliberate submission identity alongside
+// the immutable execution bindings. SubmissionRunID remains the legacy formula.
+func ManualSubmissionRunID(identity string, projectID domain.ProjectID, source, policy, publication, workUnit domain.Digest) domain.RunID {
+	legacy := SubmissionRunID(projectID, source, policy, publication, workUnit)
+	sum := sha256.Sum256([]byte("freeside.manual-submission/v1\x00" + identity + "\x00" + string(legacy)))
+	return domain.RunID("run-" + hex.EncodeToString(sum[:]))
+}
+
 // SubmissionArtifact is the digest-addressed registration of one submitted
 // input. Identity and provenance are both content-derived (never
 // run-derived), so two runs submitting the same bytes converge on one

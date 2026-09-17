@@ -310,19 +310,25 @@ func TestManualSubmissionHTTPRestartAndReplay(t *testing.T) {
 			t.Fatal("replay changed task, run, or first name")
 		}
 	}
-	reused(submit("first", "project-client", "# New client task", "Ignored", http.StatusOK))
+	reused(submit("first", "project-client", "# New client task", "First name", http.StatusOK))
 	counts(1, 1, 1)
-	reused(submit("second", "project-client", "# New client task", "Ignored", http.StatusOK))
-	counts(1, 1, 2)
+	second := submit("second", "project-client", "# New client task", "First name", http.StatusOK)
+	if second.TaskID == first.TaskID || second.SpecificationRunID == first.SpecificationRunID {
+		t.Fatal("new submission reused original work")
+	}
+	counts(2, 2, 2)
 	cfg.Projects[0].CommitAuthor.BotUserID = 456
 	cfg.Projects[0].PolicyKeys[0].Value = "scripts/**"
 	writeManualConfig(t, path, cfg)
 	start(path, nil)
-	reused(submit("first", "project-client", "# New client task", "Ignored", http.StatusOK))
-	reused(submit("third", "project-client", "# New client task", "Ignored", http.StatusOK))
-	counts(1, 1, 3)
+	reused(submit("first", "project-client", "# New client task", "First name", http.StatusOK))
+	third := submit("third", "project-client", "# New client task", "First name", http.StatusOK)
+	if third.TaskID == first.TaskID || third.TaskID == second.TaskID {
+		t.Fatal("new submission reused original work")
+	}
+	counts(3, 3, 3)
 	fresh := submit("fresh", "project-client", "# Different source", "New name", http.StatusOK)
-	counts(2, 2, 4)
+	counts(4, 4, 4)
 	if err := h.store.Read(context.Background(), func(tx *store.ReadTx) error {
 		old, err := tx.GetProductionAttempt(context.Background(), originalAttempt.CampaignID, 1)
 		if err != nil {
@@ -356,10 +362,10 @@ func TestManualSubmissionHTTPRestartAndReplay(t *testing.T) {
 	}
 	// A separately configured label project cannot become a manual fallback.
 	start("", []intakeInitiator{{ProjectID: "label-only", PolicyKeys: cfg.Projects[0].PolicyKeys, CommitAuthor: cfg.Projects[0].CommitAuthor}})
-	reused(submit("first", "project-client", "# New client task", "Ignored", http.StatusOK))
-	reused(submit("fourth", "project-client", "# New client task", "Ignored", http.StatusOK))
-	counts(2, 2, 5)
+	reused(submit("first", "project-client", "# New client task", "First name", http.StatusOK))
+	submit("fourth", "project-client", "# New client task", "First name", http.StatusNotFound)
+	counts(4, 4, 4)
 	submit("disabled", "project-client", "# Never created", "Refused", http.StatusNotFound)
 	submit("label", "label-only", "# Label only", "Refused", http.StatusNotFound)
-	counts(2, 2, 5)
+	counts(4, 4, 4)
 }

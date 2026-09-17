@@ -43,7 +43,8 @@ public final class AppSession {
         // one here, and the recovery is the same either way: pairing
         // mints a new device (#64; a lost token is revoke-and-repair).
         if let credential = try? credentials.load() {
-            phase = .ready(Self.coordinator(client: client, cache: cache, credential: credential))
+            phase = .ready(
+                Self.coordinator(client: client, cache: cache, credential: credential, deploymentURL: deploymentURL))
             // A live session already holding a credential enters `.ready`
             // here without pairing, so this is its only chance to record the
             // deployment URL for a later unadorned relaunch: `completePairing`
@@ -78,7 +79,9 @@ public final class AppSession {
             persistServerURL(deploymentURL)
         }
         phase = .ready(
-            Self.coordinator(client: connection.client, cache: connection.cache, credential: credential))
+            Self.coordinator(
+                client: connection.client, cache: connection.cache, credential: credential,
+                deploymentURL: connection.deploymentURL))
     }
 
     private init() {
@@ -122,12 +125,13 @@ public final class AppSession {
     }
 
     private static func coordinator(
-        client: any APIProtocol, cache: any CacheStore, credential: DeviceCredential
+        client: any APIProtocol, cache: any CacheStore, credential: DeviceCredential, deploymentURL: URL?
     ) -> SyncCoordinator {
         SyncCoordinator(
             client: client,
             device: DeviceIdentity(deviceID: credential.deviceID),
-            cache: cache
+            cache: cache,
+            submissionDaemonID: deploymentURL.map { deploymentKey(for: $0) } ?? "mock"
         )
     }
 

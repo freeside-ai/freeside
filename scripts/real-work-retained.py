@@ -33,6 +33,13 @@ def validate_session(session):
         raise ValueError("retained database is missing; refusing an empty replacement")
     submit = read_json(session / "submit.json")
     identity = read_json(approved_composition(session))["identity"]
+    submission_id = submit.get("submission_id")
+    if submission_id != identity.get("submission_id"):
+        raise ValueError("retained submission identity disagrees with composition")
+    saved_identity = session / "submission-id"
+    if submission_id is not None or saved_identity.exists():
+        if not saved_identity.is_file() or saved_identity.read_text().strip() != submission_id:
+            raise ValueError("retained submission identity is missing or changed")
     for file, key in (("implementation-run", "run_id"),
                       ("implementation-invocation", "implementation_invocation_id")):
         if (session / file).read_text().strip() != submit[key]:

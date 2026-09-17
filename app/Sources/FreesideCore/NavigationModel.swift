@@ -32,6 +32,7 @@ public final class NavigationModel {
     /// button, ⌘N, and the File > New Task menu item, so all three open the one
     /// sheet through the same gated path.
     public var newTaskComposerPresented = false
+    public var submissionRecoveryPresented = false
     public private(set) var operatorNavigationRevision = 0
 
     public init(launchInputs: LaunchInputs) {
