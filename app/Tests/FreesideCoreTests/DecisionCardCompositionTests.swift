@@ -105,10 +105,10 @@ import Testing
         #expect(composition.reviewingActionInsertionIndex == nil)
     }
 
-    @Test func fourSpecializedCardsAreOnlyModuleOrderings() {
+    @Test func fourSpecializedCardsAreOnlyModuleOrderings() throws {
         #expect(
             DecisionCardComposition.forType(.ready_for_final_review).modules == [
-                .recommendation, .checklist, .factBlock, .yieldChart, .facts, .summary, .claims,
+                .recommendation, .checklist, .summary, .factBlock, .yieldChart, .facts, .claims,
                 .evidence, .details,
             ])
         #expect(
@@ -128,7 +128,10 @@ import Testing
         #expect(
             !DecisionCardComposition.forType(.review_dispute).modules.contains(.recommendation))
         let ready = DecisionCardComposition.forType(.ready_for_final_review)
-        #expect(ready.actionInsertionIndex == ready.modules.firstIndex(of: .summary))
+        #expect(ready.actionInsertionIndex == ready.modules.firstIndex(of: .claims))
+        #expect(try #require(ready.modules.firstIndex(of: .summary)) < ready.actionInsertionIndex)
+        #expect(
+            try #require(ready.modules.firstIndex(of: .evidence)) < #require(ready.modules.firstIndex(of: .details)))
         #expect(ready.reviewingActionInsertionIndex == ready.modules.firstIndex(of: .details))
         #expect(
             DecisionCardComposition.forType(.execution_failure)

@@ -119,10 +119,10 @@ struct DecisionCardComposition: Equatable {
             // head are audit coordinates, so they sit last before the actions.
             return .init(
                 modules: [
-                    .recommendation, .checklist, .factBlock, .yieldChart, .facts, .summary,
+                    .recommendation, .checklist, .summary, .factBlock, .yieldChart, .facts,
                     .claims, .evidence, .details,
                 ],
-                actionInsertionIndex: 5,
+                actionInsertionIndex: 6,
                 reviewingActionInsertionIndex: 8)
         case .execution_failure:
             return .init(
