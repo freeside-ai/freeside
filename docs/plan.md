@@ -2182,8 +2182,9 @@ Task cancellation is a separate workflow input. #1367 defines acceptance,
 fence persistence, sync, and daemon-only acknowledgement helpers. #1368 owns
 admission, successor, provider/process, and publication enforcement plus
 restart reconciliation. #1344 consumes confirmed quiescence to record stopped
-lifecycle and release WIP; #1369 owns controls. The contract implementation has
-no live acknowledgement producer and leaves accepted requests pending. A
+lifecycle and release WIP; #1369 owns controls. The daemon's separate runtime
+coordinator acknowledges only proven quiescence. Native judgment process proof
+is incomplete; these calls leave cancellation failed-to-stop with WIP held. A
 failed acknowledgement retains the fence and may later be confirmed by bound
 evidence. Confirmation is final. No request deletes tasks, PRs, or evidence,
 changes existing completion facts, or authorizes task restart.
@@ -2310,8 +2311,9 @@ Additional rules:
   `human_feedback`. Stopping ends the specification run with nothing built
   or fetched. A matching task cancellation acknowledgement releases the slot
   atomically; a resolved Stop card or missing artifact alone does not. Until
-  #1368 routes legacy Stop through runtime quiescence, the administrative
-  `freesided abandon` command remains an explicit release. Retryable failures
+  native runtime quiescence is proven, the administrative `freesided abandon`
+  command remains an explicit release. Legacy Stop now records the task fence;
+  it does not itself prove termination. Retryable failures
   keep their slot. A source that settles outcome, scope, and non-goals, whether a
   full document or an unambiguous sentence, keeps the existing rules and may
   receive a specification on the first turn. This is prompt guidance under

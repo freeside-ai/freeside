@@ -211,9 +211,16 @@ func (c CodexReviewRetainedCollection) validate() error {
 // CodexReviewSource adapts ward's started-container handoff into the durable
 // ReviewSource contract.
 type CodexReviewSource struct {
-	cfg      CodexReviewSourceConfig
-	mu       sync.Mutex
-	launches map[domain.InvocationID]*CodexReviewLaunch
+	cfg           CodexReviewSourceConfig
+	mu            sync.Mutex
+	launches      map[domain.InvocationID]*CodexReviewLaunch
+	beginTaskWork func(context.Context, domain.RunID) (context.Context, func(), error)
+}
+
+// SetTaskWorkGuard installs the daemon's task fence for fresh and recovered
+// review launches. Composition sets it before the source is used.
+func (s *CodexReviewSource) SetTaskWorkGuard(begin func(context.Context, domain.RunID) (context.Context, func(), error)) {
+	s.beginTaskWork = begin
 }
 
 var _ exec.ReviewSource = (*CodexReviewSource)(nil)
@@ -280,6 +287,17 @@ func (s *CodexReviewSource) RequestReview(
 func (s *CodexReviewSource) startRequestedReview(
 	ctx context.Context, id domain.InvocationID, req exec.ReviewRequest,
 ) error {
+	if s.beginTaskWork != nil {
+		workCtx, finish, err := s.beginTaskWork(ctx, req.RunID)
+		if err != nil {
+			return err
+		}
+		defer finish()
+		ctx = workCtx
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	releaseRun, err := s.cfg.Lifecycle.acquireCodexReviewRun(ctx, string(id))
 	if err != nil {
 		return &exec.ReviewSourceFailure{
@@ -1347,6 +1365,37 @@ func (s *CodexReviewSource) rejectedOutcomeStatus(
 func (s *CodexReviewSource) reconcileRejectedRequest(
 	ctx context.Context, id domain.InvocationID,
 ) error {
+	return s.reconcileAbortedRequest(ctx, id, CodexReviewSourceOutcome{
+		InvocationID:  id,
+		FailureClass:  domain.ReviewFailureContradiction,
+		Failure:       "persisted Codex review request was rejected after launch admission; any prepared invocation is aborted",
+		AbortRequired: true,
+	})
+}
+
+// CancelReview fences this exact invocation before waiting for its launch and
+// tears down only its authenticated resources. The shared ReviewSource stays
+// unchanged; daemon composition supplies this concrete adapter to the engine.
+// A nil result proves cleanup, including on replay after a daemon restart.
+// A completed review retains its original evidence and outcome.
+func (s *CodexReviewSource) CancelReview(ctx context.Context, id domain.InvocationID) error {
+	if !runIDPattern.MatchString(string(id)) {
+		return ErrInvalidCodexReviewSpec
+	}
+	if _, err := s.cfg.Journal.GetCodexReviewRequest(ctx, string(id)); err != nil {
+		return err
+	}
+	return s.reconcileAbortedRequest(ctx, id, CodexReviewSourceOutcome{
+		InvocationID:  id,
+		FailureClass:  domain.ReviewFailureTransient,
+		Failure:       "review stopped by task cancellation",
+		AbortRequired: true,
+	})
+}
+
+func (s *CodexReviewSource) reconcileAbortedRequest(
+	ctx context.Context, id domain.InvocationID, stopped CodexReviewSourceOutcome,
+) error {
 	outcome, ready, err := s.cfg.Journal.GetCodexReviewOutcome(ctx, string(id))
 	if err == nil {
 		if validateErr := errors.Join(outcome.Validate(), outcome.verifyCompletionEvidence(s.reviewProvider())); validateErr != nil || outcome.InvocationID != id {
@@ -1368,13 +1417,7 @@ func (s *CodexReviewSource) reconcileRejectedRequest(
 		// exist when no intent is visible yet: a launch holding the run gate may
 		// not have reached BeginIntent, and its prepared transition must still
 		// lose to this rejection.
-		rejected := CodexReviewSourceOutcome{
-			InvocationID:  id,
-			FailureClass:  domain.ReviewFailureContradiction,
-			Failure:       "persisted Codex review request was rejected after launch admission; any prepared invocation is aborted",
-			AbortRequired: true,
-		}
-		if err := s.cfg.Journal.PutCodexReviewOutcome(ctx, string(id), rejected); err != nil {
+		if err := s.cfg.Journal.PutCodexReviewOutcome(ctx, string(id), stopped); err != nil {
 			return codexReviewOutcomeWriteFailure(err)
 		}
 	}

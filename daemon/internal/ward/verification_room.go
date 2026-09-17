@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -22,6 +23,32 @@ type verificationCommand func(
 ) (verify.StepResult, error)
 
 const verificationCleanupTimeout = 2 * time.Minute
+
+var errVerificationProcessUnproven = errors.New("verification process group absence is unproven")
+
+func confirmVerificationProcessExit(cmd *exec.Cmd, err error) error {
+	if cmd.Process == nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), procbound.DefaultWaitDelay)
+	defer cancel()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		probe := syscall.Kill(-cmd.Process.Pid, 0)
+		if errors.Is(probe, syscall.ESRCH) {
+			return err
+		}
+		if probe != nil {
+			return errors.Join(err, errVerificationProcessUnproven, probe)
+		}
+		select {
+		case <-ctx.Done():
+			return errors.Join(err, errVerificationProcessUnproven)
+		case <-ticker.C:
+		}
+	}
+}
 
 // ProjectRecipePath is the fixed location where the project-image builder
 // embeds the exact verification-recipe bytes approved during onboarding.
@@ -38,6 +65,8 @@ type ProjectImageRoom struct {
 	runCommand    verificationCommand
 	readCommand   verificationCommand
 	maxOutput     int64
+	ownership     *VerificationOwnership
+	ownerBinding  verificationOwner
 }
 
 // NewProjectImageRoom constructs the production verification room.
@@ -151,6 +180,13 @@ func (r *ProjectImageRoom) runImageCommand(
 		return verify.StepResult{}, err
 	}
 	defer os.Remove(cidPath) //nolint:errcheck // private one-shot runtime identity
+	var finish func(bool) error
+	if r.ownership != nil {
+		ctx, cidPath, finish, err = r.ownership.begin(ctx, r.ownerBinding, owner)
+		if err != nil {
+			return verify.StepResult{}, err
+		}
+	}
 	args := []string{
 		"run", "--cidfile", cidPath,
 		"--label", owner.Key + "=" + owner.Value,
@@ -167,6 +203,10 @@ func (r *ProjectImageRoom) runImageCommand(
 	args = append(args, "--", string(r.image.ImageRef))
 	args = append(args, argv...)
 	result, runErr := command(ctx, r.containerPath, args, maxOutput)
+	if finish != nil {
+		// The production command checks process-group absence before returning.
+		err = finish(!errors.Is(runErr, errVerificationProcessUnproven))
+	}
 	id, identityErr := readVerificationContainerID(cidPath)
 	cleanupCtx, cancelCleanup := context.WithTimeout(
 		context.WithoutCancel(ctx), verificationCleanupTimeout,
@@ -179,7 +219,7 @@ func (r *ProjectImageRoom) runImageCommand(
 	if identityErr != nil && runErr == nil {
 		return verify.StepResult{}, errors.Join(identityErr, cleanupErr)
 	}
-	return result, errors.Join(runErr, cleanupErr)
+	return result, errors.Join(runErr, cleanupErr, err)
 }
 
 func (r *ProjectImageRoom) cleanupOwnedContainers(
@@ -238,8 +278,11 @@ func runVerificationCommand(
 	cmd := exec.CommandContext(ctx, path, args...) //nolint:gosec // executable resolved at construction; argv is trusted recipe/project-image data
 	output := &verificationOutput{max: maxOutput}
 	cmd.Stdout, cmd.Stderr = output, output
-	err := procbound.Run(cmd, procbound.DefaultWaitDelay)
+	err := confirmVerificationProcessExit(cmd, procbound.Run(cmd, procbound.DefaultWaitDelay))
 	result := verify.StepResult{Output: output.buf.Bytes(), Truncated: output.truncated}
+	if errors.Is(err, errVerificationProcessUnproven) {
+		return result, err
+	}
 	if err == nil {
 		return result, nil
 	}
@@ -281,7 +324,10 @@ func runRecipeReadCommand(
 	stderr := &verificationOutput{max: maxOutput}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	err := procbound.Run(cmd, procbound.DefaultWaitDelay)
+	err := confirmVerificationProcessExit(cmd, procbound.Run(cmd, procbound.DefaultWaitDelay))
+	if errors.Is(err, errVerificationProcessUnproven) {
+		return verify.StepResult{}, err
+	}
 	if stderr.truncated {
 		return verify.StepResult{}, fmt.Errorf("recipe extraction diagnostics exceeded the %d-byte cap", maxOutput)
 	}

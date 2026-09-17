@@ -428,6 +428,9 @@ func (e *Engine) enqueueSpecDiscussion(
 	}
 	inserted := false
 	err = e.store.Write(ctx, func(tx *store.WriteTx) error {
+		if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, request.SpecificationRunID); err != nil {
+			return err
+		}
 		current, err := verifySpecificationTerminal(ctx, &tx.ReadTx, base)
 		if err != nil {
 			return err
@@ -463,6 +466,9 @@ func (e *Engine) enqueueSpecDiscussion(
 		inserted = created
 		return nil
 	})
+	if errors.Is(err, store.ErrTaskCancellationFenced) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}

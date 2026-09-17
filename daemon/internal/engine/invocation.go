@@ -678,6 +678,7 @@ func unattendedDispatchRefusal(err error) bool {
 
 func invocationDispatchHold(err error) bool {
 	return errors.Is(err, exec.ErrInputUnavailable) ||
+		errors.Is(err, store.ErrTaskCancellationFenced) ||
 		errors.Is(err, domain.ErrIdentityParallelismExhausted)
 }
 
@@ -785,7 +786,9 @@ func (e *Engine) dispatchIntent(
 		startSpec = exec.StartSpecFromAdmission(effective)
 	}
 	startedNow := false
-	if err := e.driver.Start(ctx, invocationID, startSpec); err != nil {
+	if err := e.launchTaskInvocation(ctx, binding.run, func(launchCtx context.Context) error {
+		return e.driver.Start(launchCtx, invocationID, startSpec)
+	}); err != nil {
 		if !errors.Is(err, exec.ErrDuplicateStart) {
 			if bound && effective.AuthIdentityID != nil {
 				if releaseErr := e.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
@@ -1227,6 +1230,9 @@ func (e *Engine) recordAttempt(
 		effective = *fresh
 	}
 	err := e.store.Write(ctx, func(tx *store.WriteTx) error {
+		if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, runID); err != nil {
+			return err
+		}
 		run, err := tx.GetRun(ctx, runID)
 		if err != nil {
 			return err

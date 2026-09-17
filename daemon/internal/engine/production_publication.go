@@ -93,7 +93,10 @@ type ProductionPublicationConfig struct {
 	Artifacts       ArtifactStore
 	ApprovedRecipes map[domain.Digest]bool
 	NewRoom         func(domain.ProjectImage) (ProductionVerificationRoom, error)
-	ReviewSource    exec.ReviewSource
+	// NewBoundRoom supplies concrete task-bound ownership for production.
+	// NewRoom remains the isolated test/attended factory.
+	NewBoundRoom func(domain.ProjectImage, domain.Run, domain.InvocationID) (ProductionVerificationRoom, error)
+	ReviewSource exec.ReviewSource
 	// RemediationPromptPackageDigest selects the trusted prompt package for
 	// implementation-role follow-up invocations created by finding
 	// adjudication or accepted operator feedback.
@@ -206,6 +209,8 @@ type productionPublicationWorkflow struct {
 	artifacts                       ArtifactStore
 	approvedRecipes                 map[domain.Digest]bool
 	newRoom                         func(domain.ProjectImage) (ProductionVerificationRoom, error)
+	newBoundRoom                    func(domain.ProjectImage, domain.Run, domain.InvocationID) (ProductionVerificationRoom, error)
+	beginTaskWork                   func(context.Context, domain.RunID) (context.Context, func(), error)
 	reviewSource                    exec.ReviewSource
 	remediationPromptPackage        domain.Digest
 	validateDelivery                func(context.Context, exec.StartSpec) error
@@ -319,6 +324,7 @@ func newProductionPublicationWorkflow(
 		transport: cfg.Transport, publisher: cfg.Publisher, artifacts: cfg.Artifacts,
 		approvedRecipes: mapsClone(cfg.ApprovedRecipes),
 		newRoom:         cfg.NewRoom, reviewSource: cfg.ReviewSource,
+		newBoundRoom:             cfg.NewBoundRoom,
 		remediationPromptPackage: cfg.RemediationPromptPackageDigest,
 		shadowReviewSource:       cfg.ShadowReviewSource,
 		reviewRecovery:           cfg.ReviewRecovery, reviewRecoveryPending: true,
@@ -1014,6 +1020,12 @@ func RecordProductionExecutionExport(
 			return err
 		}
 		if err := tx.RecordExecutionExportRecord(ctx, executionExport); err != nil {
+			return err
+		}
+		if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, task.RunID); err != nil {
+			if errors.Is(err, store.ErrTaskCancellationFenced) {
+				return nil // Retain the late export without publication authority.
+			}
 			return err
 		}
 		if task.Successor != nil {
@@ -1821,6 +1833,9 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 			w.deferHeldTask(task)
 		}
 		if reconcileErr != nil {
+			if errors.Is(reconcileErr, store.ErrTaskCancellationFenced) {
+				continue
+			}
 			if productionPublicationRetryableFailure(reconcileErr) {
 				// The environmental back-off is a hold an operator can see:
 				// record its typed cause beside the retry window (issue
@@ -2181,10 +2196,29 @@ func sameOptionalDigest(a, b *domain.Digest) bool {
 
 func (w *productionPublicationWorkflow) reconcileTask(
 	ctx context.Context, task productionPublicationTask,
-) (productionTaskOutcome, error) {
+) (outcome productionTaskOutcome, resultErr error) {
 	binding, err := w.loadBinding(ctx, task)
 	if err != nil {
 		return productionTaskOutcome{}, err
+	}
+	if w.beginTaskWork != nil {
+		workCtx, finish, err := w.beginTaskWork(ctx, binding.run.ID)
+		if err != nil {
+			return productionTaskOutcome{}, err
+		}
+		parentCtx := ctx
+		defer func() {
+			finish()
+			if resultErr != nil && workCtx.Err() != nil && parentCtx.Err() == nil {
+				fenceErr := w.store.Read(parentCtx, func(tx *store.ReadTx) error {
+					return requireTaskExecutionOpen(parentCtx, tx, task.RunID)
+				})
+				if errors.Is(fenceErr, store.ErrTaskCancellationFenced) {
+					resultErr = fenceErr
+				}
+			}
+		}()
+		ctx = workCtx
 	}
 	if task.Successor != nil || task.continuation != nil {
 		err := w.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -5469,7 +5503,13 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 	imported importer.Result,
 	checkoutDir string,
 ) (productionVerificationCheckpoint, error) {
-	room, err := w.newRoom(binding.image)
+	var room ProductionVerificationRoom
+	var err error
+	if w.newBoundRoom != nil {
+		room, err = w.newBoundRoom(binding.image, binding.run, task.verificationInvocationID())
+	} else {
+		room, err = w.newRoom(binding.image)
+	}
 	if err != nil {
 		return productionVerificationCheckpoint{}, fmt.Errorf("construct networkless verification room: %w", err)
 	}
@@ -6401,6 +6441,9 @@ func (w *productionPublicationWorkflow) finishTask(
 func (w *productionPublicationWorkflow) recordReviewRequest(ctx context.Context, id domain.InvocationID, req exec.ReviewRequest) error {
 	var prior domain.ReviewRequestRecord
 	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		if err := requireTaskExecutionOpen(ctx, tx, req.RunID); err != nil {
+			return err
+		}
 		var err error
 		prior, err = tx.GetReviewRequest(ctx, id)
 		return err
@@ -6437,6 +6480,9 @@ func (w *productionPublicationWorkflow) recordReviewRequest(ctx context.Context,
 		return err
 	}
 	return w.store.Write(ctx, func(tx *store.WriteTx) error {
+		if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, req.RunID); err != nil {
+			return err
+		}
 		return tx.PutReviewRequest(ctx, domain.ReviewRequestRecord{
 			InvocationID: id, RunID: req.RunID, Round: req.Round, BaseSHA: req.BaseSHA, HeadSHA: req.HeadSHA, RequestedAt: req.RequestedAt,
 		})

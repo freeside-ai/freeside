@@ -756,9 +756,24 @@ carries `requested`, `failed_to_stop`, or `confirmed` independently of lifecycle
 and WIP. Exact command replay returns the original receipt and revision.
 A new stale command returns the current task snapshot and epoch.
 
-This contract has no runtime acknowledgement producer or task Stop control.
-Acceptance stays pending until #1368 supplies bound quiescence evidence;
-#1369 owns controls. A bound confirmed acknowledgement atomically releases
+The daemon discovers Stop requests on a separate reconcile loop. It cancels
+registered task work, fences new invocations and publication, and asks concrete
+stage, review, verification, and judgment adapters to prove quiescence. An
+attempt has a two-minute wait bound; a timeout records `failed_to_stop` and
+retains WIP. Retries never turn a missing local session into proof of exit.
+Specification question and approval cards route Stop through the same fence;
+#1369 owns task-level client controls.
+
+Runtime confirmation is incomplete for native judgments: the current Claude
+adapter has no process-group quiescence result. A task that entered naming or
+another native judgment therefore remains `failed_to_stop`, even after that
+call returns. Tasks predating the ownership checkpoint, restored database
+epochs, interrupted host commands, and unresolved publication effects also
+retain WIP until proof is available. See the
+[controlled stop check](../docs/task-cancellation-check.md) for the evidence
+needed to distinguish an accepted Stop from confirmed termination.
+
+A bound confirmed acknowledgement atomically releases
 any held episode and projects `stopped`; an already completed episode stays
 `finished`. Explicit abandonment projects `abandoned` without claiming that
 execution stopped. Stopped and abandoned tasks leave Active filters and remain

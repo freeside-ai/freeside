@@ -302,6 +302,14 @@ func TestSpecificationNeedsDecisionStopResolvesWithoutEnqueueing(t *testing.T) {
 		stopped.Item.Status != domain.StatusResolved {
 		t.Fatalf("stopped question = %+v, %v, want resolved", stopped.Item.Status, err)
 	}
+	run, err := f.run("specification-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := cancellationTask(t, f.store, run.TaskID)
+	if task.Cancellation == nil || task.Cancellation.State != domain.TaskCancellationRequested || !domain.TaskWIP(task) {
+		t.Fatalf("question Stop did not fence the held episode: %+v", task)
+	}
 	if created, err := engine.reconcileOperatorFeedback(t.Context()); err != nil || created != 0 {
 		t.Fatalf("stop reconciliation = %d, %v", created, err)
 	}

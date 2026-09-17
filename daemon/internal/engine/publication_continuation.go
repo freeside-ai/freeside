@@ -212,6 +212,9 @@ func (e *Engine) enqueuePublicationContinuation(ctx context.Context, command dom
 	}
 	created := false
 	err = e.store.Write(ctx, func(tx *store.WriteTx) error {
+		if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, r.Successor.RunID); err != nil {
+			return err
+		}
 		if err := tx.RequireIncompletePublication(ctx, r.Successor.RunID); err != nil {
 			return err
 		}
@@ -225,6 +228,9 @@ func (e *Engine) enqueuePublicationContinuation(ctx context.Context, command dom
 		created = made
 		return nil
 	})
+	if errors.Is(err, store.ErrTaskCancellationFenced) {
+		return false, nil
+	}
 	if errors.Is(err, store.ErrPublicationCompleted) {
 		return e.recordOperatorFeedbackFailure(ctx, item, command,
 			"The accepted remediation continuation cannot start because the published work unit completed before remediation was queued.")

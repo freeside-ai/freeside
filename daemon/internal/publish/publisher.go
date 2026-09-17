@@ -639,6 +639,9 @@ func (p *Publisher) publishWithTransport(
 		}
 	}
 	if publishHead != nil {
+		if err := p.taskEffectOpen(ctx, c); err != nil {
+			return Result{}, err
+		}
 		// The gate is evaluated exactly once, here: the capability is
 		// minted only on this path, after preparePublication committed the
 		// intent, so the transport re-checks nothing the Publisher decided.
@@ -674,6 +677,9 @@ func (p *Publisher) publishWithTransport(
 	case ref.Exists:
 		return Result{}, fmt.Errorf("publish: branch %s exists at a different commit: %w", branch, ErrPublicationConflict)
 	default:
+		if err := p.taskEffectOpen(ctx, c); err != nil {
+			return Result{}, err
+		}
 		if err := p.forge.createRef(ctx, repo, branch, c.HeadSHA); err != nil {
 			return Result{}, fmt.Errorf("publish: %w", err)
 		}
@@ -1073,6 +1079,9 @@ func (p *Publisher) convergePR(
 					return 0, false, fmt.Errorf("publish: repair gate: %w", err)
 				}
 			}
+			if err := p.taskEffectOpen(ctx, c); err != nil {
+				return 0, false, err
+			}
 			patched, err := p.forge.updatePR(ctx, repo, pr.Number, title, body)
 			if err != nil {
 				return 0, false, fmt.Errorf("publish: %w", err)
@@ -1100,6 +1109,9 @@ func (p *Publisher) convergePR(
 			identity.Digest(), ErrPublicationConflict)
 	}
 
+	if err := p.taskEffectOpen(ctx, c); err != nil {
+		return 0, false, err
+	}
 	pr, err := p.forge.createPR(ctx, repo, branch, c.BaseRef, title, body)
 	if err != nil {
 		return 0, false, fmt.Errorf("publish: %w", err)

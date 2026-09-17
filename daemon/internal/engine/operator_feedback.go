@@ -499,6 +499,9 @@ func (e *Engine) enqueueSpecificationAnswer(
 	}
 	inserted := false
 	err = e.store.Write(ctx, func(tx *store.WriteTx) error {
+		if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, run.ID); err != nil {
+			return err
+		}
 		current, err := tx.GetAttentionItem(ctx, item.ID)
 		if err != nil {
 			return err
@@ -528,7 +531,7 @@ func (e *Engine) enqueueSpecificationAnswer(
 		}
 		return nil
 	})
-	if errors.Is(err, errReplay) {
+	if errors.Is(err, errReplay) || errors.Is(err, store.ErrTaskCancellationFenced) {
 		return false, nil
 	}
 	if err != nil {
@@ -869,6 +872,9 @@ func (e *Engine) persistImplementationFeedback(
 	}
 	inserted := false
 	err = e.store.Write(ctx, func(tx *store.WriteTx) error {
+		if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, runID); err != nil {
+			return err
+		}
 		current, err := tx.GetAttentionItem(ctx, item.ID)
 		if err != nil {
 			return err
@@ -912,7 +918,7 @@ func (e *Engine) persistImplementationFeedback(
 		}
 		return nil
 	})
-	if errors.Is(err, errReplay) {
+	if errors.Is(err, errReplay) || errors.Is(err, store.ErrTaskCancellationFenced) {
 		return false, nil
 	}
 	if err != nil {

@@ -16,9 +16,10 @@ import (
 // the daemon-side inference boundary. It re-loads every immutable body from
 // the request's version binding and never receives implementer reasoning.
 type productionFindingAdjudicator struct {
-	client    *inference.Client
-	store     *store.Store
-	artifacts ArtifactStore
+	client        *inference.Client
+	store         *store.Store
+	artifacts     ArtifactStore
+	beginTaskWork func(context.Context, domain.RunID) (context.Context, func(), error)
 }
 
 func (a *productionFindingAdjudicator) Adjudicate(
@@ -26,6 +27,14 @@ func (a *productionFindingAdjudicator) Adjudicate(
 ) ([]domain.FindingAdjudicationEntry, error) {
 	if a == nil || a.client == nil || a.store == nil || a.artifacts == nil {
 		return nil, inference.ErrAdjudicationNotAvailable
+	}
+	if a.beginTaskWork != nil {
+		workCtx, finish, err := a.beginTaskWork(ctx, request.RunID)
+		if err != nil {
+			return nil, err
+		}
+		defer finish()
+		ctx = workCtx
 	}
 	var (
 		run          domain.Run

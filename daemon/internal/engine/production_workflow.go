@@ -1753,7 +1753,12 @@ func (e *Engine) recordProductionTerminalWithCompletion(
 		e.inference != nil {
 		// A diagnostic claim is advisory-only. Failure to produce or retain one
 		// cannot roll back the durable failure fact or make the engine unavailable.
-		_ = e.inference.DiagnoseExecutionFailure(ctx, inference.DiagnosticInput{
+		workCtx, finish, workErr := e.beginTaskWork(ctx, run)
+		if workErr != nil {
+			return inserted && terminal.Status == exec.StatusCompleted, nil
+		}
+		defer finish()
+		_ = e.inference.DiagnoseExecutionFailure(workCtx, inference.DiagnosticInput{
 			Project: string(run.ProjectID), RootLineage: string(run.ID), RunID: string(run.ID),
 			FailureClass: string(terminal.Status), FailingStep: string(terminal.StageID),
 			Reason: terminal.Summary,

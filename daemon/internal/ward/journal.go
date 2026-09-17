@@ -427,6 +427,25 @@ func (b *Backend) HandoffStarted(ctx context.Context, runID string) (bool, error
 	return true, nil
 }
 
+// HandoffQuiescent re-observes the owned namespace after the journal's proven
+// teardown. An open record or an unobservable runtime cannot confirm a Stop.
+func (b *Backend) HandoffQuiescent(ctx context.Context, runID string) error {
+	if b == nil || !b.initialized || b.cfg.Journal == nil {
+		return ErrInvalidConfig
+	}
+	record, err := b.cfg.Journal.Get(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if err := record.Validate(); err != nil {
+		return err
+	}
+	if record.RunID != runID || record.Outcome == nil {
+		return fmt.Errorf("%w: handoff has no closed teardown record", ErrInvalidJournalRecord)
+	}
+	return b.auditRunAbsent(ctx, Label{Key: ownershipLabelKey, Value: record.OwnershipToken})
+}
+
 // RequestCancellation durably records daemon cancellation intent. Callers
 // must do this before canceling the handoff context; Handoff repeats the
 // amendment on unwind before teardown as a race-closing backstop.

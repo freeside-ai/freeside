@@ -57,7 +57,7 @@ func TestSpecificationApprovalStopNeedsConfirmedTaskAcknowledgement(t *testing.T
 		if err != nil {
 			return err
 		}
-		if !domain.TaskWIP(task) || task.Cancellation != nil {
+		if !domain.TaskWIP(task) || task.Cancellation == nil || task.Cancellation.State != domain.TaskCancellationRequested {
 			t.Fatal("legacy card Stop certified quiescence")
 		}
 		return nil

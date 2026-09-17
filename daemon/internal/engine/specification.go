@@ -2773,6 +2773,9 @@ func (e *Engine) acceptResearchRequests(ctx context.Context, run domain.Run, req
 		return false, err
 	}
 	err = e.store.Write(ctx, func(tx *store.WriteTx) error {
+		if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, run.ID); err != nil {
+			return err
+		}
 		verified, err := verifySpecificationChain(ctx, &tx.ReadTx, request)
 		if err != nil {
 			return err
@@ -2809,7 +2812,7 @@ func (e *Engine) acceptResearchRequests(ctx context.Context, run domain.Run, req
 		}
 		return nil
 	})
-	if errors.Is(err, errReplay) {
+	if errors.Is(err, errReplay) || errors.Is(err, store.ErrTaskCancellationFenced) {
 		return false, nil
 	}
 	if MutableAdmissionPolicyRefusal(err) {
@@ -3920,6 +3923,9 @@ func (e *Engine) startApprovedImplementation(ctx context.Context, request specif
 		WorkUnit:   cloneSpecificationWorkUnit(request.WorkUnit),
 		CampaignID: request.CampaignID, AttemptNumber: request.AttemptNumber,
 	}, &request)
+	if errors.Is(err, store.ErrTaskCancellationFenced) {
+		return false, nil
+	}
 	if err == nil {
 		err = runDurableTransitionHook(e.specification.transitionHook,
 			DurableTransitionSpecificationApproval, DurableTransitionAfter)
@@ -3974,7 +3980,10 @@ func (e *Engine) enqueueSpecRevision(ctx context.Context, run domain.Run, reques
 		e.specification.promptPackage, true, map[domain.ArtifactID]domain.Artifact{feedback.ID: feedback}); err != nil {
 		return err
 	}
-	return e.store.Write(ctx, func(tx *store.WriteTx) error {
+	err = e.store.Write(ctx, func(tx *store.WriteTx) error {
+		if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, run.ID); err != nil {
+			return err
+		}
 		if err := authorizeSpecificationRevision(
 			ctx, &tx.ReadTx, run, request, priorSpec, command,
 		); err != nil {
@@ -3996,6 +4005,10 @@ func (e *Engine) enqueueSpecRevision(ctx context.Context, run domain.Run, reques
 		}
 		return nil
 	})
+	if errors.Is(err, store.ErrTaskCancellationFenced) {
+		return nil
+	}
+	return err
 }
 
 func (e *Engine) ensureSpecificationBlockedItem(
