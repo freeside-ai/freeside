@@ -134,16 +134,18 @@ type productionInvocationRequestWire struct {
 	Publication  json.RawMessage     `json:"publication,omitempty"`
 }
 
-// ProductionPublication carries operator-authored, reviewer-facing pull-request
-// content plus claimed public commit attribution. It is deliberately separate
-// from the agent specification and driver summary: neither is a safe public-
-// content boundary. Production composition verifies CommitAuthor against the
-// App registration selected by the repository token before execution/import.
+// ProductionPublication binds literal operator prose or a versioned recipe,
+// plus claimed public commit attribution. The agent specification and private
+// driver summary never supply public prose. Production composition verifies
+// CommitAuthor against the selected App registration before execution/import.
 type ProductionPublication struct {
 	Branch       string                 `json:"branch,omitempty"`
 	Title        string                 `json:"title"`
 	Body         string                 `json:"body"`
 	CommitAuthor ProductionCommitAuthor `json:"commit_author"`
+	// Omitted fields preserve the canonical bytes of historical literal inputs.
+	Recipe      string `json:"recipe,omitempty"`
+	SourceIssue string `json:"source_issue,omitempty"`
 }
 
 // ProductionCommitAuthor is the claimed public GitHub App bot identity used
@@ -202,6 +204,18 @@ func (p ProductionPublication) validateRetained() error {
 		if err := publicationrecord.ValidateDeclaredBranch(p.Branch, ""); err != nil {
 			return fmt.Errorf("production publication: %w", err)
 		}
+	}
+	if p.Recipe != "" {
+		if p.Recipe != clientPublicationRecipeV1 || p.Title != "" || p.Body != "" {
+			return errors.New("unsupported or contradictory publication recipe")
+		}
+		if p.SourceIssue != "" && (canonicalSourceIssue(p.SourceIssue) != p.SourceIssue || screenPublicationText(p.SourceIssue) != nil) {
+			return errors.New("invalid publication source issue")
+		}
+		return p.CommitAuthor.Validate()
+	}
+	if p.SourceIssue != "" {
+		return errors.New("literal publication cannot declare a recipe source issue")
 	}
 	if !utf8.ValidString(p.Title) || !utf8.ValidString(p.Body) {
 		return errors.New("production publication metadata is not valid UTF-8")

@@ -2431,7 +2431,10 @@ func (w *productionPublicationWorkflow) reconcileTask(
 			if err != nil {
 				return productionTaskOutcome{}, productionPublicationRetryableError(err)
 			}
-			candidate := productionCandidate(task, binding, checkpoint, adoptedProfile, nil, report)
+			candidate, err := productionCandidate(task, binding, checkpoint, adoptedProfile, nil, report)
+			if err != nil {
+				return w.holdPublicMetadataTask(ctx, task, checkpoint.Imported, err)
+			}
 			if err := w.bindSuccessorCandidate(ctx, task, &candidate); err != nil {
 				return productionTaskOutcome{}, err
 			}
@@ -2599,7 +2602,10 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	if err != nil {
 		return productionTaskOutcome{}, productionPublicationRetryableError(err)
 	}
-	candidate := productionCandidate(task, binding, checkpoint, adoptedProfile, nil, report)
+	candidate, err := productionCandidate(task, binding, checkpoint, adoptedProfile, nil, report)
+	if err != nil {
+		return w.holdPublicMetadataTask(ctx, task, checkpoint.Imported, err)
+	}
 	if err := w.bindSuccessorCandidate(ctx, task, &candidate); err != nil {
 		return productionTaskOutcome{}, err
 	}
@@ -5961,14 +5967,18 @@ func productionCandidate(
 	adoptedProfile *domain.Digest,
 	dispositionHistory *publish.DispositionHistory,
 	report []byte,
-) publish.Candidate {
+) (publish.Candidate, error) {
+	title, body, err := publicationMetadata(task.Publication, task.ProducingInvocationID, checkpoint.Imported.Claims)
+	if err != nil {
+		return publish.Candidate{}, err
+	}
 	recipe := binding.image.RecipeDigest
 	authorization := checkpoint.Authorization.ID
 	profile := binding.profile.ProfileDigest
 	return publish.Candidate{
 		Repo: binding.admission.Base.Repo, BaseRef: binding.admission.Base.BaseRef,
-		HeadSHA: task.HeadSHA, Title: task.Publication.Title, Branch: task.Publication.Branch,
-		Body: task.Publication.Body, DispositionHistory: dispositionHistory,
+		HeadSHA: task.HeadSHA, Title: title, Branch: task.Publication.Branch,
+		Body: body, DispositionHistory: dispositionHistory,
 		VerificationReport: report, ImportResult: &checkpoint.Imported,
 		ScopeDecision: task.scopeDecision,
 		Advisories:    publish.AdvisoryFindings(checkpoint.Authorization.Findings),
@@ -5976,7 +5986,7 @@ func productionCandidate(
 		InvocationID: task.PublicationID, RunID: task.RunID,
 		AuthorizationID: &authorization, TrustProfileDigest: &profile,
 		AdoptedTrustProfileDigest: adoptedProfile,
-	}
+	}, nil
 }
 
 // adoptedReviewProfileDigest returns the profile revision an effective

@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -23,6 +24,57 @@ import (
 type initiatorHolder struct {
 	mu        sync.Mutex
 	byProject map[domain.ProjectID]engine.ManualInitiator
+}
+
+func TestSubmitTaskBindsRecipeIndependentOfName(t *testing.T) {
+	for _, name := range []string{"", "Operator task name"} {
+		t.Run(name, func(t *testing.T) {
+			service, s, holder := newSubmitTaskHarness(t)
+			const source = "https://github.com/example/project/issues/82"
+			command := submitCmd("cmd-recipe", "project-1", source, name)
+			first, err := service.Submit(t.Context(), command)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var original []byte
+			if err := s.Read(t.Context(), func(tx *store.ReadTx) error {
+				entry, err := tx.GetOutbox(t.Context(), string(domain.SpecificationInvocationID(first.Submission.SpecificationRunID, 1)))
+				if err != nil {
+					return err
+				}
+				original = entry.Payload
+				var request struct {
+					Publication engine.ProductionPublication `json:"publication"`
+				}
+				if err := json.Unmarshal(entry.Payload, &request); err != nil {
+					return err
+				}
+				p := request.Publication
+				if p.Recipe != "freeside.client-publication/v1" || p.SourceIssue != source || p.Title != "" || p.Body != "" {
+					t.Fatal("client source/name replaced the immutable recipe")
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			changed := submissionInitiator("app/**")
+			changed.CommitAuthor.AppSlug = "different-app"
+			holder.set("project-1", changed)
+			second, err := service.Submit(t.Context(), command)
+			if err != nil || second.Submission.SpecificationRunID != first.Submission.SpecificationRunID {
+				t.Fatalf("replay: %v", err)
+			}
+			if err := s.Read(t.Context(), func(tx *store.ReadTx) error {
+				entry, err := tx.GetOutbox(t.Context(), string(domain.SpecificationInvocationID(second.Submission.SpecificationRunID, 1)))
+				if err == nil && string(entry.Payload) != string(original) {
+					t.Fatal("configuration changed recorded publication inputs")
+				}
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }
 
 func (h *initiatorHolder) lookup(p domain.ProjectID) (engine.ManualInitiator, bool) {
@@ -344,9 +396,7 @@ func TestSubmitTaskRejectsInvalidOperatorName(t *testing.T) {
 		if err != nil {
 			t.Fatalf("submit: %v", err)
 		}
-		// The stored task name is the trimmed name; the composed publication title
-		// derives from the same canonical value in SubmitTask, so the
-		// reviewer-facing title and the stored name agree.
+		// Task naming remains independent of candidate-authored PR metadata.
 		want := domain.DisplayName{Text: "Padded name", Source: domain.DisplayNameSourceOperator}
 		if res.Submission.Name != want {
 			t.Fatalf("result name = %+v, want %+v", res.Submission.Name, want)

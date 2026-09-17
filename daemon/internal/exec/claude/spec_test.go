@@ -591,8 +591,18 @@ func TestFixedSourceDescriptorComposes(t *testing.T) {
 		HeadBinding: export.EvidenceHeadIndependent, SensitivityClass: export.EvidenceSensitivityNormal,
 		ProducerInvocationID: "inv-1",
 	}
+	publication := export.EvidenceSource{
+		Label: export.PublicationEvidenceLabel, MediaType: "text/markdown", Path: export.PublicationEvidencePath,
+		HeadBinding: export.EvidenceHeadIndependent, SensitivityClass: export.EvidenceSensitivityNormal,
+		ProducerInvocationID: "inv-1",
+	}
 	for _, sources := range [][]export.EvidenceSource{
-		{transcript, summary}, {transcript, blocked}, {transcript, summary, blocked},
+		{transcript, summary},
+		{transcript, blocked},
+		{transcript, summary, blocked},
+		{transcript, publication},
+		{transcript, publication, summary},
+		{transcript, publication, summary, blocked},
 	} {
 		fragments := make([]string, 0, len(sources))
 		for _, source := range sources {
@@ -610,6 +620,34 @@ func TestFixedSourceDescriptorComposes(t *testing.T) {
 		}
 		if _, err := export.DecodeEvidenceSourceManifest([]byte(composed)); err != nil {
 			t.Fatalf("composed descriptor does not decode: %v", err)
+		}
+	}
+}
+
+func TestPublicMetadataLauncherAndPromptContract(t *testing.T) {
+	script := strings.Join(agentCommand("work", "session-1", "inv-1", nil), " ")
+	guard := "if [ -f '" + export.PublicationEvidencePath + "' ] && [ ! -L '" + export.PublicationEvidencePath + "' ]"
+	fragment := evidenceSourceFragment("publication", export.EvidenceSource{
+		Label: export.PublicationEvidenceLabel, MediaType: "text/markdown", Path: export.PublicationEvidencePath,
+		HeadBinding: export.EvidenceHeadIndependent, SensitivityClass: export.EvidenceSensitivityNormal,
+		ProducerInvocationID: "inv-1",
+	})
+	if !strings.Contains(script, guard) || !strings.Contains(script, fragment) {
+		t.Fatal("launcher lost fixed public provenance or optional safe-file guard")
+	}
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate source")
+	}
+	for _, name := range []string{"implementer.md", "remediator.md"} {
+		body, err := os.ReadFile(filepath.Join(filepath.Dir(sourceFile), "../../../../prompts/phase-1a", name)) //nolint:gosec // fixed prompt fixtures
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, required := range []string{export.PublicationEvidencePath, "entire current change", "8 KiB", "256 UTF-8 bytes", "Do not copy the private summary", "Agent-reported implementation (claim)"} {
+			if !bytes.Contains(body, []byte(required)) {
+				t.Errorf("%s omits %s", name, required)
+			}
 		}
 	}
 }

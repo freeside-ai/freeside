@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 62
+revision: 63
 status: active
 updated: 2026-09-17
 ---
@@ -2298,6 +2298,26 @@ Additional rules:
   task comes from `freesided submit` on the host until the configured-project
   list lands in `/sync/bootstrap` (#1332). Attachments on submission wait
   until the composer can upload them. (#1328; the composer is #1330.)
+- **Client PR metadata describes the implemented outcome.** New client
+  submissions freeze `freeside.client-publication/v1`, commit attribution, and
+  an optional source-issue reference in the publication digest before identity
+  reservation. Omitted recipe fields retain literal operator metadata and its
+  historical canonical encoding, approvals and recovery behavior. Unknown
+  recipes and mixed literal/derived inputs fail closed. Task naming and name
+  refinement never select or rename publication metadata. Exact command replay
+  returns its original record before consulting host configuration.
+  Only a complete canonical GitHub issue URL supplied as the source may become
+  a descriptive Source issue link. It supplies no closing directive, issue
+  binding or completion authority; client work remains `bound_pr_merged` with
+  no bound issue. Explicit CLI and label-intake prose keep their own contract.
+  Recipe v1 deterministically renders the authenticated candidate's public
+  account defined in Section [5.15](#515-evidence-and-images). Same-candidate
+  retries, restarts, lost-response recovery and drift repair use identical
+  inputs and metadata bytes. A newly authorized remediation or feedback
+  candidate supplies its own complete account under existing successor rules;
+  no queue payload, approval digest, submission identity, branch or bound PR
+  is rewritten to insert derived prose. Cancellation still fences publication
+  and repair effects.
 - **A sketch gets a clarification round before a specification.** A
   submission that leaves the task's outcome, scope, or non-goals unresolved
   is a sketch: an idea, not a work contract, and the usual shape of what a
@@ -2740,6 +2760,42 @@ Four machine-enforced rules govern evidence:
    because the first repository is deliberately non-UI (Section [11](#11-roadmap-build-order-and-coordination)). Phase 1A
    ships the artifact schema, provenance enforcement, and client rendering; 1B
    adds external publication with the first evidence-bearing workflow.
+
+Client recipe v1 consumes `.freeside-evidence/publication.md`, declared by the
+launcher as `freeside.publication`: agent-produced, current invocation, normal
+sensitivity, head-independent, and without a source-head value. Its opening
+`# Outcome title` line supplies one trimmed title within 256 UTF-8 bytes; its
+nonempty remaining paragraphs describe the entire implemented scope, limits,
+and uncertainty. The full artifact is bounded at 8 KiB. The separate
+`freeside.summary` channel remains sensitive and never supplies public fallback.
+
+The daemon requires exactly one inline Markdown claim with matching digest
+and launcher-shaped provenance from the authenticated current export/import.
+Existing run, specification, candidate-head and authorization bindings remain
+necessary; a public label or sensitivity value grants no authority. Missing,
+duplicate, malformed, foreign, artifact-only or non-public claims hold
+publication with an actionable reason. Outdated admitted prompt packages need
+new public-output instructions under a new digest, never replacement bytes
+under an admitted digest. An immutable metadata failure cannot be repaired by
+reconciling the same import. Recovery uses the existing paired-device
+`stop_task` command on `POST /commands`, binding the task/project IDs, current
+task snapshot version and sync epoch. After confirmed cancellation and any
+needed prompt-package admission, submit a fresh task with a new command ID.
+The hold remains inspect-only: its card's Stop would resolve the card without
+cancelling implementation work. Existing PRs remain intact and must be inspected
+and dispositioned before replacement work is submitted. This requirement does
+not apply to literal records; it adds no same-task retry authority.
+
+Before rendering, screen the full artifact and source link for supported secret
+patterns, control/format characters, closing/automation directives and reserved
+publisher headings/markers. Refusals never echo the rejected text. Escape prose
+as inert text under **Agent-reported implementation (claim)**, with producer
+and digest provenance. Preserve the original private artifact without
+truncation or upload authority. The composed body must fit the publisher's
+existing budget and retain daemon-owned Verification, review history,
+advisories, scope decisions and the final identity marker. Reported checks
+remain claims; only authenticated daemon report bytes establish verified
+results. No new inference call, evidence-snapshot entry or trust bit is added.
 
 A failed post-publication feedback invocation may offer the existing `retry`
 action only when its accepted return-command ancestry, failure outcome and exact
@@ -4578,16 +4634,16 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 62 ("Confirmed Cancellation Releases Task WIP"):
+Revision 63 ("Candidate-Bound Public PR Metadata"):
 
-1. **Confirmed cancellation ends its bound task episode.** Acknowledgement and
-   any needed abandonment commit atomically. Task lifecycle distinguishes
-   stopped and administratively abandoned work from finished runs. Ordinary
-   milestones cannot reopen terminal work; an uncancelled explicit retry that
-   needs a slot checks the policy cap and records admission with allocation.
-   Run history, receipts, PRs and completions remain intact. Runtime stopping
-   and client controls remain #1368 and #1369. (Owner-assigned #1344 contract;
-   [decision note](../devlog/2026-09-17-0830-confirmed-task-lifecycle.md).)
+1. **Client publication freezes a recipe, then renders a public claim.** New
+   client submissions bind a versioned metadata recipe and attribution before
+   reserving implementation identity. Publication consumes the current
+   candidate producer's separate public-intended account; task names and private
+   summaries never supply PR prose. Literal operator inputs remain unchanged.
+   Same-candidate recovery reconstructs identical metadata; an authorized
+   successor supplies its own whole-change account. (Owner-assigned #1382;
+   [decision note](../devlog/2026-09-17-1430-client-publication-metadata.md).)
 
 ## 14. Risks
 
