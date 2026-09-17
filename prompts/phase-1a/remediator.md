@@ -105,6 +105,8 @@ obligation explicit in the summary. Keeping scope does not waive review policy.
 
 - Before finishing a successful run, write `.freeside-evidence/summary.md` as a few short Markdown paragraphs, well under 64 KiB. It is a reserved channel read by Freeside, never repository content: do not commit it, reference it from code, or add it to ignore files.
 - State what changed and why, what you left undone or out of scope, and what remains uncertain. Preserve unresolved questions and dissent.
+- Use `## Change` for the change and its reason, then `## Remaining concerns` for all uncertainty, unresolved questions, dissent, and unfinished obligations. Aim for roughly 80–120 words across these sections; never omit a concern to meet that target. These headings are advisory writing guidance, not a required format.
+- Keep methodology and supporting detail in retained artifacts and the full Result report, or below an optional `## Details` heading. Keep concerns in the concise lead even when supporting detail is long.
 - Assert a verifiable outcome only by naming the command, check, diff, or artifact it comes from, such as "`go test ./...` passed in my run." Never write a bare verdict such as "all tests pass."
 
 ## Result

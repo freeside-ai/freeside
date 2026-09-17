@@ -26,8 +26,14 @@ struct TechnicalDetailsRevealRequest: Equatable {
 /// and exactly the item's requested actions. Actions stay disabled until
 /// the model's revalidation of current state succeeds.
 struct DecisionDetailView: View {
+    private struct SummaryRevealRequest: Equatable {
+        let identity: DecisionSummaryIdentity
+        let nonce = UUID()
+    }
+
     private enum ScrollTarget: Hashable {
         case technicalDetails
+        case summaryReport(DecisionSummaryIdentity)
     }
 
     /// A consequential action awaiting its seal. Identified by action and
@@ -77,6 +83,9 @@ struct DecisionDetailView: View {
     /// a finding_adjudication card leads with collapsed rows so its actions
     /// stay in the first viewport (#1107).
     @State private var expandedFindings: Set<String>
+    @State private var expandedSummaryReports: Set<DecisionSummaryIdentity> = []
+    @State private var summaryRevealRequest: SummaryRevealRequest?
+    private let expandsSummaryReports: Bool
     private let attachments: AttachmentLoader
     private let graphics: DecisionGraphicPresentations
     private let loadsAttachments: Bool
@@ -94,6 +103,7 @@ struct DecisionDetailView: View {
         itemID: String,
         detailsExpanded: Bool = false,
         expandedFindings: Set<String> = [],
+        expandsSummaryReports: Bool = false,
         detailsRevealRequest: TechnicalDetailsRevealRequest? = nil,
         onConsumeDetailsRevealRequest: @escaping (UUID) -> Void = { _ in },
         graphics: DecisionGraphicPresentations = .init(),
@@ -118,6 +128,7 @@ struct DecisionDetailView: View {
         _expandedFindings = State(initialValue: expandedFindings)
         attachments = store.attachments
         self.itemID = itemID
+        self.expandsSummaryReports = expandsSummaryReports
         self.externalDetailsRevealRequest = detailsRevealRequest
         self.onConsumeDetailsRevealRequest = onConsumeDetailsRevealRequest
         externalInspectorPresented = inspectorPresented
@@ -154,6 +165,12 @@ struct DecisionDetailView: View {
                             geometry.size.width
                         } action: { width in
                             detailWidth = width
+                        }
+                        .onChange(of: summaryRevealRequest) {
+                            if let summaryRevealRequest {
+                                scrollProxy.scrollTo(
+                                    ScrollTarget.summaryReport(summaryRevealRequest.identity), anchor: .top)
+                            }
                         }
                         .onChange(of: detailsRevealRequest) {
                             revealTechnicalDetailsIfRequested(using: scrollProxy)
@@ -755,9 +772,13 @@ struct DecisionDetailView: View {
         case .factBlock:
             factBlocks(item, rendersInteractiveControls: rendersInteractiveControls)
         case .summary:
-            agentSummary(
-                composition.summaries(from: item.agent_claims),
-                rendersInteractiveControls: rendersInteractiveControls)
+            if item._type == .ready_for_final_review {
+                readySummary(item, rendersInteractiveControls: rendersInteractiveControls)
+            } else {
+                agentSummary(
+                    composition.summaries(from: item.agent_claims),
+                    rendersInteractiveControls: rendersInteractiveControls)
+            }
         case .claims:
             #if os(iOS)
                 claims(
@@ -812,6 +833,9 @@ struct DecisionDetailView: View {
                     rendersInteractiveControls: rendersInteractiveControls)
             #endif
         case .details:
+            if item._type == .ready_for_final_review {
+                summaryReports(item, rendersInteractiveControls: rendersInteractiveControls)
+            }
             #if os(iOS)
                 details(item, accessibilityLayout: accessibilityLayout)
             #endif
@@ -843,6 +867,106 @@ struct DecisionDetailView: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func readySummary(_ item: Components.Schemas.AttentionItem, rendersInteractiveControls: Bool) -> some View {
+        let claims = DecisionCardComposition.forType(item._type).summaries(from: item.agent_claims)
+        cardSection("Agent summary (unverified)", dashed: true) {
+            Text("Written by the agent, not checked by the daemon.")
+                .foregroundStyle(Color.inkDim)
+            if claims.isEmpty {
+                Text("Inline summary unavailable. Any retained report is listed with the claim attachments.")
+            }
+            ForEach(Array(claims.enumerated()), id: \.offset) { _, claim in
+                if let text = claim.text {
+                    let presentation = DecisionSummaryPresentation(text)
+                    Text("Source: agent invocation `\(producerInvocationID(claim))`")
+                        .font(FreesideFont.caption)
+                        .foregroundStyle(Color.inkDim)
+                        .textSelection(.enabled)
+                    if presentation.isExcerpt {
+                        Text("Report excerpt (incomplete)").font(FreesideFont.caption)
+                    }
+                    summaryText(presentation.lead, mediaType: text.media_type)
+                    if presentation.isExcerpt { Text("…").accessibilityLabel("Excerpt ends here") }
+                    if let concerns = presentation.concerns {
+                        Text("Remaining concerns").font(FreesideFont.sans(.callout, weight: .semibold))
+                        summaryText(concerns, mediaType: text.media_type)
+                    }
+                    if presentation.concernsUnknown {
+                        Text(
+                            "Concerns have not been extracted; read the full report. Concerns may be outside this excerpt."
+                        )
+                        .foregroundStyle(Color.inkDim)
+                    }
+                    if rendersInteractiveControls {
+                        Button("Read full report") {
+                            let identity = DecisionSummaryIdentity(itemID: item.id, claim: claim)
+                            expandedSummaryReports.insert(identity)
+                            summaryRevealRequest = SummaryRevealRequest(identity: identity)
+                        }
+                    } else {
+                        Text("Read full report ↓").foregroundStyle(Color.inkDim)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func summaryReports(_ item: Components.Schemas.AttentionItem, rendersInteractiveControls: Bool) -> some View
+    {
+        let claims = DecisionCardComposition.forType(item._type).summaries(from: item.agent_claims)
+        ForEach(Array(claims.enumerated()), id: \.offset) { _, claim in
+            let identity = DecisionSummaryIdentity(itemID: item.id, claim: claim)
+            let expanded = Binding(
+                get: { expandedSummaryReports.contains(identity) || expandsSummaryReports },
+                set: {
+                    if $0 {
+                        expandedSummaryReports.insert(identity)
+                    } else {
+                        expandedSummaryReports.remove(identity)
+                        summaryRevealRequest = nil
+                    }
+                })
+            cardSection("Full agent report (unverified)", dashed: true) {
+                if rendersInteractiveControls {
+                    DisclosureGroup("Complete original report", isExpanded: expanded) {
+                        fullSummaryReport(claim, rendersInteractiveControls: true)
+                    }
+                } else {
+                    Text(expanded.wrappedValue ? "▾ Complete original report" : "▸ Complete original report")
+                    if expanded.wrappedValue { fullSummaryReport(claim, rendersInteractiveControls: false) }
+                }
+            }
+            .id(ScrollTarget.summaryReport(identity))
+        }
+    }
+
+    private func fullSummaryReport(
+        _ claim: Components.Schemas.AgentClaim, rendersInteractiveControls: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Source: agent invocation `\(producerInvocationID(claim))`")
+                .font(FreesideFont.caption).textSelection(.enabled)
+            AttachmentRow(
+                label: "Original report", digest: claim.digest, metadata: claim.metadata, attachments: attachments,
+                loadsAttachments: false, text: claim.text, rendersInteractiveControls: rendersInteractiveControls)
+        }
+    }
+
+    private func summaryText(_ content: String, mediaType: Components.Schemas.ClaimText.media_typePayload) -> some View
+    {
+        let attributed =
+            mediaType == .text_sol_markdown
+            ? try? AttributedString(
+                markdown: content, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) : nil
+        return Text(attributed ?? AttributedString(content))
+            .font(FreesideFont.callout)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func producerInvocationID(_ claim: Components.Schemas.AgentClaim) -> String {

@@ -871,6 +871,41 @@
                 }
 
                 if snapshot.item._type == .ready_for_final_review {
+                    for (name, content) in [
+                        ("structured", Optional(DecisionSummaryFixtures.structured)),
+                        ("legacy", Optional(DecisionSummaryFixtures.legacy)),
+                        ("short", Optional(DecisionSummaryFixtures.change)),
+                        ("artifact-only", nil),
+                    ] {
+                        let summarySnapshot = DecisionSummaryFixtures.snapshot(content: content)
+                        for expanded in [false, true] where content != nil || !expanded {
+                            let summaryDetail = DecisionDetailView(
+                                store: store, itemID: summarySnapshot.item.id,
+                                expandsSummaryReports: expanded, loadsAttachments: false,
+                                showsValidationProgress: false, now: screenshotNow)
+                            for width: CGFloat in [720, 390] {
+                                for theme in [ColorScheme.light, .dark] {
+                                    surfaces.append(
+                                        Surface(
+                                            name:
+                                                "decision-ready-summary-\(name)-\(expanded ? "expanded-tail" : "collapsed")-\(Int(width))-\(theme)",
+                                            width: width, colorScheme: theme,
+                                            view: AnyView(
+                                                summaryDetail.screenshotCard(
+                                                    summarySnapshot.item, at: dynamicTypeSize,
+                                                    compactLayout: width == 390
+                                                )
+                                                .fixedSize(horizontal: false, vertical: true)
+                                                // Bound the expanded scroll viewport: a full ax5
+                                                // report exceeds the platform PNG height limit.
+                                                // Its tail pins the final concern and digest;
+                                                // collapsed captures retain the card/actions.
+                                                .frame(height: expanded ? 1_600 : nil, alignment: .bottom)
+                                                .clipped())))
+                                }
+                            }
+                        }
+                    }
                     // The card carries this item's commit-plan fact, so the
                     // inspector beside it must not repeat a Facts section.
                     let readyPreferencesSuite = "FreesideScreenshotReadyPreferences"

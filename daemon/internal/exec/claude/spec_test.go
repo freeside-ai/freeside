@@ -244,6 +244,20 @@ func TestPhase1ASummaryPromptContracts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// These assertions pin writing guidance, not a guarantee of model behavior.
+	for name, prompt := range map[string][]byte{"implementer": implementer, "remediator": remediator} {
+		for _, required := range []string{
+			"`## Change`", "`## Remaining concerns`", "`## Details`",
+			"80–120 words", "never omit a concern to meet that target",
+			"uncertainty, unresolved questions, dissent, and unfinished obligations",
+			"advisory writing guidance, not a required format",
+			"retained artifacts and the full Result report",
+		} {
+			if !bytes.Contains(prompt, []byte(required)) {
+				t.Errorf("%s prompt omits summary guidance %q", name, required)
+			}
+		}
+	}
 	// The remediator plays the prior-artifact-rendering role opposite the
 	// implementer, so the composition the driver enforces at startup validates.
 	if err := ValidatePromptPackageRoles(implementer, remediator); err != nil {
