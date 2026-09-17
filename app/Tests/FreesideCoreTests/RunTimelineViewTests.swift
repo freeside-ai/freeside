@@ -5,6 +5,28 @@ import Testing
 @testable import FreesideCore
 
 @Suite struct RunTimelineViewTests {
+    @Test @MainActor func missingAndCachedReviewReadsNeverClaimAnEmptyHistory() {
+        for state in [SyncCoordinator.TimelineLoadState.idle, .loading, .unavailable] {
+            #expect(RunReviewSection.availabilityMessage(hasTimeline: false, state: state, freshness: .fresh) != nil)
+            #expect(RunReviewSection.availabilityMessage(hasTimeline: true, state: state, freshness: .fresh) != nil)
+        }
+        #expect(RunReviewSection.availabilityMessage(hasTimeline: true, state: nil, freshness: .unvalidated) != nil)
+        #expect(RunReviewSection.availabilityMessage(hasTimeline: true, state: .loaded, freshness: .unreachable) != nil)
+        #expect(RunReviewSection.availabilityMessage(hasTimeline: true, state: .loaded, freshness: .fresh) == nil)
+        #expect(RunReviewSection.sourceLabel("freeside_invoked").contains("Freeside-invoked"))
+        #expect(RunReviewSection.sourceLabel("github").contains("External"))
+        #expect(RunReviewSection.sourceLabel("future-source").contains("Unknown"))
+    }
+
+    @Test @MainActor func activeReviewCompletionIsNotPresentedAsMissingData() {
+        for state in [Components.Schemas.ReviewProgressState.pending, .running] {
+            #expect(RunReviewSection.missingCompletionMessage(state) == "Not completed")
+        }
+        for state in [Components.Schemas.ReviewProgressState.completed, .failed] {
+            #expect(RunReviewSection.missingCompletionMessage(state) == "Completion time unavailable")
+        }
+    }
+
     @Test func invalidReviewTextIsLabeledWithoutChangingRetainedBytes() {
         let bytes: [UInt8] = [0x61, 0xff, 0x62]
         let output = ReviewOutputText(bytes: bytes)

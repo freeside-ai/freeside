@@ -64,6 +64,68 @@ public final class SyncCoordinator {
     private var runListGeneration = 0
     private var timelineGenerations: [String: Int] = [:]
     private var taskTimelineGenerations: [String: Int] = [:]
+    private struct TaskReviewRequest {
+        let key: TaskReviewRequestKey
+        let token: UUID
+        let operation: Task<Void, Never>
+    }
+    private var taskReviewRequests: [String: TaskReviewRequest] = [:]
+
+    struct TaskReviewRequestKey: Hashable {
+        let taskID: String
+        let taskRevision: Int64
+        let historyRevision: Int64
+        let epoch: String
+        let fullSnapshotRevision: Int64?
+        let cacheGeneration: Int
+        let runIDs: [String]
+    }
+
+    func taskReviewRequestKey(for taskID: String, revision: Int64) -> TaskReviewRequestKey? {
+        guard let history = taskTimelinesByTaskID[taskID], let cursors else { return nil }
+        var seen = Set<String>()
+        let runIDs = history.sections.flatMap(\.runs).filter {
+            ($0.role == nil || $0.role?.value1 == .implementation) && seen.insert($0.run_id).inserted
+        }.map(\.run_id)
+        return .init(
+            taskID: taskID, taskRevision: revision, historyRevision: history.as_of_revision,
+            epoch: cursors.syncEpoch, fullSnapshotRevision: cursors.lastFullSnapshotRevision,
+            cacheGeneration: cacheGeneration, runIDs: runIDs)
+    }
+
+    /// Only fetched task membership authorizes these reads. Mark before awaiting
+    /// so overlapping views share work; failed/cancelled reads can be retried.
+    func refreshTaskReviews(for taskID: String, revision: Int64) async {
+        guard let key = taskReviewRequestKey(for: taskID, revision: revision) else { return }
+        runLoop: for runID in key.runIDs {
+            guard !Task.isCancelled,
+                key == taskReviewRequestKey(for: taskID, revision: revision)
+            else { return }
+            while let existing = taskReviewRequests[runID], existing.key == key {
+                await existing.operation.value
+                guard !Task.isCancelled,
+                    key == taskReviewRequestKey(for: taskID, revision: revision)
+                else { return }
+                if timelineLoadStates[runID] == .loaded { continue runLoop }
+                if taskReviewRequests[runID]?.token == existing.token {
+                    taskReviewRequests[runID] = nil
+                }
+            }
+            let operation = Task { await refreshTimeline(for: runID) }
+            let token = UUID()
+            taskReviewRequests[runID] = .init(key: key, token: token, operation: operation)
+            await withTaskCancellationHandler {
+                await operation.value
+            } onCancel: {
+                operation.cancel()
+            }
+            if taskReviewRequests[runID]?.token == token,
+                timelineLoadStates[runID] != .loaded || key.cacheGeneration != cacheGeneration
+            {
+                taskReviewRequests[runID] = nil
+            }
+        }
+    }
     private var heartbeatTask: Task<Void, Never>?
     private var heartbeatToken: UUID?
     private var refreshTask: Task<Void, Never>?
@@ -584,6 +646,7 @@ public final class SyncCoordinator {
         self[keyPath: loadStates][id] = .loading
         do {
             let output = try await read()
+            try Task.checkCancellation()
             guard self[keyPath: generations][id] == requestGeneration else { return }
             guard requestCacheGeneration == cacheGeneration else {
                 self[keyPath: loadStates][id] = .idle
@@ -651,6 +714,7 @@ public final class SyncCoordinator {
             discardCache()
         }
         cacheGeneration += 1
+        taskReviewRequests = [:]
         store.replaceAll(with: snapshot.attention_items)
         store.replaceAllConversations(with: snapshot.conversations)
         runs = snapshot.runs

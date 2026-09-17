@@ -5,6 +5,36 @@ struct RunReviewSection: View {
     let coordinator: SyncCoordinator
     let runID: String
     let facts: Components.Schemas.RunReviewFacts?
+    var hasTimeline = true
+    @Environment(\.timeZone) private var timeZone
+    @Environment(\.locale) private var locale
+
+    static func sourceLabel(_ kind: String) -> String {
+        switch kind {
+        case "freeside_invoked": "Daemon facts · Freeside-invoked review"
+        case "external", "github", "external_github": "External review · Source: \(kind)"
+        default: "Unknown review source: \(kind)"
+        }
+    }
+
+    static func missingCompletionMessage(_ state: Components.Schemas.ReviewProgressState) -> String {
+        switch state {
+        case .pending, .running: "Not completed"
+        case .completed, .failed: "Completion time unavailable"
+        }
+    }
+
+    static func availabilityMessage(
+        hasTimeline: Bool, state: SyncCoordinator.TimelineLoadState?, freshness: InboxStore.Freshness
+    ) -> String? {
+        if !hasTimeline {
+            return state == .loading ? "Loading review…" : "Review details unavailable"
+        }
+        if state == .loading { return "Showing saved review details while refreshing…" }
+        if state == .unavailable { return "Review refresh failed. Showing saved details." }
+        if state != .loaded || freshness != .fresh { return "Saved review details. Freshness unconfirmed." }
+        return nil
+    }
 
     private struct Selection: Identifiable {
         let round: Components.Schemas.RunReviewRound
@@ -12,24 +42,38 @@ struct RunReviewSection: View {
     }
 
     @State private var selection: Selection?
+    @State private var retry = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Review").font(FreesideFont.title)
+            let state = coordinator.timelineLoadStates[runID]
+            let availability = Self.availabilityMessage(
+                hasTimeline: hasTimeline, state: state, freshness: coordinator.store.freshness)
+            if let availability {
+                Text(availability).font(FreesideFont.callout).foregroundStyle(Color.inkDim)
+            }
             let rounds = RunHistoryPresentation.rounds(facts)
             if !rounds.isEmpty {
                 ForEach(rounds, id: \.invocation_id) { round in
                     roundCard(round)
                 }
-            } else {
+            } else if hasTimeline && state == .loaded && availability == nil {
                 Text("No review requested yet")
                     .font(FreesideFont.callout)
                     .foregroundStyle(Color.inkDim)
+            }
+            if state != .loading && availability != nil {
+                Button("Retry review details") { retry += 1 }
+                    .font(FreesideFont.callout)
             }
         }
         .foregroundStyle(Color.ink)
         .sheet(item: $selection) { selection in
             ReviewEvidenceView(coordinator: coordinator, runID: runID, round: selection.round)
+        }
+        .task(id: retry) {
+            if retry > 0 { await coordinator.refreshTimeline(for: runID) }
         }
     }
 
@@ -46,12 +90,15 @@ struct RunReviewSection: View {
             Text("Head \(round.head_sha.prefix(12))")
                 .font(FreesideFont.monoCaption)
                 .textSelection(.enabled)
+            Text("Base \(round.base_sha.prefix(12))")
+                .font(FreesideFont.monoCaption)
+                .textSelection(.enabled)
             Text(RunDisplay.reviewIdentity(round))
                 .font(FreesideFont.callout)
-            if let outcome = round.outcome?.value1, let count = round.findings_count {
-                Text("\(outcome.rawValue.capitalized) · \(count) findings")
-                    .font(FreesideFont.callout)
-            }
+            Text(round.outcome.map { "Outcome: \($0.value1.rawValue.capitalized)" } ?? "Outcome unavailable")
+                .font(FreesideFont.callout)
+            Text(round.findings_count.map { "\($0) findings" } ?? "Findings count unavailable")
+                .font(FreesideFont.callout)
             if let counts = round.dispositions?.value1 {
                 Text(
                     "\(counts.fixed) fixed · \(counts.declined) declined · \(counts.deferred) deferred · \(counts.open) open"
@@ -66,15 +113,21 @@ struct RunReviewSection: View {
             if round.retry_pending {
                 Text("Retry pending").font(FreesideFont.callout)
             }
-            if round.requested_at == nil {
+            if let requested = round.requested_at {
+                Text("Requested: \(formattedTime(requested))")
+                    .font(FreesideFont.caption)
+            } else {
                 Text("Request time unavailable").font(FreesideFont.caption)
             }
-            Text(
-                round.source.kind == "freeside_invoked"
-                    ? "Daemon facts · Freeside-invoked review" : "Source: \(round.source.kind)"
-            )
-            .font(FreesideFont.caption)
-            .foregroundStyle(Color.inkDim)
+            if let completed = round.completed_at {
+                Text("Completed: \(formattedTime(completed))")
+                    .font(FreesideFont.caption)
+            } else {
+                Text(Self.missingCompletionMessage(round.state)).font(FreesideFont.caption)
+            }
+            Text(Self.sourceLabel(round.source.kind))
+                .font(FreesideFont.caption)
+                .foregroundStyle(Color.inkDim)
             if let status = round.source.status {
                 Text("Source status: \(status)").font(FreesideFont.caption)
             }
@@ -91,6 +144,10 @@ struct RunReviewSection: View {
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.rule))
+    }
+
+    private func formattedTime(_ date: Date) -> String {
+        date.formatted(Date.FormatStyle(date: .abbreviated, time: .standard, locale: locale, timeZone: timeZone))
     }
 }
 
