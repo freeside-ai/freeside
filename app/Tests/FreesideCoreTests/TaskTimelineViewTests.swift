@@ -324,6 +324,138 @@ import Testing
 }
 
 @Suite struct TaskTimelineViewTests {
+    @Test(arguments: TaskHistoryFixtures.Scenario.allCases)
+    func completeHistoryRetainsEveryPartition(scenario: TaskHistoryFixtures.Scenario) throws {
+        let history = TaskHistoryFixtures.history(scenario)
+        let entries = TaskTimelinePresentation.entries(history)
+        #expect(history.events.last?.kind == .task_created)
+        #expect(Array(entries.suffix(history.events.count)) == history.events.map { .event($0.kind) })
+        let runs = history.sections.flatMap(\.runs)
+        #expect(entries.compactMap { if case .run(let id) = $0 { id } else { nil } } == runs.map(\.run_id))
+        #expect(TaskHistoryFixtures.snapshot(history).task.run_ids.count == runs.count)
+        for section in history.sections {
+            for event in section.events where event.kind == .specification_approved {
+                let specification = try #require(section.runs.first { $0.run_id == event.specification_run_id })
+                let implementation = try #require(section.runs.first { $0.run_id == event.run_id })
+                #expect(specification.role?.value1 == .specification)
+                #expect(implementation.role?.value1 == .implementation)
+                #expect(event.campaign_id == section.campaign_id)
+                #expect(event.approved_spec_digest != nil)
+                #expect(specification.run_id != implementation.run_id)
+            }
+        }
+        switch scenario {
+        case .creation:
+            #expect(history.sections.isEmpty)
+            #expect(entries == [.event(.task_created)])
+        case .approved:
+            #expect(runs.count == 2)
+            #expect(!entries.contains(.event(.pr_opened)))
+        case .published:
+            #expect(entries.contains(.event(.pr_opened)))
+            #expect(!entries.contains(.event(.pr_merged)))
+        case .retry:
+            #expect(runs[1].superseded_by == runs[0].run_id)
+            #expect(runs[0].parent_run_id == runs[1].run_id)
+            #expect(history.sections[0].events.filter { $0.kind == .specification_approved }.count == 1)
+        case .revised:
+            #expect(history.sections[0].campaign_id != history.sections[1].campaign_id)
+            #expect(history.sections[0].events.allSatisfy { $0.kind != .specification_approved })
+            #expect(history.sections[1].events.contains { $0.kind == .specification_approved })
+        case .legacy:
+            #expect(history.sections[0].campaign_id == nil)
+            #expect(runs.allSatisfy { $0.role == nil })
+        }
+    }
+
+    @Test func savedHistoryNeverReadsAsAnEmptyOrCurrentResult() {
+        #expect(TaskTimelinePresentation.availabilityMessage(state: .loaded, freshness: .fresh) == nil)
+        #expect(
+            TaskTimelinePresentation.availabilityMessage(state: .loading, freshness: .fresh)?.contains("refreshing")
+                == true)
+        #expect(
+            TaskTimelinePresentation.availabilityMessage(state: .unavailable, freshness: .fresh)?.contains("failed")
+                == true)
+        for state: SyncCoordinator.TimelineLoadState? in [nil, .idle, .loaded] {
+            #expect(
+                TaskTimelinePresentation.availabilityMessage(state: state, freshness: .unreachable)?.contains("Saved")
+                    == true)
+        }
+        #expect(TaskTimelinePresentation.availabilityMessage(state: nil, freshness: .fresh) != nil)
+    }
+
+    @Test func milestoneDatesUseTheSameTimeZoneAsReviewAndEvents() throws {
+        let run = Self.timeline().sections[0].runs[0]
+        let locale = Locale(identifier: "en_US")
+        let utc = try #require(TimeZone(secondsFromGMT: 0))
+        let west = try #require(TimeZone(secondsFromGMT: -5 * 3_600))
+        let utcEntries = TaskTimelinePresentation.milestoneEntries(run, locale: locale, timeZone: utc)
+        let westEntries = TaskTimelinePresentation.milestoneEntries(run, locale: locale, timeZone: west)
+        #expect(utcEntries.map(\.timestamp) != westEntries.map(\.timestamp))
+        #expect(
+            utcEntries[0].timestamp
+                == run.milestones[0].recorded_at.formatted(
+                    Date.FormatStyle(date: .abbreviated, time: .shortened, locale: locale, timeZone: utc)))
+    }
+
+    @Test(arguments: [false, true]) @MainActor
+    func savedCompleteHistorySurvivesFailureButNotAnEpochReset(legacy: Bool) async throws {
+        var history = TaskHistoryFixtures.history(.published)
+        if legacy { history.events = history.events.filter { $0.kind == .task_created } }
+        let expectedEvents = TaskTimelinePresentation.events(history)
+        #expect(expectedEvents.contains { $0.kind == .pr_opened })
+        let cache = InMemoryCacheStore()
+        try cache.save(
+            .init(
+                cursors: .init(
+                    syncEpoch: "history-epoch", lastFullSnapshotRevision: 12, highestObservedServerRevision: 12),
+                attentionItems: [], tasks: [TaskHistoryFixtures.snapshot(history)], taskTimelines: [history]))
+        let server = MockServer()
+        let coordinator = SyncCoordinator(client: APIClientFactory.mock(server: server), cache: cache)
+        #expect(coordinator.taskTimelinesByTaskID[history.task_id] == history)
+        let entered = AsyncGate()
+        let release = AsyncGate()
+        await server.setBeforeRespond { operation in
+            if operation == "getTaskTimeline" {
+                await entered.open()
+                await release.wait()
+                throw MockServer.ForcedStatus(500)
+            }
+        }
+        let read = Task { await coordinator.refreshTaskTimeline(for: history.task_id) }
+        await entered.wait()
+        #expect(coordinator.taskTimelineLoadStates[history.task_id] == .loading)
+        #expect(coordinator.taskTimelinesByTaskID[history.task_id] == history)
+        await release.open()
+        await read.value
+        #expect(coordinator.taskTimelineLoadStates[history.task_id] == .unavailable)
+        #expect(coordinator.taskTimelinesByTaskID[history.task_id] == history)
+        #expect(coordinator.cursors?.lastFullSnapshotRevision == 12)
+        #expect(cache.load()?.taskTimelines == [history])
+        let saved = try #require(coordinator.taskTimelinesByTaskID[history.task_id])
+        #expect(TaskTimelinePresentation.events(saved) == expectedEvents)
+        await server.setBeforeRespond(nil)
+        await server.rotateEpoch()
+        await coordinator.bootstrap()
+        #expect(coordinator.taskTimelinesByTaskID[history.task_id] == nil)
+        #expect(coordinator.taskTimelineLoadStates[history.task_id] == nil)
+    }
+
+    @Test func legacyEventsKeepRecordedFactsWithoutDuplicates() {
+        var history = TaskHistoryFixtures.history(.published)
+        let currentEvents = history.events
+        #expect(TaskTimelinePresentation.events(history) == currentEvents)
+        history.events = currentEvents.filter { $0.kind == .task_created }
+        history.sections += history.sections
+        let events = TaskTimelinePresentation.events(history)
+        #expect(events.contains { $0.kind == .campaign_allocated })
+        #expect(events.contains { $0.kind == .pr_opened })
+        #expect(events.filter { $0.kind == .pr_opened }.count == 1)
+        #expect(!events.contains { $0.kind == .verification_recorded })
+        #expect(events.map(\.recorded_at) == events.map(\.recorded_at).sorted(by: >))
+        #expect(TaskTimelinePresentation.events(history) == events)
+    }
+
     /// Instants deliberately oldest first: the daemon orders its lists, and
     /// the client must render them as received, never by timestamp.
     private static let instants = (0..<4).map {
@@ -363,17 +495,15 @@ import Testing
             ])
     }
 
-    @Test func entriesKeepTheDaemonsOrderWithoutSorting() {
+    @Test func entriesShowWorkBeforeEventsAndKeepTheDaemonsOrder() {
         let timeline = Self.timeline()
 
         #expect(
             TaskTimelinePresentation.entries(timeline) == [
                 .section(campaignID: "campaign-a"),
-                .event(.campaign_allocated),
                 .run("run-1"),
                 .milestone(runID: "run-1", kind: .run_submitted),
                 .milestone(runID: "run-1", kind: .invocation_started),
-                .event(.pr_opened),
                 .run("run-2"),
                 .section(campaignID: nil),
                 .run("run-0"),
@@ -393,12 +523,10 @@ import Testing
                 .section(campaignID: nil),
                 .run("run-0"),
                 .section(campaignID: "campaign-a"),
-                .event(.campaign_allocated),
                 .run("run-2"),
                 .run("run-1"),
                 .milestone(runID: "run-1", kind: .invocation_started),
                 .milestone(runID: "run-1", kind: .run_submitted),
-                .event(.pr_opened),
                 .event(.specification_approved),
                 .event(.task_created),
             ])
@@ -442,7 +570,7 @@ import Testing
                 .init(
                     kind: .specification_approved, recorded_at: Self.instants[0],
                     approved_spec_digest: .init(value1: "sha256:abc"), specification_run_id: "run-spec"))
-                == "sha256:abc")
+                == "run-spec · sha256:abc")
         #expect(TaskTimelinePresentation.detail(.init(kind: .task_created, recorded_at: Self.instants[0])) == nil)
         #expect(
             TaskTimelinePresentation.runTitle(.init(run_id: "run-legacy", milestones: [], events: []))
@@ -451,6 +579,30 @@ import Testing
             TaskTimelinePresentation.sectionTitle(.init(campaign_id: nil, events: [], runs: []))
                 == "Outside a campaign")
         #expect(TaskTimelinePresentation.sectionTitle(.init(campaign_id: "c", events: [], runs: [])) == "Campaign")
+    }
+
+    @Test func historicalResultsRetainTheirSourceAndDoNotImplyCurrentReadiness() {
+        let failed = Components.Schemas.TaskEvent(
+            review: .init(
+                value1: .init(
+                    invocation_id: "review-old", round: 2, head_sha: "old-head", base_sha: "old-base",
+                    failure: "provider_error")),
+            kind: .review_failed, recorded_at: Self.instants[0], run_id: "run-old")
+        #expect(TaskTimelinePresentation.label(failed) == "Review failed")
+        #expect(
+            TaskTimelinePresentation.detail(failed)
+                == "run-old · Round 2 · Head old-head · Base old-base · provider error")
+        let verification = Components.Schemas.TaskEvent(
+            verification: .init(
+                value1: .init(item_id: "ready-old", _class: .ready_degraded, head_sha: "old-head", base_sha: "old-base")
+            ),
+            kind: .verification_recorded, recorded_at: Self.instants[0], run_id: "run-old")
+        #expect(TaskTimelinePresentation.label(verification) == "Verification recorded · Degraded")
+        #expect(
+            TaskTimelinePresentation.detail(verification)
+                == "run-old · Head old-head · Base old-base · Checklist in Inbox: ready-old")
+        #expect(TaskTimelinePresentation.label(Components.Schemas.TaskEventKind.stop_failed) == "Stop failed")
+        #expect(TaskTimelinePresentation.label(Components.Schemas.TaskEventKind.task_stopped) == "Task stopped")
     }
 
     @Test func headerNamePrefersTheFetchedTimelineOverTheSnapshot() throws {

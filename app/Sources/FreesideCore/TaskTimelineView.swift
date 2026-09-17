@@ -8,10 +8,9 @@ import SwiftUI
 #endif
 
 /// A task's history as the daemon computes it (`GET /tasks/{id}/timeline`):
-/// the header names the task, then each campaign section lists its runs,
-/// each run its milestones and events, and the task-level events close the
-/// page. Every list keeps the daemon's newest-first order; unlike the run
-/// rail, nothing here is reversed or sorted by timestamp.
+/// task-wide events lead the page, then campaign sections list their runs
+/// and detailed milestones. Every list keeps the daemon's newest-first order;
+/// unlike the run rail, nothing here is reversed or sorted by timestamp.
 struct TaskTimelineView: View {
     /// Keys the timeline refetch task, as `RunTimelineView.TimelineRequestKey`
     /// does: the task's own revision plus the epoch and full-snapshot
@@ -36,13 +35,33 @@ struct TaskTimelineView: View {
     /// Opens a run's timeline from its section header: the iOS stack pushes
     /// it, the macOS detail column shows it in place of this view.
     let onOpenRun: (String) -> Void
+    /// Supplies the existing screenshot composition without loading tasks or
+    /// a scroll viewport. Rendering through body installs environment values
+    /// before the content helpers read locale, time zone, and text size.
+    var screenshotTimeline: Components.Schemas.TaskTimeline?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.timeZone) private var timeZone
+    @Environment(\.locale) private var locale
 
     private var timeline: Components.Schemas.TaskTimeline? {
         coordinator.taskTimelinesByTaskID[snapshot.task.id]
     }
 
-    var body: some View {
+    @ViewBuilder var body: some View {
+        if let screenshotTimeline {
+            VStack(alignment: .leading, spacing: 22) {
+                header(screenshotTimeline)
+                content(screenshotTimeline)
+            }
+            .padding(24)
+            .frame(maxWidth: 820, alignment: .leading)
+            .foregroundStyle(Color.ink)
+        } else {
+            liveContent
+        }
+    }
+
+    private var liveContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 header
@@ -78,15 +97,9 @@ struct TaskTimelineView: View {
 
     /// The composition with fixture data supplied directly, because
     /// ImageRenderer never executes the loading task.
-    @ViewBuilder
     func screenshotContent(_ timeline: Components.Schemas.TaskTimeline) -> some View {
-        VStack(alignment: .leading, spacing: 22) {
-            header(timeline)
-            content(timeline)
-        }
-        .padding(24)
-        .frame(maxWidth: 820, alignment: .leading)
-        .foregroundStyle(Color.ink)
+        TaskTimelineView(
+            coordinator: coordinator, snapshot: snapshot, onOpenRun: onOpenRun, screenshotTimeline: timeline)
     }
 
     private var header: some View {
@@ -137,18 +150,38 @@ struct TaskTimelineView: View {
             }
     }
 
-    /// Sections first, newest campaign leading, then the task-level events:
-    /// the newest activity leads and the creation event closes the page.
+    /// Campaign and run details lead; recorded task events follow the work.
     private func content(_ timeline: Components.Schemas.TaskTimeline) -> some View {
-        VStack(alignment: .leading, spacing: 22) {
+        let events = TaskTimelinePresentation.events(timeline)
+        return VStack(alignment: .leading, spacing: 22) {
+            if let message = TaskTimelinePresentation.availabilityMessage(
+                state: coordinator.taskTimelineLoadStates[snapshot.task.id], freshness: coordinator.store.freshness)
+            {
+                Text(message)
+                    .font(FreesideFont.callout)
+                    .foregroundStyle(Color.inkDim)
+            }
+            if timeline.sections.isEmpty {
+                Text("No campaigns or runs in this history.")
+                    .font(FreesideFont.callout)
+                    .foregroundStyle(Color.inkDim)
+            }
             ForEach(Array(timeline.sections.enumerated()), id: \.offset) { _, section in
                 sectionView(section)
             }
-            if !timeline.events.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Task Events")
-                        .font(FreesideFont.title)
-                    eventRows(timeline.events)
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Task Events").font(FreesideFont.title)
+                Text(
+                    "Recorded workflow milestones, newest first. Historical results do not establish current readiness."
+                )
+                .font(FreesideFont.callout)
+                .foregroundStyle(Color.inkDim)
+                if events.isEmpty {
+                    Text("No recorded events in this history.")
+                        .font(FreesideFont.callout)
+                        .foregroundStyle(Color.inkDim)
+                } else {
+                    eventRows(events)
                 }
             }
         }
@@ -165,9 +198,6 @@ struct TaskTimelineView: View {
                     .contextMenu {
                         Button("Copy campaign ID") { copy(campaignID) }
                     }
-            }
-            if !section.events.isEmpty {
-                eventRows(section.events)
             }
             ForEach(section.runs, id: \.run_id) { run in
                 runCard(run)
@@ -188,6 +218,9 @@ struct TaskTimelineView: View {
                         Text(run.run_id)
                             .font(FreesideFont.monoCaption)
                             .foregroundStyle(Color.inkDim)
+                        Text("Open run history")
+                            .font(FreesideFont.callout)
+                            .foregroundStyle(Color.accentText)
                     }
                     Spacer()
                     Image(systemName: "chevron.right")
@@ -197,7 +230,10 @@ struct TaskTimelineView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Open \(TaskTimelinePresentation.runTitle(run)), \(run.run_id)")
+            .accessibilityLabel(
+                "Open detailed run history for \(TaskTimelinePresentation.runTitle(run)), \(run.run_id)"
+            )
+            .accessibilityHint("Shows this run's recorded milestones and invocation observations.")
             if run.role == nil || run.role?.value1 == .implementation {
                 RunReviewSection(
                     coordinator: coordinator, runID: run.run_id,
@@ -230,18 +266,22 @@ struct TaskTimelineView: View {
                     .font(FreesideFont.caption)
                     .foregroundStyle(Color.accentText)
             }
+            KeywordLabel(text: "Run Activity")
             if !run.milestones.isEmpty {
                 KeywordLabel(text: "Milestones")
                     .padding(.top, 4)
                 StageRail(
                     title: nil,
-                    presentation: .timeline(entries: TaskTimelinePresentation.milestoneEntries(run)),
+                    presentation: .timeline(
+                        entries: TaskTimelinePresentation.milestoneEntries(run, locale: locale, timeZone: timeZone)),
                     axis: .vertical,
                     showsSummaryText: false,
                     accessibilityStyle: .entries)
             }
-            if !run.events.isEmpty {
-                eventRows(run.events)
+            if run.milestones.isEmpty {
+                Text("No execution milestones in this run's task history.")
+                    .font(FreesideFont.callout)
+                    .foregroundStyle(Color.inkDim)
             }
         }
         .padding(14)
@@ -253,21 +293,41 @@ struct TaskTimelineView: View {
     private func eventRows(_ events: [Components.Schemas.TaskEvent]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(Array(events.enumerated()), id: \.offset) { _, event in
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(TaskTimelinePresentation.label(event.kind))
-                        .font(FreesideFont.callout)
+                VStack(alignment: .leading, spacing: 4) {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            eventLabel(event)
+                            Spacer(minLength: 8)
+                            eventTime(event)
+                        }
+                        VStack(alignment: .leading, spacing: 4) {
+                            eventLabel(event)
+                            eventTime(event)
+                        }
+                    }
                     if let detail = TaskTimelinePresentation.detail(event) {
                         Text(detail)
                             .font(FreesideFont.monoCaption)
                             .foregroundStyle(Color.inkDim)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
                     }
-                    Spacer(minLength: 8)
-                    Text(event.recorded_at.formatted(date: .abbreviated, time: .shortened))
-                        .font(FreesideFont.monoCaption)
-                        .foregroundStyle(Color.inkDim)
                 }
             }
         }
+    }
+
+    private func eventLabel(_ event: Components.Schemas.TaskEvent) -> some View {
+        Text(TaskTimelinePresentation.label(event)).font(FreesideFont.callout)
+    }
+
+    private func eventTime(_ event: Components.Schemas.TaskEvent) -> some View {
+        Text(
+            event.recorded_at.formatted(
+                Date.FormatStyle(date: .abbreviated, time: .shortened, locale: locale, timeZone: timeZone))
+        )
+        .font(FreesideFont.monoCaption)
+        .foregroundStyle(Color.inkDim)
     }
 
     private func copy(_ string: String) {
@@ -280,9 +340,38 @@ struct TaskTimelineView: View {
     }
 }
 
-/// The task timeline's labels and its one ordering rule: everything renders
-/// in the order the daemon computed it.
+/// Current projections retain daemon ordering. Legacy cached projections
+/// recover their nested events in newest-first order.
 enum TaskTimelinePresentation {
+    /// Older saved projections put only creation at task level. Recover their
+    /// recorded nested events without changing the current daemon projection.
+    static func events(_ timeline: Components.Schemas.TaskTimeline) -> [Components.Schemas.TaskEvent] {
+        guard timeline.events.allSatisfy({ $0.kind == .task_created }) else { return timeline.events }
+        var events = timeline.events
+        for section in timeline.sections {
+            for event in section.events + section.runs.flatMap(\.events) where !events.contains(event) {
+                events.append(event)
+            }
+        }
+        return events.enumerated().sorted {
+            if $0.element.recorded_at != $1.element.recorded_at {
+                return $0.element.recorded_at > $1.element.recorded_at
+            }
+            return $0.offset < $1.offset
+        }.map(\.element)
+    }
+
+    /// A cached partition remains useful after a failed refresh, but neither
+    /// its contents nor an empty array establish current, complete history.
+    static func availabilityMessage(
+        state: SyncCoordinator.TimelineLoadState?, freshness: InboxStore.Freshness
+    ) -> String? {
+        if state == .loading { return "Showing saved task history while refreshing…" }
+        if state == .unavailable { return "Task history refresh failed. Showing saved history." }
+        if state != .loaded || freshness != .fresh { return "Saved task history. Freshness unconfirmed." }
+        return nil
+    }
+
     /// The page's elements flattened in render order, so a test can pin the
     /// order without a view.
     enum Entry: Equatable {
@@ -296,15 +385,12 @@ enum TaskTimelinePresentation {
         var entries: [Entry] = []
         for section in timeline.sections {
             entries.append(.section(campaignID: section.campaign_id))
-            entries += section.events.map { .event($0.kind) }
             for run in section.runs {
                 entries.append(.run(run.run_id))
                 entries += run.milestones.map { .milestone(runID: run.run_id, kind: $0.kind) }
-                entries += run.events.map { .event($0.kind) }
             }
         }
-        entries += timeline.events.map { .event($0.kind) }
-        return entries
+        return entries + events(timeline).map { .event($0.kind) }
     }
 
     /// The header's name: the fetched timeline carries the task's current
@@ -332,14 +418,15 @@ enum TaskTimelinePresentation {
     /// because its source is oldest first; this source already leads with
     /// the newest.
     static func milestoneEntries(
-        _ run: Components.Schemas.TaskTimelineRun
+        _ run: Components.Schemas.TaskTimelineRun, locale: Locale = .current, timeZone: TimeZone = .current
     ) -> [DecisionStageRailPresentation.Entry] {
         run.milestones.enumerated().map { index, milestone in
             DecisionStageRailPresentation.Entry(
                 id: "\(index)-\(milestone.kind.rawValue)-\(milestone.recorded_at.timeIntervalSince1970)",
                 title: RunDisplay.label(milestone.kind),
                 detail: RunHistoryPresentation.detail(milestone),
-                timestamp: milestone.recorded_at.formatted(date: .abbreviated, time: .shortened),
+                timestamp: milestone.recorded_at.formatted(
+                    Date.FormatStyle(date: .abbreviated, time: .shortened, locale: locale, timeZone: timeZone)),
                 state: index == 0 ? .current : .completed)
         }
     }
@@ -354,6 +441,17 @@ enum TaskTimelinePresentation {
     static func label(_ kind: Components.Schemas.TaskEventKind) -> String {
         switch kind {
         case .task_created: "Task created"
+        case .task_started: "Task started"
+        case .task_completed: "Task work completed"
+        case .task_abandoned: "Task work abandoned"
+        case .stop_requested: "Stop requested"
+        case .task_stopped: "Task stopped"
+        case .stop_failed: "Stop failed"
+        case .run_milestone: "Run activity"
+        case .review_requested: "Review requested"
+        case .review_completed: "Review completed"
+        case .review_failed: "Review failed"
+        case .verification_recorded: "Verification recorded"
         case .campaign_allocated: "Campaign allocated"
         case .specification_approved: "Specification approved"
         case .pr_opened: "PR opened"
@@ -361,18 +459,41 @@ enum TaskTimelinePresentation {
         }
     }
 
-    /// The event's reference, when it carries one: the PR, the approved
-    /// specification's digest, or the run that supplied it.
+    static func label(_ event: Components.Schemas.TaskEvent) -> String {
+        if let milestone = event.milestone?.value1 {
+            let detail = RunHistoryPresentation.detail(milestone)
+            return RunDisplay.label(milestone.kind) + (detail.map { " · \($0)" } ?? "")
+        }
+        if let outcome = event.review?.value1.outcome?.value1 {
+            return "Review completed · \(outcome.rawValue.replacingOccurrences(of: "_", with: " ").capitalized)"
+        }
+        if let verification = event.verification?.value1 {
+            return verification._class == .ready_clean
+                ? "Verification recorded · Clean" : "Verification recorded · Degraded"
+        }
+        return label(event.kind)
+    }
+
+    /// Keep the source beside the summary so old campaigns and review rounds
+    /// cannot read as a result for the task's current run or candidate.
     static func detail(_ event: Components.Schemas.TaskEvent) -> String? {
-        if let number = event.pr_number {
-            return "PR #\(number)"
+        var parts: [String] = []
+        if let number = event.pr_number { parts.append("PR #\(number)") }
+        if let campaign = event.campaign_id { parts.append(campaign) }
+        if let run = event.run_id ?? event.specification_run_id { parts.append(run) }
+        if let review = event.review?.value1 {
+            parts += [
+                "Round \(review.round)", "Head \(review.head_sha.prefix(12))", "Base \(review.base_sha.prefix(12))",
+            ]
+            if let failure = review.failure { parts.append(failure.replacingOccurrences(of: "_", with: " ")) }
         }
-        if let digest = event.approved_spec_digest?.value1 {
-            return digest
+        if let verification = event.verification?.value1 {
+            parts += [
+                "Head \(verification.head_sha.prefix(12))", "Base \(verification.base_sha.prefix(12))",
+                "Checklist in Inbox: \(verification.item_id)",
+            ]
         }
-        if let runID = event.specification_run_id {
-            return runID
-        }
-        return nil
+        if let digest = event.approved_spec_digest?.value1 { parts.append(digest) }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }

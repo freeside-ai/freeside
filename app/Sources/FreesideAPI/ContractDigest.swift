@@ -5,5 +5,5 @@ public enum APIContract {
     /// "sha256:" plus the lowercase hex SHA-256 of the spec's exact bytes.
     /// The client compares this with the daemon's reported digest on
     /// GET /health to diagnose a client/daemon contract skew.
-    public static let digest = "sha256:dab8a9c8d40b863e45298b1c4b97fe9df7c2e9abd049db7012148133ba7e6117"
+    public static let digest = "sha256:a8232617ace39dfb125763394d2cc460adaa197eec79c78a62a4733159baf272"
 }

@@ -1443,7 +1443,7 @@ components:
       description: >
         Recorded task history computed under one server revision. The current
         name appears once as a source-labeled claim; no name history is inferred.
-        Invocation detail, review facts, and cost remain on the run timeline.
+        Detailed invocation observations, review evidence, and cost remain on the run timeline.
       additionalProperties: false
       required: [as_of_revision, as_of, task_id, project_id, name, events, sections]
       properties:
@@ -1463,7 +1463,11 @@ components:
           $ref: "#/components/schemas/DisplayName"
         events:
           type: array
-          description: Task-level events, newest first.
+          description: >
+            Task-wide recorded milestones, newest first. Equal instants are
+            ordered by event kind and bound source identifiers. Includes
+            lifecycle, campaign, execution, review, verification and PR facts;
+            detailed nested partitions are retained for run/approval consumers.
           items:
             $ref: "#/components/schemas/TaskEvent"
         sections:
@@ -1490,6 +1494,9 @@ components:
             specification_run_id: null
             pr_number: null
             merge_commit_sha: null
+            milestone: null
+            review: null
+            verification: null
         sections: []
 
     TaskTimelineSection:
@@ -1584,10 +1591,32 @@ components:
         and emit no new approval event. pr_opened requires run_id and pr_number
         and uses the daemon's PR binding instant. pr_merged also requires
         merge_commit_sha and uses the re-gated completion record's instant.
+        task_started, task_completed and task_abandoned require the recorded
+        run_id and retain campaign_id when the lifecycle fact has one.
+        stop_requested, task_stopped and stop_failed have no details; request
+        acceptance and confirmed stopping are distinct events, including for
+        queued tasks with no run. run_milestone requires run_id and milestone,
+        with matching run and timestamp. review_requested, review_completed and
+        review_failed require run_id and review; outcome is present only for
+        completed, failure only for failed. verification_recorded requires
+        run_id and verification, referring to a dated readiness decision with
+        detailed results. It never establishes current readiness.
         All other details are null. Events are observations, never authority.
       additionalProperties: false
-      required: [kind, recorded_at, campaign_id, run_id, approved_spec_digest, specification_run_id, pr_number, merge_commit_sha]
+      required: [kind, recorded_at, campaign_id, run_id, approved_spec_digest, specification_run_id, pr_number, merge_commit_sha, milestone, review, verification]
       properties:
+        milestone:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/RunMilestone"
+        review:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/TaskEventReview"
+        verification:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/TaskEventVerification"
         kind:
           $ref: "#/components/schemas/TaskEventKind"
         recorded_at:
@@ -1626,11 +1655,60 @@ components:
         specification_run_id: null
         pr_number: null
         merge_commit_sha: null
+        milestone: null
+        review: null
+        verification: null
+
+    TaskEventReview:
+      type: object
+      description: Recorded review identity and result, never parsed from reviewer output.
+      additionalProperties: false
+      required: [invocation_id, round, head_sha, base_sha, outcome, failure]
+      properties:
+        invocation_id:
+          type: string
+          minLength: 1
+        round:
+          type: integer
+          minimum: 1
+        head_sha:
+          type: string
+          minLength: 1
+        base_sha:
+          type: string
+          minLength: 1
+        outcome:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ReviewOutcome"
+        failure:
+          type: string
+          nullable: true
+          minLength: 1
+
+    TaskEventVerification:
+      type: object
+      description: Historical detailed-readiness decision binding, not current readiness.
+      additionalProperties: false
+      required: [item_id, class, head_sha, base_sha]
+      properties:
+        item_id:
+          type: string
+          minLength: 1
+        class:
+          type: string
+          enum: [ready_clean, ready_degraded]
+        head_sha:
+          type: string
+          minLength: 1
+        base_sha:
+          type: string
+          minLength: 1
 
     TaskEventKind:
       type: string
-      description: Closed vocabulary of recorded task history.
-      enum: [task_created, campaign_allocated, specification_approved, pr_opened, pr_merged]
+      description: Closed vocabulary of recorded task-wide milestone history.
+      enum: [task_created, task_started, task_completed, task_abandoned, stop_requested, task_stopped, stop_failed, run_milestone, review_requested, review_completed, review_failed, verification_recorded, campaign_allocated, specification_approved, pr_opened, pr_merged]
       example: task_created
 
     TaskRunRole:
