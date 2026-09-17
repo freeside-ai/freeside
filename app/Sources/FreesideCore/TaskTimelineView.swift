@@ -71,6 +71,9 @@ struct TaskTimelineView: View {
         .task(id: TimelineRequestKey(snapshot: snapshot, cursors: coordinator.cursors)) {
             await coordinator.refreshTaskTimeline(for: snapshot.task.id)
         }
+        .task(id: coordinator.taskReviewRequestKey(for: snapshot.task.id, revision: snapshot.as_of_revision)) {
+            await coordinator.refreshTaskReviews(for: snapshot.task.id, revision: snapshot.as_of_revision)
+        }
     }
 
     /// The composition with fixture data supplied directly, because
@@ -194,6 +197,13 @@ struct TaskTimelineView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Open \(TaskTimelinePresentation.runTitle(run)), \(run.run_id)")
+            if run.role == nil || run.role?.value1 == .implementation {
+                RunReviewSection(
+                    coordinator: coordinator, runID: run.run_id,
+                    facts: coordinator.timelinesByRunID[run.run_id]?.review?.value1,
+                    hasTimeline: coordinator.timelinesByRunID[run.run_id] != nil)
+                Divider().padding(.vertical, 6)
+            }
             HStack(spacing: 14) {
                 if let role = run.role?.value1 {
                     Label(TaskTimelinePresentation.label(role), systemImage: "square.stack.3d.up")

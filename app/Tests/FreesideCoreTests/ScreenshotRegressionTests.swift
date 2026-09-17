@@ -1202,6 +1202,55 @@
             else {
                 throw ScreenshotError.missingRetryTask
             }
+            let publishedRun = try #require(RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.completedRunID })
+            let publishedTask = try #require(tasks.first { $0.task.id == publishedRun.run.task_id })
+            var publishedTimeline = try #require(
+                RunFixtures.defaultTimelines().first { $0.run_id == publishedRun.run.id })
+            var publishedRound = RunFixtures.reviewRound(.completed, availability: .available)
+            publishedRound.invocation_id = "review-published-1"
+            publishedTimeline.review = .init(value1: .init(rounds: [publishedRound]))
+            let publishedCoordinator = SyncCoordinator(
+                client: APIClientFactory.mock(server: MockServer(timelines: [publishedTimeline])),
+                cache: InMemoryCacheStore())
+            await publishedCoordinator.bootstrap()
+            await publishedCoordinator.refreshTaskTimeline(for: publishedTask.task.id)
+            await publishedCoordinator.refreshTimeline(for: publishedRun.run.id)
+            let publishedHistory = try #require(publishedCoordinator.taskTimelinesByTaskID[publishedTask.task.id])
+            for width in [CGFloat(820), CGFloat(390)] {
+                for scheme in [ColorScheme.light, .dark] {
+                    surfaces.append(
+                        Surface(
+                            name: "task-published-review-\(Int(width))-\(scheme == .dark ? "dark" : "light")",
+                            width: width, colorScheme: scheme, nativeAppearance: true,
+                            view: AnyView(
+                                TaskTimelineView(
+                                    coordinator: publishedCoordinator, snapshot: publishedTask, onOpenRun: { _ in }
+                                )
+                                .screenshotContent(publishedHistory))))
+                }
+            }
+            let legacyTask = try #require(tasks.first { $0.task.id == TaskFixtures.legacyTaskID })
+            var legacyTimeline = try #require(
+                RunFixtures.defaultTimelines().first { $0.run_id == RunFixtures.legacyRunID })
+            legacyTimeline.review = .init(value1: .init(rounds: [publishedRound]))
+            let legacyCoordinator = SyncCoordinator(
+                client: APIClientFactory.mock(server: MockServer(timelines: [legacyTimeline])),
+                cache: InMemoryCacheStore())
+            await legacyCoordinator.bootstrap()
+            await legacyCoordinator.refreshTaskTimeline(for: legacyTask.task.id)
+            await legacyCoordinator.refreshTaskReviews(for: legacyTask.task.id, revision: legacyTask.as_of_revision)
+            let legacyHistory = try #require(legacyCoordinator.taskTimelinesByTaskID[legacyTask.task.id])
+            for scheme in [ColorScheme.light, .dark] {
+                surfaces.append(
+                    Surface(
+                        name: "task-legacy-review-390-\(scheme == .dark ? "dark" : "light")",
+                        width: 390, colorScheme: scheme, nativeAppearance: true,
+                        view: AnyView(
+                            TaskTimelineView(
+                                coordinator: legacyCoordinator, snapshot: legacyTask, onOpenRun: { _ in }
+                            )
+                            .screenshotContent(legacyHistory))))
+            }
             surfaces.append(
                 Surface(
                     name: "task-timeline",
@@ -1342,7 +1391,21 @@
                                     .font(FreesideFont.monoCaption)
                                     .foregroundStyle(Color.ink)
                                     .padding(24))))
+                    var unknownRound = RunFixtures.reviewRound(.completed, availability: .unknown)
+                    unknownRound.requested_at = nil
+                    unknownRound.completed_at = nil
+                    unknownRound.provider = nil
+                    unknownRound.model_configuration = nil
+                    unknownRound.outcome = nil
+                    unknownRound.findings_count = nil
+                    unknownRound.dispositions = nil
+                    unknownRound.source = .init(kind: "future-source", status: "quarantined")
+                    var externalRound = RunFixtures.reviewRound(.failed, round: 2)
+                    externalRound.retry_pending = true
+                    externalRound.source = .init(kind: "github")
                     for (name, rounds) in [
+                        ("unknown-external", [unknownRound, externalRound]),
+                        ("pending", [RunFixtures.reviewRound(.pending)]),
                         ("running", [RunFixtures.reviewRound(.running)]),
                         ("findings", [RunFixtures.reviewRound(.completed, findings: true, availability: .available)]),
                         (
