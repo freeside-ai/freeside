@@ -179,8 +179,9 @@ the outcome hits a Decision notes trigger or the mandatory-note list.
 2. When resuming an existing unit, read its issue or PR and any decision
    note it links (Decision notes section).
 3. Status queries:
-   - open PRs and their declared paths: overlap with yours means stop and
-     coordinate via issue comment before claiming;
+   - active work-unit claims and open PRs: inspect overlapping scopes under
+     Shared-Path Coordination below; a shared path alone does not block a claim
+     or implementation;
    - active claims on any unit you intend to claim: the paginated reads and
      deterministic direct-exclusivity-set arbitration under Claiming;
    - reverse exclusivity declarations: page every open work-unit issue body,
@@ -216,6 +217,54 @@ the outcome hits a Decision notes trigger or the mandatory-note list.
      declarations found by the status query above.
    An unknown or materially ambiguous relationship is `starts-after` until the
    spine resolves it.
+
+## Shared-Path Coordination
+
+Apply the ordinary authorization, claim, reservation, typed-relationship, and
+contract gates first. This procedure resolves incidental path overlap; it does
+not override those gates or reassign another unit's work.
+
+1. **Inspect the intended changes.** Read both work contracts, current plans,
+   and available diffs. A component, directory, or shared filename is a search
+   boundary, not an exclusive lock. An unfinished PR diff does not exhaust its
+   unit's planned scope. Compare behavior and inputs as well as edit locations:
+   different files or a clean merge do not prove independence.
+2. **Proceed when the edits are independent.** Name the functions, test cases,
+   baseline keys, or document sections each unit will change and why neither
+   relies on the other's unfinished result. Record this on the work-unit issue
+   before starting the overlapping work. When the existing scopes already
+   establish that separation, this is an evidence record, not a permission
+   request: no reply, release, or merge is required. Do not narrow another
+   unit's scope unilaterally. Use isolated checkouts and preserve both changes
+   during integration.
+3. **Limit a real conflict to the affected work.** If two units make competing
+   changes to the same behavior or content, or one needs the other's unfinished
+   result, identify that dependency and propose a concrete boundary or order.
+   Pause the affected edits until the conflict is resolved; continue work whose
+   correctness does not depend on that resolution. Block the whole unit only
+   when an existing gate requires it or no independent work remains. If the
+   available scope is too vague to decide, name the missing fact and seek that
+   clarification rather than treating every shared file as owned in full.
+4. **Recheck when the scope or base changes.** Broader edits can invalidate an
+   earlier separation. Resolve textual conflicts while preserving both units'
+   intent, and repeat the required integration checks against the new base.
+   A predicted textual conflict or baseline refresh is not by itself a reason
+   to serialize implementation.
+
+Examples:
+
+| Overlap | Treatment |
+| --- | --- |
+| Different rows in `app/SURFACES.md` | Record the rows and proceed. |
+| Separate screenshot cases and baseline keys with unchanged shared rendering inputs | Record the cases and keys and proceed. |
+| A shared screenshot renderer changes while another unit adds baselines that depend on its output | Coordinate the renderer-dependent work; unrelated edits can continue. |
+| Competing changes to the same lifecycle rule, even in different files | Resolve the behavioral conflict before the affected work proceeds. |
+
+Plans and blocker reports must name the contested behavior or content. Do not
+turn “these units share files” into “shared files need one writer” or an implied
+`starts-after` relationship. The unknown-relationship fallback concerns an
+actual unresolved dependency, not path overlap alone. Existing explicit
+relationships remain authoritative until changed through their normal protocol.
 
 ## Stages
 
