@@ -25,7 +25,7 @@ const corpusCompletionBoundIssue = 443
 // from. The run's policy digest is the policy's content digest, so the
 // admission must carry it too. No milestone is appended.
 func (f corpusFixture) seedPublishedRun(
-	t *testing.T, runID domain.RunID, attemptInvocation domain.InvocationID,
+	t *testing.T, runID domain.RunID, attemptInvocation domain.InvocationID, readiness ...domain.ReadinessDetail,
 ) domain.ResolvedPolicy {
 	t.Helper()
 	ctx := context.Background()
@@ -54,6 +54,11 @@ func (f corpusFixture) seedPublishedRun(
 	item, err := f.readyItem(runID)
 	if err != nil {
 		t.Fatalf("readyItem: %v", err)
+	}
+	if len(readiness) == 1 {
+		item.CreatedAt = &f.at
+		item.ReadinessDetail = &readiness[0]
+		item.Readiness = &domain.ReadinessSummary{Class: readiness[0].Class(), EvaluationSetDigest: readiness[0].EvaluationSetDigest}
 	}
 	f.seedItem(t, item)
 	f.seedReadyBinding(t, runID, attemptInvocation, publicationInvocation(runID))

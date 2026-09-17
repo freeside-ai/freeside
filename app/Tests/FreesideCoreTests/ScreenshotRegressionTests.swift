@@ -144,6 +144,30 @@
             }
         }
 
+        @Test func taskHistoryEvidence() async throws {
+            _ = FreesideFont.registration
+            let history = TaskHistoryFixtures.history(.published)
+            let coordinator = try TaskHistoryFixtures.coordinator(history)
+            for size in [DynamicTypeSize.large, .accessibility1] {
+                for width in [CGFloat(820), CGFloat(390)] {
+                    for scheme in [ColorScheme.light, .dark] {
+                        let view = TaskTimelineView(
+                            coordinator: coordinator, snapshot: TaskHistoryFixtures.snapshot(history),
+                            onOpenRun: { _ in }
+                        ).screenshotContent(history)
+                        let image = try await FreesideFont.$screenshotDynamicTypeSize.withValue(size) {
+                            try await render(
+                                AnyView(view), at: size, width: width, colorScheme: scheme, nativeAppearance: true)
+                        }
+                        #expect(image.width == Int(width))
+                        if ProcessInfo.processInfo.environment["FREESIDE_DUMP_SCREENSHOTS"] == "1" {
+                            _ = try dump(image, named: "task-history-evidence-\(Int(width))-\(scheme)-\(size)")
+                        }
+                    }
+                }
+            }
+        }
+
         @Test func publishedHandoffSurfaces() async throws {
             _ = FreesideFont.registration
             let runs = RunFixtures.defaultRuns()
@@ -1255,6 +1279,55 @@
                 }
             }
             let publishedRun = try #require(RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.completedRunID })
+            let completeHistory = TaskHistoryFixtures.history(.published)
+            let historyCoordinator = try TaskHistoryFixtures.coordinator(completeHistory)
+            for width in [CGFloat(820), CGFloat(390)] {
+                for scheme in [ColorScheme.light, .dark] {
+                    surfaces.append(
+                        Surface(
+                            name: "task-history-\(Int(width))-\(scheme)", width: width, colorScheme: scheme,
+                            nativeAppearance: true,
+                            view: AnyView(
+                                TaskTimelineView(
+                                    coordinator: historyCoordinator,
+                                    snapshot: TaskHistoryFixtures.snapshot(completeHistory),
+                                    onOpenRun: { _ in }
+                                ).screenshotContent(completeHistory))))
+                }
+            }
+            let emptyHistory = TaskHistoryFixtures.history(.creation)
+            let emptyTask = TaskHistoryFixtures.snapshot(emptyHistory)
+            let emptyServer = MockServer(runs: [], tasks: [emptyTask])
+            let emptyCoordinator = SyncCoordinator(
+                client: APIClientFactory.mock(server: emptyServer), cache: InMemoryCacheStore())
+            await emptyCoordinator.bootstrap()
+            await emptyCoordinator.refreshTaskTimeline(for: emptyTask.task.id)
+            let loadedEmptyHistory = try #require(emptyCoordinator.taskTimelinesByTaskID[emptyTask.task.id])
+            #expect(emptyCoordinator.taskTimelineLoadStates[emptyTask.task.id] == .loaded)
+            let failedServer = MockServer()
+            let failedCoordinator = try TaskHistoryFixtures.coordinator(completeHistory, server: failedServer)
+            await failedServer.setBeforeRespond { _ in throw MockServer.ForcedStatus(500) }
+            await failedCoordinator.refreshTaskTimeline(for: completeHistory.task_id)
+            #expect(failedCoordinator.taskTimelineLoadStates[completeHistory.task_id] == .unavailable)
+            let revisedHistory = TaskHistoryFixtures.history(.revised)
+            let revisedCoordinator = try TaskHistoryFixtures.coordinator(revisedHistory)
+            for (name, history, display) in [
+                ("empty", loadedEmptyHistory, emptyCoordinator),
+                ("failed", completeHistory, failedCoordinator),
+                ("revised", revisedHistory, revisedCoordinator),
+            ] {
+                for scheme in [ColorScheme.light, .dark] {
+                    surfaces.append(
+                        Surface(
+                            name: "task-history-\(name)-390-\(scheme)", width: 390, colorScheme: scheme,
+                            nativeAppearance: true,
+                            view: AnyView(
+                                TaskTimelineView(
+                                    coordinator: display, snapshot: TaskHistoryFixtures.snapshot(history),
+                                    onOpenRun: { _ in }
+                                ).screenshotContent(history))))
+                }
+            }
             let publishedTask = try #require(tasks.first { $0.task.id == publishedRun.run.task_id })
             var publishedTimeline = try #require(
                 RunFixtures.defaultTimelines().first { $0.run_id == publishedRun.run.id })
@@ -2168,7 +2241,13 @@
         }
 
         private func dump(_ image: CGImage, named name: String) throws -> URL {
-            let directory = FileManager.default.temporaryDirectory
+            // Separate evidence from concurrent worktrees without changing
+            // which pixels are compared or accepted.
+            let directory =
+                ProcessInfo.processInfo.environment["FREESIDE_SCREENSHOT_OUTPUT"].map {
+                    URL(fileURLWithPath: $0, isDirectory: true)
+                }
+                ?? FileManager.default.temporaryDirectory
                 .appendingPathComponent("freeside-screenshot-regressions", isDirectory: true)
             try FileManager.default.createDirectory(
                 at: directory, withIntermediateDirectories: true)

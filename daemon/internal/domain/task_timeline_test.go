@@ -75,3 +75,75 @@ func toggled[T any](value *T, replacement T) *T {
 	}
 	return &replacement
 }
+
+func TestTaskHistoryEventDetails(t *testing.T) {
+	at := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+	run := RunID("run")
+	review := TaskEventReview{InvocationID: "review", Round: 2, HeadSHA: "head", BaseSHA: "base"}
+	completed := review
+	completed.Outcome = ptr(ReviewClean)
+	failed := review
+	failed.Failure = ptr(AllReviewFailureClasses[0])
+	fixtures := []TaskEvent{
+		{Kind: TaskEventStarted, RecordedAt: at, RunID: &run},
+		{Kind: TaskEventCompleted, RecordedAt: at, RunID: &run},
+		{Kind: TaskEventAbandoned, RecordedAt: at, RunID: &run},
+		{Kind: TaskEventStopRequested, RecordedAt: at},
+		{Kind: TaskEventStopped, RecordedAt: at},
+		{Kind: TaskEventStopFailed, RecordedAt: at},
+		{Kind: TaskEventRunMilestone, RecordedAt: at, RunID: &run, Milestone: &RunMilestone{RunID: run, Kind: MilestoneRunSubmitted, InvocationID: ptr(InvocationID("inv")), RecordedAt: at}},
+		{Kind: TaskEventReviewRequested, RecordedAt: at, RunID: &run, Review: &review},
+		{Kind: TaskEventReviewCompleted, RecordedAt: at, RunID: &run, Review: &completed},
+		{Kind: TaskEventReviewFailed, RecordedAt: at, RunID: &run, Review: &failed},
+		{Kind: TaskEventVerificationRecorded, RecordedAt: at, RunID: &run, Verification: &TaskEventVerification{ItemID: "ready", Class: ReadinessReadyClean, HeadSHA: "head", BaseSHA: "base"}},
+	}
+	if len(fixtures)+5 != len(AllTaskEventKinds) {
+		t.Fatal("new event kinds need detail fixtures")
+	}
+	for _, e := range fixtures {
+		t.Run(string(e.Kind), func(t *testing.T) {
+			if err := e.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			invalid := e
+			invalid.PRNumber = ptr(1)
+			if err := invalid.Validate(); err == nil {
+				t.Fatal("unrelated PR detail accepted")
+			}
+			invalid = e
+			invalid.Milestone = toggled(invalid.Milestone, RunMilestone{})
+			if err := invalid.Validate(); err == nil {
+				t.Fatal("missing or unrelated milestone accepted")
+			}
+			invalid = e
+			invalid.Review = toggled(invalid.Review, TaskEventReview{})
+			if err := invalid.Validate(); err == nil {
+				t.Fatal("missing or unrelated review accepted")
+			}
+			invalid = e
+			invalid.Verification = toggled(invalid.Verification, TaskEventVerification{})
+			if err := invalid.Validate(); err == nil {
+				t.Fatal("missing or unrelated verification accepted")
+			}
+		})
+	}
+	invalid := fixtures[6]
+	copy := *invalid.Milestone
+	copy.RunID = "other"
+	invalid.Milestone = &copy
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("cross-run milestone accepted")
+	}
+	invalid = fixtures[7]
+	invalid.Review = &completed
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("request promoted to a clean result")
+	}
+	invalid = fixtures[10]
+	v := *invalid.Verification
+	v.Class = ReadinessBlocked
+	invalid.Verification = &v
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("blocked verdict laundered as recorded readiness")
+	}
+}

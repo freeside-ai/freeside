@@ -688,14 +688,16 @@ public struct MockServerTransport: ClientTransport {
             case "events":
                 keys = [
                     "campaign_id", "run_id", "approved_spec_digest", "specification_run_id", "pr_number",
-                    "merge_commit_sha",
+                    "merge_commit_sha", "milestone", "review", "verification",
                 ]
             case "sections":
                 keys = ["campaign_id"]
             case "runs":
                 keys = ["role", "attempt_number", "attempt_reason", "parent_run_id", "superseded_by", "hold"]
-            case "milestones":
+            case "milestones", "milestone":
                 keys = ["invocation_id", "terminal", "outcome", "reason"]
+            case "review":
+                keys = ["outcome", "failure"]
             case "hold":
                 keys = ["invocation_id"]
             default:

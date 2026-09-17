@@ -47,6 +47,7 @@ type taskTimelineInput struct {
 	observation domain.RunObservation
 	attempt     *domain.ProductionAttempt
 	facts       runProjectionFacts
+	readiness   []domain.AttentionItem
 	prBinding   *domain.WorkUnitPRBinding
 }
 
@@ -121,7 +122,31 @@ func (s *Service) GetTaskTimeline(ctx context.Context, id domain.TaskID) (TaskTi
 			if err != nil {
 				return asRunObservationIntegrityError(err)
 			}
+			facts.review, err = runReviewFacts(ctx, tx, runID, observation.Invocations)
+			if err != nil {
+				return asRunObservationIntegrityError(err)
+			}
 			input := taskTimelineInput{run: run.Value, observation: observation, facts: facts}
+			for _, storedItem := range items {
+				item := storedItem.Value
+				if item.Type != domain.AttentionReadyForFinalReview || item.Subject.RunID == nil || *item.Subject.RunID != runID {
+					continue
+				}
+				if item.ProjectID != task.ProjectID || (item.Subject.TaskID != nil && *item.Subject.TaskID != task.ID) {
+					return ErrRunObservationIntegrity
+				}
+				if item.CreatedAt == nil || item.ReadinessDetail == nil || item.Readiness == nil {
+					continue
+				}
+				authenticated, err := taskTimelineReadinessBinding(ctx, tx, runID, item.ID)
+				if err != nil {
+					return asRunObservationIntegrityError(err)
+				}
+				if !authenticated {
+					continue
+				}
+				input.readiness = append(input.readiness, item)
+			}
 			if run.Value.CampaignID != "" {
 				attempt, err := tx.GetProductionAttempt(ctx, run.Value.CampaignID, run.Value.AttemptNumber)
 				if err != nil {
@@ -155,6 +180,34 @@ func (s *Service) GetTaskTimeline(ctx context.Context, id domain.TaskID) (TaskTi
 		return TaskTimeline{}, fmt.Errorf("get task %q timeline: %w", id, err)
 	}
 	return out, nil
+}
+
+func taskTimelineReadinessBinding(ctx context.Context, tx *store.ReadTx, runID domain.RunID, itemID domain.ItemID) (bool, error) {
+	binding, err := tx.GetReadyItemPRBinding(ctx, itemID)
+	// Legacy and fixture ready items may have no production binding. Their
+	// display fields alone cannot establish a verification history event.
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if binding.RunID != runID {
+		return false, domain.ErrParentKeyMismatch
+	}
+	if itemID == domain.ProductionReadyItemID(runID) && binding.PublicationInvocationID == domain.ProductionPublicationInvocationID(runID) {
+		return true, nil
+	}
+	chain, err := tx.PublicationSuccessorChain(ctx, runID)
+	if err != nil {
+		return false, err
+	}
+	for _, successor := range chain {
+		if successor.ReadyItemID() == itemID && successor.PublicationID() == binding.PublicationInvocationID {
+			return true, nil
+		}
+	}
+	return false, domain.ErrParentKeyMismatch
 }
 
 func taskTimelinePRBinding(ctx context.Context, tx *store.ReadTx, runID domain.RunID) (*domain.WorkUnitPRBinding, error) {
@@ -297,6 +350,11 @@ func taskTimeline(task domain.Task, inputs []taskTimelineInput, revision int64, 
 		}
 		return cmp.Or(allocated[bID].Compare(allocated[aID]), cmp.Compare(bID, aID))
 	})
+	events, err := taskHistoryEvents(task, inputs, out.Sections)
+	if err != nil {
+		return TaskTimeline{}, err
+	}
+	out.Events = events
 	return out, nil
 }
 

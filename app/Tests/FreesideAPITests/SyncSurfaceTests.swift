@@ -16,7 +16,12 @@ import Testing
         let timeline = try await client.getTaskTimeline(path: .init(task_id: task.id)).ok.body.json
         #expect(timeline.task_id == task.id)
         #expect(timeline.name == task.display_names.task)
-        #expect(timeline.events.map(\.kind) == [.task_created])
+        #expect(timeline.events.filter { $0.kind == .task_created }.count == 1)
+        #expect(
+            Set(timeline.events.map(\.kind)) == [
+                .task_created, .task_started, .run_milestone, .review_requested, .review_completed,
+            ])
+        #expect(timeline.events == timeline.events.sorted { $0.recorded_at > $1.recorded_at })
         #expect(Set(timeline.sections.flatMap { $0.runs.map(\.run_id) }) == Set(task.run_ids))
         let run = try #require(timeline.sections.flatMap(\.runs).first { $0.run_id == RunFixtures.activeRunID })
         #expect(run.role?.value1 == .implementation)
@@ -60,6 +65,10 @@ import Testing
         #expect(changedRun.milestones == current.milestones.sorted { $0.recorded_at > $1.recorded_at })
         #expect(changedRun.milestones.map(\.kind) == [.invocation_started, .run_submitted])
         #expect(changedRun.milestones.first?.recorded_at == recordedAt)
+        let started = try #require(
+            after.events.first { $0.run_id == source.run_id && $0.milestone?.value1.kind == .invocation_started })
+        #expect(started.recorded_at == recordedAt)
+        #expect(started.milestone?.value1 == changedRun.milestones.first)
 
         let emptyClient = APIClientFactory.mock(server: MockServer(tasks: []))
         guard case .notFound = try await emptyClient.getTaskTimeline(path: .init(task_id: task.task.id)) else {
@@ -68,20 +77,26 @@ import Testing
         }
     }
 
-    @Test func taskTimelineWireIncludesRequiredNulls() async throws {
+    @Test(arguments: [false, true]) func taskTimelineWireIncludesRequiredNulls(failedReview: Bool) async throws {
         var timelines = RunFixtures.defaultTimelines()
         let heldIndex = try #require(timelines.firstIndex { $0.run_id == RunFixtures.activeRunID })
         try #require(timelines[heldIndex].hold != nil)
         timelines[heldIndex].hold?.value1.invocation_id = nil
+        timelines[heldIndex].review = .init(
+            value1: .init(rounds: [RunFixtures.reviewRound(failedReview ? .failed : .completed)]))
         let transport = MockServerTransport(server: MockServer(timelines: timelines))
         let eventNullableKeys = [
             "campaign_id", "run_id", "approved_spec_digest", "specification_run_id", "pr_number", "merge_commit_sha",
+            "milestone", "review", "verification",
         ]
         let runNullableKeys = ["role", "attempt_number", "attempt_reason", "parent_run_id", "superseded_by", "hold"]
         var sawLegacy = false
         var sawNullHold = false
         var sawHoldWithoutInvocation = false
         var sawMerge = false
+        var sawMilestone = false
+        var sawRequestedReview = false
+        var sawTerminalReview = false
         for task in TaskFixtures.defaultTasks() {
             let request = HTTPRequest(
                 method: .get, scheme: "https", authority: "freeside.invalid",
@@ -125,6 +140,26 @@ import Testing
                 if event["kind"] as? String == "task_created" {
                     #expect(eventNullableKeys.allSatisfy { event[$0] is NSNull })
                 }
+                if let milestone = event["milestone"] as? [String: Any] {
+                    #expect(Set(["invocation_id", "terminal", "outcome", "reason"]).isSubset(of: Set(milestone.keys)))
+                    sawMilestone = true
+                }
+                if let review = event["review"] as? [String: Any] {
+                    #expect(Set(["outcome", "failure"]).isSubset(of: Set(review.keys)))
+                    switch event["kind"] as? String {
+                    case "review_requested":
+                        #expect(review["outcome"] is NSNull && review["failure"] is NSNull)
+                        sawRequestedReview = true
+                    case "review_completed":
+                        #expect(review["outcome"] as? String != nil && review["failure"] is NSNull)
+                        if !failedReview { sawTerminalReview = true }
+                    case "review_failed":
+                        #expect(review["outcome"] is NSNull && review["failure"] as? String == "configuration")
+                        if failedReview { sawTerminalReview = true }
+                    default:
+                        Issue.record("Unexpected review event kind")
+                    }
+                }
                 if event["kind"] as? String == "pr_merged" {
                     let completion = try #require(
                         timelines.first { $0.run_id == event["run_id"] as? String }?.completion?.value1)
@@ -135,6 +170,7 @@ import Testing
             }
         }
         #expect(sawLegacy && sawNullHold && sawHoldWithoutInvocation && sawMerge)
+        #expect(sawMilestone && sawRequestedReview && sawTerminalReview)
     }
 
     @Test func taskTimelineOrdersNewlySubmittedRunsFirst() async throws {

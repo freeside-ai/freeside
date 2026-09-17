@@ -128,10 +128,73 @@ public enum TaskFixtures {
                         hold: timeline?.hold.map { .init(value1: $0.value1) }, events: events)
                 })
         }
+        var events: [Components.Schemas.TaskEvent] = [.init(kind: .task_created, recorded_at: task.created_at)]
+        for fact in task.lifecycle_facts {
+            let kind: Components.Schemas.TaskEventKind
+            switch fact.kind {
+            case .started: kind = .task_started
+            case .completed: kind = .task_completed
+            case .abandoned: kind = .task_abandoned
+            }
+            events.append(.init(kind: kind, recorded_at: fact.recorded_at, run_id: fact.run_id))
+        }
+        if let cancellation = task.cancellation?.value1 {
+            events.append(.init(kind: .stop_requested, recorded_at: cancellation.requested_at))
+            if let ack = cancellation.acknowledgement?.value1 {
+                switch ack.state {
+                case .confirmed: events.append(.init(kind: .task_stopped, recorded_at: ack.recorded_at))
+                case .failed_to_stop: events.append(.init(kind: .stop_failed, recorded_at: ack.recorded_at))
+                case .requested: break
+                }
+            }
+        }
+        for section in sections {
+            events += section.events
+            for run in section.runs {
+                events += run.events
+                for milestone in run.milestones {
+                    switch milestone.kind {
+                    case .run_submitted, .invocation_started, .terminal_recorded, .publication_ready,
+                        .publication_blocked:
+                        events.append(
+                            .init(
+                                milestone: .init(value1: milestone), kind: .run_milestone,
+                                recorded_at: milestone.recorded_at, run_id: run.run_id))
+                    case .invocation_admitted, .execution_export_recorded, .execution_outcome_recorded,
+                        .work_unit_completed:
+                        break
+                    }
+                }
+                for round in timelines[run.run_id]?.review?.value1.rounds ?? [] {
+                    if let at = round.requested_at {
+                        events.append(
+                            .init(
+                                review: .init(
+                                    value1: .init(
+                                        invocation_id: round.invocation_id, round: round.round,
+                                        head_sha: round.head_sha, base_sha: round.base_sha)), kind: .review_requested,
+                                recorded_at: at, run_id: run.run_id))
+                    }
+                    if let at = round.completed_at {
+                        events.append(
+                            .init(
+                                review: .init(
+                                    value1: .init(
+                                        invocation_id: round.invocation_id, round: round.round,
+                                        head_sha: round.head_sha, base_sha: round.base_sha,
+                                        outcome: round.outcome.map { .init(value1: $0.value1) },
+                                        failure: round.failure?.value1._class)),
+                                kind: round.failure == nil ? .review_completed : .review_failed, recorded_at: at,
+                                run_id: run.run_id))
+                    }
+                }
+            }
+        }
+        events.sort { $0.recorded_at > $1.recorded_at }
         return .init(
             as_of_revision: revision, as_of: asOf,
             task_id: task.id, project_id: task.project_id, name: task.display_names.task,
-            events: [.init(kind: .task_created, recorded_at: task.created_at)], sections: sections)
+            events: events, sections: sections)
     }
 
     /// The task holding the retry campaign (`run-freeside-656` and

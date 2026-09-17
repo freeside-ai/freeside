@@ -95,6 +95,9 @@ func TestTaskTimelineSpecificationOnly(t *testing.T) {
 		}); err != nil {
 			return err
 		}
+		if err := tx.RecordTaskLifecycleFact(ctx, task.ID, domain.TaskLifecycleFact{Kind: domain.TaskLifecycleStarted, RunID: specification, CampaignID: &campaign, SourceID: "start:" + string(specification), RecordedAt: at}); err != nil {
+			return err
+		}
 		return tx.SetTaskName(ctx, task.ID, domain.DisplayName{Text: "Improve navigation", Source: domain.DisplayNameSourceAgent})
 	}); err != nil {
 		t.Fatal(err)
@@ -113,9 +116,21 @@ func TestTaskTimelineSpecificationOnly(t *testing.T) {
 	if timeline.Name.Text != "Improve navigation" || timeline.Name.Source != domain.DisplayNameSourceAgent {
 		t.Fatalf("name claim = %+v", timeline.Name)
 	}
-	if len(timeline.Events) != 1 || timeline.Events[0].Kind != domain.TaskEventCreated || !timeline.Events[0].RecordedAt.Equal(task.CreatedAt) {
-		t.Fatalf("task events = %+v", timeline.Events)
+	if len(timeline.Events) != 4 {
+		t.Fatalf("task history must include creation, start, allocation and submission: %+v", timeline.Events)
 	}
+	for _, kind := range []domain.TaskEventKind{domain.TaskEventCreated, domain.TaskEventStarted, domain.TaskEventCampaignAllocated, domain.TaskEventRunMilestone} {
+		found := false
+		for _, event := range timeline.Events {
+			if event.Kind == kind {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("missing task event %s", kind)
+		}
+	}
+
 	if len(timeline.Sections) != 1 || len(timeline.Sections[0].Events) != 1 || len(timeline.Sections[0].Runs) != 1 {
 		t.Fatalf("specification-only sections = %+v", timeline.Sections)
 	}
@@ -321,6 +336,20 @@ func TestTaskTimelineRejectsMissingApprovedImplementation(t *testing.T) {
 	timeline, err := f.service.GetTaskTimeline(ctx, taskID)
 	if err != nil || len(timeline.Sections) != 1 || len(timeline.Sections[0].Runs) != 2 || len(timeline.Sections[0].Events) != 2 {
 		t.Fatalf("approved campaign history = %+v, %v", timeline, err)
+	}
+	for _, kind := range []domain.TaskEventKind{domain.TaskEventCampaignAllocated, domain.TaskEventSpecificationApproved} {
+		count := 0
+		for _, event := range timeline.Events {
+			if event.Kind == kind {
+				count++
+				if event.CampaignID == nil || *event.CampaignID != campaign || (kind == domain.TaskEventSpecificationApproved && (event.RunID == nil || *event.RunID != run.ID)) {
+					t.Fatalf("wrong task-wide campaign binding: %+v", event)
+				}
+			}
+		}
+		if count != 1 {
+			t.Fatalf("task-wide %s count = %d, want 1", kind, count)
+		}
 	}
 	db, err := sql.Open("sqlite", f.dbPath)
 	if err != nil {
