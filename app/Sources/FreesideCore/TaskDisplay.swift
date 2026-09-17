@@ -21,6 +21,9 @@ enum TaskDisplay {
         let rail: DecisionStageRailPresentation
         let hold: String?
         var qualification: String? = nil
+        var status: String? = nil
+        var guidance: String = "Open task details."
+        var historical = false
     }
 
     enum SpecificationApproval {
@@ -134,7 +137,7 @@ enum TaskDisplay {
         }
     }
 
-    /// The stage line derives from the newest run when the list holds it,
+    /// The stage line derives from the named current run when the list holds it,
     /// so the row and that run's timeline agree on phase and round
     /// (`RunDisplay.workflowPhase`). When the run is not listed, the
     /// daemon's own position supplies the stage, round, and hold; the rail
@@ -146,10 +149,110 @@ enum TaskDisplay {
         attentionItems: [Components.Schemas.AttentionItemSnapshot] = [],
         history: Components.Schemas.TaskTimeline? = nil
     ) -> Position? {
+        guard let current = task.current_position?.value1,
+            var position = phasePosition(task, runs: runs, attentionItems: attentionItems, history: history)
+        else { return nil }
+        let run = runs.first { $0.run.id == current.run_id }?.run
+        position.status = rowStatus(task, run: run)
+        position.historical = !isActive(task) || run?.superseded_by != nil || run?.lifecycle == .finished
+        // A current cancellation fence suppresses action guidance even when
+        // older snapshots still contain an open approval or published handoff.
+        if !suppressesGuidanceForCancellation(task), isActive(task), run?.superseded_by == nil {
+            if let handoff = finalReviewHeading(task, run: run, attentionItems: attentionItems, titleCase: true) {
+                position.status = handoff
+                position.guidance = "Review the pull request from Inbox."
+            } else if run?.lifecycle != .finished,
+                run == nil || (run?.task_id == task.id && run?.project_id == task.project_id),
+                specificationApproval(task, runID: current.run_id, run: run, history: history)
+                    != .approved,
+                task.run_ids.contains(current.run_id),
+                attentionItems.contains(where: { snapshot in
+                    let item = snapshot.item
+                    guard item._type == .spec_approval, item.status == .open,
+                        item.project_id == task.project_id, case .run(let subject) = item.subject
+                    else { return false }
+                    return subject.subject_id == current.run_id && subject.run_id == current.run_id
+                        && subject.task_id == task.id
+                })
+            {
+                position.status = "Specification Approval Required"
+                position.guidance = "Review the specification in Inbox."
+            }
+        }
+        return position
+    }
+
+    private static func suppressesGuidanceForCancellation(_ task: Components.Schemas.Task) -> Bool {
+        guard let cancellation = task.cancellation?.value1 else { return false }
+        // The daemon's active projection means a historical confirmation must
+        // not hide attention bound to the current run. This grants no execution.
+        return cancellation.state != .confirmed || task.lifecycle != .active
+    }
+
+    /// Task lifecycle remains the daemon's projection. A run's terminal
+    /// outcome and a cancellation request are separate facts, not success.
+    static func rowStatus(_ task: Components.Schemas.Task, run: Components.Schemas.Run? = nil) -> String {
+        if task.lifecycle == .stopped || task.lifecycle == .abandoned { return lifecycleLabel(task).text }
+        if let cancellation = task.cancellation?.value1 {
+            switch cancellation.state {
+            case .requested: return "Stop Requested · Awaiting Confirmation"
+            case .failed_to_stop: return "Failed to Stop · Execution May Continue"
+            case .confirmed: break
+            }
+        }
+        if run?.superseded_by != nil { return "Superseded Run · Historical" }
+        if run?.outcome == .failed { return "Execution Failed" }
+        if run?.outcome == .lost { return "Execution Lost" }
+        if task.lifecycle == .finished { return "Finished · See Recorded Outcome" }
+        let hold = run?.hold_reason?.value1 ?? task.current_position?.value1.hold_reason?.value1
+        if hold == .identity_parallelism { return "Queued" }
+        if hold != nil { return "On Hold" }
+        if run?.outcome == .blocked { return "Publication Blocked" }
+        if run?.outcome == .unobserved { return "Execution Status Unavailable" }
+        if run?.outcome == .published { return "Published · See Review Status" }
+        if run?.lifecycle == .finished { return "Run Finished · See Recorded Outcome" }
+        guard task.current_position != nil else { return "No Execution Position Recorded" }
+        return run == nil ? "Run Details Unavailable" : "In Progress"
+    }
+
+    /// These exact strings are both visible text and the row's combined
+    /// accessibility content. Unknown approval is never rendered as pending.
+    static func progressLines(_ task: Components.Schemas.Task, position: Position?) -> [String] {
+        var lines = [position?.status ?? rowStatus(task)]
+        if let position {
+            let phases = position.rail.entries.map { entry in
+                let state =
+                    position.historical && entry.state == .current
+                    ? "Last Recorded Phase" : entry.state.accessibilityLabel.capitalized
+                if entry.id == "specification", position.qualification != nil {
+                    return entry.state == .pending
+                        ? "Specification Approval History Unavailable"
+                        : "Specification \(state), Approval History Unavailable"
+                }
+                return "\(entry.title) \(state)"
+            }
+            lines.append(phases.joined(separator: " · "))
+            if let round = position.heading?.round { lines.append(round) }
+            if let hold = position.hold, !position.historical { lines.append("Hold: \(hold)") }
+        }
+        if task.cancellation?.value1.state == .confirmed, task.lifecycle == .finished {
+            lines.append("Stop Confirmation Recorded")
+        }
+        lines.append(position?.guidance ?? "Open task details.")
+        return lines
+    }
+
+    private static func phasePosition(
+        _ task: Components.Schemas.Task, runs: [Components.Schemas.RunSnapshot],
+        attentionItems: [Components.Schemas.AttentionItemSnapshot],
+        history: Components.Schemas.TaskTimeline?
+    ) -> Position? {
         guard let position = task.current_position?.value1 else { return nil }
         let run = runs.first(where: { $0.run.id == position.run_id })?.run
         let approval = specificationApproval(task, runID: position.run_id, run: run, history: history)
-        let handoff = finalReviewHeading(task, run: run, attentionItems: attentionItems)
+        let handoff =
+            (!suppressesGuidanceForCancellation(task)
+            ? finalReviewHeading(task, run: run, attentionItems: attentionItems) : nil)
             .map { Position.Heading(label: $0, round: nil) }
         if let run {
             return Position(
@@ -188,7 +291,7 @@ enum TaskDisplay {
     /// under the existing freshness banner; this never certifies their age.
     static func finalReviewHeading(
         _ task: Components.Schemas.Task, run: Components.Schemas.Run?,
-        attentionItems: [Components.Schemas.AttentionItemSnapshot]
+        attentionItems: [Components.Schemas.AttentionItemSnapshot], titleCase: Bool = false
     ) -> String? {
         guard task.lifecycle == .active,
             let position = task.current_position?.value1,
@@ -217,7 +320,13 @@ enum TaskDisplay {
             else { return false }
             return true
         }
-        return item.map { AttentionDisplay.title($0.item) }
+        return item.map {
+            if titleCase {
+                return $0.item.readiness?.value1._class == .ready_degraded
+                    ? "Ready for Final Review (Degraded)" : "Ready for Final Review"
+            }
+            return AttentionDisplay.title($0.item)
+        }
     }
 
     /// The task name a run's timeline shows: the task snapshot's current
