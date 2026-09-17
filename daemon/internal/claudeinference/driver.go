@@ -126,25 +126,34 @@ func (d *Driver) copyBinary(dst io.Writer) error {
 // repository directory. ComputeUnits are generated tokens (including thinking
 // if ever reported); input is separately byte-bounded by the inference site.
 // The ledger reserves the entire output allowance before calling this method.
-func (d *Driver) Complete(ctx context.Context, req inference.Request, credential inference.Secret) (result inference.Response, err error) {
+func (d *Driver) Complete(ctx context.Context, req inference.Request, credential inference.Secret) (inference.Response, error) {
+	result, _, err := d.CompleteAndConfirm(ctx, req, credential)
+	return result, err
+}
+
+// CompleteAndConfirm is a concrete task-runtime adapter, not a shared driver
+// contract. quiescent is true only when no process launched or the exact
+// process group was observed absent after joining the CLI. Cancellation alone
+// never supplies that proof; a daemon crash before return remains unproven.
+func (d *Driver) CompleteAndConfirm(ctx context.Context, req inference.Request, credential inference.Secret) (result inference.Response, quiescent bool, err error) {
 	prompt, site, err := promptFor(req)
 	if err != nil || req.MaxComputeUnits < 1 || req.MaxComputeUnits > site.MaxComputeUnits || req.MaxOutput < 1 || req.MaxOutput > site.MaxOutputBytes || credential.Reveal() == "" {
-		return inference.Response{}, errCompletion
+		return inference.Response{}, true, errCompletion
 	}
 	body, err := json.Marshal(req.Fields)
 	if err != nil || len(body) > site.MaxInputBytes {
-		return inference.Response{}, errCompletion
+		return inference.Response{}, true, errCompletion
 	}
 	callCtx, cancel := context.WithTimeout(ctx, site.Timeout)
 	defer cancel()
 	call, err := d.acquire(callCtx, site.ID, cancel)
 	if err != nil {
-		return inference.Response{}, errCompletion
+		return inference.Response{}, true, errCompletion
 	}
 	defer d.release(call)
 	root, err := os.MkdirTemp("", "freeside-judgment-")
 	if err != nil {
-		return inference.Response{}, errCompletion
+		return inference.Response{}, true, errCompletion
 	}
 	defer func() {
 		if cleanupErr := os.RemoveAll(root); cleanupErr != nil {
@@ -157,12 +166,12 @@ func (d *Driver) Complete(ctx context.Context, req inference.Request, credential
 	binary := filepath.Join(root, "claude")
 	f, err := os.OpenFile(binary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o500) //nolint:gosec // G302: verified executable needs owner execute permission; private 0700 parent.
 	if err != nil {
-		return inference.Response{}, errCompletion
+		return inference.Response{}, true, errCompletion
 	}
 	copyErr := d.copyBinary(f)
 	closeErr := f.Close()
 	if copyErr != nil || closeErr != nil {
-		return inference.Response{}, errCompletion
+		return inference.Response{}, true, errCompletion
 	}
 	cmd := exec.CommandContext(callCtx, binary, commandArgs(d.config.Model, prompt)...) //nolint:gosec // G204: private content-pinned CLI copy and daemon-owned arguments; no shell.
 	cmd.Dir = root
@@ -174,10 +183,13 @@ func (d *Driver) Complete(ctx context.Context, req inference.Request, credential
 	output := &boundedOutput{limit: 2*req.MaxOutput + 64<<10, cancel: cancel}
 	cmd.Stdout = output
 	cmd.Stderr = io.Discard
-	if err = procbound.Run(cmd, time.Second); err != nil || callCtx.Err() != nil {
-		return inference.Response{}, errCompletion
+	err = procbound.Run(cmd, time.Second)
+	quiescent = procbound.ConfirmExit(cmd, time.Second) == nil
+	if err != nil || callCtx.Err() != nil || !quiescent {
+		return inference.Response{}, quiescent, errCompletion
 	}
-	return decodeCompletion(output.Bytes(), d.config.Model, req, site)
+	result, err = decodeCompletion(output.Bytes(), d.config.Model, req, site)
+	return result, quiescent, err
 }
 
 func commandArgs(model, prompt string) []string {

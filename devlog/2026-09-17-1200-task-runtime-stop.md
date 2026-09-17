@@ -17,12 +17,14 @@ prove that external work ended. Interrupted host processes retain uncertainty;
 do not reconstruct ownership from a guessed PID or process name.
 
 A driver return is not process-group proof. `inference.Client` may return on
-cancellation before its underlying driver finishes, and the native Claude
-adapter does not expose a descendant-quiescence result. Wrap below the client
-and retain both actual entry and actual return. Without the concrete proof,
-keep `failed_to_stop` and WIP. This is a known limitation, not a definition of
-successful cancellation. Native runtime work remains part of #1368's unresolved
-acceptance and requires its declared paths to include that adapter.
+cancellation before its underlying driver finishes. Wrap below the client and
+retain actual entry, actual return, and the concrete native adapter's separate
+quiescence result. The owner approved extending #1368 into `claudeinference/`
+and `procbound/` so the adapter can observe its exact process group after
+joining the command. A no-launch refusal is also proof; cancellation, a kill
+attempt, a probe failure, or a timeout is not. The shared inference interface
+stays unchanged. An interrupted call whose proof was not recorded still keeps
+`failed_to_stop` and WIP, without reconstructing a PID across a restart.
 
 Publication cancellation is observational recovery: retain exact committed
 identity and returned PR evidence, but never retry a write after the fence.
@@ -66,7 +68,11 @@ atomic with GitHub by pretending that cancellation reversed an entered request.
 - **Disproved:** Ignoring the existing CONNECT proxy's returned observation
   error skips its join. `connectProxy.Close` joins listener and connection
   workers before returning that error.
+- **Disproved:** A failed native call or a cancellation alone can record
+  quiescence. The concrete adapter first joins the command and observes its
+  exact process group absent; the journal retains that separate result.
+  This proves the owned group, not containment of arbitrary detached children.
 
-Revisit the conservative host-process limitation when native runtime adapters
-can report exact process-group absence and persist enough ownership to recover
-interrupted calls. Never loosen confirmation merely to free a WIP slot.
+Revisit the conservative recovery limit when runtime adapters can persist
+enough identity to recover interrupted host calls without risking PID reuse.
+Never loosen confirmation merely to free a WIP slot.

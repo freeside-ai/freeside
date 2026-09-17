@@ -6,11 +6,10 @@ episode was released. `requested` and `failed_to_stop` keep that episode held.
 Provider cancellation, a resolved card, a timeout, and a terminal run display
 are insufficient on their own.
 
-The current native Claude judgment adapter does not report process-group
-quiescence. Any task that entered task naming or another native judgment must
-therefore remain `failed_to_stop`. That limitation blocks a successful complete
-real-run check; do not replace it with a guessed process sweep or edit an
-acknowledgement into the database.
+The native Claude judgment adapter joins its CLI and observes the exact owned
+process group before recording quiescence. A daemon crash before recording
+that proof remains uncertain. Do not replace missing proof with a guessed
+process sweep or edit an acknowledgement into the database.
 
 ## Prepare A Controlled Run
 
@@ -74,8 +73,8 @@ Keep these observations with the controlled run's private evidence:
   interrupted command without a join record remains uncertain even if no
   container is visible.
 - Judgment records under `task-judgments/`: actual provider entry, return, and
-  the concrete native adapter's quiescence result. The existing adapter cannot
-  yet supply the last result.
+  the concrete native adapter's quiescence result. A successful operation and
+  a successful process-group join are separate facts.
 - Any pending publication intent and exact matching forge outcome. Preserve
   the PR URL and head; do not retry a forbidden write to obtain evidence.
 - The task's WIP state and another task's admission after confirmed release.
@@ -100,6 +99,25 @@ bash scripts/check.sh docs
 The dedicated integration fixture uses the durable fake driver. It verifies
 live cancellation and refuses confirmation when a reopened driver has lost its
 active session. These checks do not establish real-provider termination.
-Record a real check as **Not run** until the native proof adapter and its opt-in
-live fixture are available; report that gap separately from passing hermetic
-checks.
+
+## Pinned Native CLI Check
+
+This separate opt-in fixture runs the actual native CLI against a localhost
+provider that keeps its response open. It uses synthetic credentials and makes
+no paid provider call. A test-only exec shim supplies the local endpoint; both
+that shim and the real CLI are verified private copies. Production has no new
+endpoint override.
+
+Set `FREESIDE_JUDGMENT_CLI` to the installed executable and
+`FREESIDE_JUDGMENT_CLI_SHA256` to its approved SHA-256 pin, then run:
+
+```sh
+FREESIDE_TASK_CANCELLATION_LIVE_TEST=1 go -C daemon test ./internal/integration -run '^TestTaskCancellationPinnedNativeCLI$' -count=1 -timeout=2m -v
+```
+
+The fixture waits for actual provider entry, refuses confirmation while the
+call is active, cancels the owned task context, and requires retained process
+group exit proof after reopening the journal. Keep its output and executable
+pin with the verification record. It does not exercise Apple container cleanup,
+real subscription service behavior, or the complete paired-client workflow.
+Record any unavailable full real-run check separately as **Not run**.

@@ -57,3 +57,37 @@ func TestTaskCancellationJudgmentQueuedBeforeProviderEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+type provenJudgmentDriver struct{ quiescent bool }
+
+func (d provenJudgmentDriver) Complete(context.Context, inference.Request, inference.Secret) (inference.Response, error) {
+	return inference.Response{}, context.Canceled
+}
+
+func (d provenJudgmentDriver) CompleteAndConfirm(context.Context, inference.Request, inference.Secret) (inference.Response, bool, error) {
+	return inference.Response{}, d.quiescent, context.Canceled
+}
+
+func TestTaskCancellationJudgmentPersistsConcreteProofAcrossRestart(t *testing.T) {
+	for _, quiescent := range []bool{false, true} {
+		root := filepath.Join(t.TempDir(), "judgments")
+		driver := provenJudgmentDriver{quiescent: quiescent}
+		owned, err := NewTaskJudgments(root, driver)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := owned.Complete(WithTaskOwner(t.Context(), "task", "run"), inference.Request{SiteID: "task-name"}, ""); err == nil {
+			t.Fatal("provider failure was lost")
+		}
+		restarted, err := NewTaskJudgments(root, driver)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := restarted.ConfirmRun(t.Context(), "task", "run"); (err == nil) != quiescent {
+			t.Fatalf("quiescent=%v, recovered proof=%v", quiescent, err)
+		}
+		if err := restarted.ConfirmRun(t.Context(), "other-task", "run"); err == nil {
+			t.Fatal("recovered proof was retargeted")
+		}
+	}
+}

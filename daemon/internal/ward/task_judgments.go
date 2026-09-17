@@ -99,11 +99,9 @@ func (j *TaskJudgments) Complete(ctx context.Context, req inference.Request, sec
 	j.mu.Unlock()
 	var response inference.Response
 	if proven, ok := j.driver.(interface {
-		CompleteAndConfirm(context.Context, inference.Request, inference.Secret) (inference.Response, error, error)
+		CompleteAndConfirm(context.Context, inference.Request, inference.Secret) (inference.Response, bool, error)
 	}); ok {
-		var proof error
-		response, err, proof = proven.CompleteAndConfirm(ctx, req, secret)
-		record.Quiescent = proof == nil
+		response, record.Quiescent, err = proven.CompleteAndConfirm(ctx, req, secret)
 	} else {
 		response, err = j.driver.Complete(ctx, req, secret)
 	}

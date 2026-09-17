@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -24,30 +23,10 @@ type verificationCommand func(
 
 const verificationCleanupTimeout = 2 * time.Minute
 
-var errVerificationProcessUnproven = errors.New("verification process group absence is unproven")
+var errVerificationProcessUnproven = procbound.ErrQuiescenceUnproven
 
 func confirmVerificationProcessExit(cmd *exec.Cmd, err error) error {
-	if cmd.Process == nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), procbound.DefaultWaitDelay)
-	defer cancel()
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		probe := syscall.Kill(-cmd.Process.Pid, 0)
-		if errors.Is(probe, syscall.ESRCH) {
-			return err
-		}
-		if probe != nil {
-			return errors.Join(err, errVerificationProcessUnproven, probe)
-		}
-		select {
-		case <-ctx.Done():
-			return errors.Join(err, errVerificationProcessUnproven)
-		case <-ticker.C:
-		}
-	}
+	return errors.Join(err, procbound.ConfirmExit(cmd, procbound.DefaultWaitDelay))
 }
 
 // ProjectRecipePath is the fixed location where the project-image builder

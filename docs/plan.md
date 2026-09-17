@@ -2183,8 +2183,8 @@ fence persistence, sync, and daemon-only acknowledgement helpers. #1368 owns
 admission, successor, provider/process, and publication enforcement plus
 restart reconciliation. #1344 consumes confirmed quiescence to record stopped
 lifecycle and release WIP; #1369 owns controls. The daemon's separate runtime
-coordinator acknowledges only proven quiescence. Native judgment process proof
-is incomplete; these calls leave cancellation failed-to-stop with WIP held. A
+coordinator acknowledges only proven quiescence, including exact native process
+group absence. Missing or interrupted ownership evidence keeps WIP held. A
 failed acknowledgement retains the fence and may later be confirmed by bound
 evidence. Confirmation is final. No request deletes tasks, PRs, or evidence,
 changes existing completion facts, or authorizes task restart.

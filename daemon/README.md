@@ -764,12 +764,12 @@ retains WIP. Retries never turn a missing local session into proof of exit.
 Specification question and approval cards route Stop through the same fence;
 #1369 owns task-level client controls.
 
-Runtime confirmation is incomplete for native judgments: the current Claude
-adapter has no process-group quiescence result. A task that entered naming or
-another native judgment therefore remains `failed_to_stop`, even after that
-call returns. Tasks predating the ownership checkpoint, restored database
-epochs, interrupted host commands, and unresolved publication effects also
-retain WIP until proof is available. See the
+The native Claude judgment adapter reports quiescence only after joining its
+CLI and observing the exact owned process group absent, or proving no launch.
+The task journal sits below the inference client's timeout and retains that
+proof independently of whether the inference succeeded. Tasks predating the
+ownership checkpoint, restored database epochs, interrupted host commands,
+and unresolved publication effects retain WIP until proof is available. See the
 [controlled stop check](../docs/task-cancellation-check.md) for the evidence
 needed to distinguish an accepted Stop from confirmed termination.
 
