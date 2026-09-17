@@ -1202,6 +1202,37 @@
             else {
                 throw ScreenshotError.missingRetryTask
             }
+            let approvalFixture = TaskFixtures.approvedCampaign()
+            var failedImplementation = approvalFixture.runs[0]
+            failedImplementation.run.outcome = .failed
+            failedImplementation.run.lifecycle = .finished
+            failedImplementation.run.latest_milestone = .init(value1: .terminal_recorded)
+            for width in [CGFloat(820), CGFloat(390)] {
+                for scheme in [ColorScheme.light, .dark] {
+                    surfaces.append(
+                        Surface(
+                            name: "task-approval-\(Int(width))-\(scheme)", width: width, colorScheme: scheme,
+                            nativeAppearance: true,
+                            view: AnyView(
+                                VStack(alignment: .leading, spacing: 16) {
+                                    ForEach([false, true], id: \.self) { failed in
+                                        Text(
+                                            failed
+                                                ? "Approved specification, failed implementation"
+                                                : "Approved specification"
+                                        )
+                                        .font(FreesideFont.subheadline)
+                                        TaskRowView(
+                                            task: approvalFixture.task.task,
+                                            position: TaskDisplay.position(
+                                                approvalFixture.task.task,
+                                                runs: failed ? [failedImplementation] : approvalFixture.runs,
+                                                history: approvalFixture.history),
+                                            now: RunFixtures.screenshotInstant)
+                                    }
+                                }.padding())))
+                }
+            }
             let publishedRun = try #require(RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.completedRunID })
             let publishedTask = try #require(tasks.first { $0.task.id == publishedRun.run.task_id })
             var publishedTimeline = try #require(

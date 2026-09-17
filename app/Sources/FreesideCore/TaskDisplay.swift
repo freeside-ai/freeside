@@ -20,6 +20,78 @@ enum TaskDisplay {
         let heading: Heading?
         let rail: DecisionStageRailPresentation
         let hold: String?
+        var qualification: String? = nil
+    }
+
+    enum SpecificationApproval {
+        case approved, unapproved, unavailable
+
+        var qualification: String? {
+            self == .unavailable ? "Specification approval history unavailable" : nil
+        }
+    }
+
+    /// Approval belongs to the displayed run's campaign, not the task's newest
+    /// event or the stage order. A retry shares the initial attempt's approval.
+    static func specificationApproval(
+        _ task: Components.Schemas.Task, runID: String, run: Components.Schemas.Run?,
+        history: Components.Schemas.TaskTimeline?
+    ) -> SpecificationApproval {
+        guard task.run_ids.contains(runID), let history,
+            history.task_id == task.id, history.project_id == task.project_id
+        else { return .unavailable }
+        let sections = history.sections.filter { $0.runs.contains { $0.run_id == runID } }
+        guard sections.count == 1, let section = sections.first,
+            let campaign = section.campaign_id, task.campaign_ids.contains(campaign),
+            let member = section.runs.first(where: { $0.run_id == runID }), let role = member.role?.value1
+        else { return .unavailable }
+        if let run {
+            guard run.id == runID, run.task_id == task.id, run.project_id == task.project_id,
+                run.campaign_id == campaign
+            else { return .unavailable }
+        }
+        let approvals = section.events.filter { $0.kind == .specification_approved }
+        if approvals.isEmpty { return role == .specification ? .unapproved : .unavailable }
+        guard approvals.count == 1, let event = approvals.first,
+            event.campaign_id == campaign, let digest = event.approved_spec_digest?.value1, !digest.isEmpty,
+            let specificationID = event.specification_run_id, task.run_ids.contains(specificationID),
+            let initialID = event.run_id, task.run_ids.contains(initialID),
+            section.runs.contains(where: { $0.run_id == specificationID && $0.role?.value1 == .specification }),
+            section.runs.contains(where: {
+                $0.run_id == initialID && $0.role?.value1 == .implementation && $0.attempt_number == 1
+            })
+        else { return .unavailable }
+        switch role {
+        case .specification:
+            return runID == specificationID ? .approved : .unavailable
+        case .implementation:
+            guard let attempt = member.attempt_number, attempt >= 1,
+                (attempt == 1) == (runID == initialID),
+                run == nil || run?.spec_digest == digest
+            else { return .unavailable }
+            return .approved
+        }
+    }
+
+    private static func approvalRail(
+        _ rail: DecisionStageRailPresentation, approval: SpecificationApproval
+    ) -> DecisionStageRailPresentation {
+        let entries = rail.entries.map { entry in
+            guard entry.id == "specification" else { return entry }
+            let state: DecisionStageRailPresentation.State =
+                approval == .approved ? .completed : (entry.state == .completed ? .pending : entry.state)
+            return .init(id: entry.id, title: entry.title, state: state)
+        }
+        return .init(
+            entries: entries,
+            summary: entries.map { entry in
+                if entry.id == "specification", approval == .unavailable {
+                    return entry.state == .pending
+                        ? "Specification approval history unavailable"
+                        : "Specification \(entry.state.accessibilityLabel), approval history unavailable"
+                }
+                return "\(entry.title) \(entry.state.accessibilityLabel)"
+            }.joined(separator: ", "))
     }
 
     /// The sorted, unique project ids the synced tasks name: the set the
@@ -54,22 +126,25 @@ enum TaskDisplay {
     /// so the row and that run's timeline agree on phase and round
     /// (`RunDisplay.workflowPhase`). When the run is not listed, the
     /// daemon's own position supplies the stage, round, and hold; the rail
-    /// then marks that stage current and the rest pending, because the
-    /// position records nothing about which stages ran. A task with no
-    /// position has no stage line.
+    /// then marks that stage current and other stages pending. Recorded
+    /// campaign approval independently completes Specification in either
+    /// path. A task with no position has no stage line.
     static func position(
         _ task: Components.Schemas.Task, runs: [Components.Schemas.RunSnapshot],
-        attentionItems: [Components.Schemas.AttentionItemSnapshot] = []
+        attentionItems: [Components.Schemas.AttentionItemSnapshot] = [],
+        history: Components.Schemas.TaskTimeline? = nil
     ) -> Position? {
         guard let position = task.current_position?.value1 else { return nil }
         let run = runs.first(where: { $0.run.id == position.run_id })?.run
+        let approval = specificationApproval(task, runID: position.run_id, run: run, history: history)
         let handoff = finalReviewHeading(task, run: run, attentionItems: attentionItems)
             .map { Position.Heading(label: $0, round: nil) }
         if let run {
             return Position(
                 heading: handoff ?? RunDisplay.stageHeading(run).map { .init(label: $0.label, round: $0.round) },
-                rail: RunDisplay.stageRail(run),
-                hold: run.hold_reason.map { RunDisplay.label($0.value1) })
+                rail: approvalRail(RunDisplay.stageRail(run), approval: approval),
+                hold: run.hold_reason.map { RunDisplay.label($0.value1) },
+                qualification: approval.qualification)
         }
         let stage = position.stage.map(RunDisplay.canonicalStageName)
         var names = Components.Schemas.StageName.allCases.map {
@@ -87,11 +162,13 @@ enum TaskDisplay {
                 ?? stage.map {
                     .init(label: RunDisplay.stageLabel($0), round: position.round.map { "Round \($0)" })
                 },
-            rail: .init(
-                entries: entries,
-                summary: entries.map { "\($0.title) \($0.state.accessibilityLabel)" }
-                    .joined(separator: ", ")),
-            hold: position.hold_reason.map { RunDisplay.label($0.value1) })
+            rail: approvalRail(
+                .init(
+                    entries: entries,
+                    summary: entries.map { "\($0.title) \($0.state.accessibilityLabel)" }
+                        .joined(separator: ", ")), approval: approval),
+            hold: position.hold_reason.map { RunDisplay.label($0.value1) },
+            qualification: approval.qualification)
     }
 
     /// A current daemon handoff overrides the live phase, without changing

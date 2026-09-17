@@ -76,6 +76,9 @@ struct RunTimelineView: View {
         .task(id: TimelineRequestKey(snapshot: snapshot, cursors: coordinator.cursors)) {
             await coordinator.refreshTimeline(for: snapshot.run.id)
         }
+        .task(id: TimelineRequestKey(snapshot: snapshot, cursors: coordinator.cursors)) {
+            await coordinator.refreshTaskTimeline(for: snapshot.run.task_id)
+        }
     }
 
     /// The project-owned timeline composition with fixture data supplied
@@ -150,12 +153,29 @@ struct RunTimelineView: View {
                     Text("Parent run: \(parent)")
                         .font(FreesideFont.monoCaption)
                 }
-                Text("\(RunDisplay.specificationLabel(snapshot.run)): \(snapshot.run.spec_digest)")
+                Text("\(specificationLabel): \(snapshot.run.spec_digest)")
                     .font(FreesideFont.monoCaption)
+                if let qualification = specificationApproval.qualification {
+                    Text(qualification)
+                        .font(FreesideFont.caption)
+                }
             }
             .foregroundStyle(Color.inkDim)
             KeywordLabel(text: "Daemon observations")
         }
+    }
+
+    var specificationApproval: TaskDisplay.SpecificationApproval {
+        guard let task = coordinator.tasks.first(where: { $0.task.id == snapshot.run.task_id })?.task else {
+            return .unavailable
+        }
+        return TaskDisplay.specificationApproval(
+            task, runID: snapshot.run.id, run: snapshot.run,
+            history: coordinator.taskTimelinesByTaskID[task.id])
+    }
+
+    var specificationLabel: String {
+        RunDisplay.specificationLabel(snapshot.run, approval: specificationApproval)
     }
 
     /// The eyebrow names the screen and the task the run belongs to, in the

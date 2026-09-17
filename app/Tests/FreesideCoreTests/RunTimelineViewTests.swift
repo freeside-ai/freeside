@@ -321,7 +321,7 @@ import Testing
         var specification = RunFixtures.defaultRuns()[0].run
         specification.stages[0].name = "specification"
 
-        #expect(RunDisplay.specificationLabel(specification) == "Source specification")
+        #expect(RunDisplay.specificationLabel(specification, approval: .approved) == "Source specification")
     }
 
     @Test func productionLaneKeepsApprovedSpecificationAfterLaterStages() {
@@ -334,8 +334,9 @@ import Testing
             .init(id: "stage-ready-implement", run_id: ready.id, name: "implement", attempts: []),
             at: 0)
 
-        #expect(RunDisplay.specificationLabel(active) == "Approved specification")
-        #expect(RunDisplay.specificationLabel(ready) == "Approved specification")
+        #expect(RunDisplay.specificationLabel(active, approval: .approved) == "Approved specification")
+        #expect(RunDisplay.specificationLabel(ready, approval: .approved) == "Approved specification")
+        #expect(RunDisplay.specificationLabel(active, approval: .unavailable) == "Specification digest")
     }
 
     @Test func historyEntriesLeadWithTheNewestMilestoneMarkedCurrent() throws {
