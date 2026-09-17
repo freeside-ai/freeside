@@ -384,25 +384,7 @@ enum AttentionDisplay {
     }
 
     static func label(_ reason: Components.Schemas.RunHoldReason) -> String {
-        switch reason {
-        case .scope_conflict: return "Required work outside scope"
-        case .operation_stopped: return "Unattended operation stopped"
-        case .blocking_system_health: return "Blocking system-health item"
-        case .input_unavailable: return "Input unavailable"
-        case .backend_not_conformant: return "Runner backend not conformant"
-        case .admission_policy_refused: return "Admission policy refused"
-        case .backup_protection_unready: return "Backup protection not ready"
-        case .repository_untrusted: return "Repository untrusted"
-        case .provider_authority_unavailable: return "Provider authority unavailable"
-        case .attended_mode_active: return "Attended mode active"
-        case .publication_environment: return "Publication environment"
-        case .external_conflict: return "External conflict"
-        case .recipe_revoked: return "Verification recipe revoked"
-        case .verification_findings: return "Verification findings"
-        case .trust_blocked: return "Trust blocked"
-        case .base_advanced: return "Base advanced"
-        case .identity_parallelism: return "Identity parallelism limit"
-        }
+        RunDisplay.label(reason)
     }
 
     static func label(_ capability: Components.Schemas.ImpairedCapability) -> String {
@@ -644,6 +626,9 @@ enum AttentionDisplay {
         if let wait = item.blocked_on?.value1 {
             rows.append(
                 .init(label: "Waiting since", value: wait.since.formatted(.iso8601)))
+        }
+        if let hold = item.publish_block?.value1.hold_reason?.value1 {
+            rows.append(.init(label: "Hold code", value: hold.rawValue))
         }
         rows.append(.init(label: "Item version", value: "\(item.item_version)"))
         if !item.pr_head_sha.isEmpty {

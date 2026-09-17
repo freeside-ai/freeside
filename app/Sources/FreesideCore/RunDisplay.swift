@@ -248,7 +248,7 @@ enum RunDisplay {
             return .completion("Merged PR #\(completion.pr_number)")
         }
         if let hold = run.hold_reason?.value1 {
-            return .hold(label(hold))
+            return .hold(run.lifecycle == .finished ? "Recorded hold: \(label(hold))" : label(hold))
         }
         if let milestone = run.latest_milestone?.value1 {
             return .milestone(label(milestone))
@@ -293,7 +293,25 @@ enum RunDisplay {
     }
 
     static func label(_ value: Components.Schemas.RunHoldReason) -> String {
-        value.rawValue.replacingOccurrences(of: "_", with: " ").capitalized
+        switch value {
+        case .scope_conflict: "Required work outside approved scope"
+        case .operation_stopped: "Unattended operation stopped"
+        case .blocking_system_health: "System issue preventing work"
+        case .input_unavailable: "Required input unavailable"
+        case .backend_not_conformant: "Runner checks not current"
+        case .admission_policy_refused: "Current policy prevents execution"
+        case .backup_protection_unready: "Backup protection not ready"
+        case .repository_untrusted: "Repository trust not configured"
+        case .provider_authority_unavailable: "GitHub App access unavailable"
+        case .attended_mode_active: "Unattended work paused in attended mode"
+        case .publication_environment: "Publication environment unavailable"
+        case .external_conflict: "Conflicting branch or pull request"
+        case .recipe_revoked: "Verification recipe no longer approved"
+        case .verification_findings: "Verification findings block publication"
+        case .trust_blocked: "Trust checks block publication"
+        case .base_advanced: "Base branch changed"
+        case .identity_parallelism: "Waiting for agent capacity"
+        }
     }
 
     static func label(_ value: Components.Schemas.ScheduleKind) -> String {
