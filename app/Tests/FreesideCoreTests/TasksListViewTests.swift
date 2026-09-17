@@ -11,6 +11,135 @@ import Testing
 #endif
 
 @Suite struct TasksListViewTests {
+    @Test func publishedHandoffRequiresCurrentBoundReadiness() throws {
+        let run = try #require(RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.readyRunID })
+        let task = try #require(TaskFixtures.defaultTasks().first { $0.task.id == run.run.task_id }).task
+        let ready = AttentionFixtures.publishedTaskReady()
+        for snapshots in [[run], []] {
+            func heading(_ item: Components.Schemas.AttentionItemSnapshot) -> TaskDisplay.Position.Heading? {
+                TaskDisplay.position(task, runs: snapshots, attentionItems: [item])?.heading
+            }
+            #expect(heading(ready)?.text == "Ready for final review")
+            #expect(heading(ready)?.round == nil)
+            #expect(
+                heading(AttentionFixtures.publishedTaskReady(degraded: true))?.text
+                    == "Ready for final review (degraded)")
+            let mutations: [(String, (inout Components.Schemas.AttentionItem) -> Void)] = [
+                ("wrong project", { $0.project_id = "another-project" }),
+                ("wrong type", { $0._type = .publish_blocked }),
+                ("missing readiness", { $0.readiness = nil }),
+                ("missing detail", { $0.readiness_detail = nil }),
+                ("missing PR", { $0.pr_reference = nil }),
+                ("missing head", { $0.pr_head_sha = "" }),
+                ("different head", { $0.pr_head_sha = "different-head" }),
+                ("different verdict", { $0.readiness?.value1.evaluation_set_digest = "different-evaluation" }),
+                (
+                    "invalidated",
+                    { $0.readiness_invalidation = AttentionFixtures.staleReady().item.readiness_invalidation }
+                ),
+                (
+                    "base advanced",
+                    {
+                        $0.base_freshness = .init(
+                            value1: .init(
+                                base_ref: "main", admitted_base_sha: "deadbeef", observed_base_sha: "0badf00d",
+                                advanced: true, observed_at: AttentionFixtures.createdInstant))
+                    }
+                ),
+                (
+                    "foreign task",
+                    {
+                        $0.subject = .run(
+                            .init(subject_type: .run, subject_id: run.run.id, run_id: run.run.id, task_id: "other-task")
+                        )
+                    }
+                ),
+                (
+                    "older run",
+                    {
+                        $0.subject = .run(
+                            .init(subject_type: .run, subject_id: "older-run", run_id: "older-run", task_id: task.id))
+                    }
+                ),
+                (
+                    "missing task binding",
+                    {
+                        $0.subject = .run(.init(subject_type: .run, subject_id: run.run.id, run_id: run.run.id))
+                    }
+                ),
+                (
+                    "missing run binding",
+                    {
+                        $0.subject = .run(.init(subject_type: .run, subject_id: run.run.id, task_id: task.id))
+                    }
+                ),
+                (
+                    "task-only subject",
+                    {
+                        $0.subject = .task(.init(subject_type: .task, subject_id: task.id, task_id: task.id))
+                    }
+                ),
+            ]
+            for (name, mutate) in mutations {
+                var changed = ready
+                mutate(&changed.item)
+                #expect(
+                    heading(changed)?.label == "Verification"
+                        || (snapshots.isEmpty && heading(changed)?.label == "Implementation"), "\(name)")
+            }
+            for status in Components.Schemas.ItemStatus.allCases where status != .open {
+                var changed = ready
+                changed.item.status = status
+                #expect(heading(changed)?.label != "Ready for final review", "\(status)")
+            }
+        }
+        #expect(TaskDisplay.isActive(task))
+        #expect(TaskListFilter(scope: .active).rows(in: TaskFixtures.defaultTasks()).contains { $0.task.id == task.id })
+        #expect(
+            !TaskListFilter(scope: .finished).rows(in: TaskFixtures.defaultTasks()).contains { $0.task.id == task.id })
+        #expect(TaskDisplay.position(task, runs: [run])?.heading?.text == "Verification · Round 1")
+        #expect(
+            TaskDisplay.position(task, runs: [run], attentionItems: [ready])?.rail
+                == TaskDisplay.position(task, runs: [run])?.rail)
+    }
+
+    @Test func lifecycleAndHoldOverrideAnOldHandoff() throws {
+        let snapshot = try #require(RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.readyRunID })
+        let task = try #require(TaskFixtures.defaultTasks().first { $0.task.id == snapshot.run.task_id }).task
+        let items = [AttentionFixtures.publishedTaskReady()]
+        let changes: [(inout Components.Schemas.Run) -> Void] =
+            [
+                { $0.lifecycle = .finished }, { $0.superseded_by = "successor" },
+                { $0.hold_reason = .init(value1: .operation_stopped) },
+                { $0.hold_reason = .init(value1: .verification_findings) },
+                { $0.task_id = "foreign-task" }, { $0.project_id = "foreign-project" },
+            ]
+            + Components.Schemas.RunOutcome.allCases.filter { $0 != .published }.map { outcome in
+                { $0.outcome = outcome }
+            }
+        for change in changes {
+            var changed = snapshot
+            change(&changed.run)
+            #expect(
+                TaskDisplay.position(task, runs: [changed], attentionItems: items)?.heading?.label == "Verification")
+        }
+        for runs in [[snapshot], []] {
+            var held = task
+            held.current_position?.value1.hold_reason = .init(value1: .operation_stopped)
+            #expect(
+                TaskDisplay.position(held, runs: runs, attentionItems: items)?.heading?.label
+                    != "Ready for final review")
+            var finished = task
+            finished.lifecycle = .finished
+            #expect(
+                TaskDisplay.position(finished, runs: runs, attentionItems: items)?.heading?.label
+                    != "Ready for final review")
+        }
+        var fallback = task
+        fallback.current_position?.value1.round = 3
+        #expect(TaskDisplay.position(fallback, runs: [])?.heading?.text == "Implementation · Round 3")
+    }
+
     @Test func fixtureTasksAreNamedAndDistinguishable() throws {
         let freeside = TaskFixtures.defaultTasks().map(\.task).filter { $0.project_id == "freeside" }
         let names = freeside.map(\.display_names.task)

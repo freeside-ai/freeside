@@ -144,6 +144,60 @@
             }
         }
 
+        @Test func publishedHandoffSurfaces() async throws {
+            _ = FreesideFont.registration
+            let runs = RunFixtures.defaultRuns()
+            let tasks = TaskFixtures.defaultTasks()
+            let published = try #require(runs.first { $0.run.id == RunFixtures.readyRunID })
+            let task = try #require(tasks.first { $0.task.id == published.run.task_id })
+            var digests: [String: String] = [:]
+            for state in ["clean", "degraded", "offline", "verification"] {
+                let items =
+                    state == "verification" ? [] : [AttentionFixtures.publishedTaskReady(degraded: state == "degraded")]
+                let server = MockServer(items: items)
+                let cache = InMemoryCacheStore()
+                let coordinator = SyncCoordinator(client: APIClientFactory.mock(server: server), cache: cache)
+                await coordinator.refresh()
+                let display =
+                    state == "offline"
+                    ? SyncCoordinator(client: APIClientFactory.mock(server: server), cache: cache) : coordinator
+                if state == "offline" { display.store.freshness = .unreachable }
+                for width in [CGFloat(960), 390] {
+                    for scheme in [ColorScheme.light, .dark] {
+                        let view = VStack(alignment: .leading, spacing: 16) {
+                            FreshnessBanner(freshness: display.store.freshness)
+                            TaskRowView(
+                                task: task.task,
+                                position: TaskDisplay.position(
+                                    task.task, runs: runs, attentionItems: display.store.orderedSnapshots),
+                                schedules: [], isSelected: false, now: RunFixtures.screenshotInstant)
+                            Divider()
+                            RunTimelineView(coordinator: display, snapshot: published).header(at: .large)
+                        }
+                        .padding(16)
+                        .foregroundStyle(Color.ink)
+                        .background(Color.ground)
+                        let image = try await FreesideFont.$screenshotDynamicTypeSize.withValue(.large) {
+                            try await render(AnyView(view), at: .large, width: width, colorScheme: scheme)
+                        }
+                        #expect(image.width == Int(width))
+                        digests["\(state)-\(Int(width))-\(scheme)"] = try digest(image)
+                        if ProcessInfo.processInfo.environment["FREESIDE_DUMP_SCREENSHOTS"] == "1" {
+                            _ = try dump(image, named: "handoff-\(state)-\(Int(width))-\(scheme)")
+                        }
+                    }
+                }
+            }
+            for width in [960, 390] {
+                for scheme in [ColorScheme.light, .dark] {
+                    let suffix = "\(width)-\(scheme)"
+                    #expect(digests["clean-\(suffix)"] != digests["verification-\(suffix)"])
+                    #expect(digests["degraded-\(suffix)"] != digests["clean-\(suffix)"])
+                    #expect(digests["offline-\(suffix)"] != digests["clean-\(suffix)"])
+                }
+            }
+        }
+
         @Test func recordingIsRefusedOnAHostedRunner() throws {
             try validateRecordingHost(hosted: false)
             #expect(throws: ScreenshotError.self) {

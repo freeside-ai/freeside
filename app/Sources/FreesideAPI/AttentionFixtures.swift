@@ -85,6 +85,18 @@ public enum AttentionFixtures {
         phase1Types.map { fixture(type: $0) }
     }
 
+    /// A published handoff deliberately joined to the sample task's current
+    /// run. The general inbox fixtures have independent subject identities.
+    public static func publishedTaskReady(degraded: Bool = false) -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = degraded ? degradedReady() : fixture(type: .ready_for_final_review)
+        snapshot.item.project_id = "freeside"
+        snapshot.item.subject = .run(
+            .init(
+                subject_type: .run, subject_id: RunFixtures.readyRunID,
+                run_id: RunFixtures.readyRunID, task_id: "task-campaign-freeside-ready"))
+        return snapshot
+    }
+
     public static func scopeConflictQuestion() -> Components.Schemas.AttentionItemSnapshot {
         var snapshot = fixture(type: .agent_question)
         snapshot.item.id = "item-scope-conflict"
