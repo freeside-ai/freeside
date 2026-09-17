@@ -444,8 +444,8 @@ func TestAttentionDecisionSurfacesMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
-	if got := rawVersion(t, db); got != 75 {
-		t.Fatalf("schema version = %d, want 75", got)
+	if got := rawVersion(t, db); got != 76 {
+		t.Fatalf("schema version = %d, want 76", got)
 	}
 	want, err := domain.NewDecisionSurface(legacy)
 	if err != nil {
@@ -663,8 +663,8 @@ func TestAttentionDecisionSurfaceBodiesMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
-	if got := rawVersion(t, db); got != 75 {
-		t.Fatalf("schema version = %d, want 75", got)
+	if got := rawVersion(t, db); got != 76 {
+		t.Fatalf("schema version = %d, want 76", got)
 	}
 	var (
 		storedBody    []byte

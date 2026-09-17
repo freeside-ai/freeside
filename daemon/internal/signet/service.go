@@ -205,6 +205,8 @@ var errReplay = errors.New("idempotent replay: original result captured")
 // resolution.
 func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, error) {
 	switch in.Kind {
+	case domain.CommandKindStopTask:
+		return s.stopTask(ctx, in)
 	case domain.CommandKindSubmitTask:
 		return s.submitTask(ctx, in)
 	case domain.CommandKindDecision, "":

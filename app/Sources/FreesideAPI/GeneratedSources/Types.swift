@@ -210,6 +210,10 @@ public protocol APIProtocol: Sendable {
     /// command carries no such envelope. Each new command_id creates separate
     /// work. Only explicit manual Retry reuses a saved command; clients never
     /// resend automatically.
+    /// A stop_task command durably requests cancellation without an attention
+    /// item. It binds the observed task version and sync epoch. Active-device
+    /// authority is rechecked inside the transaction, including receipt replay.
+    /// Acceptance is pending, never proof of termination or WIP release.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.
@@ -613,6 +617,10 @@ extension APIProtocol {
     /// command carries no such envelope. Each new command_id creates separate
     /// work. Only explicit manual Retry reuses a saved command; clients never
     /// resend automatically.
+    /// A stop_task command durably requests cancellation without an attention
+    /// item. It binds the observed task version and sync epoch. Active-device
+    /// authority is rechecked inside the transaction, including receipt replay.
+    /// Acceptance is pending, never proof of termination or WIP release.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.
@@ -1385,6 +1393,30 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Task/lifecycle_facts`.
             public var lifecycle_facts: [Components.Schemas.TaskLifecycleFact]
+            /// Null when no Stop was accepted; acceptance alone remains requested.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Task/cancellation`.
+            public struct cancellationPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/Task/cancellation/value1`.
+                public var value1: Components.Schemas.TaskCancellation
+                /// Creates a new `cancellationPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.TaskCancellation) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// Null when no Stop was accepted; acceptance alone remains requested.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Task/cancellation`.
+            public var cancellation: Components.Schemas.Task.cancellationPayload?
             /// Creates a new `Task`.
             ///
             /// - Parameters:
@@ -1400,6 +1432,7 @@ public enum Components {
             ///   - run_ids:
             ///   - wip: Whether the task holds a work-in-progress admission slot, derived from its lifecycle facts (an admitted start with no later current-campaign completion and no later abandonment), never from the newest run.
             ///   - lifecycle_facts: The task's recorded lifecycle log in order: admitted starts, work-unit completions, and explicit abandonments. A display record; wip is the derived slot state clients should read.
+            ///   - cancellation: Null when no Stop was accepted; acceptance alone remains requested.
             public init(
                 id: Swift.String,
                 project_id: Swift.String,
@@ -1412,7 +1445,8 @@ public enum Components {
                 campaign_ids: [Swift.String],
                 run_ids: [Swift.String],
                 wip: Swift.Bool,
-                lifecycle_facts: [Components.Schemas.TaskLifecycleFact]
+                lifecycle_facts: [Components.Schemas.TaskLifecycleFact],
+                cancellation: Components.Schemas.Task.cancellationPayload? = nil
             ) {
                 self.id = id
                 self.project_id = project_id
@@ -1426,6 +1460,7 @@ public enum Components {
                 self.run_ids = run_ids
                 self.wip = wip
                 self.lifecycle_facts = lifecycle_facts
+                self.cancellation = cancellation
             }
             public enum CodingKeys: String, CodingKey {
                 case id
@@ -1440,6 +1475,7 @@ public enum Components {
                 case run_ids
                 case wip
                 case lifecycle_facts
+                case cancellation
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -1491,6 +1527,10 @@ public enum Components {
                     [Components.Schemas.TaskLifecycleFact].self,
                     forKey: .lifecycle_facts
                 )
+                self.cancellation = try container.decodeIfPresent(
+                    Components.Schemas.Task.cancellationPayload.self,
+                    forKey: .cancellation
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "id",
                     "project_id",
@@ -1503,7 +1543,332 @@ public enum Components {
                     "campaign_ids",
                     "run_ids",
                     "wip",
-                    "lifecycle_facts"
+                    "lifecycle_facts",
+                    "cancellation"
+                ])
+            }
+        }
+        /// Request acceptance is not quiescence; failure retains the fence.
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskCancellationState`.
+        @frozen public enum TaskCancellationState: String, Codable, Hashable, Sendable, CaseIterable {
+            case requested = "requested"
+            case confirmed = "confirmed"
+            case failed_to_stop = "failed_to_stop"
+        }
+        /// One daemon-derived run and its campaign, including a queued run.
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskCancellationRun`.
+        public struct TaskCancellationRun: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskCancellationRun/run_id`.
+            public var run_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskCancellationRun/campaign_id`.
+            public var campaign_id: Swift.String?
+            /// Creates a new `TaskCancellationRun`.
+            ///
+            /// - Parameters:
+            ///   - run_id:
+            ///   - campaign_id:
+            public init(
+                run_id: Swift.String,
+                campaign_id: Swift.String? = nil
+            ) {
+                self.run_id = run_id
+                self.campaign_id = campaign_id
+            }
+            public enum CodingKeys: String, CodingKey {
+                case run_id
+                case campaign_id
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.run_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .run_id
+                )
+                self.campaign_id = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .campaign_id
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "run_id",
+                    "campaign_id"
+                ])
+            }
+        }
+        /// Ordered task ownership and the current work episode at acceptance.
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskCancellationTarget`.
+        public struct TaskCancellationTarget: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskCancellationTarget/task_id`.
+            public var task_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskCancellationTarget/project_id`.
+            public var project_id: Swift.String
+            /// Newest recorded start ordinal, or zero for never-started work.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskCancellationTarget/episode_ordinal`.
+            public var episode_ordinal: Swift.Int
+            /// Every owned run in recorded order, including queued and older work.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskCancellationTarget/runs`.
+            public var runs: [Components.Schemas.TaskCancellationRun]
+            /// Creates a new `TaskCancellationTarget`.
+            ///
+            /// - Parameters:
+            ///   - task_id:
+            ///   - project_id:
+            ///   - episode_ordinal: Newest recorded start ordinal, or zero for never-started work.
+            ///   - runs: Every owned run in recorded order, including queued and older work.
+            public init(
+                task_id: Swift.String,
+                project_id: Swift.String,
+                episode_ordinal: Swift.Int,
+                runs: [Components.Schemas.TaskCancellationRun]
+            ) {
+                self.task_id = task_id
+                self.project_id = project_id
+                self.episode_ordinal = episode_ordinal
+                self.runs = runs
+            }
+            public enum CodingKeys: String, CodingKey {
+                case task_id
+                case project_id
+                case episode_ordinal
+                case runs
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.task_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .task_id
+                )
+                self.project_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .project_id
+                )
+                self.episode_ordinal = try container.decode(
+                    Swift.Int.self,
+                    forKey: .episode_ordinal
+                )
+                self.runs = try container.decode(
+                    [Components.Schemas.TaskCancellationRun].self,
+                    forKey: .runs
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "task_id",
+                    "project_id",
+                    "episode_ordinal",
+                    "runs"
+                ])
+            }
+        }
+        /// Daemon-only evidence. Confirmed asserts all owned executions are quiescent and further launches fenced. No client command accepts this record.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskCancellationAcknowledgement`.
+        public struct TaskCancellationAcknowledgement: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskCancellationAcknowledgement/id`.
+            public var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskCancellationAcknowledgement/request_id`.
+            public var request_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskCancellationAcknowledgement/target_digest`.
+            public var target_digest: Components.Schemas.Digest
+            /// - Remark: Generated from `#/components/schemas/TaskCancellationAcknowledgement/state`.
+            public var state: Components.Schemas.TaskCancellationState
+            /// - Remark: Generated from `#/components/schemas/TaskCancellationAcknowledgement/evidence_digest`.
+            public var evidence_digest: Components.Schemas.Digest
+            /// - Remark: Generated from `#/components/schemas/TaskCancellationAcknowledgement/recorded_at`.
+            public var recorded_at: Foundation.Date
+            /// Creates a new `TaskCancellationAcknowledgement`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - request_id:
+            ///   - target_digest:
+            ///   - state:
+            ///   - evidence_digest:
+            ///   - recorded_at:
+            public init(
+                id: Swift.String,
+                request_id: Swift.String,
+                target_digest: Components.Schemas.Digest,
+                state: Components.Schemas.TaskCancellationState,
+                evidence_digest: Components.Schemas.Digest,
+                recorded_at: Foundation.Date
+            ) {
+                self.id = id
+                self.request_id = request_id
+                self.target_digest = target_digest
+                self.state = state
+                self.evidence_digest = evidence_digest
+                self.recorded_at = recorded_at
+            }
+            public enum CodingKeys: String, CodingKey {
+                case id
+                case request_id
+                case target_digest
+                case state
+                case evidence_digest
+                case recorded_at
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.id = try container.decode(
+                    Swift.String.self,
+                    forKey: .id
+                )
+                self.request_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .request_id
+                )
+                self.target_digest = try container.decode(
+                    Components.Schemas.Digest.self,
+                    forKey: .target_digest
+                )
+                self.state = try container.decode(
+                    Components.Schemas.TaskCancellationState.self,
+                    forKey: .state
+                )
+                self.evidence_digest = try container.decode(
+                    Components.Schemas.Digest.self,
+                    forKey: .evidence_digest
+                )
+                self.recorded_at = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .recorded_at
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "id",
+                    "request_id",
+                    "target_digest",
+                    "state",
+                    "evidence_digest",
+                    "recorded_at"
+                ])
+            }
+        }
+        /// Durable task fence, independent of lifecycle and WIP. Runtime consumers must fence admission, descendants and publication, reconcile ownership after restart, and retain late results without publishing them. Only bound daemon evidence confirms quiescence. Confirmation is final.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskCancellation`.
+        public struct TaskCancellation: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskCancellation/request_id`.
+            public var request_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskCancellation/target`.
+            public var target: Components.Schemas.TaskCancellationTarget
+            /// - Remark: Generated from `#/components/schemas/TaskCancellation/target_digest`.
+            public var target_digest: Components.Schemas.Digest
+            /// - Remark: Generated from `#/components/schemas/TaskCancellation/sync_epoch`.
+            public var sync_epoch: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskCancellation/fence_revision`.
+            public var fence_revision: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/TaskCancellation/requested_at`.
+            public var requested_at: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/TaskCancellation/state`.
+            public var state: Components.Schemas.TaskCancellationState
+            /// - Remark: Generated from `#/components/schemas/TaskCancellation/acknowledgement`.
+            public struct acknowledgementPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskCancellation/acknowledgement/value1`.
+                public var value1: Components.Schemas.TaskCancellationAcknowledgement
+                /// Creates a new `acknowledgementPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.TaskCancellationAcknowledgement) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskCancellation/acknowledgement`.
+            public var acknowledgement: Components.Schemas.TaskCancellation.acknowledgementPayload?
+            /// Creates a new `TaskCancellation`.
+            ///
+            /// - Parameters:
+            ///   - request_id:
+            ///   - target:
+            ///   - target_digest:
+            ///   - sync_epoch:
+            ///   - fence_revision:
+            ///   - requested_at:
+            ///   - state:
+            ///   - acknowledgement:
+            public init(
+                request_id: Swift.String,
+                target: Components.Schemas.TaskCancellationTarget,
+                target_digest: Components.Schemas.Digest,
+                sync_epoch: Swift.String,
+                fence_revision: Swift.Int64,
+                requested_at: Foundation.Date,
+                state: Components.Schemas.TaskCancellationState,
+                acknowledgement: Components.Schemas.TaskCancellation.acknowledgementPayload? = nil
+            ) {
+                self.request_id = request_id
+                self.target = target
+                self.target_digest = target_digest
+                self.sync_epoch = sync_epoch
+                self.fence_revision = fence_revision
+                self.requested_at = requested_at
+                self.state = state
+                self.acknowledgement = acknowledgement
+            }
+            public enum CodingKeys: String, CodingKey {
+                case request_id
+                case target
+                case target_digest
+                case sync_epoch
+                case fence_revision
+                case requested_at
+                case state
+                case acknowledgement
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.request_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .request_id
+                )
+                self.target = try container.decode(
+                    Components.Schemas.TaskCancellationTarget.self,
+                    forKey: .target
+                )
+                self.target_digest = try container.decode(
+                    Components.Schemas.Digest.self,
+                    forKey: .target_digest
+                )
+                self.sync_epoch = try container.decode(
+                    Swift.String.self,
+                    forKey: .sync_epoch
+                )
+                self.fence_revision = try container.decode(
+                    Swift.Int64.self,
+                    forKey: .fence_revision
+                )
+                self.requested_at = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .requested_at
+                )
+                self.state = try container.decode(
+                    Components.Schemas.TaskCancellationState.self,
+                    forKey: .state
+                )
+                self.acknowledgement = try container.decodeIfPresent(
+                    Components.Schemas.TaskCancellation.acknowledgementPayload.self,
+                    forKey: .acknowledgement
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "request_id",
+                    "target",
+                    "target_digest",
+                    "sync_epoch",
+                    "fence_revision",
+                    "requested_at",
+                    "state",
+                    "acknowledgement"
                 ])
             }
         }
@@ -4142,12 +4507,12 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/ClientCommand/device_id`.
             public var device_id: Swift.String
-            /// Required for a decision command; absent for a submit_task command. The entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state.
+            /// Required for decision and stop_task; absent for submit_task. For Stop this is the observed TaskSnapshot.entity_version (the pre-write server revision), never the private task row version. The entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/ClientCommand/expected_entity_version`.
             public var expected_entity_version: Swift.Int64?
-            /// Required for a decision command; absent for a submit_task command. The digest-bound inputs the command was prepared against, keyed by binding name; checked with expected_entity_version. For a decision command the authoritative binding set is the payload's item_version, pr_head_sha, and artifact_digests (the daemon cross-checks those against the live item); this map stays for command types that name individual bindings.
+            /// Required for decision; forbidden for submit_task and stop_task. The digest-bound inputs the command was prepared against, keyed by binding name; checked with expected_entity_version. For a decision command the authoritative binding set is the payload's item_version, pr_head_sha, and artifact_digests (the daemon cross-checks those against the live item); this map stays for command types that name individual bindings.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/ClientCommand/expected_bindings`.
@@ -4168,7 +4533,7 @@ public enum Components {
                     try encoder.encodeAdditionalProperties(additionalProperties)
                 }
             }
-            /// Required for a decision command; absent for a submit_task command. The digest-bound inputs the command was prepared against, keyed by binding name; checked with expected_entity_version. For a decision command the authoritative binding set is the payload's item_version, pr_head_sha, and artifact_digests (the daemon cross-checks those against the live item); this map stays for command types that name individual bindings.
+            /// Required for decision; forbidden for submit_task and stop_task. The digest-bound inputs the command was prepared against, keyed by binding name; checked with expected_entity_version. For a decision command the authoritative binding set is the payload's item_version, pr_head_sha, and artifact_digests (the daemon cross-checks those against the live item); this map stays for command types that name individual bindings.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/ClientCommand/expected_bindings`.
@@ -4177,6 +4542,8 @@ public enum Components {
             @frozen public enum payloadPayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/ClientCommand/payload/DecisionPayload`.
                 case decision(Components.Schemas.DecisionPayload)
+                /// - Remark: Generated from `#/components/schemas/ClientCommand/payload/StopTaskPayload`.
+                case stop_task(Components.Schemas.StopTaskPayload)
                 /// - Remark: Generated from `#/components/schemas/ClientCommand/payload/SubmitTaskPayload`.
                 case submit_task(Components.Schemas.SubmitTaskPayload)
                 public enum CodingKeys: String, CodingKey {
@@ -4191,6 +4558,8 @@ public enum Components {
                     switch discriminator {
                     case "decision":
                         self = .decision(try .init(from: decoder))
+                    case "stop_task":
+                        self = .stop_task(try .init(from: decoder))
                     case "submit_task":
                         self = .submit_task(try .init(from: decoder))
                     default:
@@ -4205,6 +4574,8 @@ public enum Components {
                     switch self {
                     case let .decision(value):
                         try value.encode(to: encoder)
+                    case let .stop_task(value):
+                        try value.encode(to: encoder)
                     case let .submit_task(value):
                         try value.encode(to: encoder)
                     }
@@ -4217,8 +4588,8 @@ public enum Components {
             /// - Parameters:
             ///   - command_id: Client-generated idempotency key; a retry with the same command_id returns the original recorded result. A command_id is unique across command kinds.
             ///   - device_id: The paired device submitting the command.
-            ///   - expected_entity_version: Required for a decision command; absent for a submit_task command. The entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state.
-            ///   - expected_bindings: Required for a decision command; absent for a submit_task command. The digest-bound inputs the command was prepared against, keyed by binding name; checked with expected_entity_version. For a decision command the authoritative binding set is the payload's item_version, pr_head_sha, and artifact_digests (the daemon cross-checks those against the live item); this map stays for command types that name individual bindings.
+            ///   - expected_entity_version: Required for decision and stop_task; absent for submit_task. For Stop this is the observed TaskSnapshot.entity_version (the pre-write server revision), never the private task row version. The entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state.
+            ///   - expected_bindings: Required for decision; forbidden for submit_task and stop_task. The digest-bound inputs the command was prepared against, keyed by binding name; checked with expected_entity_version. For a decision command the authoritative binding set is the payload's item_version, pr_head_sha, and artifact_digests (the daemon cross-checks those against the live item); this map stays for command types that name individual bindings.
             ///   - payload:
             public init(
                 command_id: Swift.String,
@@ -4268,6 +4639,272 @@ public enum Components {
                     "expected_entity_version",
                     "expected_bindings",
                     "payload"
+                ])
+            }
+        }
+        /// Request task-wide cancellation without an attention item. Requires the envelope expected_entity_version and forbids expected_bindings. Target execution IDs and acknowledgement state are daemon-owned.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/StopTaskPayload`.
+        public struct StopTaskPayload: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/StopTaskPayload/kind`.
+            @frozen public enum kindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case stop_task = "stop_task"
+            }
+            /// - Remark: Generated from `#/components/schemas/StopTaskPayload/kind`.
+            public var kind: Components.Schemas.StopTaskPayload.kindPayload
+            /// - Remark: Generated from `#/components/schemas/StopTaskPayload/task_id`.
+            public var task_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/StopTaskPayload/project_id`.
+            public var project_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/StopTaskPayload/expected_sync_epoch`.
+            public var expected_sync_epoch: Swift.String
+            /// Creates a new `StopTaskPayload`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - task_id:
+            ///   - project_id:
+            ///   - expected_sync_epoch:
+            public init(
+                kind: Components.Schemas.StopTaskPayload.kindPayload,
+                task_id: Swift.String,
+                project_id: Swift.String,
+                expected_sync_epoch: Swift.String
+            ) {
+                self.kind = kind
+                self.task_id = task_id
+                self.project_id = project_id
+                self.expected_sync_epoch = expected_sync_epoch
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case task_id
+                case project_id
+                case expected_sync_epoch
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Components.Schemas.StopTaskPayload.kindPayload.self,
+                    forKey: .kind
+                )
+                self.task_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .task_id
+                )
+                self.project_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .project_id
+                )
+                self.expected_sync_epoch = try container.decode(
+                    Swift.String.self,
+                    forKey: .expected_sync_epoch
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
+                    "task_id",
+                    "project_id",
+                    "expected_sync_epoch"
+                ])
+            }
+        }
+        /// Immutable decoded request and cancellation snapshot at acceptance. Exact replay returns this receipt and its original revision, even after acknowledgement. Separate commands for the same target share its fence without retrying provider cancellation or resetting failure.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/StopTaskRecord`.
+        public struct StopTaskRecord: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/StopTaskRecord/kind`.
+            @frozen public enum kindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case stop_task = "stop_task"
+            }
+            /// - Remark: Generated from `#/components/schemas/StopTaskRecord/kind`.
+            public var kind: Components.Schemas.StopTaskRecord.kindPayload
+            /// - Remark: Generated from `#/components/schemas/StopTaskRecord/command_id`.
+            public var command_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/StopTaskRecord/device_id`.
+            public var device_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/StopTaskRecord/task_id`.
+            public var task_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/StopTaskRecord/project_id`.
+            public var project_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/StopTaskRecord/expected_sync_epoch`.
+            public var expected_sync_epoch: Swift.String
+            /// - Remark: Generated from `#/components/schemas/StopTaskRecord/expected_entity_version`.
+            public var expected_entity_version: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/StopTaskRecord/cancellation`.
+            public var cancellation: Components.Schemas.TaskCancellation
+            /// Creates a new `StopTaskRecord`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - command_id:
+            ///   - device_id:
+            ///   - task_id:
+            ///   - project_id:
+            ///   - expected_sync_epoch:
+            ///   - expected_entity_version:
+            ///   - cancellation:
+            public init(
+                kind: Components.Schemas.StopTaskRecord.kindPayload,
+                command_id: Swift.String,
+                device_id: Swift.String,
+                task_id: Swift.String,
+                project_id: Swift.String,
+                expected_sync_epoch: Swift.String,
+                expected_entity_version: Swift.Int64,
+                cancellation: Components.Schemas.TaskCancellation
+            ) {
+                self.kind = kind
+                self.command_id = command_id
+                self.device_id = device_id
+                self.task_id = task_id
+                self.project_id = project_id
+                self.expected_sync_epoch = expected_sync_epoch
+                self.expected_entity_version = expected_entity_version
+                self.cancellation = cancellation
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case command_id
+                case device_id
+                case task_id
+                case project_id
+                case expected_sync_epoch
+                case expected_entity_version
+                case cancellation
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Components.Schemas.StopTaskRecord.kindPayload.self,
+                    forKey: .kind
+                )
+                self.command_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .command_id
+                )
+                self.device_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .device_id
+                )
+                self.task_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .task_id
+                )
+                self.project_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .project_id
+                )
+                self.expected_sync_epoch = try container.decode(
+                    Swift.String.self,
+                    forKey: .expected_sync_epoch
+                )
+                self.expected_entity_version = try container.decode(
+                    Swift.Int64.self,
+                    forKey: .expected_entity_version
+                )
+                self.cancellation = try container.decode(
+                    Components.Schemas.TaskCancellation.self,
+                    forKey: .cancellation
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
+                    "command_id",
+                    "device_id",
+                    "task_id",
+                    "project_id",
+                    "expected_sync_epoch",
+                    "expected_entity_version",
+                    "cancellation"
+                ])
+            }
+        }
+        /// A decision or task concurrency conflict with replacement state.
+        ///
+        /// - Remark: Generated from `#/components/schemas/CommandRejection`.
+        @frozen public enum CommandRejection: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/CommandRejection/case1`.
+            case StaleVersionRejection(Components.Schemas.StaleVersionRejection)
+            /// - Remark: Generated from `#/components/schemas/CommandRejection/case2`.
+            case StaleTaskRejection(Components.Schemas.StaleTaskRejection)
+            public init(from decoder: any Swift.Decoder) throws {
+                var errors: [any Swift.Error] = []
+                do {
+                    self = .StaleVersionRejection(try .init(from: decoder))
+                    return
+                } catch {
+                    errors.append(error)
+                }
+                do {
+                    self = .StaleTaskRejection(try .init(from: decoder))
+                    return
+                } catch {
+                    errors.append(error)
+                }
+                throw Swift.DecodingError.failedToDecodeOneOfSchema(
+                    type: Self.self,
+                    codingPath: decoder.codingPath,
+                    errors: errors
+                )
+            }
+            public func encode(to encoder: any Swift.Encoder) throws {
+                switch self {
+                case let .StaleVersionRejection(value):
+                    try value.encode(to: encoder)
+                case let .StaleTaskRejection(value):
+                    try value.encode(to: encoder)
+                }
+            }
+        }
+        /// Current task projection and epoch for an obsolete prepared Stop.
+        ///
+        /// - Remark: Generated from `#/components/schemas/StaleTaskRejection`.
+        public struct StaleTaskRejection: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/StaleTaskRejection/message`.
+            public var message: Swift.String
+            /// - Remark: Generated from `#/components/schemas/StaleTaskRejection/replacement_task`.
+            public var replacement_task: Components.Schemas.TaskSnapshot
+            /// - Remark: Generated from `#/components/schemas/StaleTaskRejection/sync_epoch`.
+            public var sync_epoch: Swift.String
+            /// Creates a new `StaleTaskRejection`.
+            ///
+            /// - Parameters:
+            ///   - message:
+            ///   - replacement_task:
+            ///   - sync_epoch:
+            public init(
+                message: Swift.String,
+                replacement_task: Components.Schemas.TaskSnapshot,
+                sync_epoch: Swift.String
+            ) {
+                self.message = message
+                self.replacement_task = replacement_task
+                self.sync_epoch = sync_epoch
+            }
+            public enum CodingKeys: String, CodingKey {
+                case message
+                case replacement_task
+                case sync_epoch
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.message = try container.decode(
+                    Swift.String.self,
+                    forKey: .message
+                )
+                self.replacement_task = try container.decode(
+                    Components.Schemas.TaskSnapshot.self,
+                    forKey: .replacement_task
+                )
+                self.sync_epoch = try container.decode(
+                    Swift.String.self,
+                    forKey: .sync_epoch
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "message",
+                    "replacement_task",
+                    "sync_epoch"
                 ])
             }
         }
@@ -5099,6 +5736,8 @@ public enum Components {
             @frozen public enum recordPayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/CommandResult/record/CommandRecord`.
                 case decision(Components.Schemas.CommandRecord)
+                /// - Remark: Generated from `#/components/schemas/CommandResult/record/StopTaskRecord`.
+                case stop_task(Components.Schemas.StopTaskRecord)
                 /// - Remark: Generated from `#/components/schemas/CommandResult/record/TaskSubmissionRecord`.
                 case submit_task(Components.Schemas.TaskSubmissionRecord)
                 public enum CodingKeys: String, CodingKey {
@@ -5113,6 +5752,8 @@ public enum Components {
                     switch discriminator {
                     case "decision":
                         self = .decision(try .init(from: decoder))
+                    case "stop_task":
+                        self = .stop_task(try .init(from: decoder))
                     case "submit_task":
                         self = .submit_task(try .init(from: decoder))
                     default:
@@ -5126,6 +5767,8 @@ public enum Components {
                 public func encode(to encoder: any Swift.Encoder) throws {
                     switch self {
                     case let .decision(value):
+                        try value.encode(to: encoder)
+                    case let .stop_task(value):
                         try value.encode(to: encoder)
                     case let .submit_task(value):
                         try value.encode(to: encoder)
@@ -14351,6 +14994,10 @@ public enum Operations {
     /// command carries no such envelope. Each new command_id creates separate
     /// work. Only explicit manual Retry reuses a saved command; clients never
     /// resend automatically.
+    /// A stop_task command durably requests cancellation without an attention
+    /// item. It binds the observed task version and sync epoch. Active-device
+    /// authority is rechecked inside the transaction, including receipt replay.
+    /// Acceptance is pending, never proof of termination or WIP release.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.
@@ -14446,12 +15093,12 @@ public enum Operations {
                 /// - Remark: Generated from `#/paths/commands/POST/responses/409/content`.
                 @frozen public enum Body: Sendable, Hashable {
                     /// - Remark: Generated from `#/paths/commands/POST/responses/409/content/application\/json`.
-                    case json(Components.Schemas.StaleVersionRejection)
+                    case json(Components.Schemas.CommandRejection)
                     /// The associated value of the enum case if `self` is `.json`.
                     ///
                     /// - Throws: An error if `self` is not `.json`.
                     /// - SeeAlso: `.json`.
-                    public var json: Components.Schemas.StaleVersionRejection {
+                    public var json: Components.Schemas.CommandRejection {
                         get throws {
                             switch self {
                             case let .json(body):

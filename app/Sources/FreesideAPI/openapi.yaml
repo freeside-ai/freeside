@@ -532,6 +532,10 @@ paths:
         command carries no such envelope. Each new command_id creates separate
         work. Only explicit manual Retry reuses a saved command; clients never
         resend automatically.
+        A stop_task command durably requests cancellation without an attention
+        item. It binds the observed task version and sync epoch. Active-device
+        authority is rechecked inside the transaction, including receipt replay.
+        Acceptance is pending, never proof of termination or WIP release.
       requestBody:
         required: true
         description: The command to apply, prepared against canonical state.
@@ -559,7 +563,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/StaleVersionRejection"
+                $ref: "#/components/schemas/CommandRejection"
 
   /pairing:
     post:
@@ -1150,7 +1154,7 @@ components:
         work without a recoverable intake reference.
       additionalProperties: false
       required: [id, project_id, display_names, source, created_at, last_activity_at,
-                 lifecycle, current_position, campaign_ids, run_ids, wip, lifecycle_facts]
+                 lifecycle, current_position, campaign_ids, run_ids, wip, lifecycle_facts, cancellation]
       properties:
         id:
           type: string
@@ -1206,6 +1210,111 @@ components:
             wip is the derived slot state clients should read.
           items:
             $ref: "#/components/schemas/TaskLifecycleFact"
+
+        cancellation:
+          nullable: true
+          description: Null when no Stop was accepted; acceptance alone remains requested.
+          allOf:
+            - $ref: "#/components/schemas/TaskCancellation"
+
+    TaskCancellationState:
+      type: string
+      enum: [requested, confirmed, failed_to_stop]
+      description: Request acceptance is not quiescence; failure retains the fence.
+
+    TaskCancellationRun:
+      description: One daemon-derived run and its campaign, including a queued run.
+      type: object
+      additionalProperties: false
+      required: [run_id, campaign_id]
+      properties:
+        run_id:
+          type: string
+          minLength: 1
+        campaign_id:
+          type: string
+          nullable: true
+          minLength: 1
+
+    TaskCancellationTarget:
+      description: Ordered task ownership and the current work episode at acceptance.
+      type: object
+      additionalProperties: false
+      required: [task_id, project_id, episode_ordinal, runs]
+      properties:
+        task_id:
+          type: string
+          minLength: 1
+        project_id:
+          type: string
+          minLength: 1
+        episode_ordinal:
+          type: integer
+          minimum: 0
+          description: Newest recorded start ordinal, or zero for never-started work.
+        runs:
+          type: array
+          description: Every owned run in recorded order, including queued and older work.
+          items:
+            $ref: "#/components/schemas/TaskCancellationRun"
+
+    TaskCancellationAcknowledgement:
+      type: object
+      additionalProperties: false
+      description: >
+        Daemon-only evidence. Confirmed asserts all owned executions are quiescent
+        and further launches fenced. No client command accepts this record.
+      required: [id, request_id, target_digest, state, evidence_digest, recorded_at]
+      properties:
+        id:
+          type: string
+          minLength: 1
+        request_id:
+          type: string
+          minLength: 1
+        target_digest:
+          $ref: "#/components/schemas/Digest"
+        state:
+          $ref: "#/components/schemas/TaskCancellationState"
+        evidence_digest:
+          $ref: "#/components/schemas/Digest"
+        recorded_at:
+          type: string
+          format: date-time
+
+    TaskCancellation:
+      type: object
+      additionalProperties: false
+      description: >
+        Durable task fence, independent of lifecycle and WIP. Runtime consumers
+        must fence admission, descendants and publication, reconcile ownership
+        after restart, and retain late results without publishing them. Only
+        bound daemon evidence confirms quiescence. Confirmation is final.
+      required: [request_id, target, target_digest, sync_epoch, fence_revision, requested_at, state, acknowledgement]
+      properties:
+        request_id:
+          type: string
+          minLength: 1
+        target:
+          $ref: "#/components/schemas/TaskCancellationTarget"
+        target_digest:
+          $ref: "#/components/schemas/Digest"
+        sync_epoch:
+          type: string
+          minLength: 1
+        fence_revision:
+          type: integer
+          format: int64
+          minimum: 1
+        requested_at:
+          type: string
+          format: date-time
+        state:
+          $ref: "#/components/schemas/TaskCancellationState"
+        acknowledgement:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/TaskCancellationAcknowledgement"
 
     TaskLifecycleFact:
       type: object
@@ -2304,8 +2413,9 @@ components:
           format: int64
           minimum: 1
           description: >
-            Required for a decision command; absent for a submit_task
-            command. The entity_version of the target entity the command was
+            Required for decision and stop_task; absent for submit_task.
+            For Stop this is the observed TaskSnapshot.entity_version (the
+            pre-write server revision), never the private task row version. The entity_version of the target entity the command was
             prepared against; a mismatch rejects the command with the
             replacement state.
         expected_bindings:
@@ -2313,7 +2423,7 @@ components:
           additionalProperties:
             $ref: "#/components/schemas/Digest"
           description: >
-            Required for a decision command; absent for a submit_task command.
+            Required for decision; forbidden for submit_task and stop_task.
             The digest-bound inputs the command was prepared against, keyed by
             binding name; checked with expected_entity_version. For a decision
             command the authoritative binding set is the payload's
@@ -2324,11 +2434,13 @@ components:
           oneOf:
             - $ref: "#/components/schemas/DecisionPayload"
             - $ref: "#/components/schemas/SubmitTaskPayload"
+            - $ref: "#/components/schemas/StopTaskPayload"
           discriminator:
             propertyName: kind
             mapping:
               decision: "#/components/schemas/DecisionPayload"
               submit_task: "#/components/schemas/SubmitTaskPayload"
+              stop_task: "#/components/schemas/StopTaskPayload"
       example:
         command_id: "cmd-1"
         device_id: "device-1"
@@ -2342,6 +2454,83 @@ components:
           item_version: 1
           pr_head_sha: "cafebabe"
           artifact_digests: ["sha256:img", "sha256:log"]
+
+    StopTaskPayload:
+      type: object
+      additionalProperties: false
+      description: >
+        Request task-wide cancellation without an attention item. Requires the
+        envelope expected_entity_version and forbids expected_bindings.
+        Target execution IDs and acknowledgement state are daemon-owned.
+      required: [kind, task_id, project_id, expected_sync_epoch]
+      properties:
+        kind:
+          type: string
+          enum: [stop_task]
+        task_id:
+          type: string
+          minLength: 1
+        project_id:
+          type: string
+          minLength: 1
+        expected_sync_epoch:
+          type: string
+          minLength: 1
+
+    StopTaskRecord:
+      type: object
+      additionalProperties: false
+      description: >
+        Immutable decoded request and cancellation snapshot at acceptance.
+        Exact replay returns this receipt and its original revision, even after
+        acknowledgement. Separate commands for the same target share its fence
+        without retrying provider cancellation or resetting failure.
+      required: [kind, command_id, device_id, task_id, project_id, expected_sync_epoch, expected_entity_version, cancellation]
+      properties:
+        kind:
+          type: string
+          enum: [stop_task]
+        command_id:
+          type: string
+          minLength: 1
+        device_id:
+          type: string
+          minLength: 1
+        task_id:
+          type: string
+          minLength: 1
+        project_id:
+          type: string
+          minLength: 1
+        expected_sync_epoch:
+          type: string
+          minLength: 1
+        expected_entity_version:
+          type: integer
+          format: int64
+          minimum: 1
+        cancellation:
+          $ref: "#/components/schemas/TaskCancellation"
+
+    CommandRejection:
+      description: A decision or task concurrency conflict with replacement state.
+      oneOf:
+        - $ref: "#/components/schemas/StaleVersionRejection"
+        - $ref: "#/components/schemas/StaleTaskRejection"
+
+    StaleTaskRejection:
+      description: Current task projection and epoch for an obsolete prepared Stop.
+      type: object
+      additionalProperties: false
+      required: [message, replacement_task, sync_epoch]
+      properties:
+        message:
+          type: string
+        replacement_task:
+          $ref: "#/components/schemas/TaskSnapshot"
+        sync_epoch:
+          type: string
+          minLength: 1
 
     DecisionPayload:
       type: object
@@ -2709,11 +2898,13 @@ components:
           oneOf:
             - $ref: "#/components/schemas/CommandRecord"
             - $ref: "#/components/schemas/TaskSubmissionRecord"
+            - $ref: "#/components/schemas/StopTaskRecord"
           discriminator:
             propertyName: kind
             mapping:
               decision: "#/components/schemas/CommandRecord"
               submit_task: "#/components/schemas/TaskSubmissionRecord"
+              stop_task: "#/components/schemas/StopTaskRecord"
         revision:
           type: integer
           format: int64

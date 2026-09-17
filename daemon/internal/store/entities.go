@@ -1932,6 +1932,9 @@ func decodeStoredCommand(
 // It is client-visible, so it must run inside Write (which bumps revision and
 // stamps as_of_revision, the row's recorded committed result).
 func (tx *WriteTx) PutCommand(ctx context.Context, command domain.Command) error {
+	if err := tx.rejectStopCommandID(ctx, command.CommandID); err != nil {
+		return err
+	}
 	commandBody, err := encode(command)
 	if err != nil {
 		return fmt.Errorf("put command %q: %w", command.CommandID, err)

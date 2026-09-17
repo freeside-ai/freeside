@@ -746,3 +746,19 @@ go test ./internal/claudeinference -run TestPinnedClaudeCLIProtocol -count=1 -v
 It uses a synthetic token and a localhost mock provider to check the actual
 CLI's model, zero-tool input, output bound, and terminal response format.
 It does not perform a real provider call or establish live review acceptance.
+
+## Task Cancellation Contract
+
+`stop_task` on `/commands` accepts a paired device's task ID, project ID,
+expected sync epoch, and observed task snapshot version. It persists an
+immutable receipt and task fence. The task's `cancellation` field is null or
+carries `requested`, `failed_to_stop`, or `confirmed` independently of lifecycle
+and WIP. Exact command replay returns the original receipt and revision.
+A new stale command returns the current task snapshot and epoch.
+
+This contract has no runtime acknowledgement producer or task Stop control.
+Acceptance stays pending until #1368 supplies bound quiescence evidence;
+#1344 owns stopped lifecycle/WIP and #1369 owns controls. No client may set
+cancellation state. The mock also stays pending unless a test explicitly seeds
+acknowledgement evidence. See [the plan](../docs/plan.md#59-durability-effectively-once)
+for admission/publication ordering, late results, and restart reconciliation.

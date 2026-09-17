@@ -184,7 +184,8 @@
             "binding_unit_id": "workunit-run-569",
             "recorded_at": "2026-08-10T15:34:56Z"
           }
-        ]
+        ],
+        "cancellation": null
       }
     }
   ],

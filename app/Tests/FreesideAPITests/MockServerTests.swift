@@ -300,7 +300,7 @@ import Testing
         let output =
             try await client
             .submitCommand(body: .json(Self.command(id: "cmd-stale", against: before)))
-        let rejection = try output.conflict.body.json
+        let rejection = try output.conflict.body.json.asDecision
         #expect(rejection.replacement_item.entity_version == before.entity_version + 1)
         #expect(rejection.replacement_item.item.item_version == before.item.item_version + 1)
 
@@ -971,7 +971,7 @@ import Testing
         // bindings: still a closure rejection carrying the closed item.
         let output = try await client.submitCommand(
             body: .json(Self.command(id: "cmd-after-close", against: closed)))
-        let rejection = try output.conflict.body.json
+        let rejection = try output.conflict.body.json.asDecision
         #expect(rejection.replacement_item == closed)
 
         let after =
@@ -1296,7 +1296,7 @@ import Testing
             id: "cmd-stale-finding", against: seed, action: .accept_recommended_route)
         await server.advance(itemID: seed.item.id)
 
-        let rejection = try await client.submitCommand(body: .json(command)).conflict.body.json
+        let rejection = try await client.submitCommand(body: .json(command)).conflict.body.json.asDecision
 
         #expect(rejection.replacement_item.entity_version == seed.entity_version + 1)
         #expect(rejection.replacement_item.item.status == .open)

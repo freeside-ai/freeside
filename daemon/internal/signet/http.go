@@ -399,6 +399,8 @@ func (h httpHandler) submitCommand(w http.ResponseWriter, r *http.Request, authe
 		return
 	}
 	switch kindProbe.Kind {
+	case domain.CommandKindStopTask:
+		h.stopTaskCommand(w, r, request)
 	case domain.CommandKindSubmitTask:
 		h.submitTaskCommand(w, r, request)
 	case domain.CommandKindDecision, "":
@@ -475,6 +477,27 @@ func (h httpHandler) submitDecisionCommand(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, normalizeCommandResult(result))
+}
+
+func (h httpHandler) stopTaskCommand(w http.ResponseWriter, r *http.Request, request clientCommandRequest) {
+	if request.ExpectedEntityVersion == nil || request.ExpectedBindings != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: "stop_task requires expected_entity_version and forbids expected_bindings"})
+		return
+	}
+	var arm struct {
+		Kind domain.CommandKind `json:"kind"`
+		StopTaskPayload
+	}
+	if err := strictjson.Decode(request.Payload, &arm, strictjson.RejectInvalidUTF8, strictjson.Limit(maxCommandBodyBytes)); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: err.Error()})
+		return
+	}
+	result, err := h.service.Submit(r.Context(), ClientCommand{CommandID: request.CommandID, DeviceID: request.DeviceID, Kind: domain.CommandKindStopTask, ExpectedEntityVersion: *request.ExpectedEntityVersion, StopTask: arm.StopTaskPayload})
+	if err != nil {
+		writeCommandError(w, h.service.blobs, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (h httpHandler) submitTaskCommand(w http.ResponseWriter, r *http.Request, request clientCommandRequest) {
@@ -756,6 +779,14 @@ type errorResponse struct {
 }
 
 func writeCommandError(w http.ResponseWriter, blobs *BlobStore, err error) {
+	var staleTask *StaleTaskError
+	if errors.As(err, &staleTask) {
+		writeJSON(w, http.StatusConflict, struct {
+			Message string `json:"message"`
+			*StaleTaskError
+		}{Message: err.Error(), StaleTaskError: staleTask})
+		return
+	}
 	var stale *StaleVersionError
 	if errors.As(err, &stale) {
 		writeJSON(w, http.StatusConflict, staleVersionResponse{
@@ -813,7 +844,7 @@ func isCommandRequestError(err error) bool {
 		// it, so it is a request error like the unstored-digest case.
 		ErrInvalidDigest,
 		store.ErrActionNotOffered, store.ErrImmutableConflict,
-		ErrInvalidSubmitTaskPayload,
+		ErrInvalidSubmitTaskPayload, ErrInvalidStopTaskPayload,
 		domain.ErrEmptyID, domain.ErrEmptyField, domain.ErrInvalidAction, domain.ErrInvalidAnswerRoute,
 		domain.ErrNonPositive, domain.ErrDigestsNotCanonical, domain.ErrDuplicate,
 	} {

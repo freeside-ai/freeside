@@ -22,17 +22,20 @@ type ClientCommand struct {
 	DeviceID  domain.DeviceID
 	// Kind discriminates the payload (plan §5.14). A decision command decides an
 	// attention item and carries ExpectedEntityVersion and Payload; a
-	// submit_task command creates or fetches a task from source text (plan
-	// §5.11) and carries SubmitTask instead. The empty zero value is treated as
-	// a decision so existing decision callers stay unchanged; the HTTP boundary
-	// sets it from the payload discriminator.
+	// submit_task command creates a task from source text (plan §5.11) and
+	// carries SubmitTask; stop_task carries StopTask and the observed version.
+	// The empty zero value is treated as a decision so existing decision callers
+	// stay unchanged; the HTTP boundary sets it from the payload discriminator.
 	Kind domain.CommandKind
 	// ExpectedEntityVersion is the store's per-row entity_version the command
 	// was prepared against; distinct from the payload's domain ItemVersion. A
-	// mismatch rejects the command with the replacement item. Decision only.
+	// mismatch rejects the command with replacement state. Stop uses the public
+	// task projection version (currently the global revision), not a row version.
 	ExpectedEntityVersion int64
 	Payload               DecisionPayload
-	// SubmitTask carries the submit_task payload; the zero value for a decision.
+	// StopTask carries the stop_task payload; zero for other command kinds.
+	StopTask StopTaskPayload
+	// SubmitTask carries the submit_task payload; zero for other command kinds.
 	SubmitTask SubmitTaskPayload
 }
 
@@ -164,11 +167,13 @@ func decisionMessage(payload DecisionPayload) (string, error) {
 // CommandResult is the committed outcome of an accepted command: the durable
 // record and the server revision of the transaction that applied it. A retry of
 // the same CommandID returns this exact value (§5.14 test 4). The record is a
-// tagged union: Record holds a decision command, or Submission holds a task
-// submission when it is non-nil. MarshalJSON renders the wire record with its
-// kind discriminator so the client can decode the matching arm.
+// tagged union: Record holds a decision, Submission a task submission, or Stop
+// an immutable task cancellation receipt. MarshalJSON renders the wire record
+// with its kind discriminator so the client can decode the matching arm.
 type CommandResult struct {
 	Record domain.Command
+	// Stop is set only for an accepted stop_task command.
+	Stop *domain.StopTaskReceipt
 	// Submission is set only for an accepted submit_task command; when non-nil
 	// the wire record is the submission with kind submit_task instead of the
 	// decision Record.
@@ -194,7 +199,12 @@ func (r CommandResult) MarshalJSON() ([]byte, error) {
 		Record   any   `json:"record"`
 		Revision int64 `json:"revision"`
 	}{Revision: r.Revision}
-	if r.Submission != nil {
+	if r.Stop != nil {
+		wire.Record = struct {
+			Kind domain.CommandKind `json:"kind"`
+			domain.StopTaskReceipt
+		}{domain.CommandKindStopTask, *r.Stop}
+	} else if r.Submission != nil {
 		wire.Record = kindedSubmissionRecord{Kind: domain.CommandKindSubmitTask, TaskSubmission: *r.Submission}
 	} else {
 		wire.Record = kindedCommandRecord{Kind: domain.CommandKindDecision, Command: r.Record}

@@ -21,6 +21,7 @@ type Task struct {
 	// persists it in a side table and loads it with the task, so a decoded body
 	// carries none. Order is recorded order, preserved across idempotent replay.
 	LifecycleFacts []TaskLifecycleFact `json:"lifecycle_facts"`
+	Cancellation   *TaskCancellation   `json:"cancellation"`
 }
 
 // TaskLifecycleFact is one recorded event in a task's lifecycle log. Facts

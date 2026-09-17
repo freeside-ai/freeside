@@ -56,6 +56,9 @@ VALUES (?, ?, ?, ?, ?, 1, ?, ?)`
 // is a conflict. The command_id is unique across command kinds, so a decision
 // command already recorded under this id is a cross-kind conflict.
 func (tx *WriteTx) PutTaskSubmission(ctx context.Context, submission domain.TaskSubmission) error {
+	if err := tx.rejectStopCommandID(ctx, submission.CommandID); err != nil {
+		return err
+	}
 	if err := submission.Validate(); err != nil {
 		return fmt.Errorf("put task submission %q: %w", submission.CommandID, err)
 	}

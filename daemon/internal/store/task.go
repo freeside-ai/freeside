@@ -142,6 +142,10 @@ func (tx *ReadTx) GetTaskSnapshot(ctx context.Context, id domain.TaskID) (Snapsh
 		return Snapshotted[domain.Task]{}, err
 	}
 	task.LifecycleFacts = facts
+	task.Cancellation, err = tx.currentTaskCancellation(ctx, id)
+	if err != nil {
+		return Snapshotted[domain.Task]{}, err
+	}
 	if err := task.Validate(); err != nil {
 		return Snapshotted[domain.Task]{}, err
 	}
@@ -530,6 +534,7 @@ func (tx *WriteTx) updateTask(ctx context.Context, task domain.Task) error {
 	// Lifecycle facts are persisted in task_lifecycle_facts, never the body;
 	// strip them so the body carries a single source of truth (issue #1318 D1).
 	task.LifecycleFacts = nil
+	task.Cancellation = nil
 	body, err := encode(task)
 	if err != nil {
 		return err
