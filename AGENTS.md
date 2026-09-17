@@ -63,7 +63,7 @@ are the only sources of active work state; a note records why, never status.
 - **Current shape:** Shapes 2–5 combined: path-and-dependency units, typed
   relations, stable named work streams, and an integration
   spine/shared-contract domain. Current demonstrated width is four fronts,
-  further bounded by each wave tracker, live claims, path overlap, review
+  further bounded by each wave tracker, live claims, conflicting changes, review
   bandwidth, and spine integration capacity.
 - **Evidence basis:** Waves 3–6 and issue/PR history show recurring
   lane-scoped fronts; PR #801 established the typed relations; Wave 6 tracker
@@ -805,9 +805,24 @@ condition is inert until something else tells you to go look.
     relationship, claim, and reservation read is done.
   - Treat an unknown or materially ambiguous relationship as `starts-after`
     until the spine resolves it.
-- **Check open PRs for declared-path overlap before you start.** Compare
-  every open PR's declared paths against yours, whatever shape the work takes.
-  An overlap means stop and coordinate via issue comment before going further.
+- **Check concurrent work for conflicting changes before you start.** Compare
+  your scope with active work-unit claims and open PRs, whatever shape the work
+  takes. Shared paths trigger inspection, not an automatic stop or ownership
+  of an entire file. Use the work contracts, plans, and available diffs to
+  identify the behavior or content each unit changes.
+- **Proceed with independent edits within the existing gates.** Authorization,
+  claims, planning reservations, explicit dependencies and exclusivity,
+  contract serialization, and integration checks still apply. Independent
+  edits may proceed in isolated checkouts after recording their boundaries on
+  the issue; they need no acknowledgement when neither unit's scope is
+  reassigned.
+- **Pause affected edits when changes conflict or depend on unfinished work.**
+  Pause edits when units make competing changes to the same behavior or
+  content, or when one needs the other's unfinished result. Name the conflict
+  and required resolution; continue independent work within the assigned scope,
+  subject to the other coordination gates. Expected textual merge conflicts
+  alone do not require waiting for another PR to merge. Follow Shared-Path
+  Coordination in `docs/coordination.md`.
 - **Contract work serializes.** Before you start, whatever shape the work
   takes, check open `kind:contract` issues: one touching the shared-package
   surfaces your work will change blocks you. An issue-backed unit names those
