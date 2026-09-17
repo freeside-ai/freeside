@@ -1,0 +1,27 @@
+{
+  "record": {
+    "kind": "stop_task",
+    "command_id": "stop-1",
+    "device_id": "device-1",
+    "task_id": "task-1",
+    "project_id": "project-1",
+    "expected_sync_epoch": "epoch-1",
+    "expected_entity_version": 4,
+    "cancellation": {
+      "request_id": "cancel-1",
+      "target": {
+        "task_id": "task-1",
+        "project_id": "project-1",
+        "episode_ordinal": 0,
+        "runs": []
+      },
+      "target_digest": "sha256:4ff9b7117fde13f8e232d19c7ee5c9608de1046b1e232b6a8363edda70a6d8b8",
+      "sync_epoch": "epoch-1",
+      "fence_revision": 5,
+      "requested_at": "2026-09-17T01:00:00Z",
+      "state": "requested",
+      "acknowledgement": null
+    }
+  },
+  "revision": 5
+}

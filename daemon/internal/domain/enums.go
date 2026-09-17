@@ -192,6 +192,7 @@ type CommandKind string
 const (
 	CommandKindDecision   CommandKind = "decision"
 	CommandKindSubmitTask CommandKind = "submit_task"
+	CommandKindStopTask   CommandKind = "stop_task"
 )
 
 // AllCommandKinds lists every valid CommandKind; it is the single registration
@@ -199,11 +200,12 @@ const (
 var AllCommandKinds = []CommandKind{
 	CommandKindDecision,
 	CommandKindSubmitTask,
+	CommandKindStopTask,
 }
 
 func (k CommandKind) valid() bool {
 	switch k {
-	case CommandKindDecision, CommandKindSubmitTask:
+	case CommandKindDecision, CommandKindSubmitTask, CommandKindStopTask:
 		return true
 	default:
 		return false

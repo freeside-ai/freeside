@@ -13,6 +13,32 @@ import Foundation
 /// actor's bridge can pass its own policy set. `MockContractValidationTests`
 /// pins each in isolation.
 enum MockContractValidation {
+    static func cancellationTargetDigest(_ target: Components.Schemas.TaskCancellationTarget, epoch: String) -> String {
+        var fields = [
+            "task-cancellation-target-v1", epoch, target.task_id, target.project_id,
+            String(target.episode_ordinal), String(target.runs.count),
+        ]
+        for run in target.runs { fields.append(contentsOf: [run.run_id, run.campaign_id ?? ""]) }
+        return sha256Digest(of: fields.map { "\($0.utf8.count):\($0)" }.joined())
+    }
+
+    static func cancellationBreach(_ c: Components.Schemas.TaskCancellation) -> String? {
+        guard !c.request_id.isEmpty, !c.sync_epoch.isEmpty, c.fence_revision >= 1,
+            !c.target.task_id.isEmpty, !c.target.project_id.isEmpty, c.target.episode_ordinal >= 0,
+            c.target.runs.allSatisfy({ !$0.run_id.isEmpty && $0.campaign_id != "" }),
+            Set(c.target.runs.map(\.run_id)).count == c.target.runs.count,
+            c.target_digest == cancellationTargetDigest(c.target, epoch: c.sync_epoch),
+            c.requested_at != daemonZeroInstant
+        else { return "invalid cancellation fence" }
+        if c.state == .requested { return c.acknowledgement == nil ? nil : "requested with acknowledgement" }
+        guard let ack = c.acknowledgement?.value1, !ack.id.isEmpty,
+            ack.request_id == c.request_id, ack.target_digest == c.target_digest,
+            ack.state == c.state, ack.recorded_at >= c.requested_at,
+            ack.evidence_digest.range(of: "^sha256:[0-9a-f]{64}$", options: .regularExpression) != nil
+        else { return "invalid cancellation acknowledgement" }
+        return nil
+    }
+
     static func taskSnapshotBreach(
         _ snapshot: Components.Schemas.TaskSnapshot, serverRevision: Int64
     ) -> String? {
@@ -21,6 +47,13 @@ enum MockContractValidation {
             return "as_of_revision outside the server revision"
         }
         let task = snapshot.task
+        if let cancellation = task.cancellation?.value1 {
+            if cancellation.target.task_id != task.id || cancellation.target.project_id != task.project_id
+                || cancellation.fence_revision > serverRevision || cancellationBreach(cancellation) != nil
+            {
+                return "invalid task cancellation"
+            }
+        }
         if task.id.isEmpty || task.project_id.isEmpty { return "empty task identity" }
         if let breach = displayNamesBreach(task.display_names) { return breach }
         if task.display_names.task.source == .name { return "invalid task name source" }
@@ -938,6 +971,10 @@ enum MockContractValidation {
                     throw malformed("duplicate attachment digest")
                 }
             }
+        case .stop_task(let payload):
+            guard !payload.task_id.isEmpty, !payload.project_id.isEmpty, !payload.expected_sync_epoch.isEmpty,
+                let expected = command.expected_entity_version, expected >= 1, command.expected_bindings == nil
+            else { throw malformed("invalid stop_task binding") }
         case .submit_task(let payload):
             guard !payload.project_id.isEmpty else { throw malformed("empty project_id") }
             guard !payload.source.isEmpty else { throw malformed("empty source") }

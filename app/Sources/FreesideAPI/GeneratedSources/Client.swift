@@ -1442,6 +1442,10 @@ public struct Client: APIProtocol {
     /// command carries no such envelope. Each new command_id creates separate
     /// work. Only explicit manual Retry reuses a saved command; clients never
     /// resend automatically.
+    /// A stop_task command durably requests cancellation without an attention
+    /// item. It binds the observed task version and sync epoch. Active-device
+    /// authority is rechecked inside the transaction, including receipt replay.
+    /// Acceptance is pending, never proof of termination or WIP release.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.
@@ -1511,7 +1515,7 @@ public struct Client: APIProtocol {
                     switch chosenContentType {
                     case "application/json":
                         body = try await converter.getResponseBodyAsJSON(
-                            Components.Schemas.StaleVersionRejection.self,
+                            Components.Schemas.CommandRejection.self,
                             from: responseBody,
                             transforming: { value in
                                 .json(value)

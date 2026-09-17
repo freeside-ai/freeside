@@ -1781,3 +1781,16 @@ Revision 58 ("Client Task Submission and the Sketch Round"):
    refinement, as the PR #1326 review proposed. (User decision;
    Section [5.12](../plan.md#512-workflow-definition-initiators-and-artifacts); #1208,
    #1327; devlog 2026-09-15-0914-first-acceptance-naming.md.)
+
+Revision 60 ("Deliberate Manual Submission Identity"):
+
+1. **New Task always creates new work.** Distinct submissions receive distinct
+   tasks, runs, and campaigns even with identical input. Only explicit manual
+   Retry reuses a durably saved submission identity. No automatic resubmission
+   is authorized. Legacy recorded commands retain their original results and
+   replay checks, without inventing missing requested-name data. This reverses
+   the same-source reuse rule in revision 58 after the client exit exercise
+   showed that it reopened old work instead of creating the requested task.
+   (User decision, September 16, 2026; #1366;
+   [decision note](../../devlog/2026-09-16-0830-manual-submission-identity.md);
+   separate ADR promotion: [#1387](https://github.com/freeside-ai/freeside/issues/1387).)

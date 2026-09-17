@@ -611,6 +611,8 @@ public actor MockServer {
                 original.deviceID == deviceID
             else { return nil }
             return resultsByCommandID[command.command_id]
+        case .stop_task:
+            return nil  // Active-device authority is required even for Stop replay.
         case .submit_task:
             // A submit_task record carries no normalized body; its recorded
             // result replays for the same device.
@@ -627,6 +629,7 @@ public actor MockServer {
     enum SubmitOutcome {
         case ok(Components.Schemas.CommandResult)
         case stale(Components.Schemas.StaleVersionRejection)
+        case staleTask(Components.Schemas.StaleTaskRejection)
     }
 
     struct UnknownItemError: Error {
@@ -764,10 +767,12 @@ public actor MockServer {
     }
 
     func task(id: String) throws -> Components.Schemas.TaskSnapshot? {
-        guard let snapshot = tasksByID[id] else { return nil }
+        guard var snapshot = tasksByID[id] else { return nil }
         if let reason = MockContractValidation.taskSnapshotBreach(snapshot, serverRevision: revision) {
             throw InvalidTaskError(taskID: id, reason: reason)
         }
+        snapshot.entity_version = revision
+        snapshot.as_of_revision = revision
         return snapshot
     }
 
@@ -1275,6 +1280,8 @@ public actor MockServer {
         // interpreted only for a genuinely new command below.
         try MockContractValidation.validateStructure(command)
         switch command.payload {
+        case .stop_task(let payload):
+            return try submitStopTaskCommand(command, payload)
         case .submit_task(let payload):
             return try submitTaskCommand(command, payload)
         case .decision(let payload):
@@ -1297,6 +1304,9 @@ public actor MockServer {
                 throw ImmutableConflictError(commandID: command.command_id)
             }
             return .ok(commandResultTransform?(recorded) ?? recorded)
+        }
+        if resultsByCommandID[command.command_id] != nil {
+            throw ImmutableConflictError(commandID: command.command_id)
         }
         guard let current = itemsByID[payload.item_id] else {
             throw UnknownItemError(itemID: payload.item_id)
@@ -1702,13 +1712,71 @@ public actor MockServer {
         return .ok(commandResultTransform?(result) ?? result)
     }
 
-    /// submitTaskCommand creates or fetches the task for a submitted source and
-    /// records the result. It mirrors the daemon: the project-scoped intake key
-    /// (project id plus source digest) fetches an existing task, so a distinct
-    /// command_id with the same source returns the same task and starts no
-    /// second run; a retried command_id replays the recorded result. The mock
-    /// does not resolve per-project policy, so it accepts any project. The
-    /// revoked-device refusal is the transport's, as for a decision command.
+    struct InactiveStopDeviceError: Error {}
+
+    private func submitStopTaskCommand(
+        _ command: Components.Schemas.ClientCommand,
+        _ payload: Components.Schemas.StopTaskPayload
+    ) throws -> SubmitOutcome {
+        if case .enforcing = authMode {
+            guard let device = devicesByID[command.device_id], case .active = device.device else {
+                throw InactiveStopDeviceError()
+            }
+        }
+        if let recorded = resultsByCommandID[command.command_id] {
+            guard CommandResultTrust.accepts(recorded, for: command) else {
+                throw ImmutableConflictError(commandID: command.command_id)
+            }
+            return .ok(commandResultTransform?(recorded) ?? recorded)
+        }
+        guard var snapshot = try task(id: payload.task_id), snapshot.task.project_id == payload.project_id else {
+            throw UnknownItemError(itemID: payload.task_id)
+        }
+        guard let expectedVersion = command.expected_entity_version, payload.expected_sync_epoch == syncEpoch,
+            expectedVersion == revision
+        else {
+            return .staleTask(
+                .init(message: "task cancellation binding changed", replacement_task: snapshot, sync_epoch: syncEpoch))
+        }
+        let target = Components.Schemas.TaskCancellationTarget(
+            task_id: payload.task_id, project_id: payload.project_id,
+            episode_ordinal: snapshot.task.lifecycle_facts.lastIndex(where: { $0.kind == .started }).map { $0 + 1 }
+                ?? 0,
+            runs: try snapshot.task.run_ids.map { id in
+                guard let run = runsByID[id]?.run, run.task_id == payload.task_id, run.project_id == payload.project_id
+                else {
+                    throw InvalidTaskError(taskID: payload.task_id, reason: "foreign cancellation run")
+                }
+                return .init(run_id: id, campaign_id: run.campaign_id)
+            })
+        let digest = MockContractValidation.cancellationTargetDigest(target, epoch: syncEpoch)
+        revision += 1
+        let cancellation: Components.Schemas.TaskCancellation
+        if let old = snapshot.task.cancellation?.value1, old.target_digest == digest {
+            cancellation = old
+        } else {
+            cancellation = .init(
+                request_id: "cancel-\(UUID().uuidString.lowercased())", target: target,
+                target_digest: digest, sync_epoch: syncEpoch, fence_revision: revision,
+                requested_at: currentTime, state: .requested, acknowledgement: nil)
+        }
+        snapshot.task.cancellation = .init(value1: cancellation)
+        snapshot.entity_version = revision
+        snapshot.as_of_revision = revision
+        tasksByID[payload.task_id] = snapshot
+        let record = Components.Schemas.StopTaskRecord(
+            kind: .stop_task, command_id: command.command_id,
+            device_id: command.device_id, task_id: payload.task_id, project_id: payload.project_id,
+            expected_sync_epoch: payload.expected_sync_epoch, expected_entity_version: expectedVersion,
+            cancellation: cancellation)
+        let result = Components.Schemas.CommandResult(record: .stop_task(record), revision: revision)
+        resultsByCommandID[command.command_id] = result
+        return .ok(commandResultTransform?(result) ?? result)
+    }
+
+    /// Creates new work for each distinct command ID and replays the original
+    /// result for an exact retry. The mock accepts any project; transport owns
+    /// revoked-device refusal, as for a decision command.
     private func submitTaskCommand(
         _ command: Components.Schemas.ClientCommand,
         _ payload: Components.Schemas.SubmitTaskPayload

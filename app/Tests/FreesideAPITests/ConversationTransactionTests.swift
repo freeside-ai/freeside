@@ -79,7 +79,7 @@ import Testing
         let second = Self.command(
             id: "cmd-discuss-2", action: .discuss, message: "A second message",
             against: updated)
-        let rejection = try await client.submitCommand(body: .json(second)).conflict.body.json
+        let rejection = try await client.submitCommand(body: .json(second)).conflict.body.json.asDecision
         #expect(rejection.replacement_item == updated)
 
         let replay = try await client.submitCommand(body: .json(command)).ok.body.json

@@ -58,12 +58,16 @@ enum TaskDisplay {
     /// position records nothing about which stages ran. A task with no
     /// position has no stage line.
     static func position(
-        _ task: Components.Schemas.Task, runs: [Components.Schemas.RunSnapshot]
+        _ task: Components.Schemas.Task, runs: [Components.Schemas.RunSnapshot],
+        attentionItems: [Components.Schemas.AttentionItemSnapshot] = []
     ) -> Position? {
         guard let position = task.current_position?.value1 else { return nil }
-        if let run = runs.first(where: { $0.run.id == position.run_id })?.run {
+        let run = runs.first(where: { $0.run.id == position.run_id })?.run
+        let handoff = finalReviewHeading(task, run: run, attentionItems: attentionItems)
+            .map { Position.Heading(label: $0, round: nil) }
+        if let run {
             return Position(
-                heading: RunDisplay.stageHeading(run).map { .init(label: $0.label, round: $0.round) },
+                heading: handoff ?? RunDisplay.stageHeading(run).map { .init(label: $0.label, round: $0.round) },
                 rail: RunDisplay.stageRail(run),
                 hold: run.hold_reason.map { RunDisplay.label($0.value1) })
         }
@@ -79,14 +83,52 @@ enum TaskDisplay {
                 id: name, title: label, state: name == stage ? .current : .pending)
         }
         return Position(
-            heading: stage.map {
-                .init(label: RunDisplay.stageLabel($0), round: position.round.map { "Round \($0)" })
-            },
+            heading: handoff
+                ?? stage.map {
+                    .init(label: RunDisplay.stageLabel($0), round: position.round.map { "Round \($0)" })
+                },
             rail: .init(
                 entries: entries,
                 summary: entries.map { "\($0.title) \($0.state.accessibilityLabel)" }
                     .joined(separator: ", ")),
             hold: position.hold_reason.map { RunDisplay.label($0.value1) })
+    }
+
+    /// A current daemon handoff overrides the live phase, without changing
+    /// lifecycle or stage history. Cached snapshots use this same projection
+    /// under the existing freshness banner; this never certifies their age.
+    static func finalReviewHeading(
+        _ task: Components.Schemas.Task, run: Components.Schemas.Run?,
+        attentionItems: [Components.Schemas.AttentionItemSnapshot]
+    ) -> String? {
+        guard task.lifecycle == .active,
+            let position = task.current_position?.value1,
+            task.run_ids.contains(position.run_id), position.hold_reason == nil
+        else { return nil }
+        if let run {
+            guard run.id == position.run_id, run.task_id == task.id, run.project_id == task.project_id,
+                run.lifecycle == .active, run.outcome == .published,
+                run.hold_reason == nil, run.superseded_by == nil
+            else { return nil }
+        }
+        let item = attentionItems.first { snapshot in
+            let item = snapshot.item
+            guard item._type == .ready_for_final_review, item.status == .open,
+                item.project_id == task.project_id,
+                case .run(let subject) = item.subject,
+                subject.subject_id == position.run_id, subject.run_id == position.run_id,
+                subject.task_id == task.id,
+                let pr = item.pr_reference?.value1, !pr.repo.isEmpty, pr.number > 0,
+                !item.pr_head_sha.isEmpty,
+                let readiness = item.readiness?.value1,
+                let detail = item.readiness_detail?.value1,
+                detail.candidate_head == item.pr_head_sha,
+                detail.evaluation_set_digest == readiness.evaluation_set_digest,
+                item.readiness_invalidation == nil, item.base_freshness?.value1.advanced != true
+            else { return false }
+            return true
+        }
+        return item.map { AttentionDisplay.title($0.item) }
     }
 
     /// The task name a run's timeline shows: the task snapshot's current

@@ -977,7 +977,10 @@ public final class DecisionModel {
                 // Staleness and closure share this shape (the recorded #65
                 // decision): the replacement is the canonical state, and
                 // its status gates whether deciding again is possible.
-                let rejection = try conflict.body.json
+                guard case .StaleVersionRejection(let rejection) = try conflict.body.json else {
+                    throw DecodingError.dataCorrupted(
+                        .init(codingPath: [], debugDescription: "Expected a decision rejection"))
+                }
                 // The 409 proves this command never committed, so release
                 // the slot regardless of whether the replacement rendered.
                 store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
@@ -1415,7 +1418,7 @@ public final class DecisionModel {
                 // carries is canonical state either way.
                 var isCurrent = false
                 var awaitingAgent = false
-                if let rejection = try? conflict.body.json {
+                if let response = try? conflict.body.json, case .StaleVersionRejection(let rejection) = response {
                     // An epoch eviction during the replay makes the
                     // replacement possibly dead-epoch: drop it rather than
                     // apply it, so the caller revalidates (#162).

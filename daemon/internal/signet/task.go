@@ -32,8 +32,9 @@ type Task struct {
 	RunIDs          []domain.RunID       `json:"run_ids"`
 	// WIP is the authoritative admission-slot state, derived from LifecycleFacts
 	// (never from the newest run); Lifecycle above is display only (#1318).
-	WIP            bool                `json:"wip"`
-	LifecycleFacts []TaskLifecycleFact `json:"lifecycle_facts"`
+	WIP            bool                     `json:"wip"`
+	LifecycleFacts []TaskLifecycleFact      `json:"lifecycle_facts"`
+	Cancellation   *domain.TaskCancellation `json:"cancellation"`
 }
 
 // TaskLifecycleFact renders one recorded lifecycle event for display. The
@@ -91,7 +92,7 @@ func projectTaskSnapshot(ctx context.Context, tx *store.ReadTx, state store.Serv
 	value := Task{
 		ID: task.ID, ProjectID: task.ProjectID, DisplayNames: *names, Source: projectTaskSource(task.Source),
 		CreatedAt: task.CreatedAt, LastActivityAt: task.CreatedAt, CampaignIDs: task.CampaignIDs, RunIDs: ids,
-		WIP: domain.TaskWIP(task), LifecycleFacts: projectTaskLifecycleFacts(task.LifecycleFacts),
+		WIP: domain.TaskWIP(task), LifecycleFacts: projectTaskLifecycleFacts(task.LifecycleFacts), Cancellation: task.Cancellation,
 	}
 	campaigns := []domain.CampaignID{}
 	for _, id := range ids {

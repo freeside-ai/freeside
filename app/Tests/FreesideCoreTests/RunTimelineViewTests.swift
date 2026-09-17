@@ -27,6 +27,21 @@ import Testing
         }
     }
 
+    @Test func currentRunHandoffAgreesWithTaskRowAndHistoricalRunsKeepTheirPhase() throws {
+        let snapshot = try #require(RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.readyRunID })
+        let task = try #require(TaskFixtures.defaultTasks().first { $0.task.id == snapshot.run.task_id }).task
+        for degraded in [false, true] {
+            let items = [AttentionFixtures.publishedTaskReady(degraded: degraded)]
+            let row = try #require(TaskDisplay.position(task, runs: [snapshot], attentionItems: items)?.heading)
+            let detail = try #require(RunDisplay.stageHeading(snapshot.run, task: task, attentionItems: items))
+            #expect(row.label == detail.label)
+            #expect(row.round == nil && detail.round == nil)
+            var newer = task
+            newer.current_position?.value1.run_id = "newer-run"
+            #expect(RunDisplay.stageHeading(snapshot.run, task: newer, attentionItems: items)?.label == "Verification")
+        }
+    }
+
     @Test func invalidReviewTextIsLabeledWithoutChangingRetainedBytes() {
         let bytes: [UInt8] = [0x61, 0xff, 0x62]
         let output = ReviewOutputText(bytes: bytes)

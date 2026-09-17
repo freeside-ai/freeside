@@ -70,7 +70,15 @@ enum RunDisplay {
     }
 
     /// Shared by the row title and timeline header so their phase and round agree.
-    static func stageHeading(_ run: Components.Schemas.Run) -> (label: String, round: String?)? {
+    static func stageHeading(
+        _ run: Components.Schemas.Run, task: Components.Schemas.Task? = nil,
+        attentionItems: [Components.Schemas.AttentionItemSnapshot] = []
+    ) -> (label: String, round: String?)? {
+        if let task,
+            let handoff = TaskDisplay.finalReviewHeading(task, run: run, attentionItems: attentionItems)
+        {
+            return (handoff, nil)
+        }
         if let phase = workflowPhase(run) {
             return (AttentionDisplay.label(phase.stage), phase.round)
         }
