@@ -315,9 +315,14 @@ public struct MockServerTransport: ClientTransport {
                 switch try await server.submitCommand(command) {
                 case .ok(let result):
                     return try Self.json(status: .ok, body: result)
+                case .staleTask(let rejection):
+                    return try Self.json(status: .conflict, body: rejection)
                 case .stale(let rejection):
                     return try Self.json(status: .conflict, body: rejection)
                 }
+            } catch is MockServer.InactiveStopDeviceError {
+                return try Self.json(
+                    status: .forbidden, body: Components.Schemas._Error(message: "device is not active"))
             } catch let missing as MockServer.UnknownItemError {
                 // Daemon rejections are authoritative HTTP responses, not
                 // transport failures: the generated client surfaces the
@@ -329,8 +334,10 @@ public struct MockServerTransport: ClientTransport {
                         message: "no item exists under \(missing.itemID)")
                 )
             } catch let rejection as MockServer.ImmutableConflictError {
+                let status: HTTPResponse.Status =
+                    if case .stop_task = command.payload { .badRequest } else { .unprocessableContent }
                 return try Self.json(
-                    status: .unprocessableContent,
+                    status: status,
                     body: Components.Schemas._Error(
                         message: "command \(rejection.commandID) reused with a different body")
                 )
@@ -351,8 +358,10 @@ public struct MockServerTransport: ClientTransport {
                     )
                 )
             } catch let rejection as MockServer.MalformedCommandError {
+                let status: HTTPResponse.Status =
+                    if case .stop_task = command.payload { .badRequest } else { .unprocessableContent }
                 return try Self.json(
-                    status: .unprocessableContent,
+                    status: status,
                     body: Components.Schemas._Error(
                         message: "malformed command: \(rejection.reason)")
                 )

@@ -53,6 +53,47 @@ struct RealDaemonConvergenceTests {
         #expect(original.task.campaign_ids != next.task.campaign_ids)
     }
 
+    @Test func stopTaskAcceptanceReplayAndStaleBinding() async throws {
+        let device = try await ConvergenceHarness.pairDevice(displayName: "Task Stop")
+        let submission = Components.Schemas.ClientCommand(
+            command_id: UUID().uuidString, device_id: device.deviceID,
+            payload: .submit_task(
+                .init(
+                    kind: .submit_task, project_id: "submission-convergence", source: "# Cancellation contract fixture")
+            ))
+        let submitted = try await device.client.submitCommand(body: .json(submission)).ok.body.json
+        guard case .submit_task(let created) = submitted.record else {
+            Issue.record("missing submission")
+            return
+        }
+        let before = try await device.client.getSyncBootstrap().ok.body.json
+        let task = try #require(before.tasks.first { $0.task.id == created.task_id })
+        let command = Components.Schemas.ClientCommand(
+            command_id: UUID().uuidString, device_id: device.deviceID,
+            expected_entity_version: task.entity_version,
+            payload: .stop_task(
+                .init(
+                    kind: .stop_task, task_id: task.task.id, project_id: task.task.project_id,
+                    expected_sync_epoch: before.sync_epoch)))
+        let result = try await device.client.submitCommand(body: .json(command)).ok.body.json
+        #expect(CommandResultTrust.accepts(result, for: command))
+        #expect(try await device.client.submitCommand(body: .json(command)).ok.body.json == result)
+        let after = try await device.client.getSyncBootstrap().ok.body.json
+        let current = try #require(after.tasks.first { $0.task.id == task.task.id })
+        #expect(current.task.cancellation?.value1.state == .requested)
+        #expect(current.task.cancellation?.value1.acknowledgement == nil)
+        #expect(current.task.wip == task.task.wip)
+        var stale = command
+        stale.command_id = UUID().uuidString
+        let rejection = try await device.client.submitCommand(body: .json(stale)).conflict.body.json
+        guard case .StaleTaskRejection(let replacement) = rejection else {
+            Issue.record("wrong rejection arm")
+            return
+        }
+        #expect(replacement.replacement_task == current)
+        #expect(replacement.sync_epoch == after.sync_epoch)
+    }
+
     // MARK: - Pairing facts (plan §5.14)
 
     @Test func pairingPreviewReportsHostFactsAndLeavesTheCodeRedeemable() async throws {

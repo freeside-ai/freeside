@@ -1,0 +1,20 @@
+{
+  "request_id": "cancel-1",
+  "target": {
+    "task_id": "task-1",
+    "project_id": "project-1",
+    "episode_ordinal": 0,
+    "runs": [
+      {
+        "run_id": "run-1",
+        "campaign_id": null
+      }
+    ]
+  },
+  "target_digest": "sha256:bf2bac4b571141a74cebe95b6b8b59d9fb11344d3a2ab779f0dd5c2fa6343fad",
+  "sync_epoch": "epoch-1",
+  "fence_revision": 5,
+  "requested_at": "2026-09-17T01:00:00Z",
+  "state": "requested",
+  "acknowledgement": null
+}

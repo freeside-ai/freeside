@@ -27,3 +27,12 @@ extension Components.Schemas.CommandResult.recordPayload {
         set { self = .decision(newValue) }
     }
 }
+
+extension Components.Schemas.CommandRejection {
+    var asDecision: Components.Schemas.StaleVersionRejection {
+        guard case .StaleVersionRejection(let rejection) = self else {
+            preconditionFailure("expected a decision rejection")
+        }
+        return rejection
+    }
+}

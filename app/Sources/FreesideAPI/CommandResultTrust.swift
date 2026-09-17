@@ -23,6 +23,18 @@ public enum CommandResultTrust {
                 && record.action == payload.action
                 && record.message == expectedMessage
                 && record.attachments == (payload.attachments ?? [])
+        case .stop_task(let payload):
+            guard case .stop_task(let record) = result.record else { return false }
+            return record.command_id == command.command_id && record.device_id == command.device_id
+                && record.task_id == payload.task_id && record.project_id == payload.project_id
+                && record.expected_sync_epoch == payload.expected_sync_epoch
+                && record.expected_entity_version == command.expected_entity_version
+                && record.cancellation.target.task_id == payload.task_id
+                && record.cancellation.target.project_id == payload.project_id
+                && record.cancellation.fence_revision <= result.revision
+                && record.expected_entity_version == result.revision - 1
+                && record.cancellation.sync_epoch == payload.expected_sync_epoch
+                && MockContractValidation.cancellationBreach(record.cancellation) == nil
         case .submit_task(let payload):
             // A submit_task result names the created-or-fetched task; its source
             // digest must be the sha256 of exactly the submitted source, and its

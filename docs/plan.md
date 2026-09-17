@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 60
+revision: 61
 status: active
-updated: 2026-09-16
+updated: 2026-09-17
 ---
 
 # Freeside
@@ -387,6 +387,15 @@ word needs a real receipt from the device. The headline attention-latency
 metric is the time from opening an item to deciding it; the Section [1](#1-what-freeside-is) measure,
 useful, correct work per unit of attention, governs. An item's timing fields
 are aggregates derived from its deliveries.
+
+**TaskCancellation** records a task-scoped Stop independently of attention
+items, display lifecycle, and WIP. A paired device can request it while a task
+is queued or in specification, implementation, review, or verification. The
+record is absent (explicit null in sync), `requested`, `failed_to_stop`, or
+`confirmed`. Acceptance is not termination. Existing attention-item Stop
+semantics remain unchanged until their runtime adapters adopt this contract.
+A terminal-looking run, resolved card, abandonment, missing result, or timeout
+never proves quiescence.
 
 ### Phase 1 Item Types and Actions
 
@@ -1883,6 +1892,27 @@ decisions survive restart. Deterministic identities, reconciliation, and
 bounded retry make external effects converge on one intended result. Anything
 that cannot be safely retried waits for me.
 
+A task Stop commits its exact decoded command, immutable receipt and result
+revision, and daemon-derived task fence in one client-visible transaction.
+The fence captures task/project identity, sync epoch, current start ordinal
+(zero before any start), and all owned run/campaign memberships. It covers
+outstanding work and forbids continuation and descendants, rather than naming
+only the newest displayed run. Separate valid command IDs for the same target
+share the fence and do not repeat provider cancellation or reset failure.
+A fresh request after a sync-epoch change creates a fresh fence; old-epoch
+confirmation cannot establish current quiescence. New acknowledgements for
+old-epoch fences fail. Replaying a command returns its original receipt/revision
+after restart or acknowledgement; changed input or another command kind under
+that ID fails.
+
+Cancellation and completion/publication order at durable boundaries. A
+publication committed before the fence remains history. Runtime consumers
+must check the fence when admitting work, committing successor invocation
+intents, and authorizing publication. Work that finishes after the fence keeps
+its evidence but cannot authorize publication. On restart, reconcile all
+owned executions and fence further launches before acknowledging quiescence.
+An unresponsive provider or partially stopped child stays requested or failed.
+
 One logical control plane has a stable `control_plane_id`, and one or more
 enrolled hosts with distinct host identities. Exactly one host is active: a
 single global execution seat. GitHub App private keys stay per-machine
@@ -2134,6 +2164,16 @@ latency becomes a problem.
 The workflow is a Go state machine. YAML supplies policy only. Crash retry and
 agent remediation are separate mechanisms. A pipeline DSL waits until Freeside
 has three genuinely different workflow shapes.
+
+Task cancellation is a separate workflow input. #1367 defines acceptance,
+fence persistence, sync, and daemon-only acknowledgement helpers. #1368 owns
+admission, successor, provider/process, and publication enforcement plus
+restart reconciliation. #1344 consumes confirmed quiescence to record stopped
+lifecycle and release WIP; #1369 owns controls. The contract implementation has
+no live acknowledgement producer and leaves accepted requests pending. A
+failed acknowledgement retains the fence and may later be confirmed by bound
+evidence. Confirmation is final. No request deletes tasks, PRs, or evidence,
+changes existing completion facts, or authorizes task restart.
 
 Budgeting uses three clocks:
 
@@ -2524,6 +2564,27 @@ record is telemetry evidence only: it cannot widen the item's actions or
 authorize a command.
 
 A retry returns the original result.
+
+A `stop_task` command carries task ID, project ID, expected sync epoch, and the
+observed `TaskSnapshot.entity_version`. It carries no attention item, approval
+digest, decision surface, or execution IDs. The credential authenticates the
+device, its body ID must match, and active-device authority is rechecked inside
+the accepting transaction, including replay. New requests compare the epoch
+and the pre-write public task projection version, currently the global server
+revision. Using the private task-row version or next revision is incorrect.
+A mismatch returns HTTP 409 with the current task snapshot and epoch; a
+prepared Stop is never silently rebound. Unrelated revision advances may
+conservatively reject a new command. Same-ID exact replay precedes live-target
+version checks, but never revocation checks.
+
+The immutable Stop receipt includes the cancellation snapshot at acceptance;
+task sync exposes subsequent state. Daemon acknowledgements bind the request
+ID and target digest, carry an evidence digest and timestamp, and replay
+idempotently. A foreign or changed current target rejects the acknowledgement.
+Only the runtime producer may attest that every owned execution is quiescent
+and future launches are fenced. Clients cannot submit this acknowledgement or
+set cancellation state. A separate Stop on a confirmed target returns that
+state without restarting cancellation.
 
 Monotonic telemetry, the credential-control surface, and attachment upload sit
 outside `ClientCommand`:
@@ -4482,18 +4543,16 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 60 ("Deliberate Manual Submission Identity"):
+Revision 61 ("Durable Task Cancellation Requests"):
 
-1. **New Task always creates new work.** Distinct submissions receive distinct
-   tasks, runs, and campaigns even with identical input. Only explicit manual
-   Retry reuses a durably saved submission identity. No automatic resubmission
-   is authorized. Legacy recorded commands retain their original results and
-   replay checks, without inventing missing requested-name data. This reverses
-   the same-source reuse rule in revision 58 after the client exit exercise
-   showed that it reopened old work instead of creating the requested task.
-   (User decision, September 16, 2026; #1366;
-   [decision note](../devlog/2026-09-16-0830-manual-submission-identity.md);
-   separate ADR promotion: [#1387](https://github.com/freeside-ai/freeside/issues/1387).)
+1. **Stop acceptance and runtime quiescence are separate facts.** A task-wide
+   command records an immutable receipt and durable fence without an attention
+   item. Its target includes all owned runs and the current work episode.
+   Only bound daemon evidence may confirm quiescence; failure retains the fence.
+   Global projection-version checks prevent old prepared requests from stopping
+   changed work. Runtime enforcement, stopped lifecycle/WIP, and controls remain
+   the responsibilities of #1368, #1344, and #1369 respectively. (#1367;
+   [decision note](../devlog/2026-09-16-2100-task-cancellation-contract.md).)
 
 ## 14. Risks
 

@@ -395,7 +395,14 @@ import Testing
         #expect(bootstrap.attention_items == listed)
         #expect(bootstrap.attention_deliveries.isEmpty)
         #expect(bootstrap.runs == runs)
-        #expect(bootstrap.tasks == TaskFixtures.defaultTasks())
+        let taskRevision = bootstrap.revision
+        let projectedTasks = TaskFixtures.defaultTasks().map { snapshot in
+            var projected = snapshot
+            projected.entity_version = taskRevision
+            projected.as_of_revision = taskRevision
+            return projected
+        }
+        #expect(bootstrap.tasks == projectedTasks)
         #expect(Set(bootstrap.tasks.flatMap { $0.task.run_ids }) == Set(runs.map { $0.run.id }))
         #expect(bootstrap.schedules == schedules)
         #expect(bootstrap.conversations == AttentionFixtures.defaultConversations())

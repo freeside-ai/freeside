@@ -481,7 +481,14 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         let cache = InMemoryCacheStore()
         let coordinator = makeCoordinator(server: server, cache: cache)
         await coordinator.bootstrap()
-        #expect(coordinator.tasks == TaskFixtures.defaultTasks())
+        let taskRevision = try #require(coordinator.cursors).highestObservedServerRevision
+        let projectedTasks = TaskFixtures.defaultTasks().map { snapshot in
+            var projected = snapshot
+            projected.entity_version = taskRevision
+            projected.as_of_revision = taskRevision
+            return projected
+        }
+        #expect(coordinator.tasks == projectedTasks)
         let taskID = try #require(
             coordinator.tasks.first { $0.task.run_ids.contains(RunFixtures.activeRunID) }
         ).task.id
