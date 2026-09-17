@@ -256,8 +256,16 @@ enum RunDisplay {
         return .milestone("No milestone recorded")
     }
 
-    static func specificationLabel(_ run: Components.Schemas.Run) -> String {
-        run.stages.contains { $0.name == "implement" } ? "Approved specification" : "Source specification"
+    static func specificationLabel(_ run: Components.Schemas.Run, approval: TaskDisplay.SpecificationApproval) -> String
+    {
+        if run.stages.contains(where: { canonicalStageName($0.name) == "specification" }) {
+            return "Source specification"
+        }
+        switch approval {
+        case .approved: return "Approved specification"
+        case .unapproved: return "Source specification"
+        case .unavailable: return "Specification digest"
+        }
     }
 
     static func label(_ value: Components.Schemas.RunOutcome) -> String {

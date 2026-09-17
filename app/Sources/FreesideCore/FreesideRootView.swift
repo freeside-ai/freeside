@@ -194,6 +194,9 @@ public struct FreesideRootView: View {
                             runs: coordinator.runs,
                             schedules: coordinator.schedules,
                             attentionItems: coordinator.store.orderedSnapshots,
+                            taskTimelines: coordinator.taskTimelinesByTaskID,
+                            cursors: coordinator.cursors,
+                            onLoadTimeline: coordinator.refreshTaskTimeline,
                             selection: taskSelection,
                             onRefresh: coordinator.refresh)
                     }
@@ -345,6 +348,9 @@ public struct FreesideRootView: View {
                     runs: coordinator.runs,
                     schedules: coordinator.schedules,
                     attentionItems: coordinator.store.orderedSnapshots,
+                    taskTimelines: coordinator.taskTimelinesByTaskID,
+                    cursors: coordinator.cursors,
+                    onLoadTimeline: coordinator.refreshTaskTimeline,
                     selection: rawTaskSelectionBinding,
                     navigationPath: rawTasksPathBinding,
                     onRefresh: coordinator.refresh

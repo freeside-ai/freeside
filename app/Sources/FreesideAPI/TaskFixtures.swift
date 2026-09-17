@@ -2,6 +2,32 @@ import Foundation
 
 /// Stable task identities group a campaign's attempts in the sample snapshots.
 public enum TaskFixtures {
+    /// Complete daemon-shaped history, including the specification predecessor
+    /// that the default samples omit. The source and approved digests differ.
+    public static func approvedCampaign() -> (
+        task: Components.Schemas.TaskSnapshot, runs: [Components.Schemas.RunSnapshot],
+        history: Components.Schemas.TaskTimeline
+    ) {
+        guard let implementation = RunFixtures.defaultRuns().first(where: { $0.run.id == RunFixtures.readyRunID }),
+            var task = defaultTasks().first(where: { $0.task.id == implementation.run.task_id })
+        else { preconditionFailure("The approved campaign requires its implementation run and task fixtures") }
+        var specification = RunFixtures.handedOffSpecificationRun()
+        specification.run.spec_digest = "sha256:\(String(repeating: "3", count: 64))"
+        task.task.run_ids.insert(specification.run.id, at: 0)
+        let runs = [implementation, specification]
+        var history = timeline(
+            for: task.task, runs: runs.map(\.run), timelines: [:],
+            revision: task.as_of_revision, asOf: RunFixtures.screenshotInstant)
+        history.sections[0].events = [
+            .init(
+                kind: .specification_approved, recorded_at: RunFixtures.screenshotInstant,
+                campaign_id: implementation.run.campaign_id, run_id: implementation.run.id,
+                approved_spec_digest: .init(value1: implementation.run.spec_digest),
+                specification_run_id: specification.run.id)
+        ]
+        return (task, runs, history)
+    }
+
     /// Group the existing sample run observations by task. The sample run
     /// collection omits some specification predecessors, so it supplies no
     /// allocation or approval event for those incomplete campaign histories.

@@ -64,6 +64,26 @@ public final class SyncCoordinator {
     private var runListGeneration = 0
     private var timelineGenerations: [String: Int] = [:]
     private var taskTimelineGenerations: [String: Int] = [:]
+    private struct TaskHistoryKey: Equatable {
+        let taskID: String
+        let revision: Int64?
+        let epoch: String?
+        let fullRevision: Int64?
+        let generation: Int
+    }
+    private struct TaskHistoryRequest {
+        let key: TaskHistoryKey
+        let token: UUID
+        let operation: Task<Void, Never>
+    }
+    private var taskHistoryRequests: [String: TaskHistoryRequest] = [:]
+
+    private func taskHistoryKey(_ taskID: String) -> TaskHistoryKey {
+        .init(
+            taskID: taskID, revision: tasks.first { $0.task.id == taskID }?.as_of_revision,
+            epoch: cursors?.syncEpoch, fullRevision: cursors?.lastFullSnapshotRevision,
+            generation: cacheGeneration)
+    }
     private struct TaskReviewRequest {
         let key: TaskReviewRequestKey
         let token: UUID
@@ -598,6 +618,30 @@ public final class SyncCoordinator {
     /// The task counterpart of `refreshTimeline(for:)`, keyed by task id and
     /// held under the same cache-generation rules.
     public func refreshTaskTimeline(for taskID: String) async {
+        let key = taskHistoryKey(taskID)
+        while let existing = taskHistoryRequests[taskID], existing.key == key {
+            await existing.operation.value
+            guard !Task.isCancelled, key == taskHistoryKey(taskID) else { return }
+            if taskTimelineLoadStates[taskID] == .loaded { return }
+            if taskHistoryRequests[taskID]?.token == existing.token { taskHistoryRequests[taskID] = nil }
+        }
+        guard !Task.isCancelled else { return }
+        let token = UUID()
+        let operation = Task { await loadTaskTimeline(for: taskID) }
+        taskHistoryRequests[taskID] = .init(key: key, token: token, operation: operation)
+        await withTaskCancellationHandler {
+            await operation.value
+        } onCancel: {
+            operation.cancel()
+        }
+        if taskHistoryRequests[taskID]?.token == token,
+            taskTimelineLoadStates[taskID] != .loaded || key != taskHistoryKey(taskID)
+        {
+            taskHistoryRequests[taskID] = nil
+        }
+    }
+
+    private func loadTaskTimeline(for taskID: String) async {
         await refreshComputedTimeline(
             id: taskID,
             generations: \.taskTimelineGenerations,
@@ -609,7 +653,12 @@ public final class SyncCoordinator {
                 case .undocumented(let statusCode, _): .undocumented(status: statusCode)
                 }
             },
-            binds: { $0.task_id == taskID },
+            binds: { history in
+                history.task_id == taskID
+                    && tasks.first(where: { $0.task.id == taskID }).map {
+                        $0.task.project_id == history.project_id
+                    } != false
+            },
             adopt: { taskTimelinesByTaskID[taskID] = $0 },
             revision: \.as_of_revision)
     }
@@ -738,6 +787,7 @@ public final class SyncCoordinator {
         let listedTaskIDs = Set(snapshot.tasks.map(\.task.id))
         taskTimelinesByTaskID = taskTimelinesByTaskID.filter { listedTaskIDs.contains($0.key) }
         taskTimelineLoadStates = taskTimelineLoadStates.filter { listedTaskIDs.contains($0.key) }
+        taskHistoryRequests = taskHistoryRequests.filter { listedTaskIDs.contains($0.key) }
         cursors = SyncCursors(
             syncEpoch: snapshot.sync_epoch,
             lastFullSnapshotRevision: snapshot.revision,
@@ -836,6 +886,7 @@ public final class SyncCoordinator {
         tasks = []
         taskTimelinesByTaskID = [:]
         taskTimelineLoadStates = [:]
+        taskHistoryRequests = [:]
         cursors = nil
         persist()
     }

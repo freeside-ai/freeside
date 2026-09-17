@@ -92,6 +92,7 @@ public actor MockServer {
     }
 
     private var itemsByID: [String: Components.Schemas.AttentionItemSnapshot] = [:]
+    private var taskHistoryFixtures: [String: Components.Schemas.TaskTimeline] = [:]
     private var conversationsByID: [String: Components.Schemas.ConversationSnapshot] = [:]
     private var commandsByID: [String: NormalizedCommand] = [:]
     private var resultsByCommandID: [String: Components.Schemas.CommandResult] = [:]
@@ -184,6 +185,7 @@ public actor MockServer {
         tasks: [Components.Schemas.TaskSnapshot] = TaskFixtures.defaultTasks(),
         schedules: [Components.Schemas.ScheduleSnapshot] = RunFixtures.defaultSchedules(),
         timelines: [Components.Schemas.RunTimeline] = RunFixtures.defaultTimelines(),
+        taskTimelines: [Components.Schemas.TaskTimeline] = [],
         approvedRecipes: Set<String> = [AttentionFixtures.approvedRecipeDigest],
         authMode: AuthMode = .permissive,
         pairingCodes: [String: PairingCodeState] = [:],
@@ -194,6 +196,9 @@ public actor MockServer {
         attachments: [String: Data] = AttentionFixtures.defaultAttachments(),
         automaticallyCompletesAgentWork: Bool = false
     ) {
+        for timeline in taskTimelines {
+            taskHistoryFixtures[timeline.task_id] = timeline
+        }
         for snapshot in items {
             itemsByID[snapshot.item.id] = snapshot
         }
@@ -787,6 +792,7 @@ public actor MockServer {
 
     func taskTimeline(id: String) throws -> Components.Schemas.TaskTimeline? {
         guard let snapshot = try task(id: id) else { return nil }
+        if let history = taskHistoryFixtures[id] { return history }
         let snapshots: [Components.Schemas.RunSnapshot] = try runsByID.keys.sorted().compactMap { runID in
             guard runsByID[runID]?.run.task_id == id else { return nil }
             return try run(id: runID)

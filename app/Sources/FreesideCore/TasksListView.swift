@@ -7,6 +7,9 @@ struct TasksListView: View {
     /// (`TaskDisplay.position`).
     let runs: [Components.Schemas.RunSnapshot]
     let attentionItems: [Components.Schemas.AttentionItemSnapshot]
+    let taskTimelines: [String: Components.Schemas.TaskTimeline]
+    let cursors: SyncCursors?
+    private let onLoadTimeline: @MainActor (String) async -> Void
     /// The schedule list, so a row can show the armed watches and deadlines
     /// attached to the task's runs.
     let schedules: [Components.Schemas.ScheduleSnapshot]
@@ -20,6 +23,9 @@ struct TasksListView: View {
         runs: [Components.Schemas.RunSnapshot],
         schedules: [Components.Schemas.ScheduleSnapshot],
         attentionItems: [Components.Schemas.AttentionItemSnapshot] = [],
+        taskTimelines: [String: Components.Schemas.TaskTimeline] = [:],
+        cursors: SyncCursors? = nil,
+        onLoadTimeline: @escaping @MainActor (String) async -> Void = { _ in },
         selection: Binding<String?>,
         initialScope: TaskListFilter.Scope = .active,
         navigationPath: Binding<[String]>? = nil,
@@ -28,6 +34,9 @@ struct TasksListView: View {
         self.tasks = tasks
         self.runs = runs
         self.attentionItems = attentionItems
+        self.taskTimelines = taskTimelines
+        self.cursors = cursors
+        self.onLoadTimeline = onLoadTimeline
         self.schedules = schedules
         _selection = selection
         _filter = State(initialValue: TaskListFilter(scope: initialScope))
@@ -144,6 +153,9 @@ struct TasksListView: View {
                 #endif
             }
             .tag(snapshot.task.id)
+            .task(id: TaskTimelineView.TimelineRequestKey(snapshot: snapshot, cursors: cursors)) {
+                await onLoadTimeline(snapshot.task.id)
+            }
             .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
@@ -156,7 +168,8 @@ struct TasksListView: View {
     ) -> some View {
         TaskRowView(
             task: snapshot.task,
-            position: TaskDisplay.position(snapshot.task, runs: runs, attentionItems: attentionItems),
+            position: TaskDisplay.position(
+                snapshot.task, runs: runs, attentionItems: attentionItems, history: taskTimelines[snapshot.task.id]),
             schedules: TaskDisplay.armedSchedules(for: snapshot.task, in: schedules),
             isSelected: selection == snapshot.task.id,
             now: now)
@@ -342,6 +355,11 @@ struct TaskRowView: View {
                     axis: .horizontal,
                     showsSummaryText: false,
                     labelStyle: .compact)
+                if let qualification = position.qualification {
+                    Text(qualification)
+                        .font(FreesideFont.caption)
+                        .foregroundStyle(Color.inkDim)
+                }
                 if let hold = position.hold {
                     // A hold is attention, as it is on the run timeline.
                     Label(hold, systemImage: "pause.circle.fill")

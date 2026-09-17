@@ -259,7 +259,11 @@ import Testing
         let listed = try #require(TaskDisplay.position(retry, runs: runs))
         #expect(listed.heading == .init(label: "Verification", round: "Round 1"))
         #expect(listed.heading?.text == RunDisplay.title(active))
-        #expect(listed.rail == RunDisplay.stageRail(active))
+        #expect(listed.rail.entries == RunDisplay.stageRail(active).entries)
+        #expect(
+            listed.rail.summary
+                == "Specification approval history unavailable, Implementation completed, Review completed, Verification current"
+        )
         #expect(listed.hold == "Verification Findings")
 
         let fallback = try #require(TaskDisplay.position(retry, runs: []))
@@ -317,6 +321,25 @@ import Testing
     }
 
     #if os(macOS)
+        @Test @MainActor func visibleRowsRequestHistoryWithoutSelection() throws {
+            let fixture = TaskFixtures.approvedCampaign()
+            let state = TaskListProbeState(tasks: [fixture.task], selection: nil)
+            let host = NSHostingView(rootView: TaskListProbe(state: state))
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 400, height: 600),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.contentView = host
+            window.orderFront(nil)
+            defer { window.orderOut(nil) }
+            host.setFrameSize(NSSize(width: 400, height: 600))
+            host.layoutSubtreeIfNeeded()
+            try #require(pumpUntil { state.requests[fixture.task.task.id] == 1 })
+            #expect(state.selection == nil)
+            state.tasks[0].as_of_revision += 1
+            try #require(pumpUntil { state.requests[fixture.task.task.id] == 2 })
+            withExtendedLifetime(host) {}
+        }
+
         @Test @MainActor func finishedSelectionSurvivesColdSnapshotLoad() throws {
             let state = TaskListProbeState(tasks: [], selection: "task-campaign-freeside-completed")
             let host = NSHostingView(rootView: TaskListProbe(state: state))
@@ -361,6 +384,7 @@ import Testing
         var selection: String?
         var appeared = false
         var updates = 0
+        var requests: [String: Int] = [:]
 
         init(tasks: [Components.Schemas.TaskSnapshot], selection: String?) {
             self.tasks = tasks
@@ -372,10 +396,13 @@ import Testing
         @Bindable var state: TaskListProbeState
 
         var body: some View {
-            TasksListView(tasks: state.tasks, runs: [], schedules: [], selection: $state.selection)
-                .onAppear { state.appeared = true }
-                .onChange(of: state.tasks.map(\.task.id)) { state.updates += 1 }
-                .onChange(of: state.tasks.map(\.task.lifecycle)) { state.updates += 1 }
+            TasksListView(
+                tasks: state.tasks, runs: [], schedules: [],
+                onLoadTimeline: { state.requests[$0, default: 0] += 1 }, selection: $state.selection
+            )
+            .onAppear { state.appeared = true }
+            .onChange(of: state.tasks.map(\.task.id)) { state.updates += 1 }
+            .onChange(of: state.tasks.map(\.task.lifecycle)) { state.updates += 1 }
         }
     }
 #endif
