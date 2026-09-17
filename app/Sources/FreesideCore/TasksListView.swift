@@ -6,6 +6,7 @@ struct TasksListView: View {
     /// The run list, so a task's stage line can follow its newest run
     /// (`TaskDisplay.position`).
     let runs: [Components.Schemas.RunSnapshot]
+    let attentionItems: [Components.Schemas.AttentionItemSnapshot]
     /// The schedule list, so a row can show the armed watches and deadlines
     /// attached to the task's runs.
     let schedules: [Components.Schemas.ScheduleSnapshot]
@@ -18,6 +19,7 @@ struct TasksListView: View {
         tasks: [Components.Schemas.TaskSnapshot],
         runs: [Components.Schemas.RunSnapshot],
         schedules: [Components.Schemas.ScheduleSnapshot],
+        attentionItems: [Components.Schemas.AttentionItemSnapshot] = [],
         selection: Binding<String?>,
         initialScope: TaskListFilter.Scope = .active,
         navigationPath: Binding<[String]>? = nil,
@@ -25,6 +27,7 @@ struct TasksListView: View {
     ) {
         self.tasks = tasks
         self.runs = runs
+        self.attentionItems = attentionItems
         self.schedules = schedules
         _selection = selection
         _filter = State(initialValue: TaskListFilter(scope: initialScope))
@@ -153,7 +156,7 @@ struct TasksListView: View {
     ) -> some View {
         TaskRowView(
             task: snapshot.task,
-            position: TaskDisplay.position(snapshot.task, runs: runs),
+            position: TaskDisplay.position(snapshot.task, runs: runs, attentionItems: attentionItems),
             schedules: TaskDisplay.armedSchedules(for: snapshot.task, in: schedules),
             isSelected: selection == snapshot.task.id,
             now: now)

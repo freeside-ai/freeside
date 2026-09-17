@@ -96,7 +96,7 @@ struct RunTimelineView: View {
         .foregroundStyle(Color.ink)
     }
 
-    private func header(at size: DynamicTypeSize) -> some View {
+    func header(at size: DynamicTypeSize) -> some View {
         let accessibilityLayout = size >= .accessibility1
         let layout =
             accessibilityLayout
@@ -117,7 +117,11 @@ struct RunTimelineView: View {
                 RunOutcomeBadge(outcome: snapshot.run.outcome)
             }
             HStack(spacing: 14) {
-                if let heading = RunDisplay.stageHeading(snapshot.run) {
+                if let heading = RunDisplay.stageHeading(
+                    snapshot.run,
+                    task: coordinator.tasks.first { $0.task.id == snapshot.run.task_id }?.task,
+                    attentionItems: coordinator.store.orderedSnapshots)
+                {
                     Label(heading.label, systemImage: "square.stack.3d.up")
                     if let round = heading.round {
                         Label(round, systemImage: "arrow.triangle.2.circlepath")

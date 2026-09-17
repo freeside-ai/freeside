@@ -84,6 +84,65 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
 /// The client half of plan §5.14's cursor and freshness semantics,
 /// against the mock daemon.
 @Suite @MainActor struct SyncCoordinatorTests {
+    @Test func cachedHandoffConvergesAfterReturnToAgentAndRepublication() async throws {
+        let ready = AttentionFixtures.publishedTaskReady()
+        let server = MockServer(items: [ready])
+        let cache = InMemoryCacheStore()
+        let live = makeCoordinator(server: server, cache: cache)
+        await live.bootstrap()
+        func heading(_ coordinator: SyncCoordinator) throws -> String? {
+            let task = try #require(coordinator.tasks.first { $0.task.id == "task-campaign-freeside-ready" }).task
+            return TaskDisplay.position(
+                task, runs: coordinator.runs, attentionItems: coordinator.store.orderedSnapshots)?.heading?.label
+        }
+        #expect(try heading(live) == "Ready for final review")
+        let cached = makeCoordinator(server: server, cache: cache)
+        #expect(cached.store.freshness == .unvalidated)
+        #expect(try heading(cached) == "Ready for final review")
+        await server.setBeforeRespond { _ in throw MockOutage() }
+        await cached.heartbeat()
+        #expect(cached.store.freshness == .unreachable)
+        #expect(try heading(cached) == "Ready for final review")
+        await server.setBeforeRespond(nil)
+
+        let model = DecisionModel(store: live.store, itemID: ready.item.id)
+        await model.validate()
+        await model.submitReturnToAgent(message: "Revise the published work")
+        #expect(live.store.snapshotsByID[ready.item.id]?.item.status == .superseded)
+        #expect(try heading(live) == "Verification")
+        let before = try #require(cached.cursors)
+        await cached.refreshRuns()
+        #expect(cached.cursors?.lastFullSnapshotRevision == before.lastFullSnapshotRevision)
+        // A partial success retains the more specific outage warning until
+        // a full sync validates the cached attention items too.
+        #expect(cached.store.freshness == .unreachable)
+        #expect(try heading(cached) == "Ready for final review")
+        await cached.heartbeat()
+        #expect(cached.store.freshness == .fresh)
+        #expect(try heading(cached) == "Verification")
+
+        // The next canonical bootstrap may replace the concluded item with
+        // a new publication. Only that newly accepted item supplies the title.
+        let replacement = AttentionFixtures.publishedTaskReady(degraded: true)
+        await server.setBootstrapTransform { response in
+            var response = response
+            var replacement = replacement
+            replacement.as_of_revision = response.revision
+            response.attention_items = [replacement]
+            return response
+        }
+        await cached.bootstrap()
+        #expect(try heading(cached) == "Ready for final review (degraded)")
+        #expect(cached.store.snapshotsByID[ready.item.id] == nil)
+        await server.setBootstrapTransform(nil)
+        await server.restoreAttentionState(items: [], revision: 1)
+        await cached.heartbeat()
+        #expect(cached.cursors?.syncEpoch != before.syncEpoch)
+        #expect(cached.store.orderedSnapshots.isEmpty)
+        #expect(try heading(cached) == "Verification")
+        #expect(cache.load()?.attentionItems.isEmpty == true)
+    }
+
     @Test func bootstrapSetsBothCursorsAndPersistsTheCache() async throws {
         let cache = InMemoryCacheStore()
         let coordinator = makeCoordinator(server: MockServer(), cache: cache)
