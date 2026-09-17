@@ -95,6 +95,7 @@ struct TaskTimelineView: View {
 
     private func header(_ timeline: Components.Schemas.TaskTimeline?) -> some View {
         let task = snapshot.task
+        let lifecycle = TaskDisplay.lifecycleLabel(task)
         return VStack(alignment: .leading, spacing: 10) {
             eyebrow
             TaskNameLabel(
@@ -108,8 +109,8 @@ struct TaskTimelineView: View {
                     Label(issue, systemImage: "number")
                 }
                 Label(
-                    TaskDisplay.isActive(task) ? "Active" : "Finished",
-                    systemImage: TaskDisplay.isActive(task) ? "circle.dotted" : "checkmark.circle")
+                    lifecycle.text,
+                    systemImage: lifecycle.systemImage)
             }
             .font(FreesideFont.subheadline)
             .foregroundStyle(Color.inkDim)

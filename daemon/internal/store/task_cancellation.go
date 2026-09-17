@@ -298,7 +298,18 @@ func (tx *WriteTx) AcknowledgeTaskCancellation(ctx context.Context, ack domain.T
 	if err := c.Validate(); err != nil {
 		return false, err
 	}
+	// The current target was rechecked above under this same write lock. Release
+	// only its still-held episode, before inserting confirmation so TaskWIP still
+	// reports the held slot. No start and completed episodes append no fact.
+	if ack.State == domain.TaskCancellationConfirmed && domain.TaskWIP(task) {
+		if _, err := tx.AbandonTask(ctx, task.ID, ack.RecordedAt); err != nil {
+			return false, err
+		}
+	}
 	_, err = tx.tx.ExecContext(ctx, `INSERT INTO task_cancellation_acknowledgements VALUES (?, ?, ?, ?)`, ack.ID, ack.RequestID, tx.asOfRevision, body)
+	if err == nil {
+		_, err = tx.tx.ExecContext(ctx, `UPDATE tasks SET entity_version = entity_version + 1, as_of_revision = ? WHERE id = ?`, tx.asOfRevision, task.ID)
+	}
 	return err == nil, err
 }
 

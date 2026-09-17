@@ -83,6 +83,9 @@ struct RealDaemonConvergenceTests {
         #expect(current.task.cancellation?.value1.state == .requested)
         #expect(current.task.cancellation?.value1.acknowledgement == nil)
         #expect(current.task.wip == task.task.wip)
+        #expect(current.task.lifecycle == task.task.lifecycle)
+        #expect(current.task.lifecycle_facts == task.task.lifecycle_facts)
+        #expect(current.task.current_position == task.task.current_position)
         var stale = command
         stale.command_id = UUID().uuidString
         let rejection = try await device.client.submitCommand(body: .json(stale)).conflict.body.json

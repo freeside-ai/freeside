@@ -196,6 +196,26 @@ func (tx *ReadTx) taskLifecycleFacts(ctx context.Context, id domain.TaskID) ([]d
 		if err := tx.regateTaskLifecycleFacts(ctx, id, facts); err != nil {
 			return nil, err
 		}
+		ids, err := tx.TaskRunIDs(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		for i := range facts {
+			if facts[i].Kind != domain.TaskLifecycleCompleted {
+				continue
+			}
+			resultIndex := slices.Index(ids, facts[i].RunID)
+			facts[i].EpisodeOrdinal = -1 // A result predating every start is history.
+			for _, start := range facts[:i] {
+				// Migration 0072 collapsed the current campaign into one episode,
+				// using its newest launched run as the synthetic start. Its paired
+				// completion can therefore come from an earlier run in that campaign.
+				migrationPair := start.SourceID == "migration:start" && facts[i].SourceID == "migration:complete"
+				if start.Kind == domain.TaskLifecycleStarted && (migrationPair || slices.Index(ids, start.RunID) <= resultIndex) {
+					facts[i].EpisodeOrdinal = start.Ordinal
+				}
+			}
+		}
 	}
 	return facts, nil
 }
@@ -315,13 +335,34 @@ func (tx *WriteTx) RecordTaskLifecycleFact(ctx context.Context, taskID domain.Ta
 	return nil
 }
 
-// RecordTaskStart records an admitted workflow start for the run's task,
-// unless the task already holds its WIP slot (issue #1318 D3): a spec run and
+var (
+	ErrTaskAdmissionRequired  = errors.New("terminal task requires explicit WIP admission")
+	ErrTaskCancellationFenced = errors.New("task cancellation fences further starts")
+	ErrTaskWIPCapExhausted    = errors.New("task WIP cap exhausted")
+)
+
+// RecordTaskStart records an initial workflow start or ordinary continuation.
+// It cannot reopen a terminal episode or clear any cancellation fence.
+// A task that already holds its WIP slot records nothing: a spec run and
 // its implementation run in one campaign share one start, and a retry or
 // return on a still-WIP task records nothing. The source id is the run, so
 // replay and a re-recorded submission converge. The campaign is the run's, so
 // a later completion's currency is decidable from the log.
 func (tx *WriteTx) RecordTaskStart(ctx context.Context, runID domain.RunID, recordedAt time.Time) error {
+	return tx.recordTaskStart(ctx, runID, recordedAt, false, 0)
+}
+
+// AdmitTaskStart is reserved for explicit admission callers. The validated
+// configured cap, count and new start share the caller's write transaction.
+// Ordinary milestones must use RecordTaskStart instead.
+func (tx *WriteTx) AdmitTaskStart(ctx context.Context, runID domain.RunID, recordedAt time.Time, wipCap int) error {
+	if wipCap < 1 {
+		return ErrTaskAdmissionRequired
+	}
+	return tx.recordTaskStart(ctx, runID, recordedAt, true, wipCap)
+}
+
+func (tx *WriteTx) recordTaskStart(ctx context.Context, runID domain.RunID, recordedAt time.Time, admission bool, wipCap int) error {
 	run, err := tx.GetRun(ctx, runID)
 	if err != nil {
 		return err
@@ -333,8 +374,30 @@ func (tx *WriteTx) RecordTaskStart(ctx context.Context, runID domain.RunID, reco
 	if err != nil {
 		return err
 	}
+	if task.Cancellation != nil {
+		return ErrTaskCancellationFenced
+	}
 	if domain.TaskWIP(task) {
 		return nil
+	}
+	if task.CurrentStart() != nil && !admission {
+		return ErrTaskAdmissionRequired
+	}
+	if admission {
+		others, err := tx.CountProjectWIPTasks(ctx, task.ProjectID, task.ID)
+		if err != nil {
+			return err
+		}
+		if others >= wipCap {
+			return ErrTaskWIPCapExhausted
+		}
+		// An already-submitted run cannot acquire a fresh episode through a
+		// repeated admission. Its source key would silently reuse an old start.
+		for _, fact := range task.LifecycleFacts {
+			if fact.Kind == domain.TaskLifecycleStarted && fact.RunID == runID {
+				return ErrTaskAdmissionRequired
+			}
+		}
 	}
 	var campaign *domain.CampaignID
 	if run.CampaignID != "" {
@@ -345,6 +408,22 @@ func (tx *WriteTx) RecordTaskStart(ctx context.Context, runID domain.RunID, reco
 		Kind: domain.TaskLifecycleStarted, RunID: run.ID, CampaignID: campaign,
 		SourceID: "start:" + string(run.ID), RecordedAt: recordedAt.UTC(),
 	})
+}
+
+// CountProjectWIPTasks counts held slots, excluding the task being admitted.
+func (tx *ReadTx) CountProjectWIPTasks(ctx context.Context, projectID domain.ProjectID, exclude domain.TaskID) (int, error) {
+	tasks, err := tx.ListTasks(ctx)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, snapshot := range tasks {
+		task := snapshot.Value
+		if task.ProjectID == projectID && task.ID != exclude && domain.TaskWIP(task) {
+			count++
+		}
+	}
+	return count, nil
 }
 
 // RecordTaskCompletion records a work-unit completion as a task lifecycle fact

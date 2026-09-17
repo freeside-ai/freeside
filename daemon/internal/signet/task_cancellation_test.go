@@ -384,6 +384,16 @@ func TestStopTaskPreservesLifecycleAndRejectsPriorEpisodeAcknowledgement(t *test
 	}
 	if err := s.Write(t.Context(), func(tx *store.WriteTx) error {
 		return tx.RecordTaskStart(t.Context(), "run-implementation", start.Add(2*time.Second))
+	}); !errors.Is(err, store.ErrTaskCancellationFenced) {
+		t.Fatalf("late start crossed cancellation fence: %v", err)
+	}
+	// Pre-upgrade data could contain an unrestricted post-abandon start.
+	// Seed that historical fact explicitly; the live admission door refuses it.
+	if err := s.Write(t.Context(), func(tx *store.WriteTx) error {
+		return tx.RecordTaskLifecycleFact(t.Context(), id, domain.TaskLifecycleFact{
+			Kind: domain.TaskLifecycleStarted, RunID: "run-implementation",
+			SourceID: "start:run-implementation", RecordedAt: start.Add(2 * time.Second),
+		})
 	}); err != nil {
 		t.Fatal(err)
 	}

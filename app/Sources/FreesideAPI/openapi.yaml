@@ -1148,9 +1148,10 @@ components:
       type: object
       description: >
         Stored work identity and name across specification revisions, campaigns,
-        and retries. Lifecycle summarizes the newest run for display and never
+        and retries. Lifecycle projects task completion, confirmed stopping or
+        explicit abandonment, otherwise the newest run's display state. It never
         determines WIP membership; wip is the authoritative slot state, derived
-        from the recorded lifecycle facts. Source is null only for legacy or demo
+        from lifecycle facts and bound confirmed cancellation. Source is null only for legacy or demo
         work without a recoverable intake reference.
       additionalProperties: false
       required: [id, project_id, display_names, source, created_at, last_activity_at,
@@ -1177,8 +1178,15 @@ components:
         lifecycle:
           type: string
           nullable: true
-          enum: [active, finished, null]
-          description: The newest run's display lifecycle, or null before any run exists.
+          enum: [active, finished, stopped, abandoned, null]
+          description: >
+            A completed current episode is finished. Otherwise bound confirmed
+            cancellation is stopped, explicit current-episode abandonment is
+            abandoned, and unaffected tasks keep the newest run's display state.
+            Null means no run or terminal decision. A stopped task may have no
+            run or current_position. A finished run alone proves neither task
+            completion nor execution quiescence. Pending or failed cancellation
+            does not supply a terminal override.
         current_position:
           nullable: true
           allOf:

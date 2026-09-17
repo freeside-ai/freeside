@@ -1,0 +1,49 @@
+{
+  "as_of_revision": 3,
+  "entity_version": 3,
+  "task": {
+    "id": "task-queued",
+    "project_id": "project",
+    "display_names": {
+      "project": {
+        "text": "project",
+        "source": "identifier"
+      },
+      "task": {
+        "text": "Queued work",
+        "source": "operator"
+      }
+    },
+    "source": null,
+    "created_at": "2026-09-17T12:00:00Z",
+    "last_activity_at": "2026-09-17T12:00:00Z",
+    "lifecycle": "stopped",
+    "current_position": null,
+    "campaign_ids": [],
+    "run_ids": [],
+    "wip": false,
+    "lifecycle_facts": [],
+    "cancellation": {
+      "request_id": "cancel-queued",
+      "target": {
+        "task_id": "task-queued",
+        "project_id": "project",
+        "episode_ordinal": 0,
+        "runs": []
+      },
+      "target_digest": "sha256:5d54733ff7564ba7bbc8e604b3bb36e538830fed518d43d6494653b909e00b1a",
+      "sync_epoch": "epoch",
+      "fence_revision": 2,
+      "requested_at": "2026-09-17T12:00:00Z",
+      "state": "confirmed",
+      "acknowledgement": {
+        "id": "ack-queued",
+        "request_id": "cancel-queued",
+        "target_digest": "sha256:5d54733ff7564ba7bbc8e604b3bb36e538830fed518d43d6494653b909e00b1a",
+        "state": "confirmed",
+        "evidence_digest": "sha256:5d54733ff7564ba7bbc8e604b3bb36e538830fed518d43d6494653b909e00b1a",
+        "recorded_at": "2026-09-17T12:00:00Z"
+      }
+    }
+  }
+}

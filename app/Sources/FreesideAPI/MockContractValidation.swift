@@ -69,8 +69,21 @@ enum MockContractValidation {
             if position.run_id != task.run_ids.last || task.lifecycle == nil { return "invalid task position" }
             if let stage = position.stage, stage.isEmpty { return "empty task stage" }
             if let round = position.round, round < 1 { return "non-positive task round" }
-        } else if !task.run_ids.isEmpty || task.lifecycle != nil {
+        } else if !task.run_ids.isEmpty || (task.lifecycle != nil && task.lifecycle != .stopped) {
             return "missing task position"
+        }
+        if task.lifecycle == .stopped {
+            guard let cancellation = task.cancellation?.value1,
+                cancellation.state == .confirmed,
+                cancellation.target.episode_ordinal
+                    == (task.lifecycle_facts.lastIndex(where: { $0.kind == .started }).map({ $0 + 1 }) ?? 0),
+                !task.wip
+            else { return "stopped task lacks bound confirmation" }
+        }
+        if task.lifecycle == .abandoned {
+            guard let start = task.lifecycle_facts.lastIndex(where: { $0.kind == .started }),
+                task.lifecycle_facts.dropFirst(start + 1).contains(where: { $0.kind == .abandoned }), !task.wip
+            else { return "abandoned task lacks a released episode" }
         }
         if let source = task.source?.value1 {
             switch source {

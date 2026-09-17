@@ -32,13 +32,17 @@ type Task struct {
 // BindingUnitID is the completed work unit's binding, set only on a completion.
 // SourceID makes replay idempotent; the store dedupes on it.
 type TaskLifecycleFact struct {
-	Ordinal       int                   `json:"ordinal"`
-	Kind          TaskLifecycleFactKind `json:"kind"`
-	RunID         RunID                 `json:"run_id"`
-	CampaignID    *CampaignID           `json:"campaign_id"`
-	BindingUnitID *WorkUnitID           `json:"binding_unit_id"`
-	SourceID      string                `json:"source_id"`
-	RecordedAt    time.Time             `json:"recorded_at"`
+	// EpisodeOrdinal is reconstructed from ordered run membership and start
+	// facts. It prevents a late result from completing a newer same-campaign
+	// episode; it is never trusted from serialized input.
+	EpisodeOrdinal int                   `json:"-"`
+	Ordinal        int                   `json:"ordinal"`
+	Kind           TaskLifecycleFactKind `json:"kind"`
+	RunID          RunID                 `json:"run_id"`
+	CampaignID     *CampaignID           `json:"campaign_id"`
+	BindingUnitID  *WorkUnitID           `json:"binding_unit_id"`
+	SourceID       string                `json:"source_id"`
+	RecordedAt     time.Time             `json:"recorded_at"`
 }
 
 func (f TaskLifecycleFact) Validate() error {
@@ -80,14 +84,16 @@ func (f TaskLifecycleFact) Validate() error {
 // TaskWIP reports whether the task occupies a work-in-progress admission slot,
 // derived from its lifecycle facts (never stored; issue #1318 D2, D4). The
 // task is WIP when its newest recorded start has neither a later abandonment
-// nor a later completion bound to that start's campaign (the current work
+// nor a later completion bound to that start's episode and campaign (the current work
 // episode). Currency is decided against the newest start's campaign, not the
 // last of CampaignIDs: a reserved-but-unstarted proposal appends its campaign
 // to CampaignIDs but records no start, and it must not shift currency so that a
 // completion of the actually-running campaign stops releasing the slot
 // (docs/plan.md §5.11). A completion bound to a superseded campaign stays in
 // the log but does not release the slot. Facts before the newest start are
-// prior history: they cannot clear a restarted task's slot.
+// prior history: they cannot clear a restarted task's slot. Bound confirmed
+// cancellation also releases the slot, including confirmations recorded before
+// atomic cancellation-to-abandonment projection existed.
 func TaskWIP(t Task) bool {
 	newestStart := -1
 	for i, f := range t.LifecycleFacts {
@@ -98,6 +104,9 @@ func TaskWIP(t Task) bool {
 	if newestStart < 0 {
 		return false
 	}
+	if t.confirmedCancellationForCurrentEpisode() {
+		return false
+	}
 	current := t.LifecycleFacts[newestStart].CampaignID
 	for i := newestStart + 1; i < len(t.LifecycleFacts); i++ {
 		f := t.LifecycleFacts[i]
@@ -105,7 +114,7 @@ func TaskWIP(t Task) bool {
 		case TaskLifecycleAbandoned:
 			return false
 		case TaskLifecycleCompleted:
-			if sameCampaign(f.CampaignID, current) {
+			if sameCampaign(f.CampaignID, current) && (f.EpisodeOrdinal == 0 || f.EpisodeOrdinal == t.LifecycleFacts[newestStart].Ordinal) {
 				return false
 			}
 		case TaskLifecycleStarted:
@@ -113,6 +122,58 @@ func TaskWIP(t Task) bool {
 		}
 	}
 	return true
+}
+
+// DisplayLifecycle keeps terminal task decisions separate from run history.
+// A completed episode stays finished even when cancellation follows. Otherwise
+// confirmed cancellation wins over administrative abandonment. A finished run
+// alone retains its display meaning without certifying completion or stopping.
+func (t Task) DisplayLifecycle(newest *RunLifecycle) *TaskLifecycle {
+	var value TaskLifecycle
+	start := t.CurrentStart()
+	if start != nil {
+		for _, fact := range t.LifecycleFacts {
+			if fact.Ordinal > start.Ordinal && fact.Kind == TaskLifecycleCompleted &&
+				sameCampaign(fact.CampaignID, start.CampaignID) &&
+				(fact.EpisodeOrdinal == 0 || fact.EpisodeOrdinal == start.Ordinal) {
+				value = TaskFinished
+				return &value
+			}
+		}
+	}
+	if t.confirmedCancellationForCurrentEpisode() {
+		value = TaskStopped
+		return &value
+	}
+	if start != nil {
+		for _, fact := range t.LifecycleFacts {
+			if fact.Ordinal > start.Ordinal && fact.Kind == TaskLifecycleAbandoned {
+				value = TaskAbandoned
+				return &value
+			}
+		}
+	}
+	if newest == nil {
+		return nil
+	}
+	switch *newest {
+	case RunLifecycleActive:
+		value = TaskActive
+	case RunLifecycleFinished:
+		value = TaskFinished
+	}
+	return &value
+}
+
+func (t Task) confirmedCancellationForCurrentEpisode() bool {
+	if t.Cancellation == nil || t.Cancellation.State != TaskCancellationConfirmed {
+		return false
+	}
+	ordinal := 0
+	if start := t.CurrentStart(); start != nil {
+		ordinal = start.Ordinal
+	}
+	return t.Cancellation.Target.EpisodeOrdinal == ordinal
 }
 
 func sameCampaign(a, b *CampaignID) bool {

@@ -77,14 +77,9 @@ func ParseIntakePolicy(resolved domain.ResolvedPolicy) (IntakePolicy, error) {
 	for _, key := range resolved.Keys {
 		keys[key.Key] = key
 	}
-	capKey, ok := keys[PolicyRunWIPCap]
-	if !ok {
-		return IntakePolicy{}, fmt.Errorf("%w: %s", ErrIntakePolicyMissing, PolicyRunWIPCap)
-	}
-	wipCap, err := strconv.Atoi(capKey.Value)
-	if err != nil || wipCap < 1 || wipCap > MaxRunWIPCap {
-		return IntakePolicy{}, fmt.Errorf("%w: %s must be an integer in [1, %d]",
-			ErrIntakePolicyMalformed, PolicyRunWIPCap, MaxRunWIPCap)
+	wipCap, err := ParseTaskWIPCap(resolved)
+	if err != nil {
+		return IntakePolicy{}, err
 	}
 	modeKey, ok := keys[PolicyInitiatorMode]
 	if !ok {
@@ -100,6 +95,25 @@ func ParseIntakePolicy(resolved domain.ResolvedPolicy) (IntakePolicy, error) {
 		Mode:           mode,
 		ModeProvenance: modeKey.Provenance.Source,
 	}, nil
+}
+
+// ParseTaskWIPCap validates the task limit without requiring label-intake mode.
+// Explicit retries use the same cap contract as unattended intake.
+func ParseTaskWIPCap(resolved domain.ResolvedPolicy) (int, error) {
+	if err := resolved.Validate(); err != nil {
+		return 0, err
+	}
+	for _, key := range resolved.Keys {
+		if key.Key != PolicyRunWIPCap {
+			continue
+		}
+		cap, err := strconv.Atoi(key.Value)
+		if err != nil || cap < 1 || cap > MaxRunWIPCap {
+			return 0, fmt.Errorf("%w: %s must be an integer in [1, %d]", ErrIntakePolicyMalformed, PolicyRunWIPCap, MaxRunWIPCap)
+		}
+		return cap, nil
+	}
+	return 0, fmt.Errorf("%w: %s", ErrIntakePolicyMissing, PolicyRunWIPCap)
 }
 
 // AutoStartAuthorized is the provenance predicate: auto_start is eligible only

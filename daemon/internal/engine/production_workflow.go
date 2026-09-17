@@ -16,6 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
+	"github.com/freeside-ai/freeside/daemon/internal/intake"
 	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
@@ -282,6 +283,18 @@ func submitProductionRun(
 	if st == nil {
 		return ProductionRun{}, errors.New("submit production run: nil store")
 	}
+	var result ProductionRun
+	err := st.Write(ctx, func(tx *store.WriteTx) error {
+		var err error
+		result, err = submitProductionRunTx(ctx, tx, spec, specificationGrant, false)
+		return err
+	})
+	return result, err
+}
+
+// A deliberate reattempt shares this transaction with attempt allocation and
+// may request cap-checked re-admission. No routine submission grants that right.
+func submitProductionRunTx(ctx context.Context, tx *store.WriteTx, spec ProductionRunSpec, specificationGrant *specificationRequest, readmit bool) (ProductionRun, error) {
 	if spec.RunID == "" || spec.ProjectID == "" {
 		return ProductionRun{}, fmt.Errorf("submit production run: run and project ids are required: %w", domain.ErrEmptyID)
 	}
@@ -328,7 +341,7 @@ func submitProductionRun(
 		run        domain.Run
 		runCreated bool
 	)
-	err = st.Write(ctx, func(tx *store.WriteTx) error {
+	err = func() error {
 		if err := authorizeProductionSubmission(ctx, tx, spec, specificationGrant); err != nil {
 			return err
 		}
@@ -603,10 +616,21 @@ func submitProductionRun(
 		}); err != nil {
 			return err
 		}
-		// An admitted implementation-run submission is a task start unless the
-		// task already holds its slot from its specification run (issue #1318 D3).
+		if readmit {
+			task, err := tx.GetTask(ctx, run.TaskID)
+			if err != nil {
+				return err
+			}
+			if !domain.TaskWIP(task) {
+				cap, err := intake.ParseTaskWIPCap(spec.ResolvedPolicy)
+				if err != nil {
+					return err
+				}
+				return tx.AdmitTaskStart(ctx, spec.RunID, time.Now().UTC(), cap)
+			}
+		}
 		return tx.RecordTaskStart(ctx, spec.RunID, time.Now().UTC())
-	})
+	}()
 	if err != nil {
 		return ProductionRun{}, fmt.Errorf("submit production run %q: %w", spec.RunID, err)
 	}

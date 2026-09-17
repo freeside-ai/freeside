@@ -54,7 +54,23 @@ func productionFailureCardID(runID domain.RunID) domain.ItemID {
 // driveApprovedCampaign submits and approves a specification run, so the
 // campaign's attempt 1 implementation run exists and is ready to dispatch. It
 // returns the campaign and the derived specification run id.
-func driveApprovedCampaign(t *testing.T, f *workflowFixture) (domain.CampaignID, domain.RunID) {
+func driveApprovedCampaign(t *testing.T, f *workflowFixture, additionalKeys ...domain.PolicyKey) (domain.CampaignID, domain.RunID) {
+	t.Helper()
+	campaignID, specificationRunID, approval := driveCampaignToApproval(t, f, additionalKeys...)
+	if _, err := f.signet.Submit(context.Background(), signet.ClientCommand{
+		CommandID: "approve-attempt-sweep", DeviceID: deviceA,
+		ExpectedEntityVersion: approval.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: approval.Item.ID, Action: domain.ActionApprove,
+			ItemVersion: approval.Item.ItemVersion, ArtifactDigests: approval.Item.ArtifactDigests,
+		},
+	}); err != nil {
+		t.Fatalf("approve specification: %v", err)
+	}
+	return campaignID, specificationRunID
+}
+
+func driveCampaignToApproval(t *testing.T, f *workflowFixture, additionalKeys ...domain.PolicyKey) (domain.CampaignID, domain.RunID, signet.AttentionItemSnapshot) {
 	t.Helper()
 	ctx := context.Background()
 	f.seedDevices(t)
@@ -69,7 +85,7 @@ func driveApprovedCampaign(t *testing.T, f *workflowFixture) (domain.CampaignID,
 		t.Fatalf("derive campaign: %v", err)
 	}
 	source, policyArtifact, resolved := registerSubmissionArtifactsWithPolicyKeys(
-		t, f.store, string(specificationRunID), capabilityRetryPolicy(t, manifest, specificationRunID))
+		t, f.store, string(specificationRunID), append(capabilityRetryPolicy(t, manifest, specificationRunID), additionalKeys...))
 	policyBody, err := json.Marshal(resolved.Keys)
 	if err != nil {
 		t.Fatalf("marshal policy keys: %v", err)
@@ -118,17 +134,7 @@ func driveApprovedCampaign(t *testing.T, f *workflowFixture) (domain.CampaignID,
 	if err != nil {
 		t.Fatalf("get specification approval: %v", err)
 	}
-	if _, err := f.signet.Submit(ctx, signet.ClientCommand{
-		CommandID: "approve-attempt-sweep", DeviceID: deviceA,
-		ExpectedEntityVersion: approval.EntityVersion,
-		Payload: signet.DecisionPayload{
-			ItemID: approval.Item.ID, Action: domain.ActionApprove,
-			ItemVersion: approval.Item.ItemVersion, ArtifactDigests: approval.Item.ArtifactDigests,
-		},
-	}); err != nil {
-		t.Fatalf("approve specification: %v", err)
-	}
-	return campaignID, specificationRunID
+	return campaignID, specificationRunID, approval
 }
 
 // driveRunToFailureCard scripts the run's implementation invocation to fail

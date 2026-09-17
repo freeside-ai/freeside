@@ -1794,3 +1794,14 @@ Revision 60 ("Deliberate Manual Submission Identity"):
    (User decision, September 16, 2026; #1366;
    [decision note](../../devlog/2026-09-16-0830-manual-submission-identity.md);
    separate ADR promotion: [#1387](https://github.com/freeside-ai/freeside/issues/1387).)
+
+Revision 61 ("Durable Task Cancellation Requests"):
+
+1. **Stop acceptance and runtime quiescence are separate facts.** A task-wide
+   command records an immutable receipt and durable fence without an attention
+   item. Its target includes all owned runs and the current work episode.
+   Only bound daemon evidence may confirm quiescence; failure retains the fence.
+   Global projection-version checks prevent old prepared requests from stopping
+   changed work. Runtime enforcement, stopped lifecycle/WIP, and controls remain
+   the responsibilities of #1368, #1344, and #1369 respectively. (#1367;
+   [decision note](../../devlog/2026-09-16-2100-task-cancellation-contract.md).)

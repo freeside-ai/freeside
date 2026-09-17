@@ -758,7 +758,13 @@ A new stale command returns the current task snapshot and epoch.
 
 This contract has no runtime acknowledgement producer or task Stop control.
 Acceptance stays pending until #1368 supplies bound quiescence evidence;
-#1344 owns stopped lifecycle/WIP and #1369 owns controls. No client may set
+#1369 owns controls. A bound confirmed acknowledgement atomically releases
+any held episode and projects `stopped`; an already completed episode stays
+`finished`. Explicit abandonment projects `abandoned` without claiming that
+execution stopped. Stopped and abandoned tasks leave Active filters and remain
+in Finished/All history. A confirmed queued task needs no run or position.
+Ordinary submission cannot reopen a terminal episode; an uncancelled explicit
+retry needs atomic cap-checked admission, and cancellation forbids it. No client may set
 cancellation state. The mock also stays pending unless a test explicitly seeds
 acknowledgement evidence. See [the plan](../docs/plan.md#59-durability-effectively-once)
 for admission/publication ordering, late results, and restart reconciliation.
