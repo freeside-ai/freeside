@@ -141,6 +141,9 @@ func (p *Publisher) convergeSuccessorPR(ctx context.Context, repo repoRef, ident
 		return 0, ErrPublicationConflict
 	}
 	if pr.Title != title || pr.Body != body {
+		if err := p.taskEffectOpen(ctx, candidate); err != nil {
+			return 0, err
+		}
 		pr, err = p.forge.updatePR(ctx, repo, pr.Number, title, body)
 		if err != nil {
 			return 0, err

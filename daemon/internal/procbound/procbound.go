@@ -30,6 +30,7 @@
 package procbound
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -110,4 +111,49 @@ func Run(cmd *exec.Cmd, waitDelay time.Duration) error {
 	err := cmd.Run()
 	Reap(cmd)
 	return err
+}
+
+// ErrQuiescenceUnproven means cancellation or reaping did not establish that
+// the command's owned process group is absent. It must never release task WIP.
+var ErrQuiescenceUnproven = errors.New("owned process group absence is unproven")
+
+// ConfirmExit observes the exact group created by Bind, after Run or Wait
+// has returned. A command that never started has no group to join. This is
+// separate from Run's exit error: a failed command can still be quiescent.
+// It never signals another process and cannot recover a PID after a restart.
+func ConfirmExit(cmd *exec.Cmd, timeout time.Duration) error {
+	if cmd == nil {
+		return ErrQuiescenceUnproven
+	}
+	if cmd.Process == nil {
+		return nil
+	}
+	if cmd.SysProcAttr == nil || !cmd.SysProcAttr.Setpgid || cmd.ProcessState == nil {
+		return ErrQuiescenceUnproven
+	}
+	if timeout <= 0 {
+		timeout = DefaultWaitDelay
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return awaitGroupAbsence(ctx, func() error { return syscall.Kill(-cmd.Process.Pid, 0) })
+}
+
+func awaitGroupAbsence(ctx context.Context, probe func() error) error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		err := probe()
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		if err != nil {
+			return errors.Join(ErrQuiescenceUnproven, err)
+		}
+		select {
+		case <-ctx.Done():
+			return errors.Join(ErrQuiescenceUnproven, ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }

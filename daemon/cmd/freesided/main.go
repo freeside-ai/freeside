@@ -686,6 +686,12 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		doctorAvailable       atomic.Bool
 	)
 	attention := signet.NewService(st,
+		signet.WithTaskStopGuard(func(stopCtx context.Context, taskID domain.TaskID, commit func() error) error {
+			if workflow == nil {
+				return commit()
+			}
+			return workflow.CommitTaskStop(stopCtx, taskID, commit)
+		}),
 		signet.WithPairingKey(pairingKey),
 		signet.WithHostFacts(signet.HostFacts{DisplayName: hostName, ConnectionMode: connectionMode}),
 		signet.WithClock(cfg.now),
@@ -780,6 +786,11 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		if err != nil {
 			return nil, fmt.Errorf("compose subscription judgments: %w", err)
 		}
+		ownedJudgments, err := ward.NewTaskJudgments(filepath.Join(cfg.StateDir, "task-judgments"), judgmentBinding.Driver)
+		if err != nil {
+			return nil, err
+		}
+		judgmentBinding.Driver = ownedJudgments
 		judgments, err := inference.New(inference.Config{
 			StatePath:  filepath.Join(cfg.StateDir, "inference-budget.json"),
 			AnchorPath: cfg.DBPath + ".inference-budget-anchor",
@@ -820,6 +831,66 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 				}
 			}
 		}
+		verificationOwnership, err := ward.NewVerificationOwnership(
+			filepath.Join(cfg.StateDir, "task-verification"), ward.NewCLIRuntime(claudeWiring.containerBin))
+		if err != nil {
+			return nil, err
+		}
+		var existingTasks []domain.TaskID
+		var coverageEpoch string
+		if err := st.Read(ctx, func(tx *store.ReadTx) error {
+			state, err := tx.ServerState(ctx)
+			if err != nil {
+				return err
+			}
+			coverageEpoch = state.SyncEpoch
+			tasks, err := tx.ListTasks(ctx)
+			for _, task := range tasks {
+				existingTasks = append(existingTasks, task.Value.ID)
+			}
+			return err
+		}); err != nil {
+			return nil, err
+		}
+		coverage, err := ward.OpenCancellationCoverage(filepath.Join(cfg.StateDir, "task-runtime-coverage.json"), coverageEpoch, existingTasks)
+		if err != nil {
+			return nil, err
+		}
+		engineOptions = append(engineOptions, engine.WithTaskCancellationRuntime(engine.TaskCancellationRuntime{
+			Timeout: 2 * time.Minute,
+			StopRun: func(stopCtx context.Context, run domain.Run, reviews []domain.ReviewRequestRecord) error {
+				var joined error
+				// Still request exact known teardown for an uncovered legacy task,
+				// but never equate its missing private records with absence.
+				state, err := st.ServerState(stopCtx)
+				joined = errors.Join(err, coverage.Covers(run.TaskID, state.SyncEpoch))
+				var mu sync.Mutex
+				var children sync.WaitGroup
+				stop := func(call func() error) {
+					children.Go(func() {
+						err := call()
+						mu.Lock()
+						joined = errors.Join(joined, err)
+						mu.Unlock()
+					})
+				}
+				for _, stage := range run.Stages {
+					for _, attempt := range stage.Attempts {
+						stop(func() error { return claudeWiring.driver.CancelAndConfirm(stopCtx, attempt.InvocationID) })
+					}
+				}
+				for _, review := range reviews {
+					stop(func() error {
+						return engine.StopTaskReviews(stopCtx, st, review, claudeWiring.reviewSource, claudeWiring.shadowReviewSource)
+					})
+				}
+				stop(func() error { return verificationOwnership.StopRun(stopCtx, run.TaskID, run.ID) })
+				stop(func() error { return ownedJudgments.ConfirmRun(stopCtx, run.TaskID, run.ID) })
+				stop(func() error { return claudeWiring.publisher.ReconcileCancelledRun(stopCtx, run.ID) })
+				children.Wait()
+				return joined
+			},
+		}))
 		engineOptions = append(engineOptions, engine.WithProductionPublication(engine.ProductionPublicationConfig{
 			WorkDir:   filepath.Join(cfg.Claude.SeedRoot, "production-publication"),
 			Transport: claudeWiring.publicationTransport,
@@ -839,6 +910,16 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			HoldOnly:               cfg.Claude.OperatingMode != domain.ModeUnattended,
 			NewRoom: func(image domain.ProjectImage) (engine.ProductionVerificationRoom, error) {
 				return ward.NewProjectImageRoom(claudeWiring.containerBin, image)
+			},
+			NewBoundRoom: func(image domain.ProjectImage, run domain.Run, invocation domain.InvocationID) (engine.ProductionVerificationRoom, error) {
+				room, err := ward.NewProjectImageRoom(claudeWiring.containerBin, image)
+				if err != nil {
+					return nil, err
+				}
+				if err := verificationOwnership.Bind(room, run.TaskID, run.ID, invocation); err != nil {
+					return nil, err
+				}
+				return room, nil
 			},
 		}))
 		if cfg.Claude.OperatingMode == domain.ModeUnattended {
@@ -862,6 +943,14 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		workflow, err = engine.New(st, attention, stageDriver, engineOptions...)
 		if err != nil {
 			return nil, err
+		}
+		claudeWiring.driver.SetRecoveryLauncher(workflow.ResumeTaskInvocation)
+		for _, source := range []exec.ReviewSource{claudeWiring.reviewSource, claudeWiring.shadowReviewSource} {
+			if guarded, ok := source.(interface {
+				SetTaskWorkGuard(func(context.Context, domain.RunID) (context.Context, func(), error))
+			}); ok {
+				guarded.SetTaskWorkGuard(workflow.BeginRunWork)
+			}
 		}
 		// Give every orphan its first adoption attempt before the engine loop.
 		// A permanent reconstruction failure stops startup; an operational
@@ -996,7 +1085,11 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}()
 	}
 	if workflow != nil {
-		d.wg.Add(1)
+		d.wg.Add(2)
+		go func() {
+			defer d.wg.Done()
+			d.componentExited(parent, ctx, componentWorkflow, workflow.RunTaskCancellations(ctx, cfg.ReconcileInterval))
+		}()
 		go func() {
 			defer d.wg.Done()
 			d.componentExited(parent, ctx, componentWorkflow, workflow.Run(ctx, cfg.ReconcileInterval))

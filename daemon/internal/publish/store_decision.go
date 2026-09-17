@@ -21,6 +21,11 @@ type storePublicationDecision struct {
 func (d *storePublicationDecision) revalidateOutcomeRepair(
 	ctx context.Context, c Candidate, audit domain.WorkflowAudit,
 ) error {
+	if err := d.store.Read(ctx, func(tx *store.ReadTx) error {
+		return requireTaskPublicationOpen(ctx, tx, c.RunID)
+	}); err != nil {
+		return err
+	}
 	if c.DispositionHistory == nil {
 		return nil
 	}
@@ -96,6 +101,9 @@ func (d *storePublicationDecision) prepare(
 		decisionErr error
 	)
 	err := d.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := requireTaskPublicationOpen(ctx, &tx.ReadTx, c.RunID); err != nil {
+			return err
+		}
 		if err := validateSuccessorCandidate(ctx, &tx.ReadTx, c, producingInvocationID); err != nil {
 			return err
 		}

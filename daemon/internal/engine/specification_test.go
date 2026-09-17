@@ -1350,19 +1350,8 @@ func TestSpecificationDiscussionDeliveryFailureRepliesFailSafe(t *testing.T) {
 	if err := specifyfake.Script(driver, lateID, 0, 1, specify.Output{Reply: &lateReply}); err != nil {
 		t.Fatal(err)
 	}
-	item, snapshot = f.item(t, itemID)
-	if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
-		CommandID: "stop-before-spec-reply", DeviceID: "device-1",
-		ExpectedEntityVersion: snapshot.EntityVersion,
-		Payload: signet.DecisionPayload{
-			ItemID: item.ID, Action: domain.ActionStop, ItemVersion: item.ItemVersion,
-			ArtifactDigests: item.ArtifactDigests,
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := engine.Reconcile(t.Context()); err != nil {
-		t.Fatalf("enqueue late discussion after stop: %v", err)
+		t.Fatalf("enqueue discussion before stop: %v", err)
 	}
 	var marker store.QueueEntry
 	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
@@ -1373,12 +1362,25 @@ func TestSpecificationDiscussionDeliveryFailureRepliesFailSafe(t *testing.T) {
 		t.Fatalf("late discussion marker = %+v, error = %v", marker, err)
 	}
 	if _, err := engine.Reconcile(t.Context()); err != nil {
-		t.Fatalf("start late discussion after stop: %v", err)
+		t.Fatalf("start discussion before stop: %v", err)
 	}
 	conversation, err = f.signet.GetConversation(t.Context(), *item.ConversationID)
 	if err != nil || conversation.Conversation.Status != domain.ConversationAwaitingAgent ||
 		len(conversation.Conversation.Messages) != 5 {
 		t.Fatalf("in-flight late discussion = %+v, error = %v", conversation, err)
+	}
+	// Stop fences new launches; evidence from this already-started call is
+	// still accepted.
+	item, snapshot = f.item(t, itemID)
+	if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
+		CommandID: "stop-before-spec-reply", DeviceID: "device-1",
+		ExpectedEntityVersion: snapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: item.ID, Action: domain.ActionStop, ItemVersion: item.ItemVersion,
+			ArtifactDigests: item.ArtifactDigests,
+		},
+	}); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := engine.Reconcile(t.Context()); err != nil {
 		t.Fatalf("accept late discussion: %v", err)

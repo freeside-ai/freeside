@@ -1133,6 +1133,9 @@ func (intent *preparedRemediationIntent) persist(
 	ctx context.Context,
 	tx *store.WriteTx,
 ) error {
+	if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, intent.request.RunID); err != nil {
+		return err
+	}
 	currentRecord, err := tx.GetReviewRecord(ctx, intent.reviewRecord.InvocationID)
 	if err != nil {
 		return err

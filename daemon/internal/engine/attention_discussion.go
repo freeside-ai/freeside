@@ -233,7 +233,12 @@ func (e *Engine) produceAttentionDiscussionReply(
 		importer.ContainsSecret([]byte(discussion.item.Reason)) {
 		return unavailableAttentionDiscussionReply, nil
 	}
-	reply, fallback, err := e.inference.DiscussAttentionItem(ctx, inference.DiscussionInput{
+	workCtx, finish, err := e.BeginRunWork(ctx, *discussion.item.Subject.RunID)
+	if err != nil {
+		return "", err
+	}
+	defer finish()
+	reply, fallback, err := e.inference.DiscussAttentionItem(workCtx, inference.DiscussionInput{
 		Project: string(discussion.item.ProjectID), RootLineage: string(*discussion.item.Subject.RunID),
 		ItemType: string(discussion.item.Type), Reason: discussion.item.Reason,
 		CardFacts: string(cardFacts), Conversation: string(prefix),

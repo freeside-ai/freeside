@@ -102,6 +102,14 @@ func (e *Engine) nameTaskIfUnnamed(ctx context.Context, run domain.Run) error {
 	if !e.inference.SupportsSite(inference.TaskNamerSiteID) || e.specification == nil {
 		return nil
 	}
+	ctx, finish, err := e.beginTaskWork(ctx, run)
+	if errors.Is(err, store.ErrTaskCancellationFenced) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer finish()
 	var task domain.Task
 	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error

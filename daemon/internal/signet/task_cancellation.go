@@ -32,44 +32,52 @@ func (s *Service) stopTask(ctx context.Context, in ClientCommand) (CommandResult
 		return CommandResult{}, ErrInvalidStopTaskPayload
 	}
 	var result CommandResult
-	err := s.store.Write(ctx, func(tx *store.WriteTx) error {
-		if err := gateActiveDevice(ctx, tx, in.DeviceID); err != nil {
-			return err
-		}
-		if old, snap, err := tx.GetStopTaskReceipt(ctx, in.CommandID); err == nil {
-			if old.StopTaskRequest != request {
-				return store.ErrImmutableConflict
+	commit := func() error {
+		return s.store.Write(ctx, func(tx *store.WriteTx) error {
+			if err := gateActiveDevice(ctx, tx, in.DeviceID); err != nil {
+				return err
 			}
-			result = CommandResult{Stop: &old, Revision: snap.AsOfRevision}
-			return errReplay
-		} else if !errors.Is(err, store.ErrNotFound) {
-			return err
-		}
-		task, err := tx.GetTask(ctx, request.TaskID)
-		if err != nil {
-			return err
-		}
-		if task.ProjectID != request.ProjectID {
-			return store.ErrNotFound
-		}
-		receipt, snap, err := tx.StopTask(ctx, request, s.now().UTC())
-		if errors.Is(err, store.ErrCancellationBinding) {
-			state, err := tx.ServerState(ctx)
+			if old, snap, err := tx.GetStopTaskReceipt(ctx, in.CommandID); err == nil {
+				if old.StopTaskRequest != request {
+					return store.ErrImmutableConflict
+				}
+				result = CommandResult{Stop: &old, Revision: snap.AsOfRevision}
+				return errReplay
+			} else if !errors.Is(err, store.ErrNotFound) {
+				return err
+			}
+			task, err := tx.GetTask(ctx, request.TaskID)
 			if err != nil {
 				return err
 			}
-			snapshot, err := currentTaskSnapshot(ctx, &tx.ReadTx, state, task)
+			if task.ProjectID != request.ProjectID {
+				return store.ErrNotFound
+			}
+			receipt, snap, err := tx.StopTask(ctx, request, s.now().UTC())
+			if errors.Is(err, store.ErrCancellationBinding) {
+				state, err := tx.ServerState(ctx)
+				if err != nil {
+					return err
+				}
+				snapshot, err := currentTaskSnapshot(ctx, &tx.ReadTx, state, task)
+				if err != nil {
+					return err
+				}
+				return &StaleTaskError{ReplacementTask: snapshot, SyncEpoch: state.SyncEpoch}
+			}
 			if err != nil {
 				return err
 			}
-			return &StaleTaskError{ReplacementTask: snapshot, SyncEpoch: state.SyncEpoch}
-		}
-		if err != nil {
-			return err
-		}
-		result = CommandResult{Stop: &receipt, Revision: snap.AsOfRevision}
-		return nil
-	})
+			result = CommandResult{Stop: &receipt, Revision: snap.AsOfRevision}
+			return nil
+		})
+	}
+	var err error
+	if s.taskStopGuard != nil {
+		err = s.taskStopGuard(ctx, request.TaskID, commit)
+	} else {
+		err = commit()
+	}
 	if err != nil && !errors.Is(err, errReplay) {
 		return CommandResult{}, err
 	}

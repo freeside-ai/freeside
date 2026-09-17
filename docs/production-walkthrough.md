@@ -6,6 +6,10 @@ listener remain available to the paired Mac and iPhone. The production deadline
 ends at publication; the walkthrough has no automatic deadline or stdin prompt.
 Closing the shell is an interruption, not a request to complete the walkthrough.
 
+For a task-specific Stop exercise, follow the
+[controlled cancellation check](task-cancellation-check.md). It records runtime
+evidence separately from the walkthrough's publication and shutdown checks.
+
 ## Start And Verify
 
 Use the harness header's required environment and input files. The three

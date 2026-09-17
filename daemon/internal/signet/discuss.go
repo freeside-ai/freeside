@@ -178,6 +178,19 @@ func (s *Service) validateCommandContent(command domain.Command) error {
 // (message "msg-<id>", invocation "inv-<id>") and the item ("conv-<id>"), so
 // they need no randomness and a replayed command converges on the same rows.
 func (s *Service) applyDiscuss(ctx context.Context, tx *store.WriteTx, command domain.Command, item domain.AttentionItem, snap store.Snapshot) error {
+	if item.Subject.RunID != nil {
+		run, err := tx.GetRun(ctx, *item.Subject.RunID)
+		if err != nil {
+			return err
+		}
+		task, err := tx.GetTask(ctx, run.TaskID)
+		if err != nil {
+			return err
+		}
+		if task.Cancellation != nil {
+			return store.ErrTaskCancellationFenced
+		}
+	}
 	conversation := domain.Conversation{
 		ID:     domain.ConversationID("conv-" + string(item.ID)),
 		Status: domain.ConversationIdle,

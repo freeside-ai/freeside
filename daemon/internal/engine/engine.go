@@ -57,6 +57,9 @@ type Engine struct {
 	specification               *specificationWorkflow
 	inference                   *inference.Client
 	taskNames                   chan domain.Run
+	cancellation                taskCancellationCoordinator
+	taskExecutionMu             sync.Mutex
+	taskExecutions              map[domain.TaskID]*taskExecution
 	// artifacts reads persisted agent evidence by digest (a blocked
 	// implementer's decisions). It is the blob store the configured
 	// workflows already share; the first workflow option that carries one
@@ -177,6 +180,7 @@ func New(st *store.Store, attention *signet.Service, driver exec.StageDriver, op
 		}
 	}
 	if e.productionPublication != nil {
+		e.productionPublication.beginTaskWork = e.BeginRunWork
 		if e.admission != nil && !e.productionPublication.holdOnly &&
 			e.productionDeliveryValidator == nil {
 			return nil, errors.New("new engine: active production admission has no delivery validator")
@@ -188,6 +192,7 @@ func New(st *store.Store, attention *signet.Service, driver exec.StageDriver, op
 		if e.inference.SupportsSite(inference.AdjudicatorSiteID) {
 			e.productionPublication.findingAdjudicator = &productionFindingAdjudicator{
 				client: e.inference, store: e.store, artifacts: e.productionPublication.artifacts,
+				beginTaskWork: e.BeginRunWork,
 			}
 		}
 	}
@@ -403,6 +408,12 @@ func (e *Engine) RunProductionPublications(ctx context.Context, interval time.Du
 			_, err := e.ReconcileProductionPublications(ctx)
 			return err
 		})
+}
+
+// RunTaskCancellations has an independent cadence: a provider call or slow
+// publication cannot delay discovery of a committed task fence.
+func (e *Engine) RunTaskCancellations(ctx context.Context, interval time.Duration) error {
+	return runReconcileLoop(ctx, e.logger, "run task cancellations", interval, e.ReconcileTaskCancellations)
 }
 
 // runReconcileLoop runs pass immediately and then on interval until ctx is

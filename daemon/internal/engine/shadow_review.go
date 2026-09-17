@@ -529,6 +529,14 @@ func (w *productionPublicationWorkflow) classifySampleFinding(
 	}
 	decision := inference.ConservativeClassifierDecision(finding, version)
 	if w.inference != nil {
+		if w.beginTaskWork != nil {
+			workCtx, finish, err := w.beginTaskWork(ctx, task.RunID)
+			if err != nil {
+				return domain.Finding{}, domain.Classification{}, err
+			}
+			defer finish()
+			ctx = workCtx
+		}
 		decision, err = w.inference.ClassifyFinding(
 			ctx, string(task.ProjectID), string(task.RunID), finding, version)
 		if err != nil {

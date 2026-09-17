@@ -1894,7 +1894,7 @@ func (d *Driver) recoverIntent(ctx context.Context, in intent) error {
 		// exist and nothing external happened. Re-running the pipeline is
 		// both safe and better than losing the work item: the intent already
 		// pins every value a replay must reproduce.
-		return d.resume(in)
+		return d.resume(ctx, in)
 	case phaseExported, phaseImportPending:
 		// The gate closed its journal when Handoff returned and refuses to
 		// recover a closed record, so this window is the driver's to finish.
@@ -1915,11 +1915,39 @@ func (d *Driver) recoverIntent(ctx context.Context, in intent) error {
 				return fmt.Errorf("%w: return pre-journal refusal to seeding: %w",
 					ErrRecoveryRetryable, err)
 			}
-			return d.resume(in)
+			return d.resume(ctx, in)
 		}
 	case phaseCommitted, phaseLost:
 		return nil
 	}
+	if d.recoveryLauncher != nil {
+		entered := false
+		err := d.recoveryLauncher(ctx, in.Spec.RunID, func(launchCtx context.Context) error {
+			entered = true
+			return d.recoverRunning(launchCtx, in)
+		})
+		if !errors.Is(err, ErrTaskCancelled) {
+			return err
+		}
+		if entered {
+			// Stop canceled an actual recovery call. Its durable phase may
+			// already have advanced, so retry through the ordinary dispatcher
+			// instead of repeating recovery with this stale intent.
+			return fmt.Errorf("%w: %w", ErrRecoveryRetryable, err)
+		}
+		// A pre-existing task fence permits only cancellation recovery.
+		// Persist that authority before ward can observe or export anything.
+		if err := d.gate.RequestCancellation(ctx, in.RunID); err != nil {
+			return err
+		}
+	}
+	return d.recoverRunning(ctx, in)
+}
+
+// recoverRunning stays inside the task registration through reconstruction,
+// ward recovery, and retaining its result. Stop must join the actual operation,
+// not merely the lookup that supplies its cancellation context.
+func (d *Driver) recoverRunning(ctx context.Context, in intent) error {
 	hs, err := d.handoffSpec(ctx, in)
 	if err != nil {
 		return fmt.Errorf("%w: rebuild running handoff: %w", ErrRecoveryRetryable, err)
@@ -2082,18 +2110,38 @@ func truncateSummary(s string) string {
 
 // resume restarts a pipeline for an intent whose external effects had not
 // begun, under the same in-process bookkeeping a fresh Start uses.
-func (d *Driver) resume(in intent) error {
+func (d *Driver) resume(ctx context.Context, in intent) error {
+	if d.recoveryLauncher == nil {
+		return d.resumePipeline(ctx, in)
+	}
+	err := d.recoveryLauncher(ctx, in.Spec.RunID, func(launchCtx context.Context) error {
+		return d.resumePipeline(launchCtx, in)
+	})
+	if errors.Is(err, ErrTaskCancelled) {
+		settled := &session{cancel: func() {}, done: make(chan struct{})}
+		close(settled.done)
+		return d.commitPreJournalCancellation(in.InvocationID, settled)
+	}
+	return err
+}
+
+func (d *Driver) resumePipeline(ctx context.Context, in intent) error {
 	d.mu.Lock()
 	if d.closed {
 		d.mu.Unlock()
 		return fmt.Errorf("%w: %w", ErrRecoveryRetryable, ErrDriverClosed)
 	}
 	runCtx, cancel := context.WithCancel(d.lifetime)
+	stopTaskCancellation := func() bool { return false }
+	if task, ok := ctx.Value(taskCancellationKey{}).(context.Context); ok {
+		stopTaskCancellation = context.AfterFunc(task, cancel)
+	}
 	sess := &session{cancel: cancel, done: make(chan struct{})}
 	d.running[in.InvocationID] = sess
 	d.mu.Unlock()
 	go func() {
 		defer close(sess.done)
+		defer stopTaskCancellation()
 		d.runPipeline(runCtx, in)
 		d.mu.Lock()
 		if sess.pendingIntent == nil && sess.pendingResult == nil {

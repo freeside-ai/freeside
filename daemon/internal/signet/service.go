@@ -66,6 +66,14 @@ type Service struct {
 	// closed; it is injected because the engine imports signet, so signet
 	// cannot call the engine directly.
 	taskSubmitter TaskSubmitter
+	taskStopGuard func(context.Context, domain.TaskID, func() error) error
+}
+
+// WithTaskStopGuard connects Stop acceptance to the runtime's short launch
+// boundary. The guard must call commit exactly once and must not wait for
+// provider execution or teardown while accepting the command.
+func WithTaskStopGuard(guard func(context.Context, domain.TaskID, func() error) error) Option {
+	return func(s *Service) { s.taskStopGuard = guard }
 }
 
 // Option configures a Service. The clock and randomness sources exist so
@@ -223,7 +231,7 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 // submitDecision accepts one decision ClientCommand and applies it in the
 // accepting transaction. Command-id replay and durable item policy take
 // precedence over per-action content policy.
-func (s *Service) submitDecision(ctx context.Context, in ClientCommand) (CommandResult, error) {
+func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientCommand) (CommandResult, error) {
 	if err := s.convergeProposalSnoozes(ctx, s.now().UTC()); err != nil {
 		return CommandResult{}, fmt.Errorf("submit command %q proposal snoozes: %w", in.CommandID, err)
 	}
@@ -358,6 +366,9 @@ func (s *Service) submitDecision(ctx context.Context, in ClientCommand) (Command
 			// durable item's offered set against current per-type signet policy.
 			if err := tx.PutCommand(ctx, command); err != nil {
 				return translateRejection(err, snap)
+			}
+			if err := s.applySpecificationStop(ctx, tx, command, item); err != nil {
+				return err
 			}
 			switch status, kind := actionOutcome(command.Action); kind {
 			case outcomeConcludes:

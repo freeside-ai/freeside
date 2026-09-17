@@ -172,6 +172,9 @@ func (e *Engine) enqueueOperatorFeedbackRetry(ctx context.Context, command domai
 		return false, err
 	}
 	err = e.store.Write(ctx, func(tx *store.WriteTx) error {
+		if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, run.ID); err != nil {
+			return err
+		}
 		storedCommand, err := tx.GetCommand(ctx, command.CommandID)
 		if err != nil || !reflect.DeepEqual(storedCommand, command) {
 			return errors.Join(err, domain.ErrParentKeyMismatch)
@@ -204,6 +207,9 @@ func (e *Engine) enqueueOperatorFeedbackRetry(ctx context.Context, command domai
 		inserted = made
 		return nil
 	})
+	if errors.Is(err, store.ErrTaskCancellationFenced) {
+		return false, nil
+	}
 	if err != nil {
 		if errors.Is(err, store.ErrPublicationCompleted) {
 			return e.recordCompletedOperatorFeedbackRetry(ctx, sourceItem, command)

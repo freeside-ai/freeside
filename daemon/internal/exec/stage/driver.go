@@ -100,13 +100,14 @@ type Config struct {
 // exec.MaterializingStageDriver so digest verification always completes
 // before an intent is committed.
 type Driver struct {
-	errorPrefix string
-	displayName string
-	dir         string
-	seedRoot    string
-	exportRoot  string
-	seedMu      sync.Mutex
-	seedFS      *os.Root
+	recoveryLauncher func(context.Context, domain.RunID, func(context.Context) error) error
+	errorPrefix      string
+	displayName      string
+	dir              string
+	seedRoot         string
+	exportRoot       string
+	seedMu           sync.Mutex
+	seedFS           *os.Root
 	// seedCleanupWarned records, per invocation, the last terminal-seed-cleanup
 	// failure already reported (by error identity), so a persistent removal
 	// failure logs once rather than on every idempotent Inspect/Collect, yet a
@@ -476,6 +477,9 @@ func (d *Driver) StartWithInputs(
 	} else if !errors.Is(err, exec.ErrUnknownInvocation) {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if d.preJob != nil {
 		if err := d.preJob(ctx, id); err != nil {
 			return fmt.Errorf("pre-job probe: %w",
@@ -542,6 +546,9 @@ func (d *Driver) StartWithInputs(
 	if _, err := d.handoffSpec(ctx, in); err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := d.saveIntent(in); err != nil {
 		return err
 	}
@@ -549,10 +556,15 @@ func (d *Driver) StartWithInputs(
 	// The pipeline outlives this reconcile call but not its owning daemon.
 	// Close cancels and awaits this session before the store is closed.
 	runCtx, cancel := context.WithCancel(d.lifetime)
+	stopTaskCancellation := func() bool { return false }
+	if task, ok := ctx.Value(taskCancellationKey{}).(context.Context); ok {
+		stopTaskCancellation = context.AfterFunc(task, cancel)
+	}
 	sess := &session{cancel: cancel, done: make(chan struct{})}
 	d.running[id] = sess
 	go func() {
 		defer close(sess.done)
+		defer stopTaskCancellation()
 		d.runPipeline(runCtx, in)
 		d.mu.Lock()
 		if sess.pendingIntent == nil && sess.pendingResult == nil {
@@ -561,6 +573,23 @@ func (d *Driver) StartWithInputs(
 		d.mu.Unlock()
 	}()
 	return nil
+}
+
+type taskCancellationKey struct{}
+
+var ErrTaskCancelled = errors.New("task cancellation forbids invocation recovery")
+
+// SetRecoveryLauncher installs the same task launch boundary the engine uses
+// for Start. Composition calls it before startup recovery or serving requests.
+func (d *Driver) SetRecoveryLauncher(launch func(context.Context, domain.RunID, func(context.Context) error) error) {
+	d.recoveryLauncher = launch
+}
+
+// WithTaskCancellation binds an invocation to a task's cancellation signal
+// without changing Start's rule that ordinary request contexts do not own the
+// asynchronous pipeline's lifetime.
+func WithTaskCancellation(ctx, task context.Context) context.Context {
+	return context.WithValue(ctx, taskCancellationKey{}, task)
 }
 
 // Close prevents new starts, cancels every in-process session, and waits for
@@ -746,26 +775,98 @@ func (d *Driver) Cancel(ctx context.Context, id domain.InvocationID) error {
 		return nil
 	}
 	sess, live := d.running[id]
+	if !live {
+		if _, recovering := d.recovering[id]; recovering {
+			d.mu.Unlock()
+			return fmt.Errorf("%w: invocation %s is being recovered", ErrRecoveryRetryable, id)
+		}
+		d.recovering[id] = struct{}{}
+	}
 	d.mu.Unlock()
 	if !live {
-		// An orphaned intent has no pipeline to stop; Reconcile adopts or
-		// loses it against the gate's journal, which is the only honest way
-		// to end a handoff this process did not start.
-		return nil
+		defer func() {
+			d.mu.Lock()
+			delete(d.recovering, id)
+			d.mu.Unlock()
+		}()
+		// A released export already proved ward teardown. Finish retaining its
+		// evidence without starting a new writer or replacing that outcome.
+		if in.Phase == phaseExported || in.Phase == phaseImportPending {
+			return d.recoverIntent(ctx, in)
+		}
 	}
 	cancelErr := d.gate.RequestCancellation(ctx, in.RunID)
 	preJournal := errors.Is(cancelErr, ward.ErrJournalRecordNotFound)
 	if cancelErr != nil && !preJournal {
 		return fmt.Errorf("invocation %s cancellation intent: %w", id, cancelErr)
 	}
+	if !live {
+		if preJournal {
+			// Journal absence excludes a ward launch, but an old host seeder
+			// may still be alive. Preserve cancellation without claiming that
+			// the orphan is quiescent. Do not resume its seed.
+			settled := &session{cancel: func() {}, done: make(chan struct{})}
+			close(settled.done)
+			return d.commitPreJournalCancellation(id, settled)
+		}
+		if in.Phase == phaseSeeding {
+			return fmt.Errorf("%w: seeding invocation %s already has a handoff journal", ErrRecoveryRetryable, id)
+		}
+		return d.recoverIntent(ctx, in)
+	}
 	sess.cancel()
-	<-sess.done
+	select {
+	case <-sess.done:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	if preJournal {
 		if err := d.commitPreJournalCancellation(id, sess); err != nil {
 			return fmt.Errorf("invocation %s pre-journal cancellation: %w", id, err)
 		}
 	}
 	return nil
+}
+
+// CancelAndConfirm is the concrete task-stop adapter. It joins the local
+// pipeline and requires ward's fresh owned-resource absence proof. The shared
+// StageDriver.Cancel result and Inspection.Live are deliberately insufficient.
+func (d *Driver) CancelAndConfirm(ctx context.Context, id domain.InvocationID) error {
+	if err := d.Cancel(ctx, id); err != nil {
+		return err
+	}
+	d.mu.Lock()
+	in, err := d.loadIntentAdmission(ctx, id)
+	sess := d.running[id]
+	_, recovering := d.recovering[id]
+	d.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if recovering {
+		return fmt.Errorf("%w: recovery is still active", ErrRecoveryRetryable)
+	}
+	if sess != nil {
+		select {
+		case <-sess.done:
+		default:
+			return fmt.Errorf("%w: pipeline is still active", ErrRecoveryRetryable)
+		}
+	}
+	started, err := d.gate.HandoffStarted(ctx, in.RunID)
+	if err != nil {
+		return err
+	}
+	if !started {
+		return fmt.Errorf("%w: pre-journal host-process quiescence is unproven", ErrRecoveryRetryable)
+	}
+	proof, ok := d.gate.(interface {
+		HandoffQuiescent(context.Context, string) error
+	})
+	if !ok {
+		return errors.New("handoff runtime cannot prove task cancellation quiescence")
+	}
+	return proof.HandoffQuiescent(ctx, in.RunID)
 }
 
 // commitPreJournalCancellation makes a successful user cancellation terminal
