@@ -343,30 +343,17 @@ struct TaskRowView: View {
         VStack(alignment: .leading, spacing: 7) {
             TaskNameLabel(name: task.display_names.task)
             metaText(at: now)
-            if let position {
-                if let heading = position.heading {
-                    Text(heading.text)
+            let progress = TaskDisplay.progressLines(task, position: position)
+            VStack(alignment: .leading, spacing: 5) {
+                ForEach(Array(progress.enumerated()), id: \.offset) { index, line in
+                    Text(line)
                         .font(FreesideFont.caption)
-                        .foregroundStyle(Color.ink)
-                }
-                StageRail(
-                    title: nil,
-                    presentation: position.rail,
-                    axis: .horizontal,
-                    showsSummaryText: false,
-                    labelStyle: .compact)
-                if let qualification = position.qualification {
-                    Text(qualification)
-                        .font(FreesideFont.caption)
-                        .foregroundStyle(Color.inkDim)
-                }
-                if let hold = position.hold {
-                    // A hold is attention, as it is on the run timeline.
-                    Label(hold, systemImage: "pause.circle.fill")
-                        .font(FreesideFont.caption)
-                        .foregroundStyle(Color.accentText)
+                        .fontWeight(index == 0 ? .semibold : .regular)
+                        .foregroundStyle(index == 0 ? Color.ink : Color.inkDim)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            .accessibilityElement(children: .combine)
             if !schedules.isEmpty {
                 WrappingHStack(horizontalSpacing: 6, verticalSpacing: 6) {
                     ForEach(schedules, id: \.schedule.id) { snapshot in

@@ -46,6 +46,10 @@ import Testing
         #expect(
             TaskDisplay.specificationApproval(
                 fixture.task.task, runID: retry.run.id, run: retry.run, history: fixture.history) == .approved)
+        let retryPosition = TaskDisplay.position(fixture.task.task, runs: [retry], history: fixture.history)
+        #expect(
+            TaskDisplay.progressLines(fixture.task.task, position: retryPosition).joined()
+                .contains("Specification Completed"))
         // A revised campaign starts with its own unapproved specification.
         var revised = fixture.runs[1]
         revised.run.id = "revised-specification"

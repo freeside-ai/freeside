@@ -1203,6 +1203,27 @@
                 throw ScreenshotError.missingRetryTask
             }
             let approvalFixture = TaskFixtures.approvedCampaign()
+            for (group, names) in TaskProgressFixtures.groups.enumerated() {
+                for width in [CGFloat(320), CGFloat(390)] {
+                    for scheme in [ColorScheme.light, .dark] {
+                        surfaces.append(
+                            Surface(
+                                name: "task-progress-\(group)-\(Int(width))-\(scheme)",
+                                width: width, colorScheme: scheme, nativeAppearance: true,
+                                view: AnyView(
+                                    VStack(alignment: .leading, spacing: 16) {
+                                        ForEach(names, id: \.self) { name in
+                                            let fixture = TaskProgressFixtures.make(name)
+                                            Text(name).font(FreesideFont.subheadline)
+                                            TaskRowView(
+                                                task: fixture.task, position: fixture.position,
+                                                now: RunFixtures.screenshotInstant,
+                                                differentiateWithoutColorOverride: true)
+                                        }
+                                    }.padding())))
+                    }
+                }
+            }
             var failedImplementation = approvalFixture.runs[0]
             failedImplementation.run.outcome = .failed
             failedImplementation.run.lifecycle = .finished
