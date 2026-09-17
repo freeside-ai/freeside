@@ -1312,7 +1312,7 @@ public enum Components {
                 ])
             }
         }
-        /// Stored work identity and name across specification revisions, campaigns, and retries. Lifecycle summarizes the newest run for display and never determines WIP membership; wip is the authoritative slot state, derived from the recorded lifecycle facts. Source is null only for legacy or demo work without a recoverable intake reference.
+        /// Stored work identity and name across specification revisions, campaigns, and retries. Lifecycle projects task completion, confirmed stopping or explicit abandonment, otherwise the newest run's display state. It never determines WIP membership; wip is the authoritative slot state, derived from lifecycle facts and bound confirmed cancellation. Source is null only for legacy or demo work without a recoverable intake reference.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/Task`.
@@ -1347,15 +1347,19 @@ public enum Components {
             public var created_at: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/Task/last_activity_at`.
             public var last_activity_at: Foundation.Date
-            /// The newest run's display lifecycle, or null before any run exists.
+            /// A completed current episode is finished. Otherwise bound confirmed cancellation is stopped, explicit current-episode abandonment is abandoned, and unaffected tasks keep the newest run's display state. Null means no run or terminal decision. A stopped task may have no run or current_position. A finished run alone proves neither task completion nor execution quiescence. Pending or failed cancellation does not supply a terminal override.
+            ///
             ///
             /// - Remark: Generated from `#/components/schemas/Task/lifecycle`.
             @frozen public enum lifecyclePayload: String, Codable, Hashable, Sendable, CaseIterable {
                 case active = "active"
                 case finished = "finished"
+                case stopped = "stopped"
+                case abandoned = "abandoned"
                 case _empty = ""
             }
-            /// The newest run's display lifecycle, or null before any run exists.
+            /// A completed current episode is finished. Otherwise bound confirmed cancellation is stopped, explicit current-episode abandonment is abandoned, and unaffected tasks keep the newest run's display state. Null means no run or terminal decision. A stopped task may have no run or current_position. A finished run alone proves neither task completion nor execution quiescence. Pending or failed cancellation does not supply a terminal override.
+            ///
             ///
             /// - Remark: Generated from `#/components/schemas/Task/lifecycle`.
             public var lifecycle: Components.Schemas.Task.lifecyclePayload?
@@ -1426,7 +1430,7 @@ public enum Components {
             ///   - source:
             ///   - created_at:
             ///   - last_activity_at:
-            ///   - lifecycle: The newest run's display lifecycle, or null before any run exists.
+            ///   - lifecycle: A completed current episode is finished. Otherwise bound confirmed cancellation is stopped, explicit current-episode abandonment is abandoned, and unaffected tasks keep the newest run's display state. Null means no run or terminal decision. A stopped task may have no run or current_position. A finished run alone proves neither task completion nor execution quiescence. Pending or failed cancellation does not supply a terminal override.
             ///   - current_position:
             ///   - campaign_ids:
             ///   - run_ids:

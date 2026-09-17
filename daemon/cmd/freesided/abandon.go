@@ -21,17 +21,10 @@ import (
 // slot, and is idempotent on a task whose current episode is already
 // abandoned.
 //
-// It does not forcibly stop an in-flight run's execution. For stopped, failed,
-// or waiting work this reliably frees the slot: no further run submission
-// follows, so nothing re-records a start. But abandoning a task whose run is
-// still live is only partially effective: the run reaches its next submission
-// milestone (for example an implementation run after a specification approval),
-// and that path calls RecordTaskStart, which records a new start whenever the
-// task is not currently WIP with no cap re-check. The abandoned slot is then
-// silently re-occupied, and the project can exceed its WIP cap if another task
-// took the freed slot meanwhile. The proper fix (stop the run on abandon,
-// and/or gate a post-abandonment restart through admission) belongs with the
-// owner-descoped D5 stop path and is tracked in issue #1344.
+// It does not stop an in-flight provider execution or certify quiescence.
+// Routine submission milestones cannot reopen the released episode. A later
+// explicit, uncancelled reattempt needs cap-checked admission in the same write
+// as its new start; a cancellation fence always refuses it.
 func runAbandonMain(args []string) {
 	cfg, err := parseAbandonCommand(args, os.Stderr)
 	if err != nil {

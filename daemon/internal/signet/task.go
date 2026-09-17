@@ -18,20 +18,20 @@ type TaskSnapshot struct {
 }
 
 // Task is the task's stored identity and name plus its ordered run history.
-// Lifecycle describes the newest run for display; it never decides WIP.
+// Lifecycle describes task terminal decisions or the newest run for display.
 type Task struct {
-	ID              domain.TaskID        `json:"id"`
-	ProjectID       domain.ProjectID     `json:"project_id"`
-	DisplayNames    domain.DisplayNames  `json:"display_names"`
-	Source          *TaskSource          `json:"source"`
-	CreatedAt       time.Time            `json:"created_at"`
-	LastActivityAt  time.Time            `json:"last_activity_at"`
-	Lifecycle       *domain.RunLifecycle `json:"lifecycle"`
-	CurrentPosition *TaskPosition        `json:"current_position"`
-	CampaignIDs     []domain.CampaignID  `json:"campaign_ids"`
-	RunIDs          []domain.RunID       `json:"run_ids"`
-	// WIP is the authoritative admission-slot state, derived from LifecycleFacts
-	// (never from the newest run); Lifecycle above is display only (#1318).
+	ID              domain.TaskID         `json:"id"`
+	ProjectID       domain.ProjectID      `json:"project_id"`
+	DisplayNames    domain.DisplayNames   `json:"display_names"`
+	Source          *TaskSource           `json:"source"`
+	CreatedAt       time.Time             `json:"created_at"`
+	LastActivityAt  time.Time             `json:"last_activity_at"`
+	Lifecycle       *domain.TaskLifecycle `json:"lifecycle"`
+	CurrentPosition *TaskPosition         `json:"current_position"`
+	CampaignIDs     []domain.CampaignID   `json:"campaign_ids"`
+	RunIDs          []domain.RunID        `json:"run_ids"`
+	// WIP is the authoritative admission-slot state, derived from lifecycle
+	// facts and bound confirmed cancellation; Lifecycle above is display only.
 	WIP            bool                     `json:"wip"`
 	LifecycleFacts []TaskLifecycleFact      `json:"lifecycle_facts"`
 	Cancellation   *domain.TaskCancellation `json:"cancellation"`
@@ -115,7 +115,7 @@ func projectTaskSnapshot(ctx context.Context, tx *store.ReadTx, state store.Serv
 	}
 	if len(ids) > 0 {
 		newest := runs[ids[len(ids)-1]]
-		value.Lifecycle = &newest.Lifecycle
+		value.Lifecycle = task.DisplayLifecycle(&newest.Lifecycle)
 		position := &TaskPosition{RunID: newest.ID, HoldReason: newest.HoldReason}
 		if len(newest.Stages) > 0 {
 			position.Stage = &newest.Stages[len(newest.Stages)-1].Name
@@ -135,6 +135,16 @@ func projectTaskSnapshot(ctx context.Context, tx *store.ReadTx, state store.Serv
 			position.Round = &review.Rounds[len(review.Rounds)-1].Round
 		}
 		value.CurrentPosition = position
+	} else {
+		value.Lifecycle = task.DisplayLifecycle(nil)
+	}
+	for _, fact := range task.LifecycleFacts {
+		if fact.RecordedAt.After(value.LastActivityAt) {
+			value.LastActivityAt = fact.RecordedAt
+		}
+	}
+	if c := task.Cancellation; c != nil && c.Acknowledgement != nil && c.Acknowledgement.RecordedAt.After(value.LastActivityAt) {
+		value.LastActivityAt = c.Acknowledgement.RecordedAt
 	}
 	// The summary depends on observations as well as the stored task. Use the
 	// transaction's revision so a changed run pulse cannot reuse an old version.

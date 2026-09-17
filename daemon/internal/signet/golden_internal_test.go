@@ -134,7 +134,7 @@ func TestSignetWireGoldens(t *testing.T) {
 					ID: taskID, ProjectID: item.ProjectID, CreatedAt: createdAt, LastActivityAt: mergedAt,
 					DisplayNames: domain.DisplayNames{Project: domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName}, Task: domain.DisplayName{Text: "Improve navigation", Source: domain.DisplayNameSourceSpecification}},
 					Source:       projectTaskSource(&domain.SpecificationSource{Kind: domain.SpecificationSourceWorkItemArtifact, WorkItemArtifactID: "source-569"}),
-					Lifecycle:    new(domain.RunLifecycleFinished), CurrentPosition: &TaskPosition{RunID: runID},
+					Lifecycle:    new(domain.TaskFinished), CurrentPosition: &TaskPosition{RunID: runID},
 					CampaignIDs: []domain.CampaignID{}, RunIDs: []domain.RunID{runID},
 					WIP: false,
 					LifecycleFacts: []TaskLifecycleFact{

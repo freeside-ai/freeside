@@ -41,9 +41,8 @@ type ProductionReattempt struct {
 
 // ReattemptProductionRun creates one new implementation attempt from the
 // approved specification of a terminal campaign run. The store allocates the
-// ordinal and persists its lineage before the ordinary production-intake gate
-// creates the derived run; an interrupted command reuses the same incomplete
-// allocation when invoked again with the same parent and reason.
+// ordinal, admission and derived run commit together. An interrupted command
+// with a legacy incomplete allocation reuses it only for the same intent.
 func ReattemptProductionRun(
 	ctx context.Context, st *store.Store, spec ProductionReattemptSpec,
 ) (ProductionReattempt, error) {
@@ -87,131 +86,144 @@ func ReattemptProductionRun(
 		created        bool
 		resumed        bool
 	)
+	var run ProductionRun
 	err := st.Write(ctx, func(tx *store.WriteTx) error {
-		var latest domain.ProductionAttempt
-		var err error
-		if spec.CampaignID != "" {
-			latest, err = tx.LatestProductionAttempt(ctx, spec.CampaignID)
-		} else {
-			latest, err = tx.GetProductionAttemptByRun(ctx, spec.ParentRunID)
-			if err == nil {
-				latest, err = tx.LatestProductionAttempt(ctx, latest.CampaignID)
-			}
-		}
-		if err != nil {
-			return err
-		}
-		if operatorBindings != 0 {
-			existing, found, findErr := findOperatorRetryAttempt(
-				ctx, tx, latest.CampaignID, latest.AttemptNumber, spec, reason,
-			)
-			if findErr != nil {
-				return findErr
-			}
-			if found {
-				if _, runErr := tx.GetRun(ctx, existing.ImplementationRunID); errors.Is(runErr, store.ErrNotFound) {
-					resumed = true
-				} else if runErr != nil {
-					return runErr
+		allocate := func() error {
+			var latest domain.ProductionAttempt
+			var err error
+			if spec.CampaignID != "" {
+				latest, err = tx.LatestProductionAttempt(ctx, spec.CampaignID)
+			} else {
+				latest, err = tx.GetProductionAttemptByRun(ctx, spec.ParentRunID)
+				if err == nil {
+					latest, err = tx.LatestProductionAttempt(ctx, latest.CampaignID)
 				}
-				attempt = existing
-				return loadReattemptInputs(ctx, tx, attempt.ParentRunID, &parentRun,
-					&parentPolicy, &request, &sourceArtifact, &policyArtifact)
 			}
-		}
-
-		// Recover the only safe partial state: allocation committed, derived run
-		// absent, and the retried operator intent is byte-identical.
-		if latest.Kind == domain.ProductionAttemptRetry {
-			_, runErr := tx.GetRun(ctx, latest.ImplementationRunID)
-			if errors.Is(runErr, store.ErrNotFound) {
-				parentMatches := spec.ParentRunID == "" || latest.ParentRunID == spec.ParentRunID
-				intentMatches := latest.Reason == reason && parentMatches &&
-					latest.OperatorCommandID == nil && latest.RetryOfInvocationID == nil &&
-					latest.CapabilityManifestDigest == nil
-				if operatorBindings != 0 {
-					intentMatches = operatorRetryAttemptMatches(latest, spec, reason)
-				}
-				if !intentMatches {
-					return fmt.Errorf("campaign %q has incomplete attempt %d: %w",
-						latest.CampaignID, latest.AttemptNumber, domain.ErrImmutableTransition)
-				}
-				resumed = true
-				attempt = latest
-				return loadReattemptInputs(ctx, tx, attempt.ParentRunID, &parentRun,
-					&parentPolicy, &request, &sourceArtifact, &policyArtifact)
-			}
-			if runErr != nil {
-				return runErr
-			}
-		}
-
-		parentAttempt := latest
-		if spec.ParentRunID != "" {
-			parentAttempt, err = tx.GetProductionAttemptByRun(ctx, spec.ParentRunID)
 			if err != nil {
 				return err
 			}
-		}
-		if err := loadReattemptInputs(ctx, tx, parentAttempt.ImplementationRunID, &parentRun,
-			&parentPolicy, &request, &sourceArtifact, &policyArtifact); err != nil {
-			return err
-		}
-		observation, err := tx.ObserveRun(ctx, parentRun.ID)
-		if err != nil {
-			return err
-		}
-		conclusion, err := AuthenticatedProductionRunConclusion(ctx, &tx.ReadTx, parentRun, observation)
-		if err != nil {
-			return err
-		}
-		if !conclusion.Final {
-			return fmt.Errorf("parent run %q is %s; use resume while it is live",
-				parentRun.ID, conclusion.Outcome)
-		}
-		number := latest.AttemptNumber + 1
-		runID, err := ProductionAttemptRunID(latest.CampaignID, number)
-		if err != nil {
-			return err
-		}
-		attempt = domain.ProductionAttempt{
-			CampaignID: latest.CampaignID, AttemptNumber: number,
-			Kind: domain.ProductionAttemptRetry, Reason: reason,
-			ParentRunID: parentRun.ID, SourceDigest: parentAttempt.SourceDigest,
-			PublicationDigest:   parentAttempt.PublicationDigest,
-			ApprovedSpecDigest:  parentRun.SpecDigest,
-			SpecificationRunID:  parentAttempt.SpecificationRunID,
-			ImplementationRunID: runID,
-		}
-		if operatorBindings != 0 {
-			commandID := spec.OperatorCommandID
-			retryOf := spec.RetryOfInvocationID
-			manifest := spec.CapabilityManifestDigest
-			attempt.OperatorCommandID = &commandID
-			attempt.RetryOfInvocationID = &retryOf
-			attempt.CapabilityManifestDigest = &manifest
-		}
-		if err := tx.PutProductionAttempt(ctx, attempt); err != nil {
-			return err
-		}
-		created = true
-		return nil
-	})
-	if err != nil {
-		return ProductionReattempt{}, fmt.Errorf("reattempt production run: %w", err)
-	}
+			if operatorBindings != 0 {
+				existing, found, findErr := findOperatorRetryAttempt(
+					ctx, tx, latest.CampaignID, latest.AttemptNumber, spec, reason,
+				)
+				if findErr != nil {
+					return findErr
+				}
+				if found {
+					if _, runErr := tx.GetRun(ctx, existing.ImplementationRunID); errors.Is(runErr, store.ErrNotFound) {
+						resumed = true
+					} else if runErr != nil {
+						return runErr
+					}
+					attempt = existing
+					return loadReattemptInputs(ctx, tx, attempt.ParentRunID, &parentRun,
+						&parentPolicy, &request, &sourceArtifact, &policyArtifact)
+				}
+			}
 
-	resolved, err := domain.NewResolvedPolicy(attempt.ImplementationRunID, parentPolicy.Keys)
-	if err != nil {
-		return ProductionReattempt{}, fmt.Errorf("reattempt production run: %w", err)
-	}
-	run, err := SubmitProductionRun(ctx, st, ProductionRunSpec{
-		RunID: attempt.ImplementationRunID, ProjectID: parentRun.ProjectID,
-		SpecArtifactID: sourceArtifact.ID, PolicyArtifactID: policyArtifact.ID,
-		ResolvedPolicy: resolved, Publication: request.Publication,
-		WorkUnit:   cloneSpecificationWorkUnit(request.WorkUnit),
-		CampaignID: attempt.CampaignID, AttemptNumber: attempt.AttemptNumber,
-		AttemptReason: attempt.Reason, ParentRunID: attempt.ParentRunID,
+			// Recover the only safe partial state: allocation committed, derived run
+			// absent, and the retried operator intent is byte-identical.
+			if latest.Kind == domain.ProductionAttemptRetry {
+				_, runErr := tx.GetRun(ctx, latest.ImplementationRunID)
+				if errors.Is(runErr, store.ErrNotFound) {
+					parentMatches := spec.ParentRunID == "" || latest.ParentRunID == spec.ParentRunID
+					intentMatches := latest.Reason == reason && parentMatches &&
+						latest.OperatorCommandID == nil && latest.RetryOfInvocationID == nil &&
+						latest.CapabilityManifestDigest == nil
+					if operatorBindings != 0 {
+						intentMatches = operatorRetryAttemptMatches(latest, spec, reason)
+					}
+					if !intentMatches {
+						return fmt.Errorf("campaign %q has incomplete attempt %d: %w",
+							latest.CampaignID, latest.AttemptNumber, domain.ErrImmutableTransition)
+					}
+					resumed = true
+					attempt = latest
+					return loadReattemptInputs(ctx, tx, attempt.ParentRunID, &parentRun,
+						&parentPolicy, &request, &sourceArtifact, &policyArtifact)
+				}
+				if runErr != nil {
+					return runErr
+				}
+			}
+
+			parentAttempt := latest
+			if spec.ParentRunID != "" {
+				parentAttempt, err = tx.GetProductionAttemptByRun(ctx, spec.ParentRunID)
+				if err != nil {
+					return err
+				}
+			}
+			if err := loadReattemptInputs(ctx, tx, parentAttempt.ImplementationRunID, &parentRun,
+				&parentPolicy, &request, &sourceArtifact, &policyArtifact); err != nil {
+				return err
+			}
+			observation, err := tx.ObserveRun(ctx, parentRun.ID)
+			if err != nil {
+				return err
+			}
+			conclusion, err := AuthenticatedProductionRunConclusion(ctx, &tx.ReadTx, parentRun, observation)
+			if err != nil {
+				return err
+			}
+			if !conclusion.Final {
+				return fmt.Errorf("parent run %q is %s; use resume while it is live",
+					parentRun.ID, conclusion.Outcome)
+			}
+			number := latest.AttemptNumber + 1
+			runID, err := ProductionAttemptRunID(latest.CampaignID, number)
+			if err != nil {
+				return err
+			}
+			attempt = domain.ProductionAttempt{
+				CampaignID: latest.CampaignID, AttemptNumber: number,
+				Kind: domain.ProductionAttemptRetry, Reason: reason,
+				ParentRunID: parentRun.ID, SourceDigest: parentAttempt.SourceDigest,
+				PublicationDigest:   parentAttempt.PublicationDigest,
+				ApprovedSpecDigest:  parentRun.SpecDigest,
+				SpecificationRunID:  parentAttempt.SpecificationRunID,
+				ImplementationRunID: runID,
+			}
+			if operatorBindings != 0 {
+				commandID := spec.OperatorCommandID
+				retryOf := spec.RetryOfInvocationID
+				manifest := spec.CapabilityManifestDigest
+				attempt.OperatorCommandID = &commandID
+				attempt.RetryOfInvocationID = &retryOf
+				attempt.CapabilityManifestDigest = &manifest
+			}
+			if err := tx.PutProductionAttempt(ctx, attempt); err != nil {
+				return err
+			}
+			created = true
+			return nil
+		}
+		if err := allocate(); err != nil {
+			return err
+		}
+		// Replays also retain cancellation fences. A pre-existing allocation is
+		// history, never authority to restart a stopped task.
+		task, err := tx.GetTask(ctx, parentRun.TaskID)
+		if err != nil {
+			return err
+		}
+		if task.Cancellation != nil {
+			return store.ErrTaskCancellationFenced
+		}
+
+		resolved, err := domain.NewResolvedPolicy(attempt.ImplementationRunID, parentPolicy.Keys)
+		if err != nil {
+			return err
+		}
+		run, err = submitProductionRunTx(ctx, tx, ProductionRunSpec{
+			RunID: attempt.ImplementationRunID, ProjectID: parentRun.ProjectID,
+			SpecArtifactID: sourceArtifact.ID, PolicyArtifactID: policyArtifact.ID,
+			ResolvedPolicy: resolved, Publication: request.Publication,
+			WorkUnit:   cloneSpecificationWorkUnit(request.WorkUnit),
+			CampaignID: attempt.CampaignID, AttemptNumber: attempt.AttemptNumber,
+			AttemptReason: attempt.Reason, ParentRunID: attempt.ParentRunID,
+		}, nil, true)
+		return err
 	})
 	if err != nil {
 		return ProductionReattempt{}, fmt.Errorf("reattempt production run: %w", err)

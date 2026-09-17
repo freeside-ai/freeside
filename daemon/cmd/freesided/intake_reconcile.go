@@ -471,7 +471,7 @@ func (r *intakeReconciler) autoStart(
 				domain.IntakeRefusalWIPCapExhausted, r.now())
 			return err
 		}
-		if err := tx.RecordTaskStart(ctx, reserved.ID, r.now()); err != nil {
+		if err := tx.AdmitTaskStart(ctx, reserved.ID, r.now(), policy.WIPCap); err != nil {
 			return err
 		}
 		start = true
@@ -529,21 +529,7 @@ func (r *intakeReconciler) autoStart(
 func countProjectWIPTasks(
 	ctx context.Context, tx *store.ReadTx, projectID domain.ProjectID, exclude domain.TaskID,
 ) (int, error) {
-	tasks, err := tx.ListTasks(ctx)
-	if err != nil {
-		return 0, err
-	}
-	count := 0
-	for _, snapshot := range tasks {
-		task := snapshot.Value
-		if task.ProjectID != projectID || task.ID == exclude {
-			continue
-		}
-		if domain.TaskWIP(task) {
-			count++
-		}
-	}
-	return count, nil
+	return tx.CountProjectWIPTasks(ctx, projectID, exclude)
 }
 
 func (r *intakeReconciler) launch(ctx context.Context, init intakeInitiator, occurrence domain.IntakeOccurrence) error {

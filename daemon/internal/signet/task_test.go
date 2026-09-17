@@ -54,7 +54,7 @@ func TestBootstrapProjectsStoredTaskAndNewestRun(t *testing.T) {
 		t.Fatalf("task history = %+v", got)
 	}
 	current := bootstrap.Runs[slices.IndexFunc(bootstrap.Runs, func(snapshot signet.RunSnapshot) bool { return snapshot.Run.ID == "run-current" })].Run
-	if got.Lifecycle == nil || *got.Lifecycle != current.Lifecycle || got.CurrentPosition == nil || got.CurrentPosition.RunID != "run-current" || got.CurrentPosition.Stage == nil || *got.CurrentPosition.Stage != "implementation" {
+	if got.Lifecycle == nil || string(*got.Lifecycle) != string(current.Lifecycle) || got.CurrentPosition == nil || got.CurrentPosition.RunID != "run-current" || got.CurrentPosition.Stage == nil || *got.CurrentPosition.Stage != "implementation" {
 		t.Fatalf("task current position = %+v, lifecycle=%v", got.CurrentPosition, got.Lifecycle)
 	}
 }

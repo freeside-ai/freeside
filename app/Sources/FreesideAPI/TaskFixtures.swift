@@ -28,6 +28,54 @@ public enum TaskFixtures {
         return (task, runs, history)
     }
 
+    /// Synthetic daemon acknowledgement fixture. Stop acceptance in MockServer
+    /// remains pending; tests must explicitly supply this confirmed history.
+    public static func confirmedStopped(_ snapshot: Components.Schemas.TaskSnapshot) -> Components.Schemas.TaskSnapshot
+    {
+        var result = snapshot
+        let instant = result.task.last_activity_at
+        let episode = result.task.lifecycle_facts.lastIndex(where: { $0.kind == .started }).map { $0 + 1 } ?? 0
+        let runs = RunFixtures.defaultRuns().map(\.run)
+        let target = Components.Schemas.TaskCancellationTarget(
+            task_id: result.task.id, project_id: result.task.project_id, episode_ordinal: episode,
+            runs: result.task.run_ids.map { id in
+                .init(run_id: id, campaign_id: runs.first(where: { $0.id == id })?.campaign_id)
+            })
+        let epoch = "fixture-epoch"
+        let digest = MockContractValidation.cancellationTargetDigest(target, epoch: epoch)
+        let requestID = "cancel-\(result.task.id)"
+        result.task.cancellation = .init(
+            value1: .init(
+                request_id: requestID, target: target, target_digest: digest, sync_epoch: epoch,
+                fence_revision: result.as_of_revision, requested_at: instant, state: .confirmed,
+                acknowledgement: .init(
+                    value1: .init(
+                        id: "ack-\(result.task.id)", request_id: requestID, target_digest: digest,
+                        state: .confirmed, evidence_digest: digest, recorded_at: instant))))
+        if result.task.wip, episode > 0 {
+            result.task.lifecycle_facts.append(
+                .init(
+                    kind: .abandoned, run_id: result.task.lifecycle_facts[episode - 1].run_id, recorded_at: instant))
+        }
+        result.task.wip = false
+        result.task.lifecycle = .stopped
+        return result
+    }
+
+    public static func explicitlyAbandoned(
+        _ snapshot: Components.Schemas.TaskSnapshot
+    ) -> Components.Schemas.TaskSnapshot {
+        var result = snapshot
+        if let start = result.task.lifecycle_facts.last(where: { $0.kind == .started }) {
+            result.task.lifecycle_facts.append(
+                .init(
+                    kind: .abandoned, run_id: start.run_id, recorded_at: result.task.last_activity_at))
+            result.task.lifecycle = .abandoned
+            result.task.wip = false
+        }
+        return result
+    }
+
     /// Group the existing sample run observations by task. The sample run
     /// collection omits some specification predecessors, so it supplies no
     /// allocation or approval event for those incomplete campaign histories.

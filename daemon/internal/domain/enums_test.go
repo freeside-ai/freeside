@@ -262,6 +262,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["RunLifecycle"] = append(valids["RunLifecycle"], v.valid)
 	}
 	invalids["RunLifecycle"] = RunLifecycle("").valid
+	for _, v := range AllTaskLifecycles {
+		valids["TaskLifecycle"] = append(valids["TaskLifecycle"], v.valid)
+	}
+	invalids["TaskLifecycle"] = TaskLifecycle("").valid
 	for _, v := range AllInvocationLivenesses {
 		valids["InvocationLiveness"] = append(valids["InvocationLiveness"], v.valid)
 	}

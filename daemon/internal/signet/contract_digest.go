@@ -6,4 +6,4 @@ package signet
 // from: "sha256:" plus the lowercase hex SHA-256 of the spec's exact
 // bytes. The daemon reports it on GET /health so a client can detect a
 // contract skew. Regenerate with scripts/api-contract-digest.sh --write.
-const APIContractDigest = "sha256:b506a9904113597753fdd63a116637c8aaa2740e367e61975ebba4aa40749e86"
+const APIContractDigest = "sha256:dab8a9c8d40b863e45298b1c4b97fe9df7c2e9abd049db7012148133ba7e6117"

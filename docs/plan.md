@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 61
+revision: 62
 status: active
 updated: 2026-09-17
 ---
@@ -620,7 +620,7 @@ recommendation-led presentation.
   Membership starts at the task's latest admitted workflow start, including
   any authorized restart after completion or abandonment. Admission checks
   the cap at each such start. Count the task once until completion under its
-  current work-unit binding (Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection)) or explicit operator abandonment
+  current work-unit binding (Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection)), bound confirmed task cancellation, or explicit operator abandonment
   is recorded after that start in recorded order. Earlier completion and
   abandonment facts remain history; they cannot release the new start's slot.
   Specification, implementation, waits, retryable failures, and final review
@@ -628,7 +628,11 @@ recommendation-led presentation.
   card dismissal, or stopping an attempt does not release it. Unstarted or
   snoozed proposals do not count, even if intake reserved a run identity.
   This projection uses recorded task start, completion, and abandonment
-  facts, not just the newest run's lifecycle. The all-work view is Freeside's
+  facts and confirmed cancellation, not just the newest run's lifecycle.
+  Cancellation confirmation and any needed abandonment of its bound episode
+  commit together. Pending or failed cancellation retains the slot. A task
+  with no start releases none; a completed episode keeps its completion.
+  The all-work view is Freeside's
   deterministic initiative projection (Sections [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection) and [11](#11-roadmap-build-order-and-coordination)); GitHub Projects
   no longer serves that role (overturned, revision 25).
 
@@ -2159,6 +2163,15 @@ requests. Intake scanners discover new work with overlapping scans and
 idempotent identities. Webhooks wait until Phase 2 and are added only if
 latency becomes a problem.
 
+Confirmed task cancellation releases the bound WIP episode without closing an
+existing PR or erasing publication and completion history. A late result stays
+recorded against its producing episode; it cannot release a newer episode,
+including a retry in the same campaign. An ordinary submission milestone
+cannot reopen an abandoned task. Explicit re-admission checks the configured
+`budgets.run_wip_cap` and records the new start in one transaction. Missing or
+invalid policy refuses re-admission. A cancellation fence forbids re-admission;
+neither submission nor restart clears it.
+
 ### 5.12 Workflow Definition, Initiators, and Artifacts
 
 The workflow is a Go state machine. YAML supplies policy only. Crash retry and
@@ -2174,6 +2187,14 @@ no live acknowledgement producer and leaves accepted requests pending. A
 failed acknowledgement retains the fence and may later be confirmed by bound
 evidence. Confirmation is final. No request deletes tasks, PRs, or evidence,
 changes existing completion facts, or authorizes task restart.
+
+The first valid confirmed acknowledgement records any needed abandonment in
+the acknowledgement transaction, bound to the captured start ordinal. Exact
+replay changes neither facts nor revision. An explicit uncancelled reattempt
+that needs a new slot checks its authenticated policy cap, allocates the
+attempt, and records its new run and start in one write; a refusal persists
+none of them. A retry that still holds a slot keeps it. Administrative
+`freesided abandon` remains a slot release, not a provider-stop operation.
 
 Budgeting uses three clocks:
 
@@ -2287,9 +2308,11 @@ Additional rules:
   `agent_question` card. It does this before requesting research or writing
   a specification. Answering continues the normal loop through
   `human_feedback`. Stopping ends the specification run with nothing built
-  or fetched. The task keeps its WIP slot until the operator abandons it, as
-  for any stopped specification run; the recorded abandonment fact is
-  #1318's. A source that settles outcome, scope, and non-goals, whether a
+  or fetched. A matching task cancellation acknowledgement releases the slot
+  atomically; a resolved Stop card or missing artifact alone does not. Until
+  #1368 routes legacy Stop through runtime quiescence, the administrative
+  `freesided abandon` command remains an explicit release. Retryable failures
+  keep their slot. A source that settles outcome, scope, and non-goals, whether a
   full document or an unambiguous sentence, keeps the existing rules and may
   receive a specification on the first turn. This is prompt guidance under
   the specifier's output contract, not a new flag, field, or attention type.
@@ -2494,6 +2517,16 @@ databases are disposable read caches. The synchronization contract guarantees:
 - a cached, read-only view with a freshness banner while the daemon is
   unreachable; and
 - no consequential action until the client validates current state.
+
+Task lifecycle is a task-specific display projection: `active`, `finished`,
+`stopped`, or `abandoned`, with null for unaffected work that has no run.
+Current-episode completion takes precedence; otherwise matching confirmed
+cancellation is stopped, explicit current-episode abandonment is abandoned,
+and unaffected tasks retain the newest run's display state. A finished run
+does not prove task completion or quiescence. A confirmed queued task can be
+stopped with no run, position, or lifecycle fact. Active filters and counts
+exclude stopped and abandoned tasks; Finished and All retain their history.
+Cancellation remains separately visible, including when completion wins.
 
 #### Revision, Epoch, and Cache Semantics
 
@@ -4543,16 +4576,16 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 61 ("Durable Task Cancellation Requests"):
+Revision 62 ("Confirmed Cancellation Releases Task WIP"):
 
-1. **Stop acceptance and runtime quiescence are separate facts.** A task-wide
-   command records an immutable receipt and durable fence without an attention
-   item. Its target includes all owned runs and the current work episode.
-   Only bound daemon evidence may confirm quiescence; failure retains the fence.
-   Global projection-version checks prevent old prepared requests from stopping
-   changed work. Runtime enforcement, stopped lifecycle/WIP, and controls remain
-   the responsibilities of #1368, #1344, and #1369 respectively. (#1367;
-   [decision note](../devlog/2026-09-16-2100-task-cancellation-contract.md).)
+1. **Confirmed cancellation ends its bound task episode.** Acknowledgement and
+   any needed abandonment commit atomically. Task lifecycle distinguishes
+   stopped and administratively abandoned work from finished runs. Ordinary
+   milestones cannot reopen terminal work; an uncancelled explicit retry that
+   needs a slot checks the policy cap and records admission with allocation.
+   Run history, receipts, PRs and completions remain intact. Runtime stopping
+   and client controls remain #1368 and #1369. (Owner-assigned #1344 contract;
+   [decision note](../devlog/2026-09-17-0830-confirmed-task-lifecycle.md).)
 
 ## 14. Risks
 

@@ -119,7 +119,19 @@ enum TaskDisplay {
     /// A task with no lifecycle yet (no run) is work that exists and has
     /// not finished, so it counts as active.
     static func isActive(_ task: Components.Schemas.Task) -> Bool {
-        task.lifecycle != .finished
+        switch task.lifecycle {
+        case .finished, .stopped, .abandoned: false
+        case .active, ._empty, nil: true
+        }
+    }
+
+    static func lifecycleLabel(_ task: Components.Schemas.Task) -> (text: String, systemImage: String) {
+        switch task.lifecycle {
+        case .finished: ("Finished", "checkmark.circle")
+        case .stopped: ("Stopped", "stop.circle")
+        case .abandoned: ("Abandoned", "minus.circle")
+        case .active, ._empty, nil: ("Active", "circle.dotted")
+        }
     }
 
     /// The stage line derives from the newest run when the list holds it,
