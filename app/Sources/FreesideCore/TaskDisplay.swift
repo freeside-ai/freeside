@@ -19,7 +19,8 @@ enum TaskDisplay {
 
         let heading: Heading?
         let rail: DecisionStageRailPresentation
-        let hold: String?
+        let holdReason: Components.Schemas.RunHoldReason?
+        var hold: String? { holdReason.map(RunDisplay.label) }
         var qualification: String? = nil
         var status: String? = nil
         var guidance: String = "Open task details."
@@ -157,7 +158,13 @@ enum TaskDisplay {
         position.historical = !isActive(task) || run?.superseded_by != nil || run?.lifecycle == .finished
         // A current cancellation fence suppresses action guidance even when
         // older snapshots still contain an open approval or published handoff.
-        if !suppressesGuidanceForCancellation(task), isActive(task), run?.superseded_by == nil {
+        if !suppressesGuidanceForCancellation(task), !position.historical,
+            run?.outcome != .failed, run?.outcome != .lost
+        {
+            if position.holdReason == .identity_parallelism, run == nil || run?.outcome == .pending {
+                position.guidance =
+                    "The configured agent account is busy. This work is queued; no action is needed for this wait."
+            }
             if let handoff = finalReviewHeading(task, run: run, attentionItems: attentionItems, titleCase: true) {
                 position.status = handoff
                 position.guidance = "Review the pull request from Inbox."
@@ -204,13 +211,13 @@ enum TaskDisplay {
         if run?.outcome == .failed { return "Execution Failed" }
         if run?.outcome == .lost { return "Execution Lost" }
         if task.lifecycle == .finished { return "Finished · See Recorded Outcome" }
-        let hold = run?.hold_reason?.value1 ?? task.current_position?.value1.hold_reason?.value1
+        if run?.lifecycle == .finished { return "Run Finished · See Recorded Outcome" }
+        let hold = run.map { $0.hold_reason?.value1 } ?? task.current_position?.value1.hold_reason?.value1
         if hold == .identity_parallelism { return "Queued" }
         if hold != nil { return "On Hold" }
         if run?.outcome == .blocked { return "Publication Blocked" }
         if run?.outcome == .unobserved { return "Execution Status Unavailable" }
         if run?.outcome == .published { return "Published · See Review Status" }
-        if run?.lifecycle == .finished { return "Run Finished · See Recorded Outcome" }
         guard task.current_position != nil else { return "No Execution Position Recorded" }
         return run == nil ? "Run Details Unavailable" : "In Progress"
     }
@@ -233,7 +240,10 @@ enum TaskDisplay {
             }
             lines.append(phases.joined(separator: " · "))
             if let round = position.heading?.round { lines.append(round) }
-            if let hold = position.hold, !position.historical { lines.append("Hold: \(hold)") }
+            if let hold = position.hold, !position.historical {
+                let prefix = suppressesGuidanceForCancellation(task) ? "Last recorded hold" : "Hold"
+                lines.append("\(prefix): \(hold)")
+            }
         }
         if task.cancellation?.value1.state == .confirmed, task.lifecycle == .finished {
             lines.append("Stop Confirmation Recorded")
@@ -258,7 +268,7 @@ enum TaskDisplay {
             return Position(
                 heading: handoff ?? RunDisplay.stageHeading(run).map { .init(label: $0.label, round: $0.round) },
                 rail: approvalRail(RunDisplay.stageRail(run), approval: approval),
-                hold: run.hold_reason.map { RunDisplay.label($0.value1) },
+                holdReason: run.hold_reason?.value1,
                 qualification: approval.qualification)
         }
         let stage = position.stage.map(RunDisplay.canonicalStageName)
@@ -282,7 +292,7 @@ enum TaskDisplay {
                     entries: entries,
                     summary: entries.map { "\($0.title) \($0.state.accessibilityLabel)" }
                         .joined(separator: ", ")), approval: approval),
-            hold: position.hold_reason.map { RunDisplay.label($0.value1) },
+            holdReason: position.hold_reason?.value1,
             qualification: approval.qualification)
     }
 

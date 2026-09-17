@@ -25,7 +25,11 @@ import Testing
             let guidance =
                 name.hasPrefix("Ready")
                 ? "Review the pull request from Inbox."
-                : name == "Approval required" ? "Review the specification in Inbox." : "Open task details."
+                : name == "Approval required"
+                    ? "Review the specification in Inbox."
+                    : name == "Queued"
+                        ? "The configured agent account is busy. This work is queued; no action is needed for this wait."
+                        : "Open task details."
             #expect(lines.last == guidance)
         }
     }

@@ -262,9 +262,12 @@ struct TaskTimelineView: View {
                     .foregroundStyle(Color.inkDim)
             }
             if let hold = run.hold?.value1 {
-                Label(RunDisplay.label(hold.reason), systemImage: "pause.circle.fill")
+                Label("Recorded hold: \(RunDisplay.label(hold.reason))", systemImage: "pause.circle.fill")
                     .font(FreesideFont.caption)
                     .foregroundStyle(Color.accentText)
+                Text("Hold code: \(hold.reason.rawValue)")
+                    .font(FreesideFont.monoCaption)
+                    .foregroundStyle(Color.inkDim)
             }
             KeywordLabel(text: "Run Activity")
             if !run.milestones.isEmpty {

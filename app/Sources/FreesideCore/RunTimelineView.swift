@@ -214,7 +214,7 @@ struct RunTimelineView: View {
 
     private func holdCard(_ hold: Components.Schemas.RunHold) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            KeywordLabel(text: "Current hold", color: holdIsFailure ? .waxText : .accentText)
+            KeywordLabel(text: "Recorded hold", color: holdIsFailure ? .waxText : .accentText)
             Text(RunDisplay.label(hold.reason))
                 .font(FreesideFont.sectionTitle)
             Text(
@@ -222,6 +222,9 @@ struct RunTimelineView: View {
             )
             .font(FreesideFont.monoCaption)
             .foregroundStyle(Color.inkDim)
+            Text("Hold code: \(hold.reason.rawValue)")
+                .font(FreesideFont.monoCaption)
+                .foregroundStyle(Color.inkDim)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -346,7 +349,7 @@ enum RunHistoryPresentation {
             return outcome.rawValue.capitalized
         }
         if let reason = milestone.reason?.value1 {
-            return RunDisplay.label(reason)
+            return "Recorded hold: \(RunDisplay.label(reason)) (\(reason.rawValue))"
         }
         return nil
     }

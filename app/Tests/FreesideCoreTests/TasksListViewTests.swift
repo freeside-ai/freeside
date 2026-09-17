@@ -264,11 +264,11 @@ import Testing
             listed.rail.summary
                 == "Specification approval history unavailable, Implementation completed, Review completed, Verification current"
         )
-        #expect(listed.hold == "Verification Findings")
+        #expect(listed.hold == "Verification findings block publication")
 
         let fallback = try #require(TaskDisplay.position(retry, runs: []))
         #expect(fallback.heading == .init(label: "Implementation", round: nil))
-        #expect(fallback.hold == "Verification Findings")
+        #expect(fallback.hold == "Verification findings block publication")
         #expect(
             fallback.rail.entries.map { ($0.id, $0.state) }.map { "\($0.0):\($0.1)" }
                 == ["specification:pending", "implementation:current", "review:pending", "verification:pending"])
