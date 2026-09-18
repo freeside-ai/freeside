@@ -214,9 +214,27 @@ carries `requested`, `failed_to_stop`, or `confirmed` independently of lifecycle
 and WIP. Exact command replay returns the original receipt and revision.
 A new stale command returns the current task snapshot and epoch.
 
-This contract has no runtime acknowledgement producer or task Stop control.
-Acceptance stays pending until #1368 supplies bound quiescence evidence;
-#1369 owns controls. A bound confirmed acknowledgement atomically releases
+Open a task from Tasks on Mac or iPhone and choose **Stop task…**. Confirm the
+task and project to stop any remaining owned work and prevent further work.
+History and existing PRs remain available. Finished or administratively
+abandoned tasks can still have owned work, so their labels alone do not hide
+Stop. A task with a cancellation fence shows its daemon status instead.
+
+The client saves the exact command before sending. If delivery is uncertain,
+**Pending Stops** in the Tasks toolbar keeps recovery available across navigation,
+relaunch, and read-cache eviction. **Retry sending Stop** replays that saved
+command; it never refreshes its version or epoch. Opening, syncing, or
+reconnecting never sends it automatically. A stale rejection requires fresh
+confirmation. A failed disk save sends nothing. Requests belong to the paired
+device and daemon, independently of the existing submission and decision ledgers.
+
+An accepted Stop awaits the runtime's bound quiescence evidence. **Failed to
+stop** means execution may continue; **Refresh task status** only reads state.
+Repeating Stop does not restart provider cancellation. A late receipt cannot
+replace newer synced failure or confirmation. New Stop requests require fresh,
+authenticated task state; offline and unvalidated views explain the restriction.
+
+A bound confirmed acknowledgement atomically releases
 any held episode and projects `stopped`; an already completed episode stays
 `finished`. Explicit abandonment projects `abandoned` without claiming that
 execution stopped. Stopped and abandoned tasks leave Active filters and remain

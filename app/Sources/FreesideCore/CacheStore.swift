@@ -36,6 +36,8 @@ public struct SyncCursors: Codable, Equatable, Sendable {
 /// never belongs here; it lives in the Keychain alone, and a
 /// ClientCommand carries no token, so the ledger adds no credential.
 public struct CachedState: Codable, Equatable, Sendable {
+    public var pendingTaskStops: [String: PendingTaskStop]?
+    public var stopDaemonID: String?
     public var pendingTaskSubmissions: [String: Components.Schemas.ClientCommand]?
     public var submissionDaemonID: String?
     public var cursors: SyncCursors?
@@ -77,6 +79,8 @@ public struct CachedState: Codable, Equatable, Sendable {
         pendingCommands: [String: InboxStore.PendingCommandEntry]? = nil,
         pendingTaskSubmissions: [String: Components.Schemas.ClientCommand]? = nil,
         submissionDaemonID: String? = nil,
+        pendingTaskStops: [String: PendingTaskStop]? = nil,
+        stopDaemonID: String? = nil,
         comprehensionQueue: [InboxStore.QueuedComprehensionEvent]? = nil,
         comprehensionSequence: Int? = nil,
         registeredCapabilityFingerprint: String? = nil,
@@ -93,6 +97,8 @@ public struct CachedState: Codable, Equatable, Sendable {
         self.pendingCommands = pendingCommands
         self.pendingTaskSubmissions = pendingTaskSubmissions
         self.submissionDaemonID = submissionDaemonID
+        self.pendingTaskStops = pendingTaskStops
+        self.stopDaemonID = stopDaemonID
         self.comprehensionQueue = comprehensionQueue
         self.comprehensionSequence = comprehensionSequence
         self.registeredCapabilityFingerprint = registeredCapabilityFingerprint
@@ -129,6 +135,8 @@ public struct CachedState: Codable, Equatable, Sendable {
         pendingTaskSubmissions = try? container.decodeIfPresent(
             [String: Components.Schemas.ClientCommand].self, forKey: .pendingTaskSubmissions)
         submissionDaemonID = try? container.decodeIfPresent(String.self, forKey: .submissionDaemonID)
+        pendingTaskStops = try? container.decodeIfPresent([String: PendingTaskStop].self, forKey: .pendingTaskStops)
+        stopDaemonID = try? container.decodeIfPresent(String.self, forKey: .stopDaemonID)
         // The telemetry queue and its state degrade independently too: an
         // undecodable section loads absent, costing at most queued events.
         comprehensionQueue = try? container.decodeIfPresent(

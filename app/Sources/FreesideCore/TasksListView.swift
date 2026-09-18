@@ -65,6 +65,13 @@ struct TasksListView: View {
             .padding(.horizontal)
             .padding(.bottom, 8)
 
+            Text("Open task details to stop queued or running work.")
+                .font(FreesideFont.caption)
+                .foregroundStyle(Color.inkDim)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal)
+                .padding(.bottom, 8)
+
             Menu {
                 Picker("Project", selection: $filter.projectID) {
                     Text("All projects").tag(String?.none)

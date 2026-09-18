@@ -132,6 +132,7 @@ struct TaskTimelineView: View {
                 .foregroundStyle(Color.inkDim)
                 .textSelection(.enabled)
             KeywordLabel(text: "Daemon observations")
+            TaskStopView(coordinator: coordinator, taskID: task.id)
         }
     }
 

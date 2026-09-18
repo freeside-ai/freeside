@@ -1966,6 +1966,73 @@
                                 .background(Color.ground))))
             }
 
+            surfaces.append(contentsOf: try taskStopSurfaces())
+            return surfaces
+        }
+
+        private func taskStopSurfaces() throws -> [Surface] {
+            var surfaces: [Surface] = []
+            let original = try #require(TaskFixtures.defaultTasks().first)
+            for state in [
+                "queued", "specification", "implementation", "uncertain", "accepted", "failed", "confirmed", "offline",
+                "finished", "abandoned",
+            ] {
+                var snapshot = original
+                snapshot.task.display_names.task = .init(
+                    text: "Update the release notes and verify the download links", source: ._operator)
+                if state == "queued" {
+                    snapshot.task.run_ids = []
+                    snapshot.task.campaign_ids = []
+                    snapshot.task.current_position = nil
+                    snapshot.task.wip = false
+                }
+                if state == "specification" { snapshot.task.current_position?.value1.stage = "specification" }
+                if state == "finished" { snapshot.task.lifecycle = .finished }
+                if state == "abandoned" { snapshot = TaskFixtures.explicitlyAbandoned(snapshot) }
+                if ["accepted", "failed", "confirmed"].contains(state) {
+                    snapshot = TaskFixtures.confirmedStopped(snapshot)
+                    if state != "confirmed" {
+                        snapshot.task.lifecycle = original.task.lifecycle
+                        snapshot.task.wip = original.task.wip
+                        snapshot.task.cancellation?.value1.state = state == "failed" ? .failed_to_stop : .requested
+                        if state == "failed" {
+                            snapshot.task.cancellation?.value1.acknowledgement?.value1.state = .failed_to_stop
+                        } else {
+                            snapshot.task.cancellation?.value1.acknowledgement = nil
+                        }
+                    }
+                }
+                let cache = InMemoryCacheStore()
+                try cache.save(
+                    .init(
+                        cursors: .init(
+                            syncEpoch: "fixture-epoch", lastFullSnapshotRevision: snapshot.as_of_revision,
+                            highestObservedServerRevision: snapshot.as_of_revision), attentionItems: [],
+                        tasks: [snapshot]))
+                let coordinator = SyncCoordinator(client: APIClientFactory.mock(), cache: cache)
+                coordinator.store.freshness = state == "offline" ? .unreachable : .fresh
+                if state == "uncertain", let prepared = coordinator.taskStop.prepare(taskID: snapshot.task.id) {
+                    #expect(coordinator.retainTaskStop(prepared.entry))
+                }
+                for scheme in [ColorScheme.light, .dark] {
+                    surfaces.append(
+                        Surface(
+                            name: "task-stop-\(state)-\(scheme)", width: 390, colorScheme: scheme,
+                            view: AnyView(
+                                VStack(alignment: .leading, spacing: 16) {
+                                    Text(snapshot.task.display_names.task.text).font(FreesideFont.title)
+                                    Text(TaskDisplay.projectName(snapshot.task)).font(FreesideFont.callout)
+                                    TaskStopView(coordinator: coordinator, taskID: snapshot.task.id)
+                                }.padding(24).foregroundStyle(Color.ink).background(Color.ground))))
+                    if state == "queued", let confirmation = coordinator.taskStop.prepare(taskID: snapshot.task.id) {
+                        surfaces.append(
+                            Surface(
+                                name: "task-stop-confirmation-\(scheme)", width: 390, colorScheme: scheme,
+                                view: AnyView(
+                                    TaskStopConfirmationView(entry: confirmation.entry, onConfirm: {}).content)))
+                    }
+                }
+            }
             return surfaces
         }
 
