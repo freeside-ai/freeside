@@ -245,5 +245,62 @@ with tempfile.TemporaryDirectory() as temp:
     refuses(lambda: module.manual_submission_path(original))
     operator.write_bytes(b'x' * ((4 << 20) + 1))
     refuses(lambda: module.stage_manual_submission(str(operator), '', root / 'too-large'))
+import subprocess
+with tempfile.TemporaryDirectory() as temp:
+    # A client-target session binds the retained run and invocation to the
+    # selected target.json, while submit.json/composition remain the ignored
+    # seed the composition approved.
+    session = Path(temp)
+    state = session / "state"
+    state.mkdir()
+    (state / "freeside.db").touch()
+    seed = session / "seed"
+    os.environ.update(FREESIDE_REAL_RUN_STATE_ROOT=str(state),
+                      FREESIDE_REAL_RUN_LISTEN="127.0.0.1:8733",
+                      FREESIDE_REAL_RUN_SEED_ROOT=str(seed))
+    (session / "status").write_text("completed\n")
+    (session / "state-root").write_text(str(state) + "\n")
+    (session / "listener").write_text("127.0.0.1:8733\n")
+    (session / "rig-acquisition.json").write_text(
+        json.dumps({"manifest": {"resources": {"seed_root": str(seed)}}}))
+    (session / "mode").write_text("client-target\n")
+    (session / "submit.json").write_text(json.dumps({
+        "run_id": "run-seed", "implementation_invocation_id": "inv-implement-run-seed",
+        "submission_id": "seed-submission"}))
+    (session / "composition-manifest.json").write_text(json.dumps({"identity": {
+        "implementation_run_id": "run-seed", "implementation_invocation_id": "inv-implement-run-seed",
+        "submission_id": "seed-submission"}}))
+    (session / "submission-id").write_text("seed-submission\n")
+    (session / "target.json").write_text(json.dumps({
+        "task_id": "task-client", "project": "proj",
+        "specification_run_id": "run-specification-target",
+        "implementation_run_id": "run-target",
+        "implementation_invocation_id": "inv-implement-run-target"}))
+    (session / "implementation-run").write_text("run-target\n")
+    (session / "implementation-invocation").write_text("inv-implement-run-target\n")
+    module.validate_session(session)
+    assert module.session_mode(session) == "client-target"
+
+    def identity(key):
+        out = subprocess.run([sys.executable, sys.argv[1], "identity", str(session), key],
+                             capture_output=True, text=True, check=True)
+        return out.stdout.strip()
+    assert identity("run_id") == "run-target"
+    assert identity("implementation_invocation_id") == "inv-implement-run-target"
+    assert identity("specification_run_id") == "run-specification-target"
+
+    saved_target = (session / "target.json").read_text()
+    (session / "target.json").unlink()
+    refuses(lambda: module.validate_session(session))
+    (session / "target.json").write_text(saved_target)
+    for artifact in ("implementation-run", "implementation-invocation"):
+        saved = (session / artifact).read_text()
+        (session / artifact).write_text("run-seed\n")
+        refuses(lambda: module.validate_session(session))
+        (session / artifact).write_text(saved)
+    comp = json.loads((session / "composition-manifest.json").read_text())
+    comp["identity"]["implementation_run_id"] = "run-other"
+    (session / "composition-manifest.json").write_text(json.dumps(comp))
+    refuses(lambda: module.validate_session(session))
 print("PASS: retained identities/composition and exact remote publication checks")
 PY

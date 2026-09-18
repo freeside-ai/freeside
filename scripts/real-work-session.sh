@@ -1,17 +1,51 @@
 #!/usr/bin/env bash
 # Usage: real-work-session.sh complete|recover|verify <retained-session-directory> [installed-daemon-path]
+#        real-work-session.sh select-target <client-target-session-directory> <task-id>
 # Recovery never signals a stored PID. The rig command proves stale ownership,
 # database/listener exclusion and exact-resource cleanup before clearing a gate.
+# select-target only records the operator's chosen client task; the foreground
+# client-target harness validates and reports it. It never touches the database.
 set -euo pipefail
 umask 077
 action=${1:-}
 session=${2:-}
-if [[ "$action" != complete && "$action" != recover && "$action" != verify ]] || [[ ! -f "$session/status" ]]; then
+if [[ "$action" != complete && "$action" != recover && "$action" != verify && "$action" != select-target ]] || [[ ! -f "$session/status" ]]; then
 	echo 'usage: real-work-session.sh complete|recover|verify <session-directory>' >&2
+	echo '       real-work-session.sh select-target <session-directory> <task-id>' >&2
 	exit 2
 fi
 session=$(cd "$session" && pwd)
 status=$(cat "$session/status")
+if [[ "$action" == select-target ]]; then
+	target_task_id=${3:-}
+	# A task ID with whitespace can never name a stored task and would corrupt
+	# the single-line request file the harness reads, so refuse it up front.
+	if [[ -z "$target_task_id" || "$target_task_id" =~ [[:space:]] ]]; then
+		echo 'usage: real-work-session.sh select-target <session-directory> <task-id>' >&2
+		exit 2
+	fi
+	if [[ "$status" != awaiting-target ]]; then
+		echo "Session is $status, not awaiting a client target; select-target only applies while the client-target harness waits." >&2
+		exit 1
+	fi
+	# One selection per session: the saved target is authoritative, and a
+	# pending request is already the operator's live choice for this session.
+	if [[ -f "$session/target.json" ]]; then
+		echo "Session already bound to a client target; a saved selection cannot be replaced. Start a new client-target session to choose another." >&2
+		exit 1
+	fi
+	if [[ -f "$session/target.request" ]]; then
+		echo "A target selection is already pending; the foreground harness reports its result. Session: $session" >&2
+		exit 1
+	fi
+	# Publish the request atomically so the watching harness never reads a
+	# half-written task ID. rename within the session directory is atomic.
+	request_tmp=$(mktemp "$session/.target-request.XXXXXX")
+	printf '%s\n' "$target_task_id" >"$request_tmp"
+	mv -- "$request_tmp" "$session/target.request"
+	echo "Target selection requested for task $target_task_id; the foreground harness validates and reports it. Session: $session"
+	exit 0
+fi
 if [[ "$action" == verify ]]; then
   [[ -x "$session/verify-real-run" && -f "$session/real-work-verify.sh" ]] || {
     echo 'This older session has no retained verifier; use a reviewed runtime restart.' >&2

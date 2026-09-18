@@ -40,6 +40,25 @@ def validate_session(session):
     if submission_id is not None or saved_identity.exists():
         if not saved_identity.is_file() or saved_identity.read_text().strip() != submission_id:
             raise ValueError("retained submission identity is missing or changed")
+    if session_mode(session) == "client-target":
+        # The seed's identity still binds submit.json to the approved
+        # composition, because the composition was approved for the seed.
+        for key in ("run_id", "implementation_invocation_id"):
+            identity_key = "implementation_run_id" if key == "run_id" else key
+            if submit[key] != identity[identity_key]:
+                raise ValueError(f"retained seed {key} disagrees with original composition")
+        # The retained run and invocation are the selected client target's, not
+        # the seed's, so they bind to target.json. A session that never selected
+        # a target is not resumable.
+        target_path = session / "target.json"
+        if not target_path.is_file():
+            raise ValueError("client-target session has no saved target; start a new client-target session")
+        target = read_json(target_path)
+        for file, key in (("implementation-run", "implementation_run_id"),
+                          ("implementation-invocation", "implementation_invocation_id")):
+            if (session / file).read_text().strip() != target[key]:
+                raise ValueError(f"retained {file} disagrees with the saved client target")
+        return
     for file, key in (("implementation-run", "run_id"),
                       ("implementation-invocation", "implementation_invocation_id")):
         if (session / file).read_text().strip() != submit[key]:
@@ -47,6 +66,11 @@ def validate_session(session):
         identity_key = "implementation_run_id" if key == "run_id" else key
         if submit[key] != identity[identity_key]:
             raise ValueError(f"retained {file} disagrees with original composition")
+
+
+def session_mode(session):
+    mode_file = session / "mode"
+    return mode_file.read_text().strip() if mode_file.is_file() else ""
 
 
 def approved_composition(session):
@@ -178,7 +202,13 @@ def main():
     elif action == "validate":
         validate_session(Path(sys.argv[2]))
     elif action == "identity":
-        value = read_json(Path(sys.argv[2]) / "submit.json").get(sys.argv[3], "")
+        session, key = Path(sys.argv[2]), sys.argv[3]
+        if session_mode(session) == "client-target":
+            # The resumed identity is the selected target's, from target.json.
+            remap = {"run_id": "implementation_run_id"}
+            value = read_json(session / "target.json").get(remap.get(key, key), "")
+        else:
+            value = read_json(session / "submit.json").get(key, "")
         if not isinstance(value, str) or any(c.isspace() for c in value):
             raise ValueError("invalid retained run identity")
         print(value)

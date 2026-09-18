@@ -474,6 +474,40 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 		t.Errorf("export does not bind to its admission: %v", err)
 	}
 
+	// Client-target mode: the operator selected the target task from a client,
+	// not the CLI seed, so additionally bind the verified run to that exact
+	// task and project and confirm the task is neither cancelled nor stopped
+	// and that the specification run pairs with this implementation run. Unset
+	// in CLI mode, where behavior is unchanged.
+	if targetTaskID := os.Getenv(realRunTargetTaskIDEnv); targetTaskID != "" {
+		if !domain.SpecificationRunIDMatchesImplementation(specificationRunID, runID) {
+			t.Errorf("specification run %q does not pair with implementation run %q", specificationRunID, runID)
+		}
+		targetProject := domain.ProjectID(os.Getenv(realRunProjectEnv))
+		if err := st.Read(ctx, func(tx *store.ReadTx) error {
+			run, err := tx.GetRun(ctx, runID)
+			if err != nil {
+				return err
+			}
+			if run.TaskID != domain.TaskID(targetTaskID) {
+				t.Errorf("verified run belongs to task %q, want selected target %q", run.TaskID, targetTaskID)
+			}
+			if run.ProjectID != targetProject {
+				t.Errorf("verified run belongs to project %q, want %s=%q", run.ProjectID, realRunProjectEnv, targetProject)
+			}
+			task, err := tx.GetTask(ctx, domain.TaskID(targetTaskID))
+			if err != nil {
+				return err
+			}
+			if task.Cancellation != nil {
+				t.Errorf("selected target task %q is cancelled or stopped", targetTaskID)
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("read selected client target: %v", err)
+		}
+	}
+
 	if checkpoint.State == "ready" {
 		if err := st.Read(ctx, func(tx *store.ReadTx) error {
 			if _, err := tx.GetInbox(ctx, string(invocationID)); err != nil {
