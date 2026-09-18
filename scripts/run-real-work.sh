@@ -2,11 +2,27 @@
 # run-real-work.sh — the §11 1A.2 gated-unattended production exercise.
 #
 # Usage: run-real-work.sh <spec-file> <resolved-policy-keys.json> <publication.json> [work-unit.json]
+#        run-real-work.sh --client-target <spec-file> <resolved-policy-keys.json> <publication.json> [work-unit.json]
 #        run-real-work.sh --resume-session <completed-session-directory>
 #        run-real-work.sh --recover-codex-credentials [--approved-recipe <digest>]...
 # Resume keeps the existing run and starts no submission or client command.
 # Recovery serves paired-client credential recovery with execution disabled.
 # It uses the same required environment, but takes no submission files.
+#
+# Client-target mode submits the three files exactly as the CLI mode does, but
+# only as a visibility seed it never follows or verifies. It then waits for the
+# operator to submit the real target from a Freeside client and to name it with
+# `real-work-session.sh select-target <session> <task-id>`. The harness saves
+# that selection durably before it follows anything, resolves the selected
+# task's specification and implementation runs by trusted identity (never by
+# matching source text), and follows and verifies that task with the same rigor
+# as the CLI mode. It requires FREESIDE_REAL_RUN_MANUAL_SUBMISSION_CONFIG and
+# cannot combine with --resume-session or --recover-codex-credentials. A saved
+# selection cannot be replaced in the same session. Client-target session files:
+# mode (the literal client-target), daemon-started-at (Unix nanoseconds recorded
+# just before the daemon launch), seed-specification-run (the ignored seed's
+# specification run), target.request (the operator's pending selection) and
+# target.json (the durable selection plus its resolved implementation run).
 #
 # Submits one task's source specification through `freesided submit`, runs
 # the daemon with the production Claude driver, and pauses at the human
@@ -148,12 +164,21 @@ if [[ "${1:-}" == --recover-codex-credentials ]]; then
     shift 2
   done
 fi
+client_target=false
+if [[ "${1:-}" == --client-target ]]; then
+  client_target=true
+  shift
+fi
 if [[ "${1:-}" == --resume-session ]]; then
   [[ $# == 2 && -d "$2" ]] || { echo 'usage: run-real-work.sh --resume-session <completed-session>' >&2; exit 2; }
   retained_session=$(cd "$2" && pwd)
   set -- "$retained_session/submission-inputs/spec.json" \
     "$retained_session/submission-inputs/policy.json" "$retained_session/submission-inputs/publication.json"
   [[ ! -f "$retained_session/submission-inputs/work-unit.json" ]] || set -- "$@" "$retained_session/submission-inputs/work-unit.json"
+fi
+if [[ "$client_target" == true && ( -n "$retained_session" || "$recover_codex_credentials" == true ) ]]; then
+  echo 'run-real-work: --client-target cannot combine with --resume-session or --recover-codex-credentials' >&2
+  exit 2
 fi
 spec_file="${1:-}"
 policy_file="${2:-}"
@@ -200,6 +225,10 @@ if (( ${#missing[@]} > 0 )); then
   echo "run-real-work: missing required environment: ${missing[*]}" >&2
   exit 2
 fi
+if [[ "$client_target" == true && -z "${FREESIDE_REAL_RUN_MANUAL_SUBMISSION_CONFIG:-}" ]]; then
+  echo 'run-real-work: --client-target requires FREESIDE_REAL_RUN_MANUAL_SUBMISSION_CONFIG so a client can create the target task' >&2
+  exit 2
+fi
 
 # Digest pinning is the ward's own refusal; checking it here reports a
 # configuration mistake now instead of a gate failure deep into a run.
@@ -220,6 +249,8 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$repo_root/scripts/run-real-work-supervision.sh"
 # shellcheck source=scripts/real-work-lifecycle.sh
 source "$repo_root/scripts/real-work-lifecycle.sh"
+# shellcheck source=scripts/real-work-client-target.sh
+source "$repo_root/scripts/real-work-client-target.sh"
 if [[ -n "$retained_session" ]]; then
   python3 "$repo_root/scripts/real-work-retained.py" validate "$retained_session"
 fi
@@ -234,12 +265,19 @@ cp "$repo_root/scripts/real-work-session.sh" "$repo_root/scripts/real-work-lifec
 	"$repo_root/app/scripts/restore-supervised-daemon.sh" \
   "$repo_root/scripts/real-work-verify.sh" "$repo_root/scripts/real-work-retained.py" "$workdir/"
 printf 'starting\n' >"$workdir/status"
+if [[ "$client_target" == true ]]; then
+	printf 'client-target\n' >"$workdir/mode"
+fi
 echo "run-real-work: retained session: $workdir" >&2
 daemon_pid=""
 rig_pid=""
 rig_acquired=false
 specification_run_id=""
 implementation_run_id=""
+implementation_invocation_id=""
+# The client target task, once selected (fresh) or inherited (resume). Empty in
+# CLI mode, which keeps the verifier's target checks off.
+target_task_id=""
 last_supervision_snapshot="$workdir/supervision.json"
 diagnostic_path=""
 rig_acquisition="$workdir/rig-acquisition.json"
@@ -466,6 +504,13 @@ if [[ -n "$retained_session" ]]; then
   [[ -f "$approved_composition" ]] || approved_composition="$retained_session/composition-manifest.json"
   cp "$approved_composition" "$workdir/retained-composition.json"
   cp "$retained_session/submit.json" "$workdir/submit.json"
+  if [[ -f "$retained_session/mode" && "$(cat "$retained_session/mode")" == client-target ]]; then
+    # Resume rebinds to the saved client target, not the ignored seed. validate
+    # already refused a client-target predecessor with no target.json.
+    cp "$retained_session/mode" "$workdir/mode"
+    cp "$retained_session/target.json" "$workdir/target.json"
+    target_task_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["task_id"])' "$workdir/target.json")
+  fi
   implementation_run_id=$(python3 "$workdir/real-work-retained.py" identity "$retained_session" run_id)
   implementation_invocation_id=$(python3 "$workdir/real-work-retained.py" identity "$retained_session" implementation_invocation_id)
   specification_run_id=$(python3 "$workdir/real-work-retained.py" identity "$retained_session" specification_run_id)
@@ -752,7 +797,20 @@ else
 fi
 echo "reserved implementation run=$implementation_run_id invocation=$implementation_invocation_id" >&2
 
+if [[ "$client_target" == true ]]; then
+  # The seed made the project visible in sync. Record its specification run so
+  # the resolver can refuse reselecting it, then drop every seed identity: the
+  # harness follows and verifies only the operator's client target.
+  printf '%s\n' "$specification_run_id" > "$workdir/seed-specification-run"
+  echo "client-target: submitted visibility seed run=$implementation_run_id; it is never followed or verified" >&2
+  implementation_run_id=""
+  implementation_invocation_id=""
+  specification_run_id=""
+  specification_invocation_id=""
 fi
+
+fi
+if [[ "$client_target" == false ]]; then
 printf '%s\n' "$implementation_run_id" > "$workdir/implementation-run"
 printf '%s\n' "$implementation_invocation_id" > "$workdir/implementation-invocation"
 # Keep a build-bound verifier and only its named configuration so later checks
@@ -766,11 +824,20 @@ printf '%s\n' "$implementation_invocation_id" > "$workdir/implementation-invocat
   else
     printf 'unset FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID\n'
   fi
+  # Set for a resumed client-target session, unset otherwise, so `verify`
+  # applies the same target binding as the original run without leaking a
+  # stale value into a CLI-mode verify.
+  if [[ -n "$target_task_id" ]]; then
+    printf 'export FREESIDE_REAL_RUN_TARGET_TASK_ID=%q\n' "$target_task_id"
+  else
+    printf 'unset FREESIDE_REAL_RUN_TARGET_TASK_ID\n'
+  fi
 } > "$workdir/verification-env.sh"
 
 specification_verifier_env=(-u FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID)
 if [[ -n "$specification_run_id" ]]; then
 	specification_verifier_env+=(FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID="$specification_run_id")
+fi
 fi
 
 echo "starting the daemon with the production Claude driver" >&2
@@ -778,6 +845,12 @@ require_live_rig
 # FREESIDE_REAL_RUN_LISTEN pins the exact leased listener so an operator's
 # paired client can reach the specification-approval gate.
 python3 "$workdir/real-work-retained.py" check-manual "$workdir" >/dev/null
+if [[ "$client_target" == true ]]; then
+  # The client target is submitted while this daemon runs; the seed and any
+  # pre-existing task predate this instant. The resolver refuses a task created
+  # before it. Unix nanoseconds keep the comparison unambiguous.
+  python3 -c 'import time; print(time.time_ns())' >"$workdir/daemon-started-at"
+fi
 "$workdir/freesided" \
   "${judgment_args[@]}" \
   "${manual_submission_args[@]}" \
@@ -840,6 +913,34 @@ if [[ -n "$retained_session" ]]; then
   exit 0
 fi
 
+if [[ "$client_target" == true ]]; then
+  # Wait for the operator to submit the real target from a client and name it.
+  # This has no deadline; interruption runs the ordinary cleanup trap.
+  real_work_await_target "$workdir" "$daemon_pid"
+  specification_run_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["specification_run_id"])' "$workdir/target.json")
+  target_task_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["task_id"])' "$workdir/target.json")
+  implementation_run_id=""
+  # Supervision resolves the implementation run from the selected task once it
+  # is recorded. An empty print means "not bound yet"; nonzero means error.
+  real_work_resolve_implementation() {
+    local rc
+    real_work_bind_target "$workdir"
+    rc=$?
+    case "$rc" in
+    0) python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["implementation_run_id"])' "$workdir/target.json"; return 0 ;;
+    3) return 0 ;;
+    *) return 1 ;;
+    esac
+  }
+  # The verifier's configuration comes from the selection, not the seed. The
+  # implementation identity is added to verification-env.sh after binding.
+  {
+    for name in "${required[@]}"; do printf 'export %s=%q\n' "$name" "${!name}"; done
+    printf 'export FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID=%q\n' "$specification_run_id"
+    printf 'export FREESIDE_REAL_RUN_TARGET_TASK_ID=%q\n' "$target_task_id"
+  } > "$workdir/verification-env.sh"
+  specification_verifier_env=(FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID="$specification_run_id")
+fi
 
 if [[ -n "$specification_run_id" ]]; then
   echo "gated-unattended: waiting for an operator to approve or revise the generated specification" >&2
@@ -863,12 +964,30 @@ if [[ "$supervision_status" -ne 0 ]]; then
 	exit "$supervision_status"
 fi
 
+if [[ "$client_target" == true ]]; then
+  # Binding wrote the implementation identity into target.json during
+  # supervision. Adopt it now and complete verification-env.sh so verify,
+  # complete and recover bind to the selected target, never the seed.
+  implementation_run_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["implementation_run_id"])' "$workdir/target.json")
+  implementation_invocation_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["implementation_invocation_id"])' "$workdir/target.json")
+  printf '%s\n' "$implementation_run_id" >"$workdir/implementation-run"
+  printf '%s\n' "$implementation_invocation_id" >"$workdir/implementation-invocation"
+  {
+    for name in "${required[@]}"; do printf 'export %s=%q\n' "$name" "${!name}"; done
+    printf 'export FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID=%q\n' "$implementation_run_id"
+    printf 'export FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION=%q\n' "$implementation_invocation_id"
+    printf 'export FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID=%q\n' "$specification_run_id"
+    printf 'export FREESIDE_REAL_RUN_TARGET_TASK_ID=%q\n' "$target_task_id"
+  } > "$workdir/verification-env.sh"
+fi
+
 # Positive evidence, not the absence of an error: a Go test binary exits 0
 # for a skipped test too, so require the harness's own success line.
 verify_log="$workdir/verify-final.log"
 set +e
 env -u FREESIDE_REAL_RUN_RUN_ID -u FREESIDE_REAL_RUN_INVOCATION \
 	"${specification_verifier_env[@]}" \
+	${target_task_id:+FREESIDE_REAL_RUN_TARGET_TASK_ID="$target_task_id"} \
   FREESIDE_REAL_RUN_LIVE_TEST=1 \
   FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID="$implementation_run_id" \
   FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION="$implementation_invocation_id" \

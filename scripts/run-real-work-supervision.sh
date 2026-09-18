@@ -31,7 +31,7 @@ real_work_report_failure() {
 real_work_supervise() {
 	local freesided=$1 db_path=$2 specification_run_id=$3 implementation_run_id=$4
 	local daemon_pid=$5 timeout_seconds=$6 snapshot_path=$7 interval_seconds=${8:-1}
-	local lane run_id state previous_state="" state_changed deadline
+	local lane run_id state previous_state="" state_changed deadline resolved
 	local observation_failures=0
 	local max_observation_failures=${FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES:-10}
 	# Both counters drive Bash arithmetic below. A malformed value aborts under
@@ -97,6 +97,25 @@ real_work_supervise() {
 		fi
 		case "$lane:$state" in
 		specification:implementation_bound)
+			# CLI mode supplies the implementation run up front. Client-target
+			# mode leaves it empty and resolves it from the selected task's run
+			# list once the run is recorded, matching the require_live_rig hook
+			# convention. An empty result is "not bound yet": keep following the
+			# specification lane. A resolver failure is terminal.
+			if [[ -z "$implementation_run_id" ]]; then
+				if ! declare -F real_work_resolve_implementation >/dev/null; then
+					echo "run-real-work: implementation run unresolved and no resolver is defined" >&2
+					return 1
+				fi
+				if ! resolved=$(real_work_resolve_implementation); then
+					return 1
+				fi
+				if [[ -z "$resolved" ]]; then
+					sleep "$interval_seconds"
+					continue
+				fi
+				implementation_run_id=$resolved
+			fi
 			lane=implementation
 			run_id=$implementation_run_id
 			previous_state=""

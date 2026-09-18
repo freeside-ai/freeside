@@ -226,4 +226,67 @@ assert_invalid_config timeout-nonnumeric "" abc \
 assert_invalid_config timeout-octal "" 09 \
 	'supervision timeout must be a positive integer, got: 09'
 
+# Client-target late binding: the implementation run is empty up front, so at
+# implementation_bound the supervisor calls real_work_resolve_implementation.
+# Empty output means "not bound yet" and keeps it following the specification
+# lane; a nonzero resolver is terminal; a printed run id switches lanes.
+resolve_calls="$fixture_root/resolve.calls"
+real_work_resolve_implementation() {
+	local n=0
+	[[ ! -f "$resolve_calls" ]] || read -r n <"$resolve_calls"
+	n=$((n + 1))
+	printf '%s\n' "$n" >"$resolve_calls"
+	case "$RESOLVE_MODE" in
+	bind-after-2) [[ "$n" -lt 3 ]] || echo run-impl ;;
+	error) return 1 ;;
+	esac
+	return 0
+}
+
+run_hook_case() {
+	local name=$1 mode=$2 expected=$3
+	local case_dir=$fixture_root/$name status
+	mkdir -p "$case_dir"
+	rm -f "$resolve_calls"
+	RESOLVE_MODE=$mode
+	set +e
+	real_work_supervise "$stub" /state/freeside.db run-spec "" "" \
+		3 "$case_dir/snapshot.json" 0.01 2>"$case_dir/stderr"
+	status=$?
+	set -e
+	RESOLVE_MODE=""
+	if [[ "$status" -ne "$expected" ]]; then
+		echo "$name: status=$status, want $expected" >&2
+		cat "$case_dir/stderr" >&2
+		exit 1
+	fi
+}
+
+# The specification stays implementation_bound across polls until the resolver
+# yields the run; the resolved run then reaches published.
+write_sequence run-spec "$(snapshot implementation_bound pending)"
+write_sequence run-impl "$(snapshot published published)"
+run_hook_case hook-late-binding bind-after-2 0
+[[ "$(cat "$resolve_calls")" -ge 3 ]] || { echo 'resolver bound before the run was recorded' >&2; exit 1; }
+assert_contains "$fixture_root/hook-late-binding/stderr" 'implementation run=run-impl state=published'
+
+# A resolver error is terminal, not a poll-to-timeout.
+write_sequence run-spec "$(snapshot implementation_bound pending)"
+run_hook_case hook-error error 1
+
+unset -f real_work_resolve_implementation
+
+# With no resolver defined, an empty implementation run at implementation_bound
+# is a configuration error rather than a silent hang.
+write_sequence run-spec "$(snapshot implementation_bound pending)"
+no_resolver_dir=$fixture_root/hook-missing
+mkdir -p "$no_resolver_dir"
+set +e
+real_work_supervise "$stub" /state/freeside.db run-spec "" "" \
+	3 "$no_resolver_dir/snapshot.json" 0.01 2>"$no_resolver_dir/stderr"
+missing_status=$?
+set -e
+[[ "$missing_status" == 1 ]] || { echo "hook-missing: status=$missing_status, want 1" >&2; exit 1; }
+assert_contains "$no_resolver_dir/stderr" 'implementation run unresolved and no resolver is defined'
+
 echo "run-real-work supervision fixtures passed"

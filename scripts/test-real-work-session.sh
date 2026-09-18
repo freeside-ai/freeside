@@ -195,4 +195,35 @@ export HEALTH_BUILD=reviewed-build
 run_recovery
 [[ "$rc" == 0 && "$(cat "$FIXTURE/status")" == completed ]]
 [[ "$(grep -c '^rig ' "$FIXTURE/events")" == 1 ]]
+# select-target records the operator's client-task choice for the foreground
+# client-target harness. It only applies while awaiting a target, writes the
+# request atomically, refuses bad IDs, and never allows a second selection.
+sel=$tmp/select
+mkdir "$sel"
+cp "$root/scripts/real-work-session.sh" "$sel/"
+printf 'walkthrough\n' >"$sel/status"
+if bash "$sel/real-work-session.sh" select-target "$sel" task-1 >"$sel/out" 2>&1; then
+	echo 'select-target accepted in walkthrough status' >&2; exit 1
+fi
+[[ ! -f "$sel/target.request" ]]
+printf 'awaiting-target\n' >"$sel/status"
+for bad in '' 'has space' $'tab\tid'; do
+	if bash "$sel/real-work-session.sh" select-target "$sel" "$bad" >"$sel/out" 2>&1; then
+		echo "select-target accepted a bad task id" >&2; exit 1
+	fi
+	[[ ! -f "$sel/target.request" ]]
+done
+bash "$sel/real-work-session.sh" select-target "$sel" task-42 >"$sel/out"
+[[ "$(cat "$sel/target.request")" == task-42 ]]
+if bash "$sel/real-work-session.sh" select-target "$sel" task-43 >"$sel/out" 2>&1; then
+	echo 'second selection accepted while one was pending' >&2; exit 1
+fi
+[[ "$(cat "$sel/target.request")" == task-42 ]]
+rm -f "$sel/target.request"
+printf '{"task_id":"task-42"}\n' >"$sel/target.json"
+if bash "$sel/real-work-session.sh" select-target "$sel" task-99 >"$sel/out" 2>&1; then
+	echo 'selection accepted after a target was already saved' >&2; exit 1
+fi
+[[ ! -f "$sel/target.request" ]]
+
 echo 'PASS: session completion, stale recovery, retained diagnostics and restoration'
