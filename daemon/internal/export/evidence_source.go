@@ -47,6 +47,14 @@ const (
 	BlockedEvidencePath  = EvidenceWorkspaceDir + "/blocked.json"
 )
 
+// PublicationEvidenceLabel identifies explicitly public-intended agent prose.
+// It grants no publication authority; the consumer authenticates the producer
+// and candidate and screens the complete text before rendering it as a claim.
+const (
+	PublicationEvidenceLabel = "freeside.publication"
+	PublicationEvidencePath  = EvidenceWorkspaceDir + "/publication.md"
+)
+
 // EvidenceSourceVersion identifies the evidence *source descriptor* wire format
 // (the agent-facing input the helper reads), independent of and distinct from
 // the evidence *manifest* the helper emits (EvidenceManifestVersion). Any

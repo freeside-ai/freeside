@@ -37,7 +37,13 @@ func TestPublishedFeedbackRetryPreservesFailedAttemptAndInput(t *testing.T) {
 }
 
 func testPublishedFeedbackRetry(t *testing.T, scenario string) {
-	p := newProductionPublicationHarnessWithBoundIssue(t, "", 79)
+	var p *productionPublicationHarness
+	if scenario == "public-metadata" {
+		p = newPublicMetadataHarness(t)
+		p.replay = withPublicAccount(t, p, p.replay, "# Initial candidate\n\nInitial whole change.")
+	} else {
+		p = newProductionPublicationHarnessWithBoundIssue(t, "", 79)
+	}
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
 		policy, err := tx.GetResolvedPolicy(p.ctx, p.runID)
 		if err != nil {
@@ -430,11 +436,15 @@ func completeFeedbackSuccessor(t *testing.T, p *productionPublicationHarness, in
 	replay := buildProductionReplayWithContentAt(t, p.publicationHarness, p.runID, run.SpecDigest,
 		submissionSpecification(string(p.runID)), p.declaration.BoundIssue, invocation, fakePublicationTime.Add(time.Minute),
 		"production change\ncorrected decision note\n")
+	if scenario == "public-metadata" {
+		replay = withPublicAccount(t, p, replay, publicAccount)
+	}
 	completedAt := replay.ImportOptions.CommitDate.Add(30 * time.Second)
 	p.now = completedAt.Add(time.Second)
 	exported, err := domain.NewExecutionExport(domain.ExecutionExportInput{
 		InvocationID: invocation, AdmissionID: admission.ID, ObservedBaseSHA: p.baseSHA,
 		HeadSHA: replay.HeadSHA, ManifestDigest: replay.ManifestDigest, RecordedAt: completedAt,
+		EvidenceManifestDigest: replay.EvidenceManifestDigest,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -653,6 +663,13 @@ func completeFeedbackSuccessor(t *testing.T, p *productionPublicationHarness, in
 	}
 	if refs, prs := p.forge.counts(); refs != 1 || prs != 1 {
 		t.Fatalf("successor created another resource: refs=%d prs=%d", refs, prs)
+	}
+	if scenario == "public-metadata" {
+		pr := p.forge.pullRequests()[0]
+		if pr.Title != "Preserve retries after restart" || !strings.Contains(pr.Body, "Producer:\n\n<pre><code>"+string(invocation)+"</code></pre>") ||
+			!strings.Contains(pr.Body, "Keep the whole approved change") || strings.Contains(pr.Body, "Initial whole change") {
+			t.Fatal("feedback retained predecessor public metadata")
+		}
 	}
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
 		old, err := tx.GetReadyItemPRBinding(p.ctx, domain.ProductionReadyItemID(p.runID))

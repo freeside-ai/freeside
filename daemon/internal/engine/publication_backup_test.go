@@ -31,6 +31,11 @@ func historicalPublicationCases(t *testing.T, body string) []publicationBackupCa
 		Title: "Preserve historical work", Body: body,
 		CommitAuthor: ProductionCommitAuthor{AppSlug: "freeside", BotUserID: 42},
 	}
+	return publicationBackupCases(t, publication)
+}
+
+func publicationBackupCases(t *testing.T, publication ProductionPublication) []publicationBackupCase {
+	t.Helper()
 	marshal := func(value any) []byte {
 		t.Helper()
 		payload, err := json.Marshal(value)
@@ -96,6 +101,31 @@ func historicalPublicationCases(t *testing.T, body string) []publicationBackupCa
 			live:    func(entry store.QueueEntry) error { _, err := decodeProductionPublicationTask(entry); return err },
 			digests: append(productionReplayDigests(task.Replay), task.Artifacts...),
 		},
+	}
+}
+
+func TestRecipePublicationBackupPreservesInputs(t *testing.T) {
+	p := recipePublicationFixture()
+	p.SourceIssue = "https://github.com/example/project/issues/82"
+	for _, tc := range publicationBackupCases(t, p) {
+		t.Run(tc.name, func(t *testing.T) {
+			original := bytes.Clone(tc.entry.Payload)
+			if _, err := tc.extract(tc.entry); err != nil {
+				t.Fatalf("recipe backup: %v", err)
+			}
+			if err := tc.live(tc.entry); err != nil {
+				t.Fatalf("recipe live validation: %v", err)
+			}
+			var record struct {
+				Publication ProductionPublication `json:"publication"`
+			}
+			if err := json.Unmarshal(tc.entry.Payload, &record); err != nil {
+				t.Fatal(err)
+			}
+			if record.Publication != p || !bytes.Equal(original, tc.entry.Payload) {
+				t.Fatal("backup changed immutable recipe")
+			}
+		})
 	}
 }
 

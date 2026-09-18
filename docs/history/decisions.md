@@ -1805,3 +1805,16 @@ Revision 61 ("Durable Task Cancellation Requests"):
    changed work. Runtime enforcement, stopped lifecycle/WIP, and controls remain
    the responsibilities of #1368, #1344, and #1369 respectively. (#1367;
    [decision note](../../devlog/2026-09-16-2100-task-cancellation-contract.md).)
+
+---
+
+## Revision 62 ("Confirmed Cancellation Releases Task WIP")
+
+1. **Confirmed cancellation ends its bound task episode.** Acknowledgement and
+   any needed abandonment commit atomically. Task lifecycle distinguishes
+   stopped and administratively abandoned work from finished runs. Ordinary
+   milestones cannot reopen terminal work; an uncancelled explicit retry that
+   needs a slot checks the policy cap and records admission with allocation.
+   Run history, receipts, PRs and completions remain intact. Runtime stopping
+   and client controls remain #1368 and #1369. (Owner-assigned #1344 contract;
+   [decision note](../../devlog/2026-09-17-0830-confirmed-task-lifecycle.md).)

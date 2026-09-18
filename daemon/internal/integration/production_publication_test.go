@@ -267,6 +267,13 @@ func newProductionPublicationHarnessFromBase(
 	t *testing.T, h *publicationHarness, resultHead string, extraKeys []domain.PolicyKey,
 	boundIssue *int, extraFiles map[string]string,
 ) *productionPublicationHarness {
+	return newProductionPublicationHarnessWithMetadata(t, h, resultHead, extraKeys, boundIssue, extraFiles, productionPublicationMetadata(), nil)
+}
+
+func newProductionPublicationHarnessWithMetadata(
+	t *testing.T, h *publicationHarness, resultHead string, extraKeys []domain.PolicyKey,
+	boundIssue *int, extraFiles map[string]string, publication engine.ProductionPublication, prior *productionPublicationHarness, clientName ...string,
+) *productionPublicationHarness {
 	t.Helper()
 	candidateFiles := map[string]string{"README.md": "production change\n"}
 	for name, content := range extraFiles {
@@ -332,15 +339,34 @@ func newProductionPublicationHarnessFromBase(
 	)
 	specBody := submissionSpecification(string(runID))
 	putProductionBlob(t, h, spec.Digest, specBody)
-	submitted, err := engine.SubmitProductionRun(h.ctx, h.store, engine.ProductionRunSpec{
-		RunID: runID, ProjectID: projectID, SpecArtifactID: spec.ID,
-		PolicyArtifactID: policy.ID, ResolvedPolicy: resolved,
-		Publication: productionPublicationMetadata(),
-	})
-	if err != nil {
-		t.Fatal(err)
+	var submitted engine.ProductionRun
+	if len(clientName) > 0 {
+		commandID := "client-publication"
+		if len(clientName) > 1 {
+			commandID = clientName[1]
+		}
+		submitted, specBody = submitClientForPublication(t, h, image, projectID, clientName[0], commandID, prior)
+		runID, spec.Digest = submitted.Run.ID, submitted.Run.SpecDigest
+	} else {
+		submitted, err = engine.SubmitProductionRun(h.ctx, h.store, engine.ProductionRunSpec{
+			RunID: runID, ProjectID: projectID, SpecArtifactID: spec.ID,
+			PolicyArtifactID: policy.ID, ResolvedPolicy: resolved,
+			Publication: publication,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	var declaration *domain.WorkUnitDeclaration
+	if len(clientName) > 0 {
+		if err := h.store.Read(h.ctx, func(tx *store.ReadTx) error {
+			stored, err := tx.GetWorkUnitDeclarationByRun(h.ctx, runID)
+			declaration = &stored
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if boundIssue != nil {
 		captured, err := domain.NewWorkUnitDeclaration(domain.WorkUnitDeclarationInput{
 			CompletionCriterion: domain.CompletionBoundIssueClosedByMergedPR,
@@ -757,6 +783,7 @@ func (p *productionPublicationHarness) newEngineForMode(
 	approvedRecipes map[domain.Digest]bool,
 	mode domain.OperatingMode,
 	holdOnly bool,
+	extraOptions ...engine.Option,
 ) *engine.Engine {
 	t.Helper()
 	identity := testIdentity.ID
@@ -836,6 +863,7 @@ func (p *productionPublicationHarness) newEngineForMode(
 			TransitionHook:       seams.transitionHook,
 		}))
 	}
+	options = append(options, extraOptions...)
 	workflow, err := engine.New(p.store, p.attention, p.driver, options...)
 	if err != nil {
 		t.Fatal(err)
@@ -2009,6 +2037,11 @@ func TestProductionReviewOverlapGateSurvivesCrashBeforeRecord(t *testing.T) {
 
 func TestProductionAdjudicatedRemediationRerunsVerificationAndReview(t *testing.T) {
 	p := newProductionPublicationHarness(t, "")
+	testProductionAdjudicatedRemediation(t, p, false)
+}
+
+func testProductionAdjudicatedRemediation(t *testing.T, p *productionPublicationHarness, publicMetadata bool) {
+	t.Helper()
 	var delivered []exec.StartSpec
 	p.productionDelivery = func(_ context.Context, spec exec.StartSpec) error {
 		delivered = append(delivered, spec)
@@ -2158,10 +2191,14 @@ func TestProductionAdjudicatedRemediationRerunsVerificationAndReview(t *testing.
 		fakePublicationTime.Add(time.Minute),
 		"production change\nremediated review finding\n",
 	)
+	if publicMetadata {
+		remediated = withPublicAccount(t, p, remediated, publicAccount)
+	}
 	remediationExport, err := domain.NewExecutionExport(domain.ExecutionExportInput{
 		InvocationID: remediationID, AdmissionID: admission.ID,
 		ObservedBaseSHA: p.baseSHA, HeadSHA: remediated.HeadSHA,
 		ManifestDigest: remediated.ManifestDigest, RecordedAt: remediated.ImportOptions.CommitDate,
+		EvidenceManifestDigest: remediated.EvidenceManifestDigest,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2237,7 +2274,11 @@ func TestProductionAdjudicatedRemediationRerunsVerificationAndReview(t *testing.
 	}); err != nil {
 		t.Fatal(err)
 	}
-	p.assertReady(t)
+	if publicMetadata {
+		assertPublicMetadata(t, p)
+	} else {
+		p.assertReady(t)
+	}
 }
 
 func TestProductionUndeliverableRemediationTerminalizesPerRun(t *testing.T) {

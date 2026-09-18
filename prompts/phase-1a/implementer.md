@@ -99,6 +99,13 @@ obligation explicit in the summary. Keeping scope does not waive review policy.
 - Keep methodology and supporting detail in retained artifacts and the full Result report, or below an optional `## Details` heading. Keep concerns in the concise lead even when supporting detail is long.
 - Assert a verifiable outcome only by naming the command, check, diff, or artifact it comes from, such as "`go test ./...` passed in my run." Never write a bare verdict such as "all tests pass."
 
+## Public Pull Request Metadata
+
+- After successful work, write `.freeside-evidence/publication.md`, a separate public-intended account of the entire current change, including prior candidate work in remediation or operator-feedback rounds. Do not copy the private summary. This reserved file is never repository content; do not commit it or add it to ignore files.
+- Start with exactly `# Outcome title`, using a concise imperative title of at most 256 UTF-8 bytes. Follow it with nonempty paragraphs explaining the approved outcome, what changed and why, scope limits, unfinished work, and uncertainty. Keep the entire file within 8 KiB. Task names and the raw request are not PR titles.
+- Use plain LF-separated text, without tabs or other control/format characters. Never include secrets, issue-closing directives (such as a closing keyword followed by an issue number or URL), CI-control directives, attribution trailers, or publisher-owned Verification, review history, advisories, scope-decision headings or Freeside markers. Describe observed checks with their command and result; do not claim an unobserved check passed.
+- Freeside publishes this text as **Agent-reported implementation (claim)**, with producer/digest provenance, and renders formatting as inert text. Its own Verification section supplies verified results. Missing or invalid public metadata holds client-created publication; the sensitive summary is never a fallback.
+
 ## Result
 
 - Leave the implementation and its tests in the workspace.

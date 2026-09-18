@@ -180,6 +180,12 @@ func agentCommandWithInput(promptInput, sessionID string, invocationID domain.In
 		ProducerInvocationID: string(invocationID),
 	}
 	descriptorPrefix := evidenceDescriptorPrefix()
+	publicationSource := export.EvidenceSource{
+		Label: export.PublicationEvidenceLabel, MediaType: "text/markdown",
+		Path: export.PublicationEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
+		SensitivityClass:     export.EvidenceSensitivityNormal,
+		ProducerInvocationID: string(invocationID),
+	}
 	scopeConflictSource := export.EvidenceSource{
 		Label: export.ScopeConflictEvidenceLabel, MediaType: "application/json",
 		Path: export.ScopeConflictEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
@@ -196,6 +202,8 @@ func agentCommandWithInput(promptInput, sessionID string, invocationID domain.In
 	// lacks. Each fragment appears once to keep the sh argument under the
 	// Linux single-argument limit.
 	declareFixedSources := "sources=" + shellQuote(sourceFragment("transcript", transcriptSource)) + "; declare=0; " +
+		"if " + fileExists(export.PublicationEvidencePath) + "; then " +
+		"sources=\"$sources\"," + shellQuote(sourceFragment("publication", publicationSource)) + "; declare=1; fi; " +
 		"if " + fileExists(export.SummaryEvidencePath) + "; then " +
 		"sources=\"$sources\"," + shellQuote(sourceFragment("summary", summarySource)) + "; declare=1; fi; " +
 		"if " + fileExists(export.BlockedEvidencePath) + "; then " +

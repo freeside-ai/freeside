@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -81,8 +80,8 @@ func (t *TaskSubmitter) SubmitTask(ctx context.Context, tx *store.WriteTx, in si
 		return signet.TaskSubmissionResult{}, fmt.Errorf("project %q has no configured submission policy: %w", in.ProjectID, store.ErrNotFound)
 	}
 	publication := ProductionPublication{
-		Title:        submissionTitle(operatorName, in.Source),
-		Body:         "Implements the operator-submitted task specification.",
+		Recipe:       clientPublicationRecipeV1,
+		SourceIssue:  canonicalSourceIssue(strings.TrimSpace(string(in.Source))),
 		CommitAuthor: init.CommitAuthor,
 	}
 	if err := publication.Validate(); err != nil {
@@ -168,50 +167,4 @@ func (t *TaskSubmitter) SubmitTask(ctx context.Context, tx *store.WriteTx, in si
 		return signet.TaskSubmissionResult{}, err
 	}
 	return signet.TaskSubmissionResult{TaskID: task.ID, SpecificationRunID: submitted.Run.ID, Name: task.Name}, nil
-}
-
-// submissionTitle composes the reviewer-facing publication title: the operator
-// name when given, otherwise the source's first non-empty line (stripped of a
-// leading Markdown heading marker), otherwise a default. The result is a single
-// non-empty trimmed line within the publication title byte limit, so it always
-// passes ProductionPublication.Validate.
-func submissionTitle(operatorName string, source []byte) string {
-	candidate := strings.TrimSpace(operatorName)
-	if candidate == "" {
-		for _, rawLine := range strings.Split(string(source), "\n") {
-			line := strings.TrimSpace(strings.TrimSuffix(rawLine, "\r"))
-			if line == "" {
-				continue
-			}
-			hashes := 0
-			for hashes < len(line) && line[hashes] == '#' {
-				hashes++
-			}
-			if hashes > 0 && hashes < len(line) && (line[hashes] == ' ' || line[hashes] == '\t') {
-				line = strings.TrimSpace(line[hashes:])
-			}
-			candidate = line
-			break
-		}
-	}
-	// Collapse to a single line: the title contract rejects CR/LF.
-	if i := strings.IndexAny(candidate, "\r\n"); i >= 0 {
-		candidate = candidate[:i]
-	}
-	candidate = strings.TrimSpace(candidate)
-	if candidate == "" {
-		candidate = "Submitted task"
-	}
-	if len(candidate) > maxProductionPublicationTitleBytes {
-		bounded := candidate[:maxProductionPublicationTitleBytes]
-		for len(bounded) > 0 && !utf8.ValidString(bounded) {
-			bounded = bounded[:len(bounded)-1]
-		}
-		if trimmed := strings.TrimSpace(bounded); trimmed != "" {
-			candidate = trimmed
-		} else {
-			candidate = "Submitted task"
-		}
-	}
-	return candidate
 }
