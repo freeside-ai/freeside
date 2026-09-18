@@ -137,9 +137,12 @@ enum RunDisplay {
     }
 
     /// The timeline title is the attempt number; a run outside a
-    /// campaign, or missing its attempt number, is titled by its id.
+    /// campaign, or missing its attempt number, is titled by its short id.
+    /// The exact id is in the header's technical details.
     static func timelineTitle(_ run: Components.Schemas.Run) -> String {
-        guard run.campaign_id != nil, let attempt = run.attempt_number else { return run.id }
+        guard run.campaign_id != nil, let attempt = run.attempt_number else {
+            return "Run \(ShortIdentifier.short(run.id))"
+        }
         return "Attempt \(attempt)"
     }
 
@@ -266,6 +269,18 @@ enum RunDisplay {
         case .unapproved: return "Source specification"
         case .unavailable: return "Specification digest"
         }
+    }
+
+    /// The run header's plain specification line, without the digest that moved
+    /// to technical details. A source or approved run names itself; an
+    /// unavailable approval says so rather than labelling a digest that is no
+    /// longer beside it. `specificationLabel` keeps its wording for the
+    /// technical-details row that still carries the digest.
+    static func specificationHeaderLabel(
+        _ run: Components.Schemas.Run, approval: TaskDisplay.SpecificationApproval
+    ) -> String {
+        let label = specificationLabel(run, approval: approval)
+        return label == "Specification digest" ? "Specification approval not confirmed" : label
     }
 
     static func label(_ value: Components.Schemas.RunOutcome) -> String {

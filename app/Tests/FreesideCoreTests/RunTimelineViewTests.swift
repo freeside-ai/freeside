@@ -96,11 +96,18 @@ import Testing
         #expect(RunDisplay.timelineTitle(run) == "Attempt 2")
 
         run.attempt_number = nil
-        #expect(RunDisplay.timelineTitle(run) == RunFixtures.activeRunID)
+        #expect(RunDisplay.timelineTitle(run) == "Run \(RunFixtures.activeRunID)")
 
         run.attempt_number = 2
         run.campaign_id = nil
-        #expect(RunDisplay.timelineTitle(run) == RunFixtures.activeRunID)
+        #expect(RunDisplay.timelineTitle(run) == "Run \(RunFixtures.activeRunID)")
+    }
+
+    @Test func timelineTitleShortensAnOpaqueRunIdInTheFallback() throws {
+        var run = try #require(RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID }).run
+        run.id = "run-\(String(repeating: "a", count: 64))"
+        run.campaign_id = nil
+        #expect(RunDisplay.timelineTitle(run) == "Run run-aaaaaaaa…")
     }
 
     @Test func observationsGroupByOwningStageNewestFirst() throws {
@@ -337,6 +344,33 @@ import Testing
         #expect(RunDisplay.specificationLabel(active, approval: .approved) == "Approved specification")
         #expect(RunDisplay.specificationLabel(ready, approval: .approved) == "Approved specification")
         #expect(RunDisplay.specificationLabel(active, approval: .unavailable) == "Specification digest")
+    }
+
+    @Test func headerTechnicalRowsCarryTheExactSourceValues() throws {
+        var run = try #require(RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID }).run
+        run.parent_run_id = "run-\(String(repeating: "a", count: 64))"
+        let rows = RunTimelineView.technicalRows(run: run, specificationLabel: "Approved specification")
+        #expect(
+            rows.map(\.label)
+                == ["Run ID", "Task ID", "Campaign ID", "Parent run ID", "Approved specification"])
+        let campaign = try #require(run.campaign_id)
+        let parent = try #require(run.parent_run_id)
+        #expect(rows.map(\.value) == [run.id, run.task_id, campaign, parent, run.spec_digest])
+    }
+
+    @Test func specificationHeaderLabelDropsTheDigestLabelWhenApprovalIsUnavailable() {
+        let active = RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID }!.run
+        var specification = RunFixtures.defaultRuns()[0].run
+        specification.stages[0].name = "specification"
+
+        // The header line, without the digest beside it, must not read
+        // "Specification digest"; the technical-details row label still does.
+        #expect(
+            RunDisplay.specificationHeaderLabel(active, approval: .unavailable)
+                == "Specification approval not confirmed")
+        #expect(RunDisplay.specificationHeaderLabel(active, approval: .approved) == "Approved specification")
+        #expect(RunDisplay.specificationHeaderLabel(active, approval: .unapproved) == "Source specification")
+        #expect(RunDisplay.specificationHeaderLabel(specification, approval: .unavailable) == "Source specification")
     }
 
     @Test func historyEntriesLeadWithTheNewestMilestoneMarkedCurrent() throws {

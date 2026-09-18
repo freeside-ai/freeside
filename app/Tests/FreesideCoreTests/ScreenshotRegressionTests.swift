@@ -1218,6 +1218,33 @@
                             )))
                 }
             }
+            // Two tasks with the same name (#1379): the row appends a short
+            // task id so the rows do not read alike. Across the size matrix,
+            // the disambiguator must survive the accessibility sizes.
+            var secondEqualName = retryTask
+            secondEqualName.task.id = "task-\(RunFixtures.readyRunID)"
+            let equalNameTasks = [retryTask, secondEqualName]
+            let equalNameAmbiguous = TaskDisplay.ambiguousTaskIDs(equalNameTasks)
+            for colorScheme in [ColorScheme.light, .dark] {
+                surfaces.append(
+                    Surface(
+                        name: "tasks-equal-names" + (colorScheme == .dark ? "-dark" : ""),
+                        width: 640,
+                        colorScheme: colorScheme,
+                        view: AnyView(
+                            VStack(spacing: 12) {
+                                ForEach(equalNameTasks, id: \.task.id) { snapshot in
+                                    TaskRowView(
+                                        task: snapshot.task,
+                                        position: TaskDisplay.position(snapshot.task, runs: runs),
+                                        isSelected: false,
+                                        now: RunFixtures.screenshotInstant,
+                                        showsIdentifier: equalNameAmbiguous.contains(snapshot.task.id))
+                                }
+                            }
+                            .padding()
+                        )))
+            }
             for colorScheme in [ColorScheme.light, .dark] {
                 surfaces.append(
                     Surface(
@@ -1447,6 +1474,23 @@
                         TaskTimelineView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
                             .screenshotContent(retryTimeline)
                     )))
+            // The technical-details disclosures expanded (#1379): the exact
+            // task, campaign, and run ids and their copy controls.
+            surfaces.append(
+                Surface(
+                    name: "task-timeline-details",
+                    view: AnyView(
+                        TaskTimelineView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
+                            .screenshotContent(retryTimeline, expandsTechnicalDetails: true)
+                    )))
+            surfaces.append(
+                Surface(
+                    name: "task-timeline-details-390",
+                    width: 390,
+                    view: AnyView(
+                        TaskTimelineView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
+                            .screenshotContent(retryTimeline, expandsTechnicalDetails: true)
+                    )))
             surfaces.append(
                 Surface(
                     name: "operational-summary",
@@ -1514,6 +1558,23 @@
                     width: 390,
                     view: AnyView(
                         RunTimelineView(coordinator: coordinator, snapshot: activeRun)
+                            .screenshotContent(timeline, at: dynamicTypeSize)
+                    )))
+            // The header's technical details expanded (#1379): the exact run,
+            // task, campaign, and parent ids and the specification digest.
+            surfaces.append(
+                Surface(
+                    name: "run-timeline-details",
+                    view: AnyView(
+                        RunTimelineView(coordinator: coordinator, snapshot: activeRun, expandsTechnicalDetails: true)
+                            .screenshotContent(timeline, at: dynamicTypeSize)
+                    )))
+            surfaces.append(
+                Surface(
+                    name: "run-timeline-details-390",
+                    width: 390,
+                    view: AnyView(
+                        RunTimelineView(coordinator: coordinator, snapshot: activeRun, expandsTechnicalDetails: true)
                             .screenshotContent(timeline, at: dynamicTypeSize)
                     )))
             // Attempt-ordered history (#1263): two early attempts re-observed

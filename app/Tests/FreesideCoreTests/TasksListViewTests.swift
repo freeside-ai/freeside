@@ -155,6 +155,24 @@ import Testing
         #expect(names.allSatisfy { $0.source != .name }, "a task name source is never `name`")
     }
 
+    @Test func ambiguousTaskIDsFlagsOnlyRowsThatShareAName() throws {
+        let base = try #require(TaskFixtures.defaultTasks().first)
+        func snapshot(_ id: String, _ name: Components.Schemas.DisplayName) -> Components.Schemas.TaskSnapshot {
+            var snapshot = base
+            snapshot.task.id = id
+            snapshot.task.display_names.task = name
+            return snapshot
+        }
+        let tasks = [
+            snapshot("task-a", .init(text: "Fix the sync race", source: ._operator)),
+            snapshot("task-b", .init(text: "Fix the sync race", source: ._operator)),
+            snapshot("task-c", .init(text: "Unrelated work", source: ._operator)),
+            // An identifier-fallback name is the task id, so it never collides.
+            snapshot("task-id-only", .init(text: "task-id-only", source: .identifier)),
+        ]
+        #expect(TaskDisplay.ambiguousTaskIDs(tasks) == ["task-a", "task-b"])
+    }
+
     @Test func theRetryCampaignIsOneRowHoldingBothAttempts() throws {
         let rows = TaskListFilter(scope: .all).rows(in: TaskFixtures.defaultTasks())
         let holders = rows.filter {
