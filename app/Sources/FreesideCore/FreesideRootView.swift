@@ -17,6 +17,7 @@ public struct FreesideRootView: View {
     @State private var technicalDetailsRequest: TechnicalDetailsRevealRequest?
     @State private var showsInboxClearResult: Bool
     @State private var connectionAddress = ""
+    @State private var stopRecoveryPresented = false
     private let launchColorScheme: ColorScheme?
     private let launchInboxScope: InboxStore.Scope?
     private let launchProjectID: String?
@@ -271,6 +272,10 @@ public struct FreesideRootView: View {
 
     @ViewBuilder
     private func submissionRecoveryButton(_ coordinator: SyncCoordinator) -> some View {
+        if !coordinator.pendingTaskStops.isEmpty {
+            Button("Pending Stops (\(coordinator.pendingTaskStops.count))") { stopRecoveryPresented = true }
+                .sheet(isPresented: $stopRecoveryPresented) { TaskStopRecoveryView(coordinator: coordinator) }
+        }
         if !coordinator.pendingTaskSubmissions.isEmpty {
             Button {
                 navigation.submissionRecoveryPresented = true

@@ -37,6 +37,8 @@ public final class SyncCoordinator {
 
     public let store: InboxStore
     public private(set) var pendingTaskSubmissions: [String: Components.Schemas.ClientCommand] = [:]
+    public private(set) var pendingTaskStops: [String: PendingTaskStop] = [:]
+    @ObservationIgnored lazy var taskStop = TaskStopModel(coordinator: self)
     private let submissionDaemonID: String
     public private(set) var cursors: SyncCursors?
     public private(set) var runs: [Components.Schemas.RunSnapshot] = []
@@ -164,6 +166,11 @@ public final class SyncCoordinator {
         self.cache = cache
         self.submissionDaemonID = submissionDaemonID
         if let cached = cache.load() {
+            if cached.stopDaemonID == submissionDaemonID {
+                pendingTaskStops = (cached.pendingTaskStops ?? [:]).filter { id, entry in
+                    entry.isValid(commandID: id, deviceID: device.deviceID)
+                }
+            }
             if cached.submissionDaemonID == submissionDaemonID {
                 pendingTaskSubmissions = (cached.pendingTaskSubmissions ?? [:]).filter { id, command in
                     guard case .submit_task(let payload) = command.payload else { return false }
@@ -359,6 +366,7 @@ public final class SyncCoordinator {
                         store.rebuildTimeBasedOrder()
                         store.freshness = .fresh
                         lastUpdatedAt = .now
+                        settleTaskStops()
                     }
                 }
             case .undocumented(let statusCode, _):
@@ -796,6 +804,7 @@ public final class SyncCoordinator {
         )
         store.freshness = .fresh
         lastUpdatedAt = .now
+        settleTaskStops()
         persist()
         return true
     }
@@ -905,7 +914,8 @@ public final class SyncCoordinator {
         // and fingerprint keep a file alive on their own, so a queued event or
         // a registered contract survives a relaunch with no cursors.
         guard
-            cursors != nil || !pending.isEmpty || !pendingTaskSubmissions.isEmpty || !comprehensionQueue.isEmpty
+            cursors != nil || !pending.isEmpty || !pendingTaskSubmissions.isEmpty || !pendingTaskStops.isEmpty
+                || !comprehensionQueue.isEmpty
                 || fingerprint != nil
         else {
             cache.discard()
@@ -929,6 +939,8 @@ public final class SyncCoordinator {
                     pendingCommands: pending,
                     pendingTaskSubmissions: pendingTaskSubmissions,
                     submissionDaemonID: submissionDaemonID,
+                    pendingTaskStops: pendingTaskStops,
+                    stopDaemonID: submissionDaemonID,
                     comprehensionQueue: comprehensionQueue,
                     comprehensionSequence: store.comprehensionSequence,
                     registeredCapabilityFingerprint: fingerprint,
@@ -959,5 +971,40 @@ public final class SyncCoordinator {
     func finishTaskSubmission(_ commandID: String) {
         pendingTaskSubmissions.removeValue(forKey: commandID)
         persist()
+    }
+
+    /// Persist exact retry identity before sending; failed writes roll back.
+    func retainTaskStop(_ entry: PendingTaskStop) -> Bool {
+        let id = entry.command.command_id
+        guard entry.isValid(commandID: id, deviceID: store.device.deviceID),
+            !pendingTaskStops.values.contains(where: { $0.taskID == entry.taskID && $0.command.command_id != id }),
+            pendingTaskStops[id] == nil || pendingTaskStops[id]?.command == entry.command
+        else { return false }
+        let previous = pendingTaskStops[id]
+        pendingTaskStops[id] = entry
+        guard persist() else {
+            pendingTaskStops[id] = previous
+            return false
+        }
+        return true
+    }
+
+    func finishTaskStop(_ commandID: String) {
+        let previous = pendingTaskStops.removeValue(forKey: commandID)
+        if !persist() { pendingTaskStops[commandID] = previous }
+    }
+
+    func settleTaskStops() {
+        guard store.freshness == .fresh, let cursors else { return }
+        for entry in pendingTaskStops.values {
+            guard let receipt = entry.receipt, case .stop_task(let payload) = entry.command.payload,
+                let task = tasks.first(where: { $0.task.id == entry.taskID })
+            else { continue }
+            if cursors.syncEpoch != payload.expected_sync_epoch
+                || (task.as_of_revision >= receipt.revision && task.task.cancellation != nil)
+            {
+                finishTaskStop(entry.command.command_id)
+            }
+        }
     }
 }
