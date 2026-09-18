@@ -1,12 +1,6 @@
 import FreesideAPI
 import SwiftUI
 
-#if os(macOS)
-    import AppKit
-#elseif os(iOS)
-    import UIKit
-#endif
-
 /// A task's history as the daemon computes it (`GET /tasks/{id}/timeline`):
 /// task-wide events lead the page, then campaign sections list their runs
 /// and detailed milestones. Every list keeps the daemon's newest-first order;
@@ -39,6 +33,10 @@ struct TaskTimelineView: View {
     /// a scroll viewport. Rendering through body installs environment values
     /// before the content helpers read locale, time zone, and text size.
     var screenshotTimeline: Components.Schemas.TaskTimeline?
+    /// Screenshot-only: start every technical-details disclosure expanded so a
+    /// baseline can capture the section's rows and copy controls. Live use
+    /// leaves it false, so the sections open only on tap.
+    var expandsTechnicalDetails = false
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.timeZone) private var timeZone
     @Environment(\.locale) private var locale
@@ -97,9 +95,12 @@ struct TaskTimelineView: View {
 
     /// The composition with fixture data supplied directly, because
     /// ImageRenderer never executes the loading task.
-    func screenshotContent(_ timeline: Components.Schemas.TaskTimeline) -> some View {
+    func screenshotContent(
+        _ timeline: Components.Schemas.TaskTimeline, expandsTechnicalDetails: Bool = false
+    ) -> some View {
         TaskTimelineView(
-            coordinator: coordinator, snapshot: snapshot, onOpenRun: onOpenRun, screenshotTimeline: timeline)
+            coordinator: coordinator, snapshot: snapshot, onOpenRun: onOpenRun, screenshotTimeline: timeline,
+            expandsTechnicalDetails: expandsTechnicalDetails)
     }
 
     private var header: some View {
@@ -133,21 +134,21 @@ struct TaskTimelineView: View {
                 .textSelection(.enabled)
             KeywordLabel(text: "Daemon observations")
             TaskStopView(coordinator: coordinator, taskID: task.id)
+            TechnicalDetailsSection(
+                rows: TaskTimelinePresentation.technicalRows(taskID: task.id),
+                startsExpanded: expandsTechnicalDetails)
         }
     }
 
-    /// The eyebrow names the screen and the task id, as the run timeline's
-    /// does, keeping the id's spelling for selection and the copy menu. One
-    /// text, not a keyword beside a text: a task id is long, and at phone
-    /// width it must wrap under the keyword rather than beside it.
+    /// The eyebrow names the screen. The task id moved to the header's
+    /// technical details; the copy menu keeps a quick path to it.
     private var eyebrow: some View {
-        Text("TASK TIMELINE · \(snapshot.task.id)")
+        Text("TASK TIMELINE")
             .font(FreesideFont.keyword)
             .tracking(0.8)
             .foregroundStyle(Color.inkDim)
-            .textSelection(.enabled)
             .contextMenu {
-                Button("Copy task ID") { copy(snapshot.task.id) }
+                Button("Copy task ID") { Clipboard.copy(snapshot.task.id) }
             }
     }
 
@@ -168,7 +169,7 @@ struct TaskTimelineView: View {
                     .foregroundStyle(Color.inkDim)
             }
             ForEach(Array(timeline.sections.enumerated()), id: \.offset) { _, section in
-                sectionView(section)
+                sectionView(section, in: timeline)
             }
             VStack(alignment: .leading, spacing: 10) {
                 Text("Task Events").font(FreesideFont.title)
@@ -182,31 +183,31 @@ struct TaskTimelineView: View {
                         .font(FreesideFont.callout)
                         .foregroundStyle(Color.inkDim)
                 } else {
-                    eventRows(events)
+                    eventRows(events, in: timeline)
                 }
             }
         }
     }
 
-    private func sectionView(_ section: Components.Schemas.TaskTimelineSection) -> some View {
+    private func sectionView(
+        _ section: Components.Schemas.TaskTimelineSection, in timeline: Components.Schemas.TaskTimeline
+    ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            KeywordLabel(text: TaskTimelinePresentation.sectionTitle(section))
-            if let campaignID = section.campaign_id {
-                Text(campaignID)
-                    .font(FreesideFont.monoCaption)
-                    .foregroundStyle(Color.inkDim)
-                    .textSelection(.enabled)
-                    .contextMenu {
-                        Button("Copy campaign ID") { copy(campaignID) }
-                    }
-            }
+            KeywordLabel(
+                text: TaskTimelinePresentation.sectionTitle(
+                    section, disambiguate: TaskTimelinePresentation.campaignCount(timeline) > 1))
+            TechnicalDetailsSection(
+                rows: TaskTimelinePresentation.technicalRows(section: section),
+                startsExpanded: expandsTechnicalDetails)
             ForEach(section.runs, id: \.run_id) { run in
-                runCard(run)
+                runCard(run, in: timeline)
             }
         }
     }
 
-    private func runCard(_ run: Components.Schemas.TaskTimelineRun) -> some View {
+    private func runCard(
+        _ run: Components.Schemas.TaskTimelineRun, in timeline: Components.Schemas.TaskTimeline
+    ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Button {
                 onOpenRun(run.run_id)
@@ -216,9 +217,6 @@ struct TaskTimelineView: View {
                         Text(TaskTimelinePresentation.runTitle(run))
                             .font(FreesideFont.sectionTitle)
                             .foregroundStyle(Color.ink)
-                        Text(run.run_id)
-                            .font(FreesideFont.monoCaption)
-                            .foregroundStyle(Color.inkDim)
                         Text("Open run history")
                             .font(FreesideFont.callout)
                             .foregroundStyle(Color.accentText)
@@ -231,9 +229,7 @@ struct TaskTimelineView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(
-                "Open detailed run history for \(TaskTimelinePresentation.runTitle(run)), \(run.run_id)"
-            )
+            .accessibilityLabel(TaskTimelinePresentation.runCardAccessibilityLabel(run, in: timeline))
             .accessibilityHint("Shows this run's recorded milestones and invocation observations.")
             if run.role == nil || run.role?.value1 == .implementation {
                 RunReviewSection(
@@ -247,7 +243,9 @@ struct TaskTimelineView: View {
                     Label(TaskTimelinePresentation.label(role), systemImage: "square.stack.3d.up")
                 }
                 if let successor = run.superseded_by {
-                    Label("Superseded by \(successor)", systemImage: "arrow.turn.down.right")
+                    Label(
+                        "Superseded by \(TaskTimelinePresentation.runReference(successor, in: timeline))",
+                        systemImage: "arrow.turn.down.right")
                 }
             }
             .font(FreesideFont.subheadline)
@@ -258,8 +256,8 @@ struct TaskTimelineView: View {
                     .foregroundStyle(Color.inkDim)
             }
             if let parent = run.parent_run_id {
-                Text("Parent run: \(parent)")
-                    .font(FreesideFont.monoCaption)
+                Text("Parent run: \(TaskTimelinePresentation.runReference(parent, in: timeline))")
+                    .font(FreesideFont.callout)
                     .foregroundStyle(Color.inkDim)
             }
             if let hold = run.hold?.value1 {
@@ -287,6 +285,9 @@ struct TaskTimelineView: View {
                     .font(FreesideFont.callout)
                     .foregroundStyle(Color.inkDim)
             }
+            TechnicalDetailsSection(
+                rows: TaskTimelinePresentation.technicalRows(run: run, in: timeline),
+                startsExpanded: expandsTechnicalDetails)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -294,7 +295,9 @@ struct TaskTimelineView: View {
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.rule, lineWidth: 1))
     }
 
-    private func eventRows(_ events: [Components.Schemas.TaskEvent]) -> some View {
+    private func eventRows(
+        _ events: [Components.Schemas.TaskEvent], in timeline: Components.Schemas.TaskTimeline
+    ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(Array(events.enumerated()), id: \.offset) { _, event in
                 VStack(alignment: .leading, spacing: 4) {
@@ -309,7 +312,7 @@ struct TaskTimelineView: View {
                             eventTime(event)
                         }
                     }
-                    if let detail = TaskTimelinePresentation.detail(event) {
+                    if let detail = TaskTimelinePresentation.detail(event, in: timeline) {
                         Text(detail)
                             .font(FreesideFont.monoCaption)
                             .foregroundStyle(Color.inkDim)
@@ -332,15 +335,6 @@ struct TaskTimelineView: View {
         )
         .font(FreesideFont.monoCaption)
         .foregroundStyle(Color.inkDim)
-    }
-
-    private func copy(_ string: String) {
-        #if os(macOS)
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(string, forType: .string)
-        #elseif os(iOS)
-            UIPasteboard.general.string = string
-        #endif
     }
 }
 
@@ -408,13 +402,183 @@ enum TaskTimelinePresentation {
     }
 
     /// A run inside a campaign is titled by its attempt; a run outside one,
-    /// or missing its attempt number, by its id, as the run timeline does.
+    /// or missing its attempt number, by its short id, as the run timeline
+    /// does. The exact id is in the run's technical details.
     static func runTitle(_ run: Components.Schemas.TaskTimelineRun) -> String {
-        run.attempt_number.map { "Attempt \($0)" } ?? run.run_id
+        run.attempt_number.map { "Attempt \($0)" } ?? "Run \(ShortIdentifier.short(run.run_id))"
     }
 
-    static func sectionTitle(_ section: Components.Schemas.TaskTimelineSection) -> String {
-        section.campaign_id == nil ? "Outside a campaign" : "Campaign"
+    /// The run card's accessibility label: the title and the run's role,
+    /// without the opaque id VoiceOver would otherwise read character by
+    /// character. Attempt numbers restart per campaign, so when another run
+    /// shares this title and role the label names the campaign; the label
+    /// stands in for the button's content, and two controls must not read
+    /// alike.
+    static func runCardAccessibilityLabel(
+        _ run: Components.Schemas.TaskTimelineRun, in timeline: Components.Schemas.TaskTimeline
+    ) -> String {
+        var label = "Open detailed run history for \(runTitle(run))"
+        if let role = run.role?.value1 { label += ", \(self.label(role)) run" }
+        if !isUniqueRunControl(run, in: timeline),
+            let campaign = campaignID(forRun: run.run_id, in: timeline)
+        {
+            label += ", campaign \(ShortIdentifier.short(campaign))"
+        }
+        return label
+    }
+
+    /// Whether the run's title and role are unique among the timeline's runs.
+    /// Not unique means attempts have restarted in another campaign, so the
+    /// control needs a campaign to tell it apart.
+    private static func isUniqueRunControl(
+        _ run: Components.Schemas.TaskTimelineRun, in timeline: Components.Schemas.TaskTimeline
+    ) -> Bool {
+        let key = runControlKey(run)
+        var matches = 0
+        for section in timeline.sections {
+            for other in section.runs where runControlKey(other) == key {
+                matches += 1
+                if matches > 1 { return false }
+            }
+        }
+        return true
+    }
+
+    private static func runControlKey(
+        _ run: Components.Schemas.TaskTimelineRun
+    ) -> String {
+        "\(runTitle(run))|\(run.role?.value1.rawValue ?? "")"
+    }
+
+    /// The number of campaign sections, so a title or event line shows a
+    /// disambiguating short campaign id only when more than one campaign is on
+    /// screen.
+    static func campaignCount(_ timeline: Components.Schemas.TaskTimeline) -> Int {
+        timeline.sections.count { $0.campaign_id != nil }
+    }
+
+    static func sectionTitle(
+        _ section: Components.Schemas.TaskTimelineSection, disambiguate: Bool = false
+    ) -> String {
+        guard let campaign = section.campaign_id else { return "Outside a campaign" }
+        return disambiguate ? "Campaign \(ShortIdentifier.short(campaign))" : "Campaign"
+    }
+
+    /// Names another run by its role and attempt when it sits in this timeline,
+    /// so a supersession or parent line reads as "implementation attempt 2"
+    /// within the history; otherwise by its short id, since the run is not on
+    /// screen to number. The role is kept because a campaign's specification
+    /// run and its first implementation run both carry attempt 1, so a bare
+    /// "attempt 1" reference could not tell them apart.
+    static func runReference(_ runID: String, in timeline: Components.Schemas.TaskTimeline) -> String {
+        for section in timeline.sections {
+            guard let run = section.runs.first(where: { $0.run_id == runID }) else { continue }
+            switch run.role?.value1 {
+            case .specification:
+                return "specification run"
+            case .implementation:
+                return run.attempt_number.map { "implementation attempt \($0)" } ?? "implementation run"
+            case nil:
+                return run.attempt_number.map { "attempt \($0)" } ?? ShortIdentifier.short(runID)
+            }
+        }
+        return ShortIdentifier.short(runID)
+    }
+
+    /// The task header's technical details: the exact task id.
+    static func technicalRows(taskID: String) -> [AttentionDisplay.BindingRow] {
+        [.init(label: "Task ID", value: taskID)]
+    }
+
+    /// A campaign section's technical details: the exact campaign id and, when
+    /// the section recorded one, the approved specification digest.
+    static func technicalRows(
+        section: Components.Schemas.TaskTimelineSection
+    ) -> [AttentionDisplay.BindingRow] {
+        var rows: [AttentionDisplay.BindingRow] = []
+        if let campaign = section.campaign_id {
+            rows.append(.init(label: "Campaign ID", value: campaign))
+        }
+        if let digest = section.events.first(where: { $0.kind == .specification_approved })?
+            .approved_spec_digest?.value1
+        {
+            rows.append(.init(label: "Approved specification digest", value: digest))
+        }
+        return rows
+    }
+
+    /// A run card's technical details: the exact run, parent, and superseding
+    /// ids, and every verification Inbox item id a verification event records
+    /// for this run. A run that returned to the agent or remediated can record
+    /// several, each its own ready item, so all are kept, not just the first.
+    static func technicalRows(
+        run: Components.Schemas.TaskTimelineRun, in timeline: Components.Schemas.TaskTimeline
+    ) -> [AttentionDisplay.BindingRow] {
+        var rows: [AttentionDisplay.BindingRow] = [.init(label: "Run ID", value: run.run_id)]
+        if let parent = run.parent_run_id {
+            rows.append(.init(label: "Parent run ID", value: parent))
+        }
+        if let successor = run.superseded_by {
+            rows.append(.init(label: "Superseded by run ID", value: successor))
+        }
+        // Number the rows when a remediated run recorded more than one, so each
+        // row's copy control has a distinct accessibility label.
+        let itemIDs = verificationItemIDs(for: run.run_id, in: timeline)
+        for (index, itemID) in itemIDs.enumerated() {
+            let label =
+                itemIDs.count > 1
+                ? "Verification Inbox item ID \(index + 1)" : "Verification Inbox item ID"
+            rows.append(.init(label: label, value: itemID))
+        }
+        return rows
+    }
+
+    /// Every distinct verification Inbox item id a verification event records
+    /// for the run, in event order. The daemon emits one verification event per
+    /// ready item, so a remediated run has more than one.
+    private static func verificationItemIDs(
+        for runID: String, in timeline: Components.Schemas.TaskTimeline
+    ) -> [String] {
+        var seen: Set<String> = []
+        var ids: [String] = []
+        for event in events(timeline) where event.run_id == runID {
+            if let itemID = event.verification?.value1.item_id, seen.insert(itemID).inserted {
+                ids.append(itemID)
+            }
+        }
+        return ids
+    }
+
+    /// The campaign a run belongs to, taken from its section. A daemon
+    /// run-scoped event (milestone, review, verification, PR) carries only a
+    /// run id, so its campaign is recovered here rather than read off the
+    /// event.
+    static func campaignID(
+        forRun runID: String, in timeline: Components.Schemas.TaskTimeline
+    ) -> String? {
+        for section in timeline.sections where section.runs.contains(where: { $0.run_id == runID }) {
+            return section.campaign_id
+        }
+        return nil
+    }
+
+    /// A task event's run named by its role and attempt when the run is in the
+    /// timeline, so an event line stays legible without the opaque run id.
+    private static func runContext(
+        _ runID: String, in timeline: Components.Schemas.TaskTimeline
+    ) -> String {
+        for section in timeline.sections {
+            guard let run = section.runs.first(where: { $0.run_id == runID }) else { continue }
+            switch run.role?.value1 {
+            case .specification:
+                return "Specification run"
+            case .implementation:
+                return run.attempt_number.map { "Implementation attempt \($0)" } ?? "Implementation run"
+            case nil:
+                return run.attempt_number.map { "Attempt \($0)" } ?? "Run \(ShortIdentifier.short(runID))"
+            }
+        }
+        return "Run \(ShortIdentifier.short(runID))"
     }
 
     /// The daemon's milestones as rail entries in the order received (newest
@@ -479,12 +643,29 @@ enum TaskTimelinePresentation {
     }
 
     /// Keep the source beside the summary so old campaigns and review rounds
-    /// cannot read as a result for the task's current run or candidate.
-    static func detail(_ event: Components.Schemas.TaskEvent) -> String? {
+    /// cannot read as a result for the task's current run or candidate: the
+    /// run is named by its role and attempt, and a second campaign is named by
+    /// its short id. The exact ids and digests live in each section's and
+    /// run's technical details; this line carries meaning, not opaque values.
+    static func detail(
+        _ event: Components.Schemas.TaskEvent, in timeline: Components.Schemas.TaskTimeline
+    ) -> String? {
         var parts: [String] = []
         if let number = event.pr_number { parts.append("PR #\(number)") }
-        if let campaign = event.campaign_id { parts.append(campaign) }
-        if let run = event.run_id ?? event.specification_run_id { parts.append(run) }
+        let eventRunID = event.run_id ?? event.specification_run_id
+        // A run-scoped event carries no campaign id of its own, so recover the
+        // campaign from the run's section; otherwise two campaigns' events
+        // (same role, same restarted attempt) read alike and an old campaign's
+        // result can pass for the current one.
+        if campaignCount(timeline) > 1,
+            let campaign = event.campaign_id
+                ?? eventRunID.flatMap({ campaignID(forRun: $0, in: timeline) })
+        {
+            parts.append(ShortIdentifier.short(campaign))
+        }
+        if let run = eventRunID {
+            parts.append(runContext(run, in: timeline))
+        }
         if let review = event.review?.value1 {
             parts += [
                 "Round \(review.round)", "Head \(review.head_sha.prefix(12))", "Base \(review.base_sha.prefix(12))",
@@ -494,10 +675,12 @@ enum TaskTimelinePresentation {
         if let verification = event.verification?.value1 {
             parts += [
                 "Head \(verification.head_sha.prefix(12))", "Base \(verification.base_sha.prefix(12))",
-                "Checklist in Inbox: \(verification.item_id)",
+                "Checklist in Inbox",
             ]
         }
-        if let digest = event.approved_spec_digest?.value1 { parts.append(digest) }
+        if let digest = event.approved_spec_digest?.value1 {
+            parts.append(ShortIdentifier.short(digest))
+        }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }

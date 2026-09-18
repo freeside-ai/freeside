@@ -169,6 +169,12 @@ struct TasksListView: View {
         }
     }
 
+    /// The visible tasks that share a name, so a row appends a short id only
+    /// where two rows would otherwise read alike.
+    private var ambiguousTaskIDs: Set<String> {
+        TaskDisplay.ambiguousTaskIDs(visibleTasks)
+    }
+
     private func row(
         _ snapshot: Components.Schemas.TaskSnapshot,
         now: Date? = nil
@@ -179,7 +185,8 @@ struct TasksListView: View {
                 snapshot.task, runs: runs, attentionItems: attentionItems, history: taskTimelines[snapshot.task.id]),
             schedules: TaskDisplay.armedSchedules(for: snapshot.task, in: schedules),
             isSelected: selection == snapshot.task.id,
-            now: now)
+            now: now,
+            showsIdentifier: ambiguousTaskIDs.contains(snapshot.task.id))
     }
 
     private func repairFilterAndSelection() {
@@ -290,6 +297,9 @@ struct TaskRowView: View {
     /// ticks its own, so the relative last-active text ages without a data
     /// change, as `InboxRowView` does.
     var now: Date?
+    /// Set when another visible task shares this one's name, so the meta line
+    /// carries a short task id to tell the two rows apart.
+    var showsIdentifier = false
     var differentiateWithoutColorOverride: Bool?
 
     var body: some View {
@@ -336,7 +346,9 @@ struct TaskRowView: View {
     /// carries the exact instant, as inbox rows do.
     @ViewBuilder
     private func metaText(at now: Date) -> some View {
-        let text = Text(TaskDisplay.metaLine(task, now: now))
+        let base = TaskDisplay.metaLine(task, now: now)
+        let line = showsIdentifier ? "\(base) · \(ShortIdentifier.short(task.id))" : base
+        let text = Text(line)
             .font(FreesideFont.monoCaption)
             .foregroundStyle(Color.inkDim)
         #if os(macOS)

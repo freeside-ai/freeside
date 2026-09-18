@@ -495,6 +495,12 @@ import Testing
             ])
     }
 
+    private static func emptyTimeline() -> Components.Schemas.TaskTimeline {
+        .init(
+            as_of_revision: 1, as_of: instants[0], task_id: "task-1", project_id: "freeside",
+            name: .init(text: "Named", source: ._operator), events: [], sections: [])
+    }
+
     @Test func entriesShowWorkBeforeEventsAndKeepTheDaemonsOrder() {
         let timeline = Self.timeline()
 
@@ -558,23 +564,27 @@ import Testing
     }
 
     @Test func labelsReadAsProse() {
+        let timeline = Self.emptyTimeline()
         #expect(TaskTimelinePresentation.label(Components.Schemas.TaskEventKind.pr_merged) == "PR merged")
         #expect(TaskTimelinePresentation.label(Components.Schemas.TaskEventKind.task_created) == "Task created")
         #expect(TaskTimelinePresentation.label(Components.Schemas.TaskRunRole.specification) == "Specification")
         #expect(
             TaskTimelinePresentation.detail(
-                .init(kind: .pr_merged, recorded_at: Self.instants[0], pr_number: 105, merge_commit_sha: "abc"))
-                == "PR #105")
+                .init(kind: .pr_merged, recorded_at: Self.instants[0], pr_number: 105, merge_commit_sha: "abc"),
+                in: timeline) == "PR #105")
+        // A run not in the timeline reads by its short id, not the raw value.
         #expect(
             TaskTimelinePresentation.detail(
                 .init(
                     kind: .specification_approved, recorded_at: Self.instants[0],
-                    approved_spec_digest: .init(value1: "sha256:abc"), specification_run_id: "run-spec"))
-                == "run-spec · sha256:abc")
-        #expect(TaskTimelinePresentation.detail(.init(kind: .task_created, recorded_at: Self.instants[0])) == nil)
+                    approved_spec_digest: .init(value1: "sha256:abc"), specification_run_id: "run-spec"),
+                in: timeline) == "Run run-spec · sha256:abc")
+        #expect(
+            TaskTimelinePresentation.detail(.init(kind: .task_created, recorded_at: Self.instants[0]), in: timeline)
+                == nil)
         #expect(
             TaskTimelinePresentation.runTitle(.init(run_id: "run-legacy", milestones: [], events: []))
-                == "run-legacy")
+                == "Run run-legacy")
         #expect(
             TaskTimelinePresentation.sectionTitle(.init(campaign_id: nil, events: [], runs: []))
                 == "Outside a campaign")
@@ -582,6 +592,7 @@ import Testing
     }
 
     @Test func historicalResultsRetainTheirSourceAndDoNotImplyCurrentReadiness() {
+        let timeline = Self.emptyTimeline()
         let failed = Components.Schemas.TaskEvent(
             review: .init(
                 value1: .init(
@@ -590,8 +601,10 @@ import Testing
             kind: .review_failed, recorded_at: Self.instants[0], run_id: "run-old")
         #expect(TaskTimelinePresentation.label(failed) == "Review failed")
         #expect(
-            TaskTimelinePresentation.detail(failed)
-                == "run-old · Round 2 · Head old-head · Base old-base · provider error")
+            TaskTimelinePresentation.detail(failed, in: timeline)
+                == "Run run-old · Round 2 · Head old-head · Base old-base · provider error")
+        // The verification's Inbox item id moves to the run's technical
+        // details; the line names the checklist without it.
         let verification = Components.Schemas.TaskEvent(
             verification: .init(
                 value1: .init(item_id: "ready-old", _class: .ready_degraded, head_sha: "old-head", base_sha: "old-base")
@@ -599,10 +612,225 @@ import Testing
             kind: .verification_recorded, recorded_at: Self.instants[0], run_id: "run-old")
         #expect(TaskTimelinePresentation.label(verification) == "Verification recorded · Degraded")
         #expect(
-            TaskTimelinePresentation.detail(verification)
-                == "run-old · Head old-head · Base old-base · Checklist in Inbox: ready-old")
+            TaskTimelinePresentation.detail(verification, in: timeline)
+                == "Run run-old · Head old-head · Base old-base · Checklist in Inbox")
         #expect(TaskTimelinePresentation.label(Components.Schemas.TaskEventKind.stop_failed) == "Stop failed")
         #expect(TaskTimelinePresentation.label(Components.Schemas.TaskEventKind.task_stopped) == "Task stopped")
+    }
+
+    @Test func eventDetailNamesRunsByRoleAndAttemptAndGatesCampaignOnCount() {
+        let t = Self.instants
+        let single = Components.Schemas.TaskTimeline(
+            as_of_revision: 1, as_of: t[3], task_id: "task-1", project_id: "freeside",
+            name: .init(text: "n", source: ._operator), events: [],
+            sections: [
+                .init(
+                    campaign_id: "campaign-a", events: [],
+                    runs: [
+                        .init(run_id: "run-spec", role: .init(value1: .specification), milestones: [], events: []),
+                        .init(
+                            run_id: "run-impl", role: .init(value1: .implementation), attempt_number: 2,
+                            milestones: [], events: []),
+                    ])
+            ])
+        let specEvent = Components.Schemas.TaskEvent(
+            kind: .pr_opened, recorded_at: t[0], campaign_id: "campaign-a", run_id: "run-spec")
+        #expect(TaskTimelinePresentation.detail(specEvent, in: single) == "Specification run")
+        let implEvent = Components.Schemas.TaskEvent(
+            kind: .pr_opened, recorded_at: t[0], campaign_id: "campaign-a", run_id: "run-impl", pr_number: 7)
+        // One campaign: the campaign id is omitted from the line.
+        #expect(TaskTimelinePresentation.detail(implEvent, in: single) == "PR #7 · Implementation attempt 2")
+        // Two campaigns: the short campaign id disambiguates.
+        var double = single
+        double.sections.append(.init(campaign_id: "campaign-b", events: [], runs: []))
+        #expect(
+            TaskTimelinePresentation.detail(implEvent, in: double)
+                == "PR #7 · campaign-a · Implementation attempt 2")
+    }
+
+    @Test func runReferenceNamesAttemptWithinTheTimelineElseShortId() {
+        let timeline = Self.timeline()
+        // Self.timeline()'s runs carry no role, so the reference is the bare
+        // attempt or a short id.
+        #expect(TaskTimelinePresentation.runReference("run-2", in: timeline) == "attempt 2")
+        #expect(TaskTimelinePresentation.runReference("run-0", in: timeline) == "run-0")
+        let long = "run-\(String(repeating: "a", count: 64))"
+        #expect(TaskTimelinePresentation.runReference(long, in: timeline) == "run-aaaaaaaa…")
+    }
+
+    @Test func runReferenceRoleQualifiesAttemptOneWithinACampaign() {
+        // A campaign's specification run and its first implementation run both
+        // carry attempt 1; the reference names the role so they stay distinct.
+        let timeline = Components.Schemas.TaskTimeline(
+            as_of_revision: 1, as_of: Self.instants[0], task_id: "t", project_id: "p",
+            name: .init(text: "n", source: ._operator), events: [],
+            sections: [
+                .init(
+                    campaign_id: "campaign-a", events: [],
+                    runs: [
+                        .init(
+                            run_id: "run-spec", role: .init(value1: .specification), attempt_number: 1,
+                            superseded_by: "run-impl", milestones: [], events: []),
+                        .init(
+                            run_id: "run-impl", role: .init(value1: .implementation), attempt_number: 1,
+                            milestones: [], events: []),
+                    ])
+            ])
+        #expect(TaskTimelinePresentation.runReference("run-impl", in: timeline) == "implementation attempt 1")
+        #expect(TaskTimelinePresentation.runReference("run-spec", in: timeline) == "specification run")
+    }
+
+    @Test func runCardAccessibilityLabelNamesRoleWithoutTheId() {
+        let impl = Components.Schemas.TaskTimelineRun(
+            run_id: "run-\(String(repeating: "a", count: 64))", role: .init(value1: .implementation),
+            attempt_number: 2, milestones: [], events: [])
+        let legacy = Components.Schemas.TaskTimelineRun(run_id: "run-legacy", milestones: [], events: [])
+        let single = Components.Schemas.TaskTimeline(
+            as_of_revision: 1, as_of: Self.instants[0], task_id: "t", project_id: "p",
+            name: .init(text: "n", source: ._operator), events: [],
+            sections: [.init(campaign_id: "campaign-a", events: [], runs: [impl, legacy])])
+        #expect(
+            TaskTimelinePresentation.runCardAccessibilityLabel(impl, in: single)
+                == "Open detailed run history for Attempt 2, Implementation run")
+        #expect(
+            TaskTimelinePresentation.runCardAccessibilityLabel(legacy, in: single)
+                == "Open detailed run history for Run run-legacy")
+    }
+
+    @Test func runCardAccessibilityLabelNamesTheCampaignWhenAttemptsRestart() {
+        // Two campaigns, each with an Attempt 1 specification run: the title
+        // and role are identical, so the control names its campaign.
+        func specRun() -> Components.Schemas.TaskTimelineRun {
+            .init(
+                run_id: "run-spec", role: .init(value1: .specification), attempt_number: 1, milestones: [], events: [])
+        }
+        let a = specRun()
+        var b = specRun()
+        b.run_id = "run-spec-2"
+        let timeline = Components.Schemas.TaskTimeline(
+            as_of_revision: 1, as_of: Self.instants[0], task_id: "t", project_id: "p",
+            name: .init(text: "n", source: ._operator), events: [],
+            sections: [
+                .init(campaign_id: "campaign-a", events: [], runs: [a]),
+                .init(campaign_id: "campaign-b", events: [], runs: [b]),
+            ])
+        #expect(
+            TaskTimelinePresentation.runCardAccessibilityLabel(a, in: timeline)
+                == "Open detailed run history for Attempt 1, Specification run, campaign campaign-a")
+        #expect(
+            TaskTimelinePresentation.runCardAccessibilityLabel(b, in: timeline)
+                == "Open detailed run history for Attempt 1, Specification run, campaign campaign-b")
+    }
+
+    @Test func runTitleShortensAnOpaqueIdInTheFallback() {
+        let long = "run-\(String(repeating: "b", count: 64))"
+        #expect(
+            TaskTimelinePresentation.runTitle(.init(run_id: long, milestones: [], events: []))
+                == "Run run-bbbbbbbb…")
+        #expect(
+            TaskTimelinePresentation.runTitle(.init(run_id: long, attempt_number: 3, milestones: [], events: []))
+                == "Attempt 3")
+    }
+
+    @Test func technicalRowsCarryTheExactSourceValues() {
+        let t = Self.instants
+        let campaignID = "campaign-\(String(repeating: "c", count: 64))"
+        let digest = "sha256:\(String(repeating: "d", count: 64))"
+        let runID = "run-\(String(repeating: "e", count: 64))"
+        let parentID = "run-\(String(repeating: "f", count: 64))"
+        let successorID = "run-\(String(repeating: "0", count: 64))"
+
+        let section = Components.Schemas.TaskTimelineSection(
+            campaign_id: campaignID,
+            events: [
+                .init(
+                    kind: .specification_approved, recorded_at: t[0],
+                    approved_spec_digest: .init(value1: digest))
+            ],
+            runs: [])
+        let sectionRows = TaskTimelinePresentation.technicalRows(section: section)
+        #expect(sectionRows.map(\.label) == ["Campaign ID", "Approved specification digest"])
+        #expect(sectionRows.map(\.value) == [campaignID, digest])
+
+        let timeline = Components.Schemas.TaskTimeline(
+            as_of_revision: 1, as_of: t[0], task_id: "task-x", project_id: "p",
+            name: .init(text: "n", source: ._operator),
+            events: [
+                .init(
+                    verification: .init(
+                        value1: .init(item_id: "item-ready", _class: .ready_clean, head_sha: "h", base_sha: "b")),
+                    kind: .verification_recorded, recorded_at: t[0], run_id: runID)
+            ],
+            sections: [
+                .init(
+                    campaign_id: campaignID, events: [],
+                    runs: [
+                        .init(
+                            run_id: runID, parent_run_id: parentID, superseded_by: successorID,
+                            milestones: [], events: [])
+                    ])
+            ])
+        let run = timeline.sections[0].runs[0]
+        let runRows = TaskTimelinePresentation.technicalRows(run: run, in: timeline)
+        #expect(
+            runRows.map(\.label)
+                == ["Run ID", "Parent run ID", "Superseded by run ID", "Verification Inbox item ID"])
+        #expect(runRows.map(\.value) == [runID, parentID, successorID, "item-ready"])
+        #expect(TaskTimelinePresentation.technicalRows(taskID: "task-x").map(\.value) == ["task-x"])
+    }
+
+    @Test func runTechnicalRowsKeepEveryVerificationItemID() {
+        let t = Self.instants
+        let runID = "run-x"
+        func verification(_ item: String, at instant: Date) -> Components.Schemas.TaskEvent {
+            .init(
+                verification: .init(value1: .init(item_id: item, _class: .ready_clean, head_sha: "h", base_sha: "b")),
+                kind: .verification_recorded, recorded_at: instant, run_id: runID)
+        }
+        // A remediated run records one verification event per ready item; every
+        // item id is kept, not just the first.
+        let timeline = Components.Schemas.TaskTimeline(
+            as_of_revision: 1, as_of: t[0], task_id: "task-x", project_id: "p",
+            name: .init(text: "n", source: ._operator),
+            events: [verification("item-1", at: t[0]), verification("item-2", at: t[1])],
+            sections: [
+                .init(campaign_id: "campaign-a", events: [], runs: [.init(run_id: runID, milestones: [], events: [])])
+            ])
+        let rows = TaskTimelinePresentation.technicalRows(run: timeline.sections[0].runs[0], in: timeline)
+        // Numbered when there is more than one, so each copy control's
+        // accessibility label ("Copy Verification Inbox item ID 1") is distinct.
+        #expect(rows.map(\.label) == ["Run ID", "Verification Inbox item ID 1", "Verification Inbox item ID 2"])
+        #expect(rows.map(\.value) == [runID, "item-1", "item-2"])
+    }
+
+    @Test func eventDetailRecoversTheCampaignFromTheRunSection() {
+        let t = Self.instants
+        // Two campaigns, each an Attempt 1 implementation run. Run-scoped events
+        // carry only run_id, so the campaign is recovered from the run's section
+        // and the two campaigns' events do not read alike.
+        let timeline = Components.Schemas.TaskTimeline(
+            as_of_revision: 1, as_of: t[3], task_id: "task-1", project_id: "freeside",
+            name: .init(text: "n", source: ._operator), events: [],
+            sections: [
+                .init(
+                    campaign_id: "campaign-a", events: [],
+                    runs: [
+                        .init(
+                            run_id: "run-a", role: .init(value1: .implementation), attempt_number: 1,
+                            milestones: [], events: [])
+                    ]),
+                .init(
+                    campaign_id: "campaign-b", events: [],
+                    runs: [
+                        .init(
+                            run_id: "run-b", role: .init(value1: .implementation), attempt_number: 1,
+                            milestones: [], events: [])
+                    ]),
+            ])
+        let eventA = Components.Schemas.TaskEvent(kind: .run_milestone, recorded_at: t[0], run_id: "run-a")
+        let eventB = Components.Schemas.TaskEvent(kind: .run_milestone, recorded_at: t[0], run_id: "run-b")
+        #expect(TaskTimelinePresentation.detail(eventA, in: timeline) == "campaign-a · Implementation attempt 1")
+        #expect(TaskTimelinePresentation.detail(eventB, in: timeline) == "campaign-b · Implementation attempt 1")
     }
 
     @Test func headerNamePrefersTheFetchedTimelineOverTheSnapshot() throws {

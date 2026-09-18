@@ -120,6 +120,18 @@ enum TaskDisplay {
         }
     }
 
+    /// The ids of tasks whose displayed name text equals another visible
+    /// task's, so the row can append a short id only where two rows would
+    /// otherwise read alike. An identifier-fallback name is the task id, which
+    /// is unique, so those rows never collide.
+    static func ambiguousTaskIDs(_ tasks: [Components.Schemas.TaskSnapshot]) -> Set<String> {
+        var idsByName: [String: [String]] = [:]
+        for snapshot in tasks {
+            idsByName[snapshot.task.display_names.task.text, default: []].append(snapshot.task.id)
+        }
+        return Set(idsByName.values.filter { $0.count > 1 }.flatMap { $0 })
+    }
+
     /// A task with no lifecycle yet (no run) is work that exists and has
     /// not finished, so it counts as active.
     static func isActive(_ task: Components.Schemas.Task) -> Bool {

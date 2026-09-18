@@ -1,12 +1,6 @@
 import FreesideAPI
 import SwiftUI
 
-#if os(macOS)
-    import AppKit
-#elseif os(iOS)
-    import UIKit
-#endif
-
 struct RunTimelineView: View {
     /// Keys the timeline refetch task. It changes on the run's own revision
     /// and, through `lastFullSnapshotRevision`, on every same-epoch bootstrap:
@@ -31,6 +25,10 @@ struct RunTimelineView: View {
 
     let coordinator: SyncCoordinator
     let snapshot: Components.Schemas.RunSnapshot
+    /// Screenshot-only: start the header's technical-details disclosure
+    /// expanded so a baseline can capture its rows and copy controls. Live use
+    /// leaves it false.
+    var expandsTechnicalDetails = false
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var timeline: Components.Schemas.RunTimeline? {
@@ -141,28 +139,42 @@ struct RunTimelineView: View {
                     Text("Reason: \(reason)")
                         .font(FreesideFont.callout)
                 }
-                if let campaignID = snapshot.run.campaign_id {
-                    Text("Campaign: \(campaignID)")
-                        .font(FreesideFont.monoCaption)
-                        .textSelection(.enabled)
-                        .contextMenu {
-                            Button("Copy campaign ID") { copy(campaignID) }
-                        }
-                }
-                if let parent = snapshot.run.parent_run_id {
-                    Text("Parent run: \(parent)")
-                        .font(FreesideFont.monoCaption)
-                }
-                Text("\(specificationLabel): \(snapshot.run.spec_digest)")
-                    .font(FreesideFont.monoCaption)
+                Text(RunDisplay.specificationHeaderLabel(snapshot.run, approval: specificationApproval))
+                    .font(FreesideFont.callout)
                 if let qualification = specificationApproval.qualification {
                     Text(qualification)
                         .font(FreesideFont.caption)
                 }
             }
             .foregroundStyle(Color.inkDim)
+            TechnicalDetailsSection(rows: technicalRows, startsExpanded: expandsTechnicalDetails)
             KeywordLabel(text: "Daemon observations")
         }
+    }
+
+    private var technicalRows: [AttentionDisplay.BindingRow] {
+        RunTimelineView.technicalRows(run: snapshot.run, specificationLabel: specificationLabel)
+    }
+
+    /// The header's technical details: the exact run, task, campaign, and
+    /// parent ids, and the specification digest under its own label. The
+    /// primary text names the specification; the digest stays here to compare
+    /// or paste. Pure, so a test can check each value against its source field.
+    static func technicalRows(
+        run: Components.Schemas.Run, specificationLabel: String
+    ) -> [AttentionDisplay.BindingRow] {
+        var rows: [AttentionDisplay.BindingRow] = [
+            .init(label: "Run ID", value: run.id),
+            .init(label: "Task ID", value: run.task_id),
+        ]
+        if let campaignID = run.campaign_id {
+            rows.append(.init(label: "Campaign ID", value: campaignID))
+        }
+        if let parent = run.parent_run_id {
+            rows.append(.init(label: "Parent run ID", value: parent))
+        }
+        rows.append(.init(label: specificationLabel, value: run.spec_digest))
+        return rows
     }
 
     var specificationApproval: TaskDisplay.SpecificationApproval {
@@ -198,7 +210,7 @@ struct RunTimelineView: View {
         }
         .contextMenu {
             Button("Copy run ID") {
-                copy(snapshot.run.id)
+                Clipboard.copy(snapshot.run.id)
             }
         }
     }
@@ -294,15 +306,6 @@ struct RunTimelineView: View {
             invocationID: invocationID,
             stages: snapshot.run.stages,
             reviewRounds: timeline?.review?.value1.rounds ?? [])
-    }
-
-    private func copy(_ string: String) {
-        #if os(macOS)
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(string, forType: .string)
-        #elseif os(iOS)
-            UIPasteboard.general.string = string
-        #endif
     }
 
     private func milestoneDetail(_ milestone: Components.Schemas.RunMilestone) -> String? {
