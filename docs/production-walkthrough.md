@@ -393,21 +393,97 @@ explicit manual-submission file above, current installed clients, and the
 normal authenticated App, policy, admission, and specification-approval gates.
 Hermetic HTTP tests do not replace this evidence.
 
-1. Choose a configured project already visible in sync. Project discovery is
-   tracked separately in #1332. If visibility needs a CLI seed, use different
-   source from the client exercise.
-2. Confirm the chosen project/source has no existing task. For the requested
-   gh-imgup exercise, use `Please handle
-   https://github.com/freeasinbird/gh-imgup/issues/82.` as one line. Never
-   pre-create that source through the CLI.
-3. Enter that source in the client composer and submit. Record the command
-   result, new task ID, specification-run ID, and the returned sync state.
-   Verify the task name and run timeline on the Mac and physical iPhone.
-4. Follow the normal clarification or specification flow. Leave the human
-   specification approval gate in place. Submitting the same project/source
-   from the second device proves reuse, not a second task creation.
+The ordinary harness invocation submits its own task from the CLI and follows
+that CLI seed to publication. For this exercise the target must instead arrive
+through the client composer, so run the harness in client-target mode:
 
-The retained harness's publication verifier checks its original run. It is
-not evidence that this new client task was created or published. Record the
-new task's evidence separately, and leave live acceptance outstanding if the
-approved inputs or either physical client are unavailable.
+```sh
+bash scripts/run-real-work.sh --client-target \
+  /absolute/spec.json /absolute/policy.json /absolute/publication.json \
+  [/absolute/work-unit.json]
+```
+
+Client-target mode requires `FREESIDE_REAL_RUN_MANUAL_SUBMISSION_CONFIG`,
+because a client cannot create a task without it. It cannot combine with
+`--resume-session` or `--recover-codex-credentials`. The harness does
+everything the ordinary mode does up to the daemon launch, including submitting
+the three files as a visibility seed, and then waits instead of following that
+seed. The harness never follows, verifies, or records a result for the seed;
+the seed only exists to make the project visible in sync until #1332 lands.
+
+The daemon, however, executes the seed's specification run like any other
+unattended submission: nothing gates the specification invocation before it
+generates a spec, so the seed spends one real specification execution and
+produces a spec-approval attention item that you leave unapproved. Because the
+writer identity has a single execution slot, the client target's specification
+run queues behind the seed's until the seed reaches that approval gate, a few
+minutes. This is an accepted trade-off, not a defect, tracked in #1405 and
+removed by #1332 (project discovery drops the seed). Leave the seed's
+spec-approval item unapproved; approving it would run the throwaway seed to
+implementation.
+
+1. Confirm the chosen project has no existing task for your source. Project
+   discovery is tracked separately in #1332; the seed above supplies the
+   visibility this exercise needs. For the requested gh-imgup exercise, use
+   `Please handle https://github.com/freeasinbird/gh-imgup/issues/82.` as one
+   line. Never pre-create that source through the CLI.
+2. When the harness prints `awaiting a client target`, enter that source in the
+   client composer and submit. Record the command result, the new task ID, its
+   specification-run ID, and the returned sync state. Verify the task name and
+   run timeline on the Mac and physical iPhone.
+3. Hand the harness the new task by ID, in a second terminal:
+
+   ```sh
+   bash /absolute/session/real-work-session.sh select-target \
+     /absolute/session <task-id>
+   ```
+
+   The foreground harness validates the task against the live store and reports
+   the result. It refuses the visibility seed's own task, any task created
+   before this session's daemon started, a task in another project, a cancelled
+   or stopped task, and an absent task. A refusal prints its reason and the
+   harness keeps waiting, so correct the ID and run `select-target` again. On
+   acceptance the harness saves the selection durably; a saved selection cannot
+   be replaced in the same session, and choosing another target means starting
+   a new client-target session. Selection binds by trusted task and run
+   identity from the task's recorded run list, never by matching source text.
+4. Follow the normal clarification or specification flow for the selected task.
+   Leave the human specification approval gate in place. Each deliberate client
+   submission of the same project and source creates a distinct task, so a
+   second submission is a second task, not proof of reuse; select exactly one
+   as the target.
+
+After the specification is approved, the harness resolves the selected task's
+implementation run from its recorded run list, follows it to publication, and
+runs the same `TestRealWorkItemCompletesProductionPipeline` verifier with every
+existing assertion. In this mode it additionally requires that the verified run
+belongs to the selected task and to `FREESIDE_REAL_RUN_PROJECT`, and that the
+task is neither cancelled nor stopped. The walkthrough, and the session's
+`verify`, `complete`, and `recover` commands, then operate on the selected
+target's run and invocation, never the seed's.
+
+`--resume-session` of a client-target session that already saved a target
+copies the recorded mode and selection into the new session and rebinds to the
+selected target. A session that ended before any target was selected is not
+resumable; start a new client-target session instead. Interrupting the harness
+while it waits for a selection runs the ordinary cleanup: daemon stop,
+exact-resource rig cleanup, and supervised-daemon restoration.
+
+Record the selected task's evidence separately, and leave live acceptance
+outstanding if the approved inputs or either physical client are unavailable.
+
+### Next Exit-Run Commands
+
+For the #1211 exit run against `freeasinbird/gh-imgup#82`, with the exercise
+environment and the manual-submission file loaded and the supervised daemon
+suspended:
+
+```sh
+bash scripts/run-real-work.sh --client-target \
+  /absolute/spec.json /absolute/policy.json /absolute/publication.json
+# then, once the harness prints its awaiting-target line and the client task exists:
+bash /absolute/session/real-work-session.sh select-target /absolute/session <task-id>
+```
+
+Verify the published head on both paired clients, then complete the session
+deliberately with its printed `complete` command.
