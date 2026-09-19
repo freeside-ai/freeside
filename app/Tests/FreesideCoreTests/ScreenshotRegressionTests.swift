@@ -1419,6 +1419,46 @@
                                 ).screenshotContent(history))))
                 }
             }
+            // The two-campaign history with folds open: Task events alone,
+            // then every fold (the earlier campaign, each prior run, and each
+            // run's details), so the folded content is covered too.
+            let eventsOpen = TaskTimelineDisclosurePreferences(defaults: nil)
+            eventsOpen.setExpanded(true, .taskEvents, taskID: revisedHistory.task_id)
+            let everythingOpen = TaskTimelineDisclosurePreferences(defaults: nil)
+            everythingOpen.setExpanded(true, .taskEvents, taskID: revisedHistory.task_id)
+            for section in revisedHistory.sections {
+                everythingOpen.setExpanded(true, .campaign(section.campaign_id), taskID: revisedHistory.task_id)
+                for run in section.runs {
+                    everythingOpen.setExpanded(true, .run(run.run_id), taskID: revisedHistory.task_id)
+                    everythingOpen.setExpanded(true, .runDetails(run.run_id), taskID: revisedHistory.task_id)
+                }
+            }
+            // A current task state: Stop is the bare button, so it shares the
+            // header row with Technical details at 820 and stacks at 390.
+            let freshCoordinator = try TaskHistoryFixtures.coordinator(revisedHistory)
+            freshCoordinator.store.freshness = .fresh
+            #expect(freshCoordinator.taskStop.unavailableReason == nil)
+            for (width, scheme) in [(CGFloat(820), ColorScheme.light), (390, .dark)] {
+                surfaces.append(
+                    Surface(
+                        name: "task-history-revised-fresh-\(Int(width))-\(scheme)", width: width,
+                        colorScheme: scheme, nativeAppearance: true,
+                        view: AnyView(
+                            TaskTimelineView(
+                                coordinator: freshCoordinator,
+                                snapshot: TaskHistoryFixtures.snapshot(revisedHistory), onOpenRun: { _ in }
+                            ).screenshotContent(revisedHistory))))
+            }
+            for (name, disclosures) in [("events-open", eventsOpen), ("all-open", everythingOpen)] {
+                surfaces.append(
+                    Surface(
+                        name: "task-history-revised-\(name)-820-light", width: 820, nativeAppearance: true,
+                        view: AnyView(
+                            TaskTimelineView(
+                                coordinator: revisedCoordinator,
+                                snapshot: TaskHistoryFixtures.snapshot(revisedHistory), onOpenRun: { _ in }
+                            ).screenshotContent(revisedHistory, disclosures: disclosures))))
+            }
             let publishedTask = try #require(tasks.first { $0.task.id == publishedRun.run.task_id })
             var publishedTimeline = try #require(
                 RunFixtures.defaultTimelines().first { $0.run_id == publishedRun.run.id })

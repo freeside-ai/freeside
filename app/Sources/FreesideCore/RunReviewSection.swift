@@ -47,14 +47,25 @@ struct RunReviewSection: View {
     @State private var expandedFacts: Set<String>
     @State private var showsPriorRounds: Bool
 
+    /// Where the section's folds live when its host persists them (per task
+    /// id, with the rest of the task timeline's folds). Without it they are
+    /// view-local, which is what a screenshot and a host with no task want.
+    struct Folds {
+        /// A round's facts, by the round's invocation id.
+        let facts: (String) -> Binding<Bool>
+        let priorRounds: Binding<Bool>
+    }
+    private let folds: Folds?
+
     init(
         coordinator: SyncCoordinator, runID: String, facts: Components.Schemas.RunReviewFacts?,
-        hasTimeline: Bool = true, startsExpanded: Bool = false
+        hasTimeline: Bool = true, startsExpanded: Bool = false, folds: Folds? = nil
     ) {
         self.coordinator = coordinator
         self.runID = runID
         self.facts = facts
         self.hasTimeline = hasTimeline
+        self.folds = folds
         // A screenshot captures the open state by starting there; live use
         // starts every fold collapsed.
         _expandedFacts = State(
@@ -103,8 +114,9 @@ struct RunReviewSection: View {
         return VStack(alignment: .leading, spacing: 10) {
             roundRows(current, isCurrent: true, attention: attention)
             if !prior.isEmpty {
+                let showsPriorRounds = folds?.priorRounds ?? $showsPriorRounds
                 Button {
-                    showsPriorRounds.toggle()
+                    showsPriorRounds.wrappedValue.toggle()
                 } label: {
                     markedRow(isCurrent: false, time: prior.first.flatMap(ReviewRoundPresentation.time)) {
                         Text(ReviewRoundPresentation.priorSummary(prior))
@@ -116,8 +128,8 @@ struct RunReviewSection: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityValue(showsPriorRounds ? "Expanded" : "Collapsed")
-                if showsPriorRounds {
+                .accessibilityValue(showsPriorRounds.wrappedValue ? "Expanded" : "Collapsed")
+                if showsPriorRounds.wrappedValue {
                     ForEach(prior, id: \.invocation_id) { round in
                         roundRows(round, isCurrent: false, attention: false)
                     }
@@ -143,15 +155,17 @@ struct RunReviewSection: View {
                     cut: ReviewRoundPresentation.cut(round, isCurrent: isCurrent, hasOpenAdjudication: attention))
             }
         }
-        let expanded = Binding(
-            get: { expandedFacts.contains(round.invocation_id) },
-            set: { open in
-                if open {
-                    expandedFacts.insert(round.invocation_id)
-                } else {
-                    expandedFacts.remove(round.invocation_id)
-                }
-            })
+        let expanded =
+            folds?.facts(round.invocation_id)
+            ?? Binding(
+                get: { expandedFacts.contains(round.invocation_id) },
+                set: { open in
+                    if open {
+                        expandedFacts.insert(round.invocation_id)
+                    } else {
+                        expandedFacts.remove(round.invocation_id)
+                    }
+                })
         // The link shares the disclosure's row while the closed label and
         // the link fit on one line, and drops beneath it when they do not.
         ViewThatFits(in: .horizontal) {

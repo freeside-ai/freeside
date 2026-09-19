@@ -25,10 +25,14 @@ enum TaskDisplay {
         var status: String? = nil
         var guidance: String = Position.defaultGuidance
         var historical = false
+        /// The current open Inbox item `guidance` points at, when it points
+        /// at one. The lookups that produce that guidance set it, so the
+        /// accent chip, the Inbox sentence, and the place the sentence leads
+        /// can never disagree.
+        var attentionItemID: String? = nil
         /// True iff `guidance` targets a current open Inbox item bound to
-        /// this task: the same lookups that produce that guidance set it, so
-        /// the accent chip and the Inbox sentence can never disagree.
-        var attention = false
+        /// this task.
+        var attention: Bool { attentionItemID != nil }
         /// True iff `status` names history rather than a state (a superseded
         /// run, an abandoned task). Narrower than `historical`, which also
         /// covers a stopped or finished task whose status the daemon spoke.
@@ -197,16 +201,16 @@ enum TaskDisplay {
                 position.guidance =
                     "The configured agent account is busy. This work is queued; no action is needed for this wait."
             }
-            if let handoff = finalReviewHeading(task, run: run, attentionItems: attentionItems, titleCase: true) {
-                position.status = handoff
+            if let handoff = finalReviewItem(task, run: run, attentionItems: attentionItems) {
+                position.status = finalReviewHeading(handoff, titleCase: true)
                 position.guidance = "Review the pull request from Inbox."
-                position.attention = true
+                position.attentionItemID = handoff.item.id
             } else if run?.lifecycle != .finished,
                 run == nil || (run?.task_id == task.id && run?.project_id == task.project_id),
                 specificationApproval(task, runID: current.run_id, run: run, history: history)
                     != .approved,
                 task.run_ids.contains(current.run_id),
-                attentionItems.contains(where: { snapshot in
+                let approval = attentionItems.first(where: { snapshot in
                     let item = snapshot.item
                     guard item._type == .spec_approval, item.status == .open,
                         item.project_id == task.project_id, case .run(let subject) = item.subject
@@ -217,7 +221,7 @@ enum TaskDisplay {
             {
                 position.status = "Specification Approval Required"
                 position.guidance = "Review the specification in Inbox."
-                position.attention = true
+                position.attentionItemID = approval.item.id
             }
         }
         return position
@@ -395,6 +399,26 @@ enum TaskDisplay {
         _ task: Components.Schemas.Task, run: Components.Schemas.Run?,
         attentionItems: [Components.Schemas.AttentionItemSnapshot], titleCase: Bool = false
     ) -> String? {
+        finalReviewItem(task, run: run, attentionItems: attentionItems).map {
+            finalReviewHeading($0, titleCase: titleCase)
+        }
+    }
+
+    private static func finalReviewHeading(
+        _ handoff: Components.Schemas.AttentionItemSnapshot, titleCase: Bool
+    ) -> String {
+        if titleCase {
+            return handoff.item.readiness?.value1._class == .ready_degraded
+                ? "Ready for Final Review (Degraded)" : "Ready for Final Review"
+        }
+        return AttentionDisplay.title(handoff.item)
+    }
+
+    /// The current open final-review item bound to this task's position.
+    private static func finalReviewItem(
+        _ task: Components.Schemas.Task, run: Components.Schemas.Run?,
+        attentionItems: [Components.Schemas.AttentionItemSnapshot]
+    ) -> Components.Schemas.AttentionItemSnapshot? {
         guard task.lifecycle == .active,
             let position = task.current_position?.value1,
             task.run_ids.contains(position.run_id), position.hold_reason == nil
@@ -422,13 +446,7 @@ enum TaskDisplay {
             else { return false }
             return true
         }
-        return item.map {
-            if titleCase {
-                return $0.item.readiness?.value1._class == .ready_degraded
-                    ? "Ready for Final Review (Degraded)" : "Ready for Final Review"
-            }
-            return AttentionDisplay.title($0.item)
-        }
+        return item
     }
 
     /// The task name a run's timeline shows: the task snapshot's current
