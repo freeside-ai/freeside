@@ -28,6 +28,23 @@ enum FreesideFormat {
         return date.formatted(sameYear ? style : style.year())
     }
 
+    /// The date alone in the same grammar, for a summary that names a day
+    /// ("since Sep 11"): abbreviated month and day, the year only when it
+    /// differs from `now`'s.
+    static func shortDate(
+        _ date: Date,
+        now: Date,
+        locale: Locale = .current,
+        timeZone: TimeZone = .current
+    ) -> String {
+        var calendar = locale.calendar
+        calendar.timeZone = timeZone
+        let style = Date.FormatStyle(locale: locale, calendar: calendar, timeZone: timeZone)
+            .month(.abbreviated).day()
+        let sameYear = calendar.component(.year, from: date) == calendar.component(.year, from: now)
+        return date.formatted(sameYear ? style : style.year())
+    }
+
     /// The instant `shortTime` abbreviates, to the second and with its
     /// year: the ISO 8601 stamp the task row's and pairing's hover carry.
     static func exactTime(_ date: Date) -> String {

@@ -391,7 +391,8 @@ public struct FreesideRootView: View {
                     if let task = coordinator.tasks.first(where: { $0.task.id == id }) {
                         TaskTimelineView(
                             coordinator: coordinator, snapshot: task,
-                            onOpenRun: { navigation.route(to: .run(taskID: task.task.id, runID: $0)) })
+                            onOpenRun: { navigation.route(to: .run(taskID: task.task.id, runID: $0)) },
+                            onOpenInboxItem: { navigation.route(to: .attentionItem($0)) })
                     } else if let run = coordinator.runs.first(where: { $0.run.id == id }) {
                         RunTimelineView(coordinator: coordinator, snapshot: run)
                     } else {
@@ -477,7 +478,8 @@ public struct FreesideRootView: View {
                 {
                     TaskTimelineView(
                         coordinator: coordinator, snapshot: task,
-                        onOpenRun: { navigation.route(to: .run(taskID: task.task.id, runID: $0)) }
+                        onOpenRun: { navigation.route(to: .run(taskID: task.task.id, runID: $0)) },
+                        onOpenInboxItem: { navigation.route(to: .attentionItem($0)) }
                     )
                     .id(taskSelection)
                 } else {

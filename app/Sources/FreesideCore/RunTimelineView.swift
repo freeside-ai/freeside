@@ -43,7 +43,7 @@ struct RunTimelineView: View {
                     if let hold = timeline.hold?.value1 {
                         holdCard(hold)
                     }
-                    RunReviewSection(coordinator: coordinator, runID: snapshot.run.id, facts: timeline.review?.value1)
+                    reviewSection(timeline)
                     timelineSection(timeline)
                     invocationSection(timeline)
                 } else if coordinator.timelineLoadStates[snapshot.run.id] == .unavailable {
@@ -88,7 +88,7 @@ struct RunTimelineView: View {
             if let hold = timeline.hold?.value1 {
                 holdCard(hold)
             }
-            RunReviewSection(coordinator: coordinator, runID: snapshot.run.id, facts: timeline.review?.value1)
+            reviewSection(timeline, persistsFolds: false)
             timelineSection(timeline)
             invocationSection(timeline)
         }
@@ -150,6 +150,23 @@ struct RunTimelineView: View {
             TechnicalDetailsSection(rows: technicalRows, startsExpanded: expandsTechnicalDetails)
             KeywordLabel(text: "Daemon observations")
         }
+    }
+
+    /// The review folds persist with the task's other folds, so a round
+    /// opened here is open on the task timeline too. A screenshot leaves
+    /// them view-local.
+    private func reviewSection(
+        _ timeline: Components.Schemas.RunTimeline, persistsFolds: Bool = true
+    ) -> some View {
+        let folds = TaskTimelineDisclosurePreferences.shared
+        let taskID = snapshot.run.task_id
+        return RunReviewSection(
+            coordinator: coordinator, runID: snapshot.run.id, facts: timeline.review?.value1,
+            folds: !persistsFolds
+                ? nil
+                : .init(
+                    facts: { folds.binding(.roundFacts($0), taskID: taskID) },
+                    priorRounds: folds.binding(.priorRounds(snapshot.run.id), taskID: taskID)))
     }
 
     private var technicalRows: [AttentionDisplay.BindingRow] {
