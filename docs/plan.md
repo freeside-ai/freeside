@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 63
+revision: 64
 status: active
-updated: 2026-09-17
+updated: 2026-09-19
 ---
 
 # Freeside
@@ -2299,17 +2299,35 @@ Additional rules:
   list lands in `/sync/bootstrap` (#1332). Attachments on submission wait
   until the composer can upload them. (#1328; the composer is #1330.)
 - **Client PR metadata describes the implemented outcome.** New client
-  submissions freeze `freeside.client-publication/v1`, commit attribution, and
-  an optional source-issue reference in the publication digest before identity
-  reservation. Omitted recipe fields retain literal operator metadata and its
+  submissions freeze the current publication recipe
+  (`freeside.client-publication/v2`, Section [5.15](#515-evidence-and-images)),
+  commit attribution, and an optional source-issue reference in the publication
+  digest before identity reservation. The frozen version is per-submission and
+  never rewritten; records that froze v1 keep it and its recovery and replay
+  semantics. Omitted recipe fields retain literal operator metadata and its
   historical canonical encoding, approvals and recovery behavior. Unknown
   recipes and mixed literal/derived inputs fail closed. Task naming and name
   refinement never select or rename publication metadata. Exact command replay
   returns its original record before consulting host configuration.
   Only a complete canonical GitHub issue URL supplied as the source may become
-  a descriptive Source issue link. It supplies no closing directive, issue
-  binding or completion authority; client work remains `bound_pr_merged` with
-  no bound issue. Explicit CLI and label-intake prose keep their own contract.
+  a descriptive Source issue link. Under recipe v1 it supplies no closing
+  directive, issue binding or completion authority; client work remains
+  `bound_pr_merged` with no bound issue. The publication-author workflow
+  (Section [5.15](#515-evidence-and-images)) lets the publisher write a `Closes`
+  reference, but the trust in that reference depends on its source. The
+  daemon-bound `issue_subject` specification source, reached through label
+  intake, is a resolution-verified binding; the publisher may close it. A
+  client-supplied source URL is not daemon-verified: the client chooses the
+  issue number, and `canonicalSourceIssue` accepts any repository's issue
+  without asserting issue-closing authority. So a same-repository client-supplied
+  source URL yields `Closes` only as a human-confirmed recommendation, marked
+  unverified, and a cross-repository source URL renders the descriptive Source
+  issue link and a `Refs` reference at most. In every case the publisher, not
+  any agent prose, writes the reference; the `Closes` reference is a closure
+  proposal approved through the `effect_proposal` action before the publisher
+  writes it, and merging then closes the issue (Section
+  [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)).
+  Explicit CLI and label-intake prose keep their own contract.
   Recipe v1 deterministically renders the authenticated candidate's public
   account defined in Section [5.15](#515-evidence-and-images). Same-candidate
   retries, restarts, lost-response recovery and drift repair use identical
@@ -2418,8 +2436,19 @@ The engine, not an agent, runs deterministic policy jobs:
 - cleanup.
 
 Agents appear where judgment is the work: specifier, implementer, remediator,
-diagnostic, task namer, finding classifier, finding adjudicator (Section [7](#7-review-policy)), drift auditor
-(Section [7](#7-review-policy)), reviewer, shadow reviewer, and, later, briefer.
+diagnostic, task namer, publication author, finding classifier, finding
+adjudicator (Section [7](#7-review-policy)), drift auditor (Section [7](#7-review-policy)),
+reviewer, shadow reviewer, and, later, briefer.
+
+Evidence publication stays on the deterministic-jobs list. Writing the public
+pull-request text is the judgment the publication author supplies; publishing it
+stays deterministic. The engine still pushes the branch, opens the pull request,
+and renders its body; it renders public PR text from a stored, digest-bound
+authoring artifact when one exists and from recipe v1 text
+(Section [5.15](#515-evidence-and-images)) otherwise. The publication author is a
+judgment role (below), distinct from the briefer: the briefer compresses private
+evidence for internal comprehension (Section [9](#9-comprehension)), while the
+author writes advisory public prose. Neither grants publication authority.
 
 #### Daemon Judgment Calls
 
@@ -2497,6 +2526,75 @@ explicit allowlist per site), input sensitivity classification, redaction,
 provider identity, retention, size limits, and the input digests recorded per
 call. No tools, no workspace, no ward container.
 
+The publication author is a judgment role, not a pinned site. Like the
+specifier, implementer, remediator and reviewer, it carries a refinable prompt
+and per-role agent and effort selection through the admitted-agent lineup, so
+its prompt, agent and effort are tuned and compared like any other role. It runs
+without a workspace, tools or a ward container: it only reads trusted inputs and
+emits advisory output. The call reuses the daemon-side inference contract above
+for outbound field selection, redaction, sensitivity classification and
+retention, but its agent, model and effort come from the lineup, not a
+deployment-pinned binding; that requires lineup keys to accept role names, not
+only stage names, which is itself a contract change. Because it runs without a
+ward, it is admitted through a daemon-side judgment admission class, not the
+runner and ward-conformance proof the execution roles use: its launch proof is
+the admitted inference driver and prompt-package digest. The deterministic fake
+and budget cover output handling, but they do not prove the real harness runs
+with no tools, which is the whole safety argument for a wardless role. That
+no-tools proof is interim: hand-audited for the single Claude driver today, with
+a per-driver capability proof (as the stage adapter-conformance suite provides)
+left to #900 before other call drivers join. This extends the admitted-agent
+contract with a wardless judgment class. This revision decides lineup
+participation for the publication author; whether the other daemon judgment sites
+(the task namer, finding classifier, finding adjudicator, drift auditor,
+diagnostic, attention-discussion and briefer sites) also join the lineup, and
+share that admission class, stays the open decision in #900.
+
+The role comprises two sites, keeping the one-authority-per-site rule: an
+**explain** prose site producing the title, body prose describing what the pull
+request does, reviewer notes, references to publishable evidence artifacts that
+already exist, and a verification-and-review summary; and a **propose** site emitting the
+source-issue closure recommendation as a bounded `resolves` flag into the effect
+registry below. Both belong to the one role and share its refinable prompt and
+lineup entry; how each site is told which output shape to produce (for example a
+short fixed per-site instruction beside its validator) is a detail for the
+building unit. The prose is advisory, like the task namer's claim: schema-validated,
+producer-labeled, never a policy input. The role runs once, after the final
+clean review (Section [7](#7-review-policy) orders implement, verify, review,
+then clean publish), so verification and review outcomes are both inputs; its
+output is stored once and digest-bound (Section
+[5.15](#515-evidence-and-images)). It reads the source issue, the final diff,
+verification and review outcomes, existing publishable evidence artifacts, and
+the target repository's pull-request template and its trusted-base composed
+instruction snapshot for the changed paths (the nested AGENTS.md and overrides
+at every depth, per Section [5.8](#58-control-plane-trust)), not the root file
+alone, so authored prose respects rules scoped to the diff. No input that can
+flow into public prose may be more restrictive than the publication target's
+visibility. Evidence inputs and reference resolution are restricted to current,
+policy-approved publishable evidence (`publish_eligible`, Section
+[5.15](#515-evidence-and-images)); sensitive or non-publishable evidence is never
+an input. A source issue whose repository is less visible than the target (a
+private issue under a public target) contributes only its reference, never its
+body, and any other cross-visibility input falls back the same way. This closes
+the paraphrase path for every input, not just evidence, since the output screen
+alone cannot recognize confidential prose the model rewrote. Control-plane inputs (the template
+and AGENTS.md) resolve from the trusted base and are digest-bound to it, never
+from the candidate head (Section [5.8](#58-control-plane-trust)); a candidate
+edit to those files cannot reach the call. Inputs carry a sensitivity class
+derived from repository visibility, not hard-coded: the final diff and the
+trusted-base template and AGENTS.md take the target repository's tier (normal for
+a public repository, sensitive for a private one), the source issue takes its own
+repository's tier, and there is no `public` class, which the `SensitivityClass`
+contract does not define. Any private summary or credential is excluded from the
+outbound field allowlist. The role is budgeted
+under the global cumulative bounds, retains its advisory artifact under the
+advisory-store retention, carries sampled-audit telemetry, and has a
+deterministic fake. When inference is unavailable or the authored text fails
+screening, publication falls back to the path's deterministic text and the role
+never blocks publication. The role never writes a `Closes` or `Refs` line, skips
+CI, or carries a trailer directive; the trusted publisher writes any closing
+reference (Section [5.12](#512-workflow-definition-initiators-and-artifacts)).
+
 #### The Closed Effect Registry
 
 Agent-requested real-world effects are anything a run, a client proposal
@@ -2505,7 +2603,9 @@ typed, digest-addressed proposal artifacts that target a closed registry of
 effect kinds. Each kind has a fixed Go type, a trusted constructor, and a gate.
 Effects the trusted workflow performs itself (publication, notifications,
 installation maintenance) stay engine-run under Section [5.9](#59-durability-effectively-once) and the
-deterministic-jobs list above; they are not proposal-gated. Proposals supply
+deterministic-jobs list above; they are not proposal-gated. Publishing a pull
+request stays ungated on this path; only whether that pull request closes its
+source issue depends on an admitted closure proposal (below). Proposals supply
 bounded parameters, never event bodies, target identities, or authority.
 Targets are daemon-selected context, or a selection among daemon-enumerated
 opaque subject handles ("watch PR 42" parses as picking from daemon-enumerated
@@ -2519,9 +2619,27 @@ ordinal. A deliberate repeat gets a new command ID; retrying the same
 occurrence keeps it. Semantic content never defines occurrence identity. The
 instance ID is the effect identity for idempotence, ledgering, and crash
 reconciliation; content digests bind approvals. Instances: `task_proposal`
-(existing), follow-up issue filings (Section [5.17](#517-follow-up-issue-filing), 1B.1), and proposed watches
+(existing), follow-up issue filings (Section [5.17](#517-follow-up-issue-filing), 1B.1), proposed watches
 (a planned extension that lands with its schedule kind and consumer,
-Section [5.16](#516-the-durable-scheduler)). Gates read resolved policy; rein is not a security dial.
+Section [5.16](#516-the-durable-scheduler)), and the source-issue closure proposal (1B.1). The
+closure proposal carries one bounded parameter, a `resolves` flag; its target is
+the daemon-selected source issue, never an agent-supplied identity. Its trusted
+constructor sets the flag with its provenance (Section
+[5.12](#512-workflow-definition-initiators-and-artifacts)): **verified** for a
+daemon-bound `issue_subject` source, or **recommended** and unverified for a
+same-repository client-supplied source URL whose issue number the client chose; a
+cross-repository source yields no proposal. Like every effect proposal it is
+honored only through the Section [4](#4-the-attention-model) `effect_proposal`
+approval, which binds the proposal artifact digest; admission alone never
+authorizes a close. The card shows the provenance, so a human approves a verified
+close and an unverified recommendation as what each is. Because the proposal
+artifact is head-independent, the approval binds the exact publication identity
+and candidate head as well: a feedback or remediation successor with a new head
+(Section [5.15](#515-evidence-and-images)) supersedes any prior approval, so an
+approval never authorizes a close on a changed candidate that may no longer
+resolve the issue. On approval the publisher writes the `Closes` line, and
+merging the candidate then closes the issue; it fails safe to no close. Gates
+read resolved policy; rein is not a security dial.
 
 ### 5.14 Client Synchronization and Conversations
 
@@ -2796,6 +2914,78 @@ existing budget and retain daemon-owned Verification, review history,
 advisories, scope decisions and the final identity marker. Reported checks
 remain claims; only authenticated daemon report bytes establish verified
 results. No new inference call, evidence-snapshot entry or trust bit is added.
+
+Recipe `freeside.client-publication/v2` adds an authoring pass without changing
+v1, whose rendering stays frozen; a later rendering change needs another
+version. The publication-author role (Section
+[5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) runs
+once, after the final clean review, since Section [7](#7-review-policy) orders
+implement, verify, review, then clean publish; so verification and review
+outcomes are both inputs. The engine stores the authored artifact once, binds it
+by digest, and re-renders the public text from that stored artifact on every
+retry, restart and drift repair; it is never regenerated. When the role is
+unavailable or its output fails screening, the engine falls back to v1 rendering
+from the client's `.freeside-evidence/publication.md` claim, and the role never
+blocks publication. v2 is the client-side rendering of the author's output;
+label-initiated publication uses the same author role under its own intake
+contract, with that path's deterministic text as its fallback rather than the
+client claim.
+
+The publisher, not the author, writes the issue reference. It writes `Closes`
+only from a closure proposal (Section
+[5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)
+effect registry) approved through the `effect_proposal` action, which binds the
+proposal digest: a label-intake `issue_subject` source is a verified close, and a
+same-repository client-supplied source URL is an unverified recommendation the
+human approves as such. A cross-repository source URL, or any failure to admit or
+approve the closure proposal or resolve its metadata, yields `Refs` or the
+descriptive Source issue link and no close. A prose-screening failure is
+independent: it falls the body back to v1 rendering but still carries an approved
+publisher-written `Closes`, so an explain-site formatting fault never suppresses a
+close the human already approved. On approval the publisher writes the `Closes`
+line and merging then closes the issue; admission alone never writes a close.
+
+Publication (opening the PR) stays ungated, but a closable source holds the PR
+un-mergeable on the forge until its closure question is explicitly resolved.
+Because reviewing and merging happen on GitHub (Section
+[2](#2-goals-and-non-goals)), an internal readiness signal alone would not stop a
+direct merge, so the PR is opened as a draft or gated by a required check until
+then; a human cannot merge a body carrying only `Refs` and recreate the
+missing-close outcome (the mechanism, draft or check, is the publisher's). A
+closable source always has a durable closure proposal to resolve: if the closure
+site or its admission fails, the engine records a durable fallback proposal
+defaulting to no close, so failure never silently releases the gate nor blocks
+indefinitely. Resolving the proposal releases the gate: an approved `resolves`
+proposal has the publisher write `Closes`, while a fallback, declined, or
+otherwise unset-flag proposal finalizes the `Refs` or descriptive link with no
+close. Approval never writes `Closes` for a proposal whose flag is unset. A PR
+with no closable source is unaffected.
+
+v2 renders the authored body as GitHub-Flavored Markdown, not the escaped
+`<pre>` block v1 uses, but only through a screen at least as strict as v1's.
+Closing and automation directives are stopped by rejection, not rendering:
+GitHub reads a close keyword from the body source, so the screen rejects the
+same closing and automation directives, secrets, control and format characters,
+and reserved publisher headings and markers that `screenPublicationText` rejects
+today, and refused input is never rendered. Rendering safety is a separate
+concern: because live Markdown drops v1's escaping, the screen also neutralizes
+every issue and pull-request cross-reference, bare-URL, commit-reference and
+`@`-mention autolink and renders raw HTML inert, so rendered prose can never
+create a spurious cross-reference, a mention or backreference ping, or an active
+link or image the author invented. Links and images resolve only to existing
+publishable evidence artifacts (policy-approved, `publish_eligible`); the author
+references them and captures or hosts nothing. This screen answers revision 63's refutation findings, which showed
+agent text escaping a Markdown code span and blank lines, backticks, links,
+images and closing HTML escaping a producer block: v2 keeps every such construct
+inert or rejected. If the implementing unit cannot specify a screen that holds
+links, images, mentions, raw HTML and directives inert, v2 keeps the authored
+prose inert exactly as v1 does and records that.
+
+The publisher still owns Verification, review history, advisories, scope
+decisions and the final identity marker (`publish.ValidateCandidateBody`), and
+reported checks remain claims. The implementer continues to write the v1 claim
+as the deterministic fallback; v2 layers the authoring role over it and adds no
+client-supplied trust bit.
 
 A failed post-publication feedback invocation may offer the existing `retry`
 action only when its accepted return-command ancestry, failure outcome and exact
@@ -3925,10 +4115,14 @@ defect**: sampled decision audits find it, and Section [8](#8-observability-and-
 It is not a Section [12](#12-exit-criteria-definitions) false-ready (claims are claims), but recurring
 contradictions promote summarization to an independent briefer invocation
 (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) that is blind to the implementer's rationale. The claim contract
-currently carries labeled artifact references, not inline prose. So the summary
-layer requires a renderable text carrier on the claim path. That carrier is an
-explicit contract change that precedes the implementing work, never an ad hoc
-rendering choice.
+carries a renderable inline text carrier, `domain.ClaimText`, which recipe v1
+already reads; the earlier requirement for a new carrier is met, so the summary
+layer needs no further carrier contract change. The publication author's prose
+(Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry))
+rides its own advisory publication-authoring artifact, schema-validated and
+producer-labeled like any explain-site output and kept in the advisory store;
+the briefer, when it lands, reuses the existing `ClaimText` carrier rather than a
+new one.
 
 ### Measurement
 
@@ -4634,16 +4828,40 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 63 ("Candidate-Bound Public PR Metadata"):
+Revision 64 ("Author PR Metadata with a Judgment Role"):
 
-1. **Client publication freezes a recipe, then renders a public claim.** New
-   client submissions bind a versioned metadata recipe and attribution before
-   reserving implementation identity. Publication consumes the current
-   candidate producer's separate public-intended account; task names and private
-   summaries never supply PR prose. Literal operator inputs remain unchanged.
-   Same-candidate recovery reconstructs identical metadata; an authorized
-   successor supplies its own whole-change account. (Owner-assigned #1382;
-   [decision note](../devlog/2026-09-17-1430-client-publication-metadata.md).)
+1. **A publication-author role writes public PR prose after review; the
+   publisher writes any close directive, enacted at merge.** The publication
+   author is a first-class judgment role, like the specifier, implementer,
+   remediator and reviewer: a refinable prompt and per-role agent and effort
+   selection through the admitted-agent lineup, but no workspace or tools and
+   advisory authority. It runs once after the final clean review, using
+   verification and review outcomes, and its output is stored once and
+   digest-bound. Its prose is advisory (never a policy input); unavailable
+   inference or a screen failure falls back to the path's deterministic text and
+   adds no publication block. The trusted publisher, not the agent, writes any
+   `Closes`, and only from a source the daemon can trust to name the resolved
+   issue: a daemon-bound `issue_subject` source, or a same-repository
+   client-supplied source URL as a human-confirmed recommendation. The closure
+   recommendation is an effect-registry proposal approved through the
+   `effect_proposal` action, which binds the proposal digest (verified for an
+   `issue_subject` source, an unverified recommendation for a same-repo URL); on
+   approval the publisher writes `Closes` and merging closes the issue.
+   Control-plane inputs (the target repository's template and AGENTS.md) resolve
+   from the trusted base, never the candidate head. v2 renders Markdown live
+   through a screen at least as strict as v1's, rejecting close and automation
+   directives at the body source and keeping cross-references, mentions, raw HTML
+   and invented links and images inert. This decides lineup participation for the
+   publication author; #900 covers extending it to the other judgment sites. This
+   revises revision 63's decisions that client work has no generated closing
+   directive, that no inference call feeds publication and that agent prose
+   renders only as escaped text; the first real client run (gh-imgup #82) merged
+   PR #110 without the `Closes` keyword its target repository's template
+   requires, which showed the gap. The decomposed build units are unscheduled
+   deferrals; the spine places them in a wave when it schedules them (expected
+   1B.1), and this revision does not itself schedule them or edit the Section
+   [11](#11-roadmap-build-order-and-coordination) table. (Owner-assigned #1414;
+   [decision note](../devlog/2026-09-19-0823-publication-author-site.md).)
 
 ## 14. Risks
 
@@ -4653,6 +4871,7 @@ Revision 63 ("Candidate-Bound Public PR Metadata"):
 | Registry egress under `subscription_contained` | Keep `provider_only` the default and the floor fixed. Admit `provider_registry` only per project policy through the per-authority proxy allowlist with TLS server-name pinning and no DNS, to public package registries consumed read-only, with any other authority routed to the `provider_web_read` record. Conformance-check the realized allowlist against the declared profile. Residual: the tunnel cannot constrain method or path. So a registry that co-hosts a write endpoint accepts an attacker-credentialed publish. Exclude such hosts per project where the residual is not acceptable, and provide `api_key_isolated` as the escape for anything wider. |
 | CI privilege crossing | Attest effective authority; block candidate automation changes; fail closed on drift; prohibit the daemon host as a runner. |
 | Reviewer-instruction poisoning | Compose agent and reviewer instructions from the trusted base, never the candidate; detect instruction-path edits mechanically and surface them as advisories that the human merge gate reads (Section [5.8](#58-control-plane-trust)). |
+| **Rendered agent Markdown in a public PR** | Recipe v2 (Section [5.15](#515-evidence-and-images)) renders authored prose as live Markdown only through a screen at least as strict as v1's: it rejects closing and automation directives at the body source, rejects secrets and control characters, neutralizes cross-reference, bare-URL, commit-reference and mention autolinks, renders raw HTML inert, and resolves links and images only to existing publishable (`publish_eligible`) evidence artifacts. The author's evidence inputs are likewise restricted to policy-approved publishable evidence, so it cannot paraphrase sensitive evidence past the publication gate. On any screen or inference failure it falls back to frozen v1 escaped-text rendering, adding no new publication block. The author's control-plane inputs (the target repository's template and AGENTS.md) resolve from the trusted base, never the candidate head (Section [5.8](#58-control-plane-trust)). The publisher, not agent text, writes any close directive; the closure is an effect proposal approved through the `effect_proposal` action (digest-bound) before any `Closes` is written, and a same-repository client-supplied source URL is approved as an unverified recommendation. |
 | **Workspace-handoff uncertainty** | Resolved by the workspace-handoff spike: the strong class is declared and conformance-gated (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)); the same-VM fallback is refuted by execution, never implemented or declared. |
 | **Codex cloud review as a load-bearing dependency** | Realized 2026-07-31: the live-run trigger falsification (#427) showed no App-visible trigger path. The dependency is removed. Review is Freeside-invoked (Section [7](#7-review-policy)), and native review is best-effort extra evidence. |
 | Single-provider execution capacity | Claude usage limits can stall real work. Schedule the 1B Codex execution driver as a hedge (Section [11](#11-roadmap-build-order-and-coordination)). Keep selection explicit as a lineup line, never silent (a lineup may name the switch per failure class, Section [4](#4-the-attention-model)). Usage remains observed telemetry (Section [8](#8-observability-and-optimization-telemetry)). |
