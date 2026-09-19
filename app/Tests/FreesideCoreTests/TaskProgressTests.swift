@@ -34,6 +34,53 @@ import Testing
         }
     }
 
+    /// The chip's cut comes from what the operator can do, not the status
+    /// word: accent only where the guidance names a bound Inbox item, faint
+    /// only for a superseded run or an abandoned task, ink for everything
+    /// the daemon is doing or has said, a stopped or finished task included.
+    @Test func chipCutFollowsInboxGuidanceAndHistory() {
+        let attention: Set = ["Approval required", "Ready", "Ready degraded"]
+        let faint: Set = ["Superseded record", "Abandoned"]
+        let ink = [
+            "Queued", "No position", "Implementation", "Review", "Verification", "Stop pending", "Stop failed",
+            "Stopped", "Failed", "Finished", "History unavailable", "Run unavailable",
+        ]
+        for name in attention.union(faint).union(ink) {
+            let fixture = TaskProgressFixtures.make(name)
+            let expected: StateChip.Cut = attention.contains(name) ? .attention : faint.contains(name) ? .faint : .ink
+            #expect(TaskDisplay.statusCut(fixture.task, position: fixture.position) == expected, "\(name)")
+            if let position = fixture.position {
+                #expect(position.attention == attention.contains(name), "\(name)")
+                #expect(position.attention == position.guidance.contains("Inbox"), "\(name)")
+            }
+        }
+    }
+
+    /// The row draws the same strings VoiceOver reads, by slot: round and
+    /// hold share a line, an Inbox sentence becomes a link title without
+    /// its full stop, a capacity wait stays a sentence, and the default
+    /// guidance draws nothing while staying in the spoken order.
+    @Test func rowLinesKeepTheSpokenOrderAndChooseVisibleGuidance() throws {
+        for name in ["Queued", "No position", "Approval required", "Verification", "Stopped", "Ready"] {
+            let fixture = TaskProgressFixtures.make(name)
+            let lines = TaskDisplay.rowLines(fixture.task, position: fixture.position)
+            #expect(lines.all == TaskDisplay.progressLines(fixture.task, position: fixture.position), "\(name)")
+            #expect(lines.all.first == lines.status && lines.all.last == lines.guidance, "\(name)")
+        }
+        let approval = TaskProgressFixtures.make("Approval required")
+        #expect(
+            TaskDisplay.rowLines(approval.task, position: approval.position).visibleGuidance(attention: true)
+                == .link("Review the specification in Inbox"))
+        let queued = TaskProgressFixtures.make("Queued")
+        let queuedLines = TaskDisplay.rowLines(queued.task, position: queued.position)
+        #expect(queuedLines.visibleGuidance(attention: false) == .sentence(queuedLines.guidance))
+        let held = TaskProgressFixtures.make("Verification")
+        let heldLines = TaskDisplay.rowLines(held.task, position: held.position)
+        #expect(heldLines.visibleGuidance(attention: false) == nil)
+        #expect(heldLines.guidance == "Open task details.")
+        #expect(heldLines.facts.contains { $0.hasPrefix("Hold: ") })
+    }
+
     @Test func progressRetainsApprovalAndEveryRecordedPhase() throws {
         for name in ["Implementation", "Review", "Verification", "Failed", "Run unavailable"] {
             let fixture = TaskProgressFixtures.make(name)

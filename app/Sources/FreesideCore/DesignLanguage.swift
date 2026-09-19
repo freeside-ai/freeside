@@ -500,10 +500,13 @@ struct KeywordDisclosure<Content: View>: View {
 /// VoiceOver reads the title alone, since the chevron is decoration.
 struct FreesideLink: View {
     let title: String
+    /// The text style the link sits among: callout in a card or header,
+    /// caption inside a list row.
+    var style: Font.TextStyle = .callout
 
     var body: some View {
         Text("\(title) ›")
-            .font(FreesideFont.sans(.callout, weight: .medium))
+            .font(FreesideFont.sans(style, weight: .medium))
             .foregroundStyle(Color.accentText)
             .accessibilityLabel(title)
     }

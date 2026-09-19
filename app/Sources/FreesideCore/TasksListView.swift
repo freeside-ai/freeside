@@ -65,13 +65,6 @@ struct TasksListView: View {
             .padding(.horizontal)
             .padding(.bottom, 8)
 
-            Text("Open task details to stop queued or running work.")
-                .font(FreesideFont.caption)
-                .foregroundStyle(Color.inkDim)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal)
-                .padding(.bottom, 8)
-
             Menu {
                 Picker("Project", selection: $filter.projectID) {
                     Text("All projects").tag(String?.none)
@@ -282,11 +275,12 @@ struct TaskListFilter {
     }
 }
 
-/// One task as a ground-2 card: the name, the project, issue, and
-/// last-active meta line, the current stage and round over the stage rail,
-/// and the armed watches and deadlines of the task's runs. Selection uses a
-/// leading bar and wash, with a stronger wash under Differentiate Without
-/// Color.
+/// One task as a ground-2 card: the name, the status chip on its own line
+/// beneath it, the project, issue, and last-active meta line, the phase
+/// line, round and hold on one line, a guidance sentence only when it says
+/// more than "open this row", and the armed watches and deadlines of the
+/// task's runs. Selection uses a leading bar and wash, with a stronger wash
+/// under Differentiate Without Color.
 struct TaskRowView: View {
     @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
     let task: Components.Schemas.Task
@@ -321,7 +315,7 @@ struct TaskRowView: View {
                     .accessibilityHidden(true)
             }
             content(at: now)
-                .padding(12)
+                .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(
@@ -346,11 +340,12 @@ struct TaskRowView: View {
     /// carries the exact instant, as inbox rows do.
     @ViewBuilder
     private func metaText(at now: Date) -> some View {
-        let base = TaskDisplay.metaLine(task, now: now)
-        let line = showsIdentifier ? "\(base) · \(ShortIdentifier.short(task.id))" : base
-        let text = Text(line)
+        let identifier = showsIdentifier ? " · \(ShortIdentifier.short(task.id))" : ""
+        // VoiceOver keeps "last active"; the eye reads the time alone.
+        let text = Text(TaskDisplay.metaLine(task, now: now, labelsActivity: false) + identifier)
             .font(FreesideFont.monoCaption)
             .foregroundStyle(Color.inkDim)
+            .accessibilityLabel(TaskDisplay.metaLine(task, now: now) + identifier)
         #if os(macOS)
             text.help(TaskDisplay.exactActivityTimestamp(task))
         #else
@@ -360,19 +355,39 @@ struct TaskRowView: View {
 
     private func content(at now: Date) -> some View {
         VStack(alignment: .leading, spacing: 7) {
+            let lines = TaskDisplay.rowLines(task, position: position)
             TaskNameLabel(name: task.display_names.task)
+            // The chip sits above the meta line, but VoiceOver reads the
+            // status with the progress it heads, as it always has: the chip
+            // is hidden and the progress block speaks every string in order.
+            StateChip(label: lines.status, cut: TaskDisplay.statusCut(task, position: position))
+                .accessibilityHidden(true)
             metaText(at: now)
-            let progress = TaskDisplay.progressLines(task, position: position)
-            VStack(alignment: .leading, spacing: 5) {
-                ForEach(Array(progress.enumerated()), id: \.offset) { index, line in
-                    Text(line)
-                        .font(FreesideFont.caption)
-                        .fontWeight(index == 0 ? .semibold : .regular)
-                        .foregroundStyle(index == 0 ? Color.ink : Color.inkDim)
-                        .fixedSize(horizontal: false, vertical: true)
+            let guidance = lines.visibleGuidance(attention: position?.attention == true)
+            Group {
+                if lines.phases == nil, lines.facts.isEmpty, guidance == nil {
+                    // A task with no position draws no progress line, but
+                    // VoiceOver still reads its status and guidance after the
+                    // meta line, and an element needs a frame to be reached.
+                    Color.clear.frame(height: 1)
+                } else {
+                    VStack(alignment: .leading, spacing: 7) {
+                        if let phases = lines.phases {
+                            progressText(phases)
+                        }
+                        if !lines.facts.isEmpty {
+                            progressText(lines.facts.joined(separator: " · "))
+                        }
+                        switch guidance {
+                        case .link(let title): FreesideLink(title: title, style: .caption)
+                        case .sentence(let sentence): progressText(sentence)
+                        case nil: EmptyView()
+                        }
+                    }
                 }
             }
-            .accessibilityElement(children: .combine)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(lines.all.joined(separator: ", "))
             if !schedules.isEmpty {
                 WrappingHStack(horizontalSpacing: 6, verticalSpacing: 6) {
                     ForEach(schedules, id: \.schedule.id) { snapshot in
@@ -381,6 +396,15 @@ struct TaskRowView: View {
                 }
             }
         }
+    }
+}
+
+extension TaskRowView {
+    fileprivate func progressText(_ line: String) -> some View {
+        Text(line)
+            .font(FreesideFont.caption)
+            .foregroundStyle(Color.inkDim)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
