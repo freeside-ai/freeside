@@ -583,7 +583,13 @@ enum AttentionDisplay {
             append("Evidence digest", artifact.digest, seen: &seenEvidenceDigests)
         }
         for claim in item.agent_claims {
-            append("Claim digest", claim.digest, seen: &seenClaimDigests)
+            // The specification's daemon-bound digest is the one a reader
+            // pastes to verify the approval, so it names its own channel; every
+            // other claim keeps the generic label. The row's value is unchanged.
+            let label =
+                claim.label == AgentClaimLabels.specification
+                ? "Specification digest" : "Claim digest"
+            append(label, claim.digest, seen: &seenClaimDigests)
         }
         for digest in item.artifact_digests {
             guard representedDigests.insert(digest).inserted else { continue }
