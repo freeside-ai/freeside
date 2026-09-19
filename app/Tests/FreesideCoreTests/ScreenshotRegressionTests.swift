@@ -1653,6 +1653,13 @@
                     var externalRound = RunFixtures.reviewRound(.failed, round: 2)
                     externalRound.retry_pending = true
                     externalRound.source = .init(kind: "github")
+                    // Oldest first, as the daemon sends them: two clean rounds at
+                    // earlier heads, then the current round with findings.
+                    let threeRounds = [
+                        RunFixtures.reviewRound(.completed, round: 1),
+                        RunFixtures.reviewRound(.completed, round: 2),
+                        RunFixtures.reviewRound(.completed, round: 3, findings: true, availability: .available),
+                    ]
                     for (name, rounds) in [
                         ("unknown-external", [unknownRound, externalRound]),
                         ("pending", [RunFixtures.reviewRound(.pending)]),
@@ -1666,6 +1673,8 @@
                             ]
                         ),
                         ("failed", [RunFixtures.reviewRound(.failed)]),
+                        ("clean", [RunFixtures.reviewRound(.completed, availability: .available)]),
+                        ("three-rounds", threeRounds),
                     ] {
                         surfaces.append(
                             Surface(
@@ -1676,6 +1685,18 @@
                                         coordinator: coordinator, runID: activeRun.run.id, facts: .init(rounds: rounds)
                                     ).padding(24))))
                     }
+                    // Every fold open: the newest round's facts and the prior
+                    // rounds as verdict rows with their own facts.
+                    surfaces.append(
+                        Surface(
+                            name: "run-review-three-rounds-open-\(Int(width))-"
+                                + (colorScheme == .dark ? "dark" : "light"),
+                            width: width, colorScheme: colorScheme, nativeAppearance: true,
+                            view: AnyView(
+                                RunReviewSection(
+                                    coordinator: coordinator, runID: activeRun.run.id,
+                                    facts: .init(rounds: threeRounds), startsExpanded: true
+                                ).padding(24))))
                 }
             }
 
