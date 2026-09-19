@@ -191,6 +191,16 @@ import Testing
                 != TaskTimelineDisclosurePreferences.Section.campaign("outside-campaign").id)
     }
 
+    /// A rail entry keeps the instant its short timestamp stands for, so
+    /// the rail can offer the exact value; the spoken label is unchanged.
+    @Test func milestoneEntriesCarryTheirExactInstant() throws {
+        let run = try #require(TaskHistoryFixtures.history(.retry).sections.first?.runs.first)
+        let entries = TaskTimelinePresentation.milestoneEntries(run, now: .now)
+        #expect(entries.map(\.instant) == run.milestones.map { Optional($0.recorded_at) })
+        let entry = try #require(entries.first)
+        #expect(!entry.accessibilityLabel.contains(FreesideFormat.exactTime(try #require(entry.instant))))
+    }
+
     /// The guidance link leads to the very item whose lookup produced it.
     @Test func inboxGuidanceCarriesTheItemItNames() throws {
         let approval = TaskProgressFixtures.make("Approval required")

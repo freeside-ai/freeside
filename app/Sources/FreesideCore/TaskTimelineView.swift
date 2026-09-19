@@ -828,6 +828,7 @@ enum TaskTimelinePresentation {
                 detail: RunHistoryPresentation.detail(milestone),
                 timestamp: FreesideFormat.shortTime(
                     milestone.recorded_at, now: now, locale: locale, timeZone: timeZone),
+                instant: milestone.recorded_at,
                 state: index == 0 ? .current : .completed)
         }
     }

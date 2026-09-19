@@ -508,6 +508,9 @@ struct DecisionStageRailPresentation: Equatable {
         let detail: String?
         let context: String?
         let timestamp: String?
+        /// The instant `timestamp` shortens, so the rail can keep the exact
+        /// value one gesture away. Not part of the spoken label.
+        let instant: Date?
         let state: State
 
         init(
@@ -516,6 +519,7 @@ struct DecisionStageRailPresentation: Equatable {
             detail: String? = nil,
             context: String? = nil,
             timestamp: String? = nil,
+            instant: Date? = nil,
             state: State
         ) {
             self.id = id
@@ -523,6 +527,7 @@ struct DecisionStageRailPresentation: Equatable {
             self.detail = detail
             self.context = context
             self.timestamp = timestamp
+            self.instant = instant
             self.state = state
         }
 
@@ -979,9 +984,14 @@ struct StageRail: View {
                     .foregroundStyle(Color.inkDim)
             }
             if let timestamp = entry.timestamp {
-                Text(timestamp)
+                let text = Text(timestamp)
                     .font(FreesideFont.monoCaption)
                     .foregroundStyle(Color.inkDim)
+                if let instant = entry.instant {
+                    text.exactInstant(instant)
+                } else {
+                    text
+                }
             }
         }
         .frame(maxWidth: axis == .horizontal ? .infinity : nil, alignment: .leading)
