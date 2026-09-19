@@ -1830,4 +1830,5 @@ Revision 61 ("Durable Task Cancellation Requests"):
    summaries never supply PR prose. Literal operator inputs remain unchanged.
    Same-candidate recovery reconstructs identical metadata; an authorized
    successor supplies its own whole-change account. (Owner-assigned #1382;
-   [decision note](../../devlog/2026-09-17-1430-client-publication-metadata.md).)
+   [decision note](../../devlog/2026-09-17-1430-client-publication-metadata.md);
+   [ADR 0003](../decisions/0003-author-client-pr-metadata-from-a-frozen-recipe.md).)

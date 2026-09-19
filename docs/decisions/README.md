@@ -6,3 +6,4 @@ The decisions record remains the index: [`docs/plan.md` §13](../plan.md) for th
 
 - [`0001-license-freeside-under-agpl.md`](0001-license-freeside-under-agpl.md): License Freeside under AGPL-3.0-or-later.
 - [`0002-publish-reviewer-instruction-edits-as-advisory.md`](0002-publish-reviewer-instruction-edits-as-advisory.md): Publish reviewer-instruction edits as advisory findings.
+- [`0003-author-client-pr-metadata-from-a-frozen-recipe.md`](0003-author-client-pr-metadata-from-a-frozen-recipe.md): Author client PR metadata from a frozen recipe.

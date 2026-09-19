@@ -4861,7 +4861,8 @@ Revision 64 ("Author PR Metadata with a Judgment Role"):
    deferrals; the spine places them in a wave when it schedules them (expected
    1B.1), and this revision does not itself schedule them or edit the Section
    [11](#11-roadmap-build-order-and-coordination) table. (Owner-assigned #1414;
-   [decision note](../devlog/2026-09-19-0823-publication-author-site.md).)
+   [decision note](../devlog/2026-09-19-0823-publication-author-site.md);
+   [ADR 0003](decisions/0003-author-client-pr-metadata-from-a-frozen-recipe.md).)
 
 ## 14. Risks
 
