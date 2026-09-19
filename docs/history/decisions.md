@@ -1818,3 +1818,16 @@ Revision 61 ("Durable Task Cancellation Requests"):
    Run history, receipts, PRs and completions remain intact. Runtime stopping
    and client controls remain #1368 and #1369. (Owner-assigned #1344 contract;
    [decision note](../../devlog/2026-09-17-0830-confirmed-task-lifecycle.md).)
+
+---
+
+## Revision 63 ("Candidate-Bound Public PR Metadata")
+
+1. **Client publication freezes a recipe, then renders a public claim.** New
+   client submissions bind a versioned metadata recipe and attribution before
+   reserving implementation identity. Publication consumes the current
+   candidate producer's separate public-intended account; task names and private
+   summaries never supply PR prose. Literal operator inputs remain unchanged.
+   Same-candidate recovery reconstructs identical metadata; an authorized
+   successor supplies its own whole-change account. (Owner-assigned #1382;
+   [decision note](../../devlog/2026-09-17-1430-client-publication-metadata.md).)
