@@ -74,6 +74,9 @@
         private var screenshotHoveredRow: Row?
 
         @Environment(\.dismiss) private var dismiss
+        @Environment(\.timeZone) private var timeZone
+        @Environment(\.locale) private var locale
+        @Environment(\.pinnedNow) private var pinnedNow
         /// The panel body holds keyboard focus for its whole life, the way a
         /// menu does; the arrow keys move a highlight over the rows rather
         /// than focus itself, since a macOS button will not take programmatic
@@ -317,9 +320,15 @@
         private var stateSecondaryLine: Text? {
             switch state {
             case .running(let health, _):
-                (Text("v\(health.version) · started ") + Text(health.startedAt, format: Self.startedFormat))
-                    .font(FreesideFont.monoCaption)
-                    .foregroundStyle(Color.inkDim)
+                // The one short time format: the year appears only when
+                // the daemon has been up since another year.
+                Text(
+                    "v\(health.version) · started "
+                        + FreesideFormat.shortTime(
+                            health.startedAt, now: pinnedNow ?? Date(), locale: locale, timeZone: timeZone)
+                )
+                .font(FreesideFont.monoCaption)
+                .foregroundStyle(Color.inkDim)
             case .stopped:
                 callout("Actions in the app are disabled until it starts.")
             case .needsApproval:
@@ -336,8 +345,6 @@
                 .font(FreesideFont.callout)
                 .foregroundStyle(Color.inkDim)
         }
-
-        private static let startedFormat = Date.FormatStyle.dateTime.month(.abbreviated).day().hour().minute()
 
         /// VoiceOver reads the state block as one element, in the sentence
         /// the visual line and its explanation add up to.
