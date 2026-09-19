@@ -28,15 +28,20 @@ struct SpecificationReaderView: View {
     let preview: DecisionDetailView.NonImagePreview
     let digest: String
     let rendersScrollableContent: Bool
+    /// A screenshot surface opens the technical details to capture that state;
+    /// live use starts collapsed, matching the timeline sections (#1379).
+    let expandsTechnicalDetails: Bool
     let blocks: [SpecificationBlock]
 
     init(
         text: String, mediaType: Components.Schemas.ClaimText.media_typePayload,
-        digest: String, rendersScrollableContent: Bool = true
+        digest: String, rendersScrollableContent: Bool = true,
+        expandsTechnicalDetails: Bool = false
     ) {
         preview = DecisionDetailView.NonImagePreview(bytes: Data(text.utf8))
         self.digest = digest
         self.rendersScrollableContent = rendersScrollableContent
+        self.expandsTechnicalDetails = expandsTechnicalDetails
         blocks = Self.blocks(for: preview.text ?? "", mediaType: mediaType)
     }
 
@@ -79,10 +84,9 @@ struct SpecificationReaderView: View {
                     description: "This \(byteCount(preview.byteCount)) specification is not text.")
             }
 
-            Text("Daemon-bound digest `\(digest)`")
-                .font(FreesideFont.monoCaption)
-                .foregroundStyle(Color.inkDim)
-                .textSelection(.enabled)
+            TechnicalDetailsSection(
+                rows: [.init(label: "Daemon-bound digest", value: digest)],
+                startsExpanded: expandsTechnicalDetails)
         }
     }
 

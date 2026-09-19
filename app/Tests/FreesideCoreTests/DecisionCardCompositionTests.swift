@@ -693,4 +693,24 @@ import Testing
             DecisionDetailView.evidencePointerAccessibilityLabel(3)
                 == "3 attachments, shown in the inspector")
     }
+
+    /// The "Scope kept" row names the exact paths the operator left unchanged,
+    /// so a long path prints whole rather than shortened: shortening a path a
+    /// reader must recognize would lose meaning.
+    @Test func scopeKeptRowKeepsTheWholePathUnshortened() throws {
+        let longPath =
+            "daemon/internal/store/production_attempt/migrations/0007_add_publish_eligible.go"
+        var item = AttentionFixtures.fixture(type: .ready_for_final_review).item
+        item.scope_decision = .init(
+            value1: .init(
+                paths: [longPath], declared_paths: [longPath], head_sha: item.pr_head_sha,
+                command_id: "scope-decision-long",
+                answer: "Keep scope.", decided_at: Date(timeIntervalSince1970: 0)))
+
+        let checklist = try #require(DecisionChecklistPresentation(item))
+
+        let scopeRow = try #require(checklist.rows.first { $0.label == "Scope kept" })
+        #expect(scopeRow.value.contains(longPath))
+        #expect(longPath.count > FactRow.stackThreshold)
+    }
 }

@@ -404,8 +404,26 @@ import Testing
 
         #expect(rows.count == item.artifact_digests.count)
         #expect(rows.first?.label == "Evidence digest")
-        #expect(rows.dropFirst().allSatisfy { $0.label == "Claim digest" })
+        // The specification claim names its own channel; every other claim
+        // keeps the generic label, and no row's value changes.
+        let specDigest = item.agent_claims.first { $0.label == "Specification" }?.digest
+        #expect(rows.contains { $0.label == "Specification digest" && $0.value == specDigest })
+        #expect(
+            rows.dropFirst().allSatisfy {
+                $0.label == "Claim digest" || $0.label == "Specification digest"
+            })
         #expect(Set(rows.map(\.value)) == Set(item.artifact_digests))
+    }
+
+    @Test func specificationClaimDigestNamesItsOwnChannel() {
+        let item = AttentionFixtures.fixture(type: .spec_approval).item
+        let specDigest = item.agent_claims.first { $0.label == "Specification" }?.digest
+
+        let rows = AttentionDisplay.attachmentDigestRows(item)
+
+        let specRows = rows.filter { $0.label == "Specification digest" }
+        #expect(specRows.map(\.value) == [specDigest])
+        #expect(!rows.contains { $0.label == "Claim digest" && $0.value == specDigest })
     }
 
     @Test func sharedAttachmentDigestKeepsBothTrustChannelLabels() {
@@ -416,8 +434,11 @@ import Testing
 
         let rows = AttentionDisplay.attachmentDigestRows(item)
 
+        // agent_claims[0] on this fixture is the specification claim, so its
+        // digest row reads "Specification digest"; the evidence channel keeps
+        // the same value under its own label from the separate seen-set.
         #expect(rows.contains(.init(label: "Evidence digest", value: digest)))
-        #expect(rows.contains(.init(label: "Claim digest", value: digest)))
+        #expect(rows.contains(.init(label: "Specification digest", value: digest)))
     }
 
     @Test func contextMenuEvidenceDigestsAreUniqueAndStable() {
