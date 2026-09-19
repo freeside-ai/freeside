@@ -329,8 +329,8 @@ struct DecisionChecklistPresentation: Equatable {
                 .init(
                     label: "Bound to",
                     value:
-                        "\(AttentionDisplay.shortRevision(detail.candidate_head)) on "
-                        + "\(detail.base.base_ref)@\(AttentionDisplay.shortRevision(detail.base.base_sha))",
+                        "Head \(AttentionDisplay.shortRevision(detail.candidate_head)) · "
+                        + "Base \(detail.base.base_ref)@\(AttentionDisplay.shortRevision(detail.base.base_sha))",
                     result: stale ? .failed : .passed))
         }
         if let invalidation {

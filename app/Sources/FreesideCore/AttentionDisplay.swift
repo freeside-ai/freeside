@@ -755,15 +755,16 @@ enum AttentionDisplay {
         return rows
     }
 
-    /// A revision shortened for a card row; the inspector keeps the full
-    /// daemon value. Only a hex object name is abbreviated. The other
+    /// A revision shortened for a card row to the eight characters every
+    /// binding line uses; the inspector keeps the full daemon value. Only a
+    /// hex object name is abbreviated. The other
     /// coordinates a readiness invalidation carries on its axis, a base ref
     /// and a "repository_id#pr_number" identity, put their meaning in the
     /// tail, so truncating them can render two different values identically
     /// and hide the very change the row exists to name.
     static func shortRevision(_ value: String) -> String {
-        guard value.count > 12, value.allSatisfy(\.isHexDigit) else { return value }
-        return String(value.prefix(12))
+        guard value.count > 8, value.allSatisfy(\.isHexDigit) else { return value }
+        return String(value.prefix(8))
     }
 
     static func label(_ state: Components.Schemas.ReadinessRequirementState) -> String {

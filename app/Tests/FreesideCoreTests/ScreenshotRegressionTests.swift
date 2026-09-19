@@ -1664,7 +1664,7 @@
                                 view: AnyView(
                                     VStack(alignment: .leading, spacing: 14) {
                                         Text("Reviewer output").font(FreesideFont.title)
-                                        Text("Agent claims · Round \(round.round) · Head \(round.head_sha.prefix(12))")
+                                        Text("Agent claims · Round \(round.round) · Head \(round.head_sha.prefix(8))")
                                             .font(FreesideFont.caption)
                                         Text("Private, sensitive output. Not publishable verifier evidence.")
                                             .font(FreesideFont.caption).foregroundStyle(Color.inkDim)
