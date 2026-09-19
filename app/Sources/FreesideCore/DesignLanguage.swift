@@ -495,6 +495,26 @@ struct KeywordDisclosure<Content: View>: View {
     }
 }
 
+/// The one chronology marker: every newest-first list (milestones, review
+/// rounds, task events) marks entry 0 with a filled ink dot and every later
+/// entry with a hollow ring. The stage rail draws the same two markers.
+struct ChronologyMarker: View {
+    static let diameter: CGFloat = 10
+    let isCurrent: Bool
+
+    var body: some View {
+        Group {
+            if isCurrent {
+                Circle().fill(Color.ink)
+            } else {
+                Circle().strokeBorder(Color.milestonePrior, lineWidth: 1.5)
+            }
+        }
+        .frame(width: Self.diameter, height: Self.diameter)
+        .accessibilityHidden(true)
+    }
+}
+
 /// Navigation text: accent, medium, a trailing "›". Wraps a `Button` (or
 /// `NavigationLink`) label; an action that submits keeps a plain `Button`.
 /// VoiceOver reads the title alone, since the chevron is decoration.

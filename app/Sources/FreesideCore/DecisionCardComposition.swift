@@ -945,20 +945,17 @@ struct StageRail: View {
     /// never says.
     @ViewBuilder
     private func marker(_ state: DecisionStageRailPresentation.State) -> some View {
-        Group {
-            switch state {
-            case .completed:
-                Circle().strokeBorder(Color.milestonePrior, lineWidth: 1.5)
-            case .current:
-                Circle().fill(Color.ink)
-            case .failed:
-                Circle().fill(Color.waxText)
-            case .pending:
-                Circle().fill(Color.milestoneConnector)
-            }
+        switch state {
+        case .completed:
+            ChronologyMarker(isCurrent: false)
+        case .current:
+            ChronologyMarker(isCurrent: true)
+        case .failed, .pending:
+            Circle()
+                .fill(state == .failed ? Color.waxText : Color.milestoneConnector)
+                .frame(width: ChronologyMarker.diameter, height: ChronologyMarker.diameter)
+                .accessibilityHidden(true)
         }
-        .frame(width: 10, height: 10)
-        .accessibilityHidden(true)
     }
 
     /// The entry the rail stands on (current, or failed in wax) reads
