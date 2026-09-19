@@ -1832,3 +1832,41 @@ Revision 61 ("Durable Task Cancellation Requests"):
    successor supplies its own whole-change account. (Owner-assigned #1382;
    [decision note](../../devlog/2026-09-17-1430-client-publication-metadata.md);
    [ADR 0003](../decisions/0003-author-client-pr-metadata-from-a-frozen-recipe.md).)
+
+---
+
+## Revision 64 ("Author PR Metadata with a Judgment Role")
+
+1. **A publication-author role writes public PR prose after review; the
+   publisher writes any close directive, enacted at merge.** The publication
+   author is a first-class judgment role, like the specifier, implementer,
+   remediator and reviewer: a refinable prompt and per-role agent and effort
+   selection through the admitted-agent lineup, but no workspace or tools and
+   advisory authority. It runs once after the final clean review, using
+   verification and review outcomes, and its output is stored once and
+   digest-bound. Its prose is advisory (never a policy input); unavailable
+   inference or a screen failure falls back to the path's deterministic text and
+   adds no publication block. The trusted publisher, not the agent, writes any
+   `Closes`, and only from a source the daemon can trust to name the resolved
+   issue: a daemon-bound `issue_subject` source, or a same-repository
+   client-supplied source URL as a human-confirmed recommendation. The closure
+   recommendation is an effect-registry proposal approved through the
+   `effect_proposal` action, which binds the proposal digest (verified for an
+   `issue_subject` source, an unverified recommendation for a same-repo URL); on
+   approval the publisher writes `Closes` and merging closes the issue.
+   Control-plane inputs (the target repository's template and AGENTS.md) resolve
+   from the trusted base, never the candidate head. v2 renders Markdown live
+   through a screen at least as strict as v1's, rejecting close and automation
+   directives at the body source and keeping cross-references, mentions, raw HTML
+   and invented links and images inert. This decides lineup participation for the
+   publication author; #900 covers extending it to the other judgment sites. This
+   revises revision 63's decisions that client work has no generated closing
+   directive, that no inference call feeds publication and that agent prose
+   renders only as escaped text; the first real client run (gh-imgup #82) merged
+   PR #110 without the `Closes` keyword its target repository's template
+   requires, which showed the gap. The decomposed build units are unscheduled
+   deferrals; the spine places them in a wave when it schedules them (expected
+   1B.1), and this revision does not itself schedule them or edit the Section
+   [11](#11-roadmap-build-order-and-coordination) table. (Owner-assigned #1414;
+   [decision note](../../devlog/2026-09-19-0823-publication-author-site.md);
+   [ADR 0003](../decisions/0003-author-client-pr-metadata-from-a-frozen-recipe.md).)
