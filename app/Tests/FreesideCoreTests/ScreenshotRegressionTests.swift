@@ -2036,7 +2036,53 @@
             }
 
             surfaces.append(contentsOf: try taskStopSurfaces())
+            surfaces.append(contentsOf: taskStyleSurfaces())
             return surfaces
+        }
+
+        /// The pieces the task surfaces share, by day and by dusk: the three
+        /// status-chip cuts (one long enough to wrap), a keyword disclosure
+        /// closed and open, the navigation link, and a newest-first rail with
+        /// its filled current marker over hollow prior rings.
+        private func taskStyleSurfaces() -> [Surface] {
+            let rail = DecisionStageRailPresentation.timeline(entries: [
+                .init(
+                    id: "2", title: "Review round 3", detail: "Findings",
+                    timestamp: FreesideFormat.shortTime(
+                        screenshotNow, now: screenshotNow, locale: Locale(identifier: "en_US_POSIX"),
+                        timeZone: screenshotTimeZone),
+                    state: .current),
+                .init(id: "1", title: "Implementation completed", detail: "Pass 2", state: .completed),
+                .init(id: "0", title: "Run submitted", state: .completed),
+            ])
+            return [ColorScheme.light, .dark].map { scheme in
+                Surface(
+                    name: "task-style-\(scheme)", width: 390, colorScheme: scheme,
+                    view: AnyView(
+                        VStack(alignment: .leading, spacing: 12) {
+                            StateChip(label: "Specification Approval Required", cut: .attention)
+                            StateChip(label: "Stop Requested · Awaiting Confirmation", cut: .ink)
+                            StateChip(label: "Superseded Run · Historical", cut: .faint)
+                            StateChip(
+                                label: "Failed to Stop · Execution May Continue · Inspect the Recorded Outcome",
+                                cut: .ink)
+                            KeywordDisclosure(
+                                keyword: "Task events", summary: "6 recorded · newest Sep 12, 9:41 AM",
+                                isExpanded: .constant(false)
+                            ) { EmptyView() }
+                            KeywordDisclosure(
+                                keyword: "Run details", summary: "Implementation · retry of attempt 1",
+                                isExpanded: .constant(true)
+                            ) {
+                                Text("Reason: retry").font(FreesideFont.callout)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            FreesideLink(title: "Open run history")
+                            StageRail(
+                                title: nil, presentation: rail, axis: .vertical, showsSummaryText: false,
+                                accessibilityStyle: .entries)
+                        }.padding(24).foregroundStyle(Color.ink).background(Color.ground)))
+            }
         }
 
         private func taskStopSurfaces() throws -> [Surface] {
@@ -2295,6 +2341,7 @@
                 .environment(\.locale, Locale(identifier: "en_US_POSIX"))
                 .environment(\.calendar, Calendar(identifier: .gregorian))
                 .environment(\.timeZone, timeZone)
+                .environment(\.pinnedNow, screenshotNow)
                 .frame(width: width, alignment: .topLeading)
                 .fixedSize(horizontal: false, vertical: true)
                 .background(Color.ground)

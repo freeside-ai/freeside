@@ -8,6 +8,7 @@ struct RunReviewSection: View {
     var hasTimeline = true
     @Environment(\.timeZone) private var timeZone
     @Environment(\.locale) private var locale
+    @Environment(\.pinnedNow) private var pinnedNow
 
     static func sourceLabel(_ kind: String) -> String {
         switch kind {
@@ -116,12 +117,14 @@ struct RunReviewSection: View {
             if let requested = round.requested_at {
                 Text("Requested: \(formattedTime(requested))")
                     .font(FreesideFont.caption)
+                    .exactInstant(requested)
             } else {
                 Text("Request time unavailable").font(FreesideFont.caption)
             }
             if let completed = round.completed_at {
                 Text("Completed: \(formattedTime(completed))")
                     .font(FreesideFont.caption)
+                    .exactInstant(completed)
             } else {
                 Text(Self.missingCompletionMessage(round.state)).font(FreesideFont.caption)
             }
@@ -147,7 +150,7 @@ struct RunReviewSection: View {
     }
 
     private func formattedTime(_ date: Date) -> String {
-        date.formatted(Date.FormatStyle(date: .abbreviated, time: .standard, locale: locale, timeZone: timeZone))
+        FreesideFormat.shortTime(date, now: pinnedNow ?? Date(), locale: locale, timeZone: timeZone)
     }
 }
 

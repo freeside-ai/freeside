@@ -40,6 +40,7 @@ struct TaskTimelineView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.timeZone) private var timeZone
     @Environment(\.locale) private var locale
+    @Environment(\.pinnedNow) private var pinnedNow
 
     private var timeline: Components.Schemas.TaskTimeline? {
         coordinator.taskTimelinesByTaskID[snapshot.task.id]
@@ -275,7 +276,8 @@ struct TaskTimelineView: View {
                 StageRail(
                     title: nil,
                     presentation: .timeline(
-                        entries: TaskTimelinePresentation.milestoneEntries(run, locale: locale, timeZone: timeZone)),
+                        entries: TaskTimelinePresentation.milestoneEntries(
+                            run, now: pinnedNow ?? Date(), locale: locale, timeZone: timeZone)),
                     axis: .vertical,
                     showsSummaryText: false,
                     accessibilityStyle: .entries)
@@ -330,8 +332,8 @@ struct TaskTimelineView: View {
 
     private func eventTime(_ event: Components.Schemas.TaskEvent) -> some View {
         Text(
-            event.recorded_at.formatted(
-                Date.FormatStyle(date: .abbreviated, time: .shortened, locale: locale, timeZone: timeZone))
+            FreesideFormat.shortTime(
+                event.recorded_at, now: pinnedNow ?? Date(), locale: locale, timeZone: timeZone)
         )
         .font(FreesideFont.monoCaption)
         .foregroundStyle(Color.inkDim)
@@ -586,15 +588,16 @@ enum TaskTimelinePresentation {
     /// because its source is oldest first; this source already leads with
     /// the newest.
     static func milestoneEntries(
-        _ run: Components.Schemas.TaskTimelineRun, locale: Locale = .current, timeZone: TimeZone = .current
+        _ run: Components.Schemas.TaskTimelineRun, now: Date = Date(), locale: Locale = .current,
+        timeZone: TimeZone = .current
     ) -> [DecisionStageRailPresentation.Entry] {
         run.milestones.enumerated().map { index, milestone in
             DecisionStageRailPresentation.Entry(
                 id: "\(index)-\(milestone.kind.rawValue)-\(milestone.recorded_at.timeIntervalSince1970)",
                 title: RunDisplay.label(milestone.kind),
                 detail: RunHistoryPresentation.detail(milestone),
-                timestamp: milestone.recorded_at.formatted(
-                    Date.FormatStyle(date: .abbreviated, time: .shortened, locale: locale, timeZone: timeZone)),
+                timestamp: FreesideFormat.shortTime(
+                    milestone.recorded_at, now: now, locale: locale, timeZone: timeZone),
                 state: index == 0 ? .current : .completed)
         }
     }

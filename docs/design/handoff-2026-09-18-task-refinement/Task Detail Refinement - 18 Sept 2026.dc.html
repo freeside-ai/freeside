@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+  <meta name="design_doc_mode" content="canvas" />
+  <link href="https://fonts.googleapis.com/css2?family=Source+Serif+Pro:ital,wght@0,400;0,500;1,400&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet" />
+  <style>
+    body { margin: 0; background: #DAD3BF; }
+    a { color: #8F6B14; } a:hover { color: #B99A4A; }
+  </style>
+</helmet>
+<div style="position: relative; width: 2760px; height: 2680px; font-family: 'IBM Plex Sans', sans-serif; color: #2B2416;">
+
+<div style="position: absolute; left: 40px; top: 40px; width: 2680px; font-size: 12.5px; line-height: 1.6; color: #675D49;">
+  <span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 22px; color: #2B2416;">Task detail refinement, 18 Sept 2026</span> — one pass over everything the Tasks work added this week, drawn against <a href="Interfaces - 18 Sept 2026.dc.html">the 18 Sept canvas</a>. Four aims: one visual vocabulary for rows, cards, chips, times, and links; status that reads at a glance again (a bordered mono state chip beside the name, accent only when the operator is needed); progressive disclosure so the current run is the page and history is one click away; and one chronology rule — newest first, current marked — applied to campaigns, runs, milestones, rounds, and events alike. <b>Scope:</b> client presentation only. Every proposal composes components already in <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px;">FreesideCore</span> — StateChip, KeywordLabel, TechnicalDetailsSection, StageRail, DisclosureGroup, FreesideActionButtonStyle — over the daemon's existing snapshots and timeline. No API, schema, or daemon change is assumed anywhere on this canvas.
+</div>
+
+<!-- ═══════════ ROW 1 ═══════════ -->
+
+<!-- Recipe sheet -->
+<div style="position: absolute; left: 40px; top: 130px; width: 620px;" data-screen-label="Unification recipes — nine rules">
+  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: #94896E; margin-bottom: 12px;">Recipes · what every task surface shares · day</div>
+  <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 12px; padding: 20px 22px; display: flex; flex-direction: column; gap: 14px; font-size: 12px; line-height: 1.55;">
+    <div style="display: grid; grid-template-columns: 22px 1fr 190px; gap: 8px 14px; align-items: start;">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #94896E; padding-top: 2px;">01</span>
+      <div><b>Section heads are keywords.</b> Mono caps at every level — Campaign, Review, Milestones, Run details, Task Events, Technical details. The serif is reserved for the task name and the attempt title. No more serif "Review" beside a keyword "Milestones".</div>
+      <div style="display: flex; flex-direction: column; gap: 6px; padding-top: 2px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #675D49;">Review</span><span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 15px;">Attempt 2</span></div>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #94896E; padding-top: 2px;">02</span>
+      <div><b>One card, one nesting.</b> Ground-2 fill, rule border, 8pt radius, 14pt padding. Anything inside a card sits on ground-1 with no border. The review round's outline-only card, the row's 12pt padding, and the nested ground-2-in-ground-2 review card all fold into this.</div>
+      <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 8px; padding: 10px;"><div style="background: #EDE7D6; border-radius: 6px; height: 26px;"></div></div>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #94896E; padding-top: 2px;">03</span>
+      <div><b>One state chip.</b> The inbox badge recipe — mono, 1pt border, 3pt radius, title case, wrapping. Under a name it takes its own line, always; beside a title only when the title is fixed vocabulary (Attempt 2, Round 3). Ink on rule-strong by default; accent only while an Inbox item bound to this task waits on the operator; faint for historical. Review's capsule pill and the row's bold sentence become this chip.</div>
+      <div style="display: flex; gap: 6px; flex-wrap: wrap; padding-top: 2px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #877D5C; color: #2B2416; border-radius: 3px; padding: 2px 6px;">On Hold</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #8F6B14; color: #7D5C0E; border-radius: 3px; padding: 2px 6px;">Approval Required</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #C9BFA2; color: #675D49; border-radius: 3px; padding: 2px 6px;">Historical</span></div>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #94896E; padding-top: 2px;">04</span>
+      <div><b>One time.</b> Mono caption, "Sep 12, 9:41 AM"; the year only when it differs; seconds never. The exact instant is hover on Mac and long-press on iPhone. "Requested: Sep 12, 2026 at 8:13:02 AM" and "Sep 12, 2026 at 9:41 AM" both become this.</div>
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49; padding-top: 3px;">Sep 12, 9:41 AM</div>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #94896E; padding-top: 2px;">05</span>
+      <div><b>One binding line.</b> "Head 4be1d0a7 · Base 7b40d8e1" — eight characters, capitalised labels, middle dots, mono. Full digests live in Technical details.</div>
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49; padding-top: 3px;">Head 4be1d0a7 · Base 7b40d8e1</div>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #94896E; padding-top: 2px;">06</span>
+      <div><b>One link.</b> Accent text, medium weight, trailing ›, verb first: Open run history ›, Inspect reviewer output ›, Review in Inbox ›. No bare system buttons for navigation.</div>
+      <div style="color: #7D5C0E; font-weight: 500; padding-top: 2px;">Open run history ›</div>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #94896E; padding-top: 2px;">07</span>
+      <div><b>One disclosure.</b> A keyword with a leading accent chevron and a trailing mono summary — the count or the newest time — so a closed section still says what it holds. Collapsed by default everywhere it appears.</div>
+      <div style="display: flex; align-items: center; gap: 8px; padding-top: 2px;"><span style="color: #7D5C0E; font-size: 9px;">▶</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #675D49;">Task events</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #94896E; margin-left: auto;">6 · Sep 12</span></div>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #94896E; padding-top: 2px;">08</span>
+      <div><b>One chronology.</b> Newest first in every list — campaigns, runs, milestones, rounds, events. The top entry is current and carries the filled ink marker; prior entries are hollow. The stage rail already does this; the review list, event list, and campaign order join it.</div>
+      <div style="display: flex; flex-direction: column; gap: 0; padding-top: 4px;"><div style="display: flex; gap: 8px; align-items: center;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #2B2416; display: block;"></span><span style="font-size: 11px; font-weight: 600;">Newest · current</span></div><span style="width: 2px; height: 10px; background: #DDD4B9; margin-left: 3px; display: block;"></span><div style="display: flex; gap: 8px; align-items: center;"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #B9AF92; box-sizing: border-box; display: block;"></span><span style="font-size: 11px; color: #675D49;">Prior</span></div></div>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #94896E; padding-top: 2px;">09</span>
+      <div><b>One guidance sentence, last.</b> Each row and each card ends with at most one sentence saying what the operator can do, in the link recipe when it names a destination. Status never carries the instruction, and the list caption ("Open task details to stop…") goes.</div>
+      <div style="color: #7D5C0E; font-weight: 500; padding-top: 2px; font-size: 11px;">Adjudicate findings in Inbox ›</div>
+    </div>
+  </div>
+</div>
+
+<!-- Task row · as built → proposed -->
+<div style="position: absolute; left: 700px; top: 130px; width: 760px;" data-screen-label="Task row — as built vs proposed, day">
+  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: #94896E; margin-bottom: 12px;">Task row · state chip under the name · as built → proposed · day</div>
+  <div style="display: flex; gap: 20px; align-items: flex-start;">
+    <sc-if value="{{ showAsBuilt }}" hint-placeholder-val="{{ true }}">
+    <div style="width: 330px; display: flex; flex-direction: column; gap: 8px;">
+      <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 7px;">
+        <div style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 14.3px;">Idempotent decision commands</div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">owner/repo · #724 · last active 30m ago</div>
+        <div style="display: flex; flex-direction: column; gap: 5px; font-size: 11px; line-height: 1.4; color: #675D49;"><span style="font-weight: 600; color: #2B2416;">On Hold</span><span>Specification Completed · Implementation Current · Review Pending · Verification Pending</span><span>Round 3</span><span>Hold: Finding adjudication</span><span>Open task details.</span></div>
+      </div>
+      <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 7px;">
+        <div style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 14.3px;">Bound operator task names <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.08em; color: #675D49; margin-left: 4px;">AGENT</span></div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">owner/repo · #731 · last active 2h ago</div>
+        <div style="display: flex; flex-direction: column; gap: 5px; font-size: 11px; line-height: 1.4; color: #675D49;"><span style="font-weight: 600; color: #2B2416;">Specification Approval Required</span><span>Specification Current · Implementation Pending · Review Pending · Verification Pending</span><span>Round 1</span><span>Review the specification in Inbox.</span></div>
+      </div>
+      <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 7px;">
+        <div style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 14.3px;">Codex credential renewal</div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">owner/repo · last active 9m ago · task-b2d7</div>
+        <div style="display: flex; flex-direction: column; gap: 5px; font-size: 11px; line-height: 1.4; color: #675D49;"><span style="font-weight: 600; color: #2B2416;">Stop Requested · Awaiting Confirmation</span><span>Specification Completed · Implementation Current · Review Pending · Verification Pending</span><span>Round 1</span><span>Last recorded hold: Agent question</span><span>Open task details.</span></div>
+      </div>
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: #94896E;">As built · status as a bold sentence · five stacked lines</div>
+    </div>
+    </sc-if>
+    <div style="width: 330px; display: flex; flex-direction: column; gap: 8px;">
+      <div style="display: flex; background: #ECE4CD; border-radius: 8px; overflow: hidden;">
+        <div style="width: 4px; background: #7D5C0E;"></div>
+        <div style="flex: 1; padding: 14px; display: flex; flex-direction: column; gap: 7px;">
+          <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;"><span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 14.3px;">Idempotent decision commands</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #8F6B14; color: #7D5C0E; border-radius: 3px; padding: 2px 6px;">On Hold</span></div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">owner/repo · #724 · 30m ago</div>
+          <div style="font-size: 11px; line-height: 1.4; color: #675D49;">Specification Completed · Implementation Current · Review Pending · Verification Pending</div>
+          <div style="font-size: 11px; line-height: 1.4; color: #675D49;">Round 3 · Hold: Finding adjudication</div>
+          <div style="font-size: 11px; color: #7D5C0E; font-weight: 500;">Adjudicate findings in Inbox ›</div>
+        </div>
+      </div>
+      <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 7px;">
+        <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;"><span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 14.3px;">Bound operator task names <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.08em; color: #675D49; margin-left: 4px;">AGENT</span></span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #8F6B14; color: #7D5C0E; border-radius: 3px; padding: 2px 6px;">Specification Approval Required</span></div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">owner/repo · #731 · 2h ago</div>
+        <div style="font-size: 11px; line-height: 1.4; color: #675D49;">Specification Current · Implementation Pending · Review Pending · Verification Pending</div>
+        <div style="font-size: 11px; line-height: 1.4; color: #675D49;">Round 1</div>
+        <div style="font-size: 11px; color: #7D5C0E; font-weight: 500;">Review the specification in Inbox ›</div>
+      </div>
+      <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 7px;">
+        <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;"><span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 14.3px;">Codex credential renewal</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #877D5C; color: #2B2416; border-radius: 3px; padding: 2px 6px;">Stop Requested · Awaiting Confirmation</span></div>
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">owner/repo · 9m ago · task-b2d7</div>
+        <div style="font-size: 11px; line-height: 1.4; color: #675D49;">Specification Completed · Implementation Current · Review Pending · Verification Pending</div>
+        <div style="font-size: 11px; line-height: 1.4; color: #675D49;">Round 1 · Last recorded hold: Agent question</div>
+      </div>
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: #94896E;">Proposed · chip on its own line under the name · round and hold on one line · guidance is a link or absent</div>
+    </div>
+  </div>
+  <p style="font-size: 12px; line-height: 1.55; color: #675D49; margin: 12px 0 0;">The status text is unchanged — it stays the daemon's full vocabulary, wrapping when long — but it moves into the chip on its own line directly under the name, where the eye lands second and every row keeps the same silhouette. Beside a title the chip is allowed only where the title is fixed vocabulary that never wraps — Attempt 2, Round 3. The chip takes the accent only while an Inbox item bound to this task waits on the operator (the same predicate that produces Inbox guidance today); every other state is ink, so a list of active work is calm and the two rows that need a decision stand out. Round and hold share a line; "Open task details." is dropped because the row is the affordance. The accessibility element still combines the same strings in the same order.</p>
+</div>
+
+<!-- Chip catalogue -->
+<div style="position: absolute; left: 1500px; top: 130px; width: 600px;" data-screen-label="State chip catalogue — day and dusk, attention rule">
+  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: #94896E; margin-bottom: 12px;">State chip · full vocabulary · three cuts · day and dusk</div>
+  <div style="display: flex; flex-direction: column; border-radius: 12px; overflow: hidden; border: 1px solid #C9BFA2;">
+    <div style="background: #F3EEE1; padding: 18px 20px; display: flex; flex-direction: column; gap: 14px;">
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #7D5C0E;">Attention · an Inbox item bound to this task waits on you</div>
+        <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #8F6B14; color: #7D5C0E; border-radius: 3px; padding: 2px 6px;">Specification Approval Required</span>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #8F6B14; color: #7D5C0E; border-radius: 3px; padding: 2px 6px;">Ready for Final Review</span>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #8F6B14; color: #7D5C0E; border-radius: 3px; padding: 2px 6px;">Ready for Final Review (Degraded)</span>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #8F6B14; color: #7D5C0E; border-radius: 3px; padding: 2px 6px;">On Hold</span>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #8F6B14; color: #7D5C0E; border-radius: 3px; padding: 2px 6px;">Execution Failed</span>
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #675D49;">Ink · the daemon is working or has spoken; nothing to do here</div>
+        <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #877D5C; color: #2B2416; border-radius: 3px; padding: 2px 6px;">In Progress</span>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #877D5C; color: #2B2416; border-radius: 3px; padding: 2px 6px;">Queued</span>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #877D5C; color: #2B2416; border-radius: 3px; padding: 2px 6px;">On Hold</span>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #877D5C; color: #2B2416; border-radius: 3px; padding: 2px 6px;">Publication Blocked</span>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #877D5C; color: #2B2416; border-radius: 3px; padding: 2px 6px;">Stop Requested · Awaiting Confirmation</span>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #877D5C; color: #2B2416; border-radius: 3px; padding: 2px 6px;">Failed to Stop · Execution May Continue</span>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #877D5C; color: #2B2416; border-radius: 3px; padding: 2px 6px;">Stopped</span>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #877D5C; color: #2B2416; border-radius: 3px; padding: 2px 6px;">Finished · See Recorded Outcome</span>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #877D5C; color: #2B2416; border-radius: 3px; padding: 2px 6px;">Execution Status Unavailable</span>
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #94896E;">Faint · historical, never current readiness</div>
+        <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #C9BFA2; color: #675D49; border-radius: 3px; padding: 2px 6px;">Superseded Run · Historical</span>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #C9BFA2; color: #675D49; border-radius: 3px; padding: 2px 6px;">Specification Approval History Unavailable</span>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #C9BFA2; color: #675D49; border-radius: 3px; padding: 2px 6px;">Abandoned</span>
+        </div>
+      </div>
+    </div>
+    <div style="background: #1E1812; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; color: #EAE3CF;">
+      <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #C2912E; color: #C2912E; border-radius: 3px; padding: 2px 6px;">Specification Approval Required</span>
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #C2912E; color: #C2912E; border-radius: 3px; padding: 2px 6px;">On Hold</span>
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #786D58; color: #EAE3CF; border-radius: 3px; padding: 2px 6px;">In Progress</span>
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #786D58; color: #EAE3CF; border-radius: 3px; padding: 2px 6px;">Stop Requested · Awaiting Confirmation</span>
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #786D58; color: #EAE3CF; border-radius: 3px; padding: 2px 6px;">Finished · See Recorded Outcome</span>
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #3D3426; color: #B3A88E; border-radius: 3px; padding: 2px 6px;">Superseded Run · Historical</span>
+      </div>
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: #7D7460;">Dusk · tawny for attention · rule-strong ink · faint historical</div>
+    </div>
+  </div>
+  <p style="font-size: 12px; line-height: 1.55; color: #675D49; margin: 12px 0 0;">Three cuts, one shape. The cut is decided by a predicate, not by the status word: <b>attention</b> when the task has a current open Inbox item bound to it (approval, readiness, adjudication, a failure with a recovery choice) — so "On Hold" is accent while findings await adjudication and ink while the hold is the agent account's queue. Failure is not wax here: wax is for seals and destructive submits; a failed execution that needs a decision is attention like any other decision. Green stays out. The same chip serves the task row, the timeline header, the run card, and the review round.</p>
+</div>
+
+<!-- Disclosure map -->
+<div style="position: absolute; left: 2140px; top: 130px; width: 580px;" data-screen-label="Progressive disclosure — four layers of the task timeline">
+  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: #94896E; margin-bottom: 12px;">Progressive disclosure · what the task timeline shows at each layer</div>
+  <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 12px; padding: 20px 22px; display: flex; flex-direction: column; gap: 14px; font-size: 12px; line-height: 1.55;">
+    <div style="display: grid; grid-template-columns: 90px 1fr; gap: 10px 16px; align-items: start;">
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #2B2416; padding-top: 2px;">0 · Glance</div>
+      <div><b>Name, state chip, meta, source, Stop.</b> Answers "what is this and does it need me" without scrolling. The Stop control sits under its own keyword; Technical details is the header's only disclosure.</div>
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #2B2416; padding-top: 2px;">1 · Current</div>
+      <div><b>The current campaign, its current run, open.</b> Attempt title and chip, the review verdict line (round, outcome, open findings) with Inspect reviewer output, and the milestone rail newest first. This is the page; everything below is history.</div>
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #675D49; padding-top: 2px;">2 · Detail</div>
+      <div><b>Collapsed inside the run card.</b> Round facts (head, base, source, requested and completed, dispositions) under the verdict; Run details (role, attempt reason, parent, recorded hold and code); Technical details. Each closed line carries its summary so nothing is hidden, only folded.</div>
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #94896E; padding-top: 2px;">3 · History</div>
+      <div><b>Collapsed below the current run.</b> Prior attempts as one-line cards (title, faint chip, last time); older campaigns as one disclosure each (short id, run count, why it ended); Task Events as one disclosure with its count and newest time. Opening any of them never changes the current run's position.</div>
+    </div>
+    <div style="border-top: 1px solid #D6CDB2;"></div>
+    <div style="color: #675D49;">What moves down a layer from today: the review round's eleven fact lines (layer 1 → 2), the campaign keyword's exact id (already in Technical details), Run Activity / Milestones as two stacked keywords (one keyword, Milestones), the run's role, reason, parent, and hold lines (1 → 2), Task Events (1 → 3). What stays at layer 0: the source line and lifecycle, because they are the answer to "which work is this". Nothing is removed; the daemon's facts all remain reachable in two clicks or fewer.</div>
+  </div>
+</div>
+
+<!-- ═══════════ ROW 2 ═══════════ -->
+
+<!-- macOS · proposed -->
+<div style="position: absolute; left: 40px; top: 1120px; width: 1180px;" data-screen-label="macOS — Tasks list and task timeline, proposed, day">
+  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: #94896E; margin-bottom: 12px;">macOS · Tasks · proposed rows · proposed task timeline · layers 0–3 · day</div>
+  <div style="background: #EDE7D6; border: 1px solid #C9BFA2; border-radius: 12px; overflow: hidden; height: 1240px; display: flex; flex-direction: column;">
+    <div style="height: 40px; background: #E4DDC7; border-bottom: 1px solid #D6CDB2; display: flex; align-items: center; padding: 0 14px; gap: 8px; font-size: 12px; color: #675D49; flex: none;">
+      <span style="width: 12px; height: 12px; border-radius: 50%; background: #C9BFA2; display: inline-block;"></span><span style="width: 12px; height: 12px; border-radius: 50%; background: #C9BFA2; display: inline-block;"></span><span style="width: 12px; height: 12px; border-radius: 50%; background: #C9BFA2; display: inline-block;"></span>
+      <span style="margin-left: 12px; font-weight: 500; color: #2B2416;">Freeside</span>
+      <span style="margin-left: 10px; border: 1px solid #C9BFA2; border-radius: 5px; padding: 1px 8px;">+</span>
+      <span style="margin-left: auto; display: flex; gap: 6px; align-items: center; border: 1px solid #C9BFA2; border-radius: 5px; padding: 1px 8px; color: #2B2416;">Recovery<span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.06em; border: 1px solid #7D5C0E; color: #7D5C0E; border-radius: 3px; padding: 0.5px 5px;">2</span></span>
+      <span style="border: 1px solid #C9BFA2; border-radius: 5px; padding: 1px 7px;">⟳</span>
+      <span style="display: flex; align-items: center; gap: 4px; font-size: 10px;"><span style="font-size: 9px;">◷</span>Updated recently</span>
+      <span style="border: 1px solid #C9BFA2; border-radius: 5px; padding: 1px 7px;">▯</span>
+    </div>
+    <div style="display: flex; flex: 1; min-height: 0;">
+      <div style="width: 330px; flex: none; background: #E4DDC7; border-right: 1px solid #D6CDB2; padding: 12px; display: flex; flex-direction: column; gap: 8px; overflow: hidden;">
+        <div style="display: flex; background: #EDE7D6; border: 1px solid #D6CDB2; border-radius: 6px; padding: 2px; font-size: 12px; font-weight: 500;"><span style="flex: 1; text-align: center; padding: 4px 0; color: #675D49;">Inbox</span><span style="flex: 1; text-align: center; padding: 4px 0; background: #F3EEE1; border-radius: 4px; color: #2B2416;">Tasks</span></div>
+        <div style="display: flex; background: #EDE7D6; border: 1px solid #D6CDB2; border-radius: 6px; padding: 2px; font-size: 12px; font-weight: 500;">
+          <span style="flex: 1; text-align: center; padding: 4px 0; background: #F3EEE1; border-radius: 4px; color: #2B2416; display: flex; justify-content: center; gap: 5px; align-items: baseline;">Active<span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">5</span></span>
+          <span style="flex: 1; text-align: center; padding: 4px 0; color: #675D49; display: flex; justify-content: center; gap: 5px; align-items: baseline;">Finished<span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px;">7</span></span>
+          <span style="flex: 1; text-align: center; padding: 4px 0; color: #675D49; display: flex; justify-content: center; gap: 5px; align-items: baseline;">All<span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px;">12</span></span>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center; background: #F3EEE1; border: 1px solid #C9BFA2; border-radius: 6px; padding: 5px 10px; font-size: 12px; font-weight: 500;"><span>All projects</span><span style="color: #675D49; font-size: 10px;">⌃⌄</span></div>
+        <div style="display: flex; background: #ECE4CD; border-radius: 8px; overflow: hidden; flex: none;">
+          <div style="width: 4px; background: #7D5C0E;"></div>
+          <div style="flex: 1; padding: 14px; display: flex; flex-direction: column; gap: 7px;">
+            <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;"><span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 14.3px;">Idempotent decision commands</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #8F6B14; color: #7D5C0E; border-radius: 3px; padding: 2px 6px;">On Hold</span></div>
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">owner/repo · #724 · 30m ago</div>
+            <div style="font-size: 11px; line-height: 1.4; color: #675D49;">Specification Completed · Implementation Current · Review Pending · Verification Pending</div>
+            <div style="font-size: 11px; line-height: 1.4; color: #675D49;">Round 3 · Hold: Finding adjudication</div>
+            <div style="font-size: 11px; color: #7D5C0E; font-weight: 500;">Adjudicate findings in Inbox ›</div>
+          </div>
+        </div>
+        <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 7px; flex: none;">
+          <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;"><span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 14.3px;">Bound operator task names <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.08em; color: #675D49; margin-left: 4px;">AGENT</span></span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #8F6B14; color: #7D5C0E; border-radius: 3px; padding: 2px 6px;">Specification Approval Required</span></div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">owner/repo · #731 · 2h ago</div>
+          <div style="font-size: 11px; line-height: 1.4; color: #675D49;">Specification Current · Implementation Pending · Review Pending · Verification Pending</div>
+          <div style="font-size: 11px; line-height: 1.4; color: #675D49;">Round 1</div>
+          <div style="font-size: 11px; color: #7D5C0E; font-weight: 500;">Review the specification in Inbox ›</div>
+        </div>
+        <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 7px; flex: none;">
+          <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 12.5px;">task-3f9a1c2e-7b40</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #877D5C; color: #2B2416; border-radius: 3px; padding: 2px 6px;">Queued</span></div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">owner/other · 4h ago</div>
+          <div style="font-size: 11px; line-height: 1.4; color: #675D49;">Specification Current · Implementation Pending · Review Pending · Verification Pending</div>
+          <div style="font-size: 11px; line-height: 1.4; color: #675D49;">The configured agent account is busy; no action is needed for this wait.</div>
+        </div>
+        <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 7px; flex: none;">
+          <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;"><span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 14.3px;">Codex credential renewal</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #8F6B14; color: #7D5C0E; border-radius: 3px; padding: 2px 6px;">Ready for Final Review (Degraded)</span></div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">owner/repo · #719 · 5h ago · task-7e94</div>
+          <div style="font-size: 11px; line-height: 1.4; color: #675D49;">Specification Completed · Implementation Completed · Review Completed · Verification Current</div>
+          <div style="display: flex; gap: 6px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; color: #675D49; background: #ECE4CD; border-radius: 999px; padding: 3px 7px;">deadline · 5:00 pm</span></div>
+          <div style="font-size: 11px; color: #7D5C0E; font-weight: 500;">Review the pull request in Inbox ›</div>
+        </div>
+        <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 7px; flex: none;">
+          <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;"><span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 14.3px;">Codex credential renewal</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #877D5C; color: #2B2416; border-radius: 3px; padding: 2px 6px;">Stop Requested · Awaiting Confirmation</span></div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">owner/repo · 9m ago · task-b2d7</div>
+          <div style="font-size: 11px; line-height: 1.4; color: #675D49;">Specification Completed · Implementation Current · Review Pending · Verification Pending</div>
+          <div style="font-size: 11px; line-height: 1.4; color: #675D49;">Round 1 · Last recorded hold: Agent question</div>
+        </div>
+      </div>
+      <div style="flex: 1; padding: 28px 32px; overflow: hidden; display: flex; flex-direction: column; gap: 22px; font-size: 12px; line-height: 1.5;">
+        <!-- layer 0 -->
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #675D49;">Task timeline</div>
+          <div style="display: flex; flex-direction: column; gap: 8px; align-items: flex-start;"><span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 26px; line-height: 1.1;">Idempotent decision commands</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #8F6B14; color: #7D5C0E; border-radius: 3px; padding: 2px 7px;">On Hold</span></div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">owner/repo · #724 · Active · Source: owner/repo#724</div>
+          <div style="font-size: 12px; color: #7D5C0E; font-weight: 500;">Adjudicate findings in Inbox ›</div>
+          <div style="display: flex; gap: 14px; align-items: center; padding-top: 4px;">
+            <span style="display: inline-flex; align-items: center; min-height: 32px; padding: 0 14px; background: #F3EEE1; border: 1px solid #8A2D1C; color: #8A2D1C; border-radius: 6px; font-weight: 500; font-size: 12.5px; gap: 6px;"><span style="font-size: 9px;">■</span>Stop task…</span>
+            <div style="display: flex; align-items: center; gap: 8px;"><span style="color: #7D5C0E; font-size: 9px;">▶</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #675D49;">Technical details</span></div>
+          </div>
+        </div>
+        <!-- layer 1 -->
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <div style="display: flex; align-items: baseline; gap: 10px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #675D49;">Campaign 7e2f</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #94896E;">current · 2 attempts · since Sep 11</span></div>
+          <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 12px;">
+              <div style="display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;"><span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 17px;">Attempt 2</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #8F6B14; color: #7D5C0E; border-radius: 3px; padding: 2px 6px;">On Hold</span></div>
+              <span style="color: #7D5C0E; font-weight: 500; white-space: nowrap;">Open run history ›</span>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+              <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #675D49;">Review</div>
+              <div style="background: #EDE7D6; border-radius: 6px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px;">
+                <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 10px;"><span style="display: flex; gap: 8px; align-items: center;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #2B2416; display: inline-block;"></span><span style="font-weight: 600;">Round 3</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #8F6B14; color: #7D5C0E; border-radius: 3px; padding: 1px 5px;">Findings · 2 open</span></span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">Sep 12, 9:41 AM</span></div>
+                <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 10px;"><div style="display: flex; align-items: center; gap: 8px;"><span style="color: #7D5C0E; font-size: 9px;">▶</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #675D49;">Round facts</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #94896E;">Head 4be1d0a7 · Base 7b40d8e1 · Freeside-invoked</span></div><span style="color: #7D5C0E; font-weight: 500; font-size: 11px; white-space: nowrap;">Inspect reviewer output ›</span></div>
+                <div style="display: flex; gap: 8px; align-items: center; color: #675D49; font-size: 11px;"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #B9AF92; box-sizing: border-box; display: inline-block;"></span>Rounds 2 and 1 · clean at their bound heads · historical<span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; margin-left: auto;">Sep 11</span></div>
+              </div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+              <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #675D49;">Milestones</div>
+              <div style="display: flex; flex-direction: column;">
+                <div style="display: flex; gap: 12px;"><div style="display: flex; flex-direction: column; align-items: center; padding-top: 4px;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #2B2416; display: block;"></span><span style="width: 2px; height: 26px; background: #DDD4B9; display: block;"></span></div><div style="display: flex; justify-content: space-between; flex: 1; gap: 8px;"><span style="font-weight: 600; font-size: 12px;">Review round 3 · Findings</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">Sep 12, 9:41 AM</span></div></div>
+                <div style="display: flex; gap: 12px;"><div style="display: flex; flex-direction: column; align-items: center; padding-top: 4px;"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #B9AF92; box-sizing: border-box; display: block;"></span><span style="width: 2px; height: 26px; background: #DDD4B9; display: block;"></span></div><div style="display: flex; justify-content: space-between; flex: 1; gap: 8px;"><span style="font-size: 12px; color: #675D49;">Implementation completed · Pass 2</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">Sep 12, 8:12 AM</span></div></div>
+                <div style="display: flex; gap: 12px;"><div style="display: flex; flex-direction: column; align-items: center; padding-top: 4px;"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #B9AF92; box-sizing: border-box; display: block;"></span></div><div style="display: flex; justify-content: space-between; flex: 1; gap: 8px;"><span style="font-size: 12px; color: #675D49;">Run submitted</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">Sep 11, 2:02 PM</span></div></div>
+              </div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;"><span style="color: #7D5C0E; font-size: 9px;">▶</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #675D49;">Run details</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #94896E;">Implementation · retry of attempt 1 · hold: Finding adjudication</span></div>
+            <div style="display: flex; align-items: center; gap: 8px;"><span style="color: #7D5C0E; font-size: 9px;">▶</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #675D49;">Technical details</span></div>
+          </div>
+          <!-- layer 3 · prior attempt -->
+          <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 8px; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center; gap: 12px;">
+            <div style="display: flex; gap: 10px; align-items: baseline;"><span style="color: #7D5C0E; font-size: 9px;">▶</span><span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 15px; color: #675D49;">Attempt 1</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #C9BFA2; color: #675D49; border-radius: 3px; padding: 2px 6px;">Execution Failed · Superseded</span></div>
+            <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">Sep 11, 4:58 PM</span>
+          </div>
+        </div>
+        <!-- layer 3 · older campaign -->
+        <div style="display: flex; align-items: baseline; gap: 10px;"><span style="color: #7D5C0E; font-size: 9px;">▶</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #675D49;">Campaign 3a1c</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #94896E;">1 run · specification superseded · Sep 10</span></div>
+        <!-- layer 3 · task events -->
+        <sc-if value="{{ eventsOpen }}" hint-placeholder-val="{{ false }}">
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+          <div style="display: flex; align-items: baseline; gap: 10px;"><span style="color: #7D5C0E; font-size: 9px;">▼</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #675D49;">Task events</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #94896E;">6 recorded · newest Sep 12, 9:41 AM</span></div>
+          <div style="font-size: 11px; color: #675D49;">Recorded milestones, newest first. Historical results do not establish current readiness.</div>
+          <div style="display: flex; flex-direction: column; gap: 6px;">
+            <div style="display: flex; gap: 10px; align-items: baseline;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #2B2416; display: inline-block; flex: none; position: relative; top: -1px;"></span><div style="flex: 1; display: flex; flex-direction: column; gap: 1px;"><div style="display: flex; justify-content: space-between; gap: 8px;"><span>Review result · 2 findings</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">Sep 12, 9:41 AM</span></div><div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">Implementation attempt 2 · Round 3 · Head 4be1d0a7 · Base 7b40d8e1</div></div></div>
+            <div style="display: flex; gap: 10px; align-items: baseline;"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #B9AF92; box-sizing: border-box; display: inline-block; flex: none; position: relative; top: -1px;"></span><div style="flex: 1; display: flex; flex-direction: column; gap: 1px;"><div style="display: flex; justify-content: space-between; gap: 8px;"><span style="color: #675D49;">Review requested</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">Sep 12, 8:13 AM</span></div><div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">Implementation attempt 2 · Round 3</div></div></div>
+            <div style="display: flex; gap: 10px; align-items: baseline;"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #B9AF92; box-sizing: border-box; display: inline-block; flex: none; position: relative; top: -1px;"></span><div style="flex: 1; display: flex; flex-direction: column; gap: 1px;"><div style="display: flex; justify-content: space-between; gap: 8px;"><span style="color: #675D49;">Execution failed</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">Sep 11, 4:58 PM</span></div><div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">Implementation attempt 1</div></div></div>
+            <div style="display: flex; gap: 10px; align-items: baseline;"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #B9AF92; box-sizing: border-box; display: inline-block; flex: none; position: relative; top: -1px;"></span><div style="flex: 1; display: flex; justify-content: space-between; gap: 8px;"><span style="color: #675D49;">Specification approved</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">Sep 11, 1:40 PM</span></div></div>
+            <div style="display: flex; gap: 10px; align-items: baseline;"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #B9AF92; box-sizing: border-box; display: inline-block; flex: none; position: relative; top: -1px;"></span><div style="flex: 1; display: flex; justify-content: space-between; gap: 8px;"><span style="color: #675D49;">Campaign allocated · 7e2f</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">Sep 11, 9:02 AM</span></div></div>
+            <div style="display: flex; gap: 10px; align-items: baseline;"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #B9AF92; box-sizing: border-box; display: inline-block; flex: none; position: relative; top: -1px;"></span><div style="flex: 1; display: flex; justify-content: space-between; gap: 8px;"><span style="color: #675D49;">Task created</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #675D49;">Sep 10, 9:02 AM</span></div></div>
+          </div>
+        </div>
+        </sc-if>
+        <sc-if value="{{ eventsClosed }}" hint-placeholder-val="{{ true }}">
+        <div style="display: flex; align-items: baseline; gap: 10px;"><span style="color: #7D5C0E; font-size: 9px;">▶</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #675D49;">Task events</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #94896E;">6 recorded · newest Sep 12, 9:41 AM</span></div>
+        </sc-if>
+      </div>
+    </div>
+  </div>
+  <p style="font-size: 12px; line-height: 1.55; color: #675D49; margin: 12px 0 0;">Layer 0 is the header: name, then the chip on its own line, a single mono meta line (project, issue, lifecycle, source), the one guidance link, and Stop under the wax outline beside the header's Technical details. Layer 1 is the current campaign's keyword (short id only because a second campaign is on screen; its summary trails in mono) and the current run card: attempt title and chip, Open run history at the trailing edge, Review reduced to a verdict row — current round marked, outcome chip, the prior rounds folded to one hollow line — and the milestone rail, newest first, the top entry filled. Layer 2 lives inside the card as Round facts, Run details, and Technical details, each with its summary on the closed line. Layer 3: Attempt 1 as a one-line card with a faint chip, the older campaign as one keyword row, Task Events as one disclosure, drawn open here (the Tweak closes it): the same marker rule inside, detail lines naming runs by role and attempt, one time format, no raw ids. The list caption is gone; the row is the affordance.</p>
+</div>
+
+<!-- iPhone · proposed · dusk -->
+<div style="position: absolute; left: 1260px; top: 1120px; width: 393px; color: #EAE3CF;" data-screen-label="Task timeline, proposed, iPhone dusk">
+  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: #94896E; margin-bottom: 12px;">Task timeline · proposed · iPhone dusk</div>
+  <div style="background: #16120E; border: 1px solid #322A1E; border-radius: 40px; padding: 54px 16px 0; height: 900px; box-sizing: border-box; display: flex; flex-direction: column; gap: 14px; font-size: 13px; line-height: 1.45; overflow: hidden; position: relative;">
+    <div style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: #C2912E;"><span>‹ Tasks</span><span style="font-family: 'Source Serif Pro', serif; font-weight: 500; color: #EAE3CF; font-size: 18px;">Task</span><span style="opacity: 0;">‹ Tasks</span></div>
+    <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #B3A88E;">Task timeline</div>
+    <div style="display: flex; flex-direction: column; gap: 8px;">
+      <div style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 26px; line-height: 1.15;">Bound operator task names <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 500; letter-spacing: 0.08em; color: #B3A88E; margin-left: 4px;">AGENT</span></div>
+      <div style="display: flex;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #C2912E; color: #C2912E; border-radius: 3px; padding: 2px 7px;">Specification Approval Required</span></div>
+    </div>
+    <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #B3A88E;">owner/repo · #731 · Active · Source: owner/repo#731</div>
+    <div style="color: #C2912E; font-weight: 500;">Review the specification in Inbox ›</div>
+    <div style="display: flex; gap: 14px; align-items: center;">
+      <span style="display: inline-flex; align-items: center; min-height: 36px; padding: 0 14px; background: #1E1812; border: 1px solid #D26D4A; color: #D26D4A; border-radius: 6px; font-weight: 500; gap: 6px;"><span style="font-size: 9px;">■</span>Stop task…</span>
+      <div style="display: flex; align-items: center; gap: 8px;"><span style="color: #C2912E; font-size: 9px;">▶</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #B3A88E;">Technical details</span></div>
+    </div>
+    <div style="display: flex; align-items: baseline; gap: 10px; margin-top: 6px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #B3A88E;">Campaign</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #7D7460;">current · 1 attempt · since Sep 17</span></div>
+    <div style="background: #1E1812; border: 1px solid #322A1E; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 12px;">
+      <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 10px;">
+        <div style="display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;"><span style="font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 18px;">Attempt 1</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #C2912E; color: #C2912E; border-radius: 3px; padding: 2px 6px;">Awaiting Approval</span></div>
+        <span style="color: #C2912E; font-weight: 500; font-size: 12px; white-space: nowrap;">Open run history ›</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #B3A88E;">Review</div>
+        <div style="font-size: 12px; color: #B3A88E;">No review requested yet · a specification run is not reviewed.</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #B3A88E;">Milestones</div>
+        <div style="display: flex; flex-direction: column;">
+          <div style="display: flex; gap: 12px;"><div style="display: flex; flex-direction: column; align-items: center; padding-top: 5px;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #EAE3CF; display: block;"></span><span style="width: 2px; height: 28px; background: #292117; display: block;"></span></div><div style="display: flex; flex-direction: column; gap: 2px;"><span style="font-weight: 600; font-size: 13px;">Specification submitted for approval</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #B3A88E;">Sep 17, 3:20 PM</span></div></div>
+          <div style="display: flex; gap: 12px;"><div style="display: flex; flex-direction: column; align-items: center; padding-top: 5px;"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #4A3F2C; box-sizing: border-box; display: block;"></span></div><div style="display: flex; flex-direction: column; gap: 2px;"><span style="font-size: 13px; color: #B3A88E;">Run submitted</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #B3A88E;">Sep 17, 2:58 PM</span></div></div>
+        </div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px;"><span style="color: #C2912E; font-size: 9px;">▶</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #B3A88E;">Run details</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #7D7460;">Specification</span></div>
+      <div style="display: flex; align-items: center; gap: 8px;"><span style="color: #C2912E; font-size: 9px;">▶</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #B3A88E;">Technical details</span></div>
+    </div>
+    <div style="display: flex; align-items: baseline; gap: 10px;"><span style="color: #C2912E; font-size: 9px;">▶</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #B3A88E;">Task events</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #7D7460;">3 recorded · newest Sep 17, 3:21 PM</span></div>
+    <div style="position: absolute; left: 0; right: 0; bottom: 0; height: 74px; background: #1E1812; border-top: 1px solid #322A1E; display: flex; justify-content: space-around; align-items: flex-start; padding-top: 10px; font-size: 10px; color: #7D7460;"><span style="display: flex; flex-direction: column; align-items: center; gap: 3px;"><span style="font-size: 18px;">☰</span>Inbox</span><span style="display: flex; flex-direction: column; align-items: center; gap: 3px; color: #C2912E;"><span style="font-size: 18px;">☷</span>Tasks</span></div>
+  </div>
+  <p style="font-size: 12px; line-height: 1.55; color: #675D49; margin: 12px 0 0;">The chip sits under the name here as everywhere; everything else is the Mac composition at the phone's type sizes. A specification run's card says plainly why Review is empty instead of showing an empty section. One campaign, so the keyword carries no short id. The whole page fits above the tab bar without scrolling — that is the point of the folding.</p>
+</div>
+
+<!-- Chronology specimen · dusk -->
+<div style="position: absolute; left: 1700px; top: 1120px; width: 520px; color: #EAE3CF;" data-screen-label="Chronology rule — five lists, one marker, dusk">
+  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: #94896E; margin-bottom: 12px;">Chronology · newest first · current filled · five lists · dusk</div>
+  <div style="background: #16120E; border: 1px solid #322A1E; border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 18px; font-size: 12px; line-height: 1.45;">
+    <div style="display: flex; flex-direction: column; gap: 8px;">
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #B3A88E;">Campaigns</div>
+      <div style="display: flex; gap: 10px; align-items: baseline;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #EAE3CF; display: inline-block; flex: none;"></span><span style="font-weight: 600;">Campaign 7e2f</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E; margin-left: auto;">current · since Sep 11</span></div>
+      <div style="display: flex; gap: 10px; align-items: baseline;"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #4A3F2C; box-sizing: border-box; display: inline-block; flex: none;"></span><span style="color: #B3A88E;">Campaign 3a1c</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E; margin-left: auto;">superseded · Sep 10</span></div>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 8px;">
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #B3A88E;">Runs in a campaign</div>
+      <div style="display: flex; gap: 10px; align-items: baseline;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #EAE3CF; display: inline-block; flex: none;"></span><span style="font-weight: 600;">Attempt 2</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E; margin-left: auto;">Sep 12, 9:41 AM</span></div>
+      <div style="display: flex; gap: 10px; align-items: baseline;"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #4A3F2C; box-sizing: border-box; display: inline-block; flex: none;"></span><span style="color: #B3A88E;">Attempt 1</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E; margin-left: auto;">Sep 11, 4:58 PM</span></div>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 8px;">
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #B3A88E;">Review rounds</div>
+      <div style="display: flex; gap: 10px; align-items: baseline;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #EAE3CF; display: inline-block; flex: none;"></span><span style="font-weight: 600;">Round 3</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #C2912E; color: #C2912E; border-radius: 3px; padding: 1px 5px;">Findings · 2 open</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E; margin-left: auto;">Sep 12, 9:41 AM</span></div>
+      <div style="display: flex; gap: 10px; align-items: baseline;"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #4A3F2C; box-sizing: border-box; display: inline-block; flex: none;"></span><span style="color: #B3A88E;">Round 2</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #3D3426; color: #B3A88E; border-radius: 3px; padding: 1px 5px;">Clean · historical</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E; margin-left: auto;">Sep 11, 6:30 PM</span></div>
+      <div style="display: flex; gap: 10px; align-items: baseline;"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #4A3F2C; box-sizing: border-box; display: inline-block; flex: none;"></span><span style="color: #B3A88E;">Round 1</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid #3D3426; color: #B3A88E; border-radius: 3px; padding: 1px 5px;">Clean · historical</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E; margin-left: auto;">Sep 11, 3:05 PM</span></div>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 8px;">
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #B3A88E;">Milestones in a run</div>
+      <div style="display: flex; flex-direction: column;">
+        <div style="display: flex; gap: 12px;"><div style="display: flex; flex-direction: column; align-items: center; padding-top: 4px;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #EAE3CF; display: block;"></span><span style="width: 2px; height: 22px; background: #292117; display: block;"></span></div><div style="display: flex; justify-content: space-between; flex: 1;"><span style="font-weight: 600;">Review round 3 · Findings</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E;">Sep 12, 9:41 AM</span></div></div>
+        <div style="display: flex; gap: 12px;"><div style="display: flex; flex-direction: column; align-items: center; padding-top: 4px;"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #4A3F2C; box-sizing: border-box; display: block;"></span><span style="width: 2px; height: 22px; background: #292117; display: block;"></span></div><div style="display: flex; justify-content: space-between; flex: 1;"><span style="color: #B3A88E;">Implementation completed · Pass 2</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E;">Sep 12, 8:12 AM</span></div></div>
+        <div style="display: flex; gap: 12px;"><div style="display: flex; flex-direction: column; align-items: center; padding-top: 4px;"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #4A3F2C; box-sizing: border-box; display: block;"></span></div><div style="display: flex; justify-content: space-between; flex: 1;"><span style="color: #B3A88E;">Run submitted</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E;">Sep 11, 2:02 PM</span></div></div>
+      </div>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 8px;">
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #B3A88E;">Task events</div>
+      <div style="display: flex; gap: 10px; align-items: baseline;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #EAE3CF; display: inline-block; flex: none;"></span><span style="font-weight: 600;">Review result · 2 findings</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E; margin-left: auto;">Sep 12, 9:41 AM</span></div>
+      <div style="display: flex; gap: 10px; align-items: baseline;"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #4A3F2C; box-sizing: border-box; display: inline-block; flex: none;"></span><span style="color: #B3A88E;">Review requested</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E; margin-left: auto;">Sep 12, 8:13 AM</span></div>
+      <div style="display: flex; gap: 10px; align-items: baseline;"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #4A3F2C; box-sizing: border-box; display: inline-block; flex: none;"></span><span style="color: #B3A88E;">Task created</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #B3A88E; margin-left: auto;">Sep 10, 9:02 AM</span></div>
+    </div>
+  </div>
+  <p style="font-size: 12px; line-height: 1.55; color: #675D49; margin: 12px 0 0;">One rule, five places. The daemon already returns campaigns, runs, and events newest first; the review list reverses on the client today (newest round first) and the milestone rail shows its top entry as current. The proposal makes the marker identical everywhere: an 8pt filled ink dot on the newest entry, a 1.5pt hollow dot in milestone-prior on the rest, time trailing in the mono caption. Weight follows the marker — semibold ink for current, regular dim for prior — so the eye reads "now" before it reads a word. Where a list is a rail (milestones) the connector joins the dots; where it is a set of cards (campaigns, attempts) the dot sits in the closed line. Nothing is ever re-sorted by timestamp on the client; the order is the daemon's, and "current" means position 0, never "most recent clock".</p>
+</div>
+
+<!-- Ledger -->
+<div style="position: absolute; left: 2260px; top: 1120px; width: 460px;" data-screen-label="Ledger — what changes, what stays, open items">
+  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: #94896E; margin-bottom: 12px;">Ledger · changes by component · open items</div>
+  <div style="display: flex; flex-direction: column; gap: 16px;">
+    <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 12px; padding: 18px 20px; font-size: 12px; line-height: 1.6;">
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #7D5C0E;">Changes</div>
+      <ul style="margin: 6px 0 0; padding-left: 18px;">
+        <li><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px;">TaskRowView</span> — status line becomes a <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px;">StateChip</span> beside <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px;">TaskNameLabel</span>; round and hold join; guidance renders in the link recipe; padding 14; "last active" prefix dropped from the meta line.</li>
+        <li><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px;">TaskDisplay.Position</span> — the chip's cut is derived client-side from what the row already computes: attention when the existing guidance resolves to a current Inbox item bound to the task (the same <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px;">attentionItems</span> the list receives today), faint when the position is historical, ink otherwise. No new field from the daemon.</li>
+        <li><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px;">TasksListView</span> — the caption under the scope control is removed.</li>
+        <li><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px;">TaskTimelineView</span> — header meta collapses to one mono line; run card gains chip, Run details disclosure; non-current runs render as one-line cards; non-current campaigns render as one disclosure row; Task Events becomes a disclosure with count and newest time.</li>
+        <li><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px;">RunReviewSection</span> — round card becomes a verdict row (marker, round, outcome chip, time) over a Round facts disclosure; prior rounds fold to one hollow line; title keyword, not serif; time format joins recipe 04.</li>
+        <li><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px;">TaskStopView</span> — Stop task… takes the wax outline (T1 on the 18 Sept canvas); the rest of T1 stands.</li>
+        <li><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px;">StageRail</span> milestone marker — current fill moves from accent to ink; prior stays milestone-prior. Accent is now attention-only across the task surfaces.</li>
+      </ul>
+    </div>
+    <div style="background: #F3EEE1; border: 1px solid #D6CDB2; border-radius: 12px; padding: 18px 20px; font-size: 12px; line-height: 1.6; color: #675D49;">
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase;">Stays</div>
+      <p style="margin: 6px 0 0;">The API and every daemon contract; the status vocabulary and its precedence (#1374); the per-phase sentence; the combined accessibility element and its string order; ids in Technical details (#1379); the run timeline's own rail and hold card; Inbox rows. Every new element on this canvas is an existing component in a new arrangement — the only additions are SwiftUI disclosures and layout.</p>
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; margin-top: 16px;">Open</div>
+      <ul style="margin: 6px 0 0; padding-left: 18px;">
+        <li>Should the run card's chip repeat the task chip when the current run is the task's position? Drawn as repeated; dropping it leaves the attempt title bare.</li>
+        <li>Disclosure state persistence: per task, per device, or session only? Decision Detail's inspector persists per section; the same rule is proposed.</li>
+        <li>"Findings · 2 open" reads the existing <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px;">RunReviewRound.dispositions</span>; when the daemon omits it the chip reads "Findings · 2". Campaign and event summaries ("2 attempts · since Sep 11", "6 recorded · newest …") are counted from the timeline already on the client.</li>
+        <li>Differentiate Without Color: the attention cut already differs by border tone; a leading ◆ glyph is the fallback if contrast testing asks for it.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;showAsBuilt&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Canvas&quot;},&quot;eventsOpen&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Mac timeline&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const eventsOpen = this.props.eventsOpen ?? true;
+    return {
+      showAsBuilt: this.props.showAsBuilt ?? true,
+      eventsOpen,
+      eventsClosed: !eventsOpen,
+    };
+  }
+}
+</script>
+</body>
+</html>

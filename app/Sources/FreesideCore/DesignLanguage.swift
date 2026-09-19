@@ -362,13 +362,45 @@ enum FreesideFont {
 
 /// A bordered state chip: mono, lowercase, 1px border and text in the
 /// state color, no fill. `dashed` marks the not-observed idle state.
+///
+/// A `cut` chip is the task surfaces' status chip: the same shape with the
+/// label in the case it was given, free to wrap (a task status is the
+/// daemon's full phrase), and the border and text toned separately.
 struct StateChip: View {
+    /// Which of the three task-status tones a chip takes. A caller picks
+    /// the cut from what the operator can do, never from the status word.
+    enum Cut: CaseIterable {
+        /// A bound Inbox item waits on the operator.
+        case attention
+        /// The daemon is working or has spoken; nothing to do here.
+        case ink
+        /// Historical, never current readiness.
+        case faint
+
+        var border: Color {
+            switch self {
+            case .attention: .accentBorder
+            case .ink: .ruleStrong
+            case .faint: .secondaryBorder
+            }
+        }
+
+        var text: Color {
+            switch self {
+            case .attention: .accentText
+            case .ink: .ink
+            case .faint: .inkDim
+            }
+        }
+    }
+
     let label: String
     let color: Color
     var dashed = false
     /// A leading state glyph (a tick, a live dot); VoiceOver reads the
     /// label alone.
     var glyph: String? = nil
+    var cut: Cut? = nil
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
@@ -377,17 +409,17 @@ struct StateChip: View {
                 Text((glyph.map { "\($0) " } ?? "") + label)
                     .font(FreesideFont.callout)
             } else {
-                Text((glyph.map { "\($0) " } ?? "") + label.lowercased())
+                Text((glyph.map { "\($0) " } ?? "") + (cut == nil ? label.lowercased() : label))
                     .font(FreesideFont.chip)
                     .tracking(0.6)
-                    .lineLimit(1)
-                    .fixedSize()
+                    .lineLimit(cut == nil ? 1 : nil)
+                    .fixedSize(horizontal: cut == nil, vertical: true)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 1.5)
                     .overlay(
                         RoundedRectangle(cornerRadius: 3)
                             .strokeBorder(
-                                color,
+                                cut?.border ?? color,
                                 style: StrokeStyle(
                                     lineWidth: 1,
                                     dash: dashed ? [2, 2] : []))
@@ -396,6 +428,13 @@ struct StateChip: View {
         }
         .foregroundStyle(color)
         .accessibilityLabel(label)
+    }
+}
+
+extension StateChip {
+    /// A task-status chip in one of the three cuts.
+    init(label: String, cut: Cut) {
+        self.init(label: label, color: cut.text, cut: cut)
     }
 }
 
@@ -411,6 +450,62 @@ struct KeywordLabel: View {
             .font(FreesideFont.keyword)
             .tracking(0.8)
             .foregroundStyle(color)
+    }
+}
+
+/// The one folded section: a disclosure whose label is a keyword plus an
+/// optional trailing mono summary (a count or the newest time), so a closed
+/// section still says what it holds. The caller owns `isExpanded`, which is
+/// how a surface persists the state; every caller starts it collapsed.
+struct KeywordDisclosure<Content: View>: View {
+    let keyword: String
+    var summary: String? = nil
+    @Binding var isExpanded: Bool
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            content()
+        } label: {
+            if let summary {
+                // The keyword and its summary stay one line while they fit
+                // and stack when they do not (a long summary at a large text
+                // size), never truncating either.
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        KeywordLabel(text: keyword)
+                        summaryText(summary)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        KeywordLabel(text: keyword)
+                        summaryText(summary)
+                    }
+                }
+            } else {
+                KeywordLabel(text: keyword)
+            }
+        }
+        .tint(.accentText)
+    }
+
+    private func summaryText(_ summary: String) -> some View {
+        Text(summary)
+            .font(FreesideFont.monoCaption)
+            .foregroundStyle(Color.inkDim)
+    }
+}
+
+/// Navigation text: accent, medium, a trailing "›". Wraps a `Button` (or
+/// `NavigationLink`) label; an action that submits keeps a plain `Button`.
+/// VoiceOver reads the title alone, since the chevron is decoration.
+struct FreesideLink: View {
+    let title: String
+
+    var body: some View {
+        Text("\(title) ›")
+            .font(FreesideFont.sans(.callout, weight: .medium))
+            .foregroundStyle(Color.accentText)
+            .accessibilityLabel(title)
     }
 }
 
