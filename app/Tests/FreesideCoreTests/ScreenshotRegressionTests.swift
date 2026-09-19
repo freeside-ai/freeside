@@ -819,6 +819,14 @@
                                     .specification, item: revised.item))))
                     surfaces.append(
                         Surface(
+                            name: "decision-spec_approval-specification-reader-details",
+                            width: 720,
+                            view: AnyView(
+                                revisedDetail.screenshotSpecApprovalReader(
+                                    .specification, item: revised.item,
+                                    expandsTechnicalDetails: true))))
+                    surfaces.append(
+                        Surface(
                             name: "decision-spec_approval-diff-reader",
                             width: 720,
                             view: AnyView(

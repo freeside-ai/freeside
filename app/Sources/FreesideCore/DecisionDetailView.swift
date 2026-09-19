@@ -837,7 +837,10 @@ struct DecisionDetailView: View {
                 summaryReports(item, rendersInteractiveControls: rendersInteractiveControls)
             }
             #if os(iOS)
-                details(item, accessibilityLayout: accessibilityLayout)
+                details(
+                    item,
+                    accessibilityLayout: accessibilityLayout,
+                    rendersInteractiveControls: rendersInteractiveControls)
             #endif
         }
     }
@@ -1184,7 +1187,7 @@ struct DecisionDetailView: View {
                 if specification.text != nil {
                     approvalMaterialRow(
                         title: title,
-                        detail: "Daemon-bound digest \(specification.digest)",
+                        detail: "Bound by the daemon to this approval",
                         reader: .specification,
                         rendersInteractiveControls: rendersInteractiveControls)
                 } else {
@@ -1301,7 +1304,8 @@ struct DecisionDetailView: View {
     private func specApprovalReaderContent(
         _ reader: SpecApprovalReader,
         item: Components.Schemas.AttentionItem,
-        rendersScrollableContent: Bool = true
+        rendersScrollableContent: Bool = true,
+        expandsTechnicalDetails: Bool = false
     ) -> some View {
         switch reader {
         case .specification:
@@ -1312,7 +1316,8 @@ struct DecisionDetailView: View {
                     text: text.content,
                     mediaType: text.media_type,
                     digest: specification.digest,
-                    rendersScrollableContent: rendersScrollableContent)
+                    rendersScrollableContent: rendersScrollableContent,
+                    expandsTechnicalDetails: expandsTechnicalDetails)
             } else {
                 UnavailableStateView(
                     title: "Specification unavailable",
@@ -1443,7 +1448,8 @@ struct DecisionDetailView: View {
 
     private func details(
         _ item: Components.Schemas.AttentionItem,
-        accessibilityLayout: Bool
+        accessibilityLayout: Bool,
+        rendersInteractiveControls: Bool
     ) -> some View {
         lowerSection(
             "Details",
@@ -1452,7 +1458,8 @@ struct DecisionDetailView: View {
         ) {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(Array(detailRows(item).enumerated()), id: \.offset) { _, row in
-                    factRow(row.label, value: row.value, monospaced: true)
+                    TechnicalDetailRow(
+                        row: row, rendersInteractiveControls: rendersInteractiveControls)
                 }
             }
         }
@@ -1504,7 +1511,8 @@ struct DecisionDetailView: View {
                 inspectorSection("Details", isExpanded: detailsExpanded) {
                     VStack(alignment: .leading, spacing: 6) {
                         ForEach(Array(detailRows(item).enumerated()), id: \.offset) { _, row in
-                            factRow(row.label, value: row.value, monospaced: true)
+                            TechnicalDetailRow(
+                                row: row, rendersInteractiveControls: rendersInteractiveControls)
                         }
                     }
                 }
@@ -1604,7 +1612,8 @@ struct DecisionDetailView: View {
     @ViewBuilder
     func screenshotSpecApprovalReader(
         _ reader: SpecApprovalReader,
-        item: Components.Schemas.AttentionItem
+        item: Components.Schemas.AttentionItem,
+        expandsTechnicalDetails: Bool = false
     ) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(reader == .specification ? "Specification" : "Specification changes")
@@ -1612,7 +1621,8 @@ struct DecisionDetailView: View {
             specApprovalReaderContent(
                 reader,
                 item: item,
-                rendersScrollableContent: false)
+                rendersScrollableContent: false,
+                expandsTechnicalDetails: expandsTechnicalDetails)
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .topLeading)
