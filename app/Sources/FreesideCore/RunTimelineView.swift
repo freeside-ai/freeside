@@ -29,16 +29,39 @@ struct RunTimelineView: View {
     /// expanded so a baseline can capture its rows and copy controls. Live use
     /// leaves it false.
     var expandsTechnicalDetails = false
+    /// Supplies the screenshot composition without the scroll viewport or
+    /// the loading tasks. It renders through `body`, as the task timeline's
+    /// does, because the helpers below read locale, time zone, and the
+    /// pinned clock from the environment, which only a mounted view has.
+    var screenshotTimeline: Components.Schemas.RunTimeline?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.timeZone) private var timeZone
+    @Environment(\.locale) private var locale
+    @Environment(\.pinnedNow) private var pinnedNow
+
+    private func shortTime(_ date: Date) -> String {
+        FreesideFormat.shortTime(date, now: pinnedNow ?? Date(), locale: locale, timeZone: timeZone)
+    }
 
     private var timeline: Components.Schemas.RunTimeline? {
         coordinator.timelinesByRunID[snapshot.run.id]
     }
 
-    var body: some View {
+    @ViewBuilder var body: some View {
+        if let screenshotTimeline {
+            composition(screenshotTimeline)
+                .padding(24)
+                .frame(maxWidth: 820, alignment: .leading)
+                .foregroundStyle(Color.ink)
+        } else {
+            liveContent
+        }
+    }
+
+    private var liveContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                header(at: dynamicTypeSize)
+                header
                 if let timeline {
                     if let hold = timeline.hold?.value1 {
                         holdCard(hold)
@@ -81,10 +104,15 @@ struct RunTimelineView: View {
 
     /// The project-owned timeline composition with fixture data supplied
     /// directly because ImageRenderer never executes the loading task.
-    @ViewBuilder
-    func screenshotContent(_ timeline: Components.Schemas.RunTimeline, at size: DynamicTypeSize) -> some View {
+    func screenshotContent(_ timeline: Components.Schemas.RunTimeline) -> some View {
+        RunTimelineView(
+            coordinator: coordinator, snapshot: snapshot, expandsTechnicalDetails: expandsTechnicalDetails,
+            screenshotTimeline: timeline)
+    }
+
+    private func composition(_ timeline: Components.Schemas.RunTimeline) -> some View {
         VStack(alignment: .leading, spacing: 22) {
-            header(at: size)
+            header
             if let hold = timeline.hold?.value1 {
                 holdCard(hold)
             }
@@ -92,31 +120,20 @@ struct RunTimelineView: View {
             timelineSection(timeline)
             invocationSection(timeline)
         }
-        .padding(24)
-        .frame(maxWidth: 820, alignment: .leading)
-        .foregroundStyle(Color.ink)
     }
 
-    func header(at size: DynamicTypeSize) -> some View {
-        let accessibilityLayout = size >= .accessibility1
-        let layout =
-            accessibilityLayout
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
-            : AnyLayout(HStackLayout())
-        return VStack(alignment: .leading, spacing: 10) {
-            layout {
-                VStack(alignment: .leading, spacing: 4) {
-                    eyebrow
-                    Text(RunDisplay.timelineTitle(snapshot.run))
-                        .font(FreesideFont.largeTitle)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                if !accessibilityLayout {
-                    Spacer()
-                }
-                RunOutcomeBadge(outcome: snapshot.run.outcome)
+    var header: some View {
+        // The outcome chip takes its own line under the title at every
+        // size, as the task surfaces' status chips do.
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                eyebrow
+                Text(RunDisplay.timelineTitle(snapshot.run))
+                    .font(FreesideFont.largeTitle)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
+            RunOutcomeBadge(outcome: snapshot.run.outcome)
             HStack(spacing: 14) {
                 if let heading = RunDisplay.stageHeading(
                     snapshot.run,
@@ -247,10 +264,13 @@ struct RunTimelineView: View {
             Text(RunDisplay.label(hold.reason))
                 .font(FreesideFont.sectionTitle)
             Text(
-                "Observed \(hold.first_observed_at.formatted(date: .abbreviated, time: .shortened)) to \(hold.last_observed_at.formatted(date: .omitted, time: .shortened))"
+                "Observed \(shortTime(hold.first_observed_at)) to "
+                    + hold.last_observed_at.formatted(
+                        Date.FormatStyle(date: .omitted, time: .shortened, locale: locale, timeZone: timeZone))
             )
             .font(FreesideFont.monoCaption)
             .foregroundStyle(Color.inkDim)
+            .exactInstants(hold.first_observed_at, to: hold.last_observed_at)
             Text("Hold code: \(hold.reason.rawValue)")
                 .font(FreesideFont.monoCaption)
                 .foregroundStyle(Color.inkDim)
@@ -268,7 +288,8 @@ struct RunTimelineView: View {
         let entries = RunHistoryPresentation.entries(
             milestones: timeline.milestones,
             detail: milestoneDetail,
-            context: attemptContext)
+            context: attemptContext,
+            now: pinnedNow ?? Date(), locale: locale, timeZone: timeZone)
         return StageRail(
             title: "Stage, Round & Decision History",
             presentation: .timeline(entries: entries),
@@ -307,9 +328,10 @@ struct RunTimelineView: View {
                     .font(FreesideFont.sans(.headline, weight: .semibold))
                 // The observed time is freshness (the daemon's last look), not
                 // the attempt's place in history; the "Observed" prefix says so.
-                Text("Observed \(invocation.observed_at.formatted(date: .abbreviated, time: .shortened))")
+                Text("Observed \(shortTime(invocation.observed_at))")
                     .font(FreesideFont.monoCaption)
                     .foregroundStyle(Color.inkDim)
+                    .exactInstant(invocation.observed_at)
             }
             Spacer()
             let presentation = InvocationPresentation(invocation, asOf: asOf)
@@ -343,7 +365,8 @@ enum RunHistoryPresentation {
     static func entries(
         milestones: [Components.Schemas.RunMilestone],
         detail: (Components.Schemas.RunMilestone) -> String?,
-        context: (String?) -> String?
+        context: (String?) -> String?,
+        now: Date = Date(), locale: Locale = .current, timeZone: TimeZone = .current
     ) -> [DecisionStageRailPresentation.Entry] {
         let ordered = milestones.enumerated().map { index, milestone in
             DecisionStageRailPresentation.Entry(
@@ -351,8 +374,9 @@ enum RunHistoryPresentation {
                 title: RunDisplay.label(milestone.kind),
                 detail: detail(milestone),
                 context: context(milestone.invocation_id),
-                timestamp: milestone.recorded_at.formatted(
-                    date: .abbreviated, time: .shortened),
+                timestamp: FreesideFormat.shortTime(
+                    milestone.recorded_at, now: now, locale: locale, timeZone: timeZone),
+                instant: milestone.recorded_at,
                 state: index == milestones.count - 1 ? .current : .completed)
         }
         return Array(ordered.reversed())

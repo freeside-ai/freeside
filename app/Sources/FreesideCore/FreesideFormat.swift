@@ -57,9 +57,18 @@ extension View {
     /// hover help on macOS, a long-press Copy on iOS, as the pairing expiry
     /// row does. A row that shortens a recorded time and shows it nowhere
     /// else uses this so the shortening loses nothing.
-    @ViewBuilder
     func exactInstant(_ date: Date) -> some View {
-        let exact = FreesideFormat.exactTime(date)
+        exactStamp(FreesideFormat.exactTime(date))
+    }
+
+    /// The same for a line that shortens a span ("Observed … to …"): both
+    /// ends, exactly.
+    func exactInstants(_ start: Date, to end: Date) -> some View {
+        exactStamp("\(FreesideFormat.exactTime(start)) to \(FreesideFormat.exactTime(end))")
+    }
+
+    @ViewBuilder
+    private func exactStamp(_ exact: String) -> some View {
         #if os(macOS)
             help(exact)
         #elseif os(iOS)

@@ -196,7 +196,7 @@
                                     task.task, runs: runs, attentionItems: display.store.orderedSnapshots),
                                 schedules: [], isSelected: false, now: RunFixtures.screenshotInstant)
                             Divider()
-                            RunTimelineView(coordinator: display, snapshot: published).header(at: .large)
+                            RunTimelineView(coordinator: display, snapshot: published).header
                         }
                         .padding(16)
                         .foregroundStyle(Color.ink)
@@ -1598,7 +1598,7 @@
                     name: "run-timeline",
                     view: AnyView(
                         RunTimelineView(coordinator: coordinator, snapshot: activeRun)
-                            .screenshotContent(timeline, at: dynamicTypeSize)
+                            .screenshotContent(timeline)
                     )))
             surfaces.append(
                 Surface(
@@ -1606,7 +1606,7 @@
                     width: 390,
                     view: AnyView(
                         RunTimelineView(coordinator: coordinator, snapshot: activeRun)
-                            .screenshotContent(timeline, at: dynamicTypeSize)
+                            .screenshotContent(timeline)
                     )))
             // The header's technical details expanded (#1379): the exact run,
             // task, campaign, and parent ids and the specification digest.
@@ -1615,7 +1615,7 @@
                     name: "run-timeline-details",
                     view: AnyView(
                         RunTimelineView(coordinator: coordinator, snapshot: activeRun, expandsTechnicalDetails: true)
-                            .screenshotContent(timeline, at: dynamicTypeSize)
+                            .screenshotContent(timeline)
                     )))
             surfaces.append(
                 Surface(
@@ -1623,7 +1623,7 @@
                     width: 390,
                     view: AnyView(
                         RunTimelineView(coordinator: coordinator, snapshot: activeRun, expandsTechnicalDetails: true)
-                            .screenshotContent(timeline, at: dynamicTypeSize)
+                            .screenshotContent(timeline)
                     )))
             // Attempt-ordered history (#1263): two early attempts re-observed
             // after a later completed attempt, plus a review round, so the
@@ -1634,7 +1634,7 @@
                     name: "run-timeline-history",
                     view: AnyView(
                         RunTimelineView(coordinator: coordinator, snapshot: historyRun)
-                            .screenshotContent(RunFixtures.refreshedHistoryTimeline(), at: dynamicTypeSize)
+                            .screenshotContent(RunFixtures.refreshedHistoryTimeline())
                     )))
             surfaces.append(
                 Surface(
@@ -1642,7 +1642,7 @@
                     width: 390,
                     view: AnyView(
                         RunTimelineView(coordinator: coordinator, snapshot: historyRun)
-                            .screenshotContent(RunFixtures.refreshedHistoryTimeline(), at: dynamicTypeSize)
+                            .screenshotContent(RunFixtures.refreshedHistoryTimeline())
                     )))
 
             for colorScheme in [ColorScheme.light, .dark] {
@@ -1664,7 +1664,7 @@
                                 view: AnyView(
                                     VStack(alignment: .leading, spacing: 14) {
                                         Text("Reviewer output").font(FreesideFont.title)
-                                        Text("Agent claims · Round \(round.round) · Head \(round.head_sha.prefix(12))")
+                                        Text("Agent claims · Round \(round.round) · Head \(round.head_sha.prefix(8))")
                                             .font(FreesideFont.caption)
                                         Text("Private, sensitive output. Not publishable verifier evidence.")
                                             .font(FreesideFont.caption).foregroundStyle(Color.inkDim)

@@ -348,7 +348,7 @@ import Testing
                 "Terminal review",
             ])
         #expect(
-            clean.rows[1] == .init(label: "Bound to", value: "cafebabe on main@deadbeef", result: .passed))
+            clean.rows[1] == .init(label: "Bound to", value: "Head cafebabe · Base main@deadbeef", result: .passed))
         #expect(clean.rows[2] == .init(label: "clean-verification", value: "Passed", result: .passed))
         #expect(clean.passedRows.count == 4)
         #expect(clean.leadingRows.map(\.label) == ["Commit plan"])
@@ -382,7 +382,7 @@ import Testing
         // coordinates and shows both sides of the divergence.
         let stale = try #require(DecisionChecklistPresentation(AttentionFixtures.staleReady().item))
         #expect(stale.verdict == .init(label: "Verification verdict", value: "Invalidated", result: .failed))
-        #expect(stale.rows[0] == .init(label: "Bound to", value: "cafebabe on main@deadbeef", result: .failed))
+        #expect(stale.rows[0] == .init(label: "Bound to", value: "Head cafebabe · Base main@deadbeef", result: .failed))
         #expect(
             stale.rows[1]
                 == .init(label: "Head changed", value: "bound cafebabe, observed feedface", result: .failed))
@@ -406,7 +406,7 @@ import Testing
                     label: "Base freshness", value: "Advanced past deadbeef, now 0badf00d",
                     result: .failed))
         #expect(
-            AttentionDisplay.shortRevision("0123456789abcdef0123456789abcdef01234567") == "0123456789ab")
+            AttentionDisplay.shortRevision("0123456789abcdef0123456789abcdef01234567") == "01234567")
         // A base ref and a "repository_id#pr_number" identity are the other
         // coordinates an invalidation carries, and both differ in the tail, so
         // neither is truncated: a shortened pair would render two different

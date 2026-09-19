@@ -412,8 +412,11 @@ import Testing
         let detail: (Components.Schemas.RunMilestone) -> String? = { "detail-\($0.kind.rawValue)" }
         let context: (String?) -> String? = { $0.map { "ctx-\($0)" } }
 
+        // A fixed "now" in the milestones' own year, so the one short time
+        // format drops the year whatever year the suite runs in.
+        let now = try #require(milestones.last).recorded_at
         let entries = RunHistoryPresentation.entries(
-            milestones: milestones, detail: detail, context: context)
+            milestones: milestones, detail: detail, context: context, now: now)
 
         let oldestFirst = milestones.enumerated().map { index, milestone in
             DecisionStageRailPresentation.Entry(
@@ -421,7 +424,8 @@ import Testing
                 title: RunDisplay.label(milestone.kind),
                 detail: detail(milestone),
                 context: context(milestone.invocation_id),
-                timestamp: milestone.recorded_at.formatted(date: .abbreviated, time: .shortened),
+                timestamp: FreesideFormat.shortTime(milestone.recorded_at, now: now),
+                instant: milestone.recorded_at,
                 state: index == milestones.count - 1 ? .current : .completed)
         }
         #expect(entries == Array(oldestFirst.reversed()))
