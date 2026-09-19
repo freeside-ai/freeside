@@ -939,30 +939,42 @@ struct StageRail: View {
         }
     }
 
+    /// The current entry is a filled ink marker and a prior one a hollow
+    /// ring, so the rail marks where the work stands without the accent:
+    /// accent means an Inbox item waits on the operator, which a milestone
+    /// never says.
+    @ViewBuilder
     private func marker(_ state: DecisionStageRailPresentation.State) -> some View {
-        Circle()
-            .fill(markerColor(state))
-            .frame(width: 10, height: 10)
-            .accessibilityHidden(true)
-    }
-
-    private func markerColor(_ state: DecisionStageRailPresentation.State) -> Color {
-        switch state {
-        case .completed: return .milestonePrior
-        case .current: return .accentBorder
-        case .failed: return .waxText
-        case .pending: return .milestoneConnector
+        Group {
+            switch state {
+            case .completed:
+                Circle().strokeBorder(Color.milestonePrior, lineWidth: 1.5)
+            case .current:
+                Circle().fill(Color.ink)
+            case .failed:
+                Circle().fill(Color.waxText)
+            case .pending:
+                Circle().fill(Color.milestoneConnector)
+            }
         }
+        .frame(width: 10, height: 10)
+        .accessibilityHidden(true)
     }
 
+    /// The entry the rail stands on (current, or failed in wax) reads
+    /// semibold; every other title recedes to regular ink-dim.
     private func entryLabel(_ entry: DecisionStageRailPresentation.Entry) -> some View {
-        VStack(alignment: axis == .vertical ? .leading : .center, spacing: 4) {
+        let emphasized = entry.state == .current || entry.state == .failed
+        return VStack(alignment: axis == .vertical ? .leading : .center, spacing: 4) {
             Text(entry.title)
-                .font(FreesideFont.sans(.headline, weight: .semibold))
-                .foregroundStyle(entry.state == .failed ? Color.waxText : Color.ink)
+                .font(FreesideFont.sans(.headline, weight: emphasized ? .semibold : .regular))
+                .foregroundStyle(
+                    entry.state == .failed ? Color.waxText : emphasized ? Color.ink : Color.inkDim)
             if let detail = entry.detail {
+                // A receded title must not sit over a heavier detail.
                 Text(detail)
-                    .font(FreesideFont.sans(.subheadline, weight: .medium))
+                    .font(FreesideFont.sans(.subheadline, weight: emphasized ? .medium : .regular))
+                    .foregroundStyle(emphasized ? AnyShapeStyle(.foreground) : AnyShapeStyle(Color.inkDim))
             }
             if let context = entry.context {
                 Text(context)
