@@ -1,0 +1,78 @@
+/* Freeside design tokens — light = Freeside (day), dark = Straylight (dusk).
+   Modes follow the viewer's system; override with [data-theme].
+   Mirrors app/Sources/FreesideCore/DesignLanguage.swift (Sept 2026): the brand
+   tokens keep their identity values; the -text / -border / -wash cuts are the
+   contrast-safe working set every built surface uses. */
+:root {
+  --ground: #ede7d6;
+  --ground-2: #f3eee1;
+  --ground-3: #e4ddc7;
+  --sidebar-ground: #e4ddc7;
+  --rule: #d6cdb2;
+  --rule-strong: #877d5c;       /* Increased Contrast rule */
+  --text: #2b2416;
+  --text-dim: #675d49;          /* was #6e6450; lifted for 4.5:1 on ground-2 */
+  --text-faint: #94896e;
+  --accent: #8f6b14;            /* bronze — identity value, borders, marks */
+  --accent-text: #7d5c0e;       /* accent as text on ground/ground-2 */
+  --accent-border: #8f6b14;
+  --accent-dim: #b99a4a;
+  --accent-wash: #e9dfc2;
+  --accent-wash-soft: #ece4cd;
+  --wax: #8a2d1c;               /* seal moments only */
+  --wax-text: #8a2d1c;
+  --wax-wash: #e8d5c9;
+  --water: #6f9ea3;             /* pool — identity value */
+  --water-text: #3e6d72;        /* water as text */
+  --water-wash: #dce6e4;
+  --neutral-wash: #e8e2cd;      /* quiet success */
+  --milestone-prior: #b9af92;
+  --milestone-connector: #ddd4b9;
+  --ic-accent-text: #6b4e0b; --ic-wax-text: #71230f; --ic-water-text: #33595e;
+  --mark-frame-w: 3.5;
+  --mark-inlay-w: 2.6;
+  --serif: "Source Serif Pro", "Source Serif 4", "Iowan Old Style", Palatino, Georgia, serif;
+  --sans: "IBM Plex Sans", "Avenir Next", "Helvetica Neue", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground: #16120e; --ground-2: #1e1812; --ground-3: #292117; --sidebar-ground: #1e1812;
+    --rule: #322a1e; --rule-strong: #786d58;
+    --text: #eae3cf; --text-dim: #b3a88e; --text-faint: #7d7460;
+    --accent: #c2912e; /* tawny */ --accent-text: #c2912e; --accent-border: #8a6a26; --accent-dim: #8a6a26;
+    --accent-wash: #26200f; --accent-wash-soft: #221c11;
+    --wax: #9a3520; --wax-text: #d26d4a; /* legibility lift */ --wax-wash: #241310;
+    --water: #5d8489; /* mere */ --water-text: #7faaaf; --water-wash: #17201f;
+    --neutral-wash: #221c11; --milestone-prior: #4a3f2c; --milestone-connector: #292117;
+    --ic-accent-text: #e0ae46; --ic-wax-text: #dc7a57; --ic-water-text: #9cc3c7;
+    --mark-frame-w: 3.2; --mark-inlay-w: 2.4;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #16120e; --ground-2: #1e1812; --ground-3: #292117; --sidebar-ground: #1e1812;
+  --rule: #322a1e; --rule-strong: #786d58;
+  --text: #eae3cf; --text-dim: #b3a88e; --text-faint: #7d7460;
+  --accent: #c2912e; --accent-text: #c2912e; --accent-border: #8a6a26; --accent-dim: #8a6a26;
+  --accent-wash: #26200f; --accent-wash-soft: #221c11;
+  --wax: #9a3520; --wax-text: #d26d4a; --wax-wash: #241310;
+  --water: #5d8489; --water-text: #7faaaf; --water-wash: #17201f;
+  --neutral-wash: #221c11; --milestone-prior: #4a3f2c; --milestone-connector: #292117;
+  --ic-accent-text: #e0ae46; --ic-wax-text: #dc7a57; --ic-water-text: #9cc3c7;
+  --mark-frame-w: 3.2; --mark-inlay-w: 2.4;
+}
+:root[data-theme="light"] {
+  --ground: #ede7d6; --ground-2: #f3eee1; --ground-3: #e4ddc7; --sidebar-ground: #e4ddc7;
+  --rule: #d6cdb2; --rule-strong: #877d5c;
+  --text: #2b2416; --text-dim: #675d49; --text-faint: #94896e;
+  --accent: #8f6b14; --accent-text: #7d5c0e; --accent-border: #8f6b14; --accent-dim: #b99a4a;
+  --accent-wash: #e9dfc2; --accent-wash-soft: #ece4cd;
+  --wax: #8a2d1c; --wax-text: #8a2d1c; --wax-wash: #e8d5c9;
+  --water: #6f9ea3; --water-text: #3e6d72; --water-wash: #dce6e4;
+  --neutral-wash: #e8e2cd; --milestone-prior: #b9af92; --milestone-connector: #ddd4b9;
+  --ic-accent-text: #6b4e0b; --ic-wax-text: #71230f; --ic-water-text: #33595e;
+  --mark-frame-w: 3.5; --mark-inlay-w: 2.6;
+}
+/* Semantic reminder: green belongs to success/go and never brands anything;
+   success is quiet (shape + neutral tick on --neutral-wash); failure uses wax;
+   attention uses the accent; in-progress uses water. Semantic colors never borrow the accent. */
