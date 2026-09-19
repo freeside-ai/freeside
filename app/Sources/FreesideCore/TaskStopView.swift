@@ -12,6 +12,15 @@ struct TaskStopView: View {
         coordinator.tasks.first { $0.task.id == taskID }
     }
 
+    /// True while the control is the Stop button alone, with no sentence
+    /// or second button. Only then can a host set it beside something else;
+    /// any state that speaks takes its own row.
+    var showsOnlyTheStopButton: Bool {
+        snapshot?.task.cancellation == nil && !model.sending.contains(taskID)
+            && model.pending(for: taskID) == nil && model.unavailableReason == nil
+            && model.messages[taskID] == nil
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let cancellation = snapshot?.task.cancellation?.value1 {
@@ -38,9 +47,21 @@ struct TaskStopView: View {
                         .disabled(coordinator.store.freshness == .unauthenticated)
                 }
             } else if snapshot?.task.cancellation == nil {
-                Button("Stop task…", role: .destructive) { confirmation = model.prepare(taskID: taskID) }
-                    .disabled(model.unavailableReason != nil || snapshot == nil)
-                    .accessibilityHint("Review what stopping this task will do")
+                Button(role: .destructive) {
+                    confirmation = model.prepare(taskID: taskID)
+                } label: {
+                    Label {
+                        Text("Stop task…")
+                    } icon: {
+                        Image(systemName: "stop.fill").font(.system(size: 9))
+                    }
+                }
+                // The wax outline, never filled: the tone the consequence
+                // sheet uses for a destructive choice. It hugs its label so
+                // it can share the header row.
+                .buttonStyle(FreesideActionButtonStyle(tone: .destructive, compact: true, expands: false))
+                .disabled(model.unavailableReason != nil || snapshot == nil)
+                .accessibilityHint("Review what stopping this task will do")
             }
             if let reason = model.unavailableReason { Text(reason) }
             if let message = model.messages[taskID] { Text(message) }
