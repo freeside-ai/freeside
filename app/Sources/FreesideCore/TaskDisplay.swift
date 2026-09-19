@@ -23,8 +23,26 @@ enum TaskDisplay {
         var hold: String? { holdReason.map(RunDisplay.label) }
         var qualification: String? = nil
         var status: String? = nil
-        var guidance: String = "Open task details."
+        var guidance: String = Position.defaultGuidance
         var historical = false
+        /// True iff `guidance` targets a current open Inbox item bound to
+        /// this task: the same lookups that produce that guidance set it, so
+        /// the accent chip and the Inbox sentence can never disagree.
+        var attention = false
+        /// True iff `status` names history rather than a state (a superseded
+        /// run, an abandoned task). Narrower than `historical`, which also
+        /// covers a stopped or finished task whose status the daemon spoke.
+        var statusIsHistorical = false
+
+        /// The sentence every row carries for VoiceOver. The visible row
+        /// omits it: the row itself is the affordance.
+        static let defaultGuidance = "Open task details."
+
+        /// The status chip's cut, from what the operator can do and never
+        /// from the status word.
+        var cut: StateChip.Cut {
+            attention ? .attention : statusIsHistorical ? .faint : .ink
+        }
     }
 
     enum SpecificationApproval {
@@ -166,7 +184,9 @@ enum TaskDisplay {
             var position = phasePosition(task, runs: runs, attentionItems: attentionItems, history: history)
         else { return nil }
         let run = runs.first { $0.run.id == current.run_id }?.run
-        position.status = rowStatus(task, run: run)
+        let status = statusAndTone(task, run: run)
+        position.status = status.text
+        position.statusIsHistorical = status.isHistorical
         position.historical = !isActive(task) || run?.superseded_by != nil || run?.lifecycle == .finished
         // A current cancellation fence suppresses action guidance even when
         // older snapshots still contain an open approval or published handoff.
@@ -180,6 +200,7 @@ enum TaskDisplay {
             if let handoff = finalReviewHeading(task, run: run, attentionItems: attentionItems, titleCase: true) {
                 position.status = handoff
                 position.guidance = "Review the pull request from Inbox."
+                position.attention = true
             } else if run?.lifecycle != .finished,
                 run == nil || (run?.task_id == task.id && run?.project_id == task.project_id),
                 specificationApproval(task, runID: current.run_id, run: run, history: history)
@@ -196,6 +217,7 @@ enum TaskDisplay {
             {
                 position.status = "Specification Approval Required"
                 position.guidance = "Review the specification in Inbox."
+                position.attention = true
             }
         }
         return position
@@ -211,15 +233,36 @@ enum TaskDisplay {
     /// Task lifecycle remains the daemon's projection. A run's terminal
     /// outcome and a cancellation request are separate facts, not success.
     static func rowStatus(_ task: Components.Schemas.Task, run: Components.Schemas.Run? = nil) -> String {
-        if task.lifecycle == .stopped || task.lifecycle == .abandoned { return lifecycleLabel(task).text }
+        statusAndTone(task, run: run).text
+    }
+
+    /// The status chip's cut for a row with or without a position.
+    static func statusCut(_ task: Components.Schemas.Task, position: Position?) -> StateChip.Cut {
+        position?.cut ?? (statusAndTone(task, run: nil).isHistorical ? .faint : .ink)
+    }
+
+    /// The status and whether it names history rather than a state. One
+    /// chain decides both, so the chip's faint cut cannot drift from the
+    /// branch that chose the words: an abandoned task and a superseded run
+    /// are historical; every other status is the daemon working or having
+    /// spoken, a stopped or finished task included.
+    private static func statusAndTone(
+        _ task: Components.Schemas.Task, run: Components.Schemas.Run?
+    ) -> (text: String, isHistorical: Bool) {
+        if task.lifecycle == .abandoned { return (lifecycleLabel(task).text, true) }
+        if task.lifecycle == .stopped { return (lifecycleLabel(task).text, false) }
         if let cancellation = task.cancellation?.value1 {
             switch cancellation.state {
-            case .requested: return "Stop Requested · Awaiting Confirmation"
-            case .failed_to_stop: return "Failed to Stop · Execution May Continue"
+            case .requested: return ("Stop Requested · Awaiting Confirmation", false)
+            case .failed_to_stop: return ("Failed to Stop · Execution May Continue", false)
             case .confirmed: break
             }
         }
-        if run?.superseded_by != nil { return "Superseded Run · Historical" }
+        if run?.superseded_by != nil { return ("Superseded Run · Historical", true) }
+        return (liveStatus(task, run: run), false)
+    }
+
+    private static func liveStatus(_ task: Components.Schemas.Task, run: Components.Schemas.Run?) -> String {
         if run?.outcome == .failed { return "Execution Failed" }
         if run?.outcome == .lost { return "Execution Lost" }
         if task.lifecycle == .finished { return "Finished · See Recorded Outcome" }
@@ -234,10 +277,46 @@ enum TaskDisplay {
         return run == nil ? "Run Details Unavailable" : "In Progress"
     }
 
-    /// These exact strings are both visible text and the row's combined
-    /// accessibility content. Unknown approval is never rendered as pending.
+    /// The row's progress strings by the slot the row draws them in. The
+    /// row shows `status` as its chip, `phases` as a line, `facts` joined on
+    /// one line, and `guidance` only when it says something the row itself
+    /// does not; VoiceOver reads all of them, in this order.
+    struct RowLines: Equatable {
+        let status: String
+        let phases: String?
+        /// Round, hold, and a recorded stop confirmation, in that order.
+        let facts: [String]
+        let guidance: String
+
+        var all: [String] { [status] + [phases].compactMap { $0 } + facts + [guidance] }
+
+        enum VisibleGuidance: Equatable {
+            /// Names an Inbox destination: drawn in the link style, without
+            /// the sentence's full stop.
+            case link(String)
+            /// Says something the row does not (a capacity wait), neutrally.
+            case sentence(String)
+        }
+
+        /// What the row draws for `guidance`. The default sentence draws
+        /// nothing: the row itself is that affordance.
+        func visibleGuidance(attention: Bool) -> VisibleGuidance? {
+            if attention {
+                return .link(guidance.hasSuffix(".") ? String(guidance.dropLast()) : guidance)
+            }
+            return guidance == Position.defaultGuidance ? nil : .sentence(guidance)
+        }
+    }
+
+    /// These exact strings are the row's combined accessibility content, in
+    /// this order. Unknown approval is never rendered as pending.
     static func progressLines(_ task: Components.Schemas.Task, position: Position?) -> [String] {
-        var lines = [position?.status ?? rowStatus(task)]
+        rowLines(task, position: position).all
+    }
+
+    static func rowLines(_ task: Components.Schemas.Task, position: Position?) -> RowLines {
+        var phaseLine: String?
+        var facts: [String] = []
         if let position {
             let phases = position.rail.entries.map { entry in
                 let state =
@@ -250,18 +329,19 @@ enum TaskDisplay {
                 }
                 return "\(entry.title) \(state)"
             }
-            lines.append(phases.joined(separator: " · "))
-            if let round = position.heading?.round { lines.append(round) }
+            phaseLine = phases.joined(separator: " · ")
+            if let round = position.heading?.round { facts.append(round) }
             if let hold = position.hold, !position.historical {
                 let prefix = suppressesGuidanceForCancellation(task) ? "Last recorded hold" : "Hold"
-                lines.append("\(prefix): \(hold)")
+                facts.append("\(prefix): \(hold)")
             }
         }
         if task.cancellation?.value1.state == .confirmed, task.lifecycle == .finished {
-            lines.append("Stop Confirmation Recorded")
+            facts.append("Stop Confirmation Recorded")
         }
-        lines.append(position?.guidance ?? "Open task details.")
-        return lines
+        return RowLines(
+            status: position?.status ?? rowStatus(task), phases: phaseLine, facts: facts,
+            guidance: position?.guidance ?? Position.defaultGuidance)
     }
 
     private static func phasePosition(
@@ -389,12 +469,21 @@ enum TaskDisplay {
     /// The row's meta line: project, the issue when the source names one,
     /// and when the task was last active, in the run row's time grammar
     /// (coarse under a day, dated from a day on).
-    static func metaLine(_ task: Components.Schemas.Task, now: Date) -> String {
+    ///
+    /// `labelsActivity` false is the visible row: the time alone, in the one
+    /// short format from a day on. True is the sentence VoiceOver keeps.
+    static func metaLine(_ task: Components.Schemas.Task, now: Date, labelsActivity: Bool = true) -> String {
         var parts = [projectName(task)]
         if let issue = issueReference(task) {
             parts.append(issue)
         }
-        parts.append(RunDisplay.lastActiveSegment(task.last_activity_at, now: now))
+        if labelsActivity {
+            parts.append(RunDisplay.lastActiveSegment(task.last_activity_at, now: now))
+        } else if now.timeIntervalSince(task.last_activity_at) < 86_400 {
+            parts.append("\(AttentionDisplay.relativeRowTime(task.last_activity_at, now: now)) ago")
+        } else {
+            parts.append(FreesideFormat.shortTime(task.last_activity_at, now: now))
+        }
         return parts.joined(separator: " · ")
     }
 

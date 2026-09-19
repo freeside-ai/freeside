@@ -332,6 +332,13 @@ import Testing
         #expect(TaskDisplay.metaLine(retry, now: now) == "freeside · #724 · last active 30m ago")
         let dated = TaskDisplay.metaLine(legacy, now: legacy.last_activity_at.addingTimeInterval(3 * 86_400))
         #expect(dated.hasPrefix("freeside · last active "))
+        // The visible row drops the label and, from a day on, prints the
+        // one short time format; VoiceOver keeps the labeled line above.
+        #expect(TaskDisplay.metaLine(retry, now: now, labelsActivity: false) == "freeside · #724 · 30m ago")
+        let datedNow = legacy.last_activity_at.addingTimeInterval(3 * 86_400)
+        #expect(
+            TaskDisplay.metaLine(legacy, now: datedNow, labelsActivity: false)
+                == "freeside · \(FreesideFormat.shortTime(legacy.last_activity_at, now: datedNow))")
         #expect(TaskDisplay.issueReference(legacy) == nil)
         #expect(TaskDisplay.sourceLine(retry) == "Source: freeside-ai/freeside#724")
         #expect(TaskDisplay.sourceLine(legacy) == "Source: none recorded")
