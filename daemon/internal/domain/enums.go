@@ -1106,6 +1106,34 @@ func (c SensitivityClass) valid() bool {
 	}
 }
 
+// sensitivityRank orders the classes from least to most restrictive: normal <
+// sensitive < high_sensitivity. An invalid class ranks above every valid one so
+// a comparison that reaches an unexpected value fails closed (treated as more
+// restrictive than anything valid). The switch dispatches over the ordering and
+// so omits default; the trailing return covers the invalid zero value.
+func (c SensitivityClass) sensitivityRank() int {
+	switch c {
+	case SensitivityNormal:
+		return 0
+	case SensitivitySensitive:
+		return 1
+	case SensitivityHigh:
+		return 2
+	}
+	return int(^uint(0) >> 1)
+}
+
+// MoreRestrictiveThan reports whether c is a strictly more restrictive
+// sensitivity class than other, in the order normal < sensitive <
+// high_sensitivity. An invalid class is treated as more restrictive than any
+// valid one, so a gate written as "evidence class no more restrictive than the
+// authoring class" (!evidence.MoreRestrictiveThan(authoring)) fails closed on a
+// corrupt or unknown value. The store publication-authoring gate uses this, and
+// #1418 reuses it for its input filter (it cannot edit domain).
+func (c SensitivityClass) MoreRestrictiveThan(other SensitivityClass) bool {
+	return c.sensitivityRank() > other.sensitivityRank()
+}
+
 // Author is who wrote a conversation Message (plan §5.14). Provisional member
 // set; flagged for spine review.
 type Author string

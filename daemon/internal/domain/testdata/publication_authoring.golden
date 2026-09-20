@@ -1,0 +1,26 @@
+{
+  "encoding_version": 1,
+  "run_id": "run-1",
+  "title": "Publish the closure summary",
+  "body": "The run closed issue #42 with an evidence-backed pull request.",
+  "reviewer_notes": null,
+  "evidence_refs": [
+    {
+      "artifact_id": "art-1",
+      "digest": "sha256:92c9e63a110cad9d4ae8d3f875e1cdf9a37b2e373206fb7ee573e0d86bc6ac71"
+    },
+    {
+      "artifact_id": "art-2",
+      "digest": "sha256:fd6d4fce5a4db2002c99e05c4004c33bf97297bd1fb64428e5bf14840616b60c"
+    }
+  ],
+  "outcome_summary": "All required checks green; independent review clean.",
+  "producer": {
+    "site": "explain",
+    "producer": "claude-opus/high",
+    "input_digest": "sha256:32381523e63197c929b67f793a8098bed0ae3a6fa902634fdbcc6fa4567f3346"
+  },
+  "sensitivity_class": "normal",
+  "created_at": "2026-01-02T03:04:05Z",
+  "digest": "sha256:78263619f0ceb530b69b5533c75d1bb473027c18b02c61922ee543ec3c1734ea"
+}
