@@ -74,10 +74,14 @@ func (productionRigHost) RecoverReviewResources(
 
 type productionRigHost struct {
 	client *http.Client
+	dial   func(ctx context.Context, network, address string) (net.Conn, error)
 }
 
 func newProductionRigHost() productionRigHost {
-	return productionRigHost{client: &http.Client{Timeout: 2 * time.Second}}
+	return productionRigHost{
+		client: &http.Client{Timeout: 2 * time.Second},
+		dial:   (&net.Dialer{Timeout: time.Second}).DialContext,
+	}
 }
 
 func (h productionRigHost) ProbeDaemon(
@@ -90,10 +94,14 @@ func (h productionRigHost) ProbeDaemon(
 	if port == "0" {
 		return "", false, nil
 	}
-	connection, err := (&net.Dialer{Timeout: time.Second}).DialContext(ctx, "tcp", address)
+	connection, err := h.dial(ctx, "tcp", address)
 	if err != nil {
 		if errors.Is(err, syscall.ECONNREFUSED) {
 			return "", false, nil
+		}
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() && ctx.Err() == nil {
+			return probeListenAddressByBinding(ctx, address)
 		}
 		return "", false, fmt.Errorf("probe rig listen address %q: %w", address, err)
 	}
@@ -124,6 +132,27 @@ func (h productionRigHost) ProbeDaemon(
 	}
 	return fmt.Sprintf("freesided version=%s started_at=%s",
 		health.Version, health.StartedAt.UTC().Format(time.RFC3339)), true, nil
+}
+
+// probeListenAddressByBinding answers the occupancy question locally when a
+// dial got no answer at all. A host firewall can drop a machine's traffic to
+// its own non-loopback address instead of refusing it: Mullvad does this to
+// the Tailscale range, so a dial to the daemon's own Tailscale listen address
+// times out whether or not anything listens there. Binding sends no packets,
+// so no filter can hide the result, and the daemon binds this exact address,
+// so a live one always surfaces as EADDRINUSE.
+func probeListenAddressByBinding(ctx context.Context, address string) (string, bool, error) {
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", address)
+	if err != nil {
+		if errors.Is(err, syscall.EADDRINUSE) {
+			return "process holding the address without answering a local dial", true, nil
+		}
+		return "", false, fmt.Errorf("probe rig listen address %q by binding: %w", address, err)
+	}
+	if err := listener.Close(); err != nil {
+		return "", false, fmt.Errorf("release rig listen address probe %q: %w", address, err)
+	}
+	return "", false, nil
 }
 
 func (productionRigHost) SupervisedDaemon(ctx context.Context, label string) (bool, error) {
