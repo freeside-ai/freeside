@@ -1870,3 +1870,45 @@ Revision 61 ("Durable Task Cancellation Requests"):
    [11](#11-roadmap-build-order-and-coordination) table. (Owner-assigned #1414;
    [decision note](../../devlog/2026-09-19-0823-publication-author-site.md);
    [ADR 0003](../decisions/0003-author-client-pr-metadata-from-a-frozen-recipe.md).)
+
+---
+
+## Revision 65 ("Every Agent Activity Is a Lineup Role")
+
+1. **Every agent activity is a role that picks its agent and its prompt
+   through the lineup.** A lineup line maps one role to an agent and a prompt,
+   each by digest. The agent is the Section [5.4](#54-credential-modes-egress-profiles-and-concurrency) document, so the harness comes with
+   it and is never a separate setting. Every judgment site joins: task namer,
+   finding classifier, finding adjudicator, drift auditor, diagnostic, attention
+   discussion, and briefer, after revision 64's publication author. Roles sit
+   above stages and sites: a stage may hold several roles, a role may span
+   several sites, and each site keeps its own authority mode, fields, budget,
+   and fail-safe. The deployment lineup lists every role that policy asks work
+   from, a project lineup
+   overrides single roles, and one role never falls back to another's line. The
+   role list is closed and grows by plan revision. Each role has its own prompt,
+   admitted by its own digest; a second version is a separate named prompt, and
+   prompts carry no per-model or per-harness overlays, which answers the
+   question #989 parked here. Experiments are paired, not randomized: every run
+   and call records what ran, a judgment call may run as a shadow whose output
+   goes only to the advisory store, workspace roles compare before and after a
+   lineup change, and percentage and cohort arms are not built. (Owner
+   decisions, recorded on #900.)
+2. **Wardless roles run on the host behind a per-build no-tools proof; ward
+   roles stay in the ward.** What the role's agent can touch picks the launch
+   shape, and blocking or failing safe is a property of the role. One wardless
+   admission class covers every judgment role: the stage admission steps with
+   runner conformance dropped and the call launch proved per adapter build.
+   Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admission, holds the class, the interim hand-audit exception,
+   credential handling on the host, the unbound-role rule, and the call record.
+   A call has no gate before first use; its site's authority contract bounds
+   it. "Not choosable" limits what a model's answer may select, not what an
+   operator writes on a lineup line. Review independence is a recorded fact,
+   never an admission gate (owner decision; Section [7](#7-review-policy)). This supersedes the
+   earlier default that the review offer's lineage group differ from the
+   implementation offer's unless a project lineup relaxed it, with unknown
+   lineage failing closed. The role-key and wardless-admission
+   vocabulary is #1421, and #867 `starts-after` it so the first real lineup
+   never carries stage-named keys. (Positions from the owner's design discussion on #900, proposed by the
+   implementing session and decided by the owner through this revision's
+   review; [decision note](../../devlog/2026-09-19-1105-judgment-roles-join-lineups.md).)
