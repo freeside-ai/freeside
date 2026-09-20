@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 64
+revision: 65
 status: active
 updated: 2026-09-19
 ---
@@ -50,6 +50,7 @@ why.
   - [5.4 Credential Modes, Egress Profiles, and Concurrency](#54-credential-modes-egress-profiles-and-concurrency)
     - [Admitted Agents](#admitted-agents)
     - [The Stage Owns the Launch](#the-stage-owns-the-launch)
+    - [Roles and Launch Shapes](#roles-and-launch-shapes)
     - [Admission](#admission)
     - [Multi-Subscription per Provider](#multi-subscription-per-provider)
     - [Observation, Never Authority](#observation-never-authority)
@@ -456,7 +457,7 @@ failure, including a review-side quota or expiry failure; it never widens a
 card's other actions.
 
 Each explicit agent-switch retry creates a new run of the same task. It preserves the
-original failure and its evidence, re-evaluates cost owner and the Section [7](#7-review-policy) review-independence rule
+original failure and its evidence, re-evaluates cost owner and the Section [7](#7-review-policy) review-independence record
 against the new agent, and continues provider state only where the adapter
 proves compatibility (Section [5.8](#58-control-plane-trust); a different adapter is a fresh invocation).
 
@@ -1021,11 +1022,49 @@ are the agent's route and the adapter's client kind; the effort is one the offer
 allows and the adapter can send; and the enrollment's identity is enabled.
 
 "Harness, model, effort" is how a client renders an agent. A **lineup** is a
-policy's map of roles to agents. The project lineup, or the deployment lineup
-beneath it, is the only standing selection and the only approval. The one
-per-attempt selection is the Section [4](#4-the-attention-model) alternate-agent card: a recorded choice
-among agents resolved from the same tree. It never approves an agent the tree
-does not carry and never changes the lineup.
+policy's map of roles to agents and prompts: each line names one role, the
+agent that performs it, and the prompt it runs, and resolves both to digests. A
+**role** is one agent activity, finer than a stage (Roles and Launch Shapes,
+below). The agent is the whole document above, so the harness comes with it: a
+GPT role may run through Codex or pi, and a Claude role through Claude Code.
+Harness is never a setting apart from the agent.
+
+The deployment lineup holds the defaults: one line for every role that policy
+asks work from. A project lineup overrides single roles. A role needs a line
+only while policy asks for its work:
+the shadow reviewer at a zero shadow rate, the drift auditor with its key unset,
+and a role whose work is not built yet are off, not unbound. One role never
+falls back to another role's line: a remediator with no line does not borrow the
+implementer's. A wardless role may carry, beside its one line, at most one
+optional shadow line naming a second agent and prompt (Section
+[5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)). A
+project lineup overrides it per role like the primary line, and a shadow line is
+never a fallback for a missing primary line. How a lineup encodes the lines
+belongs to the lineup contract (#1421). The role list
+is closed, so a lineup line naming an unknown role is rejected, and it grows by
+plan revision (Section
+[5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)
+holds the list).
+
+Each role has its own prompt, one named document in the prompt package,
+admitted by its own digest. A second version of a prompt is a separate named
+prompt beside the first, and the lineup line is the only pointer to which one
+runs. Prompts carry no per-model or per-harness overlays. A ward role's
+harness-specific text already has a carrier, the vendor instructions (Section
+[5.8](#58-control-plane-trust)). A call has no such carrier: nothing harness-specific reaches it but
+its prompt, so a call prompt that must differ by harness is a second named
+prompt. A site's fixed output-shape instruction (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) is the
+daemon's and belongs to the site. It is the same under every agent and lineup
+line, so it is not an overlay. An overlay would make one prompt name mean
+different text under different agents, which breaks the prompt digest as a
+comparison key.
+
+The project lineup, or the deployment lineup beneath it, is the only standing
+selection and the only approval. The one per-attempt selection is the Section
+[4](#4-the-attention-model) alternate-agent card: a recorded choice among agents resolved from the
+same tree. It never approves an agent the tree does not carry and never changes
+the lineup. It selects an agent only: the role's prompt stays the one its
+lineup line names, for a stage attempt and for a call alike.
 
 The lines:
 
@@ -1064,7 +1103,7 @@ The lines:
   capabilities it honours in a closed vocabulary of its own (read tools,
   mutation tools, exact resume, instruction delivery, structured output,
   context severance, auxiliary-inference control, store contract per
-  route). `AgentVendor`, the instruction mechanism, is derived from the
+  route, and the call launch below). `AgentVendor`, the instruction mechanism, is derived from the
   adapter and never selected by policy.
 - `offer` is a content-addressed fragment: one route's offer of one model,
   with its route model id, lineage group, `identity_stability` (pinned,
@@ -1086,13 +1125,56 @@ define a launch: writer or read-only, output contract, severance, session
 mode, and an auxiliary-inference policy (`forbidden`, `declared`, or
 `observed`). The adapter maps the launch to harness-native controls or
 declares that it cannot. So any stage runs on any adapter whose proved
-capabilities cover its launch, and an agent carries no role. Review and
-experiment arms require `forbidden`; the Claude baseline runs `observed`.
+capabilities cover its launch, and an agent carries no role. Review requires
+`forbidden`; the Claude baseline runs `observed`.
 An agent narrows behaviour inside a stage. It never waives or widens the
 stage's floors: no GitHub write credential in a workspace, publication
 credentials withheld, review's fresh context and read-only workspace,
 base/head invalidation, and the role capability ceilings all hold whatever
 the agent.
+
+#### Roles and Launch Shapes
+
+A role owns a prompt and a lineup line, and it sits above stages and sites. A
+stage may hold several roles: implementation holds the implementer and the
+remediator, and review holds the reviewer and the shadow reviewer. Every role
+in a stage runs that stage's launch under that stage's floors. A role may span
+several Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) sites: the publication author has two. Each site keeps
+its own authority contract, whatever role it belongs to (Section
+[5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)). Sites are not folded into stages, because a site's authority
+contract is what bounds a model answer and a stage has none to give it.
+
+There are two launch shapes. The **stage launch** is the one above: a
+workspace, tools, and a ward. The **call launch** is the shape of every Section
+[5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) site: no tools of any kind, no workspace, one turn, Freeside's prompt, the
+site's fixed instruction where it declares one, and no other instruction,
+structured output, no saved session, and no user or host
+configuration. The harness runs in an empty directory the daemon creates, in
+an environment the daemon builds from nothing, with its update, telemetry, and
+other non-inference traffic switched off. It receives one credential for one
+route and never reads, refreshes, or writes a credential store.
+
+One host file can survive all of that. A harness may keep loading an
+administrator policy that no launch flag switches off, as Claude Code does with
+its managed settings. The call launch proof is per build, not per host, so it
+cannot see that file. This is a stated residual: how a call launch binds,
+fences, or excludes such a file is not settled here (#1424).
+
+What the role's agent can touch picks the shape. A role whose agent has no
+tools and no workspace is a **wardless role**: it runs on the host under the
+Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) inference contract. A role whose agent has either is a **ward
+role** and runs in the ward. The two are safe for opposite reasons. A wardless
+role cannot act, so its only output is a schema-validated answer bounded by its
+site's authority contract. A ward role can act, so it is sandboxed. One runtime
+cannot serve both: a tool-using role on the host would be unsandboxed, and a
+call in the ward would add nothing the no-tools proof does not already give
+while making every judgment call wait on a container and tying the daemon's
+fail-safe behaviour to ward availability.
+
+Whether a failure blocks the run or returns a declared fail-safe is a property
+of the role, not of the launch shape. The task namer fails safe to the
+identifier fallback; the adjudicator's fail-safe parks its batch to human
+attention; a ward role's failure blocks its stage.
 
 #### Admission
 
@@ -1148,24 +1230,97 @@ a durable contradiction, never a log line. Pre-proving a rolling upstream would
 be fiction; offers say so with `identity_stability`, and records claim only what
 the route exposed.
 
-Every run records what was requested (agent name and bound digest, one
-provenance entry per role), what was admitted (the step 5 snapshot), and
-what was observed (effective model and serving operator with provenance,
-usage redacted and sourced, auxiliary inference, routing). Observed facts
-never authorise a future selection; they are authoritative history. A
+A wardless role is admitted through the same five steps, as one **wardless
+admission class** shared by every judgment role (revision 64 introduced it for
+the publication author; its "admitted inference driver" is the adapter here,
+and its "prompt-package digest" is the role's prompt digest). Stage admission's
+ward-only parts fall away or change hands, and nothing else does:
+
+- *Resolve* holds unchanged, and the role's prompt resolves by digest in the
+  same revision.
+- *Selected* holds unchanged: by the lineup, or by the Section [4](#4-the-attention-model)
+  alternate-agent card's recorded choice for the attempt, where a card surfaces
+  the call's failure.
+- *Proved* keeps the adapter half and drops the runner half, because there is
+  no ward to conform. The call launch is a launch capability in the adapter's
+  closed vocabulary, and the adapter build's conformance record must have
+  proved it. The stage contract suite proves it per build against the real
+  harness, as it proves every other launch capability: launched as the adapter
+  launches it, the harness meets every clause of the call launch (Roles and
+  Launch Shapes, above), with no tool built in, configured, or served.
+  The store contract changes hands with the ward gone. A ward mount and the
+  egress proxy enforce it for a stage. On the host neither exists, so the daemon
+  keeps the enrollment's store to itself and hands the call only the current
+  generation's credential, and the call launch proof is what shows the harness
+  neither refreshes that credential nor reaches an update or telemetry host. No call runs on an adapter
+  build whose record lacks the call launch, and a deterministic fake or a
+  budget never stands in for it, since they cover output handling and not what
+  the harness can do. A hand audit is not a proof. The one exception is
+  interim: the single Claude call driver that exists today keeps running on its
+  hand audit, for the harness build that audit covered and no other, until its
+  adapter carries the record. No second call driver joins on a hand audit
+  (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)).
+- *Credentialed* holds unchanged. A judgment role's agent names an enrollment
+  on its `who` line like any other agent, the generation rules apply, and the
+  call draws on that identity's budget and usage pool. The judgment calls'
+  borrowed review credential is the interim flag path and ends at the cutover
+  below.
+- *Snapshot* holds, with the call record in the place of `ExecutionAdmission`
+  (the record paragraph below).
+
+The attended first run does not apply to a call. It gates a pair's move to
+unattended operation on an operator having looked at a run, and a call that
+lasts seconds inside the daemon has no attended mode for an operator to sit in.
+So a call has no gate before first use, and the plan does not pretend the
+audit is one. What bounds a bad new agent or prompt is what bounds any answer:
+the site's authority contract, its ceilings, and its fail-safe. Where a site
+carries a sampled audit (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)), that audit is the operator's look
+after the fact. An operator
+who wants the look before the answers count runs the new line as a shadow first
+(Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)).
+
+An upgrade can add a role
+that the deployed lineup does not list yet, and the change that adds a role
+names the lineup line to add. Until the line exists, a wardless role does not
+run: each of its sites returns its declared fail-safe, and the daemon raises a
+`system_health` item naming the role and the missing line, never only a log
+entry. A wardless role whose admission fails at any step behaves the same way.
+The item's posture is the building unit's to settle (#1425). A ward role with
+no line blocks its stage and raises an AttentionItem, because a stage has no fail-safe to return.
+
+Every run records what was requested (agent and prompt, each by name and bound
+digest, one provenance entry per role), what was admitted (the step 5
+snapshot), and what was observed (effective model and serving operator with
+provenance, usage redacted and sourced, auxiliary inference, routing). Observed
+facts never authorise a future selection; they are authoritative history. A
 versioned **treatment digest** groups runs for comparison (Section [8](#8-observability-and-optimization-telemetry)). It
 covers route behaviour, adapter, launch, offer behaviour, and requested and
 effective effort, and it excludes enrollment, generation, cost owner,
 pricing, terms, deprecation, and labels. The agent digest stays the audit
-key.
+key. The treatment digest leaves out the prompt, so the prompt digest is its
+own comparison key beside it.
 
-The Section [7](#7-review-policy) review-independence rule reads the offers. By default the review
-offer's lineage group differs from the implementation offer's. The group is
-derived per vendor family and curated conservatively; the same weights through
-any route are one group; unknown lineage fails closed. A project lineup may
-relax the rule with a stated reason; every card and record then carries which
-rule applied. This supersedes the provider-plus-identity comparison: stricter by
-default, explicit when not.
+Every judgment call records the same three layers at call grain: its role and
+site; the agent digest, prompt digest, and treatment digest; the lineup
+revision and the enrollment generation it used; what was observed (effective
+model, serving operator, and usage, as a run records them); the call it
+shadows, if any; and the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) input digests it already records. A call's treatment
+digest is computed like a run's, with the call launch's digest in the launch
+position. That digest is one per proved call launch version and the same at
+every site, so the site stays a separate key and two agents compare at one
+site on equal terms. Comparison is paired, not randomized: a shadow and the
+call it shadows share one input digest, and a workspace role is compared
+before and after a lineup change by treatment and prompt digest.
+
+Review independence (Section [7](#7-review-policy)) is a recorded fact, never an admission gate
+(owner decision, revision 65); that section holds the rule and names the
+judging and writing roles whose pairing is recorded. The record reads the
+offers' lineage groups. A
+group is derived per vendor family and curated conservatively; the same weights
+through any route are one group; unknown lineage is recorded as unknown. This supersedes the earlier default, under
+which the review offer's lineage group had to differ from the implementation
+offer's unless a project lineup relaxed the rule with a stated reason, and
+unknown lineage failed closed.
 
 The `ProviderProfile` of revision 36 is superseded. Its approval role moved to
 agents and lineups in the tree, and its remaining facts, `enabled` and
@@ -1179,8 +1334,10 @@ the interim flag selection stays active. The second step is the operator's:
 with an initial generation and emits a proposed baseline patch (the baseline
 agents, the deployment lineup, and their attended-run marks, carrying resolved
 enrollment ids). A human commits it. Selection activates and queued inputs are
-rewritten to agent digests. The flags are removed once every baseline role
-admits.
+rewritten to agent digests. The baseline lineup lists every role that policy
+asks work from by role name, judgment roles included, and never a stage name,
+so the first real lineup needs no key migration. The flags, the judgment and
+review flags among them, are removed once every such role admits.
 
 The baseline is honest: today's Claude path passes neither a model nor an effort
 flag, so its offer is `claude-code-native-default` with `identity_stability`
@@ -1204,11 +1361,19 @@ admitted-agent contract unit and the enrollment unit (#867), not listed here.
 Deliberately not built:
 
 - A qualification ledger with projections and supersession (two proofs suffice,
-  the adapter suite per build and the attended first run per agent × launch).
+  the adapter suite per build and the attended first run per agent × launch;
+  a call has the first only, bounded by its site's authority contract).
 - Alias and withdrawal machinery (the tree is the active set and git is its
   history).
 - Stored projections beyond the treatment digest.
-- Named independence policies beyond the one rule and its knob.
+- Percentage and cohort experiment arms. At one operator's volume, a few dozen
+  tasks a week, a random split cannot separate two options, and a paired
+  comparison on identical input can. Revisit if a role reaches hundreds of runs
+  a month or a second operator joins.
+- One runtime for every role, fallback from one role's lineup line to
+  another's, and per-model or per-harness prompt overlays (each rejected above).
+- Independence gates or named independence policies. The pairing is a recorded
+  fact (Section [7](#7-review-policy)).
 - Enforcement of auxiliary inference where the baseline cannot honour it.
 - A separate credential-pass record (it is a proved adapter capability).
 
@@ -2438,7 +2603,19 @@ The engine, not an agent, runs deterministic policy jobs:
 Agents appear where judgment is the work: specifier, implementer, remediator,
 diagnostic, task namer, publication author, finding classifier, finding
 adjudicator (Section [7](#7-review-policy)), drift auditor (Section [7](#7-review-policy)),
-reviewer, shadow reviewer, and, later, briefer.
+attention discussion, reviewer, shadow reviewer, and, later, briefer.
+Attention discussion is the explain site that answers a Discuss turn on an
+item with a reply for display. Its fail-safe is an empty reply, and each turn is
+one call that receives the conversation so far as input, so it fits the call
+launch with no saved session. It is not the Section [7](#7-review-policy) re-invocation that a
+Discuss response to a `finding_adjudication` item triggers; that is the finding
+adjudicator's site and runs on the adjudicator's line.
+
+Each of these is a **role**, and this list is the closed role list of Section
+[5.4](#54-credential-modes-egress-profiles-and-concurrency): every role picks its agent and its prompt through the lineup. The
+specifier, implementer, remediator, reviewer, and shadow reviewer are ward
+roles. The rest are wardless roles whose work is the judgment calls below.
+Verification is an engine job, above, and never a role.
 
 Evidence publication stays on the deterministic-jobs list. Writing the public
 pull-request text is the judgment the publication author supplies; publishing it
@@ -2461,6 +2638,40 @@ explain sites and audit telemetry, lives in an advisory store that policy
 evaluation structurally cannot reach. That store stays separate from the
 Section [8](#8-observability-and-optimization-telemetry) policy-input telemetry.
 
+Every site belongs to exactly one role, and the role's agent and prompt come
+from the lineup (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Roles and Launch Shapes). No site is pinned to a
+deployment-wide model binding. The role decides who answers and with what
+prompt; the site still decides what an answer may do. A lineup line changes
+neither a site's authority mode nor its outbound fields, budget, ceilings, or
+fail-safe.
+
+A call may run as a **shadow** of another call: the same site and the same
+input, under a different agent or prompt that the lineup names on the role's
+shadow line. Any agent may shadow any other: another model, another effort
+level, another harness, or another provider, from the primary's lineage or not
+(owner decision, revision 65). A shadow line is optional, and the shadow is
+admitted like any call. A shadow's output goes only to the advisory store, whatever the site's
+authority mode. It never annotates, proposes, or chooses, and nothing reads it
+back into the run. This uses the rule above that telemetry reuse is a sink and
+adds no authority mode. A shadow must never cost a primary call its answer. So
+a shadow's draw on every bound Freeside itself meters is kept apart from its
+primary's, and a shadow that cannot be admitted, or whose own allowance is
+short, is skipped, never the primary. A shadow line's failure is the shadow's
+alone: it never makes its role unbound (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admission). How each
+bound is partitioned is the building unit's to settle (#1429), not this
+section's. A vendor's usage pool is outside Freeside's metering: a shadow whose
+agent shares its primary's usage pool still draws on that pool, and an operator
+who wants isolation there names a shadow agent on a different usage pool. A shadow sends the site's
+allowlisted fields to a second agent's route, so the site's sensitivity and
+redaction rules bind the shadow's route as they bind the primary's. Label roles compare the two labels with each other and with the
+human's eventual decision; prose roles show the operator both outputs on a
+sample. This borrows the pattern of the Section [7](#7-review-policy) shadow review and replaces
+randomized experiment arms, which are not built (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)). It is a rule
+for judgment calls only. The shadow reviewer is a ward role under Section [7](#7-review-policy)'s
+own rules, which this leaves unchanged: its findings are recorded and never
+routed, and a credible critical or high shadow finding still blocks ready
+status.
+
 Every call site carries exactly one per-site authority contract:
 
 1. **Ceiling-bounded annotation** (type case: the finding classifier; the
@@ -2478,7 +2689,11 @@ Every call site carries exactly one per-site authority contract:
 3. **Proposal** into the closed effect registry below.
 4. **Bounded choice** among daemon-authored options whose worst-case effects
    were independently bounded before the call; cross-vendor driver selection is
-   not choosable (standing owner decision).
+   not choosable (standing owner decision). That limits what a model's answer
+   may select: no answer ever picks the vendor, adapter, or agent that runs
+   anything. An operator naming a vendor's agent on a lineup line is a
+   different act, configuration reviewed as a diff, and does not conflict with
+   it.
 
 Cumulative bounds compose globally: per-site budgets aggregate across sites and
 runs under project-level and global windows, attributed to root lineage.
@@ -2521,10 +2736,12 @@ labeled claims. Section [3.1](#31-autonomy-inside-the-ward)'s "designed judgment
 points.
 
 Daemon-side inference is its own contract, not a reuse of `provider_only`. It
-covers driver binding, credential handling, outbound field selection (an
-explicit allowlist per site), input sensitivity classification, redaction,
-provider identity, retention, size limits, and the input digests recorded per
-call. No tools, no workspace, no ward container.
+covers outbound field selection (an explicit allowlist per site), input
+sensitivity classification, redaction, provider identity, retention, size
+limits, and the input digests recorded per call. Driver binding and credential
+handling come from the role's admitted agent: the adapter is the driver, proved
+for the call launch, and the agent's enrollment is the credential (Section
+[5.4](#54-credential-modes-egress-profiles-and-concurrency), Admission). No tools, no workspace, no ward container.
 
 The publication author is a judgment role, not a pinned site. Like the
 specifier, implementer, remediator and reviewer, it carries a refinable prompt
@@ -2541,14 +2758,14 @@ runner and ward-conformance proof the execution roles use: its launch proof is
 the admitted inference driver and prompt-package digest. The deterministic fake
 and budget cover output handling, but they do not prove the real harness runs
 with no tools, which is the whole safety argument for a wardless role. That
-no-tools proof is interim: hand-audited for the single Claude driver today, with
-a per-driver capability proof (as the stage adapter-conformance suite provides)
-left to #900 before other call drivers join. This extends the admitted-agent
-contract with a wardless judgment class. This revision decides lineup
-participation for the publication author; whether the other daemon judgment sites
-(the task namer, finding classifier, finding adjudicator, drift auditor,
-diagnostic, attention-discussion and briefer sites) also join the lineup, and
-share that admission class, stays the open decision in #900.
+no-tools proof is the call launch, which an adapter proves per build in the
+stage contract suite; the single Claude driver's hand audit is the one interim
+exception (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admission). This extends
+the admitted-agent contract with a wardless judgment class. Revision 64 decided
+lineup participation for the publication author; revision 65 decides it for
+every other judgment site (the task namer, finding classifier, finding
+adjudicator, drift auditor, diagnostic, attention-discussion and briefer
+sites): each belongs to a lineup role and shares that admission class.
 
 The role comprises two sites, keeping the one-authority-per-site rule: an
 **explain** prose site producing the title, body prose describing what the pull
@@ -3498,13 +3715,35 @@ Scheduled Codex execution (Section [11](#11-roadmap-build-order-and-coordination
 Codex-reviews a same-vendor pairing. That weakens the independence this section
 targets. It also makes a selectable Claude ReviewSource more valuable later.
 The sequencing above and the deferred #397 promotion keep that pairing from
-becoming the default; shadow findings stay recorded and never routed. Once
-agents are admitted (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)), the independence rule reads the two selected
-agents' offers. By default their lineage groups differ. A project lineup may
-relax that with a stated reason, and every card and record carries which rule
-applied. Switching the review agent mid-run opens a new convergence segment. So
-the yield policy never counts the new reviewer's first pass as the old
-reviewer's next round.
+becoming the default; shadow findings stay recorded and never routed.
+
+Independence is a preference the operator expresses in the lineup and a fact
+Freeside records. It is never a gate (owner decision, revision 65). Any
+combination of providers may serve any combination of roles, and the
+implementer and the reviewer may be the same agent, because Freeside has to
+keep working when one provider is out of usage or down. Once agents are
+admitted (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)), the record reads the selected agents' offers, role by
+role. The writing roles are the implementer and the remediator. The judging
+roles are the reviewer, the finding adjudicator, and the drift auditor. For
+each judging role, every card and record says whether it shared a lineage group
+with a writing role, so a same-lineage review is always visible and never
+silent.
+
+When providers allow a choice, the pairing that matters most is a judging role
+against the writing roles. A judge that shares the writers' lineage errs toward
+waving through its own family's work, which loses a defect. A judge that shares
+another judge's lineage errs toward agreeing with it, which costs rounds that
+the yield policy, the drift audit, and the ceilings below already bound.
+
+Same-lineage pairing never loosens the ceilings below. No role supplies a
+second adjudication "from a distinct agent" today, so that ceiling is met
+deterministically or by an AttentionItem whatever the pairing. An agent second
+adjudicator would be a new role, added by plan revision, with its own lineup
+line.
+
+Switching the review agent mid-run opens a new convergence segment. So the
+yield policy never counts the new reviewer's first pass as the old reviewer's
+next round.
 
 The classifier is never the sole safety gate:
 
@@ -3860,8 +4099,8 @@ findings from round N on runs a drift audit after the batch is adjudicated and
 convergence is evaluated, and before remediation. A round that any deterministic
 cause stopped runs no audit. The audit is a model call under the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)
 ceilings: it annotates and proposes, never decides; it ships with a
-deterministic fake; and it runs under the adjudicator's independence rule, so by
-default its lineage group differs from the implementing agent's.
+deterministic fake; and its pairing with the writing roles is recorded under
+Review Independence, Credibility, and Severity, above, as the adjudicator's is.
 
 Its allowlisted inputs are the approved specification, the round-1 diff, the
 current diff, the dispositions and adjudication entries so far, the instruction
@@ -3986,8 +4225,9 @@ Each run records:
 
 - stage and all governing digests;
 - per-key rein preset or override provenance;
-- the admitted agent and launch digests, the treatment digest, and the
-  requested, admitted, and observed selection facts (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency));
+- per role, the admitted agent, prompt, and launch digests, the treatment
+  digest, and the requested, admitted, and observed selection facts (Section
+  [5.4](#54-credential-modes-egress-profiles-and-concurrency));
 - driver, credential mode, egress profile, and operating mode;
 - artifacts and their provenance;
 - tokens and cost, as billable cost, reported usage, and quota consumed
@@ -3997,6 +4237,10 @@ Each run records:
 - attempts, review rounds, and yield;
 - classifier samples and shadow results; and
 - outcome and human decisions.
+
+Each judgment call records the Section [5.4](#54-credential-modes-egress-profiles-and-concurrency) call record. Role, site, treatment
+digest, and prompt digest are its comparison keys. Comparison by role is a query over these records; no experiment
+service or stored projection is built.
 
 Defect issues reference their producing runs and may carry suggested fault
 classes. That closes the attribution loop.
@@ -4676,7 +4920,7 @@ Contracts and fakes coordinate implementation. CI keeps lanes honest.
 | **6 (1B.0): convergence and yield** | Integrated | Convergence policy and the Section [7](#7-review-policy) finding-adjudication routing (#697; the spine assigns its contract splits at wave planning); the Claude shadow arm with second adjudication and sampled classification accuracy; automatic re-review of remediation heads as a standing integration test; yield history on ready-for-final-review; the full chain on the real backlog. iOS on-device install (Section [10](#10-operations-and-onboarding)). 1B.0 exit. |
 | **7 (1B.1): the decision surface** | Parallel lanes | The decision surface closes and reads from the phone. Contract-first, one serialized chain whose positions the spine assigns at planning: the revision-40 attention-presentation cluster (the Section [4](#4-the-attention-model) recommendation shape and Section [9](#9-comprehension) typed minimum card facts, #917, which must retire `adjudicate` or reassign it to an executable `review_dispute` transaction before client adoption; decision-surface identity, #942; per-type card facts, #724; adjudication finding context, #892; per-invocation cost observations, #901), then transaction closure for the remaining Phase 1 pending actions (#918, #919, #920, #921) and the retirement of `choose_alternate_profile` (#936), then Section [5.15](#515-evidence-and-images) evidence metadata (#922), pairing identity facts (#923), readiness rendering (#982), and the Section [8](#8-observability-and-optimization-telemetry)/9 comprehension-telemetry contracts the wave-10 exit evaluation reads (#924, the first unit to slip to wave 8 if review bandwidth binds). Beside the chain: the daemon fact producers, client adoption (the provisional Swift `ActionOutcome` and mock server converge with the daemon's `discuss` and spec-approval `request_changes`), and the Section [9](#9-comprehension) summary layer (#723, stage-agent-sourced, no daemon-inference call). The adjudication-size contract (#961) is placed here or in wave 9 at planning. Deferral drain: the attention-presentation and card-fact clusters only. Exit proof: every rendered Phase 1 action executes on Mac and iPhone; no action stays pending, disabled, or decorative; every card is self-contained at its Section [9](#9-comprehension) altitude; facts stay distinct from claims. |
 | **8 (1B.1): operational closure** | Parallel lanes | Freeside runs unattended, says when it is stuck, and lets published-PR activity back in. Human-gated follow-up filing with the `effect_proposal` card (Section [5.17](#517-follow-up-issue-filing)); the doctor credential-integrity probe (Section [10](#10-operations-and-onboarding)); the stall heartbeat (Section [5.12](#512-workflow-definition-initiators-and-artifacts)); the external daemon-liveness probe (Section [5.2](#52-the-daemon-and-its-supervisor), #510); the held-work item (#766); the review drift audit (Section [7](#7-review-policy); the #1048 contract, then #1049–#1053, floor before model site); the standing stopped-operation indicator (#980); device listing and revocation (#981); the clean-machine onboarding proof (#428); and the egress floor's first capabilities above it (Sections [5.4](#54-credential-modes-egress-profiles-and-concurrency), [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, `kind:contract` because `EgressProfile` is a domain enum carried in the admission record, then (b) the policy-gated project-image rebuild in the reusable builder, `starts-after` (a) because its gate reads the registry set (a) declares; both build on merged #302 and #334. Re-entry after a ready-item invalidation (#502; the spine splits its contract half at planning) and external review ingestion on published PRs (#524) share the re-entry trigger shape and land together. Deferral drain: the operational and re-entry clusters. Exit proof: a clean machine reaches an unattended real run; daemon death, crash loops, stalls, held work, a stopped state, a review loop that grows past its specification, and external review each alert without terminal patrol or manual polling. |
-| **9 (1B.1): provider diversity** | Parallel lanes; split-eligible | One agent vocabulary and a second real provider. The agent-vocabulary contract chain, positions assigned at planning: review admission and provenance (#898), the cross-lane failure model (#899), whether daemon judgment roles consume lineups (#900, decided before any utility agent exists), then agent and run facts in the clients (#979). The Codex tail: the adapter registration (#406, `starts-after` the merged admitted-agent contract #894), ward's second vendor topology (#407), the continuation compatibility digest (#873), then #397 by explicit owner decision on shadow evidence (none existed at the wave-6 exit because the shadow configuration was never approved for a project, #1001; #397 `starts-after` #898 and #869 `starts-after` #899 are recorded under the ambiguity rule for wave-9 planning to confirm), then the StageDriver binding (#408, `merges-after` #873; Section [7](#7-review-policy) keeps #397 ahead of it so that Codex-implements plus Codex-reviews does not become the default pairing); the alternate-provider retry card (#869, `starts-after` #406 and #408). Ward fronts with no open prerequisite, startable at wave start or earlier by fiat: the Codex probe refresh-safety spike (#866) and guided enrollment with the two-step cutover (#867). The doctor account probe (#868) `starts-after` #406 and #866. The pi adapter, enrollment, and specification agent (#895) `starts-after` #897 and #867, specification only, with its pre-adoption gates run against the pinned build. The spine splits this wave into 9a (contracts) and 9b (adapters) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because tracker titles must match this section's resolver pattern. Deferral drain: the agent and provider clusters. Exit proof: a real unattended Codex run and a pi specification; provider switching explicit in the lineup and visible in the clients; correct cost and independence records (#901); quota and capacity failures recover through the retry card, never a silent fallback. 1B.1 exit evaluation. |
+| **9 (1B.1): provider diversity** | Parallel lanes; split-eligible | One agent vocabulary and a second real provider. The agent-vocabulary contract chain, positions assigned at planning: review admission and provenance (#898), the cross-lane failure model (#899), judgment roles in the lineup (#900, decided in revision 65: every agent activity is a lineup role), the role-name lineup keys and wardless admission class that decision needs (#1421, `starts-after` #900), then agent and run facts in the clients (#979). The Codex tail: the adapter registration (#406, `starts-after` the merged admitted-agent contract #894), ward's second vendor topology (#407), the continuation compatibility digest (#873), then #397 by explicit owner decision on shadow evidence (none existed at the wave-6 exit because the shadow configuration was never approved for a project, #1001; #397 `starts-after` #898 and #869 `starts-after` #899 are recorded under the ambiguity rule for wave-9 planning to confirm), then the StageDriver binding (#408, `merges-after` #873; Section [7](#7-review-policy) keeps #397 ahead of it so that Codex-implements plus Codex-reviews does not become the default pairing); the alternate-provider retry card (#869, `starts-after` #406 and #408). The ward front with no open prerequisite, startable at wave start or earlier by fiat: the Codex probe refresh-safety spike (#866). Guided enrollment with the two-step cutover (#867) `starts-after` #1421, because `freesided auth adopt` emits the first real lineup and must not emit stage-named keys (owner decision, revision 65); until then #867 no longer starts early by fiat. The doctor account probe (#868) `starts-after` #406 and #866. The pi adapter, enrollment, and specification agent (#895) `starts-after` #897 and #867, specification only, with its pre-adoption gates run against the pinned build. The spine splits this wave into 9a (contracts) and 9b (adapters) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because tracker titles must match this section's resolver pattern. Deferral drain: the agent and provider clusters. Exit proof: a real unattended Codex run and a pi specification; provider switching explicit in the lineup and visible in the clients; correct cost and independence records (#901); quota and capacity failures recover through the retry card, never a silent fallback. 1B.1 exit evaluation. |
 | **10 (1B.2): the initiative view** | Integrated | Many work units become one picture. Typed relationship kinds in the Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection) capture records (#884, `exclusive-with` every open contract unit), the frontier projection, and the deterministic initiative view rendering the dependency graph (#885). 1B exit evaluation against recorded comprehension and operational evidence. |
 
 Wave 7's transaction closure also retires the `publish_blocked`
@@ -4828,41 +5072,45 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 64 ("Author PR Metadata with a Judgment Role"):
+Revision 65 ("Every Agent Activity Is a Lineup Role"):
 
-1. **A publication-author role writes public PR prose after review; the
-   publisher writes any close directive, enacted at merge.** The publication
-   author is a first-class judgment role, like the specifier, implementer,
-   remediator and reviewer: a refinable prompt and per-role agent and effort
-   selection through the admitted-agent lineup, but no workspace or tools and
-   advisory authority. It runs once after the final clean review, using
-   verification and review outcomes, and its output is stored once and
-   digest-bound. Its prose is advisory (never a policy input); unavailable
-   inference or a screen failure falls back to the path's deterministic text and
-   adds no publication block. The trusted publisher, not the agent, writes any
-   `Closes`, and only from a source the daemon can trust to name the resolved
-   issue: a daemon-bound `issue_subject` source, or a same-repository
-   client-supplied source URL as a human-confirmed recommendation. The closure
-   recommendation is an effect-registry proposal approved through the
-   `effect_proposal` action, which binds the proposal digest (verified for an
-   `issue_subject` source, an unverified recommendation for a same-repo URL); on
-   approval the publisher writes `Closes` and merging closes the issue.
-   Control-plane inputs (the target repository's template and AGENTS.md) resolve
-   from the trusted base, never the candidate head. v2 renders Markdown live
-   through a screen at least as strict as v1's, rejecting close and automation
-   directives at the body source and keeping cross-references, mentions, raw HTML
-   and invented links and images inert. This decides lineup participation for the
-   publication author; #900 covers extending it to the other judgment sites. This
-   revises revision 63's decisions that client work has no generated closing
-   directive, that no inference call feeds publication and that agent prose
-   renders only as escaped text; the first real client run (gh-imgup #82) merged
-   PR #110 without the `Closes` keyword its target repository's template
-   requires, which showed the gap. The decomposed build units are unscheduled
-   deferrals; the spine places them in a wave when it schedules them (expected
-   1B.1), and this revision does not itself schedule them or edit the Section
-   [11](#11-roadmap-build-order-and-coordination) table. (Owner-assigned #1414;
-   [decision note](../devlog/2026-09-19-0823-publication-author-site.md);
-   [ADR 0003](decisions/0003-author-client-pr-metadata-from-a-frozen-recipe.md).)
+1. **Every agent activity is a role that picks its agent and its prompt
+   through the lineup.** A lineup line maps one role to an agent and a prompt,
+   each by digest. The agent is the Section [5.4](#54-credential-modes-egress-profiles-and-concurrency) document, so the harness comes with
+   it and is never a separate setting. Every judgment site joins: task namer,
+   finding classifier, finding adjudicator, drift auditor, diagnostic, attention
+   discussion, and briefer, after revision 64's publication author. Roles sit
+   above stages and sites: a stage may hold several roles, a role may span
+   several sites, and each site keeps its own authority mode, fields, budget,
+   and fail-safe. The deployment lineup lists every role that policy asks work
+   from, a project lineup
+   overrides single roles, and one role never falls back to another's line. The
+   role list is closed and grows by plan revision. Each role has its own prompt,
+   admitted by its own digest; a second version is a separate named prompt, and
+   prompts carry no per-model or per-harness overlays, which answers the
+   question #989 parked here. Experiments are paired, not randomized: every run
+   and call records what ran, a judgment call may run as a shadow whose output
+   goes only to the advisory store, workspace roles compare before and after a
+   lineup change, and percentage and cohort arms are not built. (Owner
+   decisions, recorded on #900.)
+2. **Wardless roles run on the host behind a per-build no-tools proof; ward
+   roles stay in the ward.** What the role's agent can touch picks the launch
+   shape, and blocking or failing safe is a property of the role. One wardless
+   admission class covers every judgment role: the stage admission steps with
+   runner conformance dropped and the call launch proved per adapter build.
+   Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admission, holds the class, the interim hand-audit exception,
+   credential handling on the host, the unbound-role rule, and the call record.
+   A call has no gate before first use; its site's authority contract bounds
+   it. "Not choosable" limits what a model's answer may select, not what an
+   operator writes on a lineup line. Review independence is a recorded fact,
+   never an admission gate (owner decision; Section [7](#7-review-policy)). This supersedes the
+   earlier default that the review offer's lineage group differ from the
+   implementation offer's unless a project lineup relaxed it, with unknown
+   lineage failing closed. The role-key and wardless-admission
+   vocabulary is #1421, and #867 `starts-after` it so the first real lineup
+   never carries stage-named keys. (Positions from the owner's design discussion on #900, proposed by the
+   implementing session and decided by the owner through this revision's
+   review; [decision note](../devlog/2026-09-19-1105-judgment-roles-join-lineups.md).)
 
 ## 14. Risks
 
@@ -4873,6 +5121,7 @@ Revision 64 ("Author PR Metadata with a Judgment Role"):
 | CI privilege crossing | Attest effective authority; block candidate automation changes; fail closed on drift; prohibit the daemon host as a runner. |
 | Reviewer-instruction poisoning | Compose agent and reviewer instructions from the trusted base, never the candidate; detect instruction-path edits mechanically and surface them as advisories that the human merge gate reads (Section [5.8](#58-control-plane-trust)). |
 | **Rendered agent Markdown in a public PR** | Recipe v2 (Section [5.15](#515-evidence-and-images)) renders authored prose as live Markdown only through a screen at least as strict as v1's: it rejects closing and automation directives at the body source, rejects secrets and control characters, neutralizes cross-reference, bare-URL, commit-reference and mention autolinks, renders raw HTML inert, and resolves links and images only to existing publishable (`publish_eligible`) evidence artifacts. The author's evidence inputs are likewise restricted to policy-approved publishable evidence, so it cannot paraphrase sensitive evidence past the publication gate. On any screen or inference failure it falls back to frozen v1 escaped-text rendering, adding no new publication block. The author's control-plane inputs (the target repository's template and AGENTS.md) resolve from the trusted base, never the candidate head (Section [5.8](#58-control-plane-trust)). The publisher, not agent text, writes any close directive; the closure is an effect proposal approved through the `effect_proposal` action (digest-bound) before any `Closes` is written, and a same-repository client-supplied source URL is approved as an unverified recommendation. |
+| **Wardless roles on the host** | A judgment role runs outside the ward, so nothing sandboxes it and no egress proxy sits in front of its harness. Its safety rests on the call launch, which an adapter proves per build against the real harness; Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admission, holds the launch's clauses, the interim hand-audit exception, and credential handling on the host. The answer is schema-validated and bounded by its site's authority contract, the model sees only the site's allowlisted, redacted fields, and a shadow's output reaches only the advisory store. Residual: a harness update can change what a launch flag means, which is why the proof is per pinned build and not per harness; a host administrator policy file that no launch flag switches off is outside that per-build proof (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); and a shadow whose agent shares its primary's usage pool draws on a vendor quota that Freeside does not meter (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)). |
 | **Workspace-handoff uncertainty** | Resolved by the workspace-handoff spike: the strong class is declared and conformance-gated (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)); the same-VM fallback is refuted by execution, never implemented or declared. |
 | **Codex cloud review as a load-bearing dependency** | Realized 2026-07-31: the live-run trigger falsification (#427) showed no App-visible trigger path. The dependency is removed. Review is Freeside-invoked (Section [7](#7-review-policy)), and native review is best-effort extra evidence. |
 | Single-provider execution capacity | Claude usage limits can stall real work. Schedule the 1B Codex execution driver as a hedge (Section [11](#11-roadmap-build-order-and-coordination)). Keep selection explicit as a lineup line, never silent (a lineup may name the switch per failure class, Section [4](#4-the-attention-model)). Usage remains observed telemetry (Section [8](#8-observability-and-optimization-telemetry)). |
