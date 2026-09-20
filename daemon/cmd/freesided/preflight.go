@@ -746,10 +746,25 @@ func evaluateDaemonConflict(
 	} else if live {
 		failCheck(manifest, "daemon_conflict", "leased listener is occupied by "+description, "stop the process occupying the leased listener (#796)")
 		return false
-	} else {
-		passCheck(manifest, "daemon_conflict", "database, supervisor, and leased listener are idle")
-		return true
 	}
+	// A Tailscale-bound daemon also serves the loopback twin (#1449); an occupied
+	// twin port would collide at startup, so report it here too.
+	twin, hasTwin, err := loopbackTwinListenAddress(manifest.Rig.Resources.ListenAddress)
+	if err != nil {
+		failCheck(manifest, "daemon_conflict", "leased loopback listener could not be derived", "repair listener access before submission (#796)")
+		return false
+	}
+	if hasTwin {
+		if description, live, err := environment.ProbeDaemon(ctx, twin); err != nil {
+			failCheck(manifest, "daemon_conflict", "leased loopback listener could not be probed", "repair listener access before submission (#796)")
+			return false
+		} else if live {
+			failCheck(manifest, "daemon_conflict", "leased loopback listener is occupied by "+description, "stop the process occupying the leased loopback listener (#796)")
+			return false
+		}
+	}
+	passCheck(manifest, "daemon_conflict", "database, supervisor, and leased listener are idle")
+	return true
 }
 
 func inspectCompositionIdentity(cfg preflightConfig) (compositionIdentity, error) {

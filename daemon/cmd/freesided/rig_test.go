@@ -21,6 +21,7 @@ import (
 type fakeRigHost struct {
 	supervised     bool
 	live           bool
+	liveByAddr     map[string]bool // when set, overrides live per probed address
 	description    string
 	containers     map[string]bool
 	volumes        map[string]bool
@@ -43,6 +44,9 @@ func (h *fakeRigHost) ProbeDaemon(
 	_ context.Context, address string,
 ) (string, bool, error) {
 	h.probed = append(h.probed, address)
+	if h.liveByAddr != nil {
+		return h.description, h.liveByAddr[address], nil
+	}
 	return h.description, h.live, nil
 }
 
@@ -158,6 +162,97 @@ func TestRigHoldProbesCanonicalListener(t *testing.T) {
 	if len(host.probed) != 1 || host.probed[0] == "localhost:8677" {
 		t.Fatalf("probed addresses = %v, want one resolved listener", host.probed)
 	}
+}
+
+func TestRigHoldProbesLoopbackTwinForTailscaleListener(t *testing.T) {
+	tailscaleArgs := func(stateRoot, seedRoot, databasePath string) []string {
+		return []string{
+			"-state-root", stateRoot, "-db", databasePath,
+			"-listen", "100.64.0.1:8677", "-seed-root", seedRoot,
+		}
+	}
+
+	t.Run("occupied twin refuses the lease", func(t *testing.T) {
+		stateRoot, seedRoot, databasePath := rigCommandRoots(t)
+		host := &fakeRigHost{
+			description: "listener",
+			liveByAddr:  map[string]bool{"127.0.0.1:8677": true},
+		}
+		var stdout, stderr bytes.Buffer
+		err := runRigHoldWithLeaseRoot(
+			context.Background(), tailscaleArgs(stateRoot, seedRoot, databasePath),
+			&stdout, &stderr, host, filepath.Join(filepath.Dir(stateRoot), "rig-locks"),
+		)
+		if err == nil || !strings.Contains(err.Error(), `loopback listen address "127.0.0.1:8677" is already occupied`) {
+			t.Fatalf("hold error = %v, want an occupied loopback twin", err)
+		}
+		if !slices.Equal(host.probed, []string{"100.64.0.1:8677", "127.0.0.1:8677"}) {
+			t.Fatalf("probed = %v, want the primary then the loopback twin", host.probed)
+		}
+		if _, err := daemonlock.ReadRigManifest(stateRoot); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("refused hold left manifest: %v", err)
+		}
+	})
+
+	t.Run("idle twin probes both then holds", func(t *testing.T) {
+		stateRoot, seedRoot, databasePath := rigCommandRoots(t)
+		host := &fakeRigHost{}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		t.Cleanup(func() {
+			recovery, err := daemonlock.AcquireStaleRig(stateRoot)
+			if errors.Is(err, os.ErrNotExist) {
+				return
+			}
+			if err != nil {
+				t.Errorf("acquire interrupted rig for cleanup: %v", err)
+				return
+			}
+			if err := recovery.Close(); err != nil {
+				t.Errorf("close interrupted rig for cleanup: %v", err)
+			}
+		})
+		var stdout, stderr bytes.Buffer
+		if err := runRigHoldWithLeaseRoot(
+			ctx, tailscaleArgs(stateRoot, seedRoot, databasePath),
+			&stdout, &stderr, host, filepath.Join(filepath.Dir(stateRoot), "rig-locks"),
+		); err != nil {
+			t.Fatalf("hold with idle twin: %v", err)
+		}
+		if !slices.Equal(host.probed, []string{"100.64.0.1:8677", "127.0.0.1:8677"}) {
+			t.Fatalf("probed = %v, want the primary then the loopback twin", host.probed)
+		}
+	})
+
+	t.Run("loopback lease probes once", func(t *testing.T) {
+		stateRoot, seedRoot, databasePath := rigCommandRoots(t)
+		host := &fakeRigHost{}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		t.Cleanup(func() {
+			recovery, err := daemonlock.AcquireStaleRig(stateRoot)
+			if errors.Is(err, os.ErrNotExist) {
+				return
+			}
+			if err != nil {
+				t.Errorf("acquire interrupted rig for cleanup: %v", err)
+				return
+			}
+			if err := recovery.Close(); err != nil {
+				t.Errorf("close interrupted rig for cleanup: %v", err)
+			}
+		})
+		var stdout, stderr bytes.Buffer
+		if err := runRigHoldWithLeaseRoot(
+			ctx, rigHoldArgs(stateRoot, seedRoot, databasePath),
+			&stdout, &stderr, host, filepath.Join(filepath.Dir(stateRoot), "rig-locks"),
+		); err != nil {
+			t.Fatalf("hold with loopback lease: %v", err)
+		}
+		if !slices.Equal(host.probed, []string{"127.0.0.1:8677"}) {
+			t.Fatalf("probed = %v, want only the loopback listener", host.probed)
+		}
+	})
 }
 
 func TestRigHoldWritesAcquisitionBeforeWaitingAndPreservesManifestOnInterrupt(t *testing.T) {
@@ -750,6 +845,39 @@ func TestRigRecoverRequiresDeadListenerAndExplicitConfirmation(t *testing.T) {
 	}
 	if _, err := daemonlock.ReadRigManifest(stateRoot); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("confirmed recovery left manifest: %v", err)
+	}
+}
+
+// TestRigRecoverProbesOnlyTheRecordedListener pins that recovery never probes
+// the loopback twin, even for a Tailscale lease: a live daemon always holds the
+// recorded address, so a stray process on the loopback port must not block
+// recovery (#1449).
+func TestRigRecoverProbesOnlyTheRecordedListener(t *testing.T) {
+	stateRoot, seedRoot, databasePath := rigCommandRoots(t)
+	lease, err := daemonlock.AcquireRig(daemonlock.RigAcquireConfig{
+		Owner:     daemonlock.RigOwner{User: "operator", Host: "host", PID: os.Getpid()},
+		StateRoot: stateRoot, DatabasePath: databasePath,
+		ListenAddress: "100.64.0.1:8677", SeedRoot: seedRoot,
+		LeaseRoot: filepath.Join(filepath.Dir(stateRoot), "rig-locks"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := daemonlock.BindRigRuntimeResources(stateRoot, lease.Token(), nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.Abandon(); err != nil {
+		t.Fatal(err)
+	}
+	host := &fakeRigHost{}
+	err = runRigRecover(context.Background(), []string{
+		"-state-root", stateRoot, "-container-bin", "container-test",
+	}, ioDiscard{}, ioDiscard{}, host)
+	if !errors.Is(err, daemonlock.ErrRigRecoveryConfirmation) {
+		t.Fatalf("recover error = %v, want confirmation stop after probing", err)
+	}
+	if !slices.Equal(host.probed, []string{"100.64.0.1:8677"}) {
+		t.Fatalf("probed = %v, want only the recorded listener", host.probed)
 	}
 }
 
