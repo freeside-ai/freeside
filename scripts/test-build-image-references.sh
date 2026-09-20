@@ -57,6 +57,12 @@ cat >"$BIN_DIR/go" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'go %s\n' "$*" >>"${BUILD_IMAGE_TEST_LOG:?}"
+# Model freeside-image-build: the same `container build`, behind a managed
+# proxy the stub does not need.
+if [ "${1:-} ${2:-} ${3:-}" = "run ./cmd/freeside-image-build --" ]; then
+	shift 3
+	exec container build "$@"
+fi
 while [ "$#" -gt 0 ]; do
 	if [ "$1" = "-o" ]; then
 		: >"$2"
@@ -195,6 +201,7 @@ for builder in "${builders[@]}"; do
 	assert_contains "$case_name" "$call_log" "image push --scheme auto registry.example/freeside/${image}:contract-test" "push call"
 	assert_contains "$case_name" "$call_log" "image pull --scheme auto $expected_ref" "exact digest pull"
 	assert_contains "$case_name" "$call_log" "image inspect $expected_ref" "seeded digest verification"
+	assert_contains "$case_name" "$call_log" "go run ./cmd/freeside-image-build -- " "managed build proxy"
 	if [ "$script" = build-agent-codex-image.sh ]; then
 		assert_contains "$case_name" "$call_log" \
 			"--build-arg CODEX_VERSION=0.147.0 --build-arg CODEX_PACKAGE_SHA256=$(printf 'a%.0s' {1..64})" \
@@ -205,6 +212,19 @@ for builder in "${builders[@]}"; do
 		"image pull --scheme auto $expected_ref" \
 		"image inspect $expected_ref" \
 		"push, exact pull, and digest verification were not ordered"
+
+	case_name="$script operator proxy"
+	: >"$LOG"
+	HTTPS_PROXY=http://proxy.example:3128 run_builder "$script" "${args[@]}"
+	call_log=$(cat "$LOG")
+	assert_equal "$case_name" 0 "$RC" "exit status"
+	assert_contains "$case_name" "$call_log" \
+		"build --build-arg HTTPS_PROXY=http://proxy.example:3128 --build-arg HTTP_PROXY=http://proxy.example:3128" \
+		"operator proxy build arguments"
+	case "$call_log" in
+	*freeside-image-build*) report_failure "$case_name" "an operator proxy must replace the managed build proxy" ;;
+	*) pass=$((pass + 1)) ;;
+	esac
 
 	case_name="$script mismatched registry digest"
 	: >"$LOG"
