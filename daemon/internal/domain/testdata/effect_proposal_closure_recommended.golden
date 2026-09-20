@@ -1,0 +1,19 @@
+{
+  "encoding_version": 1,
+  "kind": "source_issue_closure",
+  "resolved_policy_run_id": "run-policy",
+  "resolved_policy_digest": "sha256:57afc93cbc6ec4a3dc987a7803b24f65f954d481569bdd5af0dc74e4fd251d11",
+  "run_proposal": null,
+  "source_issue_closure": {
+    "subject_handle": "subject-opaque-1",
+    "target": {
+      "repo": "octo/repo",
+      "repository_id": 42,
+      "issue_number": 9
+    },
+    "resolves": true,
+    "provenance": "recommended",
+    "origin": "propose_site"
+  },
+  "digest": "sha256:3114e0a8fa90204c6a2fd45d5385a4b80e75c4cff229612b5e07b5893240aae7"
+}

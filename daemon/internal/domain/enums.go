@@ -75,14 +75,65 @@ const (
 	// version and a digest re-binding migration, so the identifier renamed
 	// to the task_proposal vocabulary while the encoding did not (#1210).
 	EffectTaskProposal EffectKind = "run_proposal"
+	// EffectSourceIssueClosure is the second registry member: an effect that
+	// proposes closing the source issue a work unit's pull request resolves
+	// (plan §5.13). Its parameter type and gate live in effect_proposal.go.
+	EffectSourceIssueClosure EffectKind = "source_issue_closure"
 )
 
 // AllEffectKinds is the single registration point for effect kinds.
-var AllEffectKinds = []EffectKind{EffectTaskProposal}
+var AllEffectKinds = []EffectKind{EffectTaskProposal, EffectSourceIssueClosure}
 
 func (k EffectKind) valid() bool {
 	switch k {
-	case EffectTaskProposal:
+	case EffectTaskProposal, EffectSourceIssueClosure:
+		return true
+	default:
+		return false
+	}
+}
+
+// ClosureProvenance is the trust a source-issue-closure proposal's target
+// earns, fixed by plan §5.13: verified when the daemon itself bound the issue
+// subject, recommended when a same-repository target came from a client-supplied
+// source the daemon cannot independently re-derive. The zero value is invalid.
+type ClosureProvenance string
+
+const (
+	ClosureProvenanceVerified    ClosureProvenance = "verified"
+	ClosureProvenanceRecommended ClosureProvenance = "recommended"
+)
+
+// AllClosureProvenances is the single registration point for closure provenance.
+var AllClosureProvenances = []ClosureProvenance{ClosureProvenanceVerified, ClosureProvenanceRecommended}
+
+func (p ClosureProvenance) valid() bool {
+	switch p {
+	case ClosureProvenanceVerified, ClosureProvenanceRecommended:
+		return true
+	default:
+		return false
+	}
+}
+
+// ClosureFlagOrigin records which mechanism produced a source-issue-closure
+// proposal: propose_site when the inference site emitted the flag, or
+// daemon_fallback when the daemon minted a durable resolve-false proposal
+// because the site or its admission failed (plan §5.13, #1419). The zero value
+// is invalid.
+type ClosureFlagOrigin string
+
+const (
+	ClosureFlagOriginProposeSite    ClosureFlagOrigin = "propose_site"
+	ClosureFlagOriginDaemonFallback ClosureFlagOrigin = "daemon_fallback"
+)
+
+// AllClosureFlagOrigins is the single registration point for the flag origin.
+var AllClosureFlagOrigins = []ClosureFlagOrigin{ClosureFlagOriginProposeSite, ClosureFlagOriginDaemonFallback}
+
+func (o ClosureFlagOrigin) valid() bool {
+	switch o {
+	case ClosureFlagOriginProposeSite, ClosureFlagOriginDaemonFallback:
 		return true
 	default:
 		return false

@@ -1,0 +1,7 @@
+{
+  "proposal_digest": "sha256:b0af0c26b04f6f9b8ca3f639e137875b262b5e22f781cdf8612a846b00aeee35",
+  "publication_identity": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "candidate_head_sha": "cafebabe",
+  "base_ref": "refs/heads/main",
+  "base_sha": "deadbeef"
+}

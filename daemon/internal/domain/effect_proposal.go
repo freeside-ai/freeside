@@ -90,7 +90,12 @@ type EffectProposal struct {
 	ResolvedPolicyRunID  RunID                   `json:"resolved_policy_run_id"`
 	ResolvedPolicyDigest Digest                  `json:"resolved_policy_digest"`
 	TaskProposal         *TaskProposalParameters `json:"run_proposal"`
-	Digest               Digest                  `json:"digest"`
+	// ClosureProposal carries source_issue_closure parameters. It is
+	// omitempty so a run_proposal encodes byte-identically to the one-kind
+	// registry: a rendered null here would change every stored run_proposal's
+	// content digest and fail its revalidation (#1417).
+	ClosureProposal *SourceIssueClosureParameters `json:"source_issue_closure,omitempty"`
+	Digest          Digest                        `json:"digest"`
 }
 
 // ProposalInstance is one admitted occurrence. Its admission key, not the
@@ -154,11 +159,12 @@ func (i ProposalInstance) EvidenceArtifact() (Artifact, error) {
 }
 
 type canonicalEffectProposal struct {
-	EncodingVersion      int                     `json:"encoding_version"`
-	Kind                 EffectKind              `json:"kind"`
-	ResolvedPolicyRunID  RunID                   `json:"resolved_policy_run_id"`
-	ResolvedPolicyDigest Digest                  `json:"resolved_policy_digest"`
-	TaskProposal         *TaskProposalParameters `json:"run_proposal"`
+	EncodingVersion      int                           `json:"encoding_version"`
+	Kind                 EffectKind                    `json:"kind"`
+	ResolvedPolicyRunID  RunID                         `json:"resolved_policy_run_id"`
+	ResolvedPolicyDigest Digest                        `json:"resolved_policy_digest"`
+	TaskProposal         *TaskProposalParameters       `json:"run_proposal"`
+	ClosureProposal      *SourceIssueClosureParameters `json:"source_issue_closure,omitempty"`
 }
 
 // NewEffectProposal dispatches construction through the kind's fixed Go type.
@@ -183,6 +189,20 @@ func NewEffectProposal(
 			EncodingVersion: EffectProposalEncodingVersion,
 			Kind:            kind, ResolvedPolicyRunID: policy.RunID,
 			ResolvedPolicyDigest: policy.Digest, TaskProposal: &params,
+		}
+	case EffectSourceIssueClosure:
+		input, ok := parameters.(SourceIssueClosureInput)
+		if !ok {
+			return EffectProposal{}, fmt.Errorf("effect kind %q requires SourceIssueClosureInput: %w", kind, ErrEffectProposalInconsistent)
+		}
+		params, err := input.parameters()
+		if err != nil {
+			return EffectProposal{}, err
+		}
+		proposal = EffectProposal{
+			EncodingVersion: EffectProposalEncodingVersion,
+			Kind:            kind, ResolvedPolicyRunID: policy.RunID,
+			ResolvedPolicyDigest: policy.Digest, ClosureProposal: &params,
 		}
 	}
 	if proposal.Kind == "" {
@@ -217,10 +237,17 @@ func (p EffectProposal) Validate() error {
 	}
 	switch p.Kind {
 	case EffectTaskProposal:
-		if p.TaskProposal == nil {
-			return fmt.Errorf("effect proposal kind %q has no parameters: %w", p.Kind, ErrEffectProposalInconsistent)
+		if p.TaskProposal == nil || p.ClosureProposal != nil {
+			return fmt.Errorf("effect proposal kind %q parameters: %w", p.Kind, ErrEffectProposalInconsistent)
 		}
 		if err := p.TaskProposal.Validate(); err != nil {
+			return err
+		}
+	case EffectSourceIssueClosure:
+		if p.ClosureProposal == nil || p.TaskProposal != nil {
+			return fmt.Errorf("effect proposal kind %q parameters: %w", p.Kind, ErrEffectProposalInconsistent)
+		}
+		if err := p.ClosureProposal.Validate(); err != nil {
 			return err
 		}
 	}
@@ -242,6 +269,7 @@ func (p EffectProposal) canonical() canonicalEffectProposal {
 		EncodingVersion: p.EncodingVersion, Kind: p.Kind,
 		ResolvedPolicyRunID:  p.ResolvedPolicyRunID,
 		ResolvedPolicyDigest: p.ResolvedPolicyDigest, TaskProposal: p.TaskProposal,
+		ClosureProposal: p.ClosureProposal,
 	}
 }
 
@@ -312,6 +340,17 @@ func gateEffectProposal(
 			return ErrEffectProposalInconsistent
 		}
 		if err := proposal.TaskProposal.Validate(); err != nil {
+			return err
+		}
+		return nil
+	case EffectSourceIssueClosure:
+		// The policy and structural gate runs here; the target and provenance
+		// re-gate against current state is GateSourceIssueClosure, which the
+		// store calls with the closable-source fact it derives from live rows.
+		if proposal.ClosureProposal == nil {
+			return ErrEffectProposalInconsistent
+		}
+		if err := proposal.ClosureProposal.Validate(); err != nil {
 			return err
 		}
 		return nil

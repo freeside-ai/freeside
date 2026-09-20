@@ -106,11 +106,16 @@ func TestDecodeEffectProposalRejectsUntrustedShapes(t *testing.T) {
 }
 
 func TestProposalAdmissionKeyEnumeratesIdentitySpace(t *testing.T) {
-	if len(domain.AllEffectKinds) != 1 || domain.AllEffectKinds[0] != domain.EffectTaskProposal {
+	if len(domain.AllEffectKinds) != 2 ||
+		domain.AllEffectKinds[0] != domain.EffectTaskProposal ||
+		domain.AllEffectKinds[1] != domain.EffectSourceIssueClosure {
 		t.Fatalf("effect registry = %v", domain.AllEffectKinds)
 	}
 	if len(domain.AllProposalAdmissionSources) != 3 || len(domain.AllTaskProposalIntents) != 1 {
 		t.Fatalf("admission source registry = %v", domain.AllProposalAdmissionSources)
+	}
+	if len(domain.AllClosureProvenances) != 2 || len(domain.AllClosureFlagOrigins) != 2 {
+		t.Fatalf("closure registries = %v / %v", domain.AllClosureProvenances, domain.AllClosureFlagOrigins)
 	}
 	export := domain.Digest("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 	valid := []domain.ProposalAdmissionKey{
