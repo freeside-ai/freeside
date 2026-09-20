@@ -428,3 +428,32 @@ func TestDeliveryStatusVocabulary(t *testing.T) {
 		t.Error("channel acceptance must not be represented as delivered")
 	}
 }
+
+// TestSensitivityClassMoreRestrictiveThan covers every ordered pair and the
+// invalid empty value, which must rank as more restrictive than any valid class
+// so a gate written as "no more restrictive than" fails closed.
+func TestSensitivityClassMoreRestrictiveThan(t *testing.T) {
+	invalid := SensitivityClass("")
+	order := []SensitivityClass{SensitivityNormal, SensitivitySensitive, SensitivityHigh}
+
+	for i, lower := range order {
+		for j, higher := range order {
+			got := higher.MoreRestrictiveThan(lower)
+			want := j > i
+			if got != want {
+				t.Fatalf("%q.MoreRestrictiveThan(%q) = %v, want %v", higher, lower, got, want)
+			}
+		}
+	}
+	for _, c := range order {
+		if !invalid.MoreRestrictiveThan(c) {
+			t.Fatalf("invalid class should be more restrictive than %q", c)
+		}
+		if c.MoreRestrictiveThan(invalid) {
+			t.Fatalf("%q should not be more restrictive than the invalid class", c)
+		}
+	}
+	if invalid.MoreRestrictiveThan(invalid) {
+		t.Fatal("invalid class is not more restrictive than itself")
+	}
+}
