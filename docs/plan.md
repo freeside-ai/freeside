@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 66
+revision: 67
 status: active
 updated: 2026-09-20
 ---
@@ -418,7 +418,7 @@ Approval is not a universal action.
 | `publish_blocked` | Rerun trust evaluation, inspect the trust failure, or stop. Which publication path a repository uses is repository configuration, never a per-item choice (revision 44). |
 | `ready_for_final_review` | Bound to the task. View the PR (navigation, not resolution), return work to the agent with feedback, `mark_seen`, dismiss, or stop. It stays active until Freeside observes merge or close, work is returned, or the item is dismissed. Returning published work starts a new feedback invocation in the same run and supersedes this item; any later final-review item has a new publication identity and exact head binding. Evidence and approvals retain their exact run, artifact-digest, and PR-head bindings. |
 | `task_proposal` | Start, **start with changes**, decline, or snooze. Start begins the task workflow from the exact accepted proposal artifact digest. “Start with changes” creates a revised proposal artifact, supersedes the original item, creates a new item version, and starts the task workflow from the exact revised digest. It never uses unversioned ad hoc parameters. Proposals are grouped under `proposal_batch_id` with per-candidate decisions. |
-| `effect_proposal` | Approve, **approve with changes**, decline, or snooze a proposed effect from the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) registry (added in 1B with the registry; first instance: follow-up issue filings in 1B.1, with proposed watches following once their schedule kind lands, Section [5.16](#516-the-durable-scheduler)). Approval binds to the proposal artifact digest; “approve with changes” creates a revised proposal artifact and supersedes the item, exactly as `task_proposal`'s start-with-changes. `task_proposal` remains its own type. |
+| `effect_proposal` | Approve, **approve with changes**, decline, or snooze a proposed effect from the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) registry (added in 1B with the registry; first instance: the source-issue closure proposal in 1B.1 (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)); follow-up issue filings reuse the same card, and proposed watches follow once their schedule kind lands, Section [5.16](#516-the-durable-scheduler)). Approval binds to the proposal artifact digest; “approve with changes” creates a revised proposal artifact and supersedes the item, exactly as `task_proposal`'s start-with-changes. `task_proposal` remains its own type. |
 | `system_health` | Acknowledge, run doctor, stop unattended operation, or, on the notice a stop raises, resume unattended operation; the rules follow the table. |
 | `blocked` | Consolidates external waits that exceed Section [5.12](#512-workflow-definition-initiators-and-artifacts) thresholds. It is read-only. |
 
@@ -2973,7 +2973,13 @@ emits advisory output. The call reuses the daemon-side inference contract above
 for outbound field selection, redaction, sensitivity classification and
 retention, but its agent, model and effort come from the lineup, not a
 deployment-pinned binding; that requires lineup keys to accept role names, not
-only stage names, which is itself a contract change. Because it runs without a
+only stage names, which is itself a contract change. By owner decision on
+2026-09-20, the author ships first on the deployment-pinned `inference.Binding`,
+the same interim flag path Section
+[5.4](#54-credential-modes-egress-profiles-and-concurrency) describes for the
+other judgment calls; #1425 moves it to the lineup with every other judgment
+site, and until then nobody can tune the author's agent or prompt per role.
+Because it runs without a
 ward, it is admitted through a daemon-side judgment admission class, not the
 runner and ward-conformance proof the execution roles use: its launch proof is
 the admitted inference driver and prompt-package digest. The deterministic fake
@@ -2986,7 +2992,10 @@ the admitted-agent contract with a wardless judgment class. Revision 64 decided
 lineup participation for the publication author; revision 65 decides it for
 every other judgment site (the task namer, finding classifier, finding
 adjudicator, drift auditor, diagnostic, attention-discussion and briefer
-sites): each belongs to a lineup role and shares that admission class.
+sites): each belongs to a lineup role and shares that admission class. Revision
+67 changes only the order the author arrives in, not that end state: it ships on
+the pinned binding first, above, and joins the lineup at #1425 with every other
+judgment site.
 
 The role comprises two sites, keeping the one-authority-per-site rule: an
 **explain** prose site producing the title, body prose describing what the pull
@@ -3360,7 +3369,13 @@ version. The publication-author role (Section
 [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) runs
 once, after the final clean review, since Section [7](#7-review-policy) orders
 implement, verify, review, then clean publish; so verification and review
-outcomes are both inputs. The engine stores the authored artifact once, binds it
+outcomes are both inputs. By owner decision on 2026-09-20, the role ships first
+on the deployment-pinned `inference.Binding` and joins the lineup at #1425, the
+same interim Section
+[5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)
+records; the fallback below already covers an unset binding, since the role is
+then unavailable and the engine renders recipe v1. The engine stores the
+authored artifact once, binds it
 by digest, and re-renders the public text from that stored artifact on every
 retry, restart and drift repair; it is never regenerated. When the role is
 unavailable or its output fails screening, the engine falls back to v1 rendering
@@ -5152,7 +5167,7 @@ Contracts and fakes coordinate implementation. CI keeps lanes honest.
 | **5 (1B.0): loop depth** | Parallel lanes | Specifier and daemon research fetching with the spec-approval gate; label-initiator intake; the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) classifier and diagnostic sites; the provenance-gated EvidencePublisher (first slice: the Section [7](#7-review-policy) disposition history at publication, #525); the runs list and run timeline; the `max_parallel_executions` experiment. The contract track drains the Section [6](#6-verification) state algebra, then the effect-registry retrofit of `run_proposal`. The supervision core consumes the revision-27 Section [5.2](#52-the-daemon-and-its-supervisor) contract, pulled forward by owner fiat: #454's daemon side and the app-side LaunchAgent and menu-bar unit. |
 | **6 (1B.0): convergence and yield** | Integrated | Convergence policy and the Section [7](#7-review-policy) finding-adjudication routing (#697; the spine assigns its contract splits at wave planning); the Claude shadow arm with second adjudication and sampled classification accuracy; automatic re-review of remediation heads as a standing integration test; yield history on ready-for-final-review; the full chain on the real backlog. iOS on-device install (Section [10](#10-operations-and-onboarding)). 1B.0 exit. |
 | **7 (1B.1): the decision surface** | Parallel lanes | The decision surface closes and reads from the phone. Contract-first, one serialized chain whose positions the spine assigns at planning: the revision-40 attention-presentation cluster (the Section [4](#4-the-attention-model) recommendation shape and Section [9](#9-comprehension) typed minimum card facts, #917, which must retire `adjudicate` or reassign it to an executable `review_dispute` transaction before client adoption; decision-surface identity, #942; per-type card facts, #724; adjudication finding context, #892; per-invocation cost observations, #901), then transaction closure for the remaining Phase 1 pending actions (#918, #919, #920, #921) and the retirement of `choose_alternate_profile` (#936), then Section [5.15](#515-evidence-and-images) evidence metadata (#922), pairing identity facts (#923), readiness rendering (#982), and the Section [8](#8-observability-and-optimization-telemetry)/9 comprehension-telemetry contracts the wave-10 exit evaluation reads (#924, the first unit to slip to wave 8 if review bandwidth binds). Beside the chain: the daemon fact producers, client adoption (the provisional Swift `ActionOutcome` and mock server converge with the daemon's `discuss` and spec-approval `request_changes`), and the Section [9](#9-comprehension) summary layer (#723, stage-agent-sourced, no daemon-inference call). The adjudication-size contract (#961) is placed here or in wave 9 at planning. Deferral drain: the attention-presentation and card-fact clusters only. Exit proof: every rendered Phase 1 action executes on Mac and iPhone; no action stays pending, disabled, or decorative; every card is self-contained at its Section [9](#9-comprehension) altitude; facts stay distinct from claims. |
-| **8 (1B.1): operational closure** | Parallel lanes | Freeside runs unattended, says when it is stuck, and lets published-PR activity back in. Human-gated follow-up filing with the `effect_proposal` card (Section [5.17](#517-follow-up-issue-filing)); the doctor credential-integrity probe (Section [10](#10-operations-and-onboarding)); the stall heartbeat (Section [5.12](#512-workflow-definition-initiators-and-artifacts)); the external daemon-liveness probe (Section [5.2](#52-the-daemon-and-its-supervisor), #510); the held-work item (#766); the review drift audit (Section [7](#7-review-policy); the #1048 contract, then #1049–#1053, floor before model site); the standing stopped-operation indicator (#980); device listing and revocation (#981); the clean-machine onboarding proof (#428); and the egress floor's first capabilities above it (Sections [5.4](#54-credential-modes-egress-profiles-and-concurrency), [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, `kind:contract` because `EgressProfile` is a domain enum carried in the admission record, then (b) the policy-gated project-image rebuild in the reusable builder, `starts-after` (a) because its gate reads the registry set (a) declares; both build on merged #302 and #334. Re-entry after a ready-item invalidation (#502; the spine splits its contract half at planning) and external review ingestion on published PRs (#524) share the re-entry trigger shape and land together. Deferral drain: the operational and re-entry clusters. Exit proof: a clean machine reaches an unattended real run; daemon death, crash loops, stalls, held work, a stopped state, a review loop that grows past its specification, and external review each alert without terminal patrol or manual polling. |
+| **8 (1B.1): operational closure** | Parallel lanes | Freeside runs unattended, says when it is stuck, and lets published-PR activity back in. The `effect_proposal` card, arriving with the source-issue closure proposal (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) and reused by human-gated follow-up filing (Section [5.17](#517-follow-up-issue-filing)); the doctor credential-integrity probe (Section [10](#10-operations-and-onboarding)); the stall heartbeat (Section [5.12](#512-workflow-definition-initiators-and-artifacts)); the external daemon-liveness probe (Section [5.2](#52-the-daemon-and-its-supervisor), #510); the held-work item (#766); the review drift audit (Section [7](#7-review-policy); the #1048 contract, then #1049–#1053, floor before model site); the standing stopped-operation indicator (#980); device listing and revocation (#981); the clean-machine onboarding proof (#428); and the egress floor's first capabilities above it (Sections [5.4](#54-credential-modes-egress-profiles-and-concurrency), [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, `kind:contract` because `EgressProfile` is a domain enum carried in the admission record, then (b) the policy-gated project-image rebuild in the reusable builder, `starts-after` (a) because its gate reads the registry set (a) declares; both build on merged #302 and #334. Re-entry after a ready-item invalidation (#502; the spine splits its contract half at planning) and external review ingestion on published PRs (#524) share the re-entry trigger shape and land together. Deferral drain: the operational and re-entry clusters. Exit proof: a clean machine reaches an unattended real run; daemon death, crash loops, stalls, held work, a stopped state, a review loop that grows past its specification, and external review each alert without terminal patrol or manual polling. |
 | **9 (1B.1): provider diversity** | Parallel lanes; split-eligible | One agent vocabulary and a second real provider. The agent-vocabulary contract chain, positions assigned at planning: review admission and provenance (#898), the cross-lane failure model (#899), judgment roles in the lineup (#900, decided in revision 65: every agent activity is a lineup role), the role-name lineup keys and wardless admission class that decision needs (#1421, `starts-after` #900), then agent and run facts in the clients (#979). The Codex tail: the adapter registration (#406, `starts-after` the merged admitted-agent contract #894), ward's second vendor topology (#407), the continuation compatibility digest (#873), then #397 by explicit owner decision on shadow evidence (none existed at the wave-6 exit because the shadow configuration was never approved for a project, #1001; #397 `starts-after` #898 and #869 `starts-after` #899 are recorded under the ambiguity rule for wave-9 planning to confirm), then the StageDriver binding (#408, `merges-after` #873; Section [7](#7-review-policy) keeps #397 ahead of it so that Codex-implements plus Codex-reviews does not become the default pairing); the alternate-provider retry card (#869, `starts-after` #406 and #408). The ward front with no open prerequisite, startable at wave start or earlier by fiat: the Codex probe refresh-safety spike (#866). Guided enrollment with the two-step cutover (#867) `starts-after` #1421, because `freesided auth adopt` emits the first real lineup and must not emit stage-named keys (owner decision, revision 65); until then #867 no longer starts early by fiat. The doctor account probe (#868) `starts-after` #406 and #866. The pi adapter, enrollment, and specification agent (#895) `starts-after` #897 and #867, specification only, with its pre-adoption gates run against the pinned build. The spine splits this wave into 9a (contracts) and 9b (adapters) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because tracker titles must match this section's resolver pattern. Deferral drain: the agent and provider clusters. Exit proof: a real unattended Codex run and a pi specification; provider switching explicit in the lineup and visible in the clients; correct cost and independence records (#901); quota and capacity failures recover through the retry card, never a silent fallback. 1B.1 exit evaluation. |
 | **10 (1B.2): the initiative view** | Integrated | Many work units become one picture. Typed relationship kinds in the Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection) capture records (#884, `exclusive-with` every open contract unit), the frontier projection, and the deterministic initiative view rendering the dependency graph (#885). 1B exit evaluation against recorded comprehension and operational evidence. |
 
@@ -5305,54 +5320,28 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 66 ("Post the Approved Specification to the Bound Issue"):
+Revision 67 ("The Publication Author's Pinned-Binding Interim"):
 
-1. **The daemon posts the approved public plan as one comment on the task's
-   bound issue.** Until now the approved specification lived only inside
-   Freeside, so a reader of the issue or the pull request could not see what
-   was approved. Section [5.11](#511-github-integration-reconciliation-plus-intake) holds the effect. It is engine-run and
-   never proposal-gated. A human approve on `spec_approval` is the only
-   trigger, so a policy with the gate off posts nothing. The daemon selects
-   the target from the label-intake `issue_subject` binding; a client task's
-   Source issue link is never a target. The comment is a visibility aid that
-   grants nothing; the ledger is the record.
-2. **The posted text is a new specifier field, bound by the approval.** The
-   specifier emits an optional public plan, bounded at 8 KiB. The summary and
-   body are never posted, because they address the owner and may quote research
-   and owner answers. The approved specification digest covers the body alone,
-   so the public plan is its own digest-addressed claim on the `spec_approval`
-   card for a bound task, where the decision's binding set covers it and the
-   card's primary layer shows what approving will post. The ruleset `github-issue-comment/1` screens it at acceptance and
-   again before dispatch. It adds mention and command-shape rejection to the
-   `github/1` and recipe v2 rules. A refused or absent public plan posts the
-   daemon-written frame alone.
-3. **The record reuses the outbox and inbox ledger; a revision appends.** New
-   intent and outcome kinds carry the identity (the approval occurrence: task
-   ID plus the resolved `spec_approval` item), both content digests, the
-   canonical comment ID, and the state. No table or migration is added. A second approval on one task
-   posts a successor comment that names the digest it supersedes, and the
-   daemon never edits or deletes a posted comment. A failed post never blocks
-   the run. A transient rejection GitHub made before creating anything, or an
-   attempt that never dispatched, retries within Section [5.9](#59-durability-effectively-once). A definite
-   refusal ends quietly. Any other dispatched attempt with no candidate is
-   never retried, and only residual ambiguity raises a `system_health` item.
-4. **The comment's fan-out is named and bounded.** An App-authored comment
-   notifies subscribers and starts `issue_comment` workflows that hold
-   repository secrets. The Section [5.5](#55-the-ci-trust-boundary) workflow audit now enumerates those
-   workflows under `allow_issue_comment_workflows` and digests each one with
-   its local dependencies. The daemon rechecks the set and the digests at the
-   default-branch tip before each post, and a profile reviewed before
-   this revision does not approve the operation. The comment mints its
-   own `issues: write` and `metadata: read` token, which only the daemon's
-   publisher holds. Every registration requests `issues: write` (Section
-   [10](#10-operations-and-onboarding); #1416 tracks the owner's grant). Label
-   intake never reads comments, so the comment cannot create work. The
-   decomposed build units are unscheduled deferrals that the spine places
-   (expected 1B.1); this revision does not edit the Section
-   [11](#11-roadmap-build-order-and-coordination) table. (Owner-assigned #1415.
-   The positions are the issue's recommendations as refined by the
-   implementing session, decided by the owner through this revision's review;
-   [decision note](../devlog/2026-09-20-0903-spec-issue-comment.md).)
+1. **The publication author ships on the deployment-pinned binding first, then
+   joins the lineup at #1425.** Revisions 64 and 65 made the author a lineup
+   role that picks its agent, model and effort like every other judgment site.
+   Every such site runs on the deployment-pinned `inference.Binding` today, the
+   interim flag path of Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), and #1425 moves them all to
+   the lineup together. By owner decision the author joins that interim rather
+   than waiting for its own lineup wiring, because the lineup path runs through
+   several unmerged units while today's client PRs still carry fixed boilerplate
+   and no close reference. The author stays a lineup role in the plan; only the
+   order it arrives in changes, and until #1425 nobody can tune its agent or
+   prompt per role. Sections [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) and [5.15](#515-evidence-and-images) carry the
+   interim; the wardless admission class and role-name lineup keys are unchanged.
+2. **The source-issue closure proposal is the first `effect_proposal`
+   instance.** Section [4](#4-the-attention-model) and the Wave 8 row named
+   human-gated follow-up issue filing as the first instance. The closure
+   proposal (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) now comes first, and follow-up filing reuses
+   the same card. This rewords the Section [11](#11-roadmap-build-order-and-coordination) Wave 8 clause but
+   schedules nothing: it adds, moves, and removes no unit.
+
+(Owner decision of 2026-09-20, owner-assigned #1442; [decision note](../devlog/2026-09-20-1017-author-pinned-interim.md).)
 
 ## 14. Risks
 
