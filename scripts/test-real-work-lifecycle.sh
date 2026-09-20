@@ -173,7 +173,7 @@ workdir=$CASE_DIR
 mkdir -p "$workdir"
 printf 'starting\n' >"$workdir/status"
 db_path="$workdir/freeside.db"
-listen_address=127.0.0.1:7339
+listen_address=${LISTEN_ADDRESS:-127.0.0.1:7339}
 FREESIDE_REAL_RUN_STATE_ROOT="$workdir/state"
 FREESIDE_REAL_RUN_APPROVED_RECIPE=sha256:fixture
 rig_release_timeout=1
@@ -188,7 +188,7 @@ real_work_restore_supervised() { touch "$workdir/supervised-restored"; }
 write_diagnostic() { return 0; }
 child_job_exists() { jobs -pr | grep -qx -- "$1"; }
 require_live_rig() { rig_child_exists; }
-curl() { [[ -f "$workdir/daemon-started" ]]; }
+curl() { printf '%s\n' "${@: -1}" >>"$workdir/curl-urls"; [[ -f "$workdir/daemon-started" ]]; }
 sleep() {
   if [[ "$(cat "$workdir/status")" == walkthrough ]]; then
     if [[ "$MODE" == interrupt ]]; then kill -TERM "$$"; else
@@ -253,5 +253,48 @@ assert args == ['-listen', '127.0.0.1:7339', '-db', str(root / 'freeside.db'),
                 '-approved-recipe', 'sha256:fixture',
                 '-approved-recipe', 'sha256:second-approved'], args
 PY
+  # A loopback lease is polled unchanged.
+  if ! grep -qx 'http://127.0.0.1:7339/health' "$case_dir/curl-urls" ||
+    grep -vqx 'http://127.0.0.1:7339/health' "$case_dir/curl-urls"; then
+    echo "FAIL: recovery $mode polled $(cat "$case_dir/curl-urls"), want the loopback address" >&2
+    exit 1
+  fi
 done
 echo 'PASS: credential recovery completion, interruption, and schema refusal clean up daemon and rig'
+
+# A Tailscale lease is polled on the loopback twin at the same port, so the
+# same-host health wait survives a host VPN dropping the Tailscale route.
+tailscale_dir="$tmp/recovery-tailscale"
+set +e
+ROOT="$root" CASE_DIR="$tailscale_dir" MODE=complete CLEANUP="$tmp/recovery-cleanup.sh" \
+  LISTEN_ADDRESS=100.64.0.1:8677 \
+  bash "$tmp/recovery-case.sh" >"$tmp/recovery-tailscale.log" 2>&1
+rc=$?
+set -e
+if [[ "$rc" != 0 ]]; then
+  cat "$tmp/recovery-tailscale.log" >&2
+  echo "FAIL: tailscale recovery exited $rc, expected 0" >&2
+  exit 1
+fi
+if ! grep -qx 'http://127.0.0.1:8677/health' "$tailscale_dir/curl-urls" ||
+  grep -vqx 'http://127.0.0.1:8677/health' "$tailscale_dir/curl-urls"; then
+  echo "FAIL: tailscale recovery polled $(cat "$tailscale_dir/curl-urls"), want the loopback twin" >&2
+  exit 1
+fi
+echo 'PASS: the same-host health wait dials the loopback twin for a Tailscale lease'
+
+# Direct cases for the same-host address rule, including IPv6 forms.
+for pair in \
+  '100.64.0.1:8677=127.0.0.1:8677' \
+  '[fd7a:115c:a1e0::1]:8677=127.0.0.1:8677' \
+  '127.0.0.1:8677=127.0.0.1:8677' \
+  '[::1]:8677=[::1]:8677'; do
+  input=${pair%%=*}
+  want=${pair#*=}
+  got=$(real_work_local_address "$input")
+  if [[ "$got" != "$want" ]]; then
+    echo "FAIL: real_work_local_address($input) = $got, want $want" >&2
+    exit 1
+  fi
+done
+echo 'PASS: real_work_local_address maps a Tailscale address to loopback and leaves loopback unchanged'

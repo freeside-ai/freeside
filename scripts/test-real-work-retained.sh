@@ -304,3 +304,25 @@ with tempfile.TemporaryDirectory() as temp:
     refuses(lambda: module.validate_session(session))
 print("PASS: retained identities/composition and exact remote publication checks")
 PY
+
+# The health check the same-host loopback wait relies on: a healthy build with
+# the expected version passes, and a wrong version or a non-ok status fails, so
+# rewriting the poll address to loopback (#1449) never masks an unhealthy or
+# mismatched daemon.
+retained="$root/scripts/real-work-retained.py"
+health_tmp=$(mktemp -d)
+trap 'rm -rf "$health_tmp"' EXIT
+printf '%s\n' '{"status":"ok","version":"build-7"}' >"$health_tmp/ok.json"
+printf '%s\n' '{"status":"ok","version":"build-6"}' >"$health_tmp/wrong-version.json"
+printf '%s\n' '{"status":"starting","version":"build-7"}' >"$health_tmp/not-ok.json"
+if ! python3 "$retained" health "$health_tmp/ok.json" build-7; then
+  echo 'FAIL: retained health rejected a healthy matching build' >&2
+  exit 1
+fi
+for bad in wrong-version not-ok; do
+  if python3 "$retained" health "$health_tmp/$bad.json" build-7 2>/dev/null; then
+    echo "FAIL: retained health accepted $bad" >&2
+    exit 1
+  fi
+done
+echo 'PASS: retained health passes a matching healthy build and fails a wrong version or non-ok status'

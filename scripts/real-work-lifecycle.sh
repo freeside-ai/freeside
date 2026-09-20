@@ -26,6 +26,20 @@ real_work_group_members() {
 		$2 == pgid && $1 != pgid && substr($3, 1, 1) != "Z" { print $1 }'
 }
 
+# real_work_local_address maps a daemon listen address to the address a
+# same-host client should dial. A daemon bound to a Tailscale address also
+# serves 127.0.0.1 at the same port (#1449), and a host VPN can drop the host's
+# traffic to its own Tailscale address, so a same-host health wait must use
+# loopback. A loopback listen address is returned unchanged. The port is the
+# text after the last colon; the harness always passes an IP literal.
+real_work_local_address() {
+	local listen_address=$1
+	case "$listen_address" in
+		127.*|"[::1]:"*) printf '%s' "$listen_address" ;;
+		*) printf '127.0.0.1:%s' "${listen_address##*:}" ;;
+	esac
+}
+
 real_work_bounded_rig() {
 	local session=$1 bound=$2
 	shift 2
@@ -133,10 +147,12 @@ real_work_recover_codex_credentials() {
 		-state-dir "$FREESIDE_REAL_RUN_STATE_ROOT" -driver disabled \
 		-approved-recipe "$FREESIDE_REAL_RUN_APPROVED_RECIPE" "$@" >>"$workdir/daemon.log" 2>&1 &
 	daemon_pid=$!
+	local health_address
+	health_address=$(real_work_local_address "$listen_address")
 	local healthy=false
 	for _ in $(seq 1 60); do
 		child_job_exists "$daemon_pid" && require_live_rig || return 1
-		if curl --fail --silent --max-time 2 "http://$listen_address/health" >/dev/null; then
+		if curl --fail --silent --max-time 2 "http://$health_address/health" >/dev/null; then
 			healthy=true
 			break
 		fi
