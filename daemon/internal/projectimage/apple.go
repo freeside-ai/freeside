@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/buildproxy"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
@@ -77,6 +78,7 @@ type appleBackend struct {
 	runner           commandRunner
 	registryLockDir  string
 	inspectAllowlist func(context.Context, string) (ward.InspectReport, error)
+	inspectNetwork   func(context.Context, string) (ward.NetworkReport, error)
 	probeRegistry    func(context.Context, string) error
 	waitRegistry     func(context.Context, string) error
 	deleteManifest   func(context.Context, string) error
@@ -165,18 +167,31 @@ func (a appleBackend) RemoveImage(ctx context.Context, ref string) error {
 	return runError("remove image reference", output, err)
 }
 
-func (a appleBackend) Build(ctx context.Context, spec buildSpec) error {
+func (a appleBackend) Build(ctx context.Context, spec buildSpec) (err error) {
+	// RUN steps always egress through a proxy, never vmnet guest NAT, which a
+	// host VPN can break (internal/buildproxy). An operator-supplied proxy
+	// wins; otherwise the build gets a managed one that lives only as long
+	// as this call.
+	proxyURL := spec.BuildProxy
+	if proxyURL == "" {
+		proxy, startErr := a.startBuildProxy(ctx)
+		if startErr != nil {
+			return fmt.Errorf("start managed build proxy: %w", startErr)
+		}
+		defer func() {
+			if closeErr := proxy.Close(); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("managed build proxy: %w", closeErr))
+			}
+		}()
+		proxyURL = proxy.URL()
+	}
 	args := []string{"build"}
 	for _, dns := range spec.DNS {
 		args = append(args, "--dns", dns)
 	}
-	if spec.BuildProxy != "" {
-		args = append(args,
-			"--build-arg", "HTTP_PROXY="+spec.BuildProxy,
-			"--build-arg", "HTTPS_PROXY="+spec.BuildProxy,
-		)
-	}
 	args = append(args,
+		"--build-arg", "HTTP_PROXY="+proxyURL,
+		"--build-arg", "HTTPS_PROXY="+proxyURL,
 		"--build-arg", "BASE_IMAGE="+spec.BaseRef,
 		"--build-arg", "BASE_DIGEST="+spec.BaseDigest,
 		"--build-arg", "PROJECT_REPOSITORY="+spec.Repository,
@@ -188,6 +203,21 @@ func (a appleBackend) Build(ctx context.Context, spec buildSpec) error {
 	)
 	output, err := a.runner.Run(ctx, commandSpec{Path: a.containerPath, Args: args})
 	return runError("container build", output, err)
+}
+
+func (a appleBackend) startBuildProxy(ctx context.Context) (*buildproxy.Proxy, error) {
+	inspect := a.inspectNetwork
+	if inspect == nil {
+		inspect = ward.NewCLIRuntime(a.containerPath).InspectNetwork
+	}
+	network, err := inspect(ctx, buildproxy.Network)
+	if err != nil {
+		return nil, fmt.Errorf("inspect build network: %w", err)
+	}
+	return buildproxy.Start(buildproxy.BuildNetwork{
+		Name: network.Name, Mode: string(network.Mode),
+		IPv4Gateway: network.IPv4Gateway, IPv4Subnet: network.IPv4Subnet,
+	})
 }
 
 func (a appleBackend) CheckProvenance(ctx context.Context, ref string, want provenanceSpec) error {

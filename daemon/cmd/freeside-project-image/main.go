@@ -145,7 +145,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	flags.StringVar(&cfg.TempDir, "temp-dir", "", "bindable scratch parent (default OS temporary directory)")
 	flags.Var(&dns, "dns", "build DNS server; repeatable")
 	flags.StringVar(&cfg.BuildProxy, "build-proxy", "",
-		"optional build-only HTTP proxy URL without credentials")
+		"build-only HTTP proxy URL without credentials, overriding the managed build proxy")
 	if err := flags.Parse(args); err != nil {
 		return config{}, err
 	}

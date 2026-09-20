@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -188,22 +189,110 @@ func testAppleRunVerificationEnvironment(t *testing.T, masked bool, argv []strin
 	}
 }
 
-func TestAppleBuildPassesBuildOnlyProxyAsPredefinedArgs(t *testing.T) {
-	runner := &recordingRunner{}
-	backend := appleBackend{containerPath: "container", runner: runner}
-	if err := backend.Build(t.Context(), buildSpec{
+func testBuildSpec() buildSpec {
+	return buildSpec{
 		ContextDir: "/tmp/context", LocalRef: "project:local",
 		BaseRef: "base:local", BaseDigest: testBaseDigest,
 		Repository: "freeasinbird/gh-imgup", RepositoryID: 1278475858,
 		CommitSHA: testCommit, RecipeDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
-		BuildProxy: "http://192.168.64.1:53536",
-	}); err != nil {
+	}
+}
+
+func defaultBuildNetwork() ward.NetworkReport {
+	return ward.NetworkReport{
+		NetworkSummary: ward.NetworkSummary{Name: "default", Mode: ward.NetworkNAT},
+		IPv4Gateway:    "192.168.64.1", IPv4Subnet: "192.168.64.0/24",
+	}
+}
+
+func TestAppleBuildPrefersAnOperatorProxyOverTheManagedOne(t *testing.T) {
+	runner := &recordingRunner{}
+	backend := appleBackend{
+		containerPath: "container", runner: runner,
+		inspectNetwork: func(context.Context, string) (ward.NetworkReport, error) {
+			t.Error("an operator proxy must not start the managed proxy")
+			return ward.NetworkReport{}, nil
+		},
+	}
+	spec := testBuildSpec()
+	spec.BuildProxy = "http://192.168.64.1:53536"
+	if err := backend.Build(t.Context(), spec); err != nil {
 		t.Fatal(err)
 	}
 	if len(runner.specs) != 1 ||
 		!slices.Contains(runner.specs[0].Args, "HTTP_PROXY=http://192.168.64.1:53536") ||
 		!slices.Contains(runner.specs[0].Args, "HTTPS_PROXY=http://192.168.64.1:53536") {
 		t.Fatalf("build args = %q", runner.specs)
+	}
+}
+
+func TestAppleBuildRunsBehindAManagedProxyForExactlyTheBuild(t *testing.T) {
+	listening := func(port string) bool {
+		conn, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", port)) //nolint:noctx // test dial to a local listener
+		if err != nil {
+			return false
+		}
+		_ = conn.Close()
+		return true
+	}
+	var inspected, port string
+	runner := &recordingRunner{run: func(spec commandSpec) (commandOutput, error) {
+		for _, arg := range spec.Args {
+			if value, ok := strings.CutPrefix(arg, "HTTPS_PROXY=http://192.168.64.1:"); ok {
+				port = value
+			}
+		}
+		if port == "" || !slices.Contains(spec.Args, "HTTP_PROXY=http://192.168.64.1:"+port) {
+			t.Errorf("build args carry no managed proxy on the gateway: %q", spec.Args)
+		} else if !listening(port) {
+			t.Errorf("managed proxy on port %s is not up while the build runs", port)
+		}
+		return commandOutput{}, nil
+	}}
+	backend := appleBackend{
+		containerPath: "container", runner: runner,
+		inspectNetwork: func(_ context.Context, name string) (ward.NetworkReport, error) {
+			inspected = name
+			return defaultBuildNetwork(), nil
+		},
+	}
+	if err := backend.Build(t.Context(), testBuildSpec()); err != nil {
+		t.Fatal(err)
+	}
+	if inspected != "default" || len(runner.specs) != 1 {
+		t.Fatalf("inspected network %q, ran %d commands", inspected, len(runner.specs))
+	}
+	if port != "" && listening(port) {
+		t.Fatalf("managed proxy on port %s outlived the build", port)
+	}
+}
+
+func TestAppleBuildFailsClosedWithoutATrustworthyBuildNetwork(t *testing.T) {
+	for name, inspect := range map[string]func(context.Context, string) (ward.NetworkReport, error){
+		"inspection fails": func(context.Context, string) (ward.NetworkReport, error) {
+			return ward.NetworkReport{}, errors.New("runtime unavailable")
+		},
+		"implausible subnet": func(context.Context, string) (ward.NetworkReport, error) {
+			network := defaultBuildNetwork()
+			network.IPv4Subnet = "0.0.0.0/0"
+			return network, nil
+		},
+		"a host-only writer network": func(context.Context, string) (ward.NetworkReport, error) {
+			network := defaultBuildNetwork()
+			network.Name, network.Mode = "freeside-writer-1", ward.NetworkHostOnly
+			return network, nil
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			runner := &recordingRunner{}
+			backend := appleBackend{containerPath: "container", runner: runner, inspectNetwork: inspect}
+			if err := backend.Build(t.Context(), testBuildSpec()); err == nil {
+				t.Fatal("build succeeded without a managed proxy")
+			}
+			if len(runner.specs) != 0 {
+				t.Fatalf("container build ran without a proxy: %q", runner.specs)
+			}
+		})
 	}
 }
 

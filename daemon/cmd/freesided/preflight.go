@@ -337,7 +337,7 @@ func parsePreflightConfig(args []string, stderr io.Writer) (preflightConfig, err
 	flags.StringVar(&cfg.PublicationPath, "publication", "", "publication metadata file (required)")
 	flags.StringVar(&cfg.WorkUnitPath, "work-unit", "", "work-unit declaration file (optional)")
 	flags.StringVar((*string)(&cfg.ProjectID), "project", "", "project id (required)")
-	flags.StringVar(&cfg.BuildProxy, "build-proxy", "", "optional supported image-build proxy URL")
+	flags.StringVar(&cfg.BuildProxy, "build-proxy", "", "image-build proxy URL overriding the managed build proxy")
 	flags.StringVar(&cfg.LaunchAgentLabel, "launch-agent-label", defaultRigLaunchAgentLabel, "supervised daemon label")
 	flags.Func("allowed-paths", "comma-separated explicit production path allowlist (required)", func(raw string) error {
 		cfg.AllowedPaths = engine.SplitNonEmpty(raw)
@@ -684,7 +684,7 @@ func evaluateComposition(
 	if err := projectimage.ValidateBuildProxy(cfg.BuildProxy); err != nil {
 		failCheck(manifest, "build_egress_configuration", "configured project-image build proxy has an unsupported shape", "configure an unauthenticated HTTP build proxy (#519)")
 	} else if cfg.BuildProxy == "" {
-		passCheck(manifest, "build_egress_configuration", "direct project-image build egress is selected")
+		passCheck(manifest, "build_egress_configuration", "managed host-side project-image build proxy is selected")
 	} else {
 		passCheck(manifest, "build_egress_configuration", "supported host-only HTTP build proxy is configured")
 	}
