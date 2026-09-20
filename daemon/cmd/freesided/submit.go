@@ -68,6 +68,36 @@ func configureSubmitUsage(flags *flag.FlagSet) {
 	}
 }
 
+// validateWriterStopBudget rejects a writer-stop timeout that the daemon or the
+// supervision deadline cannot honor, at the run-creation boundary so a doomed
+// value never produces a durable run. flag.Duration has already parsed both
+// authoritatively (malformed and out-of-range inputs fail in Parse), so this
+// only vets their meaning:
+//
+//   - A negative writer budget is not "unset": ward.Config.validate rejects it,
+//     so the daemon would fail at startup after submission. Reject it here.
+//   - A zero writer budget means "use ward's default", so it is compared at that
+//     effective value (ward.DefaultWriterStopTimeout), not skipped.
+//   - The effective writer budget must stay below supervision, which bounds the
+//     whole workflow (specification approval through publication) with one
+//     deadline; a budget at or above it is killed before it elapses. A
+//     non-positive supervision means the harness asserts no bound.
+func validateWriterStopBudget(writerStop, supervision time.Duration) error {
+	if writerStop < 0 {
+		return fmt.Errorf("writer-stop-timeout %s must not be negative", writerStop)
+	}
+	effective := writerStop
+	if effective == 0 {
+		effective = ward.DefaultWriterStopTimeout
+	}
+	if supervision > 0 && effective >= supervision {
+		return fmt.Errorf(
+			"writer-stop-timeout %s must be below supervision-timeout %s: supervision bounds the whole workflow and would stop the run before the writer budget elapses; raise -supervision-timeout or lower the writer budget",
+			effective, supervision)
+	}
+	return nil
+}
+
 // runSubmitMain parses the submit verb's flags and runs the command,
 // printing one JSON result line on success. Exit contract: 0 converged,
 // 1 refused, 2 flag misuse.
@@ -86,8 +116,21 @@ func runSubmitMain(args []string) {
 	runID := flags.String("run-id", "", "lookup-only legacy implementation run id; never creates work")
 	submissionID := flags.String("submission-id", "", "prepared identity for new work (otherwise generated and saved before submission)")
 	retrySubmissionID := flags.String("retry-submission-id", "", "manually retry a saved submission using its original inputs")
+	// Validated here, at the run-creation boundary, so a malformed, out-of-range,
+	// or unsatisfiable writer budget fails before a durable run exists rather
+	// than stranding one when the daemon later parses the same flag. The daemon
+	// run consumes -writer-stop-timeout; submit only vets it against the harness
+	// supervision deadline.
+	writerStopTimeout := flags.Duration("writer-stop-timeout", 0,
+		"implementation writer-container budget, vetted against -supervision-timeout before the run is created; 0 uses the ward default")
+	supervisionTimeout := flags.Duration("supervision-timeout", 0,
+		"harness workflow supervision deadline the writer budget must stay below; 0 skips the check")
 	if err := flags.Parse(args); err != nil {
 		os.Exit(2)
+	}
+	if err := validateWriterStopBudget(*writerStopTimeout, *supervisionTimeout); err != nil {
+		fmt.Fprintln(os.Stderr, "freesided:", err)
+		os.Exit(1)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
