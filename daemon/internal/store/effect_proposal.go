@@ -44,6 +44,10 @@ func (tx *WriteTx) AllocateProposalInstance(
 	if err := proposal.Validate(); err != nil {
 		return domain.ProposalInstance{}, false, fmt.Errorf("allocate proposal instance: %w", err)
 	}
+	subjectHandle, err := proposalSubjectHandle(proposal)
+	if err != nil {
+		return domain.ProposalInstance{}, false, fmt.Errorf("allocate proposal instance: %w", err)
+	}
 	if _, err := tx.gateProposalSubject(ctx, proposal); err != nil {
 		return domain.ProposalInstance{}, false, fmt.Errorf("allocate proposal instance gate: %w", err)
 	}
@@ -66,7 +70,7 @@ func (tx *WriteTx) AllocateProposalInstance(
 	returned, returnedKey, err := scanProposalInstance(tx.tx.QueryRowContext(ctx,
 		allocateProposalInstanceSQL,
 		want.ID, admissionKey, batchID, proposal.Kind, proposal.Digest,
-		proposal.ResolvedPolicyRunID, proposal.ResolvedPolicyDigest, proposal.TaskProposal.SubjectHandle,
+		proposal.ResolvedPolicyRunID, proposal.ResolvedPolicyDigest, subjectHandle,
 		formatTime(want.CreatedAt), body,
 	))
 	if err != nil {
@@ -176,16 +180,39 @@ func scanProposalInstance(sc scanner) (domain.ProposalInstance, string, error) {
 	if err != nil {
 		return domain.ProposalInstance{}, "", err
 	}
+	handle, err := proposalSubjectHandle(instance.Proposal)
+	if err != nil {
+		return domain.ProposalInstance{}, "", errRowInconsistent
+	}
 	if string(instance.ID) != instanceID || derivedKey != admissionKey ||
 		string(instance.ProposalBatchID) != batchID || string(instance.Proposal.Kind) != effectKind ||
 		string(instance.Proposal.Digest) != contentDigest ||
 		string(instance.Proposal.ResolvedPolicyRunID) != policyRunID ||
 		string(instance.Proposal.ResolvedPolicyDigest) != policyDigest ||
-		instance.Proposal.TaskProposal == nil || string(instance.Proposal.TaskProposal.SubjectHandle) != subjectHandle ||
+		string(handle) != subjectHandle ||
 		!instance.CreatedAt.Equal(storedCreatedAt) {
 		return domain.ProposalInstance{}, "", errRowInconsistent
 	}
 	return instance, admissionKey, nil
+}
+
+// proposalSubjectHandle returns the opaque work-unit handle for either
+// registry kind. The switch dispatches behaviour and so omits default; the
+// trailing return guards an unregistered kind.
+func proposalSubjectHandle(proposal domain.EffectProposal) (domain.OpaqueSubjectHandle, error) {
+	switch proposal.Kind {
+	case domain.EffectTaskProposal:
+		if proposal.TaskProposal == nil {
+			return "", domain.ErrEffectProposalInconsistent
+		}
+		return proposal.TaskProposal.SubjectHandle, nil
+	case domain.EffectSourceIssueClosure:
+		if proposal.ClosureProposal == nil {
+			return "", domain.ErrEffectProposalInconsistent
+		}
+		return proposal.ClosureProposal.SubjectHandle, nil
+	}
+	return "", domain.ErrInvalidEffectKind
 }
 
 // GetProposalInstance reconstructs one instance and re-runs the registry gate
@@ -328,6 +355,12 @@ func (tx *ReadTx) authenticatedProposalRevision(
 	instance domain.ProposalInstance,
 	digest domain.Digest,
 ) (domain.EffectProposal, domain.EffectProposal, error) {
+	// Only task proposals have a revision (start-with-changes) path today; a
+	// closure instance carries no revisions until #1443 builds its decision
+	// path, so treat a revision lookup against one as an inconsistent row.
+	if instance.Proposal.Kind != domain.EffectTaskProposal {
+		return domain.EffectProposal{}, domain.EffectProposal{}, errRowInconsistent
+	}
 	var body []byte
 	var supersedesValue, commandID string
 	if err := tx.tx.QueryRowContext(ctx, `SELECT body, supersedes_digest, command_id
@@ -440,22 +473,98 @@ func (tx *ReadTx) ResolveProposalSubject(
 
 // gateProposalSubject is the single store boundary for a proposal's opaque
 // handle: resolve the durable declaration and current policy independently,
-// bind declaration-derived scope, then run the closed effect registry gate.
+// then run the closed effect registry gate plus each kind's re-gate against
+// state the store derives from current rows, never from the proposal body.
+// The switch dispatches behaviour and so omits default; the trailing return
+// guards an unregistered kind.
 func (tx *ReadTx) gateProposalSubject(
 	ctx context.Context,
 	proposal domain.EffectProposal,
 ) (domain.WorkUnitDeclaration, error) {
-	declaration, policy, err := tx.ResolveProposalSubject(ctx, proposal.TaskProposal.SubjectHandle)
+	handle, err := proposalSubjectHandle(proposal)
 	if err != nil {
 		return domain.WorkUnitDeclaration{}, err
 	}
-	if err := domain.GateTaskProposalScope(proposal.TaskProposal.Scope, declaration); err != nil {
+	declaration, policy, err := tx.ResolveProposalSubject(ctx, handle)
+	if err != nil {
 		return domain.WorkUnitDeclaration{}, err
 	}
-	if err := domain.GateEffectProposal(proposal, policy); err != nil {
-		return domain.WorkUnitDeclaration{}, err
+	switch proposal.Kind {
+	case domain.EffectTaskProposal:
+		if err := domain.GateTaskProposalScope(proposal.TaskProposal.Scope, declaration); err != nil {
+			return domain.WorkUnitDeclaration{}, err
+		}
+		if err := domain.GateEffectProposal(proposal, policy); err != nil {
+			return domain.WorkUnitDeclaration{}, err
+		}
+		return declaration, nil
+	case domain.EffectSourceIssueClosure:
+		if err := domain.GateEffectProposal(proposal, policy); err != nil {
+			return domain.WorkUnitDeclaration{}, err
+		}
+		closable, err := tx.closableSource(ctx, declaration)
+		if err != nil {
+			return domain.WorkUnitDeclaration{}, err
+		}
+		if err := domain.GateSourceIssueClosure(proposal, closable); err != nil {
+			return domain.WorkUnitDeclaration{}, err
+		}
+		return declaration, nil
 	}
-	return declaration, nil
+	return domain.WorkUnitDeclaration{}, domain.ErrInvalidEffectKind
+}
+
+// closableSource derives, from current durable rows, whether the work unit
+// behind a declaration has a closable source, which issue it is, and the
+// provenance it earns. A daemon-bound issue subject is the verified target;
+// any other task source leaves only a same-repository recommended target whose
+// exact issue number the client chose and the daemon cannot re-derive (#1417).
+// The derived fact, not the decoded proposal body, is the sole authority the
+// closure gate re-checks against, and every cross-row identity is verified so
+// a tampered join cannot redirect the target.
+func (tx *ReadTx) closableSource(
+	ctx context.Context,
+	declaration domain.WorkUnitDeclaration,
+) (domain.ClosableSource, error) {
+	project, err := tx.GetProject(ctx, declaration.ProjectID)
+	if err != nil {
+		return domain.ClosableSource{}, err
+	}
+	run, err := tx.GetRun(ctx, declaration.RunID)
+	if err != nil {
+		return domain.ClosableSource{}, err
+	}
+	if run.ProjectID != project.ID || run.TaskID == "" {
+		return domain.ClosableSource{}, errRowInconsistent
+	}
+	task, err := tx.GetTask(ctx, run.TaskID)
+	if err != nil {
+		return domain.ClosableSource{}, err
+	}
+	if task.ProjectID != project.ID {
+		return domain.ClosableSource{}, errRowInconsistent
+	}
+	if task.Source != nil && task.Source.Kind == domain.SpecificationSourceIssueSubject && task.Source.IssueSubject != nil {
+		subject := task.Source.IssueSubject
+		// A daemon-bound issue subject is verified only when it names the
+		// project's own repository. Label intake binds occurrences in that
+		// repository, so a verified target is always same-repository, and a
+		// cross-repository source yields no proposal (plan §5.13). Re-anchor the
+		// verified target to project.RepositoryID here, alongside the run and
+		// task ProjectID joins above, so a tampered task-source row cannot label
+		// a foreign-repository close as verified and mislead an approver.
+		if subject.Repo != project.Repo || subject.RepositoryID != project.RepositoryID {
+			return domain.ClosableSource{}, errRowInconsistent
+		}
+		return domain.ClosableSource{
+			Present: true, Provenance: domain.ClosureProvenanceVerified,
+			Repo: subject.Repo, RepositoryID: subject.RepositoryID, IssueNumber: subject.IssueNumber,
+		}, nil
+	}
+	return domain.ClosableSource{
+		Present: true, Provenance: domain.ClosureProvenanceRecommended,
+		Repo: project.Repo, RepositoryID: project.RepositoryID,
+	}, nil
 }
 
 // PutProposalRevision records a command-authored revision under the same
