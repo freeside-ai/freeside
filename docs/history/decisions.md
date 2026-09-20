@@ -1912,3 +1912,54 @@ Revision 61 ("Durable Task Cancellation Requests"):
    never carries stage-named keys. (Positions from the owner's design discussion on #900, proposed by the
    implementing session and decided by the owner through this revision's
    review; [decision note](../../devlog/2026-09-19-1105-judgment-roles-join-lineups.md).)
+
+---
+
+## Revision 66 ("Post the Approved Specification to the Bound Issue")
+
+1. **The daemon posts the approved public plan as one comment on the task's
+   bound issue.** Until now the approved specification lived only inside
+   Freeside, so a reader of the issue or the pull request could not see what
+   was approved. Section [5.11](#511-github-integration-reconciliation-plus-intake) holds the effect. It is engine-run and
+   never proposal-gated. A human approve on `spec_approval` is the only
+   trigger, so a policy with the gate off posts nothing. The daemon selects
+   the target from the label-intake `issue_subject` binding; a client task's
+   Source issue link is never a target. The comment is a visibility aid that
+   grants nothing; the ledger is the record.
+2. **The posted text is a new specifier field, bound by the approval.** The
+   specifier emits an optional public plan, bounded at 8 KiB. The summary and
+   body are never posted, because they address the owner and may quote research
+   and owner answers. The approved specification digest covers the body alone,
+   so the public plan is its own digest-addressed claim on the `spec_approval`
+   card for a bound task, where the decision's binding set covers it and the
+   card's primary layer shows what approving will post. The ruleset `github-issue-comment/1` screens it at acceptance and
+   again before dispatch. It adds mention and command-shape rejection to the
+   `github/1` and recipe v2 rules. A refused or absent public plan posts the
+   daemon-written frame alone.
+3. **The record reuses the outbox and inbox ledger; a revision appends.** New
+   intent and outcome kinds carry the identity (the approval occurrence: task
+   ID plus the resolved `spec_approval` item), both content digests, the
+   canonical comment ID, and the state. No table or migration is added. A second approval on one task
+   posts a successor comment that names the digest it supersedes, and the
+   daemon never edits or deletes a posted comment. A failed post never blocks
+   the run. A transient rejection GitHub made before creating anything, or an
+   attempt that never dispatched, retries within Section [5.9](#59-durability-effectively-once). A definite
+   refusal ends quietly. Any other dispatched attempt with no candidate is
+   never retried, and only residual ambiguity raises a `system_health` item.
+4. **The comment's fan-out is named and bounded.** An App-authored comment
+   notifies subscribers and starts `issue_comment` workflows that hold
+   repository secrets. The Section [5.5](#55-the-ci-trust-boundary) workflow audit now enumerates those
+   workflows under `allow_issue_comment_workflows` and digests each one with
+   its local dependencies. The daemon rechecks the set and the digests at the
+   default-branch tip before each post, and a profile reviewed before
+   this revision does not approve the operation. The comment mints its
+   own `issues: write` and `metadata: read` token, which only the daemon's
+   publisher holds. Every registration requests `issues: write` (Section
+   [10](#10-operations-and-onboarding); #1416 tracks the owner's grant). Label
+   intake never reads comments, so the comment cannot create work. The
+   decomposed build units are unscheduled deferrals that the spine places
+   (expected 1B.1); this revision does not edit the Section
+   [11](#11-roadmap-build-order-and-coordination) table. (Owner-assigned #1415.
+   The positions are the issue's recommendations as refined by the
+   implementing session, decided by the owner through this revision's review;
+   [decision note](../../devlog/2026-09-20-0903-spec-issue-comment.md).)
