@@ -787,7 +787,16 @@ Tailscale is the Phase 1 reference remote-reachability mechanism, not an
 architectural property of Signet; neither Tailscale nor its address model is
 an architectural assumption. The Phase 1 security gate is unchanged: the
 production API binds only to loopback or an exact verified Tailscale-owned
-address. Reachability restricts who can contact Signet; it never
+address. A daemon bound to a Tailscale-owned address also serves the same API
+on loopback at the same port, and same-host clients (the Mac app on the
+daemon's own machine, the real-run harness health waits) always use loopback.
+The reason is that a host VPN can drop a machine's traffic to its own Tailscale
+address (reproduced with Mullvad), stranding a same-host client while other
+tailnet devices still reach the daemon; loopback is the one same-host path no
+host VPN can filter. This does not widen the gate: the gate's address set is
+still loopback or one exact verified Tailscale-owned address, and a
+both-listener daemon still reports `connection_mode: tailscale`. Reachability
+restricts who can contact Signet; it never
 authenticates anyone to it, because every mode presents the same Freeside
 device credential (Section [5.14](#514-client-synchronization-and-conversations)). The seam stays architectural prose: no
 reachability abstraction enters the daemon until a second real
@@ -933,7 +942,7 @@ sit above the credential-mode floor and represent different risk classes:
 
 | Profile | Access and risk |
 | --- | --- |
-| `provider_only` | Default. The writer has one host-only network: no direct external path and no guest DNS, and the provider API is reachable only through the daemon's allowlisting proxy. The host gateway remains a network neighbor. The production API is isolated by its loopback-or-Tailscale-owned listener gate; every other host service needs its own declared binding policy, and the ward proxy is the one intentional agent-reachable exception. |
+| `provider_only` | Default. The writer has one host-only network: no direct external path and no guest DNS, and the provider API is reachable only through the daemon's allowlisting proxy. The host gateway remains a network neighbor. The production API is isolated by its loopback-or-Tailscale-owned listener gate; a Tailscale-bound daemon also opens the loopback half of that gate at the same port for same-host clients, which admits no caller the gate refuses. Every other host service needs its own declared binding policy, and the ward proxy is the one intentional agent-reachable exception. |
 | `provider_registry` | Opt-in per project policy; `provider_only` stays the default, and the rules follow the table. |
 | `provider_web_read` | Materially wider credential-exfiltration exposure. Read-only HTTP can still exfiltrate through URLs, headers, bodies, redirects, and DNS while the provider credential shares the trust domain. It requires an explicit record of the wider exposure and a small trusted-domain allowlist. |
 | Clean verification | No network access. |

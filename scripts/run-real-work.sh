@@ -892,10 +892,11 @@ daemon_pid=$!
 
 if [[ -n "$retained_session" ]]; then
   healthy=false
+  health_address=$(real_work_local_address "$listen_address")
   for _ in $(seq 1 60); do
     child_job_exists "$daemon_pid" || break
     require_live_rig
-    if curl --fail --silent --max-time 2 "http://$listen_address/health" > "$workdir/health.json" &&
+    if curl --fail --silent --max-time 2 "http://$health_address/health" > "$workdir/health.json" &&
       python3 "$workdir/real-work-retained.py" health "$workdir/health.json" "$build_version" 2>/dev/null; then
       healthy=true
       break

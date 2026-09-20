@@ -450,6 +450,18 @@ func runRigHoldWithLeaseRoot(
 	} else if live {
 		return fmt.Errorf("listen address %q is already occupied by %s", canonicalListen, description)
 	}
+	// A Tailscale-bound daemon also serves the loopback twin (#1449), so a
+	// process squatting that loopback port would collide at startup: refuse the
+	// lease now, naming the loopback address.
+	if twin, ok, err := loopbackTwinListenAddress(canonicalListen); err != nil {
+		return err
+	} else if ok {
+		if description, live, err := host.ProbeDaemon(ctx, twin); err != nil {
+			return err
+		} else if live {
+			return fmt.Errorf("loopback listen address %q is already occupied by %s", twin, description)
+		}
+	}
 	if err := json.NewEncoder(stdout).Encode(rigHoldOutput{
 		Token: lease.Token(), Manifest: lease.Manifest(),
 	}); err != nil {

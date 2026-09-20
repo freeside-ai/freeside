@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -37,6 +38,8 @@ type fakePreflightEnvironment struct {
 	idleError            error
 	supervised           bool
 	live                 bool
+	liveByAddr           map[string]bool // when set, overrides live per probed address
+	probed               []string
 	codexError           error
 	codexExpiresAt       *time.Time
 	codexCalls           int
@@ -104,9 +107,73 @@ func (e *fakePreflightEnvironment) SupervisedDaemon(context.Context, string) (bo
 }
 
 func (e *fakePreflightEnvironment) ProbeDaemon(
-	context.Context, string,
+	_ context.Context, address string,
 ) (string, bool, error) {
+	e.probed = append(e.probed, address)
+	if e.liveByAddr != nil {
+		return "test process", e.liveByAddr[address], nil
+	}
 	return "test process", e.live, nil
+}
+
+func TestEvaluateDaemonConflictProbesLoopbackTwin(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		listen       string
+		liveByAddr   map[string]bool
+		wantPass     bool
+		wantProbed   []string
+		wantEvidence string
+	}{
+		{
+			name: "tailscale idle twin passes", listen: "100.64.0.1:8677",
+			wantPass: true, wantProbed: []string{"100.64.0.1:8677", "127.0.0.1:8677"},
+		},
+		{
+			name: "tailscale occupied twin fails", listen: "100.64.0.1:8677",
+			liveByAddr: map[string]bool{"127.0.0.1:8677": true},
+			wantPass:   false, wantProbed: []string{"100.64.0.1:8677", "127.0.0.1:8677"},
+			wantEvidence: "leased loopback listener is occupied",
+		},
+		{
+			name: "loopback lease probes once", listen: "127.0.0.1:8677",
+			wantPass: true, wantProbed: []string{"127.0.0.1:8677"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := &fakePreflightEnvironment{liveByAddr: tc.liveByAddr}
+			manifest := &compositionManifest{
+				Checks: []compositionCheck{{Name: "daemon_conflict", Status: compositionNotRun}},
+			}
+			manifest.Rig.Resources.ListenAddress = tc.listen
+			got := evaluateDaemonConflict(context.Background(), manifest, preflightConfig{}, env)
+			if got != tc.wantPass {
+				t.Fatalf("evaluateDaemonConflict = %v, want %v", got, tc.wantPass)
+			}
+			if !slices.Equal(env.probed, tc.wantProbed) {
+				t.Fatalf("probed = %v, want %v", env.probed, tc.wantProbed)
+			}
+			status := compositionPassed
+			if !tc.wantPass {
+				status = compositionFailed
+			}
+			if checkStatus(*manifest, "daemon_conflict") != status {
+				t.Fatalf("daemon_conflict status = %s, want %s",
+					checkStatus(*manifest, "daemon_conflict"), status)
+			}
+			if tc.wantEvidence != "" {
+				var evidence string
+				for _, check := range manifest.Checks {
+					if check.Name == "daemon_conflict" {
+						evidence = check.Evidence
+					}
+				}
+				if !strings.Contains(evidence, tc.wantEvidence) {
+					t.Fatalf("daemon_conflict evidence = %q, want it to contain %q", evidence, tc.wantEvidence)
+				}
+			}
+		})
+	}
 }
 
 func TestPreflightManifestGolden(t *testing.T) {

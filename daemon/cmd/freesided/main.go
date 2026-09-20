@@ -148,7 +148,7 @@ func main() {
 	dbPath := flags.String("db", "", "SQLite database path (required; created if absent)")
 	manualSubmissionConfigPath := flags.String("manual-submission-config", "", "operator JSON project policies for new client tasks (loaded once at startup)")
 	driverDir := flags.String("fake-driver-dir", "", "permanent fake StageDriver state directory (defaults beside -db)")
-	listenAddr := flags.String("listen", "127.0.0.1:0", "signet listener address (loopback or Tailscale-owned address only)")
+	listenAddr := flags.String("listen", "127.0.0.1:0", "signet listener address (loopback or Tailscale-owned address only; a Tailscale address also opens 127.0.0.1 at the same port for same-host clients)")
 	ntfyURL := flags.String("ntfy-url", defaultNtfyURL, "ntfy server URL for device notifications")
 	logLevel := flags.String("log-level", defaultLogLevel,
 		"loop log severity: debug, info, warn, or error (debug adds a record per loop iteration)")
@@ -587,12 +587,30 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	if err != nil {
 		return nil, err
 	}
+	// A Tailscale-bound daemon also serves the identical API on 127.0.0.1 at the
+	// same port, so a same-host client always has a path a host VPN cannot drop
+	// (#1449; devlog 2026-09-20-1257-same-host-loopback-listener.md). A loopback
+	// primary needs no twin. A twin bind failure is fatal: the daemon must never
+	// run reachable only over the filterable Tailscale address.
+	var loopbackTwin net.Listener
 	success := false
 	defer func() {
 		if !success {
 			_ = listener.Close()
+			if loopbackTwin != nil {
+				_ = loopbackTwin.Close()
+			}
 		}
 	}()
+	loopbackTwin, err = listenLoopbackTwin(
+		listener,
+		func(network string, resolved *net.TCPAddr) (net.Listener, error) {
+			return net.ListenTCP(network, resolved)
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
 	// The pairing surface's process-fixed facts (plan §5.14): the connection
 	// mode the bound listener implies and the host's name as a display label.
 	// Both are read once here; a host that cannot name itself must not pair
@@ -993,6 +1011,10 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
+	if loopbackTwin != nil {
+		logger.Info("serving same-host loopback twin listener",
+			"primary", listener.Addr().String(), "loopback", loopbackTwin.Addr().String())
+	}
 	// A completion recorded before migration 0066 gains its
 	// work_unit_completed milestone once (#1134); a store already carrying
 	// the milestones is a no-op.
@@ -1075,6 +1097,19 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}
 		d.componentExited(parent, ctx, componentHTTP, err)
 	}()
+	if loopbackTwin != nil {
+		// The same d.server serves both listeners, so d.server.Shutdown closes
+		// this one too; its exit is the same componentHTTP failure as the primary.
+		d.wg.Add(1)
+		go func() {
+			defer d.wg.Done()
+			err := d.server.Serve(loopbackTwin)
+			if errors.Is(err, http.ErrServerClosed) {
+				return
+			}
+			d.componentExited(parent, ctx, componentHTTP, err)
+		}()
+	}
 	if d.pairing != nil {
 		d.wg.Add(1)
 		go func() {
@@ -1359,6 +1394,66 @@ func listenPrivilegedWith(
 		return nil, fmt.Errorf("listen %q bound unexpected address %q", addr, listener.Addr())
 	}
 	return listener, nil
+}
+
+// loopbackTwinAddr returns the loopback address that mirrors a non-loopback
+// primary listener: 127.0.0.1 at the primary's port. It reports false when the
+// primary is already loopback, so a loopback listener stays single. An IPv6
+// Tailscale primary still twins onto 127.0.0.1, so same-host clients follow one
+// rule (#1449).
+func loopbackTwinAddr(bound *net.TCPAddr) (*net.TCPAddr, bool) {
+	if bound == nil || bound.IP.IsLoopback() {
+		return nil, false
+	}
+	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: bound.Port}, true
+}
+
+// listenLoopbackTwin opens the loopback companion for a primary bound to a
+// Tailscale-owned address, so a same-host client always has a path a host VPN
+// cannot drop (#1449). It returns a nil listener when the primary is already
+// loopback. It binds after the primary so a :0 primary has its real port. A
+// bind failure, or a bound address that is not loopback at that port, is
+// returned as an error naming the loopback address; startup then fails, which
+// is the contract: the daemon never runs reachable only over Tailscale.
+func listenLoopbackTwin(
+	primary net.Listener,
+	bind func(string, *net.TCPAddr) (net.Listener, error),
+) (net.Listener, error) {
+	bound, ok := primary.Addr().(*net.TCPAddr)
+	if !ok {
+		return nil, fmt.Errorf("primary listener address %q is not a TCP address", primary.Addr())
+	}
+	twinAddr, ok := loopbackTwinAddr(bound)
+	if !ok {
+		return nil, nil
+	}
+	listener, err := bind("tcp4", twinAddr)
+	if err != nil {
+		return nil, fmt.Errorf("listen loopback twin %q: %w", twinAddr, err)
+	}
+	loopbackBound, ok := listener.Addr().(*net.TCPAddr)
+	if !ok || !loopbackBound.IP.IsLoopback() || loopbackBound.Port != bound.Port {
+		_ = listener.Close()
+		return nil, fmt.Errorf("loopback twin bound unexpected address %q, want loopback at port %d",
+			listener.Addr(), bound.Port)
+	}
+	return listener, nil
+}
+
+// loopbackTwinListenAddress mirrors loopbackTwinAddr for a listen address in
+// host:port text, so the daemon and the rig and preflight probes share one rule
+// for which primary addresses also answer on loopback (#1449). It reports false
+// for a loopback address. The callers pass an IP literal, so no DNS occurs.
+func loopbackTwinListenAddress(address string) (string, bool, error) {
+	resolved, err := net.ResolveTCPAddr("tcp", address)
+	if err != nil {
+		return "", false, fmt.Errorf("resolve listen address %q: %w", address, err)
+	}
+	twin, ok := loopbackTwinAddr(resolved)
+	if !ok {
+		return "", false, nil
+	}
+	return twin.String(), true, nil
 }
 
 // connectionModeOf names how clients reach a listener listenPrivilegedWith
