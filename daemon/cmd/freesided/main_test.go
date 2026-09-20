@@ -1246,6 +1246,170 @@ func TestListenPrivilegedAcceptsOnlyTailscaleOwnedAddresses(t *testing.T) {
 	}
 }
 
+func TestLoopbackTwinAddr(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   *net.TCPAddr
+		want string // "" means no twin
+	}{
+		{name: "loopback v4", in: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 8443}},
+		{name: "loopback v6", in: &net.TCPAddr{IP: net.IPv6loopback, Port: 8443}},
+		{name: "tailscale v4", in: &net.TCPAddr{IP: net.ParseIP("100.64.0.7"), Port: 8443}, want: "127.0.0.1:8443"},
+		{name: "tailscale v6", in: &net.TCPAddr{IP: net.ParseIP("fd7a:115c:a1e0::7"), Port: 8443}, want: "127.0.0.1:8443"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			twin, ok := loopbackTwinAddr(tc.in)
+			if tc.want == "" {
+				if ok {
+					t.Fatalf("loopbackTwinAddr(%v) = %v, want no twin", tc.in, twin)
+				}
+				return
+			}
+			if !ok {
+				t.Fatalf("loopbackTwinAddr(%v) reported no twin, want %q", tc.in, tc.want)
+			}
+			if twin.String() != tc.want {
+				t.Fatalf("loopbackTwinAddr(%v) = %q, want %q", tc.in, twin, tc.want)
+			}
+			if !twin.IP.IsLoopback() {
+				t.Fatalf("twin %q is not loopback", twin)
+			}
+		})
+	}
+}
+
+func TestListenLoopbackTwin(t *testing.T) {
+	// A loopback primary needs no twin, and the binder is never called.
+	twin, err := listenLoopbackTwin(
+		&listenerStub{addr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 8443}},
+		func(string, *net.TCPAddr) (net.Listener, error) {
+			t.Fatal("loopback primary tried to bind a twin")
+			return nil, nil
+		},
+	)
+	if err != nil || twin != nil {
+		t.Fatalf("listenLoopbackTwin(loopback) = (%v, %v), want (nil, nil)", twin, err)
+	}
+
+	// A Tailscale primary (v4 and v6) twins onto 127.0.0.1 at the primary's
+	// real port. The primary's Addr already carries the bound port, so a :0
+	// primary passes its resolved port on.
+	for _, primary := range []string{"100.64.0.7:8443", "[fd7a:115c:a1e0::7]:8443"} {
+		t.Run(primary, func(t *testing.T) {
+			resolved, err := net.ResolveTCPAddr("tcp", primary)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var boundNetwork string
+			var boundAddr *net.TCPAddr
+			bound := &listenerStub{addr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: resolved.Port}}
+			twin, err := listenLoopbackTwin(
+				&listenerStub{addr: resolved},
+				func(network string, addr *net.TCPAddr) (net.Listener, error) {
+					boundNetwork, boundAddr = network, addr
+					return bound, nil
+				},
+			)
+			if err != nil {
+				t.Fatalf("listenLoopbackTwin(%q): %v", primary, err)
+			}
+			if twin != bound {
+				t.Fatalf("listenLoopbackTwin(%q) returned a different listener", primary)
+			}
+			if boundNetwork != "tcp4" || boundAddr.String() != "127.0.0.1:8443" {
+				t.Fatalf("bound %q on %q, want 127.0.0.1:8443 on tcp4", boundAddr, boundNetwork)
+			}
+		})
+	}
+
+	// A bind failure is returned with the loopback address named, so startup
+	// fails rather than run reachable only over Tailscale.
+	_, err = listenLoopbackTwin(
+		&listenerStub{addr: &net.TCPAddr{IP: net.ParseIP("100.64.0.7"), Port: 8443}},
+		func(string, *net.TCPAddr) (net.Listener, error) {
+			return nil, errors.New("address already in use")
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "127.0.0.1:8443") {
+		t.Fatalf("bind failure error = %v, want it to name 127.0.0.1:8443", err)
+	}
+
+	// A twin that binds a wrong address is closed and refused.
+	for _, name := range []string{"non-loopback", "wrong port"} {
+		t.Run(name, func(t *testing.T) {
+			wrong := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9999}
+			if name == "non-loopback" {
+				wrong = &net.TCPAddr{IP: net.ParseIP("100.64.0.7"), Port: 8443}
+			}
+			stub := &listenerStub{addr: wrong}
+			_, err := listenLoopbackTwin(
+				&listenerStub{addr: &net.TCPAddr{IP: net.ParseIP("100.64.0.7"), Port: 8443}},
+				func(string, *net.TCPAddr) (net.Listener, error) { return stub, nil },
+			)
+			if err == nil {
+				t.Fatalf("listenLoopbackTwin accepted a twin bound to %q", wrong)
+			}
+			if !stub.closed {
+				t.Fatal("refused twin listener was not closed")
+			}
+		})
+	}
+}
+
+// TestServeTwoLoopbackListenersFromOneServer pins the property the twin relies
+// on: one http.Server serves both listeners and Shutdown closes them both.
+func TestServeTwoLoopbackListenersFromOneServer(t *testing.T) {
+	first, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, "ok")
+		}),
+		ReadHeaderTimeout: time.Second,
+	}
+	var wg sync.WaitGroup
+	exits := make(chan error, 2)
+	for _, l := range []net.Listener{first, second} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			exits <- server.Serve(l)
+		}()
+	}
+	for _, l := range []net.Listener{first, second} {
+		resp, err := http.Get("http://" + l.Addr().String() + "/health")
+		if err != nil {
+			t.Fatalf("GET %s: %v", l.Addr(), err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200", l.Addr(), resp.StatusCode)
+		}
+	}
+	if err := server.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+	wg.Wait()
+	close(exits)
+	for err := range exits {
+		if !errors.Is(err, http.ErrServerClosed) {
+			t.Fatalf("Serve exit = %v, want ErrServerClosed", err)
+		}
+	}
+	// Shutdown closed both listeners, so a further accept fails on each.
+	for _, l := range []net.Listener{first, second} {
+		if _, err := l.Accept(); err == nil {
+			t.Fatalf("listener %s still accepts after Shutdown", l.Addr())
+		}
+	}
+}
+
 func TestParseTailscaleIPs(t *testing.T) {
 	got, err := parseTailscaleIPs("100.64.0.7\nfd7a:115c:a1e0::7\n")
 	if err != nil {
