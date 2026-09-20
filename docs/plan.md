@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 65
+revision: 66
 status: active
-updated: 2026-09-19
+updated: 2026-09-20
 ---
 
 # Freeside
@@ -65,6 +65,7 @@ why.
   - [5.9 Durability: Effectively Once](#59-durability-effectively-once)
   - [5.10 Coherent Backup: Encrypted Checkpoints](#510-coherent-backup-encrypted-checkpoints)
   - [5.11 GitHub Integration: Reconciliation plus Intake](#511-github-integration-reconciliation-plus-intake)
+    - [The Approved-Specification Comment](#the-approved-specification-comment)
   - [5.12 Workflow Definition, Initiators, and Artifacts](#512-workflow-definition-initiators-and-artifacts)
   - [5.13 Deterministic Components, Judgment Calls, and the Effect Registry](#513-deterministic-components-judgment-calls-and-the-effect-registry)
     - [Daemon Judgment Calls](#daemon-judgment-calls)
@@ -181,7 +182,9 @@ and API name the entity `Task` and reference it by `task_id`.
 2. A specifier turns it into a specification using research artifacts fetched
    by the daemon. When the submission is a sketch, the specifier asks me
    first.
-3. I approve the specification in the attention inbox.
+3. I approve the specification in the attention inbox. For a task bound to an
+   issue, the daemon then posts the approved public plan as one comment on
+   that issue.
 4. An agent implements it in an isolated workspace with no GitHub credentials.
 5. After the agent exits, a proven workspace handoff carries the result into
    the hostile import boundary, which runs out of process, and then into a
@@ -404,7 +407,7 @@ Approval is not a universal action.
 
 | Item type | Available actions and behavior |
 | --- | --- |
-| `spec_approval` | Approve, request changes, discuss, or stop. Render the full specification. A revision shows the diff from the last reviewed version, prior comments, and claimed addressals. |
+| `spec_approval` | Approve, request changes, discuss, or stop. Render the full specification. For a task bound to an issue, say that approving posts to that issue, and render the public plan that will post or say that only the daemon's notice will (Section [5.11](#511-github-integration-reconciliation-plus-intake)). A revision shows the diff from the last reviewed version, prior comments, and claimed addressals. |
 | `review_diminishing_returns` | Finish now; apply the current batch and finish; continue under specified policy; or turn a recurring preference into a project-policy proposal PR. It never mutates policy directly. |
 | `review_dispute` | For a routed finding: discuss or stop; the transaction that would execute the adjudication is deferred (#1016). For an observation-only shadow finding: approve continuation without routing the finding, discuss, or stop; only approve lets the run reach readiness, and stop ends the run and raises the normal durable publication-blocked surface. For a completed publication cycle whose trust recheck needs code changes: approve one remediation continuation on the existing owned PR, discuss, or stop. Without a published PR, approve records an acknowledgment-only refusal. |
 | `finding_adjudication` | Accept the recommended route, choose an offered alternative, discuss, or stop (added with the Section [7](#7-review-policy) adjudication routing, 1B). Acceptance binds to the adjudication artifact digest and the item version; a Discuss response re-invokes adjudication against the same version bindings, and the new artifact supersedes the item. Stop leaves the run parked. |
@@ -1454,6 +1457,11 @@ repository_security:
   allow_reusable_workflows: false
   allow_package_publishing: false
   allow_artifact_consumers: false
+  allow_issue_comment_workflows: false       # workflows triggered by
+                                             # issue_comment; gates only the
+                                             # approved-specification comment
+                                             # (Section 5.11), never
+                                             # publication
   commit_plan: single_commit | plan_preferred
                                              # Section 5.6 agent-proposed
                                              # commit plan; conservative
@@ -1502,6 +1510,21 @@ The audit attests the PR job's **effective authority**, including:
 - package-publishing permissions; and
 - any workflow that consumes artifacts produced by untrusted PR code.
 
+The audit also enumerates every workflow triggered by `issue_comment`. Those
+workflows run from the default branch with the repository's secrets, and the
+approved-specification comment (Section [5.11](#511-github-integration-reconciliation-plus-intake)) would start them. While
+`allow_issue_comment_workflows` is false, a repository that has one posts no
+such comment. Setting it true records that the reviewing human accepted the
+listed workflows. The audited set records a digest for each listed workflow,
+taken over the workflow file and the local reusable workflows and composite
+actions it uses. Those digests are part of the digest-bound profile. The daemon
+rechecks the enumerated set and its digests against the current default-branch
+tip immediately before each post, and drift refuses the post. Clearing drift
+needs the owner's review of the profile under its new digest.
+The key never affects pull-request publication. A profile
+reviewed before revision 66 does not approve the comment operation until the
+owner reviews it again under its new digest.
+
 Phase 1A supports one repository with a machine-readable profile. A human
 reviews it once; the daemon binds it by digest; drift fails closed.
 
@@ -1521,6 +1544,15 @@ verifies that it names exactly that repository, grants no permission beyond the
 approved effective set, includes every permission the operation requires, and
 has the expected bounded expiry. A missing or mismatched field discards the
 token before any worker can receive it and fails closed.
+
+The approved-specification comment (Section [5.11](#511-github-integration-reconciliation-plus-intake)) mints its own
+narrowed token: `issues: write` and `metadata: read` for the one target
+repository, and nothing the publication set holds. GitHub's `issues: write`
+is wider than the operation. It also labels, closes, locks, and creates
+issues, edits and deletes comments, and comments on pull requests, and a label
+can start intake. So only the daemon's publisher holds the token. It reads the
+target issue and its comments and creates the one comment, and it makes no
+other call. No ward and no agent-run process ever receives it.
 
 **Standing prohibition:** the daemon host is never a self-hosted Actions runner
 for a managed repository.
@@ -2337,6 +2369,193 @@ cannot reopen an abandoned task. Explicit re-admission checks the configured
 invalid policy refuses re-admission. A cancellation fence forbids re-admission;
 neither submission nor restart clears it.
 
+#### The Approved-Specification Comment
+
+When a `spec_approval` item resolves to approve on a task bound to an issue,
+the daemon posts a rendering of the approved specification as one comment on
+that issue. The engine runs this effect (Section
+[5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry));
+no agent requests it, and the specifier holds no GitHub credential. The comment
+is a visibility aid, not a record. The daemon ledger is the record. The comment
+grants nothing: no intake path, reconciliation, or gate reads it, on the Section
+[5.17](#517-follow-up-issue-filing) rule that markers in issue content carry
+zero authority. It still puts the approved plan where a reader of the issue or
+the pull request can find it, and the text outlives the daemon's store.
+
+- **Trigger.** A human approve decision on a `spec_approval` item, and nothing
+  else. A policy that sets `gates.spec_approval: false` starts implementation
+  with no human approval, so it posts no comment: no agent-written text reaches
+  an issue before a human has seen it. Drafts, discussion turns,
+  request-changes rounds, and specifier iterations post nothing. The approval
+  transaction records the comment intent beside the approval's other effects,
+  so a crash cannot lose it. The implementation run never waits for the post.
+- **Target.** The daemon selects the target from the task's intake binding: an
+  `issue_subject` specification source, which only label intake creates, keyed
+  by project, canonical repository ID, and issue number (Section
+  [5.12](#512-workflow-definition-initiators-and-artifacts)). No agent output,
+  proposal, or client field names or changes the target. A client task's Source
+  issue link is descriptive and is never a comment target, so an unbound task
+  posts nothing. The daemon reads the target issue before it posts, under the
+  same narrowed token. A missing, transferred, or locked issue, or a number
+  that resolves to a pull request, ends the effect with no post.
+- **Posted text.** The specifier's output gains an optional **public plan**: a
+  Markdown field, bounded at 8 KiB, written for readers of the issue. It says
+  what will be built, the approach, and what is out of scope. It quotes no
+  research and no owner answers. The specification's summary and body are
+  never posted. Both address the owner and the implementer, both may quote
+  daemon-fetched research and owner answers, and a body at its 64 KiB bound
+  fills a GitHub comment by itself. The specification artifact is minted at normal
+  sensitivity, and so is the public plan; a sensitivity value or public label
+  grants nothing (Section [5.15](#515-evidence-and-images)). The approval and
+  the screen make the public plan postable. The approved specification digest
+  covers the body alone. So for a task bound to an issue, the daemon stores the
+  public plan as its own digest-addressed artifact and carries it on the
+  `spec_approval` card as a labeled agent claim. For an unbound task it
+  discards the field and attaches no claim. A decision binds exactly the
+  digests its card renders (Section [4](#4-the-attention-model)), so the
+  approval binds the public plan's source bytes. What posts is the daemon's
+  deterministic rendering of those bytes inside the frame. The card's primary
+  layer says that approving posts to the bound issue when the repository's
+  trust profile allows it, and it shows the public plan or says that only the
+  daemon's notice will post (Section [9](#9-comprehension)). The field changes
+  the specifier's prompt, so that prompt gets a new digest (Section
+  [5.4](#54-credential-modes-egress-profiles-and-concurrency)). Output admitted
+  under an older prompt has no public plan.
+- **Frame and screen.** The daemon writes the comment's frame: a fixed notice
+  that Freeside approved a specification for this issue, the task ID, the
+  approved specification digest, the public plan digest, and a statement that
+  the comment is a rendering that grants nothing. The public plan renders
+  inside the frame. The daemon screens the public plan under the built-in
+  versioned ruleset `github-issue-comment/1`, on the Section
+  [5.5](#55-the-ci-trust-boundary) commit-message-screening pattern. The ruleset
+  rejects everything `github/1` rejects, and also secrets, control and format
+  characters, and reserved Freeside markers. It applies the Section
+  [5.15](#515-evidence-and-images) v2 rendering rules, with no active link or
+  image at all. It also rejects every `@name` token and every line that opens
+  with a `/` command, because a webhook bot reads the raw comment body, where
+  inert rendering protects nothing. A refusal never echoes the refused text. If
+  the implementing unit cannot hold live Markdown inert, the public plan renders
+  as escaped text, as recipe v1 does, and the unit records that. The screen is a
+  pure function of the stored bytes and the ruleset version. It runs when the
+  daemon accepts the specification. Credential-shaped content fails the
+  specification, as it does today in the summary and body. Any other refusal
+  drops the public plan: the card then carries no public plan claim, and the
+  refusal's reason class is recorded. With no public plan, the daemon posts the
+  frame alone, which contains no agent text, and the card says so. The screen
+  runs again before dispatch under the ruleset version the intent recorded. A
+  refusal there, or a recorded version the built-in registry has since
+  withdrawn, posts the frame alone and records the reason class. A later
+  ruleset version never re-screens or edits a posted comment.
+- **Identity and record.** The effect identity is the approval occurrence: the
+  task ID plus the identity of the resolved `spec_approval` item, which is
+  deterministic across replay and restart. Content digests bind the approval
+  and never define the occurrence, the rule Section
+  [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)
+  sets for proposals. Each approval is one comment, and replaying one approval
+  never posts a second. The record lives in the Section
+  [5.9](#59-durability-effectively-once) outbox and inbox ledger as new
+  intent and outcome kinds, the way publication records its intent and outcome;
+  it adds no table. The intent precedes dispatch and carries the identity, the
+  target, the approved specification digest, the public plan digest or its
+  recorded absence, the ruleset version, the digests of any comment it
+  supersedes, and the IDs of the App-authored comments already on the issue.
+  Each attempt durably records a dispatch-started marker before it sends the
+  create request. The outcome follows the response and carries the canonical
+  numeric comment ID and the final state. A boundary that rebuilds the record re-derives the target from the
+  task's current intake binding and re-checks that the named approval and
+  digests exist. It never trusts a decoded target, approval bit, or comment ID,
+  and it fails closed to no post.
+- **Idempotency and crash recovery.** The post checks before it creates, and it
+  reconciles after a crash that follows the create. Comment effects serialize
+  per issue, so recovery binds at most one outstanding intent per issue.
+  Recovery looks up the ledgered comment ID first. With none, it lists the
+  issue's comments completely. A candidate is a comment that the App's numeric
+  identity authored and that is neither in the intent's pre-dispatch ID set nor
+  ledgered to another effect. No clock defines a candidate. Recovery adopts a
+  single candidate. Text in a comment is a rendering hint, never a matching
+  key. With no candidate, a create needs evidence that no earlier create
+  committed. Two things are such evidence. No attempt has a dispatch-started
+  marker. Or the last attempt ended in a recorded response in which GitHub
+  definitively rejected the request before creating anything (a 4xx-class
+  refusal). The status class alone is not the test. The implementing unit lists
+  the responses that show rejection before creation, and a response outside
+  that list is unproven. With such evidence a create is safe, and Failure
+  posture below says whether the post retries. Every other dispatched
+  attempt is unproven: a 5xx response, an unclassifiable or truncated
+  response, a timeout, or a lost response. Its create may still commit, or the
+  listing may lag. Recovery waits a policy-set settle interval and lists again,
+  and it adopts a candidate that appears. If none appears, that is residual
+  ambiguity, never a retry. GitHub offers no idempotency key for comment
+  creation, so an empty listing cannot show that the create failed. Residual
+  ambiguity is any of three cases: two or more candidates, a listing that
+  cannot complete, or an unproven dispatched attempt with no candidate after
+  the settle interval. The invariant is that a create needs evidence that no
+  earlier create for this effect committed, and every other state is residual
+  ambiguity. The build units' fixtures enumerate the cases.
+- **Revised specifications.** A second approval on one task (the
+  `revise_specification` path) is a new approval occurrence, so it is a new
+  effect: a successor comment that names the approved specification digest and
+  the public plan digest of the comment it supersedes. The newest comment
+  therefore always names the plan in force, even when a revision returns to
+  earlier bytes. The issue's history stays append-only. The daemon never edits, deletes, or minimizes a
+  comment it posted, so the effect needs only read and create calls.
+- **Failure posture.** The comment never blocks or delays implementation or
+  publication. A rejection GitHub made before creating anything is either
+  transient or definite. A transient one, such as a rate limit, retries within
+  the Section [5.9](#59-durability-effectively-once) bounds, and so does an
+  attempt that never dispatched. A 5xx response, an unclassifiable or truncated
+  response, a timeout, or a lost response is neither, and recovery above
+  handles it. A definite refusal records a terminal outcome with its reason
+  class and interrupts no one: the App lacks `issues: write`, the target is
+  gone or locked, the repository's trust
+  profile does not approve the operation, or the dispatch-time workflow recheck
+  below finds drift. Task cancellation fences an
+  undispatched comment like any other effect. Only residual ambiguity raises a
+  `system_health` item. Recording residual ambiguity records a terminal
+  `ambiguous` outcome in the same step, so no further attempt ever follows,
+  never a blind retry. Acknowledge keeps its Section
+  [4](#4-the-attention-model) meaning, seen and never resolved, and changes
+  nothing about the effect.
+- **What the comment sets off.** An issue comment is a fan-out effect, smaller
+  than the Section [5.17](#517-follow-up-issue-filing) filing but of the same
+  kind. It notifies the issue's subscribers. It starts any workflow the
+  repository triggers on `issue_comment`. Those workflows run from the default
+  branch with the repository's secrets and can read the comment body, and a
+  comment an App authors does start them. Webhook-driven Apps may act on
+  commands in the text. Three rules bound this. One comment posts per approved
+  specification, and rejected `@name` tokens mean it pings nobody beyond the
+  subscribers. The Section [5.5](#55-the-ci-trust-boundary) workflow audit
+  enumerates every workflow triggered by `issue_comment`, and the comment is a
+  profile-approved operation only when that audit finds none or the reviewing
+  human accepted the listed ones (`allow_issue_comment_workflows`). Those
+  workflows run from the default branch as it stands when the comment posts,
+  not as it stood at profile review. The human accepted their contents, not
+  their names. So the audited set records a digest for each listed workflow,
+  taken over the workflow file and the local reusable workflows and composite
+  actions it uses. Immediately before each post the daemon re-enumerates the
+  `issue_comment` workflows at the current default-branch tip, recomputes
+  those digests, and compares both with the audited set. Any difference is
+  drift and a definite refusal: an added or removed workflow, or an edit to a
+  listed workflow or its local dependencies. A workflow merged between that
+  recheck and the post is a residual window of seconds. The screen rejects
+  command shapes. Three residuals stay open (Section [14](#14-risks)). The
+  digests cover only the files named above. A remote action or reusable
+  workflow that a listed workflow names by a mutable ref can change with no
+  default-branch commit. A script a listed workflow runs from the checkout, or
+  a workflow chained from it by `workflow_run`, can change with no digest
+  changing. A
+  webhook-driven App cannot be enumerated, whether it reacts to any comment or
+  to a plain phrase with no `@` or `/`, such as `recheck`; it sees one screened
+  comment per approval. And a
+  comment counts as issue activity, so it resets the timers of stale-issue
+  automation, which the `issue_comment` audit cannot see.
+- **Intake independence.** Label intake reads an issue's number, state, and
+  label names. It never reads comments or `issue_comment` events, so the
+  daemon's own comment cannot create a task, relabel an issue, or make anything
+  intake-eligible. One path can see the comment: a later specifier run on the
+  same issue may receive the issue's comments as daemon-fetched research.
+  Research is input and never authority, so the comment gains nothing there.
+
 ### 5.12 Workflow Definition, Initiators, and Artifacts
 
 The workflow is a Go state machine. YAML supplies policy only. Crash retry and
@@ -2477,7 +2696,8 @@ Additional rules:
   Only a complete canonical GitHub issue URL supplied as the source may become
   a descriptive Source issue link. Under recipe v1 it supplies no closing
   directive, issue binding or completion authority; client work remains
-  `bound_pr_merged` with no bound issue. The publication-author workflow
+  `bound_pr_merged` with no bound issue, and the link is never a target for
+  the approved-specification comment (Section [5.11](#511-github-integration-reconciliation-plus-intake)). The publication-author workflow
   (Section [5.15](#515-evidence-and-images)) lets the publisher write a `Closes`
   reference, but the trust in that reference depends on its source. The
   daemon-bound `issue_subject` specification source, reached through label
@@ -2597,7 +2817,8 @@ The engine, not an agent, runs deterministic policy jobs:
 - evidence capture;
 - research fetching;
 - card facts;
-- evidence publication; and
+- evidence publication;
+- the approved-specification comment (Section [5.11](#511-github-integration-reconciliation-plus-intake)); and
 - cleanup.
 
 Agents appear where judgment is the work: specifier, implementer, remediator,
@@ -2818,8 +3039,9 @@ Agent-requested real-world effects are anything a run, a client proposal
 surface, or daemon-side inference asks the daemon to do. They exist only as
 typed, digest-addressed proposal artifacts that target a closed registry of
 effect kinds. Each kind has a fixed Go type, a trusted constructor, and a gate.
-Effects the trusted workflow performs itself (publication, notifications,
-installation maintenance) stay engine-run under Section [5.9](#59-durability-effectively-once) and the
+Effects the trusted workflow performs itself (publication, the
+approved-specification comment, notifications, installation maintenance) stay
+engine-run under Section [5.9](#59-durability-effectively-once) and the
 deterministic-jobs list above; they are not proposal-gated. Publishing a pull
 request stays ungated on this path; only whether that pull request closes its
 source issue depends on an admitted closure proposal (below). Proposals supply
@@ -3310,6 +3532,10 @@ filing takes explicit per-proposal human approval, whatever the profile state.
 The policy-approved path below is the later autonomous path. A valid authority
 profile is an additional precondition for that path, never a replacement for
 the 1B.1 human gate.
+
+A comment on an issue the task is already bound to is not a filing and takes
+no filing gate. The approved-specification comment (Section [5.11](#511-github-integration-reconciliation-plus-intake)) carries its
+own, smaller fan-out rules.
 
 The policy-approved path requires a digest-bound, freshness-limited issue-event
 authority profile. The profile covers a complete enumerated authority surface.
@@ -4316,7 +4542,7 @@ Actions and lifecycle live in Section [4](#4-the-attention-model); presentation 
 
 | Item type | Leads with | Below |
 | --- | --- | --- |
-| `spec_approval` | The ask and a plan-altitude summary: intent, then key questions and decisions. A revision leads with the diff-from-last-reviewed summary and claimed addressals mapped to prior comments. | Full specification and full diff. |
+| `spec_approval` | The ask and a plan-altitude summary: intent, then key questions and decisions. A revision leads with the diff-from-last-reviewed summary and claimed addressals mapped to prior comments. For a task bound to an issue: that approving posts to the issue, with the public plan or a note that only the daemon's notice will post. | Full specification and full diff. |
 | `review_diminishing_returns` | Daemon facts: rounds, finding-rate trend, diff growth, cost so far; the drift verdict and reversal list when the item carries one. Agent claim: what remains. | Per-finding list. |
 | `review_dispute` | The disputed finding with both positions side by side. Dissent is the content; it is never summarized away. | Code context and the full thread. |
 | `finding_adjudication` | The recommended route and why, as a labeled proposal; the finding and the daemon's binding and containment facts in a separate register. | Assumptions, cited repository instructions, alternatives with consequences, gating questions, then the full artifact and code context. |
@@ -4590,6 +4816,13 @@ requires a fresh native installation through the pending-intent flow. It never
 automatically unsuspends a drifted installation or mints a token against it.
 Unsolicited installations and repository grants never authorize Freeside minting
 and never reach the attention system.
+
+Every registration, in either posture, requests `issues: write` beside the
+publication permissions, for the approved-specification comment (Section
+[5.11](#511-github-integration-reconciliation-plus-intake)) and later for follow-up filing (Section [5.17](#517-follow-up-issue-filing)). An
+existing registration gains it only when its owner accepts the permission
+change on GitHub (#1416). Until then the comment ends as a definite refusal and
+nothing else changes.
 
 Registration uses the manifest flow, and the initial key lands directly in
 protected storage. Each additional machine receives a distinct private key
@@ -5072,45 +5305,54 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 65 ("Every Agent Activity Is a Lineup Role"):
+Revision 66 ("Post the Approved Specification to the Bound Issue"):
 
-1. **Every agent activity is a role that picks its agent and its prompt
-   through the lineup.** A lineup line maps one role to an agent and a prompt,
-   each by digest. The agent is the Section [5.4](#54-credential-modes-egress-profiles-and-concurrency) document, so the harness comes with
-   it and is never a separate setting. Every judgment site joins: task namer,
-   finding classifier, finding adjudicator, drift auditor, diagnostic, attention
-   discussion, and briefer, after revision 64's publication author. Roles sit
-   above stages and sites: a stage may hold several roles, a role may span
-   several sites, and each site keeps its own authority mode, fields, budget,
-   and fail-safe. The deployment lineup lists every role that policy asks work
-   from, a project lineup
-   overrides single roles, and one role never falls back to another's line. The
-   role list is closed and grows by plan revision. Each role has its own prompt,
-   admitted by its own digest; a second version is a separate named prompt, and
-   prompts carry no per-model or per-harness overlays, which answers the
-   question #989 parked here. Experiments are paired, not randomized: every run
-   and call records what ran, a judgment call may run as a shadow whose output
-   goes only to the advisory store, workspace roles compare before and after a
-   lineup change, and percentage and cohort arms are not built. (Owner
-   decisions, recorded on #900.)
-2. **Wardless roles run on the host behind a per-build no-tools proof; ward
-   roles stay in the ward.** What the role's agent can touch picks the launch
-   shape, and blocking or failing safe is a property of the role. One wardless
-   admission class covers every judgment role: the stage admission steps with
-   runner conformance dropped and the call launch proved per adapter build.
-   Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admission, holds the class, the interim hand-audit exception,
-   credential handling on the host, the unbound-role rule, and the call record.
-   A call has no gate before first use; its site's authority contract bounds
-   it. "Not choosable" limits what a model's answer may select, not what an
-   operator writes on a lineup line. Review independence is a recorded fact,
-   never an admission gate (owner decision; Section [7](#7-review-policy)). This supersedes the
-   earlier default that the review offer's lineage group differ from the
-   implementation offer's unless a project lineup relaxed it, with unknown
-   lineage failing closed. The role-key and wardless-admission
-   vocabulary is #1421, and #867 `starts-after` it so the first real lineup
-   never carries stage-named keys. (Positions from the owner's design discussion on #900, proposed by the
-   implementing session and decided by the owner through this revision's
-   review; [decision note](../devlog/2026-09-19-1105-judgment-roles-join-lineups.md).)
+1. **The daemon posts the approved public plan as one comment on the task's
+   bound issue.** Until now the approved specification lived only inside
+   Freeside, so a reader of the issue or the pull request could not see what
+   was approved. Section [5.11](#511-github-integration-reconciliation-plus-intake) holds the effect. It is engine-run and
+   never proposal-gated. A human approve on `spec_approval` is the only
+   trigger, so a policy with the gate off posts nothing. The daemon selects
+   the target from the label-intake `issue_subject` binding; a client task's
+   Source issue link is never a target. The comment is a visibility aid that
+   grants nothing; the ledger is the record.
+2. **The posted text is a new specifier field, bound by the approval.** The
+   specifier emits an optional public plan, bounded at 8 KiB. The summary and
+   body are never posted, because they address the owner and may quote research
+   and owner answers. The approved specification digest covers the body alone,
+   so the public plan is its own digest-addressed claim on the `spec_approval`
+   card for a bound task, where the decision's binding set covers it and the
+   card's primary layer shows what approving will post. The ruleset `github-issue-comment/1` screens it at acceptance and
+   again before dispatch. It adds mention and command-shape rejection to the
+   `github/1` and recipe v2 rules. A refused or absent public plan posts the
+   daemon-written frame alone.
+3. **The record reuses the outbox and inbox ledger; a revision appends.** New
+   intent and outcome kinds carry the identity (the approval occurrence: task
+   ID plus the resolved `spec_approval` item), both content digests, the
+   canonical comment ID, and the state. No table or migration is added. A second approval on one task
+   posts a successor comment that names the digest it supersedes, and the
+   daemon never edits or deletes a posted comment. A failed post never blocks
+   the run. A transient rejection GitHub made before creating anything, or an
+   attempt that never dispatched, retries within Section [5.9](#59-durability-effectively-once). A definite
+   refusal ends quietly. Any other dispatched attempt with no candidate is
+   never retried, and only residual ambiguity raises a `system_health` item.
+4. **The comment's fan-out is named and bounded.** An App-authored comment
+   notifies subscribers and starts `issue_comment` workflows that hold
+   repository secrets. The Section [5.5](#55-the-ci-trust-boundary) workflow audit now enumerates those
+   workflows under `allow_issue_comment_workflows` and digests each one with
+   its local dependencies. The daemon rechecks the set and the digests at the
+   default-branch tip before each post, and a profile reviewed before
+   this revision does not approve the operation. The comment mints its
+   own `issues: write` and `metadata: read` token, which only the daemon's
+   publisher holds. Every registration requests `issues: write` (Section
+   [10](#10-operations-and-onboarding); #1416 tracks the owner's grant). Label
+   intake never reads comments, so the comment cannot create work. The
+   decomposed build units are unscheduled deferrals that the spine places
+   (expected 1B.1); this revision does not edit the Section
+   [11](#11-roadmap-build-order-and-coordination) table. (Owner-assigned #1415.
+   The positions are the issue's recommendations as refined by the
+   implementing session, decided by the owner through this revision's review;
+   [decision note](../devlog/2026-09-20-0903-spec-issue-comment.md).)
 
 ## 14. Risks
 
@@ -5121,6 +5363,7 @@ Revision 65 ("Every Agent Activity Is a Lineup Role"):
 | CI privilege crossing | Attest effective authority; block candidate automation changes; fail closed on drift; prohibit the daemon host as a runner. |
 | Reviewer-instruction poisoning | Compose agent and reviewer instructions from the trusted base, never the candidate; detect instruction-path edits mechanically and surface them as advisories that the human merge gate reads (Section [5.8](#58-control-plane-trust)). |
 | **Rendered agent Markdown in a public PR** | Recipe v2 (Section [5.15](#515-evidence-and-images)) renders authored prose as live Markdown only through a screen at least as strict as v1's: it rejects closing and automation directives at the body source, rejects secrets and control characters, neutralizes cross-reference, bare-URL, commit-reference and mention autolinks, renders raw HTML inert, and resolves links and images only to existing publishable (`publish_eligible`) evidence artifacts. The author's evidence inputs are likewise restricted to policy-approved publishable evidence, so it cannot paraphrase sensitive evidence past the publication gate. On any screen or inference failure it falls back to frozen v1 escaped-text rendering, adding no new publication block. The author's control-plane inputs (the target repository's template and AGENTS.md) resolve from the trusted base, never the candidate head (Section [5.8](#58-control-plane-trust)). The publisher, not agent text, writes any close directive; the closure is an effect proposal approved through the `effect_proposal` action (digest-bound) before any `Closes` is written, and a same-repository client-supplied source URL is approved as an unverified recommendation. |
+| **Agent text in a public issue comment** | The approved-specification comment (Section [5.11](#511-github-integration-reconciliation-plus-intake)) posts only a human-approved, digest-bound public plan inside a daemon-written frame, screened under `github-issue-comment/1`, which rejects directives, secrets, mentions, and command shapes. The workflow audit gates it on `issue_comment` triggers, and only the daemon's publisher holds the `issues: write` token. The workflow set, with a content digest of each workflow and its local dependencies, is rechecked at the default-branch tip before each post. Residual: a remote action or reusable workflow named by a mutable ref, a script a listed workflow runs from the checkout, or a workflow chained by `workflow_run` can change unseen by the digests. Also residual: a webhook-driven App that reacts to any comment or to a plain phrase cannot be enumerated, and a comment resets stale-issue timers; each sees one screened comment per approval. |
 | **Wardless roles on the host** | A judgment role runs outside the ward, so nothing sandboxes it and no egress proxy sits in front of its harness. Its safety rests on the call launch, which an adapter proves per build against the real harness; Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admission, holds the launch's clauses, the interim hand-audit exception, and credential handling on the host. The answer is schema-validated and bounded by its site's authority contract, the model sees only the site's allowlisted, redacted fields, and a shadow's output reaches only the advisory store. Residual: a harness update can change what a launch flag means, which is why the proof is per pinned build and not per harness; a host administrator policy file that no launch flag switches off is outside that per-build proof (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); and a shadow whose agent shares its primary's usage pool draws on a vendor quota that Freeside does not meter (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)). |
 | **Workspace-handoff uncertainty** | Resolved by the workspace-handoff spike: the strong class is declared and conformance-gated (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)); the same-VM fallback is refuted by execution, never implemented or declared. |
 | **Codex cloud review as a load-bearing dependency** | Realized 2026-07-31: the live-run trigger falsification (#427) showed no App-visible trigger path. The dependency is removed. Review is Freeside-invoked (Section [7](#7-review-policy)), and native review is best-effort extra evidence. |
