@@ -32,17 +32,36 @@ public enum APIClientFactory {
     /// URLSession one (e.g. to fail requests before they leave the
     /// process) without hand-building a Client that would drift from
     /// this composition; the default rides the uncached session above.
+    ///
+    /// On macOS the client also carries the same-host loopback rule (#1449): a
+    /// request to a Tailscale address assigned to this Mac is redirected to
+    /// 127.0.0.1 at the same port, so a host VPN cannot drop the app's path to a
+    /// daemon on its own machine. `localAddresses` overrides the interface read
+    /// for tests; production reads the host's own interfaces.
     public static func live(
         serverURL: URL,
         transport: (any ClientTransport)? = nil,
-        token: @escaping BearerAuthMiddleware.TokenProvider = { nil }
+        token: @escaping BearerAuthMiddleware.TokenProvider = { nil },
+        localAddresses: (@Sendable () -> Set<String>)? = nil
     ) -> Client {
-        Client(
+        var middlewares: [any ClientMiddleware] = [BearerAuthMiddleware(token: token)]
+        #if os(macOS)
+            // Outermost, so it redirects the base URL before the bearer middleware
+            // and the transport see it; the bearer credential still rides every
+            // request to the loopback twin, which serves the identical handler.
+            middlewares.insert(
+                SameHostLoopbackMiddleware(
+                    addressSource: localAddresses ?? SameHostLoopbackMiddleware.localInterfaceAddresses
+                ),
+                at: 0
+            )
+        #endif
+        return Client(
             serverURL: serverURL,
             configuration: configuration,
             transport: transport
                 ?? URLSessionTransport(configuration: .init(session: uncachedSession())),
-            middlewares: [BearerAuthMiddleware(token: token)]
+            middlewares: middlewares
         )
     }
 
