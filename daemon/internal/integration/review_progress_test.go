@@ -90,7 +90,8 @@ func TestProductionReviewUpgradePreservesRequestTime(t *testing.T) {
 				"DROP TABLE task_lifecycle_facts",
 				"DROP TABLE task_submission_commands", "DROP TABLE manual_submissions",
 				"DROP TABLE task_runs", "DROP TABLE task_intake_keys", "DROP TABLE tasks",
-				"DROP TABLE review_requests", "DELETE FROM schema_migrations WHERE version >= 67",
+				"DROP TABLE review_requests", "DROP TABLE publication_authorings",
+				"DELETE FROM schema_migrations WHERE version >= 67",
 			} {
 				if _, err := raw.ExecContext(p.ctx, query); err != nil {
 					_ = raw.Close()
