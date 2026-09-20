@@ -33,10 +33,12 @@
 # means pinned inputs plus a recorded digest, not a bit-identical image: the
 # script captures and verifies the exact digest produced by this invocation.
 #
-# With HTTPS_PROXY set, the build forwards it (and HTTP_PROXY, defaulting to
-# HTTPS_PROXY) into RUN steps as the predefined proxy build args; unset, the
-# invocation is unchanged. See images/README.md (Building Behind a VPN) for the
-# host-proxy recipe a guest-NAT-blocking VPN requires.
+# RUN steps never egress through vmnet guest NAT, which a host VPN can break.
+# Unset, the build runs behind a managed host-side proxy that lives only for
+# the build (daemon/cmd/freeside-image-build), so it needs the Go toolchain.
+# With HTTPS_PROXY set, the build forwards that operator proxy instead (and
+# HTTP_PROXY, defaulting to HTTPS_PROXY) as the predefined proxy build args.
+# See images/README.md (Build Egress).
 #
 # Usage:
 #   scripts/build-agent-codex-image.sh [--tag NAME]
@@ -217,14 +219,15 @@ digest_of() {
 		head -n 1 | grep -o 'sha256:[0-9a-f]\{64\}'
 }
 
-# Forward standard proxy environment into RUN steps as the predefined proxy
-# build args: `container build` does not auto-forward its own environment, and
-# behind a guest-NAT-blocking VPN the proxy is the only egress a RUN step has
-# (see images/README.md, Building Behind a VPN).
-proxy_args=()
+# A proxy is the only egress a RUN step gets (see images/README.md, Build
+# Egress). An operator proxy is forwarded as the predefined proxy build args,
+# because `container build` does not auto-forward its own environment;
+# otherwise freeside-image-build runs the same build behind a managed proxy.
 if [ -n "${HTTPS_PROXY:-}" ]; then
-	proxy_args+=(--build-arg "HTTPS_PROXY=$HTTPS_PROXY" \
+	build=(container build --build-arg "HTTPS_PROXY=$HTTPS_PROXY" \
 		--build-arg "HTTP_PROXY=${HTTP_PROXY:-$HTTPS_PROXY}")
+else
+	build=(go run ./cmd/freeside-image-build --)
 fi
 
 version_args=(--build-arg "CODEX_VERSION=${codex_version}")
@@ -233,9 +236,9 @@ if [ -n "$package_sha256" ]; then
 fi
 
 echo "build-agent-codex-image: building with Apple container (Codex CLI ${codex_version})" >&2
-container build ${dns_args[@]+"${dns_args[@]}"} ${proxy_args[@]+"${proxy_args[@]}"} \
+(cd "$repo_root/daemon" && "${build[@]}" ${dns_args[@]+"${dns_args[@]}"} \
 	"${version_args[@]}" \
-	--tag "$image_name:local" "$context" >&2
+	--tag "$image_name:local" "$context") >&2
 
 # Assert the shipped CLI, with networking disabled so nothing can be fetched to
 # satisfy the check. The CLI has no background updater: `codex update` is an

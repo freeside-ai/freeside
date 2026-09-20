@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -823,3 +824,51 @@ func TestRigReviewJournalNeverCreatesMissingDatabase(t *testing.T) {
 type ioDiscard struct{}
 
 func (ioDiscard) Write(body []byte) (int, error) { return len(body), nil }
+
+// droppedDial models a host firewall that drops a machine's traffic to its
+// own non-loopback address: the dial gets no answer instead of a refusal.
+func droppedDial(context.Context, string, string) (net.Conn, error) {
+	return nil, &net.OpError{Op: "dial", Net: "tcp", Err: os.ErrDeadlineExceeded}
+}
+
+func TestProbeDaemonAnswersByBindingWhenTheDialIsDropped(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0") //nolint:noctx // test listener
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	address := listener.Addr().String()
+	host := productionRigHost{dial: droppedDial}
+
+	description, live, err := host.ProbeDaemon(t.Context(), address)
+	if err != nil || !live || description == "" {
+		t.Fatalf("held address: description %q, live %v, err %v; want a live occupant", description, live, err)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if description, live, err := host.ProbeDaemon(t.Context(), address); err != nil || live {
+		t.Fatalf("free address: description %q, live %v, err %v; want idle", description, live, err)
+	}
+}
+
+func TestProbeDaemonStillFailsClosedWhenItCannotAnswer(t *testing.T) {
+	for name, tc := range map[string]struct {
+		dial    func(context.Context, string, string) (net.Conn, error)
+		address string
+	}{
+		"unexplained dial error": {
+			func(context.Context, string, string) (net.Conn, error) { return nil, errors.New("no route to host") },
+			"127.0.0.1:8729",
+		},
+		// TEST-NET-1 is never assigned to this host, so the bind cannot succeed.
+		"dropped dial to an address this host does not own": {droppedDial, "192.0.2.1:8729"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, live, err := productionRigHost{dial: tc.dial}.ProbeDaemon(t.Context(), tc.address)
+			if err == nil || live {
+				t.Fatalf("live %v, err %v; want an error and no occupancy claim", live, err)
+			}
+		})
+	}
+}

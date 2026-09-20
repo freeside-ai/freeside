@@ -107,8 +107,9 @@
 #                                    wait after rig release (default 120)
 #   FREESIDE_REAL_RUN_DIAGNOSTIC_DIR operator-visible diagnostic destination
 #                                    (default ~/Library/Logs/Freeside)
-#   FREESIDE_REAL_RUN_BUILD_PROXY   supported unauthenticated HTTP proxy used
-#                                    when building the already-pinned images;
+#   FREESIDE_REAL_RUN_BUILD_PROXY   unauthenticated operator HTTP proxy that
+#                                    replaces the managed build proxy when
+#                                    building the already-pinned images;
 #                                    live reachability is recorded not_run
 #   FREESIDE_REAL_RUN_RESTORE_DAEMON installed app daemon for upgraded-session
 #                                    restoration (default ~/Applications/Freeside.app/

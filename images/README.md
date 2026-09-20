@@ -26,63 +26,73 @@ ward resolves a digest only through a registry (Apple `container` 1.1.0 does
 not resolve a local-only digest). The scripts therefore fail before building
 when neither registry mode is selected.
 
-## Building Behind a VPN
+## Build Egress
 
-A VPN that breaks Apple container guest NAT egress (observed with Mullvad,
-container 1.1.0) leaves `RUN` steps with no network: guest DNS to the vmnet
-gateway is refused and direct-IP TCP is dead. Only builds are affected;
-`container image pull` and ward's runtime egress proxy keep working, because
-they egress from host processes through the tunnel.
+`RUN` steps never egress through Apple container's vmnet guest NAT. Every
+build routes them through a host-side proxy, so a build needs no network setup
+and does not change with the host's VPN state. It depends only on a guest
+reaching the host at the vmnet gateway, as ward's runtime egress proxy does; a
+VPN that blocks local-network traffic outright breaks both.
 
-The recipe: run a CONNECT-capable HTTP proxy on the host, reachable from
+**Why:** A VPN that moves the default route without becoming the host's
+primary network service leaves vmnet's NAT rule unmatched. Guest DNS to the
+vmnet gateway is then refused and direct-IP traffic dies, while host processes
+keep working. This was observed with Mullvad and is open upstream
+(apple/container#1881) with Tailscale exit nodes and NordVPN. `container image
+pull` and ward's runtime egress proxy were never affected, because they egress
+from host processes.
+
+**The managed proxy:** With no proxy configured, the build scripts run
+`container build` through `daemon/cmd/freeside-image-build`, and the
+project-image builder (`freesided onboard`, `freeside-project-image`) does the
+same in process. Both start `daemon/internal/buildproxy` for exactly one
+build and pass its URL as the predefined proxy build args, which the runtime
+injects into `RUN` steps in both uppercase and lowercase forms (verified on
+container 1.1.0), so `apt` is covered. The proxy serves CONNECT tunnels and
+ordinary absolute-URI HTTP; the agent images need the second form because
+their pinned Debian base's sources are plain `http://deb.debian.org`. Proxy
+egress leaves the host through the tunnel, so the VPN posture is preserved.
+The scripts therefore need the Go toolchain. With the macOS Application
+Firewall on, the script path may prompt to allow the freshly built helper to
+accept connections (not verified).
+
+**Binding policy:** The proxy is a guest-reachable host service
+(`docs/plan.md` §5.4), so it is deliberately narrow:
+
+- It lives only for the build, so it is never up during a credential-bearing
+  agent run unless a build is running at the same time.
+- It admits only connections addressed to the build network's gateway from
+  that network's subnet. Ward's per-run writer networks cannot reach it, so it
+  cannot bypass ward's allowlisting egress proxy, and a LAN peer that reaches
+  the host at its LAN address is dropped even when the LAN is numbered like
+  the build network.
+- It refuses loopback, private (RFC 1918), shared-address (tailnet),
+  link-local, multicast, and unspecified destinations, checked on the
+  resolved address, and does not dial IPv6. Host loopback is the reach a
+  host-side forwarder would newly add; the rest a build never needs. It is
+  not a full special-use registry: the remaining reserved ranges follow the
+  host's routing table, as guest NAT did.
+
+The decision record is `devlog/2026-09-20-1031-vpn-independent-host-paths.md`.
+
+**Operator proxy override:** A host that must egress through its own proxy
+sets `HTTPS_PROXY` (and optionally `HTTP_PROXY`, which defaults to
+`HTTPS_PROXY`) for a build script, or passes `-build-proxy` to `freesided
+onboard`; the managed proxy is then not started. That proxy must be
+CONNECT-capable, forward absolute-URI HTTP requests, and be reachable from
 guests at the vmnet gateway address (192.168.64.1 by default; a guest cannot
-reach the host's 127.0.0.1), and set `HTTPS_PROXY` (and optionally
-`HTTP_PROXY`, which defaults to `HTTPS_PROXY`) when invoking a build script.
-The scripts forward them to `container build` as the predefined proxy build
-args, which is required: plain environment on the `container build` process is
-not auto-forwarded into `RUN` steps. The runtime injects both the uppercase
-and lowercase forms of a predefined proxy arg into `RUN` steps (verified on
-container 1.1.0), so tools that read only the lowercase `http_proxy`, such as
-`apt`, are covered by the uppercase args the scripts pass. Proxy egress exits
-the host through the tunnel, so the VPN posture is preserved. The proxy must
-forward both request forms: CONNECT tunnels for the HTTPS fetches (the
-exporter's `apk` packages, the agent image's Node tarball and npm registry),
-and ordinary absolute-URI HTTP requests for the agent image's `apt-get`
-steps, whose pinned Debian base's sources are plain `http://deb.debian.org`.
-A CONNECT-only proxy
-therefore serves the exporter build but fails the agent build; BusyBox `wget`
-likewise sends absolute-URI requests rather than CONNECT.
+reach the host's 127.0.0.1). The binding policy above becomes the operator's
+responsibility: stop the proxy once the build finishes, or restrict its
+accepted client sources to the build network's subnet.
 
-The proxy is a build-time tool, and leaving it up is a trust hole: a
-guest-reachable forwarder still running during agent execution is an
-undeclared host service on the agent VM's network neighborhood, and its
-unrestricted forwarding would bypass ward's allowlisting egress proxy
-(`docs/plan.md` §5.4 provider_only expects every other host service to carry
-a declared binding policy). Stop it once the build finishes, and never leave
-it running across a credential-bearing agent run; a proxy that must persist
-has to restrict accepted client sources to the build network's subnet so
-ward's per-run writer networks cannot reach it. The recorded project-image
-verification (devlog 2026-07-27-1030) ran with the build proxy absent during
-execution; that absence is part of what it proved.
-
-## Recovering Broken Build DNS
-
-The vmnet gateway DNS responder can fail independently of a VPN: guest queries
-to `192.168.64.1` were observed being refused with the VPN fully quit and its
-lockdown disabled, and the failure survived a full `container system` restart.
-Builds then fail with symptoms such as `EAI_AGAIN` or empty `apt` indexes even
-though host DNS still works.
-
-Reconfigure the BuildKit VM with an explicit resolver:
-
-```sh
-container builder start --dns 8.8.8.8
-```
-
-Use a resolver trusted for the build's dependency lookups. This changes build
-DNS only; it does not configure or relax ward's runtime egress. For individual
-project-image builds, `freesided onboard` also accepts repeatable `-dns`
-options and the build-only `-build-proxy` option described above.
+**Build DNS:** Proxied fetches resolve names on the host, so a build does not
+need guest DNS. A `RUN` step that resolves names itself still does, and the
+vmnet gateway's DNS responder can fail even with no VPN running. For that
+case, reconfigure the BuildKit VM with a resolver trusted for the build's
+dependency lookups, `container builder start --dns 8.8.8.8`, or pass the
+repeatable `--dns` (agent scripts) or `-dns` (`freesided onboard`) option.
+This changes build DNS only; it does not configure or relax ward's runtime
+egress.
 
 ## exporter/
 

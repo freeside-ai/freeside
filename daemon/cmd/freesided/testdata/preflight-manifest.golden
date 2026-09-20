@@ -162,7 +162,7 @@
     {
       "name": "build_egress_configuration",
       "status": "passed",
-      "evidence": "direct project-image build egress is selected"
+      "evidence": "managed host-side project-image build proxy is selected"
     },
     {
       "name": "build_egress_reachability",

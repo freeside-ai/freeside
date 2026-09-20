@@ -329,7 +329,7 @@ func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) 
 	flags.StringVar(&cfg.TempDir, "temp-dir", "", "bindable scratch parent")
 	flags.Var(&dns, "dns", "build DNS server; repeatable")
 	flags.StringVar(&cfg.BuildProxy, "build-proxy", "",
-		"optional build-only HTTP proxy URL without credentials")
+		"build-only HTTP proxy URL without credentials, overriding the managed build proxy")
 	if err := flags.Parse(args[1:]); err != nil {
 		return onboardConfig{}, err
 	}
