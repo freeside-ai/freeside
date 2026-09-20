@@ -19,14 +19,36 @@ func TestEffectProposalMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatal(err)
 	}
-	if got := rawVersion(t, db); got != 76 {
-		t.Fatalf("schema version = %d, want 76", got)
+	if got := rawVersion(t, db); got != 77 {
+		t.Fatalf("schema version = %d, want 77", got)
 	}
 	for _, table := range []string{
 		"effect_proposal_instances", "effect_proposal_items", "effect_proposal_revisions",
 		"effect_proposal_decisions", "effect_proposal_snoozes",
 	} {
 		assertTableExists(t, db, table, true)
+	}
+	// The 0077 rebuild widened the effect_kind CHECK to admit the second
+	// registry member while still rejecting any unknown kind, and the batch
+	// index and admission_key UNIQUE constraint survived the rebuild.
+	var schema string
+	if err := db.QueryRowContext(ctx,
+		`SELECT sql FROM sqlite_master WHERE type='table' AND name='effect_proposal_instances'`).Scan(&schema); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(schema, "effect_kind IN ('run_proposal', 'source_issue_closure')") {
+		t.Fatalf("rebuilt effect_kind CHECK missing both kinds: %s", schema)
+	}
+	if !strings.Contains(schema, "admission_key           TEXT NOT NULL UNIQUE") {
+		t.Fatalf("rebuilt table lost admission_key UNIQUE: %s", schema)
+	}
+	var indexCount int
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='effect_proposal_instances_batch'`).Scan(&indexCount); err != nil {
+		t.Fatal(err)
+	}
+	if indexCount != 1 {
+		t.Fatalf("effect_proposal_instances_batch index count = %d, want 1", indexCount)
 	}
 }
 
