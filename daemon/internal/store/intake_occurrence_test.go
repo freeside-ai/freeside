@@ -359,7 +359,7 @@ func bindAdmittedOccurrence(
 	if err := tx.PutAttentionItem(ctx, item); err != nil {
 		t.Fatalf("put attention item: %v", err)
 	}
-	if err := tx.BindProposalItem(ctx, domain.ItemID(instance.ID), instance.ID, proposal.Digest); err != nil {
+	if err := tx.BindProposalItem(ctx, domain.ItemID(instance.ID), instance.ID, proposal.Digest, nil); err != nil {
 		t.Fatalf("bind proposal item: %v", err)
 	}
 	if _, err := tx.BindIntakeAdmission(ctx, intakeRepoID, intakeIssue, intakeLabel, 1, instance.ID, intakePolicyArtifactID); err != nil {

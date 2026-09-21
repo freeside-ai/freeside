@@ -334,7 +334,7 @@ func TestProposalLedgerRejectsMismatchedCommandAuthority(t *testing.T) {
 		if err := tx.PutAttentionItem(ctx, item); err != nil {
 			return err
 		}
-		if err := tx.BindProposalItem(ctx, item.ID, instance.ID, proposal.Digest); err != nil {
+		if err := tx.BindProposalItem(ctx, item.ID, instance.ID, proposal.Digest, nil); err != nil {
 			return err
 		}
 		command, err := domain.NewCommand(domain.CommandInput{
@@ -658,4 +658,163 @@ func TestProposalLedgerRejectsMismatchedCommandAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestClosureApprovalRejectsCorruptedDeclineRow proves ClosureApprovalForInstance
+// re-gates the authoring command's action against the ledger row. A durable
+// decision row corrupted from decline to approve (with the item's bound digest)
+// still names the original decline command; the read must refuse to mint an
+// approval from it rather than trust the tampered action, matching the write
+// path's command-authority check.
+func TestClosureApprovalRejectsCorruptedDeclineRow(t *testing.T) {
+	ctx := context.Background()
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+
+	policy, err := domain.NewResolvedPolicy("closure-approval-policy-run", []domain.PolicyKey{{
+		Key: "paths", Value: "daemon/", Provenance: domain.KeyProvenance{
+			Source: domain.ProvenanceOverride, Digest: domain.Digest("sha256:" + strings.Repeat("a", 64)),
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle := domain.OpaqueSubjectHandle(domain.WorkUnitIDForRun(policy.RunID))
+	const repo, issue = "owner/repo", 7
+	const repoID = int64(123)
+	proposedTarget := domain.IssueSubjectRef{Repo: repo, RepositoryID: repoID, IssueNumber: issue}
+	source := domain.SpecificationSource{
+		Kind: domain.SpecificationSourceIssueSubject, IssueSubject: &proposedTarget,
+	}
+	proposal, err := domain.NewEffectProposal(domain.EffectSourceIssueClosure, domain.SourceIssueClosureInput{
+		SubjectHandle:  handle,
+		Source:         domain.ClosableSource{Present: true, Provenance: domain.ClosureProvenanceVerified, Repo: repo, RepositoryID: repoID, IssueNumber: issue},
+		ProposedTarget: proposedTarget,
+		Origin:         domain.ClosureFlagOriginProposeSite,
+		Resolves:       true,
+	}, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	at := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	merge := domain.ProspectiveMerge{
+		PublicationIdentity: domain.Digest("sha256:" + strings.Repeat("b", 64)),
+		CandidateHeadSHA:    "head-aaa",
+		BaseRef:             "main",
+		BaseSHA:             "base-000",
+	}
+	var instance domain.ProposalInstance
+	var item domain.AttentionItem
+	err = st.Write(ctx, func(tx *WriteTx) error {
+		if err := tx.RegisterProject(ctx, domain.Project{ID: "proj-1", Repo: repo, RepositoryID: repoID}); err != nil {
+			return err
+		}
+		task, err := tx.GetOrCreateTask(ctx, "proj-1", source)
+		if err != nil {
+			return err
+		}
+		if err := tx.PutRun(ctx, domain.Run{
+			ID: policy.RunID, ProjectID: "proj-1", TaskID: task.ID,
+			SpecDigest: "sha256:spec", PolicyDigest: policy.Digest, Stages: []domain.Stage{},
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutResolvedPolicy(ctx, policy); err != nil {
+			return err
+		}
+		declaration, err := domain.NewWorkUnitDeclaration(domain.WorkUnitDeclarationInput{
+			CompletionCriterion: domain.CompletionBoundPRMerged,
+			DeclaredPaths:       domain.CanonicalDeclaredPaths(policy),
+		}, policy.RunID, "proj-1", at.Add(-time.Hour))
+		if err != nil {
+			return err
+		}
+		if err := tx.RecordWorkUnitDeclaration(ctx, declaration); err != nil {
+			return err
+		}
+		instance, _, err = tx.AllocateProposalInstance(ctx,
+			domain.ProposalAdmissionKey{Source: domain.ProposalSourceUpstreamEvent, UpstreamEventID: "closure-event"},
+			"batch-closure", proposal, at)
+		if err != nil {
+			return err
+		}
+		artifact, err := instance.EvidenceArtifact()
+		if err != nil {
+			return err
+		}
+		if err := tx.PutArtifact(ctx, artifact); err != nil {
+			return err
+		}
+		item, err = domain.NewAttentionItem(domain.AttentionItemInput{
+			ID:        domain.ItemID(string(instance.ID) + "/effect"),
+			ProjectID: "proj-1",
+			Subject:   domain.Subject{Type: domain.SubjectProposalBatch, ID: domain.SubjectID(instance.ProposalBatchID)},
+			Type:      domain.AttentionEffectProposal, Priority: domain.PriorityNormal,
+			Reason: "Decide the proposed effect on the source issue",
+			RequestedDecision: []domain.Action{
+				domain.ActionApprove, domain.ActionApproveWithChanges,
+				domain.ActionDecline, domain.ActionSnooze,
+			},
+			EvidenceSnapshot: []domain.Artifact{artifact}, ItemVersion: 1,
+			InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
+			PRHeadSHA: merge.CandidateHeadSHA,
+		}, map[domain.Digest]bool{domain.EffectProposalRecipeDigest: true})
+		if err != nil {
+			return err
+		}
+		if err := tx.PutAttentionItem(ctx, item); err != nil {
+			return err
+		}
+		if err := tx.BindProposalItem(ctx, item.ID, instance.ID, proposal.Digest, &merge); err != nil {
+			return err
+		}
+		command, err := domain.NewCommand(domain.CommandInput{
+			CommandID: "command-decline", DeviceID: "device-1", ItemID: item.ID,
+			ItemVersion: item.ItemVersion, PRHeadSHA: item.PRHeadSHA,
+			ArtifactDigests: item.ArtifactDigests, Action: domain.ActionDecline,
+		})
+		if err != nil {
+			return err
+		}
+		if err := tx.PutCommand(ctx, command); err != nil {
+			return err
+		}
+		return tx.RecordProposalDecision(ctx, instance.ID, command.CommandID, domain.ActionDecline, nil, at)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A genuine decline yields no approval.
+	if approval := closureApproval(t, ctx, st, instance.ID); approval != nil {
+		t.Fatalf("declined instance yielded an approval: %+v", approval)
+	}
+
+	// Corrupt the durable row to approve with the item's bound digest, leaving
+	// the decline command in place. The action re-gate must reject it.
+	if _, err := st.db.ExecContext(ctx,
+		`UPDATE effect_proposal_decisions SET action = 'approve', selected_digest = ? WHERE instance_id = ?`,
+		proposal.Digest, instance.ID); err != nil {
+		t.Fatal(err)
+	}
+	err = st.Read(ctx, func(tx *ReadTx) error {
+		_, err := tx.ClosureApprovalForInstance(ctx, instance.ID)
+		return err
+	})
+	if !errors.Is(err, errRowInconsistent) {
+		t.Fatalf("corrupted decline-to-approve row error = %v, want row inconsistency", err)
+	}
+}
+
+func closureApproval(t *testing.T, ctx context.Context, st *Store, instanceID domain.ProposalInstanceID) *domain.ClosureApproval {
+	t.Helper()
+	var approval *domain.ClosureApproval
+	if err := st.Read(ctx, func(tx *ReadTx) error {
+		var err error
+		approval, err = tx.ClosureApprovalForInstance(ctx, instanceID)
+		return err
+	}); err != nil {
+		t.Fatalf("ClosureApprovalForInstance: %v", err)
+	}
+	return approval
 }

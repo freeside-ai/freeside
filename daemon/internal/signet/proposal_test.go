@@ -97,7 +97,7 @@ func newProposalDecisionFixture(t *testing.T) proposalDecisionFixture {
 		if err := tx.PutAttentionItem(ctx, item); err != nil {
 			return err
 		}
-		return tx.BindProposalItem(ctx, item.ID, instance.ID, proposal.Digest)
+		return tx.BindProposalItem(ctx, item.ID, instance.ID, proposal.Digest, nil)
 	})
 	if err != nil {
 		t.Fatal(err)

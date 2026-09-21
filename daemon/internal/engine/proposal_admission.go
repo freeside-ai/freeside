@@ -134,7 +134,7 @@ func (e *Engine) admitProposalAt(
 		if err := tx.PutAttentionItem(ctx, item); err != nil {
 			return fmt.Errorf("persist proposal item: %w", err)
 		}
-		if err := tx.BindProposalItem(ctx, item.ID, instance.ID, proposal.Digest); err != nil {
+		if err := tx.BindProposalItem(ctx, item.ID, instance.ID, proposal.Digest, nil); err != nil {
 			return fmt.Errorf("bind proposal item: %w", err)
 		}
 		result.Item = item

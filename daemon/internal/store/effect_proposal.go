@@ -234,24 +234,56 @@ func (tx *ReadTx) GetProposalInstance(
 	return instance, nil
 }
 
-// BindProposalItem anchors one rendered card to the exact proposal digest it
-// exposes. The binding is immutable and cross-checked on every decision read.
+// BindProposalItem writes the immutable anchor from an attention item to its
+// proposal instance and rendered digest. A task_proposal item carries no
+// prospective merge (merge must be nil); an effect_proposal (closure) item
+// requires one, and its candidate head must equal the item's PRHeadSHA so the
+// approval binding and the command binding check judge the same head. The bind
+// is idempotent: a repeat with the same instance, digest, and merge is a no-op,
+// and any divergence is an immutable conflict.
 func (tx *WriteTx) BindProposalItem(
 	ctx context.Context,
 	itemID domain.ItemID,
 	instanceID domain.ProposalInstanceID,
 	digest domain.Digest,
+	merge *domain.ProspectiveMerge,
 ) error {
 	item, err := tx.GetAttentionItem(ctx, itemID)
 	if err != nil {
 		return fmt.Errorf("bind proposal item %q: %w", itemID, err)
 	}
-	if item.Type != domain.AttentionTaskProposal || len(item.ArtifactDigests) != 1 || item.ArtifactDigests[0] != digest {
+	if len(item.ArtifactDigests) != 1 || item.ArtifactDigests[0] != digest {
 		return fmt.Errorf("bind proposal item %q: %w", itemID, errRowInconsistent)
 	}
+	switch item.Type {
+	case domain.AttentionTaskProposal:
+		if merge != nil {
+			return fmt.Errorf("bind proposal item %q: task proposal carries a merge: %w", itemID, errRowInconsistent)
+		}
+	case domain.AttentionEffectProposal:
+		if merge == nil {
+			return fmt.Errorf("bind proposal item %q: effect proposal lacks a merge: %w", itemID, errRowInconsistent)
+		}
+		if err := merge.Validate(); err != nil {
+			return fmt.Errorf("bind proposal item %q merge: %w", itemID, errRowInconsistent)
+		}
+		if item.PRHeadSHA != merge.CandidateHeadSHA {
+			return fmt.Errorf("bind proposal item %q: candidate head differs from item head: %w", itemID, errRowInconsistent)
+		}
+	default:
+		return fmt.Errorf("bind proposal item %q: type %q: %w", itemID, item.Type, errRowInconsistent)
+	}
+	var publicationIdentity, candidateHeadSHA, baseRef, baseSHA any
+	if merge != nil {
+		publicationIdentity, candidateHeadSHA = string(merge.PublicationIdentity), merge.CandidateHeadSHA
+		baseRef, baseSHA = merge.BaseRef, merge.BaseSHA
+	}
 	res, err := tx.tx.ExecContext(ctx, `INSERT INTO effect_proposal_items
-		(item_id, instance_id, content_digest) VALUES (?, ?, ?)
-		ON CONFLICT (item_id) DO NOTHING`, itemID, instanceID, digest)
+		(item_id, instance_id, content_digest,
+		 publication_identity, candidate_head_sha, base_ref, base_sha)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (item_id) DO NOTHING`,
+		itemID, instanceID, digest, publicationIdentity, candidateHeadSHA, baseRef, baseSHA)
 	if err != nil {
 		return fmt.Errorf("bind proposal item %q: %w", itemID, err)
 	}
@@ -260,16 +292,24 @@ func (tx *WriteTx) BindProposalItem(
 		return err
 	}
 	if inserted == 0 {
-		var storedInstance, storedDigest string
-		if err := tx.tx.QueryRowContext(ctx, `SELECT instance_id, content_digest
-			FROM effect_proposal_items WHERE item_id = ?`, itemID).Scan(&storedInstance, &storedDigest); err != nil {
+		storedInstance, storedDigest, storedMerge, err := tx.proposalItemBinding(ctx, itemID)
+		if err != nil {
 			return err
 		}
-		if storedInstance != string(instanceID) || storedDigest != string(digest) {
+		if storedInstance != instanceID || storedDigest != digest || !sameProspectiveMerge(storedMerge, merge) {
 			return fmt.Errorf("bind proposal item %q: %w", itemID, ErrImmutableConflict)
 		}
 	}
 	return nil
+}
+
+// sameProspectiveMerge reports whether two optional merges are equal, treating
+// two absent merges as equal (both task proposals).
+func sameProspectiveMerge(a, b *domain.ProspectiveMerge) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }
 
 // ProposalForItem returns the instance and exact rendered proposal revision,
@@ -278,7 +318,7 @@ func (tx *ReadTx) ProposalForItem(
 	ctx context.Context,
 	itemID domain.ItemID,
 ) (domain.ProposalInstance, domain.EffectProposal, error) {
-	instanceID, renderedDigest, err := tx.proposalItemBinding(ctx, itemID)
+	instanceID, renderedDigest, _, err := tx.proposalItemBinding(ctx, itemID)
 	if err != nil {
 		return domain.ProposalInstance{}, domain.EffectProposal{}, err
 	}
@@ -355,12 +395,6 @@ func (tx *ReadTx) authenticatedProposalRevision(
 	instance domain.ProposalInstance,
 	digest domain.Digest,
 ) (domain.EffectProposal, domain.EffectProposal, error) {
-	// Only task proposals have a revision (start-with-changes) path today; a
-	// closure instance carries no revisions until #1443 builds its decision
-	// path, so treat a revision lookup against one as an inconsistent row.
-	if instance.Proposal.Kind != domain.EffectTaskProposal {
-		return domain.EffectProposal{}, domain.EffectProposal{}, errRowInconsistent
-	}
 	var body []byte
 	var supersedesValue, commandID string
 	if err := tx.tx.QueryRowContext(ctx, `SELECT body, supersedes_digest, command_id
@@ -372,44 +406,35 @@ func (tx *ReadTx) authenticatedProposalRevision(
 	if err != nil {
 		return domain.EffectProposal{}, domain.EffectProposal{}, err
 	}
-	if proposal.Digest != digest {
+	prior := instance.Proposal
+	if proposal.Digest != digest || proposal.Kind != prior.Kind {
 		return domain.EffectProposal{}, domain.EffectProposal{}, errRowInconsistent
+	}
+	expectedAction, err := revisionActionForKind(prior.Kind)
+	if err != nil {
+		return domain.EffectProposal{}, domain.EffectProposal{}, err
 	}
 	command, err := tx.GetCommand(ctx, commandID)
 	if err != nil {
 		return domain.EffectProposal{}, domain.EffectProposal{}, err
 	}
-	boundInstance, boundDigest, err := tx.proposalItemBinding(ctx, command.ItemID)
+	boundInstance, boundDigest, _, err := tx.proposalItemBinding(ctx, command.ItemID)
 	if err != nil {
 		return domain.EffectProposal{}, domain.EffectProposal{}, err
 	}
 	supersedes := domain.Digest(supersedesValue)
-	prior := instance.Proposal
-	if command.Action != domain.ActionStartWithChanges || boundInstance != instance.ID ||
+	if command.Action != expectedAction || boundInstance != instance.ID ||
 		boundDigest != supersedes || supersedes != prior.Digest ||
 		!slices.Equal(command.ArtifactDigests, []domain.Digest{supersedes}) {
 		return domain.EffectProposal{}, domain.EffectProposal{}, errRowInconsistent
 	}
-	var revision struct {
-		Intent            domain.TaskProposalIntent `json:"intent"`
-		ExpectedCostUnits int                       `json:"expected_cost_units"`
-		Scope             domain.TaskProposalScope  `json:"scope"`
-	}
-	if err := strictjson.Decode(
-		[]byte(command.Message), &revision, strictjson.RejectInvalidUTF8, domain.MaxEffectProposalBytes,
-	); err != nil {
-		return domain.EffectProposal{}, domain.EffectProposal{}, errRowInconsistent
-	}
-	canonical, err := json.Marshal(revision)
-	if err != nil || string(canonical) != command.Message {
-		return domain.EffectProposal{}, domain.EffectProposal{}, errRowInconsistent
-	}
-	declaration, policy, err := tx.ResolveProposalSubject(ctx, prior.TaskProposal.SubjectHandle)
+	handle, err := proposalSubjectHandle(prior)
 	if err != nil {
 		return domain.EffectProposal{}, domain.EffectProposal{}, err
 	}
-	if err := domain.GateTaskProposalScope(revision.Scope, declaration); err != nil {
-		return domain.EffectProposal{}, domain.EffectProposal{}, errRowInconsistent
+	declaration, policy, err := tx.ResolveProposalSubject(ctx, handle)
+	if err != nil {
+		return domain.EffectProposal{}, domain.EffectProposal{}, err
 	}
 	// The authoring item is historical authentication input, not evidence to
 	// present as currently trusted. Re-entering its evidence gate here would
@@ -424,29 +449,173 @@ func (tx *ReadTx) authenticatedProposalRevision(
 		!slices.Equal(item.ArtifactDigests, command.ArtifactDigests) {
 		return domain.EffectProposal{}, domain.EffectProposal{}, errRowInconsistent
 	}
-	expected, err := domain.NewEffectProposal(domain.EffectTaskProposal, domain.TaskProposalParameters{
-		SubjectHandle: prior.TaskProposal.SubjectHandle, Intent: revision.Intent,
-		ExpectedCostUnits: revision.ExpectedCostUnits, Scope: revision.Scope,
-	}, policy)
+	// Rebuild the expected revised proposal from the command-authored bounded
+	// delta and current durable inputs, then require the stored revision body to
+	// reproduce it exactly. A closure revision's rebuild draws its target,
+	// provenance, and origin from the daemon's current closable-source
+	// determination, so a decoded resolves flag is the only client-authored bit.
+	expected, err := tx.expectedRevision(ctx, prior, declaration, policy, command.Message)
 	if err != nil || expected.Digest != proposal.Digest {
 		return domain.EffectProposal{}, domain.EffectProposal{}, errRowInconsistent
 	}
 	return proposal, prior, nil
 }
 
+// expectedRevision recomputes the revised proposal one revise command should
+// produce, from the command's canonical bounded delta and current durable
+// state. The switch dispatches on the prior kind and so omits default; the
+// trailing return guards an unregistered kind.
+func (tx *ReadTx) expectedRevision(
+	ctx context.Context,
+	prior domain.EffectProposal,
+	declaration domain.WorkUnitDeclaration,
+	policy domain.ResolvedPolicy,
+	message string,
+) (domain.EffectProposal, error) {
+	switch prior.Kind {
+	case domain.EffectTaskProposal:
+		var revision struct {
+			Intent            domain.TaskProposalIntent `json:"intent"`
+			ExpectedCostUnits int                       `json:"expected_cost_units"`
+			Scope             domain.TaskProposalScope  `json:"scope"`
+		}
+		if err := decodeCanonicalRevision(message, &revision); err != nil {
+			return domain.EffectProposal{}, err
+		}
+		if err := domain.GateTaskProposalScope(revision.Scope, declaration); err != nil {
+			return domain.EffectProposal{}, errRowInconsistent
+		}
+		return domain.NewEffectProposal(domain.EffectTaskProposal, domain.TaskProposalParameters{
+			SubjectHandle: prior.TaskProposal.SubjectHandle, Intent: revision.Intent,
+			ExpectedCostUnits: revision.ExpectedCostUnits, Scope: revision.Scope,
+		}, policy)
+	case domain.EffectSourceIssueClosure:
+		var revision struct {
+			Resolves bool `json:"resolves"`
+		}
+		if err := decodeCanonicalRevision(message, &revision); err != nil {
+			return domain.EffectProposal{}, err
+		}
+		closable, err := tx.closableSource(ctx, declaration)
+		if err != nil {
+			return domain.EffectProposal{}, err
+		}
+		return domain.NewEffectProposal(domain.EffectSourceIssueClosure, domain.SourceIssueClosureInput{
+			SubjectHandle:  prior.ClosureProposal.SubjectHandle,
+			Source:         closable,
+			ProposedTarget: prior.ClosureProposal.Target,
+			Origin:         prior.ClosureProposal.Origin,
+			Resolves:       revision.Resolves,
+		}, policy)
+	}
+	return domain.EffectProposal{}, domain.ErrInvalidEffectKind
+}
+
+// ReviseClosureProposal rebuilds the revised source-issue-closure proposal a
+// approve_with_changes command produces, from the prior proposal and the
+// command's canonical {resolves} delta, drawing target, provenance, and origin
+// from the daemon's current closable-source determination. It is the closure
+// counterpart of the task path's inline revise construction; the caller checks
+// that the digest actually changed (an unchanged resolves is rejected there).
+func (tx *ReadTx) ReviseClosureProposal(
+	ctx context.Context,
+	prior domain.EffectProposal,
+	message string,
+) (domain.EffectProposal, error) {
+	if prior.Kind != domain.EffectSourceIssueClosure || prior.ClosureProposal == nil {
+		return domain.EffectProposal{}, domain.ErrEffectProposalInconsistent
+	}
+	declaration, policy, err := tx.ResolveProposalSubject(ctx, prior.ClosureProposal.SubjectHandle)
+	if err != nil {
+		return domain.EffectProposal{}, err
+	}
+	return tx.expectedRevision(ctx, prior, declaration, policy, message)
+}
+
+// ProspectiveMergeForItem returns the stored prospective merge of an effect
+// proposal (closure) item, or nil for a task-proposal item. It fails closed on
+// a partial merge (via proposalItemBinding).
+func (tx *ReadTx) ProspectiveMergeForItem(
+	ctx context.Context,
+	itemID domain.ItemID,
+) (*domain.ProspectiveMerge, error) {
+	_, _, merge, err := tx.proposalItemBinding(ctx, itemID)
+	if err != nil {
+		return nil, err
+	}
+	return merge, nil
+}
+
+// decodeCanonicalRevision strictly decodes a revise command's message into the
+// kind's bounded delta and rejects any message that is not the delta's exact
+// canonical JSON, so a self-consistent but non-canonical body is not authority.
+func decodeCanonicalRevision(message string, into any) error {
+	if err := strictjson.Decode(
+		[]byte(message), into, strictjson.RejectInvalidUTF8, domain.MaxEffectProposalBytes,
+	); err != nil {
+		return errRowInconsistent
+	}
+	canonical, err := json.Marshal(into)
+	if err != nil || string(canonical) != message {
+		return errRowInconsistent
+	}
+	return nil
+}
+
 func (tx *ReadTx) proposalItemBinding(
 	ctx context.Context,
 	itemID domain.ItemID,
-) (domain.ProposalInstanceID, domain.Digest, error) {
+) (domain.ProposalInstanceID, domain.Digest, *domain.ProspectiveMerge, error) {
 	var instanceID, renderedDigest string
-	if err := tx.tx.QueryRowContext(ctx, `SELECT instance_id, content_digest
-		FROM effect_proposal_items WHERE item_id = ?`, itemID).Scan(&instanceID, &renderedDigest); err != nil {
-		return "", "", fmt.Errorf("proposal for item %q: %w", itemID, notFoundOr(err))
+	var publicationIdentity, candidateHeadSHA, baseRef, baseSHA sql.NullString
+	if err := tx.tx.QueryRowContext(ctx, `SELECT instance_id, content_digest,
+		publication_identity, candidate_head_sha, base_ref, base_sha
+		FROM effect_proposal_items WHERE item_id = ?`, itemID).Scan(
+		&instanceID, &renderedDigest,
+		&publicationIdentity, &candidateHeadSHA, &baseRef, &baseSHA); err != nil {
+		return "", "", nil, fmt.Errorf("proposal for item %q: %w", itemID, notFoundOr(err))
 	}
 	if instanceID == "" || renderedDigest == "" {
-		return "", "", fmt.Errorf("proposal for item %q: %w", itemID, errRowInconsistent)
+		return "", "", nil, fmt.Errorf("proposal for item %q: %w", itemID, errRowInconsistent)
 	}
-	return domain.ProposalInstanceID(instanceID), domain.Digest(renderedDigest), nil
+	merge, err := scanProspectiveMerge(publicationIdentity, candidateHeadSHA, baseRef, baseSHA)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("proposal for item %q: %w", itemID, err)
+	}
+	return domain.ProposalInstanceID(instanceID), domain.Digest(renderedDigest), merge, nil
+}
+
+// scanProspectiveMerge reconstructs the closure item's prospective merge from
+// its four nullable columns. All four are set together for a closure item and
+// all null for a task-proposal item; a partially populated row is a corrupt
+// binding and fails closed. The reconstructed merge is validated so a blank
+// column that slipped past the CHECK cannot become a trusted binding value.
+func scanProspectiveMerge(
+	publicationIdentity, candidateHeadSHA, baseRef, baseSHA sql.NullString,
+) (*domain.ProspectiveMerge, error) {
+	set := 0
+	for _, v := range []sql.NullString{publicationIdentity, candidateHeadSHA, baseRef, baseSHA} {
+		if v.Valid {
+			set++
+		}
+	}
+	switch set {
+	case 0:
+		return nil, nil
+	case 4:
+		merge := domain.ProspectiveMerge{
+			PublicationIdentity: domain.Digest(publicationIdentity.String),
+			CandidateHeadSHA:    candidateHeadSHA.String,
+			BaseRef:             baseRef.String,
+			BaseSHA:             baseSHA.String,
+		}
+		if err := merge.Validate(); err != nil {
+			return nil, fmt.Errorf("%w: %w", errRowInconsistent, err)
+		}
+		return &merge, nil
+	default:
+		return nil, errRowInconsistent
+	}
 }
 
 // ResolveProposalSubject resolves an opaque handle through the daemon-owned
@@ -584,41 +753,56 @@ func (tx *WriteTx) PutProposalRevision(
 	if err := revised.Validate(); err != nil {
 		return fmt.Errorf("put proposal revision: %w", err)
 	}
+	// A revision keeps the effect kind; the authoring action is the kind's
+	// revise action (start_with_changes for a task, approve_with_changes for a
+	// closure).
+	if prior.Kind != revised.Kind {
+		return fmt.Errorf("put proposal revision command %q kind: %w", commandID, domain.ErrTransitionCommandMismatch)
+	}
+	expectedAction, err := revisionActionForKind(revised.Kind)
+	if err != nil {
+		return fmt.Errorf("put proposal revision command %q: %w", commandID, err)
+	}
 	command, err := tx.GetCommand(ctx, commandID)
 	if err != nil {
 		return fmt.Errorf("put proposal revision command %q: %w", commandID, err)
 	}
-	boundInstance, boundDigest, err := tx.proposalItemBinding(ctx, command.ItemID)
+	boundInstance, boundDigest, _, err := tx.proposalItemBinding(ctx, command.ItemID)
 	if err != nil {
 		return fmt.Errorf("put proposal revision command %q: %w", commandID, err)
 	}
-	if command.Action != domain.ActionStartWithChanges || boundInstance != instance.ID || boundDigest != prior.Digest {
+	if command.Action != expectedAction || boundInstance != instance.ID || boundDigest != prior.Digest {
 		return fmt.Errorf("put proposal revision command %q: %w", commandID, domain.ErrTransitionCommandMismatch)
 	}
 	_, storedPrior, err := tx.ProposalForItem(ctx, command.ItemID)
 	if err != nil {
 		return fmt.Errorf("put proposal revision command %q prior: %w", commandID, err)
 	}
-	if storedPrior.Digest != prior.Digest ||
-		revised.TaskProposal.SubjectHandle != storedPrior.TaskProposal.SubjectHandle {
-		return fmt.Errorf("put proposal revision command %q subject: %w", commandID, domain.ErrTransitionCommandMismatch)
-	}
-	declaration, policy, err := tx.ResolveProposalSubject(ctx, revised.TaskProposal.SubjectHandle)
+	priorHandle, err := proposalSubjectHandle(storedPrior)
 	if err != nil {
-		return err
+		return fmt.Errorf("put proposal revision command %q prior subject: %w", commandID, err)
+	}
+	revisedHandle, err := proposalSubjectHandle(revised)
+	if err != nil {
+		return fmt.Errorf("put proposal revision command %q subject: %w", commandID, err)
+	}
+	if storedPrior.Digest != prior.Digest || storedPrior.Kind != revised.Kind || revisedHandle != priorHandle {
+		return fmt.Errorf("put proposal revision command %q subject: %w", commandID, domain.ErrTransitionCommandMismatch)
 	}
 	item, err := tx.GetAttentionItem(ctx, command.ItemID)
 	if err != nil {
 		return err
 	}
+	// gateProposalSubject re-derives the declaration and current policy and runs
+	// the kind's full gate against live rows (task scope + effect gate, or the
+	// closable-source re-gate for a closure), so the revised body is never its
+	// own authority.
+	declaration, err := tx.gateProposalSubject(ctx, revised)
+	if err != nil {
+		return fmt.Errorf("put proposal revision command %q gate: %w", commandID, err)
+	}
 	if declaration.ProjectID != item.ProjectID {
 		return fmt.Errorf("put proposal revision command %q project: %w", commandID, domain.ErrTransitionCommandMismatch)
-	}
-	if err := domain.GateTaskProposalScope(revised.TaskProposal.Scope, declaration); err != nil {
-		return fmt.Errorf("put proposal revision command %q scope: %w", commandID, domain.ErrTransitionCommandMismatch)
-	}
-	if err := domain.GateEffectProposal(revised, policy); err != nil {
-		return err
 	}
 	body, err := revised.Encode()
 	if err != nil {
@@ -634,8 +818,62 @@ func (tx *WriteTx) PutProposalRevision(
 	return nil
 }
 
+// proposalInstanceKind reads the effect kind of a stored instance. It is the
+// authority for the action-family gate, taken from the durable row rather than
+// any decoded proposal body.
+func (tx *ReadTx) proposalInstanceKind(
+	ctx context.Context,
+	instanceID domain.ProposalInstanceID,
+) (domain.EffectKind, error) {
+	var kind string
+	if err := tx.tx.QueryRowContext(ctx,
+		`SELECT effect_kind FROM effect_proposal_instances WHERE instance_id = ?`,
+		instanceID).Scan(&kind); err != nil {
+		return "", notFoundOr(err)
+	}
+	return domain.EffectKind(kind), nil
+}
+
+// gateDecisionActionKind rejects a decision action that does not belong to the
+// instance's effect kind. start and start_with_changes decide task proposals;
+// approve and approve_with_changes decide effect (closure) proposals; decline
+// terminates either. This is a predicate over the proposal-decision subset of
+// the Action union, so it uses default rather than exhaustive dispatch.
+func gateDecisionActionKind(action domain.Action, kind domain.EffectKind) error {
+	switch action {
+	case domain.ActionStart, domain.ActionStartWithChanges:
+		if kind != domain.EffectTaskProposal {
+			return domain.ErrTransitionCommandMismatch
+		}
+		return nil
+	case domain.ActionApprove, domain.ActionApproveWithChanges:
+		if kind != domain.EffectSourceIssueClosure {
+			return domain.ErrTransitionCommandMismatch
+		}
+		return nil
+	case domain.ActionDecline:
+		return nil
+	default:
+		return domain.ErrTransitionCommandMismatch
+	}
+}
+
+// revisionActionForKind returns the decision action that authors a revision for
+// the given effect kind. The switch dispatches behaviour and so omits default,
+// forcing a new registry member to declare its revise action.
+func revisionActionForKind(kind domain.EffectKind) (domain.Action, error) {
+	switch kind {
+	case domain.EffectTaskProposal:
+		return domain.ActionStartWithChanges, nil
+	case domain.EffectSourceIssueClosure:
+		return domain.ActionApproveWithChanges, nil
+	}
+	return "", domain.ErrInvalidEffectKind
+}
+
 // RecordProposalDecision appends the terminal ledger row for one effect
-// identity. selectedDigest is required for starts and absent for decline.
+// identity. selectedDigest is required for start, start_with_changes, approve,
+// and approve_with_changes, and absent for decline.
 func (tx *WriteTx) RecordProposalDecision(
 	ctx context.Context,
 	instanceID domain.ProposalInstanceID,
@@ -651,19 +889,28 @@ func (tx *WriteTx) RecordProposalDecision(
 	if err != nil {
 		return fmt.Errorf("record proposal decision command %q: %w", commandID, err)
 	}
-	boundInstance, boundDigest, err := tx.proposalItemBinding(ctx, command.ItemID)
+	boundInstance, boundDigest, _, err := tx.proposalItemBinding(ctx, command.ItemID)
 	if err != nil {
 		return fmt.Errorf("record proposal decision command %q: %w", commandID, err)
 	}
 	if command.Action != action || boundInstance != instanceID {
 		return fmt.Errorf("record proposal decision command %q: %w", commandID, domain.ErrTransitionCommandMismatch)
 	}
-	switch action {
-	case domain.ActionStart:
-		if selectedDigest == nil || *selectedDigest != boundDigest {
-			return fmt.Errorf("record proposal decision command %q selected digest: %w", commandID, domain.ErrTransitionCommandMismatch)
-		}
-	case domain.ActionStartWithChanges:
+	kind, err := tx.proposalInstanceKind(ctx, instanceID)
+	if err != nil {
+		return fmt.Errorf("record proposal decision command %q kind: %w", commandID, err)
+	}
+	// The action family must match the effect kind: start/start_with_changes
+	// decide a task proposal, approve/approve_with_changes an effect (closure)
+	// proposal. Enforcing it here keeps a start from landing on a closure
+	// instance (or an approve on a task instance) even if a caller mis-routes.
+	if err := gateDecisionActionKind(action, kind); err != nil {
+		return fmt.Errorf("record proposal decision command %q: %w", commandID, err)
+	}
+	// A "digest" decision (start/approve) binds the item's current rendered
+	// digest; a "revision" decision (start_with_changes/approve_with_changes)
+	// binds a revision row authored by this command; decline binds none.
+	requireRevisionRow := func() error {
 		if selectedDigest == nil {
 			return fmt.Errorf("record proposal decision command %q selected digest: %w", commandID, domain.ErrTransitionCommandMismatch)
 		}
@@ -675,6 +922,17 @@ func (tx *WriteTx) RecordProposalDecision(
 		}
 		if matched != 1 {
 			return fmt.Errorf("record proposal decision command %q revision: %w", commandID, domain.ErrTransitionCommandMismatch)
+		}
+		return nil
+	}
+	switch action {
+	case domain.ActionStart, domain.ActionApprove:
+		if selectedDigest == nil || *selectedDigest != boundDigest {
+			return fmt.Errorf("record proposal decision command %q selected digest: %w", commandID, domain.ErrTransitionCommandMismatch)
+		}
+	case domain.ActionStartWithChanges, domain.ActionApproveWithChanges:
+		if err := requireRevisionRow(); err != nil {
+			return err
 		}
 	case domain.ActionDecline:
 		if selectedDigest != nil {
@@ -696,6 +954,165 @@ func (tx *WriteTx) RecordProposalDecision(
 	return nil
 }
 
+// ClosureApprovalForInstance rebuilds the source-issue-closure approval binding
+// an approve or approve_with_changes decision established, from the durable
+// decision row, its authoring command, the decided item, and that item's stored
+// prospective merge. It returns nil for an undecided or declined instance (the
+// caller reads "no approval" as no close). It fails closed: a non-closure
+// instance, an absent or partial merge, a candidate head that disagrees with the
+// item's PRHeadSHA, an approved digest that no authenticated proposal or
+// revision backs, or a malformed ClosureApproval all yield an error, never a
+// silently weakened approval. #1419 passes the result to
+// ClosureApproval.AuthorizesClose with the merge it observes now.
+func (tx *ReadTx) ClosureApprovalForInstance(
+	ctx context.Context,
+	instanceID domain.ProposalInstanceID,
+) (*domain.ClosureApproval, error) {
+	var commandID, action string
+	var selectedDigest sql.NullString
+	err := tx.tx.QueryRowContext(ctx, `SELECT command_id, action, selected_digest
+		FROM effect_proposal_decisions
+		WHERE instance_id = ? AND action IN ('approve', 'approve_with_changes')`,
+		instanceID).Scan(&commandID, &action, &selectedDigest)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("closure approval for instance %q: %w", instanceID, err)
+	}
+	if !selectedDigest.Valid || selectedDigest.String == "" {
+		return nil, fmt.Errorf("closure approval for instance %q: %w", instanceID, errRowInconsistent)
+	}
+	kind, err := tx.proposalInstanceKind(ctx, instanceID)
+	if err != nil {
+		return nil, fmt.Errorf("closure approval for instance %q: %w", instanceID, err)
+	}
+	if kind != domain.EffectSourceIssueClosure {
+		return nil, fmt.Errorf("closure approval for instance %q: %w", instanceID, errRowInconsistent)
+	}
+	command, err := tx.GetCommand(ctx, commandID)
+	if err != nil {
+		return nil, fmt.Errorf("closure approval for instance %q: %w", instanceID, err)
+	}
+	// Re-gate the authoring command's action against the ledger row, exactly as
+	// the write path (RecordProposalDecision) does. A durable row whose action
+	// was corrupted to approve (from a decline, say) still names its original
+	// command; without this check that decline command would pass the remaining
+	// binding checks and mint a closure-authorizing approval.
+	if command.Action != domain.Action(action) {
+		return nil, fmt.Errorf("closure approval for instance %q: %w", instanceID, errRowInconsistent)
+	}
+	boundInstance, boundDigest, merge, err := tx.proposalItemBinding(ctx, command.ItemID)
+	if err != nil {
+		return nil, fmt.Errorf("closure approval for instance %q: %w", instanceID, err)
+	}
+	if boundInstance != instanceID || merge == nil {
+		return nil, fmt.Errorf("closure approval for instance %q: %w", instanceID, errRowInconsistent)
+	}
+	// Re-tie the approved digest to an authenticated proposal: an approve binds
+	// the item's rendered digest; an approve_with_changes binds a revision row
+	// this command authored. A tampered selected_digest fails here.
+	approved := domain.Digest(selectedDigest.String)
+	switch domain.Action(action) {
+	case domain.ActionApprove:
+		if approved != boundDigest {
+			return nil, fmt.Errorf("closure approval for instance %q: %w", instanceID, errRowInconsistent)
+		}
+	case domain.ActionApproveWithChanges:
+		var matched int
+		if err := tx.tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM effect_proposal_revisions
+			WHERE instance_id = ? AND content_digest = ? AND supersedes_digest = ? AND command_id = ?`,
+			instanceID, approved, boundDigest, commandID).Scan(&matched); err != nil {
+			return nil, fmt.Errorf("closure approval for instance %q revision: %w", instanceID, err)
+		}
+		if matched != 1 {
+			return nil, fmt.Errorf("closure approval for instance %q revision: %w", instanceID, errRowInconsistent)
+		}
+	default:
+		return nil, fmt.Errorf("closure approval for instance %q action %q: %w", instanceID, action, errRowInconsistent)
+	}
+	item, err := tx.GetAttentionItem(ctx, command.ItemID)
+	if err != nil {
+		return nil, fmt.Errorf("closure approval for instance %q: %w", instanceID, err)
+	}
+	if item.PRHeadSHA != merge.CandidateHeadSHA {
+		return nil, fmt.Errorf("closure approval for instance %q: candidate head differs from item head: %w",
+			instanceID, errRowInconsistent)
+	}
+	approval := domain.ClosureApproval{
+		ProposalDigest:      approved,
+		PublicationIdentity: merge.PublicationIdentity,
+		CandidateHeadSHA:    merge.CandidateHeadSHA,
+		BaseRef:             merge.BaseRef,
+		BaseSHA:             merge.BaseSHA,
+	}
+	if err := approval.Validate(); err != nil {
+		return nil, fmt.Errorf("closure approval for instance %q: %w: %w", instanceID, errRowInconsistent, err)
+	}
+	return &approval, nil
+}
+
+// OpenEffectItemForInstance returns the single open effect_proposal item bound
+// to an instance and its stored merge, for OpenEffectProposalItem's idempotency
+// and supersession. found is false when the instance has no open effect item.
+// More than one open item for one instance is a corrupt state and fails closed,
+// because OpenEffectProposalItem supersedes the prior item before opening a new
+// one.
+func (tx *ReadTx) OpenEffectItemForInstance(
+	ctx context.Context,
+	instanceID domain.ProposalInstanceID,
+) (domain.AttentionItem, *domain.ProspectiveMerge, bool, error) {
+	rows, err := tx.tx.QueryContext(ctx,
+		`SELECT item_id FROM effect_proposal_items WHERE instance_id = ?`, instanceID)
+	if err != nil {
+		return domain.AttentionItem{}, nil, false, fmt.Errorf("open effect item for instance %q: %w", instanceID, err)
+	}
+	// Collect the ids and close the cursor before loading each item: the store
+	// runs on one connection, so a per-row GetAttentionItem while rows is open
+	// would contend with the cursor.
+	var itemIDs []domain.ItemID
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return domain.AttentionItem{}, nil, false, err
+		}
+		itemIDs = append(itemIDs, domain.ItemID(id))
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return domain.AttentionItem{}, nil, false, err
+	}
+	if err := rows.Close(); err != nil {
+		return domain.AttentionItem{}, nil, false, err
+	}
+	var open domain.AttentionItem
+	found := false
+	for _, id := range itemIDs {
+		item, err := tx.GetAttentionItem(ctx, id)
+		if err != nil {
+			return domain.AttentionItem{}, nil, false, err
+		}
+		if item.Type != domain.AttentionEffectProposal || item.Status != domain.StatusOpen {
+			continue
+		}
+		if found {
+			return domain.AttentionItem{}, nil, false,
+				fmt.Errorf("open effect item for instance %q: %w", instanceID, errRowInconsistent)
+		}
+		open = item
+		found = true
+	}
+	if !found {
+		return domain.AttentionItem{}, nil, false, nil
+	}
+	_, _, merge, err := tx.proposalItemBinding(ctx, open.ID)
+	if err != nil {
+		return domain.AttentionItem{}, nil, false, err
+	}
+	return open, merge, true, nil
+}
+
 // RecordProposalSnooze appends a bounded deferral and leaves the proposal
 // open. The item's version transition makes every pre-snooze command stale.
 func (tx *WriteTx) RecordProposalSnooze(
@@ -711,7 +1128,7 @@ func (tx *WriteTx) RecordProposalSnooze(
 	if err != nil {
 		return fmt.Errorf("record proposal snooze command %q: %w", commandID, err)
 	}
-	boundInstance, boundDigest, err := tx.proposalItemBinding(ctx, command.ItemID)
+	boundInstance, boundDigest, _, err := tx.proposalItemBinding(ctx, command.ItemID)
 	if err != nil {
 		return fmt.Errorf("record proposal snooze command %q: %w", commandID, err)
 	}
@@ -756,7 +1173,7 @@ type proposalSnooze struct {
 // durable snooze command for that instance, preserve canonical daemon timing,
 // and begin no earlier than the preceding deferral ends.
 func (tx *ReadTx) proposalSnoozes(ctx context.Context, itemID domain.ItemID) ([]proposalSnooze, error) {
-	instanceID, _, err := tx.proposalItemBinding(ctx, itemID)
+	instanceID, _, _, err := tx.proposalItemBinding(ctx, itemID)
 	if err != nil {
 		return nil, err
 	}
@@ -793,7 +1210,7 @@ func (tx *ReadTx) proposalSnoozes(ctx context.Context, itemID domain.ItemID) ([]
 		if err != nil {
 			return nil, fmt.Errorf("proposal snooze for item %q command %q: %w", itemID, commandID, err)
 		}
-		boundInstance, boundDigest, err := tx.proposalItemBinding(ctx, command.ItemID)
+		boundInstance, boundDigest, _, err := tx.proposalItemBinding(ctx, command.ItemID)
 		if err != nil {
 			return nil, fmt.Errorf("proposal snooze for item %q command %q: %w", itemID, commandID, err)
 		}

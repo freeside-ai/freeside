@@ -106,7 +106,7 @@ func seedBoundIntakeOccurrence(t *testing.T, ctx context.Context, tx *WriteTx) d
 	if err := tx.PutAttentionItem(ctx, item); err != nil {
 		t.Fatalf("put item: %v", err)
 	}
-	if err := tx.BindProposalItem(ctx, domain.ItemID(instance.ID), instance.ID, proposal.Digest); err != nil {
+	if err := tx.BindProposalItem(ctx, domain.ItemID(instance.ID), instance.ID, proposal.Digest, nil); err != nil {
 		t.Fatalf("bind proposal item: %v", err)
 	}
 	bound, err := tx.BindIntakeAdmission(ctx, intakeIntRepoID, intakeIntIssue, intakeIntLabel, 1, instance.ID, "policy-art-1")

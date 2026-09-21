@@ -82,6 +82,17 @@ func (s *Service) validateCommandContent(command domain.Command) error {
 		}
 		return nil
 	}
+	if command.Action == domain.ActionApproveWithChanges {
+		if command.Message == "" || len(command.Message) > domain.MaxEffectProposalBytes || len(command.Attachments) > 0 {
+			return fmt.Errorf("action %q: %w", command.Action, ErrInvalidProposalDecisionPayload)
+		}
+		var revision EffectProposalRevisionInput
+		if err := strictjson.Decode([]byte(command.Message), &revision,
+			strictjson.RejectInvalidUTF8, domain.MaxEffectProposalBytes); err != nil {
+			return fmt.Errorf("action %q: %w: %w", command.Action, ErrInvalidProposalDecisionPayload, err)
+		}
+		return nil
+	}
 	if command.Action == domain.ActionSnooze {
 		until, err := time.Parse(time.RFC3339Nano, command.Message)
 		if err != nil || until.Location() != time.UTC || len(command.Attachments) > 0 {
