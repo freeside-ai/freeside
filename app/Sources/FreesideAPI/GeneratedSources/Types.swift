@@ -211,9 +211,16 @@ public protocol APIProtocol: Sendable {
     /// work. Only explicit manual Retry reuses a saved command; clients never
     /// resend automatically.
     /// A stop_task command durably requests cancellation without an attention
-    /// item. It binds the observed task version and sync epoch. Active-device
-    /// authority is rechecked inside the transaction, including receipt replay.
-    /// Acceptance is pending, never proof of termination or WIP release.
+    /// item. It binds the observed sync epoch and task version: the epoch must
+    /// match, and expected_entity_version is accepted when it is between 1 and
+    /// the current server revision. A greater value, or a stale epoch, is
+    /// rejected with 409 carrying the current task snapshot and epoch; it
+    /// writes no row. Unrelated revision movement alone no longer rejects it,
+    /// so a Stop lands on a task whose revision advances while an agent runs.
+    /// The receipt keeps the client's expected_entity_version unchanged.
+    /// Active-device authority is rechecked inside the transaction, including
+    /// receipt replay. Acceptance is pending, never proof of termination or
+    /// WIP release.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.
@@ -618,9 +625,16 @@ extension APIProtocol {
     /// work. Only explicit manual Retry reuses a saved command; clients never
     /// resend automatically.
     /// A stop_task command durably requests cancellation without an attention
-    /// item. It binds the observed task version and sync epoch. Active-device
-    /// authority is rechecked inside the transaction, including receipt replay.
-    /// Acceptance is pending, never proof of termination or WIP release.
+    /// item. It binds the observed sync epoch and task version: the epoch must
+    /// match, and expected_entity_version is accepted when it is between 1 and
+    /// the current server revision. A greater value, or a stale epoch, is
+    /// rejected with 409 carrying the current task snapshot and epoch; it
+    /// writes no row. Unrelated revision movement alone no longer rejects it,
+    /// so a Stop lands on a task whose revision advances while an agent runs.
+    /// The receipt keeps the client's expected_entity_version unchanged.
+    /// Active-device authority is rechecked inside the transaction, including
+    /// receipt replay. Acceptance is pending, never proof of termination or
+    /// WIP release.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.
@@ -4779,7 +4793,7 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/ClientCommand/device_id`.
             public var device_id: Swift.String
-            /// Required for decision and stop_task; absent for submit_task. For Stop this is the observed TaskSnapshot.entity_version (the pre-write server revision), never the private task row version. The entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state.
+            /// Required for decision and stop_task; absent for submit_task. For a decision command this is the entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state. For Stop this is the observed TaskSnapshot.entity_version (the server revision), never the private task row version; it is accepted when between 1 and the current revision, and only a greater value (or a stale epoch) is rejected, so unrelated revision movement no longer rejects a Stop.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/ClientCommand/expected_entity_version`.
@@ -4860,7 +4874,7 @@ public enum Components {
             /// - Parameters:
             ///   - command_id: Client-generated idempotency key; a retry with the same command_id returns the original recorded result. A command_id is unique across command kinds.
             ///   - device_id: The paired device submitting the command.
-            ///   - expected_entity_version: Required for decision and stop_task; absent for submit_task. For Stop this is the observed TaskSnapshot.entity_version (the pre-write server revision), never the private task row version. The entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state.
+            ///   - expected_entity_version: Required for decision and stop_task; absent for submit_task. For a decision command this is the entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state. For Stop this is the observed TaskSnapshot.entity_version (the server revision), never the private task row version; it is accepted when between 1 and the current revision, and only a greater value (or a stale epoch) is rejected, so unrelated revision movement no longer rejects a Stop.
             ///   - expected_bindings: Required for decision; forbidden for submit_task and stop_task. The digest-bound inputs the command was prepared against, keyed by binding name; checked with expected_entity_version. For a decision command the authoritative binding set is the payload's item_version, pr_head_sha, and artifact_digests (the daemon cross-checks those against the live item); this map stays for command types that name individual bindings.
             ///   - payload:
             public init(
@@ -4914,7 +4928,7 @@ public enum Components {
                 ])
             }
         }
-        /// Request task-wide cancellation without an attention item. Requires the envelope expected_entity_version and forbids expected_bindings. Target execution IDs and acknowledgement state are daemon-owned.
+        /// Request task-wide cancellation without an attention item. Requires the envelope expected_entity_version and forbids expected_bindings. The Stop is accepted when expected_entity_version is between 1 and the current server revision and the sync epoch matches; a greater value or a stale epoch returns 409 with the current task snapshot and epoch. Target execution IDs and acknowledgement state are daemon-owned.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/StopTaskPayload`.
@@ -5002,6 +5016,9 @@ public enum Components {
             public var project_id: Swift.String
             /// - Remark: Generated from `#/components/schemas/StopTaskRecord/expected_sync_epoch`.
             public var expected_sync_epoch: Swift.String
+            /// The client's observed version, recorded unchanged. It is always strictly below the receipt's accepting revision; the daemon rejects a stored receipt whose value is not less than its as_of_revision.
+            ///
+            ///
             /// - Remark: Generated from `#/components/schemas/StopTaskRecord/expected_entity_version`.
             public var expected_entity_version: Swift.Int64
             /// - Remark: Generated from `#/components/schemas/StopTaskRecord/cancellation`.
@@ -5015,7 +5032,7 @@ public enum Components {
             ///   - task_id:
             ///   - project_id:
             ///   - expected_sync_epoch:
-            ///   - expected_entity_version:
+            ///   - expected_entity_version: The client's observed version, recorded unchanged. It is always strictly below the receipt's accepting revision; the daemon rejects a stored receipt whose value is not less than its as_of_revision.
             ///   - cancellation:
             public init(
                 kind: Components.Schemas.StopTaskRecord.kindPayload,
@@ -15269,9 +15286,16 @@ public enum Operations {
     /// work. Only explicit manual Retry reuses a saved command; clients never
     /// resend automatically.
     /// A stop_task command durably requests cancellation without an attention
-    /// item. It binds the observed task version and sync epoch. Active-device
-    /// authority is rechecked inside the transaction, including receipt replay.
-    /// Acceptance is pending, never proof of termination or WIP release.
+    /// item. It binds the observed sync epoch and task version: the epoch must
+    /// match, and expected_entity_version is accepted when it is between 1 and
+    /// the current server revision. A greater value, or a stale epoch, is
+    /// rejected with 409 carrying the current task snapshot and epoch; it
+    /// writes no row. Unrelated revision movement alone no longer rejects it,
+    /// so a Stop lands on a task whose revision advances while an agent runs.
+    /// The receipt keeps the client's expected_entity_version unchanged.
+    /// Active-device authority is rechecked inside the transaction, including
+    /// receipt replay. Acceptance is pending, never proof of termination or
+    /// WIP release.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.

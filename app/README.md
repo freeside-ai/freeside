@@ -212,7 +212,9 @@ expected sync epoch, and observed task snapshot version. It persists an
 immutable receipt and task fence. The task's `cancellation` field is null or
 carries `requested`, `failed_to_stop`, or `confirmed` independently of lifecycle
 and WIP. Exact command replay returns the original receipt and revision.
-A new stale command returns the current task snapshot and epoch.
+A new command is accepted when its version is between 1 and the current
+revision, so unrelated revision movement no longer rejects it; a stale epoch
+or a greater version returns the current task snapshot and epoch.
 
 Open a task from Tasks on Mac or iPhone and choose **Stop task…**. Confirm the
 task and project to stop any remaining owned work and prevent further work.

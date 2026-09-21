@@ -80,7 +80,6 @@ final class TaskStopModel {
             coordinator.cursors?.syncEpoch == payload.expected_sync_epoch,
             let snapshot = coordinator.tasks.first(where: { $0.task.id == entry.taskID }),
             snapshot.task.project_id == payload.project_id,
-            snapshot.entity_version == entry.command.expected_entity_version,
             snapshot.task.cancellation == nil
         else {
             messages[entry.taskID] = "Task state changed. Refresh and confirm Stop again."

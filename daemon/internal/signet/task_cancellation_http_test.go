@@ -63,7 +63,11 @@ func TestStopTaskHTTPAuthenticationAndPayloads(t *testing.T) {
 	if response.Body.String() != replay.Body.String() {
 		t.Fatal("HTTP replay changed")
 	}
-	base["command_id"] = "stale-http"
+	// A version above the current revision can't have been observed, so it is
+	// rejected with 409. An older version is now accepted, so the conflict is
+	// driven by a too-great version rather than unrelated revision movement.
+	base["command_id"] = "too-new-http"
+	base["expected_entity_version"] = state.Revision + 2
 	raw, _ = json.Marshal(base)
 	stale := authenticatedRequest(t, handler, http.MethodPost, "/commands", bytes.NewReader(raw))
 	if stale.Code != 409 {

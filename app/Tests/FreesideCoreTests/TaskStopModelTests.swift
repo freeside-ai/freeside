@@ -158,15 +158,26 @@ import Testing
         }
     #endif
 
-    @Test func staleOpenConfirmationNeverRebinds() async throws {
+    @Test func staleOpenConfirmationSendsWithoutRebinding() async throws {
         let server = MockServer()
         let coordinator = await coordinator(server)
         let prepared = try preparation(coordinator)
+        let preparedVersion = prepared.entry.command.expected_entity_version
+        // An unrelated write advances the revision while the confirmation sheet is
+        // open. A revision change alone no longer refuses the Stop: it sends.
         _ = await TaskSubmissionModel(coordinator: coordinator).submit(projectID: "project-1", source: "Other work")
         await coordinator.taskStop.confirm(prepared)
-        #expect(coordinator.pendingTaskStops.isEmpty)
-        #expect(coordinator.taskStop.messages[prepared.entry.taskID]?.contains("confirm Stop again") == true)
-        #expect(coordinator.tasks.first { $0.task.id == prepared.entry.taskID }?.task.cancellation == nil)
+        let task = try #require(coordinator.tasks.first { $0.task.id == prepared.entry.taskID })
+        #expect(task.task.cancellation?.value1.state == .requested)
+        #expect(coordinator.taskStop.messages[prepared.entry.taskID] == nil)
+        // The sent command is never rebound: the daemon records the prepared
+        // version, recovered here by replaying the same command_id.
+        let replay = try await coordinator.store.client.submitCommand(body: .json(prepared.entry.command)).ok.body.json
+        guard case .stop_task(let record) = replay.record else {
+            Issue.record("Wrong record")
+            return
+        }
+        #expect(record.expected_entity_version == preparedVersion)
     }
 
     @Test func changedEpochInvalidatesConfirmation() async throws {
@@ -238,21 +249,78 @@ import Testing
         }
     }
 
-    @Test func serverSideVersionConflictRefreshesAndRequiresNewConfirmation() async throws {
+    @Test func serverSideEpochConflictRefreshesAndRequiresNewConfirmation() async throws {
         let server = MockServer()
         let coordinator = await coordinator(server)
         let prepared = try preparation(coordinator)
-        _ = try await coordinator.store.client.submitCommand(
-            body: .json(
-                .init(
-                    command_id: "other", device_id: "device-mock",
-                    payload: .submit_task(.init(kind: .submit_task, project_id: "project-1", source: "Other work")))))
+        guard case .stop_task(let payload) = prepared.entry.command.payload else {
+            Issue.record("Wrong payload")
+            return
+        }
+        // The daemon's sync epoch rotates after the client prepared but before it
+        // confirms. The local check passes on the client's cached epoch, so the
+        // Stop sends and the daemon returns a stale-epoch 409 (a too-great version
+        // is unreachable from a well-behaved client, which never over-sends).
+        await server.rotateEpoch()
         await coordinator.taskStop.confirm(prepared)
         #expect(coordinator.pendingTaskStops.isEmpty)
         #expect(coordinator.taskStop.messages[prepared.entry.taskID]?.contains("confirm Stop again") == true)
+        #expect(coordinator.tasks.first { $0.task.id == prepared.entry.taskID }?.task.cancellation == nil)
         let next = try #require(coordinator.taskStop.prepare(taskID: prepared.entry.taskID))
         #expect(next.id != prepared.id)
-        #expect(next.entry.command.expected_entity_version != prepared.entry.command.expected_entity_version)
+        guard case .stop_task(let nextPayload) = next.entry.command.payload else {
+            Issue.record("Wrong payload")
+            return
+        }
+        #expect(nextPayload.expected_sync_epoch != payload.expected_sync_epoch)
+    }
+
+    @Test func confirmMovesOffTheBareStopButtonThroughSendingAndAccepted() async throws {
+        let server = MockServer()
+        let coordinator = await coordinator(server)
+        let prepared = try preparation(coordinator)
+        let taskID = prepared.entry.taskID
+        // Before confirm the control is the bare Stop button.
+        #expect(TaskStopView(coordinator: coordinator, taskID: taskID).showsOnlyTheStopButton)
+        let entered = AsyncGate()
+        let release = AsyncGate()
+        await server.setBeforeRespond { operation in
+            if operation == "submitCommand" {
+                await entered.open()
+                await release.wait()
+            }
+        }
+        let sending = Task { await coordinator.taskStop.confirm(prepared) }
+        await entered.wait()
+        // Sending: the control speaks, never the bare button.
+        #expect(coordinator.taskStop.sending.contains(taskID))
+        #expect(!TaskStopView(coordinator: coordinator, taskID: taskID).showsOnlyTheStopButton)
+        await release.open()
+        await sending.value
+        // Accepted: the synced cancellation keeps the control off the bare button.
+        #expect(coordinator.tasks.first { $0.task.id == taskID }?.task.cancellation?.value1.state == .requested)
+        #expect(!TaskStopView(coordinator: coordinator, taskID: taskID).showsOnlyTheStopButton)
+    }
+
+    @Test(arguments: [(503, false), (404, true)])
+    func uncertainOrRejectedConfirmNeverLeavesTheBareStopButton(status: Int, definitive: Bool) async throws {
+        let server = MockServer()
+        let coordinator = await coordinator(server)
+        let prepared = try preparation(coordinator)
+        let taskID = prepared.entry.taskID
+        await server.setBeforeRespond { operation in
+            if operation == "submitCommand" { throw MockServer.ForcedStatus(status) }
+        }
+        await coordinator.taskStop.confirm(prepared)
+        if definitive {
+            // Rejected: the request is cleared but a message replaces the bare button.
+            #expect(coordinator.pendingTaskStops.isEmpty)
+            #expect(coordinator.taskStop.messages[taskID] != nil)
+        } else {
+            // Uncertain: the retryable pending entry replaces the bare button.
+            #expect(coordinator.pendingTaskStops[prepared.id]?.receipt == nil)
+        }
+        #expect(!TaskStopView(coordinator: coordinator, taskID: taskID).showsOnlyTheStopButton)
     }
 
     @Test(arguments: [400, 404], [false, true])

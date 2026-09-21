@@ -73,7 +73,12 @@ func (tx *WriteTx) StopTask(ctx context.Context, request domain.StopTaskRequest,
 	if err != nil {
 		return empty, Snapshot{}, err
 	}
-	if state.SyncEpoch != request.ExpectedSyncEpoch || state.Revision != request.ExpectedEntityVersion {
+	// A new Stop is accepted whenever the client saw a revision that exists:
+	// unrelated revision movement (constant while an agent runs) no longer
+	// rejects it. StopTaskRequest.Validate already requires ExpectedEntityVersion
+	// >= 1; a value above the current revision can't have been observed, so it
+	// still fails closed. See devlog 2026-09-21 task-stop-live-revision.
+	if state.SyncEpoch != request.ExpectedSyncEpoch || request.ExpectedEntityVersion > state.Revision {
 		return empty, Snapshot{}, ErrCancellationBinding
 	}
 	target, err := tx.cancellationTarget(ctx, task)
@@ -141,7 +146,21 @@ func (tx *ReadTx) GetStopTaskReceipt(ctx context.Context, commandID string) (dom
 	}
 	want, _ := encode(atAcceptance)
 	got, _ := encode(r.Cancellation)
-	if r.CommandID != commandID || r.Cancellation.RequestID != requestID || snap.AsOfRevision < c.FenceRevision || snap.AsOfRevision-1 != r.ExpectedEntityVersion || got != want {
+	// Re-gate the persisted revision against current server state. AsOfRevision is
+	// the accepting write's revision; the global revision is monotonic and is not
+	// reset by an epoch change (see NewEpoch), so a coherent receipt's revision is
+	// at or below the current one. A future value is single-column corruption:
+	// fail closed here rather than replay a fabricated future revision that no
+	// revision progress can reach, stranding the pending Stop.
+	state, err := tx.ServerState(ctx)
+	if err != nil {
+		return r, snap, err
+	}
+	// The receipt records the client's ExpectedEntityVersion unchanged, and the
+	// accepting write's revision is strictly greater than any revision the client
+	// could have seen, so the recorded version is always below AsOfRevision.
+	// Receipts written under the old "exactly one behind" rule still satisfy this.
+	if r.CommandID != commandID || r.Cancellation.RequestID != requestID || snap.AsOfRevision < c.FenceRevision || snap.AsOfRevision > state.Revision || r.ExpectedEntityVersion >= snap.AsOfRevision || got != want {
 		return r, snap, errRowInconsistent
 	}
 	return r, snap, nil

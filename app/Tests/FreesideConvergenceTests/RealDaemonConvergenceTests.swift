@@ -86,8 +86,11 @@ struct RealDaemonConvergenceTests {
         #expect(current.task.lifecycle == task.task.lifecycle)
         #expect(current.task.lifecycle_facts == task.task.lifecycle_facts)
         #expect(current.task.current_position == task.task.current_position)
+        // Only a version above the current revision is rejected now (an older or
+        // equal version is accepted); unrelated revision movement no longer 409s.
         var stale = command
         stale.command_id = UUID().uuidString
+        stale.expected_entity_version = after.revision + 1
         let rejection = try await device.client.submitCommand(body: .json(stale)).conflict.body.json
         guard case .StaleTaskRejection(let replacement) = rejection else {
             Issue.record("wrong rejection arm")
@@ -95,6 +98,50 @@ struct RealDaemonConvergenceTests {
         }
         #expect(replacement.replacement_task == current)
         #expect(replacement.sync_epoch == after.sync_epoch)
+    }
+
+    @Test func stopTaskAcceptsVersionBelowCurrentAfterUnrelatedWrite() async throws {
+        let device = try await ConvergenceHarness.pairDevice(displayName: "Task Stop live revision")
+        let submission = Components.Schemas.ClientCommand(
+            command_id: UUID().uuidString, device_id: device.deviceID,
+            payload: .submit_task(
+                .init(kind: .submit_task, project_id: "submission-convergence", source: "# Live-task Stop fixture")))
+        let submitted = try await device.client.submitCommand(body: .json(submission)).ok.body.json
+        guard case .submit_task(let created) = submitted.record else {
+            Issue.record("missing submission")
+            return
+        }
+        let before = try await device.client.getSyncBootstrap().ok.body.json
+        let task = try #require(before.tasks.first { $0.task.id == created.task_id })
+        // The client prepares against this revision.
+        let command = Components.Schemas.ClientCommand(
+            command_id: UUID().uuidString, device_id: device.deviceID,
+            expected_entity_version: task.entity_version,
+            payload: .stop_task(
+                .init(
+                    kind: .stop_task, task_id: task.task.id, project_id: task.task.project_id,
+                    expected_sync_epoch: before.sync_epoch)))
+        // An unrelated write advances the global revision before the Stop lands,
+        // the way an engine observation refresh does while an agent runs.
+        let filler = Components.Schemas.ClientCommand(
+            command_id: UUID().uuidString, device_id: device.deviceID,
+            payload: .submit_task(
+                .init(kind: .submit_task, project_id: "submission-convergence", source: "# Unrelated work")))
+        _ = try await device.client.submitCommand(body: .json(filler)).ok.body.json
+        let moved = try await device.client.getSyncRevision().ok.body.json
+        #expect(moved.revision > task.entity_version)
+        // The Stop carrying the now-older version is still accepted and receipts.
+        let result = try await device.client.submitCommand(body: .json(command)).ok.body.json
+        #expect(CommandResultTrust.accepts(result, for: command))
+        guard case .stop_task(let receipt) = result.record else {
+            Issue.record("missing Stop receipt")
+            return
+        }
+        #expect(receipt.expected_entity_version == task.entity_version)
+        #expect(receipt.cancellation.state == .requested)
+        let after = try await device.client.getSyncBootstrap().ok.body.json
+        let current = try #require(after.tasks.first { $0.task.id == task.task.id })
+        #expect(current.task.cancellation?.value1.state == .requested)
     }
 
     // MARK: - Pairing facts (plan §5.14)
