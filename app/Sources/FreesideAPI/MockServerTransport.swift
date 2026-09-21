@@ -169,7 +169,7 @@ public struct MockServerTransport: ClientTransport {
             return try Self.json(status: .ok, body: facts)
         case "getEffectProposalFacts":
             guard let itemID = Self.effectProposalItemID(request.path),
-                let facts = try await server.effectProposalFacts(itemID: itemID)
+                let facts = try await server.effectProposalFactsResponse(itemID: itemID)
             else {
                 return try Self.json(
                     status: .notFound,
