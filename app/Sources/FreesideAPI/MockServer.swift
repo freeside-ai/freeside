@@ -1738,8 +1738,12 @@ public actor MockServer {
         guard var snapshot = try task(id: payload.task_id), snapshot.task.project_id == payload.project_id else {
             throw UnknownItemError(itemID: payload.task_id)
         }
+        // Accept any revision the client could have observed (1..current):
+        // unrelated writes advance the revision on a live task. Only a stale
+        // epoch or a version above the current revision is rejected, mirroring
+        // the daemon's StopTask rule.
         guard let expectedVersion = command.expected_entity_version, payload.expected_sync_epoch == syncEpoch,
-            expectedVersion == revision
+            expectedVersion >= 1, expectedVersion <= revision
         else {
             return .staleTask(
                 .init(message: "task cancellation binding changed", replacement_task: snapshot, sync_epoch: syncEpoch))

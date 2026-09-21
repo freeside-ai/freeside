@@ -32,7 +32,7 @@ public enum CommandResultTrust {
                 && record.cancellation.target.task_id == payload.task_id
                 && record.cancellation.target.project_id == payload.project_id
                 && record.cancellation.fence_revision <= result.revision
-                && record.expected_entity_version == result.revision - 1
+                && record.expected_entity_version < result.revision
                 && record.cancellation.sync_epoch == payload.expected_sync_epoch
                 && MockContractValidation.cancellationBreach(record.cancellation) == nil
         case .submit_task(let payload):

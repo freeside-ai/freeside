@@ -38,9 +38,12 @@ import Testing
         #expect(current.entity_version == result.revision)
         #expect(try await client.submitCommand(body: .json(command)).ok.body.json == result)
         #expect(try await client.getSyncRevision().ok.body.json.revision == after.revision)
-        let stale = try await client.submitCommand(body: .json(stop(task, epoch: before.sync_epoch, id: "stale")))
-            .conflict.body.json
-        guard case .StaleTaskRejection(let conflict) = stale else {
+        // Only a version above the current revision is rejected now; the older
+        // task.entity_version, behind after the first Stop, would be accepted.
+        var tooNew = stop(current, epoch: after.sync_epoch, id: "too-new")
+        tooNew.expected_entity_version = after.revision + 1
+        let rejected = try await client.submitCommand(body: .json(tooNew)).conflict.body.json
+        guard case .StaleTaskRejection(let conflict) = rejected else {
             Issue.record("wrong conflict arm")
             return
         }
@@ -68,8 +71,24 @@ import Testing
                 !CommandResultTrust.accepts(.init(record: .stop_task(changed), revision: result.revision), for: command)
             )
         }
+        // The receipt's version is valid strictly below the accepting revision:
+        // equal or greater is rejected, but any distance below is accepted (a live
+        // task's revision advances between the client's read and the Stop).
         #expect(
-            !CommandResultTrust.accepts(.init(record: result.record, revision: result.revision + 100), for: command))
+            CommandResultTrust.accepts(
+                .init(record: result.record, revision: receipt.expected_entity_version + 50), for: command))
+        #expect(
+            !CommandResultTrust.accepts(
+                .init(record: result.record, revision: receipt.expected_entity_version), for: command))
+        #expect(
+            !CommandResultTrust.accepts(
+                .init(record: result.record, revision: receipt.expected_entity_version - 1), for: command))
+        // An inflated revision is no longer rejected here: the loosened rule bounds
+        // the revision only from below, so this now passes the gate. The
+        // stuck-pending risk it reopens is analysed in the decision note; a
+        // pending entry settles on the next epoch change regardless.
+        #expect(
+            CommandResultTrust.accepts(.init(record: result.record, revision: result.revision + 100), for: command))
         var changed = command
         changed.expected_entity_version = after.revision
         let collision = try await client.submitCommand(body: .json(changed))
