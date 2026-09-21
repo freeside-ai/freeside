@@ -13,3 +13,10 @@ Stage prompts are **control-plane** content under the same trust rules as `polic
   remediation contract, which also drives the operator-feedback round. The
   daemon admits the stage-specific content digest and materializes those exact
   bytes from the artifact store; the workspace path is never prompt authority.
+- **Judgment-role prompts:**
+  [`publication-author.md`](publication-author.md) is the shared, refinable role
+  prompt for the publication-author judgment sites (plan §5.13, §5.15). It is
+  flat and named by role. Unlike the phase-1a stage packages, a judgment-role
+  prompt reaches the Claude judgment driver directly through a daemon flag (the
+  daemon reads the file at startup and folds its digest into the judgment
+  configuration digest), not through the workspace artifact store.

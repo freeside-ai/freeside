@@ -45,16 +45,20 @@ func testClientWithCredential(
 	diagnostic := inference.DiagnosticSite(testBudget(calls))
 	discussion := inference.DiscussionSite(testBudget(calls))
 	namer := inference.TaskNamerSite(testBudget(calls))
+	explain := inference.PublicationAuthorExplainSite(testBudget(calls))
+	propose := inference.PublicationAuthorProposeSite(testBudget(calls))
 	classifier.AuditEvery = 1
 	adjudicator.AuditEvery = 1
 	diagnostic.AuditEvery = 1
 	discussion.AuditEvery = 1
 	namer.AuditEvery = 1
+	explain.AuditEvery = 1
+	propose.AuditEvery = 1
 	statePath := filepath.Join(dir, "ledger.json")
 	client, err := inference.New(inference.Config{
 		StatePath: statePath,
 		Binding:   inference.Binding{Provider: "fake", Model: "test", Credential: inference.Secret(credential), Driver: driver},
-		Sites:     []inference.Site{classifier, adjudicator, diagnostic, discussion, namer}, Advisory: store,
+		Sites:     []inference.Site{classifier, adjudicator, diagnostic, discussion, namer, explain, propose}, Advisory: store,
 		Now: now,
 	})
 	if err != nil {
