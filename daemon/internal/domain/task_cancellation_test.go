@@ -52,3 +52,32 @@ func TestTaskCancellationGolden(t *testing.T) {
 		}
 	}
 }
+
+func TestStopTaskReceiptVersionBinding(t *testing.T) {
+	target := domain.TaskCancellationTarget{TaskID: "task-1", ProjectID: "project-1", Runs: []domain.TaskCancellationRun{{RunID: "run-1"}}}
+	c := domain.TaskCancellation{RequestID: "cancel-1", Target: target, TargetDigest: target.Digest("epoch-1"), SyncEpoch: "epoch-1", FenceRevision: 5, RequestedAt: time.Date(2026, 9, 17, 1, 0, 0, 0, time.UTC), State: domain.TaskCancellationRequested}
+	base := domain.StopTaskReceipt{StopTaskRequest: domain.StopTaskRequest{CommandID: "stop-1", DeviceID: "device-1", TaskID: "task-1", ProjectID: "project-1", ExpectedSyncEpoch: "epoch-1", ExpectedEntityVersion: 4}, Cancellation: c}
+	// A version far below the fence is now valid: unrelated writes advance the
+	// revision between the client's read and the Stop. The store re-gates the
+	// version against the persisted accepting revision.
+	for _, version := range []int64{1, 4, 6} {
+		r := base
+		r.ExpectedEntityVersion = version
+		if err := r.Validate(); err != nil {
+			t.Fatalf("version %d rejected: %v", version, err)
+		}
+	}
+	// The retained cross-checks still fail closed.
+	for name, mutate := range map[string]func(*domain.StopTaskReceipt){
+		"task":    func(r *domain.StopTaskReceipt) { r.TaskID = "other" },
+		"project": func(r *domain.StopTaskReceipt) { r.ProjectID = "other" },
+		"epoch":   func(r *domain.StopTaskReceipt) { r.ExpectedSyncEpoch = "other" },
+		"zero":    func(r *domain.StopTaskReceipt) { r.ExpectedEntityVersion = 0 },
+	} {
+		bad := base
+		mutate(&bad)
+		if bad.Validate() == nil {
+			t.Fatalf("accepted invalid receipt (%s): %+v", name, bad)
+		}
+	}
+}

@@ -46,6 +46,55 @@ func stopCommand(t *testing.T, s *store.Store, id domain.TaskID, commandID strin
 	return signet.ClientCommand{CommandID: commandID, DeviceID: "device-1", Kind: domain.CommandKindStopTask, ExpectedEntityVersion: state.Revision, StopTask: signet.StopTaskPayload{TaskID: id, ProjectID: "project-1", ExpectedSyncEpoch: state.SyncEpoch}}
 }
 
+// advanceRevision commits an unrelated write, raising the global revision the
+// way an engine observation refresh does while an agent runs. It leaves the
+// sync epoch untouched.
+func advanceRevision(t *testing.T, s *store.Store, marker string) {
+	t.Helper()
+	if err := s.Write(t.Context(), func(tx *store.WriteTx) error {
+		return tx.PutDevice(t.Context(), domain.Device{ID: domain.DeviceID("filler-" + marker), DisplayName: "filler", Status: domain.DeviceActive, PairedAt: time.Now().UTC()})
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStopTaskAcceptsRevisionMovedByUnrelatedWrite(t *testing.T) {
+	svc, s := newSubmitTaskService(t, nil, domain.DeviceActive)
+	id := seedStopTask(t, s, "implementation")
+	// The client prepares against the current revision, then unrelated writes
+	// advance it before the Stop lands. This reproduces the run-70 live-task
+	// case; it fails with a StaleTaskError before the acceptance rule loosens.
+	command := stopCommand(t, s, id, "stop-after-writes")
+	advanceRevision(t, s, "a")
+	advanceRevision(t, s, "b")
+	state, err := s.ServerState(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Revision <= command.ExpectedEntityVersion {
+		t.Fatalf("unrelated writes did not advance the revision: %d not past %d", state.Revision, command.ExpectedEntityVersion)
+	}
+	result, err := svc.Submit(t.Context(), command)
+	if err != nil {
+		t.Fatalf("stop below current revision rejected: %v", err)
+	}
+	if result.Stop.Cancellation.State != domain.TaskCancellationRequested {
+		t.Fatalf("cancellation: %+v", result.Stop.Cancellation)
+	}
+	// A task_stop_commands row exists and keeps the client's prepared version.
+	var row domain.StopTaskReceipt
+	if err := s.Read(t.Context(), func(tx *store.ReadTx) error {
+		r, _, err := tx.GetStopTaskReceipt(t.Context(), command.CommandID)
+		row = r
+		return err
+	}); err != nil {
+		t.Fatalf("no task_stop_commands row: %v", err)
+	}
+	if row.ExpectedEntityVersion != command.ExpectedEntityVersion {
+		t.Fatalf("receipt rewrote the prepared version: %d not %d", row.ExpectedEntityVersion, command.ExpectedEntityVersion)
+	}
+}
+
 func TestStopTaskAcceptanceAndImmutableReplay(t *testing.T) {
 	for _, phases := range [][]string{nil, {"specification"}, {"implementation", "review", "verification", "older-child"}} {
 		t.Run("runs="+strconv.Itoa(len(phases)), func(t *testing.T) {
@@ -143,13 +192,21 @@ func TestStopTaskRejectsChangedRequestsAndStaleBindings(t *testing.T) {
 			t.Fatalf("changed input: %v", err)
 		}
 	}
-	stale := command
-	stale.CommandID = "stale"
-	var conflict *signet.StaleTaskError
-	if _, err := svc.Submit(t.Context(), stale); !errors.As(err, &conflict) {
-		t.Fatalf("stale: %v", err)
+	// A version above the current revision can't have been observed, so it is
+	// rejected with the replacement snapshot. An older or equal version is now
+	// accepted; see TestStopTaskAcceptsRevisionMovedByUnrelatedWrite.
+	state, err := s.ServerState(t.Context())
+	if err != nil {
+		t.Fatal(err)
 	}
-	if conflict.ReplacementTask.EntityVersion != command.ExpectedEntityVersion+1 || conflict.ReplacementTask.Task.Cancellation == nil {
+	tooNew := command
+	tooNew.CommandID = "too-new"
+	tooNew.ExpectedEntityVersion = state.Revision + 1
+	var conflict *signet.StaleTaskError
+	if _, err := svc.Submit(t.Context(), tooNew); !errors.As(err, &conflict) {
+		t.Fatalf("too-new version: %v", err)
+	}
+	if conflict.ReplacementTask.EntityVersion != state.Revision || conflict.ReplacementTask.Task.Cancellation == nil {
 		t.Fatalf("replacement: %+v", conflict)
 	}
 	fresh := stopCommand(t, s, id, "epoch")
@@ -275,38 +332,41 @@ func TestStopTaskConcurrentDeviceRequestsConverge(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// Both devices prepare against the same revision and stop at once. The first
+	// accepted write advances the revision, but the second's now-older version is
+	// no longer rejected: both are accepted and share one fence.
 	first := stopCommand(t, s, id, "device-one-stop")
 	second := first
 	second.CommandID, second.DeviceID = "device-two-stop", "device-2"
 	type outcome struct {
-		command signet.ClientCommand
-		result  signet.CommandResult
-		err     error
+		result signet.CommandResult
+		err    error
 	}
 	results := make(chan outcome, 2)
 	for _, command := range []signet.ClientCommand{first, second} {
 		go func() {
 			result, err := svc.Submit(t.Context(), command)
-			results <- outcome{command, result, err}
+			results <- outcome{result, err}
 		}()
 	}
 	a, b := <-results, <-results
-	if a.err != nil {
-		a, b = b, a
+	if a.err != nil || b.err != nil {
+		t.Fatalf("both devices should be accepted: %v, %v", a.err, b.err)
 	}
-	var stale *signet.StaleTaskError
-	if a.err != nil || !errors.As(b.err, &stale) {
-		t.Fatalf("expected one acceptance and one stale binding: %v, %v", a.err, b.err)
+	// Distinct commands, one shared cancellation, no duplicate work.
+	if a.result.Stop.Cancellation.RequestID != b.result.Stop.Cancellation.RequestID {
+		t.Fatalf("devices created duplicate cancellations: %s vs %s", a.result.Stop.Cancellation.RequestID, b.result.Stop.Cancellation.RequestID)
 	}
-	// A separately prepared request observes the accepted fence, so the other
-	// device converges without another cancellation or a silent stale retry.
-	b.command.ExpectedEntityVersion = stale.ReplacementTask.EntityVersion
-	retried, err := svc.Submit(t.Context(), b.command)
-	if err != nil {
+	var task domain.Task
+	if err := s.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		task, err = tx.GetTask(t.Context(), id)
+		return err
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(retried.Stop.Cancellation, a.result.Stop.Cancellation) || retried.Revision != a.result.Revision+1 {
-		t.Fatalf("second device did not converge: %+v", retried)
+	if task.Cancellation == nil || task.Cancellation.RequestID != a.result.Stop.Cancellation.RequestID {
+		t.Fatalf("task did not converge on one cancellation: %+v", task.Cancellation)
 	}
 }
 

@@ -200,7 +200,14 @@ func (r StopTaskReceipt) Validate() error {
 	if err := r.Cancellation.Validate(); err != nil {
 		return err
 	}
-	if r.TaskID != r.Cancellation.Target.TaskID || r.ProjectID != r.Cancellation.Target.ProjectID || r.ExpectedSyncEpoch != r.Cancellation.SyncEpoch || r.Cancellation.FenceRevision-1 > r.ExpectedEntityVersion {
+	// The client's ExpectedEntityVersion is any revision it could have observed
+	// (1..the accepting revision minus 1), not exactly one below the fence: a
+	// live task's revision advances between the client's read and the Stop. The
+	// version-below-accepting-revision invariant is re-gated in the store against
+	// the persisted as_of_revision, which this decoded type does not carry, so it
+	// cannot be checked here. A shared fence's receipt may even carry a version
+	// above FenceRevision. See devlog 2026-09-21 task-stop-live-revision.
+	if r.TaskID != r.Cancellation.Target.TaskID || r.ProjectID != r.Cancellation.Target.ProjectID || r.ExpectedSyncEpoch != r.Cancellation.SyncEpoch {
 		return ErrParentKeyMismatch
 	}
 	return nil
