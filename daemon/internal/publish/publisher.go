@@ -198,6 +198,36 @@ func (p *Publisher) PublishExecution(
 	)
 }
 
+// RepositoryClass reads the target repository's current visibility and maps it
+// to the sensitivity class recipe v2 stores on an authored artifact and
+// re-checks before every render (issue #1419): a public repository is normal, a
+// private or internal one is sensitive. It fails closed on an unrecognized
+// visibility so a render sees the most restrictive class and falls back to v1.
+func (p *Publisher) RepositoryClass(ctx context.Context, c Candidate) (domain.SensitivityClass, error) {
+	repo, err := parseRepo(c.Repo)
+	if err != nil {
+		return "", fmt.Errorf("repository class: %w", err)
+	}
+	visibility, err := p.forge.getRepositoryVisibility(ctx, repo)
+	if err != nil {
+		return "", fmt.Errorf("repository class: %w", err)
+	}
+	switch visibility.Visibility {
+	case "public":
+		return domain.SensitivityNormal, nil
+	case "private", "internal":
+		return domain.SensitivitySensitive, nil
+	case "":
+		// Older API shapes omit "visibility"; fall back to the legacy boolean.
+		if visibility.Private {
+			return domain.SensitivitySensitive, nil
+		}
+		return domain.SensitivityNormal, nil
+	default:
+		return "", fmt.Errorf("repository class: unrecognized visibility %q", visibility.Visibility)
+	}
+}
+
 // VerifyOutcome observes the identity's unique live pull request without
 // mutating it. A persisted PR number is not trusted until the live marker and
 // candidate coordinates identify exactly that PR.

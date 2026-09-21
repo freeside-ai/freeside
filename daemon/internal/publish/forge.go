@@ -317,6 +317,36 @@ func (f *forge) getRepositoryID(ctx context.Context, repo repoRef) (int64, error
 	return decoded.ID, nil
 }
 
+// repoVisibilityResponse decodes a repository's visibility. GitHub returns the
+// modern "visibility" (public|private|internal) and the legacy "private" bool;
+// the caller maps them to a sensitivity class.
+type repoVisibilityResponse struct {
+	Visibility string `json:"visibility"`
+	Private    bool   `json:"private"`
+}
+
+// getRepositoryVisibility reads the target repository's current visibility from
+// the same GET /repos/{owner}/{repo} endpoint getRepositoryID uses. recipe v2
+// derives the authored artifact's sensitivity class from it and re-reads it
+// before every render, so a repository that has become more open than the
+// stored class allows falls back to v1 (issue #1419).
+func (f *forge) getRepositoryVisibility(ctx context.Context, repo repoRef) (repoVisibilityResponse, error) {
+	path := "/repos/" + repo.path()
+	resp, err := f.do(ctx, http.MethodGet, repo, path, "", nil)
+	if err != nil {
+		return repoVisibilityResponse{}, fmt.Errorf("get repository visibility: %w", err)
+	}
+	defer drainAndClose(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return repoVisibilityResponse{}, fmt.Errorf("get repository visibility: %w", &APIError{Status: resp.StatusCode, RequestPath: path})
+	}
+	var decoded repoVisibilityResponse
+	if err := decodeResponse(resp.Body, &decoded); err != nil {
+		return repoVisibilityResponse{}, fmt.Errorf("get repository visibility: decode response: %w", err)
+	}
+	return decoded, nil
+}
+
 // prRead is a conditional pull-request observation: the decoded state
 // plus the validator for the next conditional request, or NotModified
 // when the server confirmed the cached state still holds.
