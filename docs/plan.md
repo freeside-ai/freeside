@@ -3199,13 +3199,15 @@ A `stop_task` command carries task ID, project ID, expected sync epoch, and the
 observed `TaskSnapshot.entity_version`. It carries no attention item, approval
 digest, decision surface, or execution IDs. The credential authenticates the
 device, its body ID must match, and active-device authority is rechecked inside
-the accepting transaction, including replay. New requests compare the epoch
-and the pre-write public task projection version, currently the global server
-revision. Using the private task-row version or next revision is incorrect.
-A mismatch returns HTTP 409 with the current task snapshot and epoch; a
-prepared Stop is never silently rebound. Unrelated revision advances may
-conservatively reject a new command. Same-ID exact replay precedes live-target
-version checks, but never revocation checks.
+the accepting transaction, including replay. A new request must match the epoch
+and carry an `expected_entity_version` between 1 and the current server
+revision; that version is the public task projection version, currently the
+global server revision, never the private task-row version. A stale epoch or a
+version above the current revision returns HTTP 409 with the current task
+snapshot and epoch; a prepared Stop is never silently rebound. Unrelated
+revision movement no longer rejects a new command, so a Stop lands on a task
+whose revision is advancing while an agent runs. Same-ID exact replay precedes
+live-target version checks, but never revocation checks.
 
 The immutable Stop receipt includes the cancellation snapshot at acceptance;
 task sync exposes subsequent state. Daemon acknowledgements bind the request
