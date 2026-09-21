@@ -63,6 +63,7 @@ enum AttentionDisplay {
         case .ready_for_final_review: return "Ready for final review"
         case .publish_blocked: return "Publish blocked"
         case .task_proposal: return "Task proposal"
+        case .effect_proposal: return "Effect proposal"
         case .system_health: return "System health"
         case .blocked: return "Blocked"
         }
@@ -99,6 +100,8 @@ enum AttentionDisplay {
             return "How should publication recover from this trust failure?"
         case .task_proposal:
             return "Start this proposed run?"
+        case .effect_proposal:
+            return "Approve this proposed effect?"
         case .system_health:
             return "How should this system-health condition be handled?"
         case .blocked:
@@ -143,6 +146,8 @@ enum AttentionDisplay {
             return "Publication is blocked by a trust-policy check."
         case .task_proposal:
             return "A proposed run is ready to start."
+        case .effect_proposal:
+            return "A proposed effect is ready to review."
         case .system_health:
             guard let diagnostic = item.health_diagnostic?.value1 else {
                 return "A system-health condition needs attention."
@@ -245,7 +250,7 @@ enum AttentionDisplay {
         // finding_adjudication, the authenticated proposal snapshot leads
         // task_proposal, and the recovery bindings these two recovery types
         // lead with are already their own rows.
-        case .spec_approval, .finding_adjudication, .task_proposal,
+        case .spec_approval, .finding_adjudication, .task_proposal, .effect_proposal,
             .review_contradiction, .review_configuration:
             return []
         }
@@ -285,6 +290,7 @@ enum AttentionDisplay {
         case .dismiss: return "Dismiss"
         case .start: return "Start"
         case .start_with_changes: return "Start with changes"
+        case .approve_with_changes: return "Approve with changes"
         case .decline: return "Decline"
         case .snooze: return "Snooze"
         case .acknowledge: return "Acknowledge"
@@ -311,7 +317,7 @@ enum AttentionDisplay {
             .retry_with_capabilities, .answer_and_retry, .answer_without_retry,
             .rerun_trust_evaluation,
             .inspect_trust_failure, .mark_seen, .dismiss, .start,
-            .start_with_changes, .decline, .acknowledge, .run_doctor,
+            .start_with_changes, .approve_with_changes, .decline, .acknowledge, .run_doctor,
             .resume_unattended, .recover_review, .adopt_review_configuration,
             .resolve_reenrollment, .accept_recommended_route,
             .choose_alternative_route:
@@ -333,7 +339,7 @@ enum AttentionDisplay {
             case .spec_approval, .review_diminishing_returns, .review_dispute,
                 .review_contradiction, .execution_failure, .agent_question,
                 .publish_blocked, .ready_for_final_review, .task_proposal,
-                .system_health, .blocked:
+                .effect_proposal, .system_health, .blocked:
                 break
             }
             return "The current invocation is discarded. Work already exported stays; the round in flight does not."
@@ -348,7 +354,7 @@ enum AttentionDisplay {
             .retry_with_capabilities, .answer_and_retry, .answer_without_retry,
             .rerun_trust_evaluation,
             .inspect_trust_failure, .open_pr, .return_to_agent, .mark_seen,
-            .start, .start_with_changes, .snooze, .acknowledge, .run_doctor,
+            .start, .start_with_changes, .approve_with_changes, .snooze, .acknowledge, .run_doctor,
             .resume_unattended, .recover_review, .adopt_review_configuration,
             .resolve_reenrollment, .accept_recommended_route,
             .choose_alternative_route:

@@ -5690,6 +5690,7 @@ components:
         - ready_for_final_review
         - publish_blocked
         - task_proposal
+        - effect_proposal
         - system_health
         - blocked
 
@@ -5735,6 +5736,7 @@ components:
         - dismiss
         - start
         - start_with_changes
+        - approve_with_changes
         - decline
         - snooze
         - acknowledge

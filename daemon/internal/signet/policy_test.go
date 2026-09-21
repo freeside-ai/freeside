@@ -48,6 +48,10 @@ func TestAllowedActionsByType(t *testing.T) {
 		domain.AttentionTaskProposal: {
 			domain.ActionStart, domain.ActionStartWithChanges, domain.ActionDecline, domain.ActionSnooze,
 		},
+		domain.AttentionEffectProposal: {
+			domain.ActionApprove, domain.ActionApproveWithChanges,
+			domain.ActionDecline, domain.ActionSnooze,
+		},
 		domain.AttentionSystemHealth: {
 			domain.ActionAcknowledge, domain.ActionRunDoctor, domain.ActionStopUnattended,
 			domain.ActionResumeUnattended, domain.ActionResolveReenrollment,

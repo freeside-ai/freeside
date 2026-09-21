@@ -29,6 +29,7 @@ const (
 	AttentionReadyForFinalReview AttentionType = "ready_for_final_review"
 	AttentionPublishBlocked      AttentionType = "publish_blocked"
 	AttentionTaskProposal        AttentionType = "task_proposal"
+	AttentionEffectProposal      AttentionType = "effect_proposal"
 	AttentionSystemHealth        AttentionType = "system_health"
 	AttentionBlocked             AttentionType = "blocked"
 )
@@ -47,6 +48,7 @@ var AllAttentionTypes = []AttentionType{
 	AttentionReadyForFinalReview,
 	AttentionPublishBlocked,
 	AttentionTaskProposal,
+	AttentionEffectProposal,
 	AttentionSystemHealth,
 	AttentionBlocked,
 }
@@ -56,7 +58,8 @@ func (t AttentionType) valid() bool {
 	case AttentionSpecApproval, AttentionExecutionFailure, AttentionAgentQuestion,
 		AttentionReviewDiminishing, AttentionReviewDispute, AttentionReviewContradiction,
 		AttentionReviewConfiguration, AttentionFindingAdjudication, AttentionReadyForFinalReview,
-		AttentionPublishBlocked, AttentionTaskProposal, AttentionSystemHealth, AttentionBlocked:
+		AttentionPublishBlocked, AttentionTaskProposal, AttentionEffectProposal,
+		AttentionSystemHealth, AttentionBlocked:
 		return true
 	default:
 		return false
@@ -908,6 +911,7 @@ const (
 	ActionDismiss                  Action = "dismiss"
 	ActionStart                    Action = "start"
 	ActionStartWithChanges         Action = "start_with_changes"
+	ActionApproveWithChanges       Action = "approve_with_changes"
 	ActionDecline                  Action = "decline"
 	ActionSnooze                   Action = "snooze"
 	ActionAcknowledge              Action = "acknowledge"
@@ -929,7 +933,7 @@ var AllActions = []Action{
 	ActionAnswerAndRetry, ActionAnswerWithoutRetry,
 	ActionRerunTrustEvaluation, ActionInspectTrustFailure,
 	ActionOpenPR, ActionReturnToAgent, ActionMarkSeen, ActionDismiss,
-	ActionStart, ActionStartWithChanges, ActionDecline, ActionSnooze,
+	ActionStart, ActionStartWithChanges, ActionApproveWithChanges, ActionDecline, ActionSnooze,
 	ActionAcknowledge, ActionRunDoctor, ActionStopUnattended,
 	ActionResumeUnattended, ActionRecoverReview, ActionAdoptReviewConfiguration,
 	ActionResolveReenrollment, ActionAcceptRecommendedRoute, ActionChooseAlternativeRoute,
@@ -943,7 +947,7 @@ func (a Action) valid() bool {
 		ActionAnswerAndRetry, ActionAnswerWithoutRetry,
 		ActionRerunTrustEvaluation, ActionInspectTrustFailure,
 		ActionOpenPR, ActionReturnToAgent, ActionMarkSeen, ActionDismiss,
-		ActionStart, ActionStartWithChanges, ActionDecline, ActionSnooze,
+		ActionStart, ActionStartWithChanges, ActionApproveWithChanges, ActionDecline, ActionSnooze,
 		ActionAcknowledge, ActionRunDoctor, ActionStopUnattended,
 		ActionResumeUnattended, ActionRecoverReview, ActionAdoptReviewConfiguration,
 		ActionResolveReenrollment, ActionAcceptRecommendedRoute, ActionChooseAlternativeRoute:

@@ -11674,6 +11674,7 @@ public enum Components {
             case ready_for_final_review = "ready_for_final_review"
             case publish_blocked = "publish_blocked"
             case task_proposal = "task_proposal"
+            case effect_proposal = "effect_proposal"
             case system_health = "system_health"
             case blocked = "blocked"
         }
@@ -11716,6 +11717,7 @@ public enum Components {
             case dismiss = "dismiss"
             case start = "start"
             case start_with_changes = "start_with_changes"
+            case approve_with_changes = "approve_with_changes"
             case decline = "decline"
             case snooze = "snooze"
             case acknowledge = "acknowledge"

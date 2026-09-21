@@ -1334,7 +1334,7 @@ func authenticateRunObservation(
 			domain.AttentionAgentQuestion, domain.AttentionReviewDiminishing,
 			domain.AttentionReviewDispute, domain.AttentionReviewContradiction,
 			domain.AttentionReviewConfiguration, domain.AttentionFindingAdjudication,
-			domain.AttentionTaskProposal,
+			domain.AttentionTaskProposal, domain.AttentionEffectProposal,
 			domain.AttentionSystemHealth, domain.AttentionBlocked:
 		}
 	}

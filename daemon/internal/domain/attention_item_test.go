@@ -120,8 +120,8 @@ func textClaims(text domain.ClaimText, digest domain.Digest) []domain.AgentClaim
 // attention types constructs a valid item; an unknown type and an invalid
 // subject type are rejected.
 func TestNewAttentionItemTypes(t *testing.T) {
-	if len(domain.AllAttentionTypes) != 13 {
-		t.Fatalf("expected thirteen Phase 1 attention types, got %d", len(domain.AllAttentionTypes))
+	if len(domain.AllAttentionTypes) != 14 {
+		t.Fatalf("expected fourteen Phase 1 attention types, got %d", len(domain.AllAttentionTypes))
 	}
 	for _, typ := range domain.AllAttentionTypes {
 		t.Run(string(typ), func(t *testing.T) {

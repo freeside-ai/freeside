@@ -55,7 +55,7 @@ public enum ActionOutcome: Equatable {
             return .adoptsReviewConfiguration
         case .resolve_reenrollment:
             return .resolvesReenrollment
-        case .start_with_changes:
+        case .start_with_changes, .approve_with_changes:
             return .revisesProposal
         case .snooze:
             return .snoozesProposal

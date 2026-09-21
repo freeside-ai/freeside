@@ -62,6 +62,7 @@ func (e *Engine) reconcileAttentionDiscussions(ctx context.Context) (int, error)
 		case domain.AttentionReviewDiminishing, domain.AttentionReviewContradiction,
 			domain.AttentionAgentQuestion, domain.AttentionPublishBlocked,
 			domain.AttentionReadyForFinalReview, domain.AttentionTaskProposal,
+			domain.AttentionEffectProposal,
 			domain.AttentionSystemHealth, domain.AttentionBlocked:
 			continue
 		}
@@ -222,6 +223,7 @@ func (e *Engine) produceAttentionDiscussionReply(
 		domain.AttentionReviewDiminishing, domain.AttentionReviewContradiction,
 		domain.AttentionAgentQuestion, domain.AttentionPublishBlocked,
 		domain.AttentionReadyForFinalReview, domain.AttentionTaskProposal,
+		domain.AttentionEffectProposal,
 		domain.AttentionSystemHealth, domain.AttentionBlocked:
 		return "", domain.ErrParentKeyMismatch
 	}
