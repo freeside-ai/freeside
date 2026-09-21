@@ -1002,6 +1002,199 @@ import Testing
         #expect(model.snapshot?.item.status == .superseded)
     }
 
+    @Test func effectProposalRendersAuthenticatedFactsAndSubmitsTypedRevision() async throws {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-effect_proposal")
+        await model.validate()
+
+        let facts = try #require(model.effectProposalFacts)
+        let closure = try #require(facts.source_issue_closure?.value1)
+        #expect(closure.provenance == .verified)
+        #expect(closure.resolves)
+        #expect(model.actionsEnabled)
+        for action in [
+            Components.Schemas.Action.approve, .approve_with_changes, .decline, .snooze,
+        ] {
+            #expect(model.isSubmittable(action))
+        }
+
+        await model.submitEffectProposalRevision(
+            .init(source_issue_closure: .init(resolves: !closure.resolves)))
+
+        #expect(model.appliedRecord?.action == .approve_with_changes)
+        // Revising and approving are one command: the item is superseded and
+        // the replacement the mock creates is already decided, so no new open
+        // item waits in the inbox.
+        #expect(model.snapshot?.item.status == .superseded)
+    }
+
+    @Test func recommendedEffectProposalLoadsRecommendedProvenance() async throws {
+        let server = MockServer(
+            items: AttentionFixtures.defaultInbox() + [AttentionFixtures.recommendedEffectProposal()])
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-effect_proposal-recommended")
+        await model.validate()
+
+        let closure = try #require(model.effectProposalFacts?.source_issue_closure?.value1)
+        #expect(closure.provenance == .recommended)
+        #expect(model.actionsEnabled)
+    }
+
+    @Test func effectProposalApproveSubmitsWithoutRevision() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-effect_proposal")
+        await model.validate()
+
+        await model.submit(.approve)
+
+        #expect(model.appliedRecord?.action == .approve)
+        #expect(model.snapshot?.item.status == .resolved)
+    }
+
+    @Test func effectProposalDeclineSubmits() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-effect_proposal")
+        await model.validate()
+
+        await model.submit(.decline)
+
+        #expect(model.appliedRecord?.action == .decline)
+        #expect(model.snapshot?.item.status == .dismissed)
+    }
+
+    @Test func effectProposalSnoozeControlSubmitsTypedInstant() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-effect_proposal")
+        await model.validate()
+
+        await model.snooze(until: Date(timeIntervalSince1970: 1_786_506_245))
+
+        #expect(model.appliedRecord?.action == .snooze)
+        #expect(model.snapshot == nil)
+        #expect(model.validation == .validated)
+    }
+
+    @Test func staleEffectProposalFactsAreDroppedAndActionsStayDisabled() async {
+        let server = MockServer()
+        // Facts whose version tuple no longer matches the served item must
+        // never reach the card, and the actions must stay disabled until a
+        // matching snapshot loads (plan §5.14; the facts-vs-item match gate).
+        await server.setEffectProposalFactsTransform { facts in
+            var stale = facts
+            stale.item_version += 1
+            return stale
+        }
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-effect_proposal")
+
+        await model.validate()
+
+        #expect(model.effectProposalFacts == nil)
+        #expect(!model.actionsEnabled)
+    }
+
+    @Test func unsupportedEffectKindFactsAreDroppedAndActionsStayDisabled() async {
+        let server = MockServer()
+        // The schema permits a null closure arm for a non-closure effect kind.
+        // The card can render only source_issue_closure, so such facts must
+        // fail the match gate and never enable actions on an unrendered effect.
+        await server.setEffectProposalFactsTransform { facts in
+            var unsupported = facts
+            unsupported.effect_kind = .run_proposal
+            unsupported.source_issue_closure = nil
+            return unsupported
+        }
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-effect_proposal")
+
+        await model.validate()
+
+        #expect(model.effectProposalFacts == nil)
+        #expect(!model.actionsEnabled)
+    }
+
+    @Test func effectFactsWhoseBoundHeadDiffersFromTheItemAreDropped() async {
+        let server = MockServer()
+        // The card shows the facts' candidate head but submits the item's
+        // pr_head_sha; facts whose head diverges from the item must fail the
+        // match gate so the card never displays one head and approves another.
+        await server.setEffectProposalFactsTransform { facts in
+            guard var closure = facts.source_issue_closure?.value1 else { return facts }
+            closure.merge.candidate_head_sha = "beadfeed"
+            var mutated = facts
+            mutated.source_issue_closure = .init(value1: closure)
+            return mutated
+        }
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-effect_proposal")
+
+        await model.validate()
+
+        #expect(model.effectProposalFacts == nil)
+        #expect(!model.actionsEnabled)
+    }
+
+    @Test func parameterizedEffectProposalActionsCannotUseTheUntypedSubmitPath() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-effect_proposal")
+        await model.validate()
+
+        await model.submit(.approve_with_changes)
+        await model.submit(.snooze)
+
+        #expect(model.appliedRecord == nil)
+        #expect(model.pendingCommand == nil)
+        #expect(model.snapshot?.item.status == .open)
+    }
+
+    @Test func effectProposalRevisionFlipsOnlyResolves() async throws {
+        let store = await makeStore(server: MockServer())
+        let model = DecisionModel(store: store, itemID: "item-effect_proposal")
+        await model.validate()
+        let facts = try #require(model.effectProposalFacts)
+        let closure = try #require(facts.source_issue_closure?.value1)
+
+        let revision = try #require(
+            DecisionDetailView.effectProposalRevision(from: facts, resolves: !closure.resolves))
+        #expect(revision.source_issue_closure.resolves == !closure.resolves)
+    }
+
+    @Test func unchangedEffectProposalResolvesProduceNoRevision() async throws {
+        let store = await makeStore(server: MockServer())
+        let model = DecisionModel(store: store, itemID: "item-effect_proposal")
+        await model.validate()
+        let facts = try #require(model.effectProposalFacts)
+        let closure = try #require(facts.source_issue_closure?.value1)
+
+        #expect(
+            DecisionDetailView.effectProposalRevision(from: facts, resolves: closure.resolves) == nil)
+    }
+
+    @Test func effectProposalRankingShowsApproveWithChangesOnlyWhenOffered() {
+        let offered = DecisionActionRanking(
+            requested: [.approve, .approve_with_changes, .decline, .snooze],
+            recommendedAction: .approve)
+        let offeredActions =
+            offered.principal + offered.overflow
+            + [offered.recommended, offered.reviewing].compactMap { $0 }
+        #expect(offeredActions.contains(.approve_with_changes))
+
+        // A daemon_fallback closure proposal arrives without
+        // approve_with_changes, so the card must offer no such button.
+        let fallback = DecisionActionRanking(
+            requested: [.approve, .decline, .snooze],
+            recommendedAction: .approve)
+        let fallbackActions =
+            fallback.principal + fallback.overflow
+            + [fallback.recommended, fallback.reviewing].compactMap { $0 }
+        #expect(!fallbackActions.contains(.approve_with_changes))
+    }
+
     @Test func unchangedTaskProposalFactsProduceNoRevision() async throws {
         let store = await makeStore(server: MockServer())
         let model = DecisionModel(store: store, itemID: "item-task_proposal")

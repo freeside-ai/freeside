@@ -728,4 +728,99 @@ import Testing
 
         #expect(AttentionDisplay.reviewYieldRows(item).isEmpty)
     }
+
+    private func value(_ rows: [AttentionDisplay.FactRow], _ label: String) -> String? {
+        rows.first { $0.label == label }?.value
+    }
+
+    @Test func effectProposalRowsNameTheTargetMergeAndTrust() throws {
+        let verifiedFacts = try #require(
+            AttentionFixtures.effectProposalFacts(for: AttentionFixtures.fixture(type: .effect_proposal)))
+        let recommendedFacts = try #require(
+            AttentionFixtures.effectProposalFacts(for: AttentionFixtures.recommendedEffectProposal()))
+
+        let verified = AttentionDisplay.effectProposalRows(verifiedFacts)
+        let recommended = AttentionDisplay.effectProposalRows(recommendedFacts)
+
+        #expect(
+            verified.map(\.label) == ["Effect", "Target", "On merge", "Reference", "Origin", "Bound to"])
+        #expect(value(verified, "Effect") == "Source issue closure")
+        #expect(value(verified, "Target") == "owner/repo#724")
+        #expect(value(verified, "On merge") == "Closes the issue")
+        // Origin names the mechanism that emitted the flag (the inference
+        // site), not the human work proposal.
+        #expect(value(verified, "Origin") == "Emitted by the inference site")
+
+        // A verified and a recommended closure differ in their Reference row;
+        // only the recommended card says the person is confirming the reference.
+        #expect(value(verified, "Reference") != value(recommended, "Reference"))
+        #expect(value(recommended, "Reference")?.lowercased().contains("confirm") == true)
+        #expect(value(verified, "Reference")?.lowercased().contains("confirm") == false)
+
+        // The card names the issue reference but shows no PR number.
+        #expect(verified.contains { $0.value == "owner/repo#724" })
+        #expect(verified.allSatisfy { !$0.label.lowercased().contains("pr") })
+
+        // Bound to names the merge the approval binds to: the head and the base.
+        let bound = try #require(value(verified, "Bound to"))
+        #expect(bound.contains("cafebabe"))
+        #expect(bound.contains("main@deadbeef"))
+    }
+
+    @Test func effectProposalOnMergeFollowsResolves() throws {
+        var facts = try #require(
+            AttentionFixtures.effectProposalFacts(for: AttentionFixtures.fixture(type: .effect_proposal)))
+        var closure = try #require(facts.source_issue_closure?.value1)
+        closure.resolves = false
+        facts.source_issue_closure = .init(value1: closure)
+
+        let rows = AttentionDisplay.effectProposalRows(facts)
+        #expect(value(rows, "On merge") == "Doesn't close the issue")
+        // The Effect row names the kind neutrally, so a resolve-false proposal
+        // does not contradict the "On merge" row.
+        #expect(value(rows, "Effect") == "Source issue closure")
+    }
+
+    @Test func effectProposalBoundToShortensRevisionsToEightCharacters() throws {
+        var facts = try #require(
+            AttentionFixtures.effectProposalFacts(for: AttentionFixtures.fixture(type: .effect_proposal)))
+        var closure = try #require(facts.source_issue_closure?.value1)
+        closure.merge.candidate_head_sha = "0123456789abcdef0123456789abcdef01234567"
+        closure.merge.base_sha = "fedcba9876543210fedcba9876543210fedcba98"
+        facts.source_issue_closure = .init(value1: closure)
+
+        #expect(
+            value(AttentionDisplay.effectProposalRows(facts), "Bound to")
+                == "Head 01234567 · Base main@fedcba98")
+    }
+
+    @Test func effectProposalSupersededRowAppearsOnlyWithPriorFacts() throws {
+        let base = try #require(
+            AttentionFixtures.effectProposalFacts(for: AttentionFixtures.fixture(type: .effect_proposal)))
+        #expect(!AttentionDisplay.effectProposalRows(base).contains { $0.label == "Superseded proposal" })
+
+        var revised = base
+        revised.supersedes = .init(
+            value1: .init(
+                proposal_digest: "sha256:prior-effect",
+                source_issue_closure: .init(resolves: false)))
+        let row = value(AttentionDisplay.effectProposalRows(revised), "Superseded proposal")
+        #expect(row?.contains("leaving the issue open") == true)
+        // The prior digest is shown in full, as the sibling "Prior proposal"
+        // binding row does; a Digest is algorithm-prefixed, so it is not
+        // abbreviated.
+        #expect(row?.contains("sha256:prior-effect") == true)
+    }
+
+    @Test func decliningAnEffectProposalNamesTheEffectNotARun() {
+        let effect = AttentionFixtures.fixture(type: .effect_proposal).item
+        let task = AttentionFixtures.fixture(type: .task_proposal).item
+
+        #expect(
+            AttentionDisplay.confirmationConsequence(.decline, for: effect)
+                == "The proposal is dismissed and the effect is not applied.")
+        #expect(
+            AttentionDisplay.confirmationConsequence(.decline, for: task)
+                == "The proposal is dismissed and no run starts.")
+    }
 }
