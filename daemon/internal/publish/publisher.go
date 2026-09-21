@@ -198,6 +198,62 @@ func (p *Publisher) PublishExecution(
 	)
 }
 
+// RepositoryClass reads the target repository's current visibility and maps it
+// to the sensitivity class recipe v2 stores on an authored artifact and
+// re-checks before every render (issue #1419): a public repository is normal, a
+// private or internal one is sensitive. It fails closed on an unrecognized
+// visibility so a render sees the most restrictive class and falls back to v1.
+func (p *Publisher) RepositoryClass(ctx context.Context, c Candidate) (domain.SensitivityClass, error) {
+	repo, err := parseRepo(c.Repo)
+	if err != nil {
+		return "", fmt.Errorf("repository class: %w", err)
+	}
+	visibility, err := p.forge.getRepositoryVisibility(ctx, repo)
+	if err != nil {
+		return "", fmt.Errorf("repository class: %w", err)
+	}
+	class, err := classForRepositoryVisibility(visibility)
+	if err != nil {
+		return "", fmt.Errorf("repository class: %w", err)
+	}
+	return class, nil
+}
+
+// classForRepositoryVisibility maps a repository-visibility response to a
+// sensitivity class, failing closed on an untrusted returned object. GitHub
+// sends both the modern "visibility" and the legacy "private" bool; a partial or
+// empty body (which decodes to no signals) must not pass as the least
+// restrictive (public) class. The only safety-relevant contradiction is a
+// "public" visibility paired with private=true, which could otherwise downgrade
+// a restricted repository to normal; a visibility that maps to sensitive is safe
+// regardless of the private bool, so no check is applied there (an internal
+// repository legitimately reports private=false, since internal is org-visible,
+// not private). A caller treats the error as an unavailable read: authoring
+// records a v1 fallback and a render fails closed per the stored class.
+func classForRepositoryVisibility(resp repoVisibilityResponse) (domain.SensitivityClass, error) {
+	switch resp.Visibility {
+	case "public":
+		if resp.Private != nil && *resp.Private {
+			return "", fmt.Errorf("contradictory visibility \"public\" with private=true")
+		}
+		return domain.SensitivityNormal, nil
+	case "private", "internal":
+		return domain.SensitivitySensitive, nil
+	case "":
+		// No modern signal: rely on the legacy boolean, and fail closed when the
+		// response carries neither so an empty or partial body is never public.
+		if resp.Private == nil {
+			return "", fmt.Errorf("response carried no visibility signal")
+		}
+		if *resp.Private {
+			return domain.SensitivitySensitive, nil
+		}
+		return domain.SensitivityNormal, nil
+	default:
+		return "", fmt.Errorf("unrecognized visibility %q", resp.Visibility)
+	}
+}
+
 // VerifyOutcome observes the identity's unique live pull request without
 // mutating it. A persisted PR number is not trusted until the live marker and
 // candidate coordinates identify exactly that PR.

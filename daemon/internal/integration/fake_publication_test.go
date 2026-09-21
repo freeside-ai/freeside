@@ -82,12 +82,15 @@ type integrationForge struct {
 	writeCounts          map[string]int
 	failPRCreateResponse bool
 	requestHook          func(method, path string) bool
+	visibility           string
+	failRepoRead         bool
 }
 
 func newIntegrationForge(t *testing.T) (*integrationForge, *httptest.Server) {
 	t.Helper()
 	forge := &integrationForge{
 		t: t, refs: map[string]string{}, nextPR: 101, writeCounts: map[string]int{},
+		visibility: "public",
 	}
 	server := httptest.NewServer(http.HandlerFunc(forge.handle))
 	t.Cleanup(server.Close)
@@ -108,6 +111,16 @@ func (f *integrationForge) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	root := "/repos/" + fakePublicationRepo
 	switch {
+	case r.Method == http.MethodGet && r.URL.Path == root:
+		// GET /repos/{owner}/{repo}: recipe v2 reads the target repository's
+		// visibility here to derive and re-check the artifact's sensitivity class.
+		if f.failRepoRead {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": 424242, "visibility": f.visibility, "private": f.visibility != "public",
+		})
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, root+"/git/ref/heads/"):
 		branch := strings.TrimPrefix(r.URL.Path, root+"/git/ref/heads/")
 		sha, ok := f.refs[branch]

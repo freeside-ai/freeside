@@ -206,7 +206,7 @@ func (p ProductionPublication) validateRetained() error {
 		}
 	}
 	if p.Recipe != "" {
-		if p.Recipe != clientPublicationRecipeV1 || p.Title != "" || p.Body != "" {
+		if (p.Recipe != clientPublicationRecipeV1 && p.Recipe != clientPublicationRecipeV2) || p.Title != "" || p.Body != "" {
 			return errors.New("unsupported or contradictory publication recipe")
 		}
 		if p.SourceIssue != "" && (canonicalSourceIssue(p.SourceIssue) != p.SourceIssue || screenPublicationText(p.SourceIssue) != nil) {
