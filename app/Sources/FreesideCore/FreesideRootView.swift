@@ -18,6 +18,8 @@ public struct FreesideRootView: View {
     @State private var showsInboxClearResult: Bool
     @State private var connectionAddress = ""
     @State private var stopRecoveryPresented = false
+    @State private var rePairConfirmationPresented = false
+    @State private var rePairFailure: String?
     private let launchColorScheme: ColorScheme?
     private let launchInboxScope: InboxStore.Scope?
     private let launchProjectID: String?
@@ -89,10 +91,15 @@ public struct FreesideRootView: View {
 
     private func synced(_ coordinator: SyncCoordinator) -> some View {
         @Bindable var navigation = navigation
+        let pendingUnderOldPairing = Self.unsentActionCount(
+            pendingCommands: coordinator.store.pendingCommandsByItemID.count,
+            pendingTaskSubmissions: coordinator.pendingTaskSubmissions.count,
+            taskStops: coordinator.pendingTaskStops.values)
         return VStack(spacing: 0) {
             FreshnessBanner(
                 freshness: coordinator.store.freshness,
-                lastUpdatedAt: coordinator.lastUpdatedAt)
+                lastUpdatedAt: coordinator.lastUpdatedAt,
+                onRePair: { rePairConfirmationPresented = true })
             platformNavigation(
                 coordinator,
                 selectedTab: operatorSelectedTabBinding,
@@ -123,6 +130,97 @@ public struct FreesideRootView: View {
                 showsInboxClearResult = false
             }
         }
+        // Re-pair is offered only while revoked. If a transient failure clears
+        // while the dialog is open, freshness returns to a non-revoked state
+        // and the banner's action goes away; dismiss the open confirmation so
+        // its destructive button cannot delete a credential that just
+        // re-authenticated.
+        .onChange(of: FreshnessBanner.showsRePairAction(for: coordinator.store.freshness, hasHandler: true)) {
+            if !FreshnessBanner.showsRePairAction(for: coordinator.store.freshness, hasHandler: true) {
+                rePairConfirmationPresented = false
+            }
+        }
+        // Deleting the credential cannot be undone, so the revoked banner's
+        // "Pair Again" confirms first (#1458). A 401 can be the wrong daemon
+        // answering, so the operator, not the app, decides.
+        .confirmationDialog(
+            "Pair this device again?",
+            isPresented: $rePairConfirmationPresented,
+            titleVisibility: .visible
+        ) {
+            Button("Pair Again", role: .destructive) {
+                performRePair(for: coordinator.store.freshness)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(Self.rePairConfirmationMessage(pendingUnderOldPairing: pendingUnderOldPairing))
+        }
+        .alert(
+            "Couldn't pair again",
+            isPresented: Binding(
+                get: { rePairFailure != nil },
+                set: { if !$0 { rePairFailure = nil } })
+        ) {
+            Button("OK", role: .cancel) { rePairFailure = nil }
+        } message: {
+            Text(rePairFailure ?? "")
+        }
+    }
+
+    /// Deletes this deployment's credential and returns to pairing. A failed
+    /// delete leaves the synced view in place and surfaces the failure, so the
+    /// app never shows pairing over a credential it could not confirm removing.
+    ///
+    /// Revalidates revocation at commit time against `freshness` (the same
+    /// predicate that offered the action): deleting the credential is
+    /// irreversible, so a freshness recovery that raced an open dialog must not
+    /// delete a credential that just re-authenticated.
+    private func performRePair(for freshness: InboxStore.Freshness) {
+        guard FreshnessBanner.showsRePairAction(for: freshness, hasHandler: true) else { return }
+        do {
+            try session.rePair()
+        } catch {
+            rePairFailure = Self.rePairFailureMessage
+        }
+    }
+
+    /// The delete-failed alert copy. `rePair()` throws both when the credential
+    /// definitely remains and when removal is indeterminate (the reload also
+    /// failed), so the copy says removal could not be confirmed rather than
+    /// asserting the device is still paired.
+    static let rePairFailureMessage =
+        "This device's stored credential couldn't be removed, so removal isn't confirmed and it may still be paired. Try again."
+
+    /// Actions under the old pairing whose delivery is unresolved, for the
+    /// re-pair confirmation copy. A Stop keeps its entry with a non-nil
+    /// receipt after the daemon accepts it; that one is confirmed sent, so it
+    /// is excluded. The inbox and submission ledgers release an entry once its
+    /// outcome is definitive, so their remaining entries are unresolved (a
+    /// lost response may already have committed), not confirmed unsent.
+    static func unsentActionCount(
+        pendingCommands: Int,
+        pendingTaskSubmissions: Int,
+        taskStops: some Sequence<PendingTaskStop>
+    ) -> Int {
+        pendingCommands + pendingTaskSubmissions
+            + taskStops.filter { $0.receipt == nil }.count
+    }
+
+    /// The confirmation copy. A counted command's delivery is unresolved, not
+    /// necessarily unsent: a lost response or 5xx may already have committed
+    /// on the daemon (the ledgers keep such entries for verbatim replay). So
+    /// the copy says these actions won't be retried, since a re-paired device
+    /// gets a new id and the app drops the entries, rather than claiming they
+    /// were never sent.
+    static func rePairConfirmationMessage(pendingUnderOldPairing: Int) -> String {
+        let base =
+            "This removes this device's stored credential and returns to pairing for the same daemon. Cached items are kept and become readable again after pairing."
+        guard pendingUnderOldPairing > 0 else { return base }
+        let actions =
+            pendingUnderOldPairing == 1
+            ? "1 unresolved action" : "\(pendingUnderOldPairing) unresolved actions"
+        return
+            "\(base) \(actions) made under the old pairing won't be retried."
     }
 
     @ViewBuilder
