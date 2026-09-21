@@ -21,6 +21,24 @@ func TestConfigDefaults(t *testing.T) {
 	}
 }
 
+func TestConfigWriterStopTimeoutOverridePreserved(t *testing.T) {
+	// A production implementation can legitimately run longer than the 10m
+	// default; the operator's override must survive withDefaults, or the run is
+	// aborted at the writer-termination handoff with a context deadline.
+	const custom = 45 * time.Minute
+	cfg := Config{WriterStopTimeout: custom}.withDefaults()
+	if cfg.WriterStopTimeout != custom {
+		t.Errorf("WriterStopTimeout = %v, want %v (operator override must survive withDefaults)",
+			cfg.WriterStopTimeout, custom)
+	}
+	// The overall handoff backstop derives from WriterStopTimeout, so a larger
+	// writer budget must widen it and stay larger than the inner wait, keeping
+	// WriterStopTimeout the deadline that fires first.
+	if cfg.HandoffTimeout <= cfg.WriterStopTimeout {
+		t.Errorf("HandoffTimeout = %v, want > WriterStopTimeout %v", cfg.HandoffTimeout, cfg.WriterStopTimeout)
+	}
+}
+
 func TestConfigValidate(t *testing.T) {
 	if err := testConfig().validate(); err != nil {
 		t.Fatalf("valid fixture: validate() = %v, want nil", err)

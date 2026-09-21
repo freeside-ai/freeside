@@ -96,7 +96,24 @@
 #   FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT existing setup-token file relative
 #                                    to REVIEW_INPUT_ROOT; all four go together
 #   FREESIDE_REAL_RUN_TIMEOUT_SECONDS global supervision deadline in seconds;
-#                                    a positive integer (default 2400)
+#                                    a positive integer (default 3600). Bounds
+#                                    the whole supervised workflow (spec-approval
+#                                    wait through publication), so it must exceed
+#                                    FREESIDE_REAL_RUN_WRITER_STOP_TIMEOUT plus
+#                                    the preceding workflow time, or supervision
+#                                    returns 124 and stops the daemon before the
+#                                    writer budget is reached; raise both together
+#   FREESIDE_REAL_RUN_WRITER_STOP_TIMEOUT max time the implementation writer
+#                                    container may run before it must reach
+#                                    observed stopped (a Go duration such as
+#                                    45m; default 45m). Ward's own default is
+#                                    10m, which aborts a legitimately longer
+#                                    implementation at the writer-termination
+#                                    handoff; this raises it for real runs. Must
+#                                    stay below FREESIDE_REAL_RUN_TIMEOUT_SECONDS;
+#                                    `freesided submit` enforces this and rejects
+#                                    a malformed or out-of-range value before the
+#                                    run is created.
 #   FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES consecutive transient
 #                                    observation-failure budget before the run
 #                                    is abandoned; a positive integer
@@ -287,7 +304,13 @@ composition_evidence_tmp=""
 db_path="$FREESIDE_REAL_RUN_STATE_ROOT/freeside.db"
 listen_address="$FREESIDE_REAL_RUN_LISTEN"
 rig_release_timeout=${FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS:-30}
-supervision_timeout=${FREESIDE_REAL_RUN_TIMEOUT_SECONDS:-2400}
+# Supervision bounds the whole workflow (spec-approval wait through publication)
+# and must outlast the writer budget plus that preceding time, or it returns 124
+# and cleanup stops the daemon before the writer's own deadline can fire. The
+# default is 45m writer plus 15m of spec-approval, preflight, and publication
+# headroom; raise both together when raising the writer budget.
+supervision_timeout=${FREESIDE_REAL_RUN_TIMEOUT_SECONDS:-3600}
+writer_stop_timeout=${FREESIDE_REAL_RUN_WRITER_STOP_TIMEOUT:-45m}
 
 if [[ ! "$rig_release_timeout" =~ ^[1-9][0-9]*$ ]]; then
 	echo "run-real-work: FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS must be a positive integer" >&2
@@ -302,6 +325,11 @@ if [[ ! "$supervision_timeout" =~ ^[1-9][0-9]*$ ]]; then
 	echo "run-real-work: FREESIDE_REAL_RUN_TIMEOUT_SECONDS must be a positive integer" >&2
 	exit 2
 fi
+# The writer-stop timeout is a Go duration. It is validated authoritatively by
+# `freesided submit` below (flag.Duration parse, plus the writer-below-
+# supervision relationship), before the run is created, so a malformed, out-of-
+# range, or unsatisfiable value fails without stranding a submitted run. The
+# harness deliberately does not re-derive Go's duration grammar here.
 if [[ ! "${FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES:-10}" =~ ^[1-9][0-9]*$ ]]; then
 	echo "run-real-work: FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES must be a positive integer" >&2
 	exit 2
@@ -774,11 +802,21 @@ submit_args=(
   --project "$FREESIDE_REAL_RUN_PROJECT"
   --composition-manifest "$composition_manifest"
   --require-composition
+  # Vet the writer budget against the supervision deadline at the run-creation
+  # boundary. submit parses both authoritatively (flag.Duration) and refuses a
+  # malformed, out-of-range, or writer>=supervision value before a run exists.
+  -writer-stop-timeout "$writer_stop_timeout"
+  -supervision-timeout "${supervision_timeout}s"
 )
 if [[ -n "$work_unit_file" ]]; then
   submit_args+=(--work-unit "$work_unit_file")
 fi
 "$workdir/freesided" submit "${submit_args[@]}" | tee "$submit_log"
+submit_status=${PIPESTATUS[0]}
+if [[ "$submit_status" -ne 0 ]]; then
+  echo "run-real-work: submit refused the task before creating a run (exit $submit_status); no run was dispatched" >&2
+  exit "$submit_status"
+fi
 
 implementation_invocation_id="$(sed -n 's/.*"implementation_invocation_id":"\([^"]*\)".*/\1/p' "$submit_log")"
 implementation_run_id="$(sed -n 's/.*"run_id":"\([^"]*\)".*/\1/p' "$submit_log")"
@@ -882,6 +920,7 @@ fi
   -base-sha "$FREESIDE_REAL_RUN_BASE_SHA" \
   -auth-identity "$FREESIDE_REAL_RUN_AUTH_IDENTITY" \
   -approved-recipe "$FREESIDE_REAL_RUN_APPROVED_RECIPE" \
+  -writer-stop-timeout "$writer_stop_timeout" \
   -operating-mode unattended \
   -run-conformance \
   -allowed-paths "$FREESIDE_REAL_RUN_ALLOWED_PATHS" \

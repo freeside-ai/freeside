@@ -1335,3 +1335,38 @@ func TestSubmitCommandEmptyDependencyDeclarationConverges(t *testing.T) {
 		t.Fatalf("replay identities differ: %+v vs %+v", replay, first)
 	}
 }
+
+func TestValidateWriterStopBudget(t *testing.T) {
+	// The guard is the run-creation gate for the writer budget: a value at or
+	// above the harness supervision deadline is stopped by supervision before it
+	// elapses, so the run this submission creates would be doomed. flag.Duration
+	// parses both values authoritatively before this runs, so malformed and
+	// out-of-range inputs never reach it; the cases below cover the meaning of
+	// the parsed values (negative, zero-as-ward-default, and the relationship).
+	cases := []struct {
+		name        string
+		writer      time.Duration
+		supervision time.Duration
+		wantErr     bool
+	}{
+		{"writer below supervision", 45 * time.Minute, 60 * time.Minute, false},
+		{"writer equal to supervision is rejected", time.Hour, time.Hour, true},
+		{"writer above supervision is rejected", 2 * time.Hour, time.Hour, true},
+		{"negative writer is rejected", -time.Second, time.Hour, true},
+		{"zero writer resolves to the ward default and passes", 0, time.Hour, false},
+		{"zero writer resolves to the ward default and is rejected below it", 0, 5 * time.Minute, true},
+		{"supervision unset skips the check", 2 * time.Hour, 0, false},
+		{"both unset skips the check", 0, 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateWriterStopBudget(tc.writer, tc.supervision)
+			if tc.wantErr && err == nil {
+				t.Fatalf("validateWriterStopBudget(%s, %s) = nil, want error", tc.writer, tc.supervision)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("validateWriterStopBudget(%s, %s) = %v, want nil", tc.writer, tc.supervision, err)
+			}
+		})
+	}
+}

@@ -178,6 +178,8 @@ func main() {
 	exporterImage := flags.String("exporter-image", "", "digest-pinned export helper image")
 	containerBin := flags.String("container-bin", "container", "Apple container CLI path")
 	seedRoot := flags.String("seed-root", "", "daemon-owned exact-base checkout root")
+	writerStopTimeout := flags.Duration("writer-stop-timeout", 0,
+		"max time the implementation writer container may run before it must reach stopped; 0 uses the ward default (10m)")
 	stateDir := flags.String("state-dir", "", "production driver state directory")
 	rigTokenFile := flags.String("rig-token-file", "", "production rig acquisition file (optional)")
 	providerEndpoints := flags.String("provider-endpoints", "api.anthropic.com:443", "comma-separated provider host:port allowlist")
@@ -300,7 +302,8 @@ func main() {
 		daemonConfig.Claude = &claudeDriverConfig{
 			AgentImage: domain.ImageRef(*agentImage), ExporterImage: *exporterImage,
 			ContainerBin: *containerBin, SeedRoot: *seedRoot,
-			StateDir: *stateDir, RigTokenFile: *rigTokenFile, Judgments: judgmentsConfig,
+			WriterStopTimeout: *writerStopTimeout,
+			StateDir:          *stateDir, RigTokenFile: *rigTokenFile, Judgments: judgmentsConfig,
 			ProviderEndpoints:              strings.Split(*providerEndpoints, ","),
 			PromptPackageFile:              *promptPackage,
 			SpecificationPromptPackageFile: *specificationPromptPackage,

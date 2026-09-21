@@ -92,6 +92,11 @@ var ErrOutputScanRefused = errors.New("output scan refused content")
 // anything; New wraps it with the specific violation.
 var ErrInvalidConfig = errors.New("invalid ward backend config")
 
+// DefaultWriterStopTimeout is the WriterStopTimeout withDefaults applies when a
+// caller leaves it zero. It is exported so a pre-run gate (freesided submit) can
+// resolve a zero override to the same effective budget the daemon will use.
+const DefaultWriterStopTimeout = 10 * time.Minute
+
 // Config parameterizes the backend. The exporter image is the unit's seam
 // with the gauntlet lane: the pinned image carries the trusted export helper
 // (check 6), while everything the gate enforces about the exporter (checks 4,
@@ -289,7 +294,7 @@ func (cfg Config) withDefaults() Config {
 		cfg.MaxSeedEntries = 100_000
 	}
 	if cfg.WriterStopTimeout == 0 {
-		cfg.WriterStopTimeout = 10 * time.Minute
+		cfg.WriterStopTimeout = DefaultWriterStopTimeout
 	}
 	if cfg.ExporterTimeout == 0 {
 		cfg.ExporterTimeout = 5 * time.Minute

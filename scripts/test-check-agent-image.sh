@@ -173,6 +173,7 @@ begin_case() {
   unset FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS
   unset FREESIDE_REAL_RUN_TIMEOUT_SECONDS
   unset FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES
+  unset FREESIDE_REAL_RUN_WRITER_STOP_TIMEOUT
   printf 'ok' >"$CASE_DIR/create_mode"
   echo "case: $CASE"
 }
@@ -1583,6 +1584,20 @@ assert_contains "FREESIDE_REAL_RUN_TIMEOUT_SECONDS must be a positive integer"
 assert_not_exists "$CASE_DIR/rig-hold.args"
 assert_not_exists "$CASE_DIR/submit.called"
 assert_not_exists "$CASE_DIR/daemon.args"
+
+begin_case "58a2 the writer and supervision budgets reach the submit gate"
+# submit validates the writer budget authoritatively (flag.Duration parse plus
+# the writer-below-supervision relationship) before creating the run, so the
+# harness must hand it both durations. The relationship logic itself is covered
+# by the Go unit test TestValidateWriterStopBudget.
+run_real_work lifecycle current ok ok pending
+assert_rc 0
+if grep -q -- '-writer-stop-timeout' "$CASE_DIR/submit.args" &&
+  grep -q -- '-supervision-timeout' "$CASE_DIR/submit.args"; then
+	pass=$((pass + 1))
+else
+	report_failure "submit did not receive the writer-stop and supervision budgets"
+fi
 
 begin_case "58b an invalid observation-failure budget refuses before the rig and submit"
 export FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES=09

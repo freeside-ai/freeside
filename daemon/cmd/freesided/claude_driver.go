@@ -48,13 +48,20 @@ import (
 // endpoint, or identity would put an unaudited value into the durable
 // admission record.
 type claudeDriverConfig struct {
-	Judgments         judgmentConfig
-	AgentImage        domain.ImageRef
-	ExporterImage     string
-	ContainerBin      string
-	SeedRoot          string
-	StateDir          string
-	RigTokenFile      string
+	Judgments     judgmentConfig
+	AgentImage    domain.ImageRef
+	ExporterImage string
+	ContainerBin  string
+	SeedRoot      string
+	StateDir      string
+	RigTokenFile  string
+	// WriterStopTimeout bounds how long the implementation writer container may
+	// run before it must reach observed "stopped" (ward's writer-termination
+	// handoff check). Zero keeps ward's built-in default (10m). Production sets
+	// it larger because a legitimate implementation can exceed 10m; a too-short
+	// bound aborts the run at the writer-termination handoff with a context
+	// deadline instead of publishing.
+	WriterStopTimeout time.Duration
 	ProviderEndpoints []string
 	// The prompt-package files are trusted implementation, specification, and
 	// remediation inputs. The daemon derives every digest from ingested bytes.
@@ -1463,6 +1470,8 @@ func composeClaudeDriver(
 		SeedRoot:          cfg.SeedRoot,
 		ExportRoot:        filepath.Join(cfg.StateDir, "ward-exports"),
 		ProviderEndpoints: cfg.ProviderEndpoints,
+		// Zero leaves ward's own default in place (config.withDefaults).
+		WriterStopTimeout: cfg.WriterStopTimeout,
 		Scanner:           credentialScanner{},
 		AuthStoreLeaser:   adapters.Leaser,
 		Journal:           adapters.Journal,
