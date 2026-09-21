@@ -675,6 +675,7 @@
                             declared_path_count: 3,
                             touches_control_plane: false))
                     : nil
+                let effectProposalFacts = AttentionFixtures.effectProposalFacts(for: snapshot)
                 surfaces.append(
                     Surface(
                         name: "decision-\(snapshot.item._type.rawValue)",
@@ -682,7 +683,8 @@
                             detail.screenshotCard(
                                 snapshot.item,
                                 at: dynamicTypeSize,
-                                proposalFacts: proposalFacts))))
+                                proposalFacts: proposalFacts,
+                                effectProposalFacts: effectProposalFacts))))
 
                 if snapshot.item._type == .execution_failure {
                     surfaces.append(
@@ -694,6 +696,27 @@
                                     snapshot.item,
                                     at: dynamicTypeSize,
                                     proposalFacts: proposalFacts))))
+                }
+
+                if snapshot.item._type == .effect_proposal {
+                    // The card gains facts, so it is pinned on both platforms
+                    // and both themes, as the other proposal cards are.
+                    for (suffix, width, scheme) in [
+                        ("phone", CGFloat(390), ColorScheme.light),
+                        ("dark", canvasWidth, ColorScheme.dark),
+                        ("phone-dark", CGFloat(390), ColorScheme.dark),
+                    ] {
+                        surfaces.append(
+                            Surface(
+                                name: "decision-effect_proposal-\(suffix)",
+                                width: width,
+                                colorScheme: scheme,
+                                view: AnyView(
+                                    detail.screenshotCard(
+                                        snapshot.item,
+                                        at: dynamicTypeSize,
+                                        effectProposalFacts: effectProposalFacts))))
+                    }
                 }
 
                 if snapshot.item._type == .spec_approval {
@@ -1813,6 +1836,60 @@
                     view: AnyView(
                         TaskProposalRevisionSheet(facts: taskProposalFacts) { _ in }
                             .screenshotContent())))
+
+            // The effect-proposal edit sheet: one control for whether the PR
+            // closes the issue. Pinned in the same four variants as the task
+            // revision sheet.
+            let effectProposalFacts = try #require(
+                AttentionFixtures.effectProposalFacts(
+                    for: AttentionFixtures.fixture(type: .effect_proposal)))
+            for (suffix, width, scheme) in [
+                ("", CGFloat(480), ColorScheme.light),
+                ("-phone", CGFloat(390), ColorScheme.light),
+                ("-dark", CGFloat(480), ColorScheme.dark),
+                ("-phone-dark", CGFloat(390), ColorScheme.dark),
+            ] {
+                surfaces.append(
+                    Surface(
+                        name: "effect-proposal-revision-sheet\(suffix)",
+                        width: width,
+                        colorScheme: scheme,
+                        view: AnyView(
+                            EffectProposalRevisionSheet(facts: effectProposalFacts) { _ in }
+                                .screenshotContent())))
+            }
+
+            // The recommended effect-proposal card is not in the default
+            // inbox, so it is rendered from its own store here, in the same
+            // four variants as the verified card in the inbox loop above.
+            let recommendedEffect = AttentionFixtures.recommendedEffectProposal()
+            let recommendedEffectStore = InboxStore(client: client)
+            recommendedEffectStore.replaceAll(with: [recommendedEffect])
+            let recommendedEffectDetail = DecisionDetailView(
+                store: recommendedEffectStore,
+                itemID: recommendedEffect.item.id,
+                graphics: .init(),
+                loadsAttachments: false,
+                showsValidationProgress: false,
+                now: screenshotNow)
+            let recommendedEffectFacts = AttentionFixtures.effectProposalFacts(for: recommendedEffect)
+            for (suffix, width, scheme) in [
+                ("", canvasWidth, ColorScheme.light),
+                ("-phone", CGFloat(390), ColorScheme.light),
+                ("-dark", canvasWidth, ColorScheme.dark),
+                ("-phone-dark", CGFloat(390), ColorScheme.dark),
+            ] {
+                surfaces.append(
+                    Surface(
+                        name: "decision-effect_proposal-recommended\(suffix)",
+                        width: width,
+                        colorScheme: scheme,
+                        view: AnyView(
+                            recommendedEffectDetail.screenshotCard(
+                                recommendedEffect.item,
+                                at: dynamicTypeSize,
+                                effectProposalFacts: recommendedEffectFacts))))
+            }
             surfaces.append(
                 Surface(
                     name: "task-proposal-snooze-sheet",
