@@ -707,6 +707,21 @@ delay reconciliation. Its 32-entry in-memory queue keeps the identifier
 fallback when full or lost on restart. Diagnostic and
 Discussion sites continue to use their fallback outputs with this adapter.
 
+One further optional flag configures the publication-author role's two sites
+(`publication_author_explain` and `publication_author_propose`):
+
+```text
+-judgment-publication-author-prompt <path-to-publication-author-role-prompt>
+```
+
+It names the refinable role prompt file (`prompts/publication-author.md`). The
+daemon reads it at startup, folds the file's content digest into the judgment
+configuration digest preflight records, and hands the bytes to the Claude
+judgment driver, so a different prompt file is a different, preflight-checked
+configuration. With the flag unset, both publication-author sites return their
+fail-safe (empty prose and "no close") and nothing blocks. The prompt file must
+be non-empty and at most 32 KiB.
+
 The adapter pins and privately copies the native CLI, supplies allowlisted
 fields through stdin, and launches with safe mode, no tools or MCP, no saved
 session, and an empty temporary home/configuration directory. It does not give

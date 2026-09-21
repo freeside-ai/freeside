@@ -12,7 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/advisory"
 	"github.com/freeside-ai/freeside/daemon/internal/claudeinference"
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
+	"github.com/freeside-ai/freeside/daemon/internal/inference"
 )
 
 func judgmentFixture(t *testing.T) (judgmentConfig, string) {
@@ -31,6 +34,86 @@ func judgmentFixture(t *testing.T) (judgmentConfig, string) {
 		t.Fatal(err)
 	}
 	return judgmentConfig{CLI: claudeinference.Config{Binary: bin, SHA256: hex.EncodeToString(h[:]), Model: "test-model"}, AuthSnapshot: "token"}, root
+}
+
+func TestPublicationAuthorPromptBindingAndFailsafe(t *testing.T) {
+	// The unavailable binding drives both sites to their fail-safe with nothing
+	// blocking, and it carries no driver.
+	unavailable, digest, err := composeJudgments(judgmentConfig{}, t.TempDir())
+	if err != nil || digest != "" || unavailable.Driver != nil || unavailable.Provider != "unavailable" {
+		t.Fatalf("unavailable binding = %+v, digest=%q, err=%v", unavailable, digest, err)
+	}
+	budget := inference.Budget{
+		Window: time.Hour,
+		Site:   inference.Limits{Calls: 10, ComputeUnits: 100_000, Starvation: time.Hour},
+	}
+	budget.Project, budget.Global = budget.Site, budget.Site
+	budget.MaxCallsPerRoot, budget.MaxStarvationPerRoot = 10, time.Hour
+	store, err := advisory.Open(filepath.Join(t.TempDir(), "advisory.json"), 100, 64<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := inference.New(inference.Config{
+		StatePath: filepath.Join(t.TempDir(), "ledger.json"),
+		Binding:   unavailable,
+		Sites:     []inference.Site{inference.PublicationAuthorExplainSite(budget), inference.PublicationAuthorProposeSite(budget)},
+		Advisory:  store,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := inference.PublicationAuthorInput{
+		Project: "p", RootLineage: "r", TargetRepository: "o/r", TargetVisibility: inference.RepositoryPublic,
+		SourceIssueRef: "#1", SourceVisibility: inference.RepositoryPublic, Diff: "diff",
+		PRTemplate:          inference.ControlFile{Content: "t", Digest: contentaddr.Sum([]byte("t")), TrustedBaseCommit: "base"},
+		InstructionSnapshot: inference.ControlFile{Content: "s", Digest: contentaddr.Sum([]byte("s")), TrustedBaseCommit: "base"},
+	}
+	authored, err := client.AuthorPublication(t.Context(), input)
+	if err != nil || !authored.Fallback {
+		t.Fatalf("explain on unavailable binding = %+v, %v", authored, err)
+	}
+	proposed, err := client.ProposeSourceIssueClosure(t.Context(), input)
+	if err != nil || !proposed.Fallback || proposed.Resolves {
+		t.Fatalf("propose on unavailable binding = %+v, %v", proposed, err)
+	}
+
+	// A configured prompt changes the configuration digest, and a different
+	// prompt file changes it again; the driver is bound.
+	cfg, root := judgmentFixture(t)
+	_, base, err := composeJudgments(cfg, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	promptPath := filepath.Join(root, "author.md")
+	if err := os.WriteFile(promptPath, []byte("role prompt one"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg.PublicationAuthorPrompt = promptPath
+	bound, withPrompt, err := composeJudgments(cfg, root)
+	if err != nil || bound.Driver == nil || withPrompt == base {
+		t.Fatalf("prompt digest = %q (base %q), err = %v", withPrompt, base, err)
+	}
+	if err := os.WriteFile(promptPath, []byte("role prompt two, different"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, changed, err := composeJudgments(cfg, root)
+	if err != nil || changed == withPrompt {
+		t.Fatalf("different prompt did not change the digest: %q vs %q, err %v", changed, withPrompt, err)
+	}
+
+	// An empty or oversized prompt file is a composition error.
+	if err := os.WriteFile(promptPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := composeJudgments(cfg, root); err == nil {
+		t.Fatal("empty prompt file accepted")
+	}
+	if err := os.WriteFile(promptPath, bytes.Repeat([]byte("x"), (32<<10)+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := composeJudgments(cfg, root); err == nil {
+		t.Fatal("oversized prompt file accepted")
+	}
 }
 
 func TestJudgmentBindingAndReceipt(t *testing.T) {
