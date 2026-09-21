@@ -100,6 +100,7 @@ public actor MockServer {
     private var pendingSpecificationReplacements: [String: Components.Schemas.AttentionItemSnapshot] = [:]
     private var pendingSpecificationComments: [String: String] = [:]
     private var proposalFactsByItemID: [String: Components.Schemas.TaskProposalFactsSnapshot] = [:]
+    private var effectProposalFactsByItemID: [String: Components.Schemas.EffectProposalFactsSnapshot] = [:]
     private var proposalSnoozesByItemID: [String: Date] = [:]
     private var currentTime = Date(timeIntervalSince1970: 1_786_502_645)
     private var revision: Int64 = 1
@@ -436,6 +437,7 @@ public actor MockServer {
         pendingSpecificationReplacements.removeAll()
         pendingSpecificationComments.removeAll()
         proposalFactsByItemID.removeAll()
+        effectProposalFactsByItemID.removeAll()
         proposalSnoozesByItemID.removeAll()
     }
 
@@ -1236,6 +1238,23 @@ public actor MockServer {
             scope: .init(
                 component_count: 1, declared_path_count: 3,
                 touches_control_plane: false))
+    }
+
+    /// Serves the authenticated source-issue-closure facts for one
+    /// effect-proposal item, mirroring `taskProposalFacts`: a snoozed or
+    /// non-effect_proposal item is invisible (nil, which the transport renders
+    /// as 404). An override in `effectProposalFactsByItemID` (set by an
+    /// approve_with_changes replacement) wins over the default fixture facts,
+    /// which are built from the served snapshot's version tuple.
+    func effectProposalFacts(
+        itemID: String
+    ) throws -> Components.Schemas.EffectProposalFactsSnapshot? {
+        guard let snapshot = try servedSnapshot(itemID: itemID), snapshot.item._type == .effect_proposal
+        else { return nil }
+        if let facts = effectProposalFactsByItemID[itemID] {
+            return facts
+        }
+        return AttentionFixtures.effectProposalFacts(for: snapshot)
     }
 
     /// The actor's convenience wrapper over

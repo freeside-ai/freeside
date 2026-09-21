@@ -174,7 +174,10 @@ import Testing
             #expect(summaries.isEmpty)
         } else {
             #expect(composition.modules.contains(.summary))
-            if type == .task_proposal {
+            if type == .task_proposal || type == .effect_proposal {
+                // Store-derived one-carrier items (a single proposal digest, no
+                // agent claims) reserve the summary module but carry no summary
+                // claim, matching the daemon's item shape.
                 #expect(summaries.isEmpty)
             } else {
                 #expect(summaries.count == 1)

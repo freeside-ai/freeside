@@ -240,6 +240,32 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /attention/items/{item_id}/effect-proposal:
+    get:
+      operationId: getEffectProposalFacts
+      tags: [attention]
+      summary: Get authenticated effect-proposal facts
+      description: >
+        Returns the exact digest-bound source-issue-closure facts rendered by an
+        effect_proposal item: the daemon-resolved target, the bounded closure
+        parameters, and the prospective merge the approval binds to. The daemon
+        rebuilds these from stored rows and re-gates the closure against current
+        state; the opaque subject handle and policy identities stay server-side.
+        The version tuple lets the client prove the facts and card were read from
+        the same item state. Active snoozes remain hidden as 404, as do a
+        task_proposal item and an unknown id.
+      parameters:
+        - $ref: "#/components/parameters/ItemID"
+      responses:
+        "200":
+          description: Authenticated effect-proposal facts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EffectProposalFactsSnapshot"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /attention/items/{item_id}/deliveries:
     get:
       operationId: listAttentionItemDeliveries
@@ -1083,6 +1109,106 @@ components:
         scope:
           $ref: "#/components/schemas/TaskProposalScope"
 
+    EffectProposalFactsSnapshot:
+      type: object
+      description: >
+        Store-authenticated, digest-bound source-issue-closure facts matched to
+        one exact attention-item snapshot before the client enables a decision.
+        The opaque subject handle and policy identities stay server-side, as they
+        do for task_proposal.
+      additionalProperties: false
+      required:
+        - as_of_revision
+        - entity_version
+        - item_version
+        - proposal_digest
+        - effect_kind
+        - supersedes
+        - source_issue_closure
+      properties:
+        as_of_revision:
+          $ref: "#/components/schemas/AsOfRevision"
+        entity_version:
+          $ref: "#/components/schemas/EntityVersion"
+        item_version:
+          type: integer
+          minimum: 1
+        proposal_digest:
+          $ref: "#/components/schemas/Digest"
+        effect_kind:
+          $ref: "#/components/schemas/EffectKind"
+        supersedes:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/EffectProposalRevisionFacts"
+          description: >
+            The exact authenticated prior facts for a revised card; null for the
+            initially admitted proposal.
+        source_issue_closure:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/SourceIssueClosureFacts"
+          description: >
+            The closure facts for a source_issue_closure effect; null for any
+            other effect kind.
+
+    EffectProposalRevisionFacts:
+      type: object
+      description: One digest-bound, bounded side of an effect-proposal revision.
+      additionalProperties: false
+      required: [proposal_digest, source_issue_closure]
+      properties:
+        proposal_digest:
+          $ref: "#/components/schemas/Digest"
+        source_issue_closure:
+          nullable: true
+          type: object
+          additionalProperties: false
+          required: [resolves]
+          properties:
+            resolves:
+              type: boolean
+          description: >
+            The prior closure delta for a source_issue_closure revision; null for
+            any other effect kind.
+
+    SourceIssueClosureFacts:
+      type: object
+      description: >
+        Bounded source-issue-closure facts: the daemon-resolved target, the
+        closure delta and its trust, and the prospective merge the approval binds
+        to. No subject handle or policy identity.
+      additionalProperties: false
+      required: [target, resolves, provenance, origin, merge]
+      properties:
+        target:
+          $ref: "#/components/schemas/IssueSubjectRef"
+        resolves:
+          type: boolean
+        provenance:
+          $ref: "#/components/schemas/ClosureProvenance"
+        origin:
+          $ref: "#/components/schemas/ClosureFlagOrigin"
+        merge:
+          $ref: "#/components/schemas/ProspectiveMergeFacts"
+
+    ProspectiveMergeFacts:
+      type: object
+      description: >
+        The exact merge a closure approval binds to: the publication identity,
+        the candidate head, and the base ref and SHA the pull request targets.
+      additionalProperties: false
+      required: [publication_identity, candidate_head_sha, base_ref, base_sha]
+      properties:
+        publication_identity:
+          $ref: "#/components/schemas/Digest"
+        candidate_head_sha:
+          type: string
+        base_ref:
+          type: string
+        base_sha:
+          type: string
+
     TaskProposalRevisionInput:
       type: object
       description: >
@@ -1121,6 +1247,33 @@ components:
       type: string
       description: Closed intent understood by the task-proposal registry.
       enum: [implement_subject]
+
+    EffectKind:
+      type: string
+      description: >
+        The effect-registry member an effect_proposal renders. run_proposal is
+        the task-proposal encoding; source_issue_closure proposes closing the
+        source issue a work unit's pull request resolves (plan §5.13). Matches
+        domain.AllEffectKinds.
+      enum: [run_proposal, source_issue_closure]
+
+    ClosureProvenance:
+      type: string
+      description: >
+        The trust a source-issue-closure target earns: verified when the daemon
+        bound the issue subject, recommended when a same-repository target came
+        from a client-supplied source the daemon cannot re-derive (plan §5.13).
+        Matches domain.AllClosureProvenances.
+      enum: [verified, recommended]
+
+    ClosureFlagOrigin:
+      type: string
+      description: >
+        Which mechanism produced a source-issue-closure proposal: propose_site
+        when the inference site emitted the flag, daemon_fallback when the daemon
+        minted a durable resolve-false proposal (plan §5.13). Matches
+        domain.AllClosureFlagOrigins.
+      enum: [propose_site, daemon_fallback]
 
     AttentionDeliverySnapshot:
       type: object

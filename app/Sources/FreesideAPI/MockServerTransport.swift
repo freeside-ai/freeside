@@ -167,6 +167,16 @@ public struct MockServerTransport: ClientTransport {
                         message: "no visible task proposal exists under the identifier"))
             }
             return try Self.json(status: .ok, body: facts)
+        case "getEffectProposalFacts":
+            guard let itemID = Self.effectProposalItemID(request.path),
+                let facts = try await server.effectProposalFacts(itemID: itemID)
+            else {
+                return try Self.json(
+                    status: .notFound,
+                    body: Components.Schemas._Error(
+                        message: "no visible effect proposal exists under the identifier"))
+            }
+            return try Self.json(status: .ok, body: facts)
         case "listRuns":
             do {
                 return try Self.json(
@@ -627,6 +637,13 @@ public struct MockServerTransport: ClientTransport {
         guard let path else { return nil }
         let parts = path.split(separator: "/")
         guard parts.count >= 4, parts.last == "task-proposal" else { return nil }
+        return String(parts[parts.count - 2]).removingPercentEncoding
+    }
+
+    private static func effectProposalItemID(_ path: String?) -> String? {
+        guard let path else { return nil }
+        let parts = path.split(separator: "/")
+        guard parts.count >= 4, parts.last == "effect-proposal" else { return nil }
         return String(parts[parts.count - 2]).removingPercentEncoding
     }
 

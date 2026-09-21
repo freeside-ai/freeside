@@ -344,6 +344,52 @@ public enum AttentionFixtures {
         return snapshot
     }
 
+    /// A second effect-proposal fixture serving `recommended` provenance
+    /// facts. It stays out of `defaultInbox()`: that list is one open item per
+    /// type and the inbox screenshots pin it, so tests and screenshot surfaces
+    /// opt into this one to exercise the recommended trust level beside the
+    /// default `verified` item.
+    public static func recommendedEffectProposal() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = fixture(type: .effect_proposal)
+        snapshot.item.id = "item-effect_proposal-recommended"
+        return snapshot
+    }
+
+    /// The bounded source-issue-closure facts a client reads for one
+    /// effect-proposal item, built from the served snapshot's version tuple
+    /// and evidence digest. The default `item-effect_proposal` carries
+    /// `verified` provenance from `propose_site`; the named
+    /// `item-effect_proposal-recommended` carries `recommended`. The opaque
+    /// subject handle and policy identity stay server-side, as they do for
+    /// task_proposal. Returns nil for any non-effect_proposal item.
+    public static func effectProposalFacts(
+        for snapshot: Components.Schemas.AttentionItemSnapshot
+    ) -> Components.Schemas.EffectProposalFactsSnapshot? {
+        guard snapshot.item._type == .effect_proposal,
+            let digest = snapshot.item.evidence_snapshot.first?.digest
+        else { return nil }
+        let provenance: Components.Schemas.ClosureProvenance =
+            snapshot.item.id == "item-effect_proposal-recommended" ? .recommended : .verified
+        return .init(
+            as_of_revision: snapshot.as_of_revision,
+            entity_version: snapshot.entity_version,
+            item_version: snapshot.item.item_version,
+            proposal_digest: digest,
+            effect_kind: .source_issue_closure,
+            supersedes: nil,
+            source_issue_closure: .init(
+                value1: .init(
+                    target: .init(repo: "owner/repo", repository_id: 84_958_515, issue_number: 724),
+                    resolves: true,
+                    provenance: provenance,
+                    origin: .propose_site,
+                    merge: .init(
+                        publication_identity: "sha256:publication-effect_proposal",
+                        candidate_head_sha: snapshot.item.pr_head_sha,
+                        base_ref: "main",
+                        base_sha: "deadbeef"))))
+    }
+
     /// A ready fixture whose verdict the daemon has invalidated: the item is
     /// superseded because the pull request's head moved past the head the
     /// detail was bound to (`readiness_invalidation.bound`), so the card must
@@ -576,11 +622,13 @@ public enum AttentionFixtures {
                     ))
             }
         }
-        // A task-proposal item is the exact store-derived carrier for one
-        // proposal digest. Unlike ordinary attention cards it has no agent
-        // claims, so the client's authenticated-facts tuple can require the
-        // sole command binding to equal that proposal digest.
-        if type == .task_proposal {
+        // A task-proposal or effect-proposal item is the exact store-derived
+        // carrier for one proposal digest. Unlike ordinary attention cards it
+        // has no agent claims, so its single artifact digest equals the proposal
+        // digest: the daemon's facts reads require exactly that
+        // (GetTaskProposalFacts, GetEffectProposalFacts), so the fixture must
+        // match or it would serve a snapshot the daemon rejects.
+        if type == .task_proposal || type == .effect_proposal {
             agentClaims = []
         }
 

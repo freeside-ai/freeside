@@ -1,7 +1,10 @@
 package signet_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -366,5 +369,106 @@ func TestEffectProposalStartActionRejected(t *testing.T) {
 	item := f.open(t, f.merge)
 	if _, err := f.service.Submit(context.Background(), f.decision(item, "wrong-family", domain.ActionStart)); err == nil {
 		t.Fatal("closure item accepted a start action")
+	}
+}
+
+// TestEffectProposalFactsMatchItemAndCarryNoAuthority proves the facts read
+// projects the open closure item's version tuple, digest, resolved target, and
+// bound merge, with no supersedes and no subject handle on the wire.
+func TestEffectProposalFactsMatchItemAndCarryNoAuthority(t *testing.T) {
+	f := newClosureFixture(t, true, domain.ClosureFlagOriginProposeSite)
+	item := f.open(t, f.merge)
+	snapshot, err := f.service.GetAttentionItem(context.Background(), item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, err := f.service.GetEffectProposalFacts(context.Background(), item.ID)
+	if err != nil {
+		t.Fatalf("GetEffectProposalFacts: %v", err)
+	}
+	if facts.AsOfRevision != snapshot.AsOfRevision || facts.EntityVersion != snapshot.EntityVersion ||
+		facts.ItemVersion != item.ItemVersion || facts.ProposalDigest != f.instance.Proposal.Digest ||
+		facts.EffectKind != domain.EffectSourceIssueClosure || facts.Supersedes != nil {
+		t.Fatalf("facts = %#v, want the open item's tuple and initial projection", facts)
+	}
+	closure := facts.SourceIssueClosure
+	if closure == nil {
+		t.Fatal("facts carried no source_issue_closure arm")
+	}
+	want := f.instance.Proposal.ClosureProposal
+	if closure.Target != want.Target || closure.Resolves != want.Resolves ||
+		closure.Provenance != want.Provenance || closure.Origin != want.Origin {
+		t.Fatalf("closure facts = %#v, want %#v", closure, want)
+	}
+	if closure.Merge.PublicationIdentity != f.merge.PublicationIdentity ||
+		closure.Merge.CandidateHeadSHA != f.merge.CandidateHeadSHA ||
+		closure.Merge.BaseRef != f.merge.BaseRef || closure.Merge.BaseSHA != f.merge.BaseSHA {
+		t.Fatalf("merge facts = %#v, want the opened merge %#v", closure.Merge, f.merge)
+	}
+	body, err := json.Marshal(facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"subject_handle", "resolved_policy", "policy_run"} {
+		if bytes.Contains(body, []byte(forbidden)) {
+			t.Fatalf("facts leaked authority field %q: %s", forbidden, body)
+		}
+	}
+}
+
+// TestEffectProposalFactsHideSnoozedAndWrongType proves the facts route hides a
+// snoozed closure item and a task_proposal item, matching the item reads'
+// visibility rules.
+func TestEffectProposalFactsHideSnoozedAndWrongType(t *testing.T) {
+	t.Run("snoozed", func(t *testing.T) {
+		f := newClosureFixture(t, true, domain.ClosureFlagOriginProposeSite)
+		item := f.open(t, f.merge)
+		until := (*f.now).Add(time.Hour).UTC()
+		cmd := f.decision(item, "snooze-facts", domain.ActionSnooze)
+		cmd.Payload.SnoozeUntil = &until
+		if _, err := f.service.Submit(context.Background(), cmd); err != nil {
+			t.Fatalf("snooze: %v", err)
+		}
+		if _, err := f.service.GetEffectProposalFacts(context.Background(), item.ID); !errors.Is(err, signet.ErrProposalSnoozed) {
+			t.Fatalf("snoozed facts error = %v, want ErrProposalSnoozed", err)
+		}
+	})
+	t.Run("task proposal", func(t *testing.T) {
+		f := newProposalDecisionFixture(t)
+		if _, err := f.service.GetEffectProposalFacts(context.Background(), f.item.ID); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("task_proposal facts error = %v, want ErrNotFound", err)
+		}
+	})
+	t.Run("unknown id", func(t *testing.T) {
+		f := newClosureFixture(t, true, domain.ClosureFlagOriginProposeSite)
+		if _, err := f.service.GetEffectProposalFacts(context.Background(), "item-does-not-exist"); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("unknown facts error = %v, want ErrNotFound", err)
+		}
+	})
+}
+
+// TestEffectProposalRevisionFactsCarrySupersedes proves the replacement item's
+// facts after approve_with_changes carry the revised digest and a supersedes
+// with the prior digest and prior resolves.
+func TestEffectProposalRevisionFactsCarrySupersedes(t *testing.T) {
+	f := newClosureFixture(t, false, domain.ClosureFlagOriginProposeSite)
+	item := f.open(t, f.merge)
+	cmd := f.decision(item, "approve-changes-facts", domain.ActionApproveWithChanges)
+	cmd.Payload.EffectProposalRevision = &signet.EffectProposalRevisionInput{Resolves: true}
+	if _, err := f.service.Submit(context.Background(), cmd); err != nil {
+		t.Fatalf("approve_with_changes: %v", err)
+	}
+	replacementID := domain.ItemID(string(f.instance.ID) + "/revision/" + cmd.CommandID)
+	facts, err := f.service.GetEffectProposalFacts(context.Background(), replacementID)
+	if err != nil {
+		t.Fatalf("GetEffectProposalFacts(replacement): %v", err)
+	}
+	if facts.SourceIssueClosure == nil || !facts.SourceIssueClosure.Resolves {
+		t.Fatalf("revised facts = %#v, want resolves=true", facts.SourceIssueClosure)
+	}
+	if facts.Supersedes == nil || facts.Supersedes.ProposalDigest != f.instance.Proposal.Digest ||
+		facts.Supersedes.SourceIssueClosure == nil || facts.Supersedes.SourceIssueClosure.Resolves != false ||
+		facts.ProposalDigest == facts.Supersedes.ProposalDigest {
+		t.Fatalf("supersedes = %#v, want the prior digest and prior resolves=false", facts.Supersedes)
 	}
 }

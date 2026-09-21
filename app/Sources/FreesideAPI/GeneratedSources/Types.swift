@@ -86,6 +86,14 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /attention/items/{item_id}/task-proposal`.
     /// - Remark: Generated from `#/paths//attention/items/{item_id}/task-proposal/get(getTaskProposalFacts)`.
     func getTaskProposalFacts(_ input: Operations.getTaskProposalFacts.Input) async throws -> Operations.getTaskProposalFacts.Output
+    /// Get authenticated effect-proposal facts
+    ///
+    /// Returns the exact digest-bound source-issue-closure facts rendered by an effect_proposal item: the daemon-resolved target, the bounded closure parameters, and the prospective merge the approval binds to. The daemon rebuilds these from stored rows and re-gates the closure against current state; the opaque subject handle and policy identities stay server-side. The version tuple lets the client prove the facts and card were read from the same item state. Active snoozes remain hidden as 404, as do a task_proposal item and an unknown id.
+    ///
+    ///
+    /// - Remark: HTTP `GET /attention/items/{item_id}/effect-proposal`.
+    /// - Remark: Generated from `#/paths//attention/items/{item_id}/effect-proposal/get(getEffectProposalFacts)`.
+    func getEffectProposalFacts(_ input: Operations.getEffectProposalFacts.Input) async throws -> Operations.getEffectProposalFacts.Output
     /// List an item's delivery attempts
     ///
     /// Lists the item's per-channel, per-attempt delivery records (plan §4). Delivery rows are created and advanced by the daemon's delivery pipeline; the single client write is the opened receipt (reportDeliveryOpened), which advances an existing attempt and never creates one.
@@ -428,6 +436,22 @@ extension APIProtocol {
         headers: Operations.getTaskProposalFacts.Input.Headers = .init()
     ) async throws -> Operations.getTaskProposalFacts.Output {
         try await getTaskProposalFacts(Operations.getTaskProposalFacts.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// Get authenticated effect-proposal facts
+    ///
+    /// Returns the exact digest-bound source-issue-closure facts rendered by an effect_proposal item: the daemon-resolved target, the bounded closure parameters, and the prospective merge the approval binds to. The daemon rebuilds these from stored rows and re-gates the closure against current state; the opaque subject handle and policy identities stay server-side. The version tuple lets the client prove the facts and card were read from the same item state. Active snoozes remain hidden as 404, as do a task_proposal item and an unknown id.
+    ///
+    ///
+    /// - Remark: HTTP `GET /attention/items/{item_id}/effect-proposal`.
+    /// - Remark: Generated from `#/paths//attention/items/{item_id}/effect-proposal/get(getEffectProposalFacts)`.
+    public func getEffectProposalFacts(
+        path: Operations.getEffectProposalFacts.Input.Path,
+        headers: Operations.getEffectProposalFacts.Input.Headers = .init()
+    ) async throws -> Operations.getEffectProposalFacts.Output {
+        try await getEffectProposalFacts(Operations.getEffectProposalFacts.Input(
             path: path,
             headers: headers
         ))
@@ -1135,6 +1159,358 @@ public enum Components {
                 ])
             }
         }
+        /// Store-authenticated, digest-bound source-issue-closure facts matched to one exact attention-item snapshot before the client enables a decision. The opaque subject handle and policy identities stay server-side, as they do for task_proposal.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot`.
+        public struct EffectProposalFactsSnapshot: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/as_of_revision`.
+            public var as_of_revision: Components.Schemas.AsOfRevision
+            /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/entity_version`.
+            public var entity_version: Components.Schemas.EntityVersion
+            /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/item_version`.
+            public var item_version: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/proposal_digest`.
+            public var proposal_digest: Components.Schemas.Digest
+            /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/effect_kind`.
+            public var effect_kind: Components.Schemas.EffectKind
+            /// The exact authenticated prior facts for a revised card; null for the initially admitted proposal.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/supersedes`.
+            public struct supersedesPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/supersedes/value1`.
+                public var value1: Components.Schemas.EffectProposalRevisionFacts
+                /// Creates a new `supersedesPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.EffectProposalRevisionFacts) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The exact authenticated prior facts for a revised card; null for the initially admitted proposal.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/supersedes`.
+            public var supersedes: Components.Schemas.EffectProposalFactsSnapshot.supersedesPayload?
+            /// The closure facts for a source_issue_closure effect; null for any other effect kind.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/source_issue_closure`.
+            public struct source_issue_closurePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/source_issue_closure/value1`.
+                public var value1: Components.Schemas.SourceIssueClosureFacts
+                /// Creates a new `source_issue_closurePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.SourceIssueClosureFacts) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The closure facts for a source_issue_closure effect; null for any other effect kind.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/source_issue_closure`.
+            public var source_issue_closure: Components.Schemas.EffectProposalFactsSnapshot.source_issue_closurePayload?
+            /// Creates a new `EffectProposalFactsSnapshot`.
+            ///
+            /// - Parameters:
+            ///   - as_of_revision:
+            ///   - entity_version:
+            ///   - item_version:
+            ///   - proposal_digest:
+            ///   - effect_kind:
+            ///   - supersedes: The exact authenticated prior facts for a revised card; null for the initially admitted proposal.
+            ///   - source_issue_closure: The closure facts for a source_issue_closure effect; null for any other effect kind.
+            public init(
+                as_of_revision: Components.Schemas.AsOfRevision,
+                entity_version: Components.Schemas.EntityVersion,
+                item_version: Swift.Int,
+                proposal_digest: Components.Schemas.Digest,
+                effect_kind: Components.Schemas.EffectKind,
+                supersedes: Components.Schemas.EffectProposalFactsSnapshot.supersedesPayload? = nil,
+                source_issue_closure: Components.Schemas.EffectProposalFactsSnapshot.source_issue_closurePayload? = nil
+            ) {
+                self.as_of_revision = as_of_revision
+                self.entity_version = entity_version
+                self.item_version = item_version
+                self.proposal_digest = proposal_digest
+                self.effect_kind = effect_kind
+                self.supersedes = supersedes
+                self.source_issue_closure = source_issue_closure
+            }
+            public enum CodingKeys: String, CodingKey {
+                case as_of_revision
+                case entity_version
+                case item_version
+                case proposal_digest
+                case effect_kind
+                case supersedes
+                case source_issue_closure
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.as_of_revision = try container.decode(
+                    Components.Schemas.AsOfRevision.self,
+                    forKey: .as_of_revision
+                )
+                self.entity_version = try container.decode(
+                    Components.Schemas.EntityVersion.self,
+                    forKey: .entity_version
+                )
+                self.item_version = try container.decode(
+                    Swift.Int.self,
+                    forKey: .item_version
+                )
+                self.proposal_digest = try container.decode(
+                    Components.Schemas.Digest.self,
+                    forKey: .proposal_digest
+                )
+                self.effect_kind = try container.decode(
+                    Components.Schemas.EffectKind.self,
+                    forKey: .effect_kind
+                )
+                self.supersedes = try container.decodeIfPresent(
+                    Components.Schemas.EffectProposalFactsSnapshot.supersedesPayload.self,
+                    forKey: .supersedes
+                )
+                self.source_issue_closure = try container.decodeIfPresent(
+                    Components.Schemas.EffectProposalFactsSnapshot.source_issue_closurePayload.self,
+                    forKey: .source_issue_closure
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "as_of_revision",
+                    "entity_version",
+                    "item_version",
+                    "proposal_digest",
+                    "effect_kind",
+                    "supersedes",
+                    "source_issue_closure"
+                ])
+            }
+        }
+        /// One digest-bound, bounded side of an effect-proposal revision.
+        ///
+        /// - Remark: Generated from `#/components/schemas/EffectProposalRevisionFacts`.
+        public struct EffectProposalRevisionFacts: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/EffectProposalRevisionFacts/proposal_digest`.
+            public var proposal_digest: Components.Schemas.Digest
+            /// The prior closure delta for a source_issue_closure revision; null for any other effect kind.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/EffectProposalRevisionFacts/source_issue_closure`.
+            public struct source_issue_closurePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/EffectProposalRevisionFacts/source_issue_closure/resolves`.
+                public var resolves: Swift.Bool
+                /// Creates a new `source_issue_closurePayload`.
+                ///
+                /// - Parameters:
+                ///   - resolves:
+                public init(resolves: Swift.Bool) {
+                    self.resolves = resolves
+                }
+                public enum CodingKeys: String, CodingKey {
+                    case resolves
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    let container = try decoder.container(keyedBy: CodingKeys.self)
+                    self.resolves = try container.decode(
+                        Swift.Bool.self,
+                        forKey: .resolves
+                    )
+                    try decoder.ensureNoAdditionalProperties(knownKeys: [
+                        "resolves"
+                    ])
+                }
+            }
+            /// The prior closure delta for a source_issue_closure revision; null for any other effect kind.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/EffectProposalRevisionFacts/source_issue_closure`.
+            public var source_issue_closure: Components.Schemas.EffectProposalRevisionFacts.source_issue_closurePayload?
+            /// Creates a new `EffectProposalRevisionFacts`.
+            ///
+            /// - Parameters:
+            ///   - proposal_digest:
+            ///   - source_issue_closure: The prior closure delta for a source_issue_closure revision; null for any other effect kind.
+            public init(
+                proposal_digest: Components.Schemas.Digest,
+                source_issue_closure: Components.Schemas.EffectProposalRevisionFacts.source_issue_closurePayload? = nil
+            ) {
+                self.proposal_digest = proposal_digest
+                self.source_issue_closure = source_issue_closure
+            }
+            public enum CodingKeys: String, CodingKey {
+                case proposal_digest
+                case source_issue_closure
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.proposal_digest = try container.decode(
+                    Components.Schemas.Digest.self,
+                    forKey: .proposal_digest
+                )
+                self.source_issue_closure = try container.decodeIfPresent(
+                    Components.Schemas.EffectProposalRevisionFacts.source_issue_closurePayload.self,
+                    forKey: .source_issue_closure
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "proposal_digest",
+                    "source_issue_closure"
+                ])
+            }
+        }
+        /// Bounded source-issue-closure facts: the daemon-resolved target, the closure delta and its trust, and the prospective merge the approval binds to. No subject handle or policy identity.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/SourceIssueClosureFacts`.
+        public struct SourceIssueClosureFacts: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/SourceIssueClosureFacts/target`.
+            public var target: Components.Schemas.IssueSubjectRef
+            /// - Remark: Generated from `#/components/schemas/SourceIssueClosureFacts/resolves`.
+            public var resolves: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/SourceIssueClosureFacts/provenance`.
+            public var provenance: Components.Schemas.ClosureProvenance
+            /// - Remark: Generated from `#/components/schemas/SourceIssueClosureFacts/origin`.
+            public var origin: Components.Schemas.ClosureFlagOrigin
+            /// - Remark: Generated from `#/components/schemas/SourceIssueClosureFacts/merge`.
+            public var merge: Components.Schemas.ProspectiveMergeFacts
+            /// Creates a new `SourceIssueClosureFacts`.
+            ///
+            /// - Parameters:
+            ///   - target:
+            ///   - resolves:
+            ///   - provenance:
+            ///   - origin:
+            ///   - merge:
+            public init(
+                target: Components.Schemas.IssueSubjectRef,
+                resolves: Swift.Bool,
+                provenance: Components.Schemas.ClosureProvenance,
+                origin: Components.Schemas.ClosureFlagOrigin,
+                merge: Components.Schemas.ProspectiveMergeFacts
+            ) {
+                self.target = target
+                self.resolves = resolves
+                self.provenance = provenance
+                self.origin = origin
+                self.merge = merge
+            }
+            public enum CodingKeys: String, CodingKey {
+                case target
+                case resolves
+                case provenance
+                case origin
+                case merge
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.target = try container.decode(
+                    Components.Schemas.IssueSubjectRef.self,
+                    forKey: .target
+                )
+                self.resolves = try container.decode(
+                    Swift.Bool.self,
+                    forKey: .resolves
+                )
+                self.provenance = try container.decode(
+                    Components.Schemas.ClosureProvenance.self,
+                    forKey: .provenance
+                )
+                self.origin = try container.decode(
+                    Components.Schemas.ClosureFlagOrigin.self,
+                    forKey: .origin
+                )
+                self.merge = try container.decode(
+                    Components.Schemas.ProspectiveMergeFacts.self,
+                    forKey: .merge
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "target",
+                    "resolves",
+                    "provenance",
+                    "origin",
+                    "merge"
+                ])
+            }
+        }
+        /// The exact merge a closure approval binds to: the publication identity, the candidate head, and the base ref and SHA the pull request targets.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ProspectiveMergeFacts`.
+        public struct ProspectiveMergeFacts: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ProspectiveMergeFacts/publication_identity`.
+            public var publication_identity: Components.Schemas.Digest
+            /// - Remark: Generated from `#/components/schemas/ProspectiveMergeFacts/candidate_head_sha`.
+            public var candidate_head_sha: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ProspectiveMergeFacts/base_ref`.
+            public var base_ref: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ProspectiveMergeFacts/base_sha`.
+            public var base_sha: Swift.String
+            /// Creates a new `ProspectiveMergeFacts`.
+            ///
+            /// - Parameters:
+            ///   - publication_identity:
+            ///   - candidate_head_sha:
+            ///   - base_ref:
+            ///   - base_sha:
+            public init(
+                publication_identity: Components.Schemas.Digest,
+                candidate_head_sha: Swift.String,
+                base_ref: Swift.String,
+                base_sha: Swift.String
+            ) {
+                self.publication_identity = publication_identity
+                self.candidate_head_sha = candidate_head_sha
+                self.base_ref = base_ref
+                self.base_sha = base_sha
+            }
+            public enum CodingKeys: String, CodingKey {
+                case publication_identity
+                case candidate_head_sha
+                case base_ref
+                case base_sha
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.publication_identity = try container.decode(
+                    Components.Schemas.Digest.self,
+                    forKey: .publication_identity
+                )
+                self.candidate_head_sha = try container.decode(
+                    Swift.String.self,
+                    forKey: .candidate_head_sha
+                )
+                self.base_ref = try container.decode(
+                    Swift.String.self,
+                    forKey: .base_ref
+                )
+                self.base_sha = try container.decode(
+                    Swift.String.self,
+                    forKey: .base_sha
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "publication_identity",
+                    "candidate_head_sha",
+                    "base_ref",
+                    "base_sha"
+                ])
+            }
+        }
         /// Bounded public parameters an operator may revise; the opaque work-unit handle and current policy remain store-derived authority.
         ///
         ///
@@ -1243,6 +1619,30 @@ public enum Components {
         /// - Remark: Generated from `#/components/schemas/TaskProposalIntent`.
         @frozen public enum TaskProposalIntent: String, Codable, Hashable, Sendable, CaseIterable {
             case implement_subject = "implement_subject"
+        }
+        /// The effect-registry member an effect_proposal renders. run_proposal is the task-proposal encoding; source_issue_closure proposes closing the source issue a work unit's pull request resolves (plan §5.13). Matches domain.AllEffectKinds.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/EffectKind`.
+        @frozen public enum EffectKind: String, Codable, Hashable, Sendable, CaseIterable {
+            case run_proposal = "run_proposal"
+            case source_issue_closure = "source_issue_closure"
+        }
+        /// The trust a source-issue-closure target earns: verified when the daemon bound the issue subject, recommended when a same-repository target came from a client-supplied source the daemon cannot re-derive (plan §5.13). Matches domain.AllClosureProvenances.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ClosureProvenance`.
+        @frozen public enum ClosureProvenance: String, Codable, Hashable, Sendable, CaseIterable {
+            case verified = "verified"
+            case recommended = "recommended"
+        }
+        /// Which mechanism produced a source-issue-closure proposal: propose_site when the inference site emitted the flag, daemon_fallback when the daemon minted a durable resolve-false proposal (plan §5.13). Matches domain.AllClosureFlagOrigins.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ClosureFlagOrigin`.
+        @frozen public enum ClosureFlagOrigin: String, Codable, Hashable, Sendable, CaseIterable {
+            case propose_site = "propose_site"
+            case daemon_fallback = "daemon_fallback"
         }
         /// A resource snapshot wrapping one attention delivery (plan §5.14).
         ///
@@ -13534,6 +13934,162 @@ public enum Operations {
             /// No entity exists under the identifier.
             ///
             /// - Remark: Generated from `#/paths//attention/items/{item_id}/task-proposal/get(getTaskProposalFacts)/responses/404`.
+            ///
+            /// HTTP response code: `404 notFound`.
+            case notFound(Components.Responses.NotFound)
+            /// The associated value of the enum case if `self` is `.notFound`.
+            ///
+            /// - Throws: An error if `self` is not `.notFound`.
+            /// - SeeAlso: `.notFound`.
+            public var notFound: Components.Responses.NotFound {
+                get throws {
+                    switch self {
+                    case let .notFound(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "notFound",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Get authenticated effect-proposal facts
+    ///
+    /// Returns the exact digest-bound source-issue-closure facts rendered by an effect_proposal item: the daemon-resolved target, the bounded closure parameters, and the prospective merge the approval binds to. The daemon rebuilds these from stored rows and re-gates the closure against current state; the opaque subject handle and policy identities stay server-side. The version tuple lets the client prove the facts and card were read from the same item state. Active snoozes remain hidden as 404, as do a task_proposal item and an unknown id.
+    ///
+    ///
+    /// - Remark: HTTP `GET /attention/items/{item_id}/effect-proposal`.
+    /// - Remark: Generated from `#/paths//attention/items/{item_id}/effect-proposal/get(getEffectProposalFacts)`.
+    public enum getEffectProposalFacts {
+        public static let id: Swift.String = "getEffectProposalFacts"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/attention/items/{item_id}/effect-proposal/GET/path`.
+            public struct Path: Sendable, Hashable {
+                /// The attention item's identifier.
+                ///
+                /// - Remark: Generated from `#/paths/attention/items/{item_id}/effect-proposal/GET/path/item_id`.
+                public var item_id: Components.Parameters.ItemID
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - item_id: The attention item's identifier.
+                public init(item_id: Components.Parameters.ItemID) {
+                    self.item_id = item_id
+                }
+            }
+            public var path: Operations.getEffectProposalFacts.Input.Path
+            /// - Remark: Generated from `#/paths/attention/items/{item_id}/effect-proposal/GET/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.getEffectProposalFacts.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.getEffectProposalFacts.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.getEffectProposalFacts.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            public init(
+                path: Operations.getEffectProposalFacts.Input.Path,
+                headers: Operations.getEffectProposalFacts.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/attention/items/{item_id}/effect-proposal/GET/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/attention/items/{item_id}/effect-proposal/GET/responses/200/content/application\/json`.
+                    case json(Components.Schemas.EffectProposalFactsSnapshot)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.EffectProposalFactsSnapshot {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.getEffectProposalFacts.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.getEffectProposalFacts.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Authenticated effect-proposal facts.
+            ///
+            /// - Remark: Generated from `#/paths//attention/items/{item_id}/effect-proposal/get(getEffectProposalFacts)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.getEffectProposalFacts.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.getEffectProposalFacts.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// No entity exists under the identifier.
+            ///
+            /// - Remark: Generated from `#/paths//attention/items/{item_id}/effect-proposal/get(getEffectProposalFacts)/responses/404`.
             ///
             /// HTTP response code: `404 notFound`.
             case notFound(Components.Responses.NotFound)

@@ -199,6 +199,36 @@ import Testing
                 == AttentionFixtures.defaultInbox().map(\.item.id))
     }
 
+    @Test func recommendedEffectProposalIsAValidNamedFixtureOutsideTheDefaultInbox() {
+        let recommended = AttentionFixtures.recommendedEffectProposal()
+        let base = AttentionFixtures.fixture(type: .effect_proposal)
+        #expect(recommended.item._type == .effect_proposal)
+        #expect(recommended.item.id == "item-effect_proposal-recommended")
+        #expect(recommended.item.status == .open)
+        #expect(recommended.item.requested_decision == AttentionFixtures.phase1ActionSets[.effect_proposal])
+        #expect(recommended.item.artifact_digests == base.item.artifact_digests)
+        // It stays out of the default inbox: that list is one open item per
+        // type and the inbox screenshots pin it.
+        #expect(!AttentionFixtures.defaultInboxItemIDs().contains(recommended.item.id))
+    }
+
+    @Test func effectProposalFactsCarryProvenanceAndBoundMergeWithoutAuthority() throws {
+        let verifiedItem = AttentionFixtures.fixture(type: .effect_proposal)
+        let verified = try #require(AttentionFixtures.effectProposalFacts(for: verifiedItem))
+        #expect(verified.effect_kind == .source_issue_closure)
+        #expect(verified.proposal_digest == verifiedItem.item.evidence_snapshot[0].digest)
+        #expect(verified.supersedes == nil)
+        #expect(verified.source_issue_closure?.value1.provenance == .verified)
+        #expect(verified.source_issue_closure?.value1.origin == .propose_site)
+        #expect(verified.source_issue_closure?.value1.merge.candidate_head_sha == verifiedItem.item.pr_head_sha)
+
+        let recommended = try #require(
+            AttentionFixtures.effectProposalFacts(for: AttentionFixtures.recommendedEffectProposal()))
+        #expect(recommended.source_issue_closure?.value1.provenance == .recommended)
+        // A non-effect_proposal item has no closure facts.
+        #expect(AttentionFixtures.effectProposalFacts(for: AttentionFixtures.fixture(type: .task_proposal)) == nil)
+    }
+
     @Test(arguments: AttentionFixtures.phase1Types)
     func fixtureIsValidAndOffersExactlyItsActionSet(
         type: Components.Schemas.AttentionType
