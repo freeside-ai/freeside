@@ -14,6 +14,69 @@ private struct FailingCredentialStore: DeviceCredentialStore {
     func delete() throws {}
 }
 
+/// Holds a credential but refuses to delete it, for the re-pair path where
+/// the delete fails and the session must stay ready with the credential
+/// intact (#1458).
+private final class DeleteRefusingCredentialStore: DeviceCredentialStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var credential: DeviceCredential?
+
+    init(credential: DeviceCredential?) { self.credential = credential }
+
+    func load() throws -> DeviceCredential? { lock.withLock { credential } }
+    func save(_ credential: DeviceCredential) throws {
+        lock.withLock { self.credential = credential }
+    }
+    func delete() throws { throw StoreRefused() }
+}
+
+/// Reports the credential gone but still throws from delete, mirroring the
+/// macOS store that removes the authoritative Data Protection item before a
+/// later legacy-Keychain error surfaces (#1458 re-pair recovery).
+private final class PartialDeleteCredentialStore: DeviceCredentialStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var credential: DeviceCredential?
+
+    init(credential: DeviceCredential?) { self.credential = credential }
+
+    func load() throws -> DeviceCredential? { lock.withLock { credential } }
+    func save(_ credential: DeviceCredential) throws {
+        lock.withLock { self.credential = credential }
+    }
+    func delete() throws {
+        lock.withLock { credential = nil }
+        throw StoreRefused()
+    }
+}
+
+private struct LoadRefused: Error {}
+
+/// Loads until a delete is attempted, then throws from load, mirroring a
+/// locked or ACL-restricted Keychain where a failed delete cannot be
+/// confirmed by a reload: the credential may still exist, so re-pair must
+/// treat it as indeterminate and stay ready (#1458 re-pair recovery).
+private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var credential: DeviceCredential?
+    private var deleteAttempted = false
+
+    init(credential: DeviceCredential?) { self.credential = credential }
+
+    func load() throws -> DeviceCredential? {
+        try lock.withLock {
+            if deleteAttempted { throw LoadRefused() }
+            return credential
+        }
+    }
+    func save(_ credential: DeviceCredential) throws {
+        lock.withLock { self.credential = credential }
+    }
+    func delete() throws {
+        lock.withLock { deleteAttempted = true }
+        throw StoreRefused()
+    }
+}
+
 @Suite @MainActor struct PairingModelTests {
     @Test func previewFactsFollowTheCodeAndClearOnRejection() async throws {
         // Plan §5.14 pairing facts: a live code previews to the daemon's
@@ -795,5 +858,216 @@ private struct FailingCredentialStore: DeviceCredentialStore {
             return
         }
         #expect(persisted.isEmpty)
+    }
+
+    @Test func rePairDeletesTheCredentialAndReturnsToPairing() throws {
+        // #1458 acceptance 1: the operator's in-app recovery from a rejected
+        // credential clears this deployment's credential and reopens pairing.
+        let credentials = InMemoryCredentialStore(
+            credential: DeviceCredential(
+                deviceID: "device-old", token: testDeviceToken(for: "device-old"),
+                ntfySubscription: .mock)!)
+        let session = AppSession(
+            client: APIClientFactory.mock(),
+            credentials: credentials,
+            cache: InMemoryCacheStore())
+        guard case .ready = session.phase else {
+            Issue.record("expected a ready session, got \(session.phase)")
+            return
+        }
+
+        try session.rePair()
+
+        guard case .needsPairing = session.phase else {
+            Issue.record("expected pairing after re-pair, got \(session.phase)")
+            return
+        }
+        #expect(try credentials.load() == nil)
+    }
+
+    @Test func rePairThatCannotDeleteStaysReadyAndKeepsTheCredential() throws {
+        // #1458 acceptance 2: deleting a credential is unrecoverable, so a
+        // failed delete must never present as paired-again; the session stays
+        // ready over the still-stored credential and the error reaches the
+        // caller.
+        let credential = DeviceCredential(
+            deviceID: "device-stuck", token: testDeviceToken(for: "device-stuck"),
+            ntfySubscription: .mock)!
+        let credentials = DeleteRefusingCredentialStore(credential: credential)
+        let session = AppSession(
+            client: APIClientFactory.mock(),
+            credentials: credentials,
+            cache: InMemoryCacheStore())
+        guard case .ready = session.phase else {
+            Issue.record("expected a ready session, got \(session.phase)")
+            return
+        }
+
+        #expect(throws: StoreRefused.self) { try session.rePair() }
+
+        guard case .ready = session.phase else {
+            Issue.record("expected the session to stay ready, got \(session.phase)")
+            return
+        }
+        #expect(try credentials.load() == credential)
+    }
+
+    @Test func rePairReturnsToPairingWhenDeleteRemovedTheCredentialThenThrew() throws {
+        // #1458: on macOS `delete()` removes the authoritative credential
+        // before a legacy-Keychain error can surface, so a thrown delete does
+        // not prove the credential survived. When it is already gone, re-pair
+        // must return to pairing rather than strand a "still paired" session
+        // that has no usable bearer token.
+        let credentials = PartialDeleteCredentialStore(
+            credential: DeviceCredential(
+                deviceID: "device-old", token: testDeviceToken(for: "device-old"),
+                ntfySubscription: .mock)!)
+        let session = AppSession(
+            client: APIClientFactory.mock(),
+            credentials: credentials,
+            cache: InMemoryCacheStore())
+        guard case .ready = session.phase else {
+            Issue.record("expected a ready session, got \(session.phase)")
+            return
+        }
+
+        try session.rePair()
+
+        guard case .needsPairing = session.phase else {
+            Issue.record("expected pairing after a delete that removed the credential, got \(session.phase)")
+            return
+        }
+        #expect(try credentials.load() == nil)
+    }
+
+    @Test func rePairStaysReadyWhenAFailedDeleteCannotBeConfirmedByReload() throws {
+        // #1458 review: when `delete()` throws and the reload also throws (a
+        // locked or ACL-restricted Keychain), the credential may still exist.
+        // Re-pair must treat that as indeterminate: surface the failure and
+        // stay ready rather than show pairing over a credential that might
+        // still answer requests.
+        let credentials = ReloadFailingAfterDeleteCredentialStore(
+            credential: DeviceCredential(
+                deviceID: "device-stuck", token: testDeviceToken(for: "device-stuck"),
+                ntfySubscription: .mock)!)
+        let session = AppSession(
+            client: APIClientFactory.mock(),
+            credentials: credentials,
+            cache: InMemoryCacheStore())
+        guard case .ready = session.phase else {
+            Issue.record("expected a ready session, got \(session.phase)")
+            return
+        }
+
+        #expect(throws: StoreRefused.self) { try session.rePair() }
+
+        guard case .ready = session.phase else {
+            Issue.record("expected the session to stay ready on an indeterminate delete, got \(session.phase)")
+            return
+        }
+    }
+
+    @Test func rePairThenPairingReturnsToReadyWithoutChangingTheDeployment() async throws {
+        // #1458 acceptance 3: after re-pairing, a fresh pairing mints a new
+        // device and returns to ready against the same deployment.
+        let deploymentURL = URL(string: "http://100.64.0.1:7331")!
+        let server = MockServer(authMode: .enforcing, pairingCodes: ["483911": .valid])
+        let credentials = InMemoryCredentialStore(
+            credential: DeviceCredential(
+                deviceID: "device-old", token: testDeviceToken(for: "device-old"),
+                ntfySubscription: .mock)!)
+        var persisted: [URL] = []
+        let session = AppSession(
+            client: APIClientFactory.mock(server: server) { (try? credentials.load())?.token },
+            credentials: credentials,
+            cache: InMemoryCacheStore(),
+            deploymentURL: deploymentURL,
+            persistServerURL: { persisted.append($0) })
+        guard case .ready = session.phase else {
+            Issue.record("expected a ready session, got \(session.phase)")
+            return
+        }
+        #expect(persisted == [deploymentURL])
+
+        try session.rePair()
+        guard case .needsPairing(let model) = session.phase else {
+            Issue.record("expected pairing after re-pair, got \(session.phase)")
+            return
+        }
+        model.pairingCode = "483911"
+        model.displayName = "Ben's iPhone"
+        await model.refreshFacts()
+        let credential = try #require(await model.pair())
+        session.completePairing(credential)
+
+        guard case .ready(let coordinator) = session.phase else {
+            Issue.record("expected a ready session after pairing, got \(session.phase)")
+            return
+        }
+        #expect(coordinator.store.device.deviceID == credential.deviceID)
+        #expect(credential.deviceID != "device-old")
+        // completePairing records the same deployment again; the deployment
+        // the session pairs against never changed.
+        #expect(persisted == [deploymentURL, deploymentURL])
+    }
+
+    @Test func aRelaunchAfterRePairLandsOnPairing() throws {
+        // #1458 acceptance 4: the delete persists, so a new session built on
+        // the same store starts at pairing, not the revoked banner.
+        let credentials = InMemoryCredentialStore(
+            credential: DeviceCredential(
+                deviceID: "device-old", token: testDeviceToken(for: "device-old"),
+                ntfySubscription: .mock)!)
+        let session = AppSession(
+            client: APIClientFactory.mock(),
+            credentials: credentials,
+            cache: InMemoryCacheStore())
+        try session.rePair()
+
+        let relaunched = AppSession(
+            client: APIClientFactory.mock(),
+            credentials: credentials,
+            cache: InMemoryCacheStore())
+
+        guard case .needsPairing = relaunched.phase else {
+            Issue.record("expected a relaunch to land on pairing, got \(relaunched.phase)")
+            return
+        }
+    }
+
+    @Test func rePairPrefillsFromTheLastReadinessAndKeepsOperatorInput() throws {
+        // #1458 acceptance 5: the fresh pairing screen prefills from the last
+        // readiness the session received, the same as a launch does, and an
+        // operator-typed code is never overwritten.
+        let deploymentURL = DaemonReadinessReader.supervisedAPIURL
+        let credentials = InMemoryCredentialStore(
+            credential: DeviceCredential(
+                deviceID: "device-old", token: testDeviceToken(for: "device-old"),
+                ntfySubscription: .mock)!)
+        let session = AppSession(
+            client: APIClientFactory.mock(),
+            credentials: credentials,
+            cache: InMemoryCacheStore(),
+            deploymentURL: deploymentURL)
+        // The Mac delivers readiness on change, so a ready session receives
+        // it well before it re-pairs; it is remembered, not applied yet.
+        session.applyReadiness(
+            DaemonReadiness(apiURL: deploymentURL, pairingCode: "fresh-code"))
+        guard case .ready = session.phase else {
+            Issue.record("expected a ready session, got \(session.phase)")
+            return
+        }
+
+        try session.rePair()
+        guard case .needsPairing(let model) = session.phase else {
+            Issue.record("expected pairing after re-pair, got \(session.phase)")
+            return
+        }
+        #expect(model.pairingCode == "FRESHC0DE")
+
+        model.pairingCode = "operator-input"
+        session.applyReadiness(
+            DaemonReadiness(apiURL: deploymentURL, pairingCode: "newer-code"))
+        #expect(model.pairingCode == "operator-input")
     }
 }

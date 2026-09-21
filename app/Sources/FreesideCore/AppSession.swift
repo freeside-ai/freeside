@@ -21,12 +21,20 @@ public final class AppSession {
 
     private struct Connection {
         let client: any APIProtocol
+        let credentials: any DeviceCredentialStore
         let cache: any CacheStore
         let deploymentURL: URL?
+        let displayName: String?
     }
 
     private var connection: Connection?
     private let persistServerURL: (URL) -> Void
+    /// The last readiness the session was handed (`applyReadiness`),
+    /// remembered so `rePair()` can prefill the fresh pairing screen the
+    /// same way a launch does: on the Mac readiness is delivered only when
+    /// it changes, so a session that re-pairs mid-run would otherwise have
+    /// nothing to prefill from.
+    private var lastReadiness: DaemonReadiness?
 
     public init(
         client: any APIProtocol,
@@ -37,7 +45,9 @@ public final class AppSession {
         deploymentURL: URL? = nil,
         persistServerURL: @escaping (URL) -> Void = AppSession.persistServerURLToDefaults
     ) {
-        self.connection = Connection(client: client, cache: cache, deploymentURL: deploymentURL)
+        self.connection = Connection(
+            client: client, credentials: credentials, cache: cache,
+            deploymentURL: deploymentURL, displayName: displayName)
         self.persistServerURL = persistServerURL
         // An unreadable credential is indistinguishable from an absent
         // one here, and the recovery is the same either way: pairing
@@ -84,6 +94,51 @@ public final class AppSession {
                 deploymentURL: connection.deploymentURL))
     }
 
+    /// The operator's in-app recovery from a rejected credential (the
+    /// revoked freshness banner, #1458): delete this deployment's stored
+    /// credential and return to pairing for the same daemon. Deleting a
+    /// credential cannot be undone, so the caller confirms first; a first
+    /// launch pairs without a bearer token, so the pairing endpoints still
+    /// answer once it is gone. Only meaningful while `.ready`; anything
+    /// else is a no-op. `delete()` can throw after it has already removed the
+    /// authoritative credential (the macOS store deletes the Data Protection
+    /// item before the legacy one and reports a later legacy-Keychain error),
+    /// so a thrown error returns to pairing only on a confirmed absence: a
+    /// credential that still loads, or a reload that itself throws (an
+    /// indeterminate result, since the credential may remain), keeps the phase
+    /// unchanged. The app never shows pairing over a credential that still
+    /// exists or might, nor claims "still paired" over one that is gone. The
+    /// cache, the saved deployment URL, and `changeServer()` are left
+    /// untouched (Non-goals): the next sync discards a stale cache on its own
+    /// when the daemon's epoch changed.
+    public func rePair() throws {
+        guard case .ready = phase, let connection else { return }
+        do {
+            try connection.credentials.delete()
+        } catch let deleteError {
+            // Reload to tell a completed delete from a real failure. Proceed
+            // to pairing only on a confirmed absence: a load that itself
+            // throws is indeterminate (the credential may remain, e.g. the
+            // legacy item read back and re-promoted before a cleanup error),
+            // so surface the delete failure and stay ready rather than show
+            // pairing over a credential that can still answer requests.
+            let credentialGone: Bool
+            do {
+                credentialGone = try connection.credentials.load() == nil
+            } catch {
+                throw deleteError
+            }
+            if !credentialGone { throw deleteError }
+        }
+        phase = .needsPairing(
+            PairingModel(
+                client: connection.client, credentials: connection.credentials,
+                displayName: connection.displayName))
+        // Prefill the fresh screen from the last readiness, exactly as a
+        // launch would; an operator-typed code is never overwritten.
+        applyReadiness(lastReadiness)
+    }
+
     private init() {
         connection = nil
         persistServerURL = Self.persistServerURLToDefaults
@@ -107,6 +162,9 @@ public final class AppSession {
     /// for the deployment this session already selected; never overwrite
     /// operator input or apply a local code to a persisted remote daemon.
     public func applyReadiness(_ readiness: DaemonReadiness?) {
+        // Remember it even while `.ready`, where the prefill below is a
+        // no-op, so a later `rePair()` can replay it onto the fresh screen.
+        lastReadiness = readiness
         guard
             let deploymentURL = connection?.deploymentURL,
             case .needsPairing(let model) = phase

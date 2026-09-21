@@ -7,10 +7,28 @@ import SwiftUI
 struct FreshnessBanner: View {
     let freshness: InboxStore.Freshness
     let lastUpdatedAt: Date?
+    /// The revoked banner's in-app recovery (#1458). Absent by default, so
+    /// every other call site (and the read-only screenshot fixtures) render
+    /// the plain informational banner; supplied only where the operator can
+    /// act, on `FreesideRootView`'s synced surface.
+    let onRePair: (() -> Void)?
 
-    init(freshness: InboxStore.Freshness, lastUpdatedAt: Date? = nil) {
+    init(
+        freshness: InboxStore.Freshness, lastUpdatedAt: Date? = nil,
+        onRePair: (() -> Void)? = nil
+    ) {
         self.freshness = freshness
         self.lastUpdatedAt = lastUpdatedAt
+        self.onRePair = onRePair
+    }
+
+    /// The revoked state is the only one whose credential the operator can
+    /// clear from inside the app, and the action shows only when a handler
+    /// is wired: no other freshness state offers an action.
+    static func showsRePairAction(for freshness: InboxStore.Freshness, hasHandler: Bool) -> Bool {
+        guard hasHandler else { return false }
+        if case .unauthenticated = freshness { return true }
+        return false
     }
 
     var body: some View {
@@ -79,27 +97,46 @@ struct FreshnessBanner: View {
                 "This device's access was revoked. Cached items stay readable; actions are disabled.",
                 keyword: "Revoked",
                 tint: .waxText,
-                wash: .waxWash
+                wash: .waxWash,
+                action: Self.showsRePairAction(for: freshness, hasHandler: onRePair != nil)
+                    ? BannerAction(title: "Pair Again", perform: onRePair ?? {}) : nil
             )
         }
     }
 
     /// A full-width tinted wash with a leading small-caps mono keyword in
     /// the state color and the message in Plex Sans, text-dim unless the
-    /// state passes an explicit high-contrast `foreground`.
+    /// state passes an explicit high-contrast `foreground`. An optional
+    /// trailing `action` renders as a text button in the state color.
     private func banner(
-        _ message: String, keyword: String, tint: Color, wash: Color, foreground: Color = .inkDim
+        _ message: String, keyword: String, tint: Color, wash: Color,
+        foreground: Color = .inkDim, action: BannerAction? = nil
     ) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             KeywordLabel(text: keyword, color: tint)
             Text(message)
                 .font(FreesideFont.callout)
                 .foregroundStyle(foreground)
+            if let action {
+                Spacer(minLength: 12)
+                Button(action: action.perform) {
+                    Text(action.title)
+                        .font(FreesideFont.sans(.callout, weight: .medium))
+                        .foregroundStyle(tint)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(action.title)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(wash)
+    }
+
+    private struct BannerAction {
+        let title: String
+        let perform: () -> Void
     }
 }
 
