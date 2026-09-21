@@ -174,6 +174,133 @@ import Testing
         #expect(after == before)
     }
 
+    @Test func effectProposalFactsServeVerifiedAndRecommended() async throws {
+        let server = MockServer(
+            items: AttentionFixtures.defaultInbox() + [AttentionFixtures.recommendedEffectProposal()])
+        let client = APIClientFactory.mock(server: server)
+
+        let defaultItem = try await client.getAttentionItem(
+            path: .init(item_id: "item-effect_proposal")
+        ).ok.body.json
+        let verified = try await client.getEffectProposalFacts(
+            path: .init(item_id: "item-effect_proposal")
+        ).ok.body.json
+        #expect(verified.effect_kind == .source_issue_closure)
+        #expect(verified.item_version == defaultItem.item.item_version)
+        #expect(verified.entity_version == defaultItem.entity_version)
+        #expect(verified.proposal_digest == defaultItem.item.evidence_snapshot[0].digest)
+        #expect(verified.supersedes == nil)
+        let verifiedClosure = try #require(verified.source_issue_closure?.value1)
+        #expect(verifiedClosure.provenance == .verified)
+        #expect(verifiedClosure.origin == .propose_site)
+        #expect(verifiedClosure.merge.candidate_head_sha == defaultItem.item.pr_head_sha)
+
+        let recommended = try await client.getEffectProposalFacts(
+            path: .init(item_id: "item-effect_proposal-recommended")
+        ).ok.body.json
+        #expect(recommended.source_issue_closure?.value1.provenance == .recommended)
+    }
+
+    @Test func effectProposalFactsHiddenForSnoozedAndWrongType() async throws {
+        let server = MockServer()
+        let client = APIClientFactory.mock(server: server)
+        // A task_proposal item is not found on the effect-proposal route.
+        _ = try await client.getEffectProposalFacts(
+            path: .init(item_id: "item-task_proposal")
+        ).notFound
+        // A snoozed effect item hides its facts.
+        let before = try await client.getAttentionItem(
+            path: .init(item_id: "item-effect_proposal")
+        ).ok.body.json
+        let until = Date(timeIntervalSince1970: 1_786_506_245)
+        var command = Self.command(id: "cmd-snooze-effect", against: before, action: .snooze)
+        command.payload.asDecision.snooze_until = until
+        command.payload.asDecision.attachments = []
+        _ = try await client.submitCommand(body: .json(command)).ok.body.json
+        _ = try await client.getEffectProposalFacts(path: .init(item_id: before.item.id)).notFound
+    }
+
+    @Test func effectProposalRevisionCreatesExactReplacementAndFactsDiff() async throws {
+        let server = MockServer()
+        let client = APIClientFactory.mock(server: server)
+        let before = try await client.getAttentionItem(
+            path: .init(item_id: "item-effect_proposal")
+        ).ok.body.json
+        let priorFacts = try await client.getEffectProposalFacts(
+            path: .init(item_id: "item-effect_proposal")
+        ).ok.body.json
+        var command = Self.command(
+            id: "cmd-revise-effect", against: before, action: .approve_with_changes)
+        command.payload.asDecision.effect_proposal_revision = .init(
+            value1: .init(source_issue_closure: .init(resolves: false)))
+        command.payload.asDecision.attachments = []
+
+        _ = try await client.submitCommand(body: .json(command)).ok.body.json
+
+        let original = try await client.getAttentionItem(
+            path: .init(item_id: before.item.id)
+        ).ok.body.json
+        #expect(original.item.status == .superseded)
+        let replacementID = before.item.id + "/revision/" + command.command_id
+        let replacement = try await client.getAttentionItem(
+            path: .init(item_id: replacementID)
+        ).ok.body.json
+        let facts = try await client.getEffectProposalFacts(
+            path: .init(item_id: replacementID)
+        ).ok.body.json
+        #expect(replacement.item.status == .resolved)
+        #expect(replacement.item.artifact_digests == [facts.proposal_digest])
+        #expect(facts.proposal_digest != priorFacts.proposal_digest)
+        #expect(facts.source_issue_closure?.value1.resolves == false)
+        #expect(facts.supersedes?.value1.proposal_digest == priorFacts.proposal_digest)
+        #expect(facts.supersedes?.value1.source_issue_closure?.resolves == true)
+    }
+
+    @Test func unchangedEffectProposalRevisionIsRejectedAndDoesNotAdvanceRevision() async throws {
+        let server = MockServer()
+        let client = APIClientFactory.mock(server: server)
+        let before = try await client.getAttentionItem(
+            path: .init(item_id: "item-effect_proposal")
+        ).ok.body.json
+        let revisionBefore = try await client.getSyncRevision().ok.body.json.revision
+        var command = Self.command(
+            id: "cmd-noop-effect", against: before, action: .approve_with_changes)
+        command.payload.asDecision.effect_proposal_revision = .init(
+            value1: .init(source_issue_closure: .init(resolves: true)))
+
+        let response = try await client.submitCommand(body: .json(command))
+        guard case .undocumented(let status, _) = response else {
+            Issue.record("unchanged effect revision was not definitively rejected: \(response)")
+            return
+        }
+        #expect(status == 400)
+        #expect(try await client.getSyncRevision().ok.body.json.revision == revisionBefore)
+        let after = try await client.getAttentionItem(
+            path: .init(item_id: before.item.id)
+        ).ok.body.json
+        #expect(after == before)
+    }
+
+    @Test func effectProposalConcludesOnApproveAndDecline() async throws {
+        // approve resolves the closure item; decline dismisses it. Together with
+        // approve_with_changes (superseded) and snooze (hidden), the mock applies
+        // all four decisions the effect card offers.
+        for action in [Components.Schemas.Action.approve, .decline] {
+            let server = MockServer()
+            let client = APIClientFactory.mock(server: server)
+            let before = try await client.getAttentionItem(
+                path: .init(item_id: "item-effect_proposal")
+            ).ok.body.json
+            var command = Self.command(id: "cmd-\(action.rawValue)-effect", against: before, action: action)
+            command.payload.asDecision.attachments = []
+            _ = try await client.submitCommand(body: .json(command)).ok.body.json
+            let decided = try await client.getAttentionItem(
+                path: .init(item_id: before.item.id)
+            ).ok.body.json
+            #expect(decided.item.status == (action == .approve ? .resolved : .dismissed))
+        }
+    }
+
     @Test func proposalSnoozeHidesThenReleasesWithVersionedTransitions() async throws {
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)

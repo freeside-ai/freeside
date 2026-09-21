@@ -55,6 +55,7 @@ func NewHTTPHandler(service *Service, authorize RequestAuthorizer, configuredHea
 	mux.Handle("GET /attention/items", h.authenticated(h.listAttentionItems))
 	mux.Handle("GET /attention/items/{item_id}", h.authenticated(h.getAttentionItem))
 	mux.Handle("GET /attention/items/{item_id}/task-proposal", h.authenticated(h.getTaskProposalFacts))
+	mux.Handle("GET /attention/items/{item_id}/effect-proposal", h.authenticated(h.getEffectProposalFacts))
 	mux.Handle("GET /attention/items/{item_id}/deliveries", h.authenticated(h.listAttentionItemDeliveries))
 	mux.Handle("PUT /attention/items/{item_id}/deliveries/{channel}/{attempt}/opened", h.authenticated(h.reportDeliveryOpened))
 	mux.Handle("GET /runs", h.authenticated(h.listRuns))
@@ -155,6 +156,15 @@ func (h httpHandler) getAttentionItem(w http.ResponseWriter, r *http.Request, _ 
 
 func (h httpHandler) getTaskProposalFacts(w http.ResponseWriter, r *http.Request, _ domain.DeviceID) {
 	facts, err := h.service.GetTaskProposalFacts(r.Context(), domain.ItemID(r.PathValue("item_id")))
+	if err != nil {
+		writeReadError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, facts)
+}
+
+func (h httpHandler) getEffectProposalFacts(w http.ResponseWriter, r *http.Request, _ domain.DeviceID) {
+	facts, err := h.service.GetEffectProposalFacts(r.Context(), domain.ItemID(r.PathValue("item_id")))
 	if err != nil {
 		writeReadError(w, err)
 		return
@@ -352,14 +362,31 @@ type decisionPayloadRequest struct {
 	// pure decisions omit them); the service's per-action content policy
 	// decides whether their presence or absence is an error, so nil maps to
 	// the zero values rather than a required-field 400 here.
-	Message                     *string                    `json:"message"`
-	Attachments                 *[]domain.Digest           `json:"attachments"`
-	TaskProposalRevision        *TaskProposalRevisionInput `json:"task_proposal_revision"`
-	SnoozeUntil                 *time.Time                 `json:"snooze_until"`
-	AlternativeChoices          []AlternativeChoice        `json:"alternative_choices"`
-	CapabilityManifestDigest    *domain.Digest             `json:"capability_manifest_digest"`
-	AnswerRoute                 *domain.AnswerRoute        `json:"answer_route"`
-	DecisionActionSurfaceDigest *domain.Digest             `json:"decision_action_surface_digest"`
+	Message                     *string                        `json:"message"`
+	Attachments                 *[]domain.Digest               `json:"attachments"`
+	TaskProposalRevision        *TaskProposalRevisionInput     `json:"task_proposal_revision"`
+	EffectProposalRevision      *effectProposalRevisionRequest `json:"effect_proposal_revision"`
+	SnoozeUntil                 *time.Time                     `json:"snooze_until"`
+	AlternativeChoices          []AlternativeChoice            `json:"alternative_choices"`
+	CapabilityManifestDigest    *domain.Digest                 `json:"capability_manifest_digest"`
+	AnswerRoute                 *domain.AnswerRoute            `json:"answer_route"`
+	DecisionActionSurfaceDigest *domain.Digest                 `json:"decision_action_surface_digest"`
+}
+
+// effectProposalRevisionRequest is the wire shape of effect_proposal_revision:
+// a kind-keyed arm carrying only the resolve flag. The daemon-internal
+// EffectProposalRevisionInput is flat ({resolves}) because the store's revise
+// path stores that exact canonical message; http.go maps between the two.
+// strictjson rejects unknown fields inside the arm.
+type effectProposalRevisionRequest struct {
+	SourceIssueClosure *struct {
+		// Resolves is a pointer so an absent member is distinguished from an
+		// explicit false. openapi.yaml declares it required, but strictjson
+		// rejects only unknown fields, not missing ones, so a request with an
+		// empty source_issue_closure would otherwise decode resolves to false
+		// and be accepted as an explicit revision to non-resolving.
+		Resolves *bool `json:"resolves"`
+	} `json:"source_issue_closure"`
 }
 
 type submitTaskPayloadRequest struct {
@@ -447,6 +474,23 @@ func (h httpHandler) submitDecisionCommand(w http.ResponseWriter, r *http.Reques
 		TaskProposalRevision: arm.TaskProposalRevision,
 		SnoozeUntil:          arm.SnoozeUntil,
 		AlternativeChoices:   arm.AlternativeChoices,
+	}
+	if arm.EffectProposalRevision != nil {
+		if arm.EffectProposalRevision.SourceIssueClosure == nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Message: "payload.effect_proposal_revision.source_issue_closure is required",
+			})
+			return
+		}
+		if arm.EffectProposalRevision.SourceIssueClosure.Resolves == nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Message: "payload.effect_proposal_revision.source_issue_closure.resolves is required",
+			})
+			return
+		}
+		payload.EffectProposalRevision = &EffectProposalRevisionInput{
+			Resolves: *arm.EffectProposalRevision.SourceIssueClosure.Resolves,
+		}
 	}
 	if arm.CapabilityManifestDigest != nil {
 		digest := *arm.CapabilityManifestDigest

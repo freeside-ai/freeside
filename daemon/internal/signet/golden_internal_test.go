@@ -209,6 +209,21 @@ func TestSignetWireGoldens(t *testing.T) {
 			value: attachmentReceipt{Digest: domain.Digest("sha256:" + strings.Repeat("5", 64))},
 		},
 		{name: "error-response", value: errorResponse{Message: "fixture error"}},
+		{
+			name:  "effect-proposal-facts-verified",
+			value: effectProposalFactsFixture(domain.ClosureProvenanceVerified, domain.ClosureFlagOriginProposeSite, true, true),
+		},
+		{
+			name:  "effect-proposal-facts-recommended",
+			value: effectProposalFactsFixture(domain.ClosureProvenanceRecommended, domain.ClosureFlagOriginProposeSite, true, true),
+		},
+		{
+			// A daemon_fallback proposal always carries resolves=false and, as an
+			// initially admitted proposal, no supersedes, so this case also pins
+			// the null supersedes rendering.
+			name:  "effect-proposal-facts-fallback",
+			value: effectProposalFactsFixture(domain.ClosureProvenanceVerified, domain.ClosureFlagOriginDaemonFallback, false, false),
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -218,5 +233,57 @@ func TestSignetWireGoldens(t *testing.T) {
 			}
 			golden.Assert(t, tc.name, append(got, '\n'))
 		})
+	}
+}
+
+// effectProposalFactsFixture builds a fixed, valid EffectProposalFactsSnapshot
+// with UTC-independent constant values. withSupersedes renders the revised-card
+// shape (a non-null supersedes carrying the prior digest and prior resolves);
+// without it the initially admitted shape (null supersedes).
+func effectProposalFactsFixture(
+	provenance domain.ClosureProvenance, origin domain.ClosureFlagOrigin, resolves, withSupersedes bool,
+) EffectProposalFactsSnapshot {
+	snapshot := EffectProposalFactsSnapshot{
+		AsOfRevision: 27, EntityVersion: 5, ItemVersion: 2,
+		ProposalDigest: domain.Digest("sha256:" + strings.Repeat("7", 64)),
+		EffectKind:     domain.EffectSourceIssueClosure,
+		SourceIssueClosure: &SourceIssueClosureFacts{
+			Target:     domain.IssueSubjectRef{Repo: "owner/repo", RepositoryID: 123, IssueNumber: 724},
+			Resolves:   resolves,
+			Provenance: provenance,
+			Origin:     origin,
+			Merge: ProspectiveMergeFacts{
+				PublicationIdentity: domain.Digest("sha256:" + strings.Repeat("9", 64)),
+				CandidateHeadSHA:    strings.Repeat("a", 40),
+				BaseRef:             "main",
+				BaseSHA:             strings.Repeat("b", 40),
+			},
+		},
+	}
+	if withSupersedes {
+		snapshot.Supersedes = &EffectProposalRevisionFacts{
+			ProposalDigest:     domain.Digest("sha256:" + strings.Repeat("8", 64)),
+			SourceIssueClosure: &EffectProposalRevisionClosureFacts{Resolves: false},
+		}
+	}
+	return snapshot
+}
+
+// TestEffectProposalFactsProvenanceGoldensDiffer proves the verified and
+// recommended provenance render distinct payloads, so a client can tell the two
+// trust levels apart (issue acceptance).
+func TestEffectProposalFactsProvenanceGoldensDiffer(t *testing.T) {
+	verified, err := json.Marshal(effectProposalFactsFixture(
+		domain.ClosureProvenanceVerified, domain.ClosureFlagOriginProposeSite, true, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recommended, err := json.Marshal(effectProposalFactsFixture(
+		domain.ClosureProvenanceRecommended, domain.ClosureFlagOriginProposeSite, true, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(verified) == string(recommended) {
+		t.Fatal("verified and recommended closure facts rendered identically")
 	}
 }

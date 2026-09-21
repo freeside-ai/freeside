@@ -507,6 +507,93 @@ public struct Client: APIProtocol {
             }
         )
     }
+    /// Get authenticated effect-proposal facts
+    ///
+    /// Returns the exact digest-bound source-issue-closure facts rendered by an effect_proposal item: the daemon-resolved target, the bounded closure parameters, and the prospective merge the approval binds to. The daemon rebuilds these from stored rows and re-gates the closure against current state; the opaque subject handle and policy identities stay server-side. The version tuple lets the client prove the facts and card were read from the same item state. Active snoozes remain hidden as 404, as do a task_proposal item and an unknown id.
+    ///
+    ///
+    /// - Remark: HTTP `GET /attention/items/{item_id}/effect-proposal`.
+    /// - Remark: Generated from `#/paths//attention/items/{item_id}/effect-proposal/get(getEffectProposalFacts)`.
+    public func getEffectProposalFacts(_ input: Operations.getEffectProposalFacts.Input) async throws -> Operations.getEffectProposalFacts.Output {
+        try await client.send(
+            input: input,
+            forOperation: Operations.getEffectProposalFacts.id,
+            serializer: { input in
+                let path = try converter.renderedPath(
+                    template: "/attention/items/{}/effect-proposal",
+                    parameters: [
+                        input.path.item_id
+                    ]
+                )
+                var request: HTTPTypes.HTTPRequest = .init(
+                    soar_path: path,
+                    method: .get
+                )
+                suppressMutabilityWarning(&request)
+                converter.setAcceptHeader(
+                    in: &request.headerFields,
+                    contentTypes: input.headers.accept
+                )
+                return (request, nil)
+            },
+            deserializer: { response, responseBody in
+                switch response.status.code {
+                case 200:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.getEffectProposalFacts.Output.Ok.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.EffectProposalFactsSnapshot.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .ok(.init(body: body))
+                case 404:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Components.Responses.NotFound.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas._Error.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .notFound(.init(body: body))
+                default:
+                    return .undocumented(
+                        statusCode: response.status.code,
+                        .init(
+                            headerFields: response.headerFields,
+                            body: responseBody
+                        )
+                    )
+                }
+            }
+        )
+    }
     /// List an item's delivery attempts
     ///
     /// Lists the item's per-channel, per-attempt delivery records (plan §4). Delivery rows are created and advanced by the daemon's delivery pipeline; the single client write is the opened receipt (reportDeliveryOpened), which advances an existing attempt and never creates one.

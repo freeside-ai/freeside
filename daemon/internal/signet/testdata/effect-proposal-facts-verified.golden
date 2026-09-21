@@ -1,0 +1,29 @@
+{
+  "as_of_revision": 27,
+  "entity_version": 5,
+  "item_version": 2,
+  "proposal_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+  "effect_kind": "source_issue_closure",
+  "supersedes": {
+    "proposal_digest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+    "source_issue_closure": {
+      "resolves": false
+    }
+  },
+  "source_issue_closure": {
+    "target": {
+      "repo": "owner/repo",
+      "repository_id": 123,
+      "issue_number": 724
+    },
+    "resolves": true,
+    "provenance": "verified",
+    "origin": "propose_site",
+    "merge": {
+      "publication_identity": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+      "candidate_head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "base_ref": "main",
+      "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  }
+}

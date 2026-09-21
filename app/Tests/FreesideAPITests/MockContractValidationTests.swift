@@ -986,7 +986,8 @@ import Testing
     // Every fixture passes the full validity check, each text claim's digest
     // recomputes from its content, and the summary claim appears exactly on
     // the types that carry §9's summary layer (the purely mechanical
-    // system_health, blocked, and the exact one-carrier task proposal stay text-free).
+    // system_health and blocked, and the exact one-carrier task and effect
+    // proposals, carry no agent claims and so stay text-free).
     @Test(arguments: AttentionFixtures.phase1Types)
     func fixtureTextClaimsBindTheirContent(type: Components.Schemas.AttentionType) {
         let item = AttentionFixtures.fixture(type: type).item
@@ -996,7 +997,10 @@ import Testing
             #expect(claim.digest == MockContractValidation.sha256Digest(of: text.content))
         }
         let hasText = item.agent_claims.contains { $0.text != nil }
-        #expect(hasText == (type != .system_health && type != .blocked && type != .task_proposal))
+        #expect(
+            hasText
+                == (type != .system_health && type != .blocked
+                    && type != .task_proposal && type != .effect_proposal))
     }
 
     // MARK: - itemPolicyBreach
@@ -1143,6 +1147,31 @@ import Testing
             c.payload.asDecision.alternative_choices = [
                 .init(finding_id: "review-finding-17", route: .dispute)
             ]
+            return c
+        }
+    }
+
+    @Test func effectProposalRevisionInputIsApproveWithChangesScoped() throws {
+        let effect = AttentionFixtures.fixture(type: .effect_proposal)
+        // A well-formed approve_with_changes carrying the closure arm validates.
+        var valid = command(against: effect)
+        valid.payload.asDecision.action = .approve_with_changes
+        valid.payload.asDecision.effect_proposal_revision = .init(
+            value1: .init(source_issue_closure: .init(resolves: true)))
+        try MockContractValidation.validateActionInput(valid)
+
+        // approve_with_changes without the revision arm is malformed.
+        expectMalformed(reason: "invalid effect_proposal_revision") {
+            var c = command(against: effect)
+            c.payload.asDecision.action = .approve_with_changes
+            return c
+        }
+        // The revision arm on any other action is refused.
+        expectMalformed(reason: "proposal input on unrelated action") {
+            var c = command(against: effect)
+            c.payload.asDecision.action = .approve
+            c.payload.asDecision.effect_proposal_revision = .init(
+                value1: .init(source_issue_closure: .init(resolves: true)))
             return c
         }
     }

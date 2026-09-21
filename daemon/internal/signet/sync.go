@@ -75,6 +75,57 @@ type TaskProposalRevisionFacts struct {
 	Scope             domain.TaskProposalScope  `json:"scope"`
 }
 
+// EffectProposalFactsSnapshot is the authenticated, bounded review projection
+// for one effect_proposal (source_issue_closure) card. It mirrors
+// TaskProposalFactsSnapshot: the opaque subject handle and policy identities
+// remain server-side, and the version tuple proves the facts match the rendered
+// item and its digest-bound proposal revision.
+type EffectProposalFactsSnapshot struct {
+	AsOfRevision       int64                        `json:"as_of_revision"`
+	EntityVersion      int64                        `json:"entity_version"`
+	ItemVersion        int                          `json:"item_version"`
+	ProposalDigest     domain.Digest                `json:"proposal_digest"`
+	EffectKind         domain.EffectKind            `json:"effect_kind"`
+	Supersedes         *EffectProposalRevisionFacts `json:"supersedes"`
+	SourceIssueClosure *SourceIssueClosureFacts     `json:"source_issue_closure"`
+}
+
+// SourceIssueClosureFacts carries the bounded closure facts: the daemon-resolved
+// target, the resolve delta and its trust, and the prospective merge the
+// approval binds to. It holds no opaque handle or policy identity.
+type SourceIssueClosureFacts struct {
+	Target     domain.IssueSubjectRef   `json:"target"`
+	Resolves   bool                     `json:"resolves"`
+	Provenance domain.ClosureProvenance `json:"provenance"`
+	Origin     domain.ClosureFlagOrigin `json:"origin"`
+	Merge      ProspectiveMergeFacts    `json:"merge"`
+}
+
+// ProspectiveMergeFacts is the wire projection of domain.ProspectiveMerge: the
+// exact merge a closure approval binds to.
+type ProspectiveMergeFacts struct {
+	PublicationIdentity domain.Digest `json:"publication_identity"`
+	CandidateHeadSHA    string        `json:"candidate_head_sha"`
+	BaseRef             string        `json:"base_ref"`
+	BaseSHA             string        `json:"base_sha"`
+}
+
+// EffectProposalRevisionFacts is one bounded side of an effect-proposal revision
+// comparison. It carries the prior digest and, for a source_issue_closure
+// effect, the prior resolve delta, so the card can show what an
+// approve_with_changes changed.
+type EffectProposalRevisionFacts struct {
+	ProposalDigest     domain.Digest                       `json:"proposal_digest"`
+	SourceIssueClosure *EffectProposalRevisionClosureFacts `json:"source_issue_closure"`
+}
+
+// EffectProposalRevisionClosureFacts is the bounded closure delta of a prior
+// revision: only the resolve flag, since the daemon owns target, provenance,
+// and origin.
+type EffectProposalRevisionClosureFacts struct {
+	Resolves bool `json:"resolves"`
+}
+
 // AttentionDeliverySnapshot is an AttentionDelivery with its store-stamped
 // sync metadata, matching api/openapi.yaml.
 type AttentionDeliverySnapshot struct {
@@ -479,6 +530,97 @@ func (s *Service) GetTaskProposalFacts(ctx context.Context, id domain.ItemID) (T
 	})
 	if err != nil {
 		return TaskProposalFactsSnapshot{}, fmt.Errorf("get task proposal facts %q: %w", id, err)
+	}
+	return out, nil
+}
+
+// GetEffectProposalFacts returns only store-authenticated source-issue-closure
+// facts whose item/entity/digest tuple can be matched to the decision card. It
+// follows GetTaskProposalFacts step for step, including the active-snooze and
+// wrong-type visibility rules, then rebuilds the closure facts and the merge the
+// approval binds to from the store rows alone. The opaque subject handle is left
+// out.
+func (s *Service) GetEffectProposalFacts(ctx context.Context, id domain.ItemID) (EffectProposalFactsSnapshot, error) {
+	now := s.now().UTC()
+	if err := s.convergeProposalSnoozes(ctx, now); err != nil {
+		return EffectProposalFactsSnapshot{}, fmt.Errorf("get effect proposal facts %q snoozes: %w", id, err)
+	}
+	var out EffectProposalFactsSnapshot
+	err := s.store.Read(ctx, func(tx *store.ReadTx) error {
+		state, err := tx.ServerState(ctx)
+		if err != nil {
+			return err
+		}
+		item, snapshot, err := tx.GetAttentionItemSnapshot(ctx, id)
+		if err != nil {
+			return err
+		}
+		if err := validateSnapshot(state, snapshot); err != nil {
+			return err
+		}
+		if item.Type != domain.AttentionEffectProposal {
+			return store.ErrNotFound
+		}
+		snoozed, err := proposalSnoozed(ctx, tx, item, now)
+		if err != nil {
+			return err
+		}
+		if snoozed {
+			return ErrProposalSnoozed
+		}
+		_, proposal, superseded, err := tx.ProposalForItemWithRevisionContext(ctx, id)
+		if err != nil {
+			return err
+		}
+		if proposal.Kind != domain.EffectSourceIssueClosure || proposal.ClosureProposal == nil ||
+			len(item.ArtifactDigests) != 1 || item.ArtifactDigests[0] != proposal.Digest {
+			return ErrInvalidSyncSnapshot
+		}
+		merge, err := tx.ProspectiveMergeForItem(ctx, id)
+		if err != nil {
+			return err
+		}
+		if merge == nil {
+			return ErrInvalidSyncSnapshot
+		}
+		// Re-gate the merge candidate head against the item head, the same
+		// invariant ClosureApprovalForInstance enforces at approval time. This
+		// reconstruction boundary must fail closed rather than serve a
+		// candidate the approval path would later reject as row-inconsistent.
+		if merge.CandidateHeadSHA != item.PRHeadSHA {
+			return ErrInvalidSyncSnapshot
+		}
+		var supersedes *EffectProposalRevisionFacts
+		if superseded != nil {
+			if superseded.ClosureProposal == nil {
+				return ErrInvalidSyncSnapshot
+			}
+			supersedes = &EffectProposalRevisionFacts{
+				ProposalDigest: superseded.Digest,
+				SourceIssueClosure: &EffectProposalRevisionClosureFacts{
+					Resolves: superseded.ClosureProposal.Resolves,
+				},
+			}
+		}
+		closure := proposal.ClosureProposal
+		out = EffectProposalFactsSnapshot{
+			AsOfRevision: snapshot.AsOfRevision, EntityVersion: snapshot.EntityVersion,
+			ItemVersion: item.ItemVersion, ProposalDigest: proposal.Digest,
+			EffectKind: proposal.Kind, Supersedes: supersedes,
+			SourceIssueClosure: &SourceIssueClosureFacts{
+				Target: closure.Target, Resolves: closure.Resolves,
+				Provenance: closure.Provenance, Origin: closure.Origin,
+				Merge: ProspectiveMergeFacts{
+					PublicationIdentity: merge.PublicationIdentity,
+					CandidateHeadSHA:    merge.CandidateHeadSHA,
+					BaseRef:             merge.BaseRef, BaseSHA: merge.BaseSHA,
+				},
+			},
+		}
+		return nil
+	})
+	if err != nil {
+		return EffectProposalFactsSnapshot{}, fmt.Errorf("get effect proposal facts %q: %w", id, err)
 	}
 	return out, nil
 }

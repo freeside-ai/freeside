@@ -100,6 +100,7 @@ public actor MockServer {
     private var pendingSpecificationReplacements: [String: Components.Schemas.AttentionItemSnapshot] = [:]
     private var pendingSpecificationComments: [String: String] = [:]
     private var proposalFactsByItemID: [String: Components.Schemas.TaskProposalFactsSnapshot] = [:]
+    private var effectProposalFactsByItemID: [String: Components.Schemas.EffectProposalFactsSnapshot] = [:]
     private var proposalSnoozesByItemID: [String: Date] = [:]
     private var currentTime = Date(timeIntervalSince1970: 1_786_502_645)
     private var revision: Int64 = 1
@@ -436,6 +437,7 @@ public actor MockServer {
         pendingSpecificationReplacements.removeAll()
         pendingSpecificationComments.removeAll()
         proposalFactsByItemID.removeAll()
+        effectProposalFactsByItemID.removeAll()
         proposalSnoozesByItemID.removeAll()
     }
 
@@ -1238,6 +1240,23 @@ public actor MockServer {
                 touches_control_plane: false))
     }
 
+    /// Serves the authenticated source-issue-closure facts for one
+    /// effect-proposal item, mirroring `taskProposalFacts`: a snoozed or
+    /// non-effect_proposal item is invisible (nil, which the transport renders
+    /// as 404). An override in `effectProposalFactsByItemID` (set by an
+    /// approve_with_changes replacement) wins over the default fixture facts,
+    /// which are built from the served snapshot's version tuple.
+    func effectProposalFacts(
+        itemID: String
+    ) throws -> Components.Schemas.EffectProposalFactsSnapshot? {
+        guard let snapshot = try servedSnapshot(itemID: itemID), snapshot.item._type == .effect_proposal
+        else { return nil }
+        if let facts = effectProposalFactsByItemID[itemID] {
+            return facts
+        }
+        return AttentionFixtures.effectProposalFacts(for: snapshot)
+    }
+
     /// The actor's convenience wrapper over
     /// `MockContractValidation.snapshotBreach`, supplying its own trusted
     /// approved-recipe set — never the row's word — so the read paths
@@ -1433,6 +1452,16 @@ public actor MockServer {
                         message: "the agent's reply is still pending",
                         replacement_item: projectingEvidenceAvailability(current)))
             }
+        case .revisesProposal where current.item._type == .effect_proposal:
+            guard let closure = payload.effect_proposal_revision?.value1.source_issue_closure else {
+                throw MalformedCommandError(
+                    commandID: command.command_id, reason: "missing effect_proposal_revision")
+            }
+            guard let facts = try effectProposalFacts(itemID: payload.item_id),
+                facts.source_issue_closure?.value1.resolves != closure.resolves
+            else {
+                throw InvalidProposalDecisionError(reason: "effect_proposal_revision is unchanged")
+            }
         case .revisesProposal:
             guard let revised = payload.task_proposal_revision?.value1 else {
                 throw MalformedCommandError(
@@ -1608,6 +1637,67 @@ public actor MockServer {
             // operation transition; the carrier resolution is the sync-visible
             // portion the mock can mirror.
             itemsByID[payload.item_id] = concluded(current, as: .resolved)
+        case .revisesProposal where current.item._type == .effect_proposal:
+            guard let closure = payload.effect_proposal_revision?.value1.source_issue_closure,
+                payload.task_proposal_revision == nil, payload.snooze_until == nil,
+                (payload.message ?? "").isEmpty, (payload.attachments ?? []).isEmpty
+            else {
+                throw MalformedCommandError(
+                    commandID: command.command_id,
+                    reason: "approve_with_changes requires only effect_proposal_revision")
+            }
+            guard let priorFacts = try effectProposalFacts(itemID: payload.item_id),
+                let priorClosure = priorFacts.source_issue_closure?.value1,
+                var artifact = current.item.evidence_snapshot.first
+            else {
+                throw MalformedCommandError(
+                    commandID: command.command_id, reason: "effect proposal facts are unavailable")
+            }
+            let revisedDigest = Self.closureProposalDigest(
+                prior: priorFacts.proposal_digest, resolves: closure.resolves)
+            var superseded = current
+            superseded.entity_version += 1
+            superseded.as_of_revision = revision
+            superseded.item.item_version += 1
+            superseded.item.status = .superseded
+            itemsByID[payload.item_id] = superseded
+
+            artifact.id += "-revision-\(command.command_id)"
+            artifact.digest = revisedDigest
+            let replacementID = payload.item_id + "/revision/" + command.command_id
+            var replacement = current
+            replacement.as_of_revision = revision
+            replacement.entity_version = 1
+            replacement.item.id = replacementID
+            replacement.item.reason = "Approve the revised source-issue-closure proposal"
+            replacement.item.evidence_snapshot = [artifact]
+            replacement.item.agent_claims = []
+            replacement.item.artifact_digests = [revisedDigest]
+            replacement.item.decision_surface = .init(
+                epoch: 1,
+                digest: MockContractValidation.sha256Digest(
+                    of: "decision-surface-\(replacementID)-1"))
+            replacement.item.item_version += 1
+            replacement.item.status = .resolved
+            replacement.item.created_at = currentTime
+            replacement.item.decided_at = currentTime
+            itemsByID[replacementID] = replacement
+            effectProposalFactsByItemID[replacementID] = .init(
+                as_of_revision: revision, entity_version: 1,
+                item_version: replacement.item.item_version,
+                proposal_digest: revisedDigest,
+                effect_kind: .source_issue_closure,
+                supersedes: .init(
+                    value1: .init(
+                        proposal_digest: priorFacts.proposal_digest,
+                        source_issue_closure: .init(resolves: priorClosure.resolves))),
+                source_issue_closure: .init(
+                    value1: .init(
+                        target: priorClosure.target,
+                        resolves: closure.resolves,
+                        provenance: priorClosure.provenance,
+                        origin: priorClosure.origin,
+                        merge: priorClosure.merge)))
         case .revisesProposal:
             guard let revised = payload.task_proposal_revision?.value1, payload.snooze_until == nil,
                 (payload.message ?? "").isEmpty, (payload.attachments ?? []).isEmpty
@@ -2091,6 +2181,14 @@ public actor MockServer {
             of: "\(revision.intent.rawValue)|\(revision.expected_cost_units)|"
                 + "\(revision.scope.component_count)|\(revision.scope.declared_path_count)|"
                 + "\(revision.scope.touches_control_plane)")
+    }
+
+    /// A distinct digest for a revised closure proposal: an approve_with_changes
+    /// flips only resolves, so the digest is derived from the prior digest and
+    /// the new flag. It must differ from the prior digest, which the caller
+    /// already ensured by rejecting an unchanged resolves.
+    private static func closureProposalDigest(prior: String, resolves: Bool) -> String {
+        MockContractValidation.sha256Digest(of: "\(prior)|resolves:\(resolves)")
     }
 
     private static func specificationReplacementID(
