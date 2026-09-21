@@ -343,7 +343,7 @@ func (p *Publisher) ConvergeOutcome(
 		return fmt.Errorf("converge publication outcome: %w", err)
 	}
 	number, created, err := p.convergePR(
-		ctx, repo, identity, c, title, body, false, outcome.PRNumber, func() error {
+		ctx, repo, identity, c, title, body, desiredDraftState(c), false, outcome.PRNumber, func() error {
 			return p.gateOutcomeRepair(ctx, c, approvedRecipes, identity)
 		},
 	)
@@ -743,7 +743,7 @@ func (p *Publisher) publishWithTransport(
 	}
 
 	// PR: check before create, bound by the identity marker.
-	pr, created, err := p.convergePR(ctx, repo, identity, c, title, body, true, 0, nil)
+	pr, created, err := p.convergePR(ctx, repo, identity, c, title, body, desiredDraftState(c), true, 0, nil)
 	if err != nil {
 		return Result{}, err
 	}
@@ -1076,6 +1076,7 @@ func (p *Publisher) convergePR(
 	c Candidate,
 	title string,
 	body string,
+	wantDraft *bool,
 	allowCreate bool,
 	expectedPRNumber int,
 	beforeRepair func() error,
@@ -1129,7 +1130,16 @@ func (p *Publisher) convergePR(
 		if !prMatchesCandidate(pr, repo, identity, c, branch) {
 			return 0, false, fmt.Errorf("publish: pull request #%d head or base does not match the candidate: %w", pr.Number, ErrPublicationConflict)
 		}
-		if pr.Title != title || pr.Body != body {
+		// Content and draft state are separate repairs. Either one opens
+		// the repair gate once. The cancellation fence, though, is checked
+		// before each forge write rather than once for the batch: a content
+		// PATCH is a round-trip during which the task can be stopped, so the
+		// draft mutation below re-checks the fence (see the setPRDraft site).
+		// Draft is reconciled only under a managed intent (wantDraft != nil);
+		// an unmanaged PR's draft state is left untouched (plan §5.15).
+		contentDiffers := pr.Title != title || pr.Body != body
+		draftDiffers := wantDraft != nil && pr.Draft != *wantDraft
+		if contentDiffers || draftDiffers {
 			if beforeRepair != nil {
 				if err := beforeRepair(); err != nil {
 					return 0, false, fmt.Errorf("publish: repair gate: %w", err)
@@ -1138,6 +1148,8 @@ func (p *Publisher) convergePR(
 			if err := p.taskEffectOpen(ctx, c); err != nil {
 				return 0, false, err
 			}
+		}
+		if contentDiffers {
 			patched, err := p.forge.updatePR(ctx, repo, pr.Number, title, body)
 			if err != nil {
 				return 0, false, fmt.Errorf("publish: %w", err)
@@ -1157,6 +1169,30 @@ func (p *Publisher) convergePR(
 			if patched.Title != title || patched.Body != body {
 				return 0, false, fmt.Errorf("publish: pull request #%d content was not stored as sent: %w", pr.Number, ErrPublicationConflict)
 			}
+			// Reconcile the draft state from the freshest observation of the
+			// same PR: the patch response carries the current node id and
+			// draft bit GitHub just returned.
+			pr = patched
+		}
+		// Fix the draft state after any content patch, but only under a
+		// managed intent: when wantDraft is nil the PR is unmanaged and its
+		// draft state stays untouched (plan §5.15, a PR with no closable
+		// source is unaffected). In Part C every candidate is unmanaged, so no
+		// PR toggles; Part D supplies a managed intent for a closable source.
+		if wantDraft != nil && pr.Draft != *wantDraft {
+			// Re-check the cancellation fence when a content PATCH preceded this
+			// mutation: that round-trip is a window in which the task could have
+			// been stopped, and every forge write must fail closed behind the
+			// durable fence. When no patch ran, the fence check above
+			// immediately precedes this write, so it is not repeated.
+			if contentDiffers {
+				if err := p.taskEffectOpen(ctx, c); err != nil {
+					return 0, false, err
+				}
+			}
+			if err := p.forge.setPRDraft(ctx, repo, pr.Number, pr.NodeID, *wantDraft); err != nil {
+				return 0, false, fmt.Errorf("publish: %w", err)
+			}
 		}
 		return pr.Number, false, nil
 	}
@@ -1168,7 +1204,10 @@ func (p *Publisher) convergePR(
 	if err := p.taskEffectOpen(ctx, c); err != nil {
 		return 0, false, err
 	}
-	pr, err := p.forge.createPR(ctx, repo, branch, c.BaseRef, title, body)
+	// Under a managed intent the PR opens in the wanted draft state; unmanaged
+	// (wantDraft nil), it opens as an ordinary non-draft PR the publisher does
+	// not manage the draft state of (plan §5.15).
+	pr, err := p.forge.createPR(ctx, repo, branch, c.BaseRef, title, body, wantDraft != nil && *wantDraft)
 	if err != nil {
 		return 0, false, fmt.Errorf("publish: %w", err)
 	}
@@ -1183,6 +1222,14 @@ func (p *Publisher) convergePR(
 	// Same stored-as-sent check as the patch path.
 	if pr.Title != title || pr.Body != body {
 		return 0, false, fmt.Errorf("publish: created pull request #%d content was not stored as sent: %w", pr.Number, ErrPublicationConflict)
+	}
+	// Under a managed intent the draft hold is part of the effect, so a PR
+	// opened without the requested draft state is a failure, not a hold to
+	// repair on a later pass: verify GitHub echoed it (issue #1419). Unmanaged,
+	// the publisher makes no claim about draft state, so there is nothing to
+	// verify.
+	if wantDraft != nil && pr.Draft != *wantDraft {
+		return 0, false, fmt.Errorf("publish: created pull request #%d draft state does not match: %w", pr.Number, ErrPublicationConflict)
 	}
 	return pr.Number, true, nil
 }
@@ -1270,6 +1317,20 @@ func desiredPRContent(identity Identity, c Candidate) (title, body string, err e
 		)
 	}
 	return c.Title, body, nil
+}
+
+// desiredDraftState is the draft intent the publisher holds for a candidate's
+// pull request, computed beside desiredPRContent. It is tri-state: a non-nil
+// pointer is a managed intent (its value is whether the hold is still active),
+// and nil means unmanaged, so the publisher leaves the PR's draft state
+// untouched. Only a closable source has a draft hold; the plan requires that a
+// PR with no closable source is unaffected (plan §5.15). In Part C nothing is
+// closable, so every candidate is unmanaged and this returns nil for all of
+// them. Part D is the seam: it returns a non-nil pointer for a closable source,
+// draft while the closure proposal is unresolved and not-draft once it resolves
+// (issue #1419).
+func desiredDraftState(_ Candidate) *bool {
+	return nil
 }
 
 // resolveBranch preserves the content identity while binding an operator name.

@@ -62,6 +62,12 @@ type fakePR struct {
 	// populates it with a test-merge commit on unmerged PRs, which is
 	// exactly what the reconciler must suppress.
 	MergeCommitSHA string
+	// Draft is emitted as the response's draft bit; the zero value false is
+	// the Part C wanted state, so most fixtures leave it unset.
+	Draft bool
+	// NodeID is emitted as the PR's GraphQL global id; setPRDraft binds it, so
+	// a fixture that drives the draft mutation must set it.
+	NodeID string
 }
 
 // fakeIssueEvent is one row of an issue's REST event list; CommitID nil is a
@@ -638,6 +644,8 @@ func prJSON(pr fakePR) map[string]any {
 		"state":            pr.State,
 		"title":            pr.Title,
 		"body":             pr.Body,
+		"draft":            pr.Draft,
+		"node_id":          pr.NodeID,
 		"merged_at":        mergedAt,
 		"merge_commit_sha": pr.MergeCommitSHA,
 		"head": map[string]any{

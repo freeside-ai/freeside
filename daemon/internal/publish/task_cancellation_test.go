@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -102,6 +103,71 @@ func TestTaskCancellationPublicationBoundaryOrder(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestTaskCancellationFencesDraftMutationAfterContentPatch pins the per-write
+// cancellation fence for the draft repair under a MANAGED draft intent (the
+// Part D case; Part C production keeps draft unmanaged, so this drives
+// convergePR directly through the test seam). When content and draft state both
+// drift, convergePR patches the body and then toggles draft; the content PATCH
+// is a forge round-trip during which the task can be stopped. The draft
+// mutation must re-check the durable fence and fail closed, never releasing the
+// hold on a cancelled task's PR after the batch's first fence check.
+func TestTaskCancellationFencesDraftMutationAfterContentPatch(t *testing.T) {
+	managed := func(b bool) *bool { return &b }
+	head := testHeadSHA
+	st := newExecutionBoundStore(t, executionChainOptions{})
+	seedDecisionRecords(t, st)
+	reservation := seedExecutionPublicationChain(t, st, executionChainOptions{exportHead: &head})
+	gh := newFakeGitHub(t)
+	p := storeBackedPublisher(t, st, gh, fixedWorkflowAuditor{audit: executionWorkflowAudit(t)})
+	candidate := testCandidate(t)
+	candidate.RunID = reservation.RunID
+	candidate.DispositionHistory = testDispositionHistory(t, st, candidate)
+	identity := testCandidateIdentity(t)
+
+	// A stale, still-draft owned PR: convergePR patches content, then a managed
+	// not-draft intent would mark it ready. The marker keeps it recognized as
+	// ours before and after the patch.
+	gh.prs = append(gh.prs, fakePR{
+		Number:  4242,
+		State:   "open",
+		Title:   "Stale title",
+		Body:    identity.Marker(),
+		HeadRef: identity.BranchName(),
+		HeadSHA: candidate.HeadSHA,
+		Draft:   true,
+		NodeID:  "PR_node_4242",
+	})
+	title := "Fresh title"
+	body := "Fresh prose.\n\n" + identity.Marker()
+
+	stopped := false
+	draftMutationAfterStop := false
+	gh.onRequest = func(method, path string) {
+		if stopped && method == http.MethodPost && path == "/graphql" {
+			draftMutationAfterStop = true
+			return
+		}
+		if !stopped && method == http.MethodPatch && strings.HasPrefix(path, testRepoPath+"/pulls/") {
+			stopped = true
+			stopPublicationTask(t, st, candidate.RunID)
+		}
+	}
+
+	_, _, err := p.ConvergePRForTest(
+		t.Context(), candidate.Repo, identity, candidate, title, body, managed(false), false, 4242,
+	)
+
+	if !stopped {
+		t.Fatal("fixture never reached the in-flight content PATCH")
+	}
+	if !errors.Is(err, store.ErrTaskCancellationFenced) {
+		t.Fatalf("draft repair crossed the fence: %v", err)
+	}
+	if draftMutationAfterStop {
+		t.Fatal("setPRDraft ran after Stop: draft mutation escaped the cancellation fence")
 	}
 }
 

@@ -77,7 +77,7 @@ func TestReconcilerEvictionWinsOverInFlightFill(t *testing.T) {
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"ETag": []string{`"pull-v1"`}},
 			Body: io.NopCloser(strings.NewReader(`{
-				"number":7,"state":"open","title":"title","body":"body",
+				"number":7,"state":"open","title":"title","body":"body","draft":false,
 				"head":{"ref":"branch","sha":"cafed00d","repo":{"full_name":"owner/repo"}},
 				"base":{"ref":"main","repo":{"id":42,"full_name":"owner/repo"}}
 			}`)),
