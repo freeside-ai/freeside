@@ -319,10 +319,12 @@ func (f *forge) getRepositoryID(ctx context.Context, repo repoRef) (int64, error
 
 // repoVisibilityResponse decodes a repository's visibility. GitHub returns the
 // modern "visibility" (public|private|internal) and the legacy "private" bool;
-// the caller maps them to a sensitivity class.
+// the caller maps them to a sensitivity class. Private is a pointer so an absent
+// field is distinguishable from an explicit false: a partial or empty response
+// must fail closed, not default to public.
 type repoVisibilityResponse struct {
 	Visibility string `json:"visibility"`
-	Private    bool   `json:"private"`
+	Private    *bool  `json:"private"`
 }
 
 // getRepositoryVisibility reads the target repository's current visibility from

@@ -2431,7 +2431,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 			if err != nil {
 				return productionTaskOutcome{}, productionPublicationRetryableError(err)
 			}
-			candidate, err := productionCandidate(task, binding, checkpoint, adoptedProfile, nil, report)
+			candidate, err := w.productionCandidate(ctx, task, binding, checkpoint, adoptedProfile, nil, report)
 			if err != nil {
 				return w.holdPublicMetadataTask(ctx, task, checkpoint.Imported, err)
 			}
@@ -2602,7 +2602,16 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	if err != nil {
 		return productionTaskOutcome{}, productionPublicationRetryableError(err)
 	}
-	candidate, err := productionCandidate(task, binding, checkpoint, adoptedProfile, nil, report)
+	// Run the publication author once for this reviewed candidate, after the
+	// clean review and before the candidate body is composed (§7 order). It is
+	// idempotent and never blocks: an unavailable author or a screen failure
+	// records a durable v1 fallback (issue #1419 Part B).
+	if err := w.reconcilePublicationAuthoring(
+		ctx, task, binding, checkpoint, reviewInstructions, checkoutDir, report,
+	); err != nil {
+		return productionTaskOutcome{}, productionPublicationRetryableError(err)
+	}
+	candidate, err := w.productionCandidate(ctx, task, binding, checkpoint, adoptedProfile, nil, report)
 	if err != nil {
 		return w.holdPublicMetadataTask(ctx, task, checkpoint.Imported, err)
 	}
@@ -5960,7 +5969,14 @@ func validRemediationSourceVerificationID(
 	return false
 }
 
-func productionCandidate(
+// productionCandidate composes the publication candidate. Its title and body
+// come from publicationTitleBody, which renders v1 for a v1 or literal record
+// and the stored authored artifact for a v2 record (falling back to v1 on any
+// read or gate failure). Every publication path (forward publish, crash
+// recovery, and drift repair through the candidate this returns) runs through
+// here, so a given candidate replays byte-identical metadata.
+func (w *productionPublicationWorkflow) productionCandidate(
+	ctx context.Context,
 	task productionPublicationTask,
 	binding productionBinding,
 	checkpoint productionVerificationCheckpoint,
@@ -5968,7 +5984,7 @@ func productionCandidate(
 	dispositionHistory *publish.DispositionHistory,
 	report []byte,
 ) (publish.Candidate, error) {
-	title, body, err := publicationMetadata(task.Publication, task.ProducingInvocationID, checkpoint.Imported.Claims)
+	title, body, err := w.publicationTitleBody(ctx, task, binding, checkpoint)
 	if err != nil {
 		return publish.Candidate{}, err
 	}

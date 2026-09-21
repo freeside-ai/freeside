@@ -212,19 +212,45 @@ func (p *Publisher) RepositoryClass(ctx context.Context, c Candidate) (domain.Se
 	if err != nil {
 		return "", fmt.Errorf("repository class: %w", err)
 	}
-	switch visibility.Visibility {
+	class, err := classForRepositoryVisibility(visibility)
+	if err != nil {
+		return "", fmt.Errorf("repository class: %w", err)
+	}
+	return class, nil
+}
+
+// classForRepositoryVisibility maps a repository-visibility response to a
+// sensitivity class, failing closed on an untrusted returned object. GitHub
+// sends both the modern "visibility" and the legacy "private" bool; a partial or
+// empty body (which decodes to no signals) must not pass as the least
+// restrictive (public) class. The only safety-relevant contradiction is a
+// "public" visibility paired with private=true, which could otherwise downgrade
+// a restricted repository to normal; a visibility that maps to sensitive is safe
+// regardless of the private bool, so no check is applied there (an internal
+// repository legitimately reports private=false, since internal is org-visible,
+// not private). A caller treats the error as an unavailable read: authoring
+// records a v1 fallback and a render fails closed per the stored class.
+func classForRepositoryVisibility(resp repoVisibilityResponse) (domain.SensitivityClass, error) {
+	switch resp.Visibility {
 	case "public":
+		if resp.Private != nil && *resp.Private {
+			return "", fmt.Errorf("contradictory visibility \"public\" with private=true")
+		}
 		return domain.SensitivityNormal, nil
 	case "private", "internal":
 		return domain.SensitivitySensitive, nil
 	case "":
-		// Older API shapes omit "visibility"; fall back to the legacy boolean.
-		if visibility.Private {
+		// No modern signal: rely on the legacy boolean, and fail closed when the
+		// response carries neither so an empty or partial body is never public.
+		if resp.Private == nil {
+			return "", fmt.Errorf("response carried no visibility signal")
+		}
+		if *resp.Private {
 			return domain.SensitivitySensitive, nil
 		}
 		return domain.SensitivityNormal, nil
 	default:
-		return "", fmt.Errorf("repository class: unrecognized visibility %q", visibility.Visibility)
+		return "", fmt.Errorf("unrecognized visibility %q", resp.Visibility)
 	}
 }
 
