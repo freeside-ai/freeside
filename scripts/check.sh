@@ -31,7 +31,8 @@
 # The daemon's opt-in live suites are skipped by `go test` unless their
 # environment is set (FREESIDE_PUBLISH_LIVE_TEST, FREESIDE_WARD_LIVE_TEST,
 # FREESIDE_CLAUDE_TOKEN_LIVE_TEST, FREESIDE_CODEX_ENROLLMENT_LIVE_TEST,
-# FREESIDE_REAL_RUN_LIVE_TEST); each test's skip message lists the rest
+# FREESIDE_REAL_RUN_LIVE_TEST, FREESIDE_MARKDOWN_LIVE_TEST); each test's
+# skip message lists the rest
 # of its environment. They are CI-blind by design.
 #
 # Exit codes:

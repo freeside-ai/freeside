@@ -102,17 +102,41 @@ func publicationMetadata(p ProductionPublication, producer domain.InvocationID, 
 // Screen all input, including text outside the title/description and encoded
 // forms, before rendering. Errors never repeat refused content.
 func screenPublicationText(text string) error {
-	if !utf8.ValidString(text) || len(text) > maxPublicMetadataBytes {
-		return errors.New("publication metadata must be valid UTF-8 within the 8 KiB public-output limit")
+	return screenPublicationTextWithin(text, maxPublicMetadataBytes)
+}
+
+// screenPublicationTextWithin is screenPublicationText with the size cap made
+// explicit, so recipe v2 can screen its larger authored fields under their own
+// domain bounds while running the identical content checks. maxBytes caps the
+// raw UTF-8 length and the commit-message screen; publish.ValidateCandidateBody
+// still applies its own candidate-body ceiling, so a field larger than that
+// ceiling is refused here and falls back to v1 rather than composing a PR body
+// that cannot fit. v1 keeps its 8 KiB cap through screenPublicationText.
+func screenPublicationTextWithin(text string, maxBytes int) error {
+	return screenPublicationTextImpl(text, maxBytes, false)
+}
+
+// screenPublicationTextImpl screens text against the shared content rules,
+// re-checking after each html.UnescapeString pass so an encoded form cannot
+// hide an unsafe token. When collapseMarkdown is set (recipe v2 authored
+// fields), each pass also folds out the Markdown delimiters GitHub removes from
+// its visible output; see collapseMarkdownDelimiters for why. v1 (collapseMarkdown
+// false) keeps the source-only screen unchanged.
+func screenPublicationTextImpl(text string, maxBytes int, collapseMarkdown bool) error {
+	if !utf8.ValidString(text) || len(text) > maxBytes {
+		return errors.New("publication metadata must be valid UTF-8 within the public-output byte limit")
 	}
 	for {
 		if importer.ScreenMessage(text, importer.Policy{
-			MaxCommitMessageBytes: maxPublicMetadataBytes, MessageRuleset: domain.MessageRulesetGitHub1,
+			MaxCommitMessageBytes: maxBytes, MessageRuleset: domain.MessageRulesetGitHub1,
 		}) != nil || importer.ContainsSecret([]byte(text)) || publish.ValidateCandidateBody(text) != nil ||
 			strings.Contains(strings.ToLower(text), "freeside:") {
 			return errors.New("publication metadata contains unsafe text, automation directives, or a reserved publisher section")
 		}
 		decoded := html.UnescapeString(text)
+		if collapseMarkdown {
+			decoded = collapseMarkdownDelimiters(decoded)
+		}
 		if decoded == text {
 			return nil
 		}

@@ -1,0 +1,19 @@
+# Outcome
+
+Shipped the fix for `@octocat` in `#123` (`owner/repo#5`, `GH-7`).
+Commit `deadbeefcafe`, docs at `https://example.test/x` and `www.example.test.`
+
+- Escaped &lt;b&gt;tag&lt;/b&gt; &amp; entity.
+- A link dropped its target.
+
+```
+verbatim @notmention #999
+```
+
+Evidence artifacts:
+
+- `artifact-1` (`sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc`)
+
+---
+
+Produced by the `claude-opus` producer via the `explain` site. Artifact digest: `sha256:7f90a362b9f967e84d0bc8af2259cf2ea5054cce953545c0b5544d7bbcaf0c55`.

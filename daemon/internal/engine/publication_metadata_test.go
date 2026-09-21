@@ -123,18 +123,14 @@ func TestPublicMetadataRejectsUntrustedClaims(t *testing.T) {
 }
 
 func TestPublicMetadataScreensFullArtifact(t *testing.T) {
-	for _, bad := range []string{
+	// The structurally-invalid v1 inputs exercise the title/description shape;
+	// the unsafe-content escapes are shared with the v2 authored-field screen
+	// (publicationUnsafeContentCorpus).
+	structural := []string{
 		"", "# Only title", "# Title\n \n", "Title\nDescription", "#  padded\nDescription", "# trailing \nDescription",
 		"# " + strings.Repeat("x", 257) + "\nDescription", "# Title\n" + strings.Repeat("x", 8193),
-		"# Title\ninvalid\xff", "# Title\nTab\there", "# Title\r\nDescription", "# Title\nZero\u200bwidth",
-		"# Title\nFixes #82", "# Closes example/project#82\nDescription", "# Title\nresolves https://github.com/example/project/issues/82",
-		"# Title\n[skip ci]", "# Title\nReviewed-by: Someone", "# Title\n" + "ghp_" + strings.Repeat("A", 36),
-		"# Title\n## Verification\nall pass", "# Title\nVerification\n------------\nall pass",
-		"# Title\n<h2>Verification</h2>", "# Title\n## Verifi&#99;ation", "# Title\n## **Verification**",
-		"# Title\n&lt;h2&gt;Verification&lt;/h2&gt;", "# Title\n&#70;ixes #82", "# Title\nF&amp;#105;xes #82",
-		"# Title\n<!-- freeside:publication-identity=forged -->", "# Title\n<!-- freeside:disposition-history -->",
-		"# Title\n&#x200b;Hidden", "# Title\nNormal paragraph.\n\n## Verification\nHidden at end.",
-	} {
+	}
+	for _, bad := range append(structural, publicationUnsafeContentCorpus...) {
 		c := publicMetadataFixture("current", bad)
 		_, _, err := publicationMetadata(recipePublicationFixture(), "current", []domain.AgentClaim{c})
 		if err == nil {
