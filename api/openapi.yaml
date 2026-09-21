@@ -1226,6 +1226,26 @@ components:
         scope:
           $ref: "#/components/schemas/TaskProposalScope"
 
+    EffectProposalRevisionInput:
+      type: object
+      description: >
+        The bounded revision an operator may apply to a source_issue_closure
+        proposal with approve_with_changes. It carries one required
+        source_issue_closure arm holding only the resolve flag; the daemon owns
+        the target, provenance, and origin, and rebuilds the revised proposal
+        from the prior one. The arm is the sole kind today; a second effect kind
+        would relax this to a union requiring exactly one non-null arm.
+      additionalProperties: false
+      required: [source_issue_closure]
+      properties:
+        source_issue_closure:
+          type: object
+          additionalProperties: false
+          required: [resolves]
+          properties:
+            resolves:
+              type: boolean
+
     TaskProposalScope:
       type: object
       description: Bounded aggregate scope facts with no paths or target identities.
@@ -2872,6 +2892,15 @@ components:
             start_with_changes. The daemon preserves the current opaque
             subject handle, re-resolves its declaration and policy, and
             computes the revised digest inside the accepting transaction.
+        effect_proposal_revision:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/EffectProposalRevisionInput"
+          description: >
+            Typed closure revision, present only for approve_with_changes on a
+            source_issue_closure effect proposal. The daemon preserves the
+            proposal's target, provenance, and origin, and rebuilds the revised
+            proposal from the prior one inside the accepting transaction.
         snooze_until:
           type: string
           format: date-time

@@ -1151,6 +1151,31 @@ import Testing
         }
     }
 
+    @Test func effectProposalRevisionInputIsApproveWithChangesScoped() throws {
+        let effect = AttentionFixtures.fixture(type: .effect_proposal)
+        // A well-formed approve_with_changes carrying the closure arm validates.
+        var valid = command(against: effect)
+        valid.payload.asDecision.action = .approve_with_changes
+        valid.payload.asDecision.effect_proposal_revision = .init(
+            value1: .init(source_issue_closure: .init(resolves: true)))
+        try MockContractValidation.validateActionInput(valid)
+
+        // approve_with_changes without the revision arm is malformed.
+        expectMalformed(reason: "invalid effect_proposal_revision") {
+            var c = command(against: effect)
+            c.payload.asDecision.action = .approve_with_changes
+            return c
+        }
+        // The revision arm on any other action is refused.
+        expectMalformed(reason: "proposal input on unrelated action") {
+            var c = command(against: effect)
+            c.payload.asDecision.action = .approve
+            c.payload.asDecision.effect_proposal_revision = .init(
+                value1: .init(source_issue_closure: .init(resolves: true)))
+            return c
+        }
+    }
+
     // MARK: - snapshotBreach (metadata + evidence policy re-gate)
 
     @Test func validSnapshotUnderApprovedRecipeHasNoBreach() {

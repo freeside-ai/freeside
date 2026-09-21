@@ -70,6 +70,14 @@ public enum CommandResultTrust {
                 + "\"scope\":{\"component_count\":\(revision.scope.component_count),"
                 + "\"declared_path_count\":\(revision.scope.declared_path_count),"
                 + "\"touches_control_plane\":\(touchesControlPlane)}}"
+        case .approve_with_changes:
+            // The daemon stores the flat canonical {resolves} delta the store's
+            // revise path decodes, never the kind-keyed wire arm.
+            guard let revision = payload.effect_proposal_revision?.value1 else {
+                return payload.message ?? ""
+            }
+            let resolves = revision.source_issue_closure.resolves
+            return "{\"resolves\":\(resolves ? "true" : "false")}"
         case .snooze:
             guard let until = payload.snooze_until else { return payload.message ?? "" }
             return try RFC3339DateTranscoder().encode(until)

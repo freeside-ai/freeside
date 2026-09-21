@@ -1563,6 +1563,59 @@ public enum Components {
                 ])
             }
         }
+        /// The bounded revision an operator may apply to a source_issue_closure proposal with approve_with_changes. It carries one required source_issue_closure arm holding only the resolve flag; the daemon owns the target, provenance, and origin, and rebuilds the revised proposal from the prior one. The arm is the sole kind today; a second effect kind would relax this to a union requiring exactly one non-null arm.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/EffectProposalRevisionInput`.
+        public struct EffectProposalRevisionInput: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/EffectProposalRevisionInput/source_issue_closure`.
+            public struct source_issue_closurePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/EffectProposalRevisionInput/source_issue_closure/resolves`.
+                public var resolves: Swift.Bool
+                /// Creates a new `source_issue_closurePayload`.
+                ///
+                /// - Parameters:
+                ///   - resolves:
+                public init(resolves: Swift.Bool) {
+                    self.resolves = resolves
+                }
+                public enum CodingKeys: String, CodingKey {
+                    case resolves
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    let container = try decoder.container(keyedBy: CodingKeys.self)
+                    self.resolves = try container.decode(
+                        Swift.Bool.self,
+                        forKey: .resolves
+                    )
+                    try decoder.ensureNoAdditionalProperties(knownKeys: [
+                        "resolves"
+                    ])
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/EffectProposalRevisionInput/source_issue_closure`.
+            public var source_issue_closure: Components.Schemas.EffectProposalRevisionInput.source_issue_closurePayload
+            /// Creates a new `EffectProposalRevisionInput`.
+            ///
+            /// - Parameters:
+            ///   - source_issue_closure:
+            public init(source_issue_closure: Components.Schemas.EffectProposalRevisionInput.source_issue_closurePayload) {
+                self.source_issue_closure = source_issue_closure
+            }
+            public enum CodingKeys: String, CodingKey {
+                case source_issue_closure
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.source_issue_closure = try container.decode(
+                    Components.Schemas.EffectProposalRevisionInput.source_issue_closurePayload.self,
+                    forKey: .source_issue_closure
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "source_issue_closure"
+                ])
+            }
+        }
         /// Bounded aggregate scope facts with no paths or target identities.
         ///
         /// - Remark: Generated from `#/components/schemas/TaskProposalScope`.
@@ -5716,6 +5769,32 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/DecisionPayload/task_proposal_revision`.
             public var task_proposal_revision: Components.Schemas.DecisionPayload.task_proposal_revisionPayload?
+            /// Typed closure revision, present only for approve_with_changes on a source_issue_closure effect proposal. The daemon preserves the proposal's target, provenance, and origin, and rebuilds the revised proposal from the prior one inside the accepting transaction.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/DecisionPayload/effect_proposal_revision`.
+            public struct effect_proposal_revisionPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/DecisionPayload/effect_proposal_revision/value1`.
+                public var value1: Components.Schemas.EffectProposalRevisionInput
+                /// Creates a new `effect_proposal_revisionPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.EffectProposalRevisionInput) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// Typed closure revision, present only for approve_with_changes on a source_issue_closure effect proposal. The daemon preserves the proposal's target, provenance, and origin, and rebuilds the revised proposal from the prior one inside the accepting transaction.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/DecisionPayload/effect_proposal_revision`.
+            public var effect_proposal_revision: Components.Schemas.DecisionPayload.effect_proposal_revisionPayload?
             /// Typed UTC deferral instant, present only for snooze. The daemon requires a future canonical instant and records it in the proposal ledger.
             ///
             ///
@@ -5745,6 +5824,7 @@ public enum Components {
             ///   - answer_route: Where the answer goes. Required for answer_and_retry on an agent_question whose facts name the implementation stage, and absent for every other command. retry_implementation re-invokes the implementer with the answer as operator feedback against the unchanged specification; revise_specification files the answer as specification feedback and starts a fresh campaign under the same task, whose revised specification, once approved, begins a new implementation run.
             ///   - attachments: Digest addresses of attachments already uploaded via PUT /attachments/{digest}, referenced by the appended message. Unlike artifact_digests this is ordered message content, not a binding set: order is preserved, never canonicalized.
             ///   - task_proposal_revision: Typed replacement parameters, present only for start_with_changes. The daemon preserves the current opaque subject handle, re-resolves its declaration and policy, and computes the revised digest inside the accepting transaction.
+            ///   - effect_proposal_revision: Typed closure revision, present only for approve_with_changes on a source_issue_closure effect proposal. The daemon preserves the proposal's target, provenance, and origin, and rebuilds the revised proposal from the prior one inside the accepting transaction.
             ///   - snooze_until: Typed UTC deferral instant, present only for snooze. The daemon requires a future canonical instant and records it in the proposal ledger.
             ///   - alternative_choices: Per-finding offered routes selected by choose_alternative_route. Findings omitted from this list retain their recommended route. Absent for every other action; finding IDs must be distinct.
             ///   - decision_action_surface_digest: The digest of the DecisionActionSurface the client rendered the decision from (plan §8). Optional comprehension telemetry: the daemon revalidates it against the live device, item decision surface, capability contract, and offered-action set, and stamps it onto the command's decision_evidence. It never widens the offered actions; it can only reject. Absent for a client build that does not adopt the action surface.
@@ -5760,6 +5840,7 @@ public enum Components {
                 answer_route: Components.Schemas.DecisionPayload.answer_routePayload? = nil,
                 attachments: [Components.Schemas.Digest]? = nil,
                 task_proposal_revision: Components.Schemas.DecisionPayload.task_proposal_revisionPayload? = nil,
+                effect_proposal_revision: Components.Schemas.DecisionPayload.effect_proposal_revisionPayload? = nil,
                 snooze_until: Foundation.Date? = nil,
                 alternative_choices: [Components.Schemas.AlternativeChoice]? = nil,
                 decision_action_surface_digest: Swift.String? = nil
@@ -5775,6 +5856,7 @@ public enum Components {
                 self.answer_route = answer_route
                 self.attachments = attachments
                 self.task_proposal_revision = task_proposal_revision
+                self.effect_proposal_revision = effect_proposal_revision
                 self.snooze_until = snooze_until
                 self.alternative_choices = alternative_choices
                 self.decision_action_surface_digest = decision_action_surface_digest
@@ -5791,6 +5873,7 @@ public enum Components {
                 case answer_route
                 case attachments
                 case task_proposal_revision
+                case effect_proposal_revision
                 case snooze_until
                 case alternative_choices
                 case decision_action_surface_digest
@@ -5841,6 +5924,10 @@ public enum Components {
                     Components.Schemas.DecisionPayload.task_proposal_revisionPayload.self,
                     forKey: .task_proposal_revision
                 )
+                self.effect_proposal_revision = try container.decodeIfPresent(
+                    Components.Schemas.DecisionPayload.effect_proposal_revisionPayload.self,
+                    forKey: .effect_proposal_revision
+                )
                 self.snooze_until = try container.decodeIfPresent(
                     Foundation.Date.self,
                     forKey: .snooze_until
@@ -5865,6 +5952,7 @@ public enum Components {
                     "answer_route",
                     "attachments",
                     "task_proposal_revision",
+                    "effect_proposal_revision",
                     "snooze_until",
                     "alternative_choices",
                     "decision_action_surface_digest"

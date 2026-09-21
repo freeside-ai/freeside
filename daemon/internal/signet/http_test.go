@@ -303,6 +303,85 @@ func TestHTTPCommandRejectsMalformedBodiesWithoutStateChange(t *testing.T) {
 	}
 }
 
+// closureCommandBody builds a POST /commands body for a closure item, with an
+// optional effect_proposal_revision wire arm (a nil revision omits the field).
+func closureCommandBody(
+	commandID string, item domain.AttentionItem, action domain.Action, revision map[string]any,
+) []byte {
+	payload := map[string]any{
+		"item_id": item.ID, "action": string(action), "item_version": item.ItemVersion,
+		"pr_head_sha": item.PRHeadSHA, "artifact_digests": item.ArtifactDigests,
+	}
+	if revision != nil {
+		payload["effect_proposal_revision"] = revision
+	}
+	return mustJSON(map[string]any{
+		"command_id": commandID, "device_id": "device-1", "expected_entity_version": 1,
+		"expected_bindings": map[string]string{}, "payload": payload,
+	})
+}
+
+// TestHTTPApproveWithChangesRecordsRevisedClosureApproval proves the wire
+// effect_proposal_revision round-trips into the service command: an
+// approve_with_changes carrying it records an approval bound to the revised
+// digest, not the prior one.
+func TestHTTPApproveWithChangesRecordsRevisedClosureApproval(t *testing.T) {
+	f := newClosureFixture(t, false, domain.ClosureFlagOriginProposeSite)
+	handler := signet.NewHTTPHandler(f.service, testAuthorizer)
+	item := f.open(t, f.merge)
+
+	body := closureCommandBody("cmd-awc", item, domain.ActionApproveWithChanges,
+		map[string]any{"source_issue_closure": map[string]any{"resolves": true}})
+	response := authenticatedRequest(t, handler, http.MethodPost, "/commands", bytes.NewReader(body))
+	if response.Code != http.StatusOK {
+		t.Fatalf("approve_with_changes status = %d body=%s, want 200", response.Code, response.Body.String())
+	}
+	approval := f.approval(t)
+	if approval == nil {
+		t.Fatal("approve_with_changes recorded no closure approval")
+	}
+	if approval.ProposalDigest == f.instance.Proposal.Digest {
+		t.Fatal("approval bound to the prior digest, not the revised one")
+	}
+}
+
+// TestHTTPEffectProposalRevisionRejectedOnWrongActionOrNullArm proves
+// effect_proposal_revision on any other action is a 400; an approve_with_changes
+// whose source_issue_closure arm is null is a 400; and an arm that omits the
+// required resolves member is a 400 rather than a silent revision to false.
+// None advances the server revision.
+func TestHTTPEffectProposalRevisionRejectedOnWrongActionOrNullArm(t *testing.T) {
+	f := newClosureFixture(t, false, domain.ClosureFlagOriginProposeSite)
+	handler := signet.NewHTTPHandler(f.service, testAuthorizer)
+	item := f.open(t, f.merge)
+	before := f.revision(t)
+
+	onApprove := closureCommandBody("cmd-awc-wrong", item, domain.ActionApprove,
+		map[string]any{"source_issue_closure": map[string]any{"resolves": true}})
+	if r := authenticatedRequest(t, handler, http.MethodPost, "/commands", bytes.NewReader(onApprove)); r.Code != http.StatusBadRequest {
+		t.Fatalf("effect_proposal_revision on approve status = %d body=%s, want 400", r.Code, r.Body.String())
+	}
+
+	nullArm := closureCommandBody("cmd-awc-null", item, domain.ActionApproveWithChanges,
+		map[string]any{"source_issue_closure": nil})
+	if r := authenticatedRequest(t, handler, http.MethodPost, "/commands", bytes.NewReader(nullArm)); r.Code != http.StatusBadRequest {
+		t.Fatalf("null closure arm status = %d body=%s, want 400", r.Code, r.Body.String())
+	}
+
+	// resolves is required (openapi.yaml): an empty arm must not decode to a
+	// resolves:false revision, which would record an approval flipping a
+	// resolves:true proposal.
+	missingResolves := closureCommandBody("cmd-awc-empty", item, domain.ActionApproveWithChanges,
+		map[string]any{"source_issue_closure": map[string]any{}})
+	if r := authenticatedRequest(t, handler, http.MethodPost, "/commands", bytes.NewReader(missingResolves)); r.Code != http.StatusBadRequest {
+		t.Fatalf("missing resolves status = %d body=%s, want 400", r.Code, r.Body.String())
+	}
+
+	if after := f.revision(t); after != before {
+		t.Fatalf("rejected revision commands moved revision %d -> %d", before, after)
+	}
+}
+
 const maxTestCommandBodyBytes = (1 << 20) + 1
 
 // bearerRequest performs one request under an arbitrary Authorization header
