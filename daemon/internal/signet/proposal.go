@@ -21,7 +21,7 @@ func proposalSnoozed(
 	item domain.AttentionItem,
 	now time.Time,
 ) (bool, error) {
-	if item.Type != domain.AttentionTaskProposal {
+	if item.Type != domain.AttentionTaskProposal && item.Type != domain.AttentionEffectProposal {
 		return false, nil
 	}
 	return tx.ProposalSnoozed(ctx, item.ID, now)
@@ -167,33 +167,29 @@ func (s *Service) applyStartProposalWithChanges(
 	if err != nil {
 		return err
 	}
-	var revision TaskProposalRevisionInput
-	if err := strictjson.Decode(
-		[]byte(command.Message), &revision, strictjson.RejectInvalidUTF8, domain.MaxEffectProposalBytes,
-	); err != nil {
-		return fmt.Errorf("%w: %w", ErrInvalidProposalDecisionPayload, err)
+	// A task proposal revises through start_with_changes and carries no merge; a
+	// closure proposal revises through approve_with_changes, keeps the item's
+	// prospective merge, and rebuilds the revised body in the store (which owns
+	// the closable-source determination). The digest-change and re-gate checks
+	// are shared below.
+	var revised domain.EffectProposal
+	var merge *domain.ProspectiveMerge
+	switch prior.Kind {
+	case domain.EffectTaskProposal:
+		revised, err = s.reviseTaskProposal(ctx, tx, command, prior, item)
+	case domain.EffectSourceIssueClosure:
+		revised, err = tx.ReviseClosureProposal(ctx, prior, command.Message)
+		if err == nil {
+			merge, err = tx.ProspectiveMergeForItem(ctx, item.ID)
+			if err == nil && merge == nil {
+				err = fmt.Errorf("%w: closure item lacks a merge", ErrInvalidProposalDecisionPayload)
+			}
+		}
+	default:
+		return ErrInvalidProposalDecisionPayload
 	}
-	if err := revision.validate(); err != nil {
-		return fmt.Errorf("%w: %w", ErrInvalidProposalDecisionPayload, err)
-	}
-	parameters := domain.TaskProposalParameters{
-		SubjectHandle: prior.TaskProposal.SubjectHandle, Intent: revision.Intent,
-		ExpectedCostUnits: revision.ExpectedCostUnits, Scope: revision.Scope,
-	}
-	declaration, policy, err := tx.ResolveProposalSubject(ctx, parameters.SubjectHandle)
 	if err != nil {
 		return err
-	}
-	if declaration.ProjectID != item.ProjectID {
-		return domain.ErrTransitionCommandMismatch
-	}
-	if err := domain.GateTaskProposalScope(parameters.Scope, declaration); err != nil {
-		return fmt.Errorf("%w: proposal scope differs from durable declaration: %w",
-			ErrInvalidProposalDecisionPayload, err)
-	}
-	revised, err := domain.NewEffectProposal(domain.EffectTaskProposal, parameters, policy)
-	if err != nil {
-		return fmt.Errorf("%w: %w", ErrInvalidProposalDecisionPayload, err)
 	}
 	if revised.Digest == prior.Digest {
 		return ErrInvalidProposalDecisionPayload
@@ -217,44 +213,115 @@ func (s *Service) applyStartProposalWithChanges(
 	if err := tx.PutAttentionItem(ctx, superseded); err != nil {
 		return err
 	}
-	replacement, err := proposalReplacementItem(item, instance, revised, artifact, command.CommandID, now)
+	replacement, err := proposalReplacementItem(item, instance, revised, artifact, command.CommandID, merge, now)
 	if err != nil {
 		return err
 	}
 	if err := tx.PutAttentionItem(ctx, replacement); err != nil {
 		return err
 	}
-	if err := tx.BindProposalItem(ctx, replacement.ID, instance.ID, revised.Digest); err != nil {
+	if err := tx.BindProposalItem(ctx, replacement.ID, instance.ID, revised.Digest, merge); err != nil {
 		return err
 	}
 	digest := revised.Digest
 	return tx.RecordProposalDecision(ctx, instance.ID, command.CommandID, command.Action, &digest, now)
 }
 
+// reviseTaskProposal decodes the bounded task-proposal delta from the command,
+// re-resolves the fixed subject, re-gates its scope against the current
+// declaration, and constructs the revised proposal. The opaque subject handle
+// stays bound to the reviewed proposal, never taken from the client.
+func (s *Service) reviseTaskProposal(
+	ctx context.Context,
+	tx *store.WriteTx,
+	command domain.Command,
+	prior domain.EffectProposal,
+	item domain.AttentionItem,
+) (domain.EffectProposal, error) {
+	var revision TaskProposalRevisionInput
+	if err := strictjson.Decode(
+		[]byte(command.Message), &revision, strictjson.RejectInvalidUTF8, domain.MaxEffectProposalBytes,
+	); err != nil {
+		return domain.EffectProposal{}, fmt.Errorf("%w: %w", ErrInvalidProposalDecisionPayload, err)
+	}
+	if err := revision.validate(); err != nil {
+		return domain.EffectProposal{}, fmt.Errorf("%w: %w", ErrInvalidProposalDecisionPayload, err)
+	}
+	parameters := domain.TaskProposalParameters{
+		SubjectHandle: prior.TaskProposal.SubjectHandle, Intent: revision.Intent,
+		ExpectedCostUnits: revision.ExpectedCostUnits, Scope: revision.Scope,
+	}
+	declaration, policy, err := tx.ResolveProposalSubject(ctx, parameters.SubjectHandle)
+	if err != nil {
+		return domain.EffectProposal{}, err
+	}
+	if declaration.ProjectID != item.ProjectID {
+		return domain.EffectProposal{}, domain.ErrTransitionCommandMismatch
+	}
+	if err := domain.GateTaskProposalScope(parameters.Scope, declaration); err != nil {
+		return domain.EffectProposal{}, fmt.Errorf("%w: proposal scope differs from durable declaration: %w",
+			ErrInvalidProposalDecisionPayload, err)
+	}
+	revised, err := domain.NewEffectProposal(domain.EffectTaskProposal, parameters, policy)
+	if err != nil {
+		return domain.EffectProposal{}, fmt.Errorf("%w: %w", ErrInvalidProposalDecisionPayload, err)
+	}
+	return revised, nil
+}
+
+// proposalReplacementItem builds the resolved replacement item a revise decision
+// leaves behind. A task revision produces a task_proposal item with no merge; a
+// closure revision produces an effect_proposal item carrying the same
+// prospective merge and candidate head as the item it replaces (approve with
+// changes flips only resolves, never the merge).
 func proposalReplacementItem(
 	priorItem domain.AttentionItem,
 	instance domain.ProposalInstance,
 	revised domain.EffectProposal,
 	artifact domain.Artifact,
 	commandID string,
+	merge *domain.ProspectiveMerge,
 	now time.Time,
 ) (domain.AttentionItem, error) {
-	if revised.TaskProposal == nil || commandID == "" {
-		return domain.AttentionItem{}, errors.New("revised task proposal is incomplete")
+	if commandID == "" {
+		return domain.AttentionItem{}, errors.New("revised proposal is incomplete")
 	}
-	replacement, err := domain.NewAttentionItem(domain.AttentionItemInput{
-		ID:        domain.ItemID(string(instance.ID) + "/revision/" + commandID),
-		ProjectID: priorItem.ProjectID, Subject: priorItem.Subject,
-		Type: domain.AttentionTaskProposal, Priority: priorItem.Priority,
-		Reason: "Start the revised daemon-enumerated work subject",
-		RequestedDecision: []domain.Action{
-			domain.ActionStart, domain.ActionStartWithChanges, domain.ActionDecline, domain.ActionSnooze,
-		},
-		EvidenceSnapshot: []domain.Artifact{artifact}, ItemVersion: priorItem.ItemVersion + 1,
+	input := domain.AttentionItemInput{
+		ID:                domain.ItemID(string(instance.ID) + "/revision/" + commandID),
+		ProjectID:         priorItem.ProjectID,
+		Subject:           priorItem.Subject,
+		Priority:          priorItem.Priority,
+		EvidenceSnapshot:  []domain.Artifact{artifact},
+		ItemVersion:       priorItem.ItemVersion + 1,
 		DisplayNames:      priorItem.DisplayNames,
-		InterruptionClass: priorItem.InterruptionClass, Status: domain.StatusResolved,
-		CreatedAt: &now,
-	}, map[domain.Digest]bool{domain.EffectProposalRecipeDigest: true})
+		InterruptionClass: priorItem.InterruptionClass,
+		Status:            domain.StatusResolved,
+		PRHeadSHA:         priorItem.PRHeadSHA,
+		CreatedAt:         &now,
+	}
+	switch revised.Kind {
+	case domain.EffectTaskProposal:
+		if revised.TaskProposal == nil || merge != nil {
+			return domain.AttentionItem{}, errors.New("revised task proposal is incomplete")
+		}
+		input.Type = domain.AttentionTaskProposal
+		input.Reason = "Start the revised daemon-enumerated work subject"
+		input.RequestedDecision = []domain.Action{
+			domain.ActionStart, domain.ActionStartWithChanges, domain.ActionDecline, domain.ActionSnooze,
+		}
+	case domain.EffectSourceIssueClosure:
+		if revised.ClosureProposal == nil || merge == nil {
+			return domain.AttentionItem{}, errors.New("revised closure proposal is incomplete")
+		}
+		input.Type = domain.AttentionEffectProposal
+		input.Reason = "Decide the revised proposed effect on the source issue"
+		input.RequestedDecision = []domain.Action{
+			domain.ActionApprove, domain.ActionApproveWithChanges, domain.ActionDecline, domain.ActionSnooze,
+		}
+	default:
+		return domain.AttentionItem{}, errors.New("revised proposal has an unregistered kind")
+	}
+	replacement, err := domain.NewAttentionItem(input, map[domain.Digest]bool{domain.EffectProposalRecipeDigest: true})
 	if err != nil {
 		return domain.AttentionItem{}, err
 	}

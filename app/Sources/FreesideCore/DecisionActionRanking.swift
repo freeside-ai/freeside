@@ -69,7 +69,7 @@ struct DecisionActionRanking: Equatable {
             .retry, .retry_with_capabilities, .answer_and_retry,
             .answer_without_retry, .rerun_trust_evaluation,
             .return_to_agent, .mark_seen, .dismiss,
-            .start, .start_with_changes, .decline, .snooze, .acknowledge,
+            .start, .start_with_changes, .approve_with_changes, .decline, .snooze, .acknowledge,
             .run_doctor, .stop_unattended, .resume_unattended, .recover_review,
             .adopt_review_configuration, .resolve_reenrollment,
             .accept_recommended_route, .choose_alternative_route:
@@ -87,7 +87,7 @@ struct DecisionActionRanking: Equatable {
             .retry, .retry_with_capabilities, .answer_and_retry,
             .answer_without_retry, .rerun_trust_evaluation,
             .inspect_trust_failure, .open_pr,
-            .return_to_agent, .start, .start_with_changes, .run_doctor,
+            .return_to_agent, .start, .start_with_changes, .approve_with_changes, .run_doctor,
             .resume_unattended, .recover_review, .adopt_review_configuration,
             .resolve_reenrollment, .accept_recommended_route,
             .choose_alternative_route:
@@ -109,7 +109,7 @@ struct DecisionActionRanking: Equatable {
             .retry, .retry_with_capabilities, .answer_and_retry,
             .answer_without_retry, .rerun_trust_evaluation,
             .inspect_trust_failure, .open_pr,
-            .return_to_agent, .start, .start_with_changes, .run_doctor,
+            .return_to_agent, .start, .start_with_changes, .approve_with_changes, .run_doctor,
             .resume_unattended, .recover_review, .adopt_review_configuration,
             .resolve_reenrollment, .accept_recommended_route,
             .choose_alternative_route:

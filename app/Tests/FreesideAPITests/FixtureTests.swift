@@ -42,6 +42,7 @@ import Testing
         ],
         .ready_for_final_review: [.open_pr, .return_to_agent, .mark_seen, .dismiss, .stop],
         .task_proposal: [.start, .start_with_changes, .decline, .snooze],
+        .effect_proposal: [.approve, .approve_with_changes, .decline, .snooze],
         .system_health: [
             .acknowledge, .run_doctor, .stop_unattended, .resume_unattended,
             .resolve_reenrollment,
@@ -55,7 +56,7 @@ import Testing
         // blocked is pinned read-only by signet policy: it offers the
         // empty set, which the contract permits since #96.
         #expect(AttentionFixtures.phase1ActionSets[.blocked] == [])
-        #expect(AttentionFixtures.phase1ActionSets.count == 13)
+        #expect(AttentionFixtures.phase1ActionSets.count == 14)
     }
 
     /// phase1Actions is the enumeration universe the cross-language policy
@@ -65,7 +66,7 @@ import Testing
     @Test func phase1ActionsCoverEveryOfferedActionWithoutDuplicates() {
         let offered = Set(AttentionFixtures.phase1ActionSets.values.flatMap { $0 })
         #expect(Set(AttentionFixtures.phase1Actions) == offered)
-        #expect(AttentionFixtures.phase1Actions.count == 31)
+        #expect(AttentionFixtures.phase1Actions.count == 32)
         #expect(Set(AttentionFixtures.phase1Actions).count == AttentionFixtures.phase1Actions.count)
     }
 
@@ -189,6 +190,7 @@ import Testing
                 "item-ready_for_final_review",
                 "item-publish_blocked",
                 "item-task_proposal",
+                "item-effect_proposal",
                 "item-system_health",
                 "item-blocked",
             ])

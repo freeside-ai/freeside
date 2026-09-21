@@ -2379,7 +2379,7 @@
                         ]))
             case .spec_approval, .review_contradiction, .review_configuration,
                 .finding_adjudication, .agent_question, .publish_blocked,
-                .task_proposal, .system_health, .blocked:
+                .task_proposal, .effect_proposal, .system_health, .blocked:
                 return .init()
             }
         }

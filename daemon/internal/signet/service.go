@@ -187,10 +187,12 @@ func ValidateItemIntake(item domain.AttentionItem) error {
 	if err := validateRequestedActions(item.Type, item.RequestedDecision); err != nil {
 		return fmt.Errorf("put item %q: %w", item.ID, err)
 	}
-	// A task proposal is authoritative only when Engine.AdmitProposal creates
-	// its instance, evidence carrier, item, and immutable item binding in one
-	// transaction. Generic intake has none of that trusted admission context.
-	if item.Type == domain.AttentionTaskProposal {
+	// A task or effect proposal is authoritative only when its dedicated opener
+	// creates the instance, evidence carrier, item, and immutable item binding
+	// in one transaction (AdmitProposal for a task proposal, OpenEffectProposal
+	// for an effect proposal). Generic intake has none of that trusted admission
+	// context.
+	if item.Type == domain.AttentionTaskProposal || item.Type == domain.AttentionEffectProposal {
 		return fmt.Errorf("put item %q: %w", item.ID, ErrProposalAdmissionRequired)
 	}
 	return nil
@@ -295,7 +297,7 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 			// on record keeps the command-id-first contract, while an invalid legacy
 			// item fails closed before its action's not-yet-implemented effect is
 			// considered.
-			if _, kind := actionOutcome(command.Action); kind == outcomePending {
+			if _, kind := decisionOutcome(item.Type, command.Action); kind == outcomePending {
 				return fmt.Errorf("submit command %q: action %q: %w",
 					command.CommandID, command.Action, ErrUnsupportedAction)
 			}
@@ -370,7 +372,7 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 			if err := s.applySpecificationStop(ctx, tx, command, item); err != nil {
 				return err
 			}
-			switch status, kind := actionOutcome(command.Action); kind {
+			switch status, kind := decisionOutcome(item.Type, command.Action); kind {
 			case outcomeConcludes:
 				// The stamp-and-flip semantics live in concludeItem, shared
 				// with the operating-state transactions below.
@@ -576,6 +578,19 @@ const (
 // answer) is the Wave 2 engine's, not a plain discuss append. Recording any
 // of them today would silently drop the user's data. A behaviour switch, no
 // default, so a new Action member must declare its outcome here.
+// decisionOutcome resolves an action's outcome with the deciding item's type in
+// hand. Only approve is genuinely type-dependent: on an effect_proposal it
+// records an approval binding through the proposal start path, whereas on every
+// other type it merely concludes the item with no ledger row. Every other
+// action, including approve_with_changes, decline, and snooze, resolves by
+// action alone (approve_with_changes is offered only by effect_proposal).
+func decisionOutcome(itemType domain.AttentionType, action domain.Action) (domain.ItemStatus, outcomeKind) {
+	if itemType == domain.AttentionEffectProposal && action == domain.ActionApprove {
+		return domain.StatusResolved, outcomeStartsProposal
+	}
+	return actionOutcome(action)
+}
+
 func actionOutcome(action domain.Action) (domain.ItemStatus, outcomeKind) {
 	switch action {
 	case domain.ActionDismiss:
@@ -612,7 +627,10 @@ func actionOutcome(action domain.Action) (domain.ItemStatus, outcomeKind) {
 		return domain.StatusResolved, outcomeChoosesAlternativeRoute
 	case domain.ActionStart:
 		return domain.StatusResolved, outcomeStartsProposal
-	case domain.ActionStartWithChanges:
+	case domain.ActionStartWithChanges, domain.ActionApproveWithChanges:
+		// approve_with_changes revises an effect proposal exactly as
+		// start_with_changes revises a task proposal: only an effect_proposal item
+		// offers it, so the outcome is safe to fix by action alone.
 		return domain.StatusResolved, outcomeRevisesAndStartsProposal
 	case domain.ActionDecline:
 		return domain.StatusDismissed, outcomeDeclinesProposal

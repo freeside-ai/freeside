@@ -24,6 +24,7 @@ import Testing
             .dismiss: .concludes(.dismissed),
             .start: .concludes(.resolved),
             .start_with_changes: .revisesProposal,
+            .approve_with_changes: .revisesProposal,
             .decline: .concludes(.dismissed),
             .snooze: .snoozesProposal,
             .acknowledge: .records,

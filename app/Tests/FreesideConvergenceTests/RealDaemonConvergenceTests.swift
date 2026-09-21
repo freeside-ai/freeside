@@ -670,7 +670,7 @@ struct RealDaemonConvergenceTests {
         let whole = try await control.seedItemOutcome(
             id: ConvergenceHarness.uniqueItemID("pol-\(type.rawValue)-all"),
             type: type, actions: constructibleAllowed)
-        if type == .task_proposal {
+        if type == .task_proposal || type == .effect_proposal {
             #expect(whole.statusCode == 400)
             #expect(
                 whole.message?.contains("requires atomic proposal admission") == true,
@@ -690,7 +690,7 @@ struct RealDaemonConvergenceTests {
                 id: ConvergenceHarness.uniqueItemID("pol-\(type.rawValue)-\(action.rawValue)"),
                 type: type, actions: [action])
             if allowedSet.contains(action) {
-                if type == .task_proposal {
+                if type == .task_proposal || type == .effect_proposal {
                     #expect(outcome.statusCode == 400)
                     #expect(
                         outcome.message?.contains("requires atomic proposal admission") == true,

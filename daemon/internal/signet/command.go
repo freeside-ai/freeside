@@ -68,11 +68,13 @@ type DecisionPayload struct {
 	// attachment order is authored content, preserved as sent.
 	Message     string
 	Attachments []domain.Digest
-	// TaskProposalRevision and SnoozeUntil are the typed wire inputs for the
-	// two parameterized task-proposal decisions. Submit canonicalizes exactly
-	// one of them into the durable Command.Message representation so retries
-	// retain the existing write-once command identity.
+	// TaskProposalRevision, EffectProposalRevision, and SnoozeUntil are the typed
+	// wire inputs for the parameterized proposal decisions (start_with_changes,
+	// approve_with_changes, and snooze). Submit canonicalizes exactly one of them
+	// into the durable Command.Message representation so retries retain the
+	// existing write-once command identity.
 	TaskProposalRevision     *TaskProposalRevisionInput
+	EffectProposalRevision   *EffectProposalRevisionInput
 	SnoozeUntil              *time.Time
 	AlternativeChoices       []AlternativeChoice
 	CapabilityManifestDigest *domain.Digest
@@ -111,10 +113,21 @@ func (in TaskProposalRevisionInput) validate() error {
 	}).Validate()
 }
 
+// EffectProposalRevisionInput is the typed wire input for approve_with_changes
+// on a source_issue_closure effect proposal. It carries only the resolve flag:
+// the daemon owns the target, provenance, and origin, and rebuilds the revised
+// proposal from the prior one at decision time (store.ReviseClosureProposal), so
+// no other field is client-authored. A revision whose resolves equals the prior
+// proposal's is rejected there because it changes no digest.
+type EffectProposalRevisionInput struct {
+	Resolves bool `json:"resolves"`
+}
+
 func decisionMessage(payload DecisionPayload) (string, error) {
 	switch payload.Action {
 	case domain.ActionStartWithChanges:
-		if payload.TaskProposalRevision == nil || payload.SnoozeUntil != nil || payload.Message != "" ||
+		if payload.TaskProposalRevision == nil || payload.EffectProposalRevision != nil ||
+			payload.SnoozeUntil != nil || payload.Message != "" ||
 			payload.AlternativeChoices != nil || payload.CapabilityManifestDigest != nil {
 			return "", ErrInvalidProposalDecisionPayload
 		}
@@ -126,29 +139,44 @@ func decisionMessage(payload DecisionPayload) (string, error) {
 			return "", fmt.Errorf("%w: %w", ErrInvalidProposalDecisionPayload, err)
 		}
 		return string(body), nil
+	case domain.ActionApproveWithChanges:
+		if payload.EffectProposalRevision == nil || payload.TaskProposalRevision != nil ||
+			payload.SnoozeUntil != nil || payload.Message != "" ||
+			payload.AlternativeChoices != nil || payload.CapabilityManifestDigest != nil {
+			return "", ErrInvalidProposalDecisionPayload
+		}
+		body, err := json.Marshal(payload.EffectProposalRevision)
+		if err != nil {
+			return "", fmt.Errorf("%w: %w", ErrInvalidProposalDecisionPayload, err)
+		}
+		return string(body), nil
 	case domain.ActionSnooze:
-		if payload.SnoozeUntil == nil || payload.TaskProposalRevision != nil || payload.Message != "" ||
+		if payload.SnoozeUntil == nil || payload.TaskProposalRevision != nil ||
+			payload.EffectProposalRevision != nil || payload.Message != "" ||
 			payload.SnoozeUntil.Location() != time.UTC || payload.AlternativeChoices != nil ||
 			payload.CapabilityManifestDigest != nil {
 			return "", ErrInvalidProposalDecisionPayload
 		}
 		return payload.SnoozeUntil.Format(time.RFC3339Nano), nil
 	case domain.ActionChooseAlternativeRoute:
-		if payload.TaskProposalRevision != nil || payload.SnoozeUntil != nil ||
+		if payload.TaskProposalRevision != nil || payload.EffectProposalRevision != nil ||
+			payload.SnoozeUntil != nil ||
 			payload.Message != "" || len(payload.AlternativeChoices) == 0 ||
 			payload.CapabilityManifestDigest != nil {
 			return "", ErrInvalidFindingAdjudicationDecisionPayload
 		}
 		return canonicalAlternativeChoices(payload.AlternativeChoices)
 	case domain.ActionAcceptRecommendedRoute:
-		if payload.TaskProposalRevision != nil || payload.SnoozeUntil != nil ||
+		if payload.TaskProposalRevision != nil || payload.EffectProposalRevision != nil ||
+			payload.SnoozeUntil != nil ||
 			payload.Message != "" || payload.AlternativeChoices != nil ||
 			payload.CapabilityManifestDigest != nil {
 			return "", ErrInvalidFindingAdjudicationDecisionPayload
 		}
 		return "", nil
 	case domain.ActionRetryWithCapability:
-		if payload.TaskProposalRevision != nil || payload.SnoozeUntil != nil ||
+		if payload.TaskProposalRevision != nil || payload.EffectProposalRevision != nil ||
+			payload.SnoozeUntil != nil ||
 			payload.Message != "" || payload.AlternativeChoices != nil ||
 			payload.CapabilityManifestDigest == nil ||
 			!contentaddr.Valid(string(*payload.CapabilityManifestDigest)) {
@@ -156,7 +184,8 @@ func decisionMessage(payload DecisionPayload) (string, error) {
 		}
 		return string(*payload.CapabilityManifestDigest), nil
 	default:
-		if payload.TaskProposalRevision != nil || payload.SnoozeUntil != nil ||
+		if payload.TaskProposalRevision != nil || payload.EffectProposalRevision != nil ||
+			payload.SnoozeUntil != nil ||
 			payload.AlternativeChoices != nil || payload.CapabilityManifestDigest != nil {
 			return "", ErrInvalidProposalDecisionPayload
 		}

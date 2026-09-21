@@ -46,6 +46,13 @@ var allowedActionsByType = map[domain.AttentionType]map[domain.Action]struct{}{
 	domain.AttentionTaskProposal: actionSet(
 		domain.ActionStart, domain.ActionStartWithChanges, domain.ActionDecline, domain.ActionSnooze,
 	),
+	// effect_proposal decides an agent-requested real-world effect (plan §4).
+	// approve_with_changes is offered only when the effect can be revised; the
+	// open call drops it for a daemon_fallback closure. approve concludes with a
+	// stored approval binding, unlike approve on other types.
+	domain.AttentionEffectProposal: actionSet(
+		domain.ActionApprove, domain.ActionApproveWithChanges, domain.ActionDecline, domain.ActionSnooze,
+	),
 	domain.AttentionSystemHealth: actionSet(
 		domain.ActionAcknowledge, domain.ActionRunDoctor, domain.ActionStopUnattended,
 		domain.ActionResumeUnattended, domain.ActionResolveReenrollment,

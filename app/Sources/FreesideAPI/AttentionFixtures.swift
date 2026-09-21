@@ -27,6 +27,7 @@ public enum AttentionFixtures {
         .ready_for_final_review,
         .publish_blocked,
         .task_proposal,
+        .effect_proposal,
         .system_health,
         .blocked,
     ]
@@ -53,6 +54,7 @@ public enum AttentionFixtures {
             .rerun_trust_evaluation, .inspect_trust_failure, .stop,
         ],
         .task_proposal: [.start, .start_with_changes, .decline, .snooze],
+        .effect_proposal: [.approve, .approve_with_changes, .decline, .snooze],
         .system_health: [
             .acknowledge, .run_doctor, .stop_unattended, .resume_unattended,
             .resolve_reenrollment,
@@ -73,7 +75,7 @@ public enum AttentionFixtures {
         .answer_and_retry, .answer_without_retry,
         .rerun_trust_evaluation, .inspect_trust_failure,
         .open_pr, .return_to_agent, .mark_seen, .dismiss,
-        .start, .start_with_changes, .decline, .snooze,
+        .start, .start_with_changes, .approve_with_changes, .decline, .snooze,
         .acknowledge, .run_doctor, .stop_unattended,
         .resume_unattended, .recover_review, .adopt_review_configuration,
         .resolve_reenrollment,
@@ -536,7 +538,8 @@ public enum AttentionFixtures {
                     specApprovalSummary
                 case .agent_question, .review_diminishing_returns,
                     .review_contradiction, .review_configuration, .finding_adjudication,
-                    .ready_for_final_review, .publish_blocked, .task_proposal:
+                    .ready_for_final_review, .publish_blocked, .task_proposal,
+                    .effect_proposal:
                     "Work on **\(key)** is ready; one decision is open."
                 case .system_health, .blocked:
                     preconditionFailure("Mechanical cards never carry agent claims")
@@ -547,7 +550,8 @@ public enum AttentionFixtures {
                 case .execution_failure: "Likely cause (unverified)"
                 case .spec_approval, .agent_question, .review_diminishing_returns,
                     .review_contradiction, .review_configuration, .finding_adjudication,
-                    .ready_for_final_review, .publish_blocked, .task_proposal:
+                    .ready_for_final_review, .publish_blocked, .task_proposal,
+                    .effect_proposal:
                     "freeside.summary"
                 case .system_health, .blocked:
                     preconditionFailure("Mechanical cards never carry agent claims")
@@ -642,7 +646,7 @@ public enum AttentionFixtures {
                 ))
         case .spec_approval, .execution_failure, .agent_question, .review_dispute,
             .review_contradiction, .review_configuration, .finding_adjudication,
-            .publish_blocked, .task_proposal, .system_health, .blocked:
+            .publish_blocked, .task_proposal, .effect_proposal, .system_health, .blocked:
             yieldHistory = nil
         }
         let reviewRecoveryBinding: Components.Schemas.AttentionItem.review_recovery_bindingPayload? =
@@ -1087,6 +1091,8 @@ public enum AttentionFixtures {
             return "trust evaluation failed for the candidate branch"
         case .task_proposal:
             return "a scan proposes a dependency-update run"
+        case .effect_proposal:
+            return "a scan proposes an effect run"
         case .system_health:
             return "active-resource observation is temporarily unavailable"
         case .blocked:
