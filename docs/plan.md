@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 67
+revision: 68
 status: active
-updated: 2026-09-20
+updated: 2026-09-21
 ---
 
 # Freeside
@@ -418,7 +418,7 @@ Approval is not a universal action.
 | `publish_blocked` | Rerun trust evaluation, inspect the trust failure, or stop. Which publication path a repository uses is repository configuration, never a per-item choice (revision 44). |
 | `ready_for_final_review` | Bound to the task. View the PR (navigation, not resolution), return work to the agent with feedback, `mark_seen`, dismiss, or stop. It stays active until Freeside observes merge or close, work is returned, or the item is dismissed. Returning published work starts a new feedback invocation in the same run and supersedes this item; any later final-review item has a new publication identity and exact head binding. Evidence and approvals retain their exact run, artifact-digest, and PR-head bindings. |
 | `task_proposal` | Start, **start with changes**, decline, or snooze. Start begins the task workflow from the exact accepted proposal artifact digest. “Start with changes” creates a revised proposal artifact, supersedes the original item, creates a new item version, and starts the task workflow from the exact revised digest. It never uses unversioned ad hoc parameters. Proposals are grouped under `proposal_batch_id` with per-candidate decisions. |
-| `effect_proposal` | Approve, **approve with changes**, decline, or snooze a proposed effect from the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) registry (added in 1B with the registry; first instance: the source-issue closure proposal in 1B.1 (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)); follow-up issue filings reuse the same card, and proposed watches follow once their schedule kind lands, Section [5.16](#516-the-durable-scheduler)). Approval binds to the proposal artifact digest; “approve with changes” creates a revised proposal artifact and supersedes the item, exactly as `task_proposal`'s start-with-changes. `task_proposal` remains its own type. |
+| `effect_proposal` | Approve, **approve with changes**, decline, or snooze a proposed effect from the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) registry (added in 1B with the registry; first instance: the source-issue closure proposal in 1B.1 (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)), which reaches this card only when project policy keeps the human gate on or as a fallback item (non-blocking under the default policy; a gate-on project still holds the PR until the closure question resolves), the policy actor otherwise recording the approval at publication; follow-up issue filings reuse the same card, and proposed watches follow once their schedule kind lands, Section [5.16](#516-the-durable-scheduler)). Approval binds to the proposal artifact digest; “approve with changes” creates a revised proposal artifact and supersedes the item, exactly as `task_proposal`'s start-with-changes. `task_proposal` remains its own type. |
 | `system_health` | Acknowledge, run doctor, stop unattended operation, or, on the notice a stop raises, resume unattended operation; the rules follow the table. |
 | `blocked` | Consolidates external waits that exceed Section [5.12](#512-workflow-definition-initiators-and-artifacts) thresholds. It is read-only. |
 
@@ -2714,12 +2714,14 @@ Additional rules:
   client-supplied source URL is not daemon-verified: the client chooses the
   issue number, and `canonicalSourceIssue` accepts any repository's issue
   without asserting issue-closing authority. So a same-repository client-supplied
-  source URL yields `Closes` only as a human-confirmed recommendation, marked
-  unverified, and a cross-repository source URL renders the descriptive Source
-  issue link and a `Refs` reference at most. In every case the publisher, not
-  any agent prose, writes the reference; the `Closes` reference is a closure
-  proposal approved through the `effect_proposal` action before the publisher
-  writes it, and merging then closes the issue (Section
+  source URL yields a policy-approved `Closes` when its closure proposal resolves
+  (a valid `resolves=false` result yields `Refs`), marked as a recommendation,
+  and a cross-repository source URL renders the descriptive Source issue link and a
+  `Refs` reference at most. In every case the publisher, not any agent prose,
+  writes the reference; the `Closes` reference is a closure proposal whose
+  approval is recorded by the project's policy actor, or by the `effect_proposal`
+  action when policy keeps the human gate on, before the publisher writes it, and
+  merging then closes the issue (Section
   [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)).
   Explicit CLI and label-intake prose keep their own contract.
   Recipe v1 deterministically renders the authenticated candidate's public
@@ -3085,11 +3087,20 @@ constructor sets the flag with its provenance (Section
 [5.12](#512-workflow-definition-initiators-and-artifacts)): **verified** for a
 daemon-bound `issue_subject` source, or **recommended** and unverified for a
 same-repository client-supplied source URL whose issue number the client chose; a
-cross-repository source yields no proposal. Like every effect proposal it is
-honored only through the Section [4](#4-the-attention-model) `effect_proposal`
-approval, which binds the proposal artifact digest; admission alone never
-authorizes a close. The card shows the provenance, so a human approves a verified
-close and an unverified recommendation as what each is. Because the proposal
+cross-repository source yields no proposal. At publication, under the default
+policy, a **verified** proposal and a **recommended** proposal both get a
+recorded approval from the project's policy actor, binding the same fields a
+human approval binds today: the
+proposal artifact digest, the publication identity, the candidate head, the base
+ref, and the base SHA; admission alone never authorizes a close, and the policy
+approval is a recorded approval, not admission. The approval authorizes a
+`Closes` only for a `resolves=true` proposal, so a valid `resolves=false` result
+records an approval but finalizes `Refs` with no close (the flag rule below).
+The human `effect_proposal`
+decision (Section [4](#4-the-attention-model)) applies only when project policy
+keeps the human gate on (the card exists only then or for a fallback); the card
+then shows the provenance, so a person approves a verified close and a recommendation
+as what each is. Because the proposal
 artifact is head-independent, the approval binds the exact publication identity
 and candidate head as well: a feedback or remediation successor with a new head
 (Section [5.15](#515-evidence-and-images)) supersedes any prior approval, so an
@@ -3397,34 +3408,43 @@ contract, with that path's deterministic text as its fallback rather than the
 client claim.
 
 The publisher, not the author, writes the issue reference. It writes `Closes`
-only from a closure proposal (Section
+only from an approved closure proposal (Section
 [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)
-effect registry) approved through the `effect_proposal` action, which binds the
-proposal digest: a label-intake `issue_subject` source is a verified close, and a
-same-repository client-supplied source URL is an unverified recommendation the
-human approves as such. A cross-repository source URL, or any failure to admit or
-approve the closure proposal or resolve its metadata, yields `Refs` or the
-descriptive Source issue link and no close. A prose-screening failure is
-independent: it falls the body back to v1 rendering but still carries an approved
-publisher-written `Closes`, so an explain-site formatting fault never suppresses a
-close the human already approved. On approval the publisher writes the `Closes`
+effect registry), which binds the proposal digest. The approval comes from the
+project's policy actor for both provenances, or from the `effect_proposal` action
+when project policy keeps the human gate on: a label-intake `issue_subject`
+source is a verified close, and a same-repository client-supplied source URL is a
+recommendation, marked as such on the proposal and in the PR body's Source issue
+line so the person merging sees it for what it is. A cross-repository source URL,
+or any failure to admit or approve the closure proposal or resolve its metadata,
+yields `Refs` or the descriptive Source issue link and no close. A prose-screening
+failure is independent: it falls the body back to v1 rendering but still carries an
+approved publisher-written `Closes`, so an explain-site formatting fault never
+suppresses a close already approved. On approval the publisher writes the `Closes`
 line and merging then closes the issue; admission alone never writes a close.
 
-Publication (opening the PR) stays ungated, but a closable source holds the PR
-un-mergeable on the forge until its closure question is explicitly resolved.
-Because reviewing and merging happen on GitHub (Section
-[2](#2-goals-and-non-goals)), an internal readiness signal alone would not stop a
-direct merge, so the PR is opened as a draft or gated by a required check until
-then; a human cannot merge a body carrying only `Refs` and recreate the
-missing-close outcome (the mechanism, draft or check, is the publisher's). A
-closable source always has a durable closure proposal to resolve: if the closure
-site or its admission fails, the engine records a durable fallback proposal
-defaulting to no close, so failure never silently releases the gate nor blocks
-indefinitely. Resolving the proposal releases the gate: an approved `resolves`
-proposal has the publisher write `Closes`, while a fallback, declined, or
-otherwise unset-flag proposal finalizes the `Refs` or descriptive link with no
-close. Approval never writes `Closes` for a proposal whose flag is unset. A PR
-with no closable source is unaffected.
+Publication (opening the PR) stays ungated, and under the default policy the PR
+opens mergeable on both the policy-approved and fallback paths. A
+policy-approved `resolves=true` proposal, verified or recommended, has the
+publisher write `Closes` (a valid `resolves=false` result finalizes `Refs`); a
+`daemon_fallback` proposal (the durable resolve-false proposal the
+engine records when the closure site or its admission fails) has the publisher
+write `Refs` or the descriptive link and may raise a non-blocking attention item
+that surfaces the missed close for a person to close manually after the fact;
+the item never writes `Closes` itself. Neither path holds the merge. The draft-or-required-check hold survives only for a project
+whose policy keeps the human gate on: because reviewing and merging happen on
+GitHub (Section [2](#2-goals-and-non-goals)), an internal readiness signal alone
+would not stop a direct merge, so that project opens the PR as a draft or gates
+it by a required check until its closure question is explicitly resolved
+(attention item, PR held), and a human cannot merge a body carrying only `Refs`
+and recreate the missing-close outcome (the mechanism, draft or check, is the
+publisher's). A closable source always has a durable closure proposal to resolve,
+so failure never silently releases a gate nor blocks indefinitely. Resolving the
+proposal finalizes the reference: an approved `resolves` proposal has the
+publisher write `Closes`, while a fallback, declined, or otherwise unset-flag
+proposal finalizes the `Refs` or descriptive link with no close. Approval never
+writes `Closes` for a proposal whose flag is unset. A PR with no closable source
+is unaffected.
 
 v2 renders the authored body as GitHub-Flavored Markdown, not the escaped
 `<pre>` block v1 uses, but only through a screen at least as strict as v1's.
@@ -5331,28 +5351,29 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 67 ("The Publication Author's Pinned-Binding Interim"):
+Revision 68 ("Policy Approves the Source-Issue Closure"):
 
-1. **The publication author ships on the deployment-pinned binding first, then
-   joins the lineup at #1425.** Revisions 64 and 65 made the author a lineup
-   role that picks its agent, model and effort like every other judgment site.
-   Every such site runs on the deployment-pinned `inference.Binding` today, the
-   interim flag path of Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), and #1425 moves them all to
-   the lineup together. By owner decision the author joins that interim rather
-   than waiting for its own lineup wiring, because the lineup path runs through
-   several unmerged units while today's client PRs still carry fixed boilerplate
-   and no close reference. The author stays a lineup role in the plan; only the
-   order it arrives in changes, and until #1425 nobody can tune its agent or
-   prompt per role. Sections [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) and [5.15](#515-evidence-and-images) carry the
-   interim; the wardless admission class and role-name lineup keys are unchanged.
-2. **The source-issue closure proposal is the first `effect_proposal`
-   instance.** Section [4](#4-the-attention-model) and the Wave 8 row named
-   human-gated follow-up issue filing as the first instance. The closure
-   proposal (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) now comes first, and follow-up filing reuses
-   the same card. This rewords the Section [11](#11-roadmap-build-order-and-coordination) Wave 8 clause but
-   schedules nothing: it adds, moves, and removes no unit.
+1. **Verified and recommended closures are approved by project policy at
+   publication.** A `verified` proposal (daemon-bound `issue_subject` source)
+   and a `recommended` proposal (same-repository client-supplied source URL)
+   both get a recorded approval from the project's policy actor, binding the
+   same fields a human approval binds (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) and superseded by a new
+   merge exactly as before. The publisher writes `Closes` for a `resolves=true`
+   proposal (a valid `resolves=false` result finalizes `Refs`), and the PR opens
+   mergeable.
+2. **A `daemon_fallback` proposal publishes `Refs` and holds nothing.** When
+   the closure site or its admission fails, the publisher writes the descriptive
+   `Refs` or Source issue link, the PR opens mergeable, and at most a
+   non-blocking attention item surfaces the missed close for a person to close
+   manually after the fact; the item never writes `Closes` and never holds the
+   merge.
+3. **The human decision survives as a manual override and a policy option.** A
+   project policy switch restores the prior behavior (attention item, the
+   draft-or-required-check hold); with the gate on, the `effect_proposal` card
+   (Section [4](#4-the-attention-model)) still lets a person decline or flip a
+   policy-approved closure before merge.
 
-(Owner decision of 2026-09-20, owner-assigned #1442; [decision note](../devlog/2026-09-20-1017-author-pinned-interim.md).)
+(Owner decision of 2026-09-21, owner-assigned #1482; [decision note](../devlog/2026-09-21-2151-closure-policy-approval.md).)
 
 ## 14. Risks
 
@@ -5362,7 +5383,7 @@ Revision 67 ("The Publication Author's Pinned-Binding Interim"):
 | Registry egress under `subscription_contained` | Keep `provider_only` the default and the floor fixed. Admit `provider_registry` only per project policy through the per-authority proxy allowlist with TLS server-name pinning and no DNS, to public package registries consumed read-only, with any other authority routed to the `provider_web_read` record. Conformance-check the realized allowlist against the declared profile. Residual: the tunnel cannot constrain method or path. So a registry that co-hosts a write endpoint accepts an attacker-credentialed publish. Exclude such hosts per project where the residual is not acceptable, and provide `api_key_isolated` as the escape for anything wider. |
 | CI privilege crossing | Attest effective authority; block candidate automation changes; fail closed on drift; prohibit the daemon host as a runner. |
 | Reviewer-instruction poisoning | Compose agent and reviewer instructions from the trusted base, never the candidate; detect instruction-path edits mechanically and surface them as advisories that the human merge gate reads (Section [5.8](#58-control-plane-trust)). |
-| **Rendered agent Markdown in a public PR** | Recipe v2 (Section [5.15](#515-evidence-and-images)) renders authored prose as live Markdown only through a screen at least as strict as v1's: it rejects closing and automation directives at the body source, rejects secrets and control characters, neutralizes cross-reference, bare-URL, commit-reference and mention autolinks, renders raw HTML inert, and resolves links and images only to existing publishable (`publish_eligible`) evidence artifacts. The author's evidence inputs are likewise restricted to policy-approved publishable evidence, so it cannot paraphrase sensitive evidence past the publication gate. On any screen or inference failure it falls back to frozen v1 escaped-text rendering, adding no new publication block. The author's control-plane inputs (the target repository's template and AGENTS.md) resolve from the trusted base, never the candidate head (Section [5.8](#58-control-plane-trust)). The publisher, not agent text, writes any close directive; the closure is an effect proposal approved through the `effect_proposal` action (digest-bound) before any `Closes` is written, and a same-repository client-supplied source URL is approved as an unverified recommendation. |
+| **Rendered agent Markdown in a public PR** | Recipe v2 (Section [5.15](#515-evidence-and-images)) renders authored prose as live Markdown only through a screen at least as strict as v1's: it rejects closing and automation directives at the body source, rejects secrets and control characters, neutralizes cross-reference, bare-URL, commit-reference and mention autolinks, renders raw HTML inert, and resolves links and images only to existing publishable (`publish_eligible`) evidence artifacts. The author's evidence inputs are likewise restricted to policy-approved publishable evidence, so it cannot paraphrase sensitive evidence past the publication gate. On any screen or inference failure it falls back to frozen v1 escaped-text rendering, adding no new publication block. The author's control-plane inputs (the target repository's template and AGENTS.md) resolve from the trusted base, never the candidate head (Section [5.8](#58-control-plane-trust)). The publisher, not agent text, writes any close directive; the closure is an effect proposal whose digest-bound approval is recorded by the project's policy actor, or by the `effect_proposal` action when policy keeps the human gate on, before any `Closes` is written; a same-repository client-supplied source URL is approved as a recommendation whose provenance is recorded and shown. |
 | **Agent text in a public issue comment** | The approved-specification comment (Section [5.11](#511-github-integration-reconciliation-plus-intake)) posts only a human-approved, digest-bound public plan inside a daemon-written frame, screened under `github-issue-comment/1`, which rejects directives, secrets, mentions, and command shapes. The workflow audit gates it on `issue_comment` triggers, and only the daemon's publisher holds the `issues: write` token. The workflow set, with a content digest of each workflow and its local dependencies, is rechecked at the default-branch tip before each post. Residual: a remote action or reusable workflow named by a mutable ref, a script a listed workflow runs from the checkout, or a workflow chained by `workflow_run` can change unseen by the digests. Also residual: a webhook-driven App that reacts to any comment or to a plain phrase cannot be enumerated, and a comment resets stale-issue timers; each sees one screened comment per approval. |
 | **Wardless roles on the host** | A judgment role runs outside the ward, so nothing sandboxes it and no egress proxy sits in front of its harness. Its safety rests on the call launch, which an adapter proves per build against the real harness; Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admission, holds the launch's clauses, the interim hand-audit exception, and credential handling on the host. The answer is schema-validated and bounded by its site's authority contract, the model sees only the site's allowlisted, redacted fields, and a shadow's output reaches only the advisory store. Residual: a harness update can change what a launch flag means, which is why the proof is per pinned build and not per harness; a host administrator policy file that no launch flag switches off is outside that per-build proof (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); and a shadow whose agent shares its primary's usage pool draws on a vendor quota that Freeside does not meter (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)). |
 | **Workspace-handoff uncertainty** | Resolved by the workspace-handoff spike: the strong class is declared and conformance-gated (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)); the same-VM fallback is refuted by execution, never implemented or declared. |
