@@ -90,7 +90,11 @@ func publicationMetadata(p ProductionPublication, producer domain.InvocationID, 
 	// original artifact stays private and unchanged; it is never uploaded.
 	body := fmt.Sprintf("## Agent-reported implementation (claim)\n\nProducer:\n\n<pre><code>%s</code></pre>\n\nArtifact digest: `%s`\n\n<pre>%s</pre>",
 		html.EscapeString(string(producer)), c.Digest, html.EscapeString(strings.TrimSpace(description)))
-	if p.SourceIssue != "" {
+	// A v1 record names the source issue in its prose. A v2 record (even when it
+	// falls back to v1 rendering) leaves the reference to the publisher-owned
+	// source-reference section, which writes Closes/Refs or the descriptive link
+	// (issue #1419 Part D, plan step 15).
+	if p.SourceIssue != "" && p.Recipe != clientPublicationRecipeV2 {
 		body += "\n\nSource issue: " + p.SourceIssue
 	}
 	if err := publish.ValidateCandidateBody(body); err != nil {

@@ -55,7 +55,7 @@ func TestDesiredPRContentRendersAdvisoriesBetweenProseAndHistory(t *testing.T) {
 	_, body, err := desiredPRContent(identity, Candidate{
 		Title: "Advisories", Body: "prose\n", RunID: "run-advisory", HeadSHA: head,
 		Advisories: []domain.CandidateFinding{advisoryFinding("docs/AGENTS.md"), hostile},
-	})
+	}, closureResolution{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestDesiredPRContentRendersAdvisoriesBetweenProseAndHistory(t *testing.T) {
 	}
 	if _, plain, err := desiredPRContent(identity, Candidate{
 		Title: "No advisories", Body: "prose\n", RunID: "run-plain", HeadSHA: head,
-	}); err != nil || strings.Contains(plain, advisoriesMarkerName) {
+	}, closureResolution{}); err != nil || strings.Contains(plain, advisoriesMarkerName) {
 		t.Fatalf("advisory-free candidate rendered a section (err %v):\n%s", err, plain)
 	}
 }

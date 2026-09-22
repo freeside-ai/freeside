@@ -257,6 +257,13 @@ type fakePublicationPolicyRecovery struct {
 
 type attentionService interface {
 	PutItem(context.Context, domain.AttentionItem) error
+	// OpenEffectProposalItem opens (or supersedes and reopens) the human-gate
+	// effect_proposal card for a source-issue-closure instance and the merge its
+	// pull request has now. OpenEffectProposalNotice opens the non-holding
+	// default-policy fallback notice for a daemon_fallback closure instead
+	// (#1419 Part D). *signet.Service implements both.
+	OpenEffectProposalItem(context.Context, domain.ProposalInstanceID, domain.ProspectiveMerge) (domain.AttentionItem, error)
+	OpenEffectProposalNotice(context.Context, domain.ProposalInstanceID, domain.ProspectiveMerge) (domain.AttentionItem, error)
 }
 
 // ArtifactStore is the durable content-addressed boundary for the trusted
