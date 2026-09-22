@@ -194,14 +194,28 @@ type prState struct {
 	// fact about the PR (plan §5.18 capture).
 	Merged         bool
 	MergeCommitSHA string
+	// Draft is the observed draft state. recipe v2 holds a closable-source
+	// publication as a draft until its closure proposal resolves, because the
+	// merge happens on GitHub and no internal signal can stop a direct merge
+	// (issue #1419). NodeID is the pull request's GraphQL global id, the input
+	// the mark-ready/convert-to-draft mutations bind: REST cannot toggle draft.
+	Draft  bool
+	NodeID string
 }
 
 // prResponse is the wire shape a pull-request read decodes.
 type prResponse struct {
-	Number         int     `json:"number"`
-	State          string  `json:"state"`
-	Title          string  `json:"title"`
-	Body           string  `json:"body"`
+	Number int    `json:"number"`
+	State  string `json:"state"`
+	Title  string `json:"title"`
+	Body   string `json:"body"`
+	// Draft is a pointer so an absent or null field is distinguishable from an
+	// explicit false: the response is a returned-object trust boundary, and the
+	// draft bit drives the hold decision (issue #1419). A partial body must fail
+	// closed at each decode site, not read as "not a draft" and report a hold
+	// released that GitHub never confirmed, exactly as setPRDraft guards isDraft.
+	Draft          *bool   `json:"draft"`
+	NodeID         string  `json:"node_id"`
 	MergedAt       *string `json:"merged_at"`
 	MergeCommitSHA string  `json:"merge_commit_sha"`
 	Head           struct {
@@ -220,6 +234,9 @@ type prResponse struct {
 	} `json:"base"`
 }
 
+// state maps the wire shape to the domain observation. Every caller rejects a
+// nil Draft at its decode site before calling state, so the dereference below is
+// safe: a response missing the draft bit never reaches a hold decision.
 func (r prResponse) state() prState {
 	merged := r.MergedAt != nil
 	mergeCommit := ""
@@ -239,6 +256,8 @@ func (r prResponse) state() prState {
 		BaseRepoID:     r.Base.Repo.ID,
 		Merged:         merged,
 		MergeCommitSHA: mergeCommit,
+		Draft:          *r.Draft,
+		NodeID:         r.NodeID,
 	}
 }
 
@@ -278,7 +297,7 @@ func (f *forge) listPRsByHead(ctx context.Context, repo repoRef, branch string) 
 		// Rows that survive the filter drive convergence decisions, so a
 		// malformed one fails the read rather than flowing onward (a
 		// number of zero would otherwise become a "successful" PR #0).
-		if pr.Number <= 0 || pr.State == "" || pr.Head.SHA == "" {
+		if pr.Number <= 0 || pr.State == "" || pr.Head.SHA == "" || pr.Draft == nil {
 			return nil, errors.New("list pulls: response row is malformed")
 		}
 		states = append(states, pr.state())
@@ -379,6 +398,9 @@ func (f *forge) getPR(ctx context.Context, repo repoRef, number int, etag string
 			// must not update this resource's state.
 			return prRead{}, errors.New("get pull: response names a different pull number")
 		}
+		if decoded.Draft == nil {
+			return prRead{}, errors.New("get pull: response carries no draft state")
+		}
 		return prRead{PR: decoded.state(), ETag: resp.Header.Get("ETag")}, nil
 	case http.StatusNotModified:
 		return prRead{NotModified: true, ETag: etag}, nil
@@ -386,14 +408,17 @@ func (f *forge) getPR(ctx context.Context, repo repoRef, number int, etag string
 	return prRead{}, fmt.Errorf("get pull: %w", &APIError{Status: resp.StatusCode, RequestPath: path})
 }
 
-// createPR opens a pull request from branch onto base.
-func (f *forge) createPR(ctx context.Context, repo repoRef, branch, base, title, body string) (prState, error) {
+// createPR opens a pull request from branch onto base. draft opens it as a
+// draft: a draft cannot be merged on GitHub, which is how recipe v2 holds a
+// closable-source publication until its closure proposal resolves (issue #1419).
+func (f *forge) createPR(ctx context.Context, repo repoRef, branch, base, title, body string, draft bool) (prState, error) {
 	path := "/repos/" + repo.path() + "/pulls"
-	resp, err := f.do(ctx, http.MethodPost, repo, path, "", map[string]string{
+	resp, err := f.do(ctx, http.MethodPost, repo, path, "", map[string]any{
 		"title": title,
 		"head":  branch,
 		"base":  base,
 		"body":  body,
+		"draft": draft,
 	})
 	if err != nil {
 		return prState{}, fmt.Errorf("create pull: %w", err)
@@ -408,6 +433,9 @@ func (f *forge) createPR(ctx context.Context, repo repoRef, branch, base, title,
 	}
 	if decoded.Number <= 0 {
 		return prState{}, errors.New("create pull: response carries no pull number")
+	}
+	if decoded.Draft == nil {
+		return prState{}, errors.New("create pull: response carries no draft state")
 	}
 	return decoded.state(), nil
 }
@@ -435,7 +463,104 @@ func (f *forge) updatePR(ctx context.Context, repo repoRef, number int, title, b
 	if decoded.Number != number {
 		return prState{}, errors.New("update pull: response names a different pull number")
 	}
+	if decoded.Draft == nil {
+		return prState{}, errors.New("update pull: response carries no draft state")
+	}
 	return decoded.state(), nil
+}
+
+// setPRDraft marks a pull request ready for review (draft=false) or converts it
+// back to a draft (draft=true). REST cannot toggle draft state, so this uses the
+// GraphQL markPullRequestReadyForReview / convertPullRequestToDraft mutations,
+// bound to the pull request's GraphQL node id. The mutation is an external
+// effect, so its returned object is verified like any other: the response must
+// name this pull number and report the exact draft state requested, or the call
+// fails closed rather than reporting a hold it did not establish.
+func (f *forge) setPRDraft(ctx context.Context, repo repoRef, number int, nodeID string, draft bool) error {
+	if nodeID == "" {
+		return errors.New("set pull draft: pull request carries no node id")
+	}
+	const path = "/graphql"
+	// Both mutations return { pullRequest { number isDraft } }; the field name
+	// differs by mutation, so the response decodes both and the caller selects
+	// the one the request asked for.
+	mutation := `mutation($id: ID!) {
+  markPullRequestReadyForReview(input: {pullRequestId: $id}) {
+    pullRequest { number isDraft }
+  }
+}`
+	if draft {
+		mutation = `mutation($id: ID!) {
+  convertPullRequestToDraft(input: {pullRequestId: $id}) {
+    pullRequest { number isDraft }
+  }
+}`
+	}
+	body := struct {
+		Query     string `json:"query"`
+		Variables struct {
+			ID string `json:"id"`
+		} `json:"variables"`
+	}{Query: mutation}
+	body.Variables.ID = nodeID
+
+	resp, err := f.do(ctx, http.MethodPost, repo, path, "", body)
+	if err != nil {
+		return fmt.Errorf("set pull draft: request: %w", err)
+	}
+	defer drainAndClose(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("set pull draft: %w", &APIError{Status: resp.StatusCode, RequestPath: path})
+	}
+
+	// isDraft is a pointer so an absent field is distinguishable from an
+	// explicit false: the response is a returned-object trust boundary, so a
+	// partial body must fail closed rather than read as "not a draft" and
+	// report a hold released that the mutation never confirmed.
+	type pullResult struct {
+		Number  int   `json:"number"`
+		IsDraft *bool `json:"isDraft"`
+	}
+	var decoded struct {
+		Errors []struct{} `json:"errors"`
+		Data   struct {
+			MarkReady *struct {
+				PullRequest *pullResult `json:"pullRequest"`
+			} `json:"markPullRequestReadyForReview"`
+			ConvertToDraft *struct {
+				PullRequest *pullResult `json:"pullRequest"`
+			} `json:"convertPullRequestToDraft"`
+		} `json:"data"`
+	}
+	if err := decodeResponse(resp.Body, &decoded); err != nil {
+		return fmt.Errorf("set pull draft: decode response: %w", err)
+	}
+	if len(decoded.Errors) != 0 {
+		return errors.New("set pull draft: GraphQL response carries errors")
+	}
+	var result *pullResult
+	if draft {
+		if decoded.Data.ConvertToDraft != nil {
+			result = decoded.Data.ConvertToDraft.PullRequest
+		}
+	} else {
+		if decoded.Data.MarkReady != nil {
+			result = decoded.Data.MarkReady.PullRequest
+		}
+	}
+	if result == nil {
+		return errors.New("set pull draft: response carries no pull request for the requested mutation")
+	}
+	if result.Number != number {
+		return errors.New("set pull draft: response names a different pull number")
+	}
+	if result.IsDraft == nil {
+		return errors.New("set pull draft: response carries no draft state")
+	}
+	if *result.IsDraft != draft {
+		return fmt.Errorf("set pull draft: pull request draft state did not converge to %t: %w", draft, ErrPublicationConflict)
+	}
+	return nil
 }
 
 // decodeResponse decodes exactly one JSON document from an API

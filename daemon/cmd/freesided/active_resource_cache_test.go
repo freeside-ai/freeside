@@ -57,6 +57,7 @@ func (f *activeResourceCacheForge) serveHTTP(w http.ResponseWriter, r *http.Requ
 	case "/repos/owner/repo/pulls/450":
 		body = map[string]any{
 			"number": 450, "state": f.pullState, "title": "ready", "body": "body",
+			"draft": false,
 			"head": map[string]any{
 				"ref": "freeside/publish/cache", "sha": "cafed00d",
 				"repo": map[string]any{"full_name": "owner/repo"},

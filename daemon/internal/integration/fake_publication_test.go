@@ -70,6 +70,10 @@ type integrationPR struct {
 	HeadRef string
 	HeadSHA string
 	BaseRef string
+	// Draft is emitted in the PR response; GitHub always sends the field and
+	// the forge fails closed on its absence. Production keeps it false
+	// (unmanaged draft state, plan §5.15).
+	Draft bool
 }
 
 type integrationForge struct {
@@ -240,6 +244,7 @@ func integrationPRJSON(pr integrationPR) map[string]any {
 	}
 	return map[string]any{
 		"number": pr.Number, "state": state, "title": pr.Title, "body": pr.Body,
+		"draft": pr.Draft,
 		"head": map[string]any{
 			"ref": pr.HeadRef, "sha": pr.HeadSHA,
 			"repo": map[string]string{"full_name": fakePublicationRepo},

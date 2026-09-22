@@ -1,6 +1,7 @@
 package publish
 
 import (
+	"context"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -66,4 +67,20 @@ func ValidateTrustCandidateForTest(
 	adoption func(domain.RunID) (domain.ReviewConfigurationRecoveryTransition, bool, error),
 ) error {
 	return validateTrustCandidate(c, profile, audit, lookup, adoption)
+}
+
+// ConvergePRForTest drives the unexported convergePR with a caller-supplied
+// draft intent, so an external test can exercise the managed draft path that
+// Part C production keeps dormant (desiredDraftState returns nil). It is the
+// only way to reach the setPRDraft-after-content-PATCH cancellation-fence
+// re-check without Part D wiring. Test-only; beforeRepair is nil.
+func (p *Publisher) ConvergePRForTest(
+	ctx context.Context, repoPath string, identity Identity, c Candidate,
+	title, body string, wantDraft *bool, allowCreate bool, expectedPRNumber int,
+) (int, bool, error) {
+	repo, err := parseRepo(repoPath)
+	if err != nil {
+		return 0, false, err
+	}
+	return p.convergePR(ctx, repo, identity, c, title, body, wantDraft, allowCreate, expectedPRNumber, nil)
 }
