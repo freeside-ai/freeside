@@ -140,6 +140,7 @@ func backupPayloadExtractors() map[string]store.BackupPayloadDigestExtractor {
 		signet.PublicationReevaluationCompletedKind:    signet.PublicationReevaluationCompletionBackupPayloadDigests,
 		engine.KindProductionInvocationRequested:       engine.ProductionInvocationBackupPayloadDigests,
 		engine.KindProductionPublicationRequested:      engine.ProductionPublicationBackupPayloadDigests,
+		engine.KindProductionClosureWait:               engine.ProductionClosureWaitBackupPayloadDigests,
 		engine.KindRemediationInvocationRequested:      engine.RemediationInvocationBackupPayloadDigests,
 		engine.KindOperatorFeedbackInvocationRequested: engine.OperatorFeedbackInvocationBackupPayloadDigests,
 		domain.PublicationSuccessorKind:                engine.PublicationSuccessorBackupPayloadDigests,

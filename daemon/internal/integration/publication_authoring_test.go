@@ -57,8 +57,17 @@ func newAuthoredMetadataHarness(
 // fake driver so a test can count author calls.
 func scriptPublicationAuthor(t *testing.T, p *productionPublicationHarness, script inferencefake.Script) *inferencefake.Driver {
 	t.Helper()
+	return scriptPublicationSites(t, p, script, nil)
+}
+
+// scriptPublicationSites is scriptPublicationAuthor with the source-issue-closure
+// propose site also scripted when propose is non-nil.
+func scriptPublicationSites(
+	t *testing.T, p *productionPublicationHarness, explain inferencefake.Script, propose *inferencefake.Script,
+) *inferencefake.Driver {
+	t.Helper()
 	driver := inferencefake.New()
-	driver.Script(inference.PublicationAuthorExplainSiteID, script)
+	driver.Script(inference.PublicationAuthorExplainSiteID, explain)
 	advisoryStore, err := advisory.Open(
 		filepath.Join(t.TempDir(), "advisory.json"), 20, 16<<10,
 		advisory.WithClock(func() time.Time { return p.now }),
@@ -67,14 +76,20 @@ func scriptPublicationAuthor(t *testing.T, p *productionPublicationHarness, scri
 		t.Fatal(err)
 	}
 	limits := inference.Limits{Calls: 10, ComputeUnits: 100_000, AttentionItems: 10, Starvation: time.Hour}
+	budget := inference.Budget{
+		Window: time.Hour, Site: limits, Project: limits, Global: limits,
+		MaxCallsPerRoot: 10, MaxStarvationPerRoot: time.Hour,
+	}
+	sites := []inference.Site{inference.PublicationAuthorExplainSite(budget)}
+	if propose != nil {
+		driver.Script(inference.PublicationAuthorProposeSiteID, *propose)
+		sites = append(sites, inference.PublicationAuthorProposeSite(budget))
+	}
 	client, err := inference.New(inference.Config{
 		StatePath: filepath.Join(t.TempDir(), "ledger.json"),
 		Binding:   inference.Binding{Provider: "fake", Model: "author", Driver: driver},
-		Sites: []inference.Site{inference.PublicationAuthorExplainSite(inference.Budget{
-			Window: time.Hour, Site: limits, Project: limits, Global: limits,
-			MaxCallsPerRoot: 10, MaxStarvationPerRoot: time.Hour,
-		})},
-		Advisory: advisoryStore, Now: func() time.Time { return p.now },
+		Sites:     sites,
+		Advisory:  advisoryStore, Now: func() time.Time { return p.now },
 	})
 	if err != nil {
 		t.Fatal(err)
