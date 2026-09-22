@@ -11,9 +11,8 @@ import (
 // clientPublicationRecipeV2 is the recipe that renders the publication-author
 // role's prose as live, screened GitHub-Flavored Markdown. Records freeze their
 // recipe, so a stored v2 record renders through renderAuthoredPublication while
-// a v1 record keeps the frozen v1 rendering (plan §5.15, §5.12). Nothing freezes
-// a v2 record until the recipe switch (issue #1419 Part E); these functions are
-// the pure renderer the later parts call.
+// a v1 record keeps the frozen v1 rendering (plan §5.15, §5.12). New client
+// submissions freeze it (TaskSubmitter.SubmitTask).
 const clientPublicationRecipeV2 = "freeside.client-publication/v2"
 
 // IntakePublicationRecipe is label intake's publication-author contract (plan
