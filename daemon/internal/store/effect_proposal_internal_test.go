@@ -19,12 +19,12 @@ func TestEffectProposalMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatal(err)
 	}
-	if got := rawVersion(t, db); got != 79 {
-		t.Fatalf("schema version = %d, want 79", got)
+	if got := rawVersion(t, db); got != 80 {
+		t.Fatalf("schema version = %d, want 80", got)
 	}
 	for _, table := range []string{
 		"effect_proposal_instances", "effect_proposal_items", "effect_proposal_revisions",
-		"effect_proposal_decisions", "effect_proposal_snoozes",
+		"effect_proposal_decisions", "effect_proposal_snoozes", "effect_proposal_policy_approvals",
 	} {
 		assertTableExists(t, db, table, true)
 	}
