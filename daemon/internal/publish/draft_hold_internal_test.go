@@ -55,6 +55,11 @@ type draftFakeGitHub struct {
 	graphWrongNum   bool
 	graphWrongDraft bool
 	graphOmitDraft  bool
+	// graphForeignRepo makes the mutation response name another repository,
+	// same pull number; graphOmitRepo drops the repository field entirely. Both
+	// exercise the returned-object repository-identity guard in setPRDraft.
+	graphForeignRepo bool
+	graphOmitRepo    bool
 	// createEchoWrongDraft makes a created PR report the negation of the
 	// requested draft, so the create-path draft-echo check is exercised.
 	createEchoWrongDraft bool
@@ -215,6 +220,12 @@ func (g *draftFakeGitHub) handleGraphQL(w http.ResponseWriter, r *http.Request) 
 		g.t.Errorf("graphql query selects neither or both mutations: %s", request.Query)
 		return
 	}
+	// The repository-identity guard depends on the mutation selecting the
+	// repository; pin the query shape so the selection can't be dropped without
+	// this test failing, mirroring the issue-query check in publisher_test.go.
+	if !strings.Contains(request.Query, "repository { nameWithOwner }") {
+		g.t.Errorf("graphql query does not select repository { nameWithOwner }: %s", request.Query)
+	}
 	var pr *draftFakePR
 	for _, p := range g.prs {
 		if p.nodeID == request.Variables.ID {
@@ -239,11 +250,21 @@ func (g *draftFakeGitHub) handleGraphQL(w http.ResponseWriter, r *http.Request) 
 	if toDraft {
 		field = "convertPullRequestToDraft"
 	}
+	// The response names the target repository unless a knob changes it. The
+	// omit-draft case keeps this field so it still exercises the draft guard,
+	// not the repository guard.
+	repoField := `,"repository":{"nameWithOwner":"owner/name"}`
+	if g.graphForeignRepo {
+		repoField = `,"repository":{"nameWithOwner":"other/name"}`
+	}
+	if g.graphOmitRepo {
+		repoField = ""
+	}
 	if g.graphOmitDraft {
-		_, _ = fmt.Fprintf(w, `{"data":{%q:{"pullRequest":{"number":%d}}}}`, field, num)
+		_, _ = fmt.Fprintf(w, `{"data":{%q:{"pullRequest":{"number":%d%s}}}}`, field, num, repoField)
 		return
 	}
-	_, _ = fmt.Fprintf(w, `{"data":{%q:{"pullRequest":{"number":%d,"isDraft":%t}}}}`, field, num, isDraft)
+	_, _ = fmt.Fprintf(w, `{"data":{%q:{"pullRequest":{"number":%d,"isDraft":%t%s}}}}`, field, num, isDraft, repoField)
 }
 
 // TestDesiredDraftStateUnmanagedInPartC pins the Part C invariant: nothing is
@@ -360,6 +381,8 @@ func TestForgeSetPRDraftReturnedObjectFailsClosed(t *testing.T) {
 		"wrong pull number":   func(g *draftFakeGitHub) { g.graphWrongNum = true },
 		"wrong draft state":   func(g *draftFakeGitHub) { g.graphWrongDraft = true },
 		"omitted draft state": func(g *draftFakeGitHub) { g.graphOmitDraft = true },
+		"foreign repository":  func(g *draftFakeGitHub) { g.graphForeignRepo = true },
+		"omitted repository":  func(g *draftFakeGitHub) { g.graphOmitRepo = true },
 	}
 	for name, misbehave := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -517,6 +540,19 @@ func TestConvergePRDraftHold(t *testing.T) {
 		_, _, err := p.convergePR(ctx, repo, id, c, title, body, managedDraft(true), true, 0, nil)
 		if err == nil || !errors.Is(err, ErrPublicationConflict) {
 			t.Fatalf("convergePR error = %v, want ErrPublicationConflict", err)
+		}
+	})
+
+	// A managed toggle whose mutation response names another repository must
+	// fail closed at the convergePR level, not report the PR converged: the
+	// returned-object repository-identity guard in setPRDraft propagates up.
+	t.Run("draft mutation on a foreign repository fails closed", func(t *testing.T) {
+		f, g, repo := newDraftFake(t)
+		seedPR(g, 207, true) // hold released below, so the mark-ready toggle runs
+		g.graphForeignRepo = true
+		p := &Publisher{forge: f}
+		if _, _, err := p.convergePR(ctx, repo, id, c, title, body, managedDraft(false), false, 0, nil); err == nil {
+			t.Fatal("convergePR reported convergence for a foreign-repository draft mutation")
 		}
 	})
 

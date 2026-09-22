@@ -474,25 +474,29 @@ func (f *forge) updatePR(ctx context.Context, repo repoRef, number int, title, b
 // GraphQL markPullRequestReadyForReview / convertPullRequestToDraft mutations,
 // bound to the pull request's GraphQL node id. The mutation is an external
 // effect, so its returned object is verified like any other: the response must
-// name this pull number and report the exact draft state requested, or the call
-// fails closed rather than reporting a hold it did not establish.
+// name this repository and pull number and report the exact draft state
+// requested, or the call fails closed rather than reporting a hold it did not
+// establish. Pull numbers are repository-local, so a node id naming a
+// same-numbered pull in another repository must not read as convergence here.
 func (f *forge) setPRDraft(ctx context.Context, repo repoRef, number int, nodeID string, draft bool) error {
 	if nodeID == "" {
 		return errors.New("set pull draft: pull request carries no node id")
 	}
 	const path = "/graphql"
-	// Both mutations return { pullRequest { number isDraft } }; the field name
-	// differs by mutation, so the response decodes both and the caller selects
-	// the one the request asked for.
+	// Both mutations return { pullRequest { number isDraft repository {
+	// nameWithOwner } } }; the field name differs by mutation, so the response
+	// decodes both and the caller selects the one the request asked for. The
+	// repository selection lets the caller verify the mutation acted on a pull
+	// request in the target repository, not a same-numbered one elsewhere.
 	mutation := `mutation($id: ID!) {
   markPullRequestReadyForReview(input: {pullRequestId: $id}) {
-    pullRequest { number isDraft }
+    pullRequest { number isDraft repository { nameWithOwner } }
   }
 }`
 	if draft {
 		mutation = `mutation($id: ID!) {
   convertPullRequestToDraft(input: {pullRequestId: $id}) {
-    pullRequest { number isDraft }
+    pullRequest { number isDraft repository { nameWithOwner } }
   }
 }`
 	}
@@ -518,8 +522,11 @@ func (f *forge) setPRDraft(ctx context.Context, repo repoRef, number int, nodeID
 	// partial body must fail closed rather than read as "not a draft" and
 	// report a hold released that the mutation never confirmed.
 	type pullResult struct {
-		Number  int   `json:"number"`
-		IsDraft *bool `json:"isDraft"`
+		Number     int   `json:"number"`
+		IsDraft    *bool `json:"isDraft"`
+		Repository *struct {
+			NameWithOwner string `json:"nameWithOwner"`
+		} `json:"repository"`
 	}
 	var decoded struct {
 		Errors []struct{} `json:"errors"`
@@ -553,6 +560,16 @@ func (f *forge) setPRDraft(ctx context.Context, repo repoRef, number int, nodeID
 	}
 	if result.Number != number {
 		return errors.New("set pull draft: response names a different pull number")
+	}
+	// Verify the mutation acted on a pull request in the target repository. Pull
+	// numbers are repository-local, so a right-numbered pull in another
+	// repository must fail closed. Compare nameWithOwner exactly, the same way
+	// the REST head/base repository check does in convergePR.
+	if result.Repository == nil {
+		return errors.New("set pull draft: response carries no repository")
+	}
+	if result.Repository.NameWithOwner != repo.path() {
+		return errors.New("set pull draft: response names a different repository")
 	}
 	if result.IsDraft == nil {
 		return errors.New("set pull draft: response carries no draft state")
