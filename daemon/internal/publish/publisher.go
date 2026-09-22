@@ -33,6 +33,13 @@ type Candidate struct {
 	Repo string
 	// BaseRef is the base branch the publication PR targets.
 	BaseRef string
+	// BaseSHA is the base commit the publication PR targets, the fourth
+	// prospective-merge coordinate the source-issue-closure approval binds
+	// (#1419 Part D). It is a merge coordinate, not authority: the closure
+	// approval AuthorizesClose re-checks it against the store-bound merge, so a
+	// wrong value can only withhold a close, never mint one. Empty withholds any
+	// close (the merge fails validation).
+	BaseSHA string
 	// Branch is the operator-declared head branch; empty selects the identity default.
 	Branch string
 	// HeadSHA is the candidate commit; it must already exist in the
@@ -103,6 +110,19 @@ type Candidate struct {
 	// TrustProfileDigest revision solely in its review configuration digest.
 	// Nil keeps the strict equality the gate has always enforced.
 	AdoptedTrustProfileDigest *domain.Digest
+	// ClosureInstanceID names the source-issue-closure proposal the engine
+	// admitted for this run, when it admitted one (a same-repository closable
+	// source). It is an engine-supplied pointer, never authority: the publisher
+	// reads the instance, its approval, its open item, and the run's gate mode,
+	// and re-derives whether to write Closes against the merge it observes now
+	// (#1419 Part D). Empty names no proposal.
+	ClosureInstanceID domain.ProposalInstanceID
+	// SourceIssueURL is the source issue to name in a descriptive link when
+	// there is no closable proposal (a cross-repository source). It is set only
+	// for a recipe-v2 or intake record, whose prose no longer carries the
+	// "Source issue:" line; a v1 record keeps that line in Body and leaves this
+	// empty. Empty renders no descriptive link.
+	SourceIssueURL string
 }
 
 // ExecutionCandidate is the production publication input: the candidate plus
@@ -338,12 +358,16 @@ func (p *Publisher) ConvergeOutcome(
 	if err != nil {
 		return fmt.Errorf("converge publication outcome: %w", err)
 	}
-	title, body, err := desiredPRContent(identity, c)
+	closure, err := p.resolveClosure(ctx, c, identity)
+	if err != nil {
+		return fmt.Errorf("converge publication outcome: %w", err)
+	}
+	title, body, err := desiredPRContent(identity, c, closure)
 	if err != nil {
 		return fmt.Errorf("converge publication outcome: %w", err)
 	}
 	number, created, err := p.convergePR(
-		ctx, repo, identity, c, title, body, desiredDraftState(c), false, outcome.PRNumber, func() error {
+		ctx, repo, identity, c, title, body, desiredDraftState(closure), false, outcome.PRNumber, func() error {
 			return p.gateOutcomeRepair(ctx, c, approvedRecipes, identity)
 		},
 	)
@@ -662,11 +686,20 @@ func (p *Publisher) publishWithTransport(
 		return Result{}, err
 	}
 
+	// Resolve the source-issue reference and draft hold before composing the
+	// body: the reference is a publisher-owned section of the composed body, and
+	// the reads self-validate (GetProposalInstance re-gates, AuthorizesClose
+	// re-checks the merge), so the trust boundary holds ahead of the gate
+	// transaction (#1419 Part D).
+	closure, err := p.resolveClosure(ctx, c, identity)
+	if err != nil {
+		return Result{}, fmt.Errorf("publish: %w", err)
+	}
 	// The composed PR content must parse back to exactly this identity,
 	// or the publisher's own PR would later be classified as foreign and
 	// convergence would deadlock: prose carrying a marker-shaped line
 	// (quoted from another PR, say) fails here, before any effect.
-	title, body, err := desiredPRContent(identity, c)
+	title, body, err := desiredPRContent(identity, c, closure)
 	if err != nil {
 		return Result{}, fmt.Errorf("publish: %w", err)
 	}
@@ -743,7 +776,7 @@ func (p *Publisher) publishWithTransport(
 	}
 
 	// PR: check before create, bound by the identity marker.
-	pr, created, err := p.convergePR(ctx, repo, identity, c, title, body, desiredDraftState(c), true, 0, nil)
+	pr, created, err := p.convergePR(ctx, repo, identity, c, title, body, desiredDraftState(closure), true, 0, nil)
 	if err != nil {
 		return Result{}, err
 	}
@@ -1270,11 +1303,21 @@ func prMatchesPublicationCoordinates(
 // history fitted to the remaining space with digest-bound truncation, and the
 // identity marker as the final line (plan §5.15 rule 4). Operator prose is never truncated. The final
 // ceiling check remains a fail-closed guard over the complete composition.
-func desiredPRContent(identity Identity, c Candidate) (title, body string, err error) {
+func desiredPRContent(identity Identity, c Candidate, closure closureResolution) (title, body string, err error) {
 	prose := c.Body
-	parts := make([]string, 0, 6)
+	parts := make([]string, 0, 7)
 	if prose != "" {
 		parts = append(parts, prose)
+	}
+	// The source-issue reference is a publisher-owned section, after the prose
+	// and before Verification, so the human merge gate reads how the pull request
+	// refers to its source issue without reading the diff (#1419 Part D).
+	sourceReference, err := renderSourceReference(closure)
+	if err != nil {
+		return "", "", err
+	}
+	if sourceReference != "" {
+		parts = append(parts, sourceReference)
 	}
 	report, artifact, err := candidateVerificationReport(c)
 	if err != nil {
@@ -1326,11 +1369,17 @@ func desiredPRContent(identity Identity, c Candidate) (title, body string, err e
 // untouched. Only a closable source has a draft hold; the plan requires that a
 // PR with no closable source is unaffected (plan §5.15). In Part C nothing is
 // closable, so every candidate is unmanaged and this returns nil for all of
-// them. Part D is the seam: it returns a non-nil pointer for a closable source,
-// draft while the closure proposal is unresolved and not-draft once it resolves
-// (issue #1419).
-func desiredDraftState(_ Candidate) *bool {
-	return nil
+// them. Part D is the seam: the publisher manages the draft state only for a
+// gate-on closable source (managed), holding the pull request draft while the
+// closure proposal is unresolved and marking it ready once it resolves. A
+// default-policy source is unmanaged, so its pull request opens mergeable and
+// the publisher never forces its draft state (plan revision 68, issue #1419).
+func desiredDraftState(closure closureResolution) *bool {
+	if !closure.managed {
+		return nil
+	}
+	draft := closure.outcome.Hold == domain.ClosureHoldDraft
+	return &draft
 }
 
 // resolveBranch preserves the content identity while binding an operator name.

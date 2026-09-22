@@ -267,17 +267,27 @@ func (g *draftFakeGitHub) handleGraphQL(w http.ResponseWriter, r *http.Request) 
 	_, _ = fmt.Fprintf(w, `{"data":{%q:{"pullRequest":{"number":%d,"isDraft":%t%s}}}}`, field, num, isDraft, repoField)
 }
 
-// TestDesiredDraftStateUnmanagedInPartC pins the Part C invariant: nothing is
-// closable yet, so every candidate's draft intent is unmanaged (nil) and the
-// publisher leaves each PR's draft state untouched (plan §5.15). The
-// convergence machinery is present but Part D supplies the managed intent.
-func TestDesiredDraftStateUnmanagedInPartC(t *testing.T) {
-	for _, c := range []Candidate{
+// TestDesiredDraftStateFromClosure pins the Part D draft intent: only a gate-on
+// (managed) closable source owns the pull request's draft state, holding it
+// draft while the closure proposal holds and marking it ready once it resolves.
+// An unmanaged resolution (a default-policy source, or no closable source at
+// all) leaves the draft state untouched (nil), so a default-policy PR opens
+// mergeable (plan revision 68, issue #1419).
+func TestDesiredDraftStateFromClosure(t *testing.T) {
+	draft := closureResolution{managed: true, outcome: domain.ClosureOutcome{Hold: domain.ClosureHoldDraft}}
+	if got := desiredDraftState(draft); got == nil || !*got {
+		t.Errorf("managed draft hold: desiredDraftState = %v, want *true", got)
+	}
+	ready := closureResolution{managed: true, outcome: domain.ClosureOutcome{Hold: domain.ClosureHoldNone}}
+	if got := desiredDraftState(ready); got == nil || *got {
+		t.Errorf("managed resolved hold: desiredDraftState = %v, want *false", got)
+	}
+	for _, unmanaged := range []closureResolution{
 		{},
-		{Repo: "owner/name", BaseRef: "main", HeadSHA: draftTestHeadSHA},
+		{managed: false, outcome: domain.ClosureOutcome{Hold: domain.ClosureHoldDraft}},
 	} {
-		if got := desiredDraftState(c); got != nil {
-			t.Errorf("desiredDraftState(%+v) = %v, want nil (unmanaged) in Part C", c, *got)
+		if got := desiredDraftState(unmanaged); got != nil {
+			t.Errorf("unmanaged resolution: desiredDraftState = %v, want nil", *got)
 		}
 	}
 }

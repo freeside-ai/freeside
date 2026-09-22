@@ -40,8 +40,10 @@ const (
 	minRenderedDispositionHistoryBytes = 8 << 10
 	maxRenderedScopeDecisionBytes      = 12 << 10
 	maxRenderedVerificationBytes       = 8 << 10
-	maxCandidateBodyBytes              = maxPullRequestBodyBytes - 5*len("\n\n") -
-		identityMarkerBytes - maxRenderedVerificationBytes - maxRenderedAdvisoriesBytes - maxRenderedScopeDecisionBytes - minRenderedDispositionHistoryBytes
+	// maxRenderedSourceReferenceBytes mirrors publish.maxRenderedSourceReferenceBytes.
+	maxRenderedSourceReferenceBytes = 1 << 10
+	maxCandidateBodyBytes           = maxPullRequestBodyBytes - 6*len("\n\n") -
+		identityMarkerBytes - maxRenderedVerificationBytes - maxRenderedAdvisoriesBytes - maxRenderedScopeDecisionBytes - maxRenderedSourceReferenceBytes - minRenderedDispositionHistoryBytes
 )
 
 // Task is the immutable fake-publication outbox payload.
@@ -442,6 +444,7 @@ func ValidateCandidateBody(body string) error {
 		"## freeside control-plane advisories",
 		"freeside:scope-decision", "## freeside scope decision",
 		"freeside:verification",
+		"freeside:source-reference", "## source issue",
 	} {
 		if strings.Contains(lower, owned) {
 			return errors.New("candidate body contains a publisher-owned section marker")

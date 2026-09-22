@@ -93,7 +93,7 @@ func TestDesiredPRContentFitsEveryReservedPublisherSection(t *testing.T) {
 	if err := ValidateCandidateBody(candidate.Body); err != nil {
 		t.Fatalf("exact candidate body budget: %v", err)
 	}
-	_, body, err := desiredPRContent(identity, candidate)
+	_, body, err := desiredPRContent(identity, candidate, closureResolution{})
 	if err != nil {
 		t.Fatalf("compose every reserved section: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestDesiredPRContentUsesFullHistoryWhenSpaceAllows(t *testing.T) {
 	_, body, err := desiredPRContent(identity, Candidate{
 		Title: "Full history", Body: "Short operator prose.",
 		RunID: "run-aggregate-findings", HeadSHA: head, DispositionHistory: &history,
-	})
+	}, closureResolution{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestDesiredPRContentKeepsFailClosedBodyCeiling(t *testing.T) {
 	}
 	if _, _, err := desiredPRContent(identity, Candidate{
 		Title: "Oversized body", Body: strings.Repeat("x", maxPullRequestBodyBytes),
-	}); err == nil {
+	}, closureResolution{}); err == nil {
 		t.Fatal("final composition guard accepted a body above the forge ceiling")
 	}
 }
@@ -228,7 +228,7 @@ func TestDesiredPRContentBoundsOversizedFindingClaim(t *testing.T) {
 	}
 	_, body, err := desiredPRContent(identity, Candidate{
 		Title: "Bound finding", RunID: "run-large-finding", HeadSHA: head, DispositionHistory: &history,
-	})
+	}, closureResolution{})
 	if err != nil {
 		t.Fatalf("oversized finding claim blocked publication: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestDesiredPRContentBoundsAggregateDispositionHistory(t *testing.T) {
 	if _, _, err := desiredPRContent(identity, Candidate{
 		Title: "Bound aggregate", RunID: "run-aggregate-findings", HeadSHA: head,
 		DispositionHistory: &history,
-	}); err != nil {
+	}, closureResolution{}); err != nil {
 		t.Fatalf("aggregate finding claims blocked publication: %v", err)
 	}
 }
