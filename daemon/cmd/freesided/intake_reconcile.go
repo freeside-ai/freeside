@@ -310,11 +310,22 @@ func (r *intakeReconciler) admit(
 		if err := engine.RegisterSubmissionArtifact(ctx, tx, policyArtifact); err != nil {
 			return err
 		}
-		if err := tx.PutProductionAttempt(ctx, domain.ProductionAttempt{
+		attempt := domain.ProductionAttempt{
 			CampaignID: campaignID, AttemptNumber: 1, Kind: domain.ProductionAttemptInitial,
 			SourceDigest: workItem.Digest, PublicationDigest: publicationDigest, Publication: publicationBody, SpecificationRunID: specificationRunID,
 			ImplementationRunID: implementationRunID,
-		}); err != nil {
+		}
+		// A crash before BindIntakeAdmission re-runs this admission. The attempt
+		// it already stored froze its publication, possibly the literal record
+		// of a daemon that predates the intake recipe, so converge on those
+		// bytes rather than conflict with them; every other field still must
+		// match.
+		if stored, err := tx.GetProductionAttempt(ctx, campaignID, 1); err == nil {
+			attempt.Publication, attempt.PublicationDigest = stored.Publication, stored.PublicationDigest
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+		if err := tx.PutProductionAttempt(ctx, attempt); err != nil {
 			return err
 		}
 		taskSource := domain.SpecificationSource{
@@ -578,7 +589,7 @@ func (r *intakeReconciler) startSpec(
 		attempt, err = tx.GetProductionAttempt(ctx, campaignID, 1)
 		return err
 	})
-	publication := intakePublication(init, occurrence)
+	publication := intakeLiteralPublication(init, occurrence)
 	publicationDigest := domain.Digest("")
 	publicationBytes := json.RawMessage(nil)
 	if attemptErr == nil {
@@ -911,10 +922,24 @@ func intakeWorkItemDocument(occurrence domain.IntakeOccurrence) []byte {
 		occurrence.Repo, occurrence.RepositoryID, occurrence.IssueNumber, occurrence.Label))
 }
 
-// intakePublication composes the daemon-authored pull-request metadata for a
-// label-initiated run from the occurrence coordinates and the initiator's
-// configured commit-author identity. It carries no observed issue content.
+// intakePublication composes the publication a first admission freezes for a
+// label-initiated run: the literal metadata under the intake recipe, so the
+// publication-author role writes the PR text and the literal text is its
+// fallback (plan §5.15). Only a first admission uses it; a replay decodes the
+// admitted attempt's stored bytes (admit, startSpec), so an occurrence admitted
+// before the recipe existed keeps its literal record.
 func intakePublication(init intakeInitiator, occurrence domain.IntakeOccurrence) engine.ProductionPublication {
+	publication := intakeLiteralPublication(init, occurrence)
+	publication.Recipe = engine.IntakePublicationRecipe
+	return publication
+}
+
+// intakeLiteralPublication composes the daemon-authored pull-request metadata
+// for a label-initiated run from the occurrence coordinates and the initiator's
+// configured commit-author identity. It carries no observed issue content. A
+// legacy reservation with no admitted attempt was reserved before the intake
+// recipe existed, so it reconstructs this recipe-free form.
+func intakeLiteralPublication(init intakeInitiator, occurrence domain.IntakeOccurrence) engine.ProductionPublication {
 	return engine.ProductionPublication{
 		Title: fmt.Sprintf("Resolve %s#%d", occurrence.Repo, occurrence.IssueNumber),
 		Body: fmt.Sprintf(

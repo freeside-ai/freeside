@@ -3405,7 +3405,9 @@ from the client's `.freeside-evidence/publication.md` claim, and the role never
 blocks publication. v2 is the client-side rendering of the author's output;
 label-initiated publication uses the same author role under its own intake
 contract, with that path's deterministic text as its fallback rather than the
-client claim.
+client claim. That contract is recipe `freeside.intake-publication/v1`: a new
+label-initiated run freezes it beside that literal text, and a label record
+frozen before it keeps its literal text.
 
 The publisher, not the author, writes the issue reference. It writes `Closes`
 only from an approved closure proposal (Section
