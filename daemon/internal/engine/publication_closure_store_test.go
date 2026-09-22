@@ -249,3 +249,22 @@ func TestBindClosureMergeRefusesForeignInstance(t *testing.T) {
 		t.Fatalf("read back: %v", err)
 	}
 }
+
+// TestAuthorSourceIssueRefUsesBoundIssueSubject proves a label-intake record,
+// which carries no source_issue, still gives both author sites its source issue
+// reference, taken from the task's daemon-bound issue subject.
+func TestAuthorSourceIssueRefUsesBoundIssueSubject(t *testing.T) {
+	s, policy, taskID := seedClosureChain(t, "run-author-ref")
+	w := &productionPublicationWorkflow{store: s}
+	task := productionPublicationTask{
+		RunID: policy.RunID, PublicationID: "pub-1", HeadSHA: closureStoreHead,
+		Publication: ProductionPublication{Recipe: IntakePublicationRecipe, Title: "Resolve owner/repo#7", Body: "literal"},
+	}
+	ref, err := w.authorSourceIssueRef(context.Background(), task, closureStoreBinding(policy, taskID))
+	if err != nil {
+		t.Fatalf("author source issue ref: %v", err)
+	}
+	if want := "https://github.com/owner/repo/issues/7"; ref != want {
+		t.Errorf("source issue ref = %q, want %q", ref, want)
+	}
+}

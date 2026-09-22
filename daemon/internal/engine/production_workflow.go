@@ -205,7 +205,9 @@ func (p ProductionPublication) validateRetained() error {
 			return fmt.Errorf("production publication: %w", err)
 		}
 	}
-	if p.Recipe != "" {
+	// The intake recipe carries literal title and body as its fallback, so it
+	// takes the literal checks below, including the ban on a source issue.
+	if p.Recipe != "" && p.Recipe != IntakePublicationRecipe {
 		if (p.Recipe != clientPublicationRecipeV1 && p.Recipe != clientPublicationRecipeV2) || p.Title != "" || p.Body != "" {
 			return errors.New("unsupported or contradictory publication recipe")
 		}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/advisory"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	inferencefake "github.com/freeside-ai/freeside/daemon/internal/inference/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -26,7 +27,16 @@ func newPublicV2MetadataHarness(t *testing.T) *productionPublicationHarness {
 	metadata.Title, metadata.Body = "", ""
 	metadata.Recipe = "freeside.client-publication/v2"
 	metadata.SourceIssue = "https://github.com/example/project/issues/82"
-	p := newProductionPublicationHarnessWithMetadata(t, newPublicationHarness(t), "", nil, nil, nil, metadata, nil)
+	return newAuthoredMetadataHarness(t, metadata, nil)
+}
+
+// newAuthoredMetadataHarness builds a declared production harness for an
+// authored publication record under the given extra policy keys.
+func newAuthoredMetadataHarness(
+	t *testing.T, metadata engine.ProductionPublication, extraKeys []domain.PolicyKey,
+) *productionPublicationHarness {
+	t.Helper()
+	p := newProductionPublicationHarnessWithMetadata(t, newPublicationHarness(t), "", extraKeys, nil, nil, metadata, nil)
 	declaration, err := domain.NewWorkUnitDeclaration(domain.WorkUnitDeclarationInput{
 		CompletionCriterion: domain.CompletionBoundPRMerged, DeclaredPaths: []string{"README.md"},
 	}, p.runID, p.projectID, p.now)

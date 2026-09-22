@@ -75,7 +75,7 @@ func (w *productionPublicationWorkflow) reconcilePublicationAuthoring(
 	checkoutDir string,
 	report []byte,
 ) error {
-	if task.Publication.Recipe != clientPublicationRecipeV2 {
+	if !authoredPublicationRecipe(task.Publication.Recipe) {
 		return nil
 	}
 	key := productionAuthoringCheckpointKey(task.RunID, task.HeadSHA, binding.admission.Base.BaseSHA)
@@ -169,6 +169,11 @@ func (w *productionPublicationWorkflow) buildPublicationAuthorInput(
 		return inference.PublicationAuthorInput{}, fmt.Errorf("summarize review outcome: %w", err)
 	}
 
+	sourceIssueRef, err := w.authorSourceIssueRef(ctx, task, binding)
+	if err != nil {
+		return inference.PublicationAuthorInput{}, fmt.Errorf("read source issue: %w", err)
+	}
+
 	baseSHA := binding.admission.Base.BaseSHA
 	return inference.PublicationAuthorInput{
 		Project:     string(task.ProjectID),
@@ -177,10 +182,10 @@ func (w *productionPublicationWorkflow) buildPublicationAuthorInput(
 		TargetRepository: binding.admission.Base.Repo,
 		TargetVisibility: visibility,
 
-		SourceIssueRef: task.Publication.SourceIssue,
-		// The source is the same repository as the target for a client
-		// submission, so its visibility matches. Part D resolves cross-repository
-		// sources; here the source issue prose stays empty.
+		SourceIssueRef: sourceIssueRef,
+		// Only the reference reaches the author: the source issue's title and
+		// body stay empty until the engine has a trusted issue read. With no
+		// prose input the source visibility is the target's.
 		SourceVisibility: visibility,
 
 		Diff:                diff,
@@ -193,6 +198,31 @@ func (w *productionPublicationWorkflow) buildPublicationAuthorInput(
 		Evidence:        checkpoint.Artifacts,
 		ApprovedRecipes: w.approvedRecipes,
 	}, nil
+}
+
+// authorSourceIssueRef names the source issue both author sites read. A
+// label-intake record carries no source_issue (its literal checks ban one), so
+// a task bound to an issue subject takes its reference from that daemon-bound
+// subject, the same issue decideClosableSource targets; otherwise the client
+// record's source URL, if any, is the reference.
+func (w *productionPublicationWorkflow) authorSourceIssueRef(
+	ctx context.Context, task productionPublicationTask, binding productionBinding,
+) (string, error) {
+	var source *domain.SpecificationSource
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		fetched, err := tx.GetTask(ctx, binding.run.TaskID)
+		if err != nil {
+			return err
+		}
+		source = fetched.Source
+		return nil
+	}); err != nil {
+		return "", err
+	}
+	if source != nil && source.Kind == domain.SpecificationSourceIssueSubject && source.IssueSubject != nil {
+		return fmt.Sprintf("https://github.com/%s/issues/%d", source.IssueSubject.Repo, source.IssueSubject.IssueNumber), nil
+	}
+	return task.Publication.SourceIssue, nil
 }
 
 // authoredReviewOutcome summarizes the run's latest clean review for the author.
@@ -231,7 +261,7 @@ func (w *productionPublicationWorkflow) publicationTitleBody(
 	renderV1 := func() (string, string, error) {
 		return publicationMetadata(task.Publication, task.ProducingInvocationID, checkpoint.Imported.Claims)
 	}
-	if task.Publication.Recipe != clientPublicationRecipeV2 {
+	if !authoredPublicationRecipe(task.Publication.Recipe) {
 		return renderV1()
 	}
 	key := productionAuthoringCheckpointKey(task.RunID, task.HeadSHA, binding.admission.Base.BaseSHA)
