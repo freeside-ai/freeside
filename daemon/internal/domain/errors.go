@@ -204,6 +204,7 @@ var (
 	ErrClosureProvenanceMismatch          = errors.New("closure proposal provenance does not match current state")
 	ErrClosureTargetMismatch              = errors.New("closure proposal target does not match current state")
 	ErrClosureApprovalInconsistent        = errors.New("closure approval binding is internally inconsistent")
+	ErrClosureOutcomeInconsistent         = errors.New("closure outcome input is internally inconsistent")
 	ErrProposalAdmissionKeyInconsistent   = errors.New("proposal admission key fields do not match its source")
 	ErrSpecificationSourceInconsistent    = errors.New("specification source fields do not match its kind")
 	ErrIntakeOccurrenceInconsistent       = errors.New("intake occurrence fields are internally inconsistent")
