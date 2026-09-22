@@ -41,6 +41,7 @@ public final class DecisionModel {
     public private(set) var appliedRecord: Components.Schemas.CommandRecord?
     public private(set) var submissionError: String?
     public private(set) var proposalFacts: Components.Schemas.TaskProposalFactsSnapshot?
+    public private(set) var effectProposalFacts: Components.Schemas.EffectProposalFactsSnapshot?
 
     private let store: InboxStore
     private let openURL: (URL) async -> Bool
@@ -230,6 +231,11 @@ public final class DecisionModel {
         guard snapshot.item.status == .open else { return false }
         if snapshot.item._type == .task_proposal {
             guard let proposalFacts, proposalFactsMatch(snapshot, proposalFacts) else { return false }
+        }
+        if snapshot.item._type == .effect_proposal {
+            guard let effectProposalFacts,
+                effectProposalFactsMatch(snapshot, effectProposalFacts)
+            else { return false }
         }
         guard !store.isNavigationReserved(itemID: itemID) else { return false }
         guard pendingCommand == nil else { return false }
@@ -489,6 +495,7 @@ public final class DecisionModel {
                         itemID: itemID,
                         atLeastEntityVersion: snapshot?.entity_version ?? 0)
                     proposalFacts = nil
+                    effectProposalFacts = nil
                     markValidated()
                     emitConclusionIfVerified(resultingStatus: nil)
                     return
@@ -527,6 +534,19 @@ public final class DecisionModel {
                         // proves this local snooze no longer owns its state.
                         appliedRecord = nil
                     }
+                    // A newer snapshot just applied; drop any held facts that no
+                    // longer match it before awaiting their replacement, so a
+                    // slow or hung facts fetch cannot render stale facts beside
+                    // the newer item. Facts that still match are kept, so an
+                    // unchanged revalidation does not flicker the card.
+                    if let proposalFacts, !proposalFactsMatch(confirmed, proposalFacts) {
+                        self.proposalFacts = nil
+                    }
+                    if let effectProposalFacts,
+                        !effectProposalFactsMatch(confirmed, effectProposalFacts)
+                    {
+                        self.effectProposalFacts = nil
+                    }
                     if current.item._type == .task_proposal {
                         let facts = try await store.client.getTaskProposalFacts(
                             path: .init(item_id: itemID)
@@ -536,8 +556,20 @@ public final class DecisionModel {
                             proposalFactsMatch(confirmed, facts)
                         else { continue }
                         proposalFacts = facts
+                        effectProposalFacts = nil
+                    } else if current.item._type == .effect_proposal {
+                        let facts = try await store.client.getEffectProposalFacts(
+                            path: .init(item_id: itemID)
+                        ).ok.body.json
+                        guard generation == validationGeneration,
+                            store.cacheGeneration == generationBefore,
+                            effectProposalFactsMatch(confirmed, facts)
+                        else { continue }
+                        effectProposalFacts = facts
+                        proposalFacts = nil
                     } else {
                         proposalFacts = nil
+                        effectProposalFacts = nil
                     }
                     markValidated()
                     // Phase converges with canonical state: applied sticks
@@ -553,6 +585,12 @@ public final class DecisionModel {
                 }
                 // Refused within the epoch: the loop re-fetches to converge.
             }
+            // The retries exhausted without certifying a matching snapshot, so
+            // any facts a prior validation cached are stale and must not keep
+            // rendering beside the newer item; the actions are already disabled
+            // by the failed validation, but the facts are part of the surface.
+            proposalFacts = nil
+            effectProposalFacts = nil
             validation = .failed(Self.shadowedByStaleCache)
         } catch {
             guard generation == validationGeneration else { return }
@@ -564,6 +602,7 @@ public final class DecisionModel {
             // (and actions disabled) until a later task certifies state.
             if error is CancellationError || Task.isCancelled { return }
             proposalFacts = nil
+            effectProposalFacts = nil
             validation = .failed(String(describing: error))
         }
     }
@@ -578,10 +617,38 @@ public final class DecisionModel {
             && snapshot.item.artifact_digests == [facts.proposal_digest]
     }
 
+    private func effectProposalFactsMatch(
+        _ snapshot: Components.Schemas.AttentionItemSnapshot,
+        _ facts: Components.Schemas.EffectProposalFactsSnapshot
+    ) -> Bool {
+        // The card can only render, and the operator can only decide, a
+        // source-issue-closure effect whose closure arm is present. The schema
+        // permits a null closure arm for another effect kind, so this trust
+        // boundary fails closed on any unsupported or internally inconsistent
+        // facts rather than enabling actions on an unrendered effect.
+        // The card shows the closure's candidate head as the merge the
+        // approval binds to, but the submitted command stamps the item's
+        // pr_head_sha; requiring them equal keeps the displayed binding and
+        // the submitted binding the same head, so the card can never show one
+        // head and approve another.
+        facts.effect_kind == .source_issue_closure
+            && facts.source_issue_closure?.value1.merge.candidate_head_sha == snapshot.item.pr_head_sha
+            && facts.as_of_revision == snapshot.as_of_revision
+            && facts.entity_version == snapshot.entity_version
+            && facts.item_version == snapshot.item.item_version
+            && snapshot.item.artifact_digests == [facts.proposal_digest]
+    }
+
     public func submitTaskProposalRevision(
         _ revision: Components.Schemas.TaskProposalRevisionInput
     ) async {
         await submit(.start_with_changes, revision: revision)
+    }
+
+    public func submitEffectProposalRevision(
+        _ revision: Components.Schemas.EffectProposalRevisionInput
+    ) async {
+        await submit(.approve_with_changes, effectRevision: revision)
     }
 
     public func snooze(until: Date) async {
@@ -701,6 +768,7 @@ public final class DecisionModel {
         _ action: Components.Schemas.Action,
         capabilityManifestDigest: String? = nil,
         revision: Components.Schemas.TaskProposalRevisionInput? = nil,
+        effectRevision: Components.Schemas.EffectProposalRevisionInput? = nil,
         snoozeUntil: Date? = nil,
         alternativeChoices: [Components.Schemas.AlternativeChoice]? = nil,
         message: String? = nil,
@@ -713,6 +781,7 @@ public final class DecisionModel {
             guard Self.hasSameDecisionBindings(reviewedSnapshot, snapshot) else { return }
         }
         guard (action == .start_with_changes) == (revision != nil),
+            (action == .approve_with_changes) == (effectRevision != nil),
             (action == .retry_with_capabilities) == (capabilityManifestDigest != nil),
             (action == .snooze) == (snoozeUntil != nil),
             (action == .choose_alternative_route) == (alternativeChoices != nil),
@@ -760,6 +829,9 @@ public final class DecisionModel {
                     },
                     answer_route: answerRoute.map { .init(value1: $0) },
                     task_proposal_revision: revision.map {
+                        .init(value1: $0)
+                    },
+                    effect_proposal_revision: effectRevision.map {
                         .init(value1: $0)
                     },
                     snooze_until: snoozeUntil,
@@ -882,6 +954,7 @@ public final class DecisionModel {
                         store.removeSnapshot(
                             itemID: itemID, atLeastEntityVersion: snapshot.entity_version)
                         proposalFacts = nil
+                        effectProposalFacts = nil
                         phase = .applied
                         emitConclusionIfVerified(resultingStatus: nil)
                         return

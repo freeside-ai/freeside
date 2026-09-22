@@ -48,6 +48,7 @@ struct DecisionDetailView: View {
 
     private enum ProposalEditor: String, Identifiable {
         case revision
+        case effectRevision
         case snooze
         var id: String { rawValue }
     }
@@ -148,6 +149,7 @@ struct DecisionDetailView: View {
                             card(
                                 snapshot.item,
                                 proposalFacts: model.proposalFacts,
+                                effectProposalFacts: model.effectProposalFacts,
                                 accessibilityLayout: isAccessibilityLayout,
                                 compactLayout: horizontalSizeClass == .compact,
                                 wideLayout: usesWideLayout,
@@ -207,6 +209,12 @@ struct DecisionDetailView: View {
                     if let facts = model.proposalFacts {
                         TaskProposalRevisionSheet(facts: facts) { revision in
                             Task { await model.submitTaskProposalRevision(revision) }
+                        }
+                    }
+                case .effectRevision:
+                    if let facts = model.effectProposalFacts {
+                        EffectProposalRevisionSheet(facts: facts) { revision in
+                            Task { await model.submitEffectProposalRevision(revision) }
                         }
                     }
                 case .snooze:
@@ -496,6 +504,7 @@ struct DecisionDetailView: View {
     private func card(
         _ item: Components.Schemas.AttentionItem,
         proposalFacts: Components.Schemas.TaskProposalFactsSnapshot?,
+        effectProposalFacts: Components.Schemas.EffectProposalFactsSnapshot? = nil,
         rendersInteractiveControls: Bool = true,
         accessibilityLayout: Bool,
         compactLayout: Bool,
@@ -563,6 +572,7 @@ struct DecisionDetailView: View {
                             item: item,
                             composition: composition,
                             proposalFacts: proposalFacts,
+                            effectProposalFacts: effectProposalFacts,
                             rendersInteractiveControls: rendersInteractiveControls,
                             accessibilityLayout: accessibilityLayout,
                             inspectorPresented: inspectorPresented)
@@ -585,6 +595,7 @@ struct DecisionDetailView: View {
                                     item: item,
                                     composition: composition,
                                     proposalFacts: proposalFacts,
+                                    effectProposalFacts: effectProposalFacts,
                                     rendersInteractiveControls: rendersInteractiveControls,
                                     accessibilityLayout: accessibilityLayout,
                                     inspectorPresented: inspectorPresented)
@@ -612,6 +623,7 @@ struct DecisionDetailView: View {
                             item: item,
                             composition: composition,
                             proposalFacts: proposalFacts,
+                            effectProposalFacts: effectProposalFacts,
                             rendersInteractiveControls: rendersInteractiveControls,
                             accessibilityLayout: accessibilityLayout,
                             inspectorPresented: inspectorPresented)
@@ -642,6 +654,7 @@ struct DecisionDetailView: View {
                         item: item,
                         composition: composition,
                         proposalFacts: proposalFacts,
+                        effectProposalFacts: effectProposalFacts,
                         rendersInteractiveControls: rendersInteractiveControls,
                         accessibilityLayout: accessibilityLayout,
                         inspectorPresented: inspectorPresented)
@@ -706,6 +719,7 @@ struct DecisionDetailView: View {
         item: Components.Schemas.AttentionItem,
         composition: DecisionCardComposition,
         proposalFacts: Components.Schemas.TaskProposalFactsSnapshot?,
+        effectProposalFacts: Components.Schemas.EffectProposalFactsSnapshot?,
         rendersInteractiveControls: Bool,
         accessibilityLayout: Bool,
         inspectorPresented: Bool
@@ -718,6 +732,19 @@ struct DecisionDetailView: View {
             if let proposalFacts {
                 cardSection("Authenticated proposal") {
                     proposalRows(proposalFacts)
+                }
+            }
+            // effectProposalRows is empty for an effect kind the card can't
+            // render yet (only source_issue_closure has rows today), so the
+            // titled section is suppressed rather than drawn empty.
+            if let effectProposalFacts,
+                case let effectRows = AttentionDisplay.effectProposalRows(effectProposalFacts),
+                !effectRows.isEmpty
+            {
+                cardSection("Authenticated proposal") {
+                    ForEach(effectRows) { fact in
+                        factRow(fact.label, value: fact.value, monospaced: fact.monospaced)
+                    }
                 }
             }
         case .agentQuestion:
@@ -1567,6 +1594,7 @@ struct DecisionDetailView: View {
         _ item: Components.Schemas.AttentionItem,
         at dynamicTypeSize: DynamicTypeSize,
         proposalFacts: Components.Schemas.TaskProposalFactsSnapshot? = nil,
+        effectProposalFacts: Components.Schemas.EffectProposalFactsSnapshot? = nil,
         compactLayout: Bool = false,
         detailWidth: CGFloat = 560,
         inspectorPresented: Bool = false,
@@ -1576,6 +1604,7 @@ struct DecisionDetailView: View {
         card(
             item,
             proposalFacts: proposalFacts,
+            effectProposalFacts: effectProposalFacts,
             rendersInteractiveControls: false,
             accessibilityLayout: dynamicTypeSize >= .accessibility1,
             compactLayout: compactLayout,
@@ -1904,6 +1933,21 @@ struct DecisionDetailView: View {
                 touches_control_plane: touchesControlPlane))
     }
 
+    /// The one bounded edit a closure proposal allows: whether the PR closes
+    /// the issue. The daemon owns the target, provenance, and origin and
+    /// rebuilds the proposal, so the client sends only the flipped flag, and
+    /// only when it actually differs (the daemon rejects an unchanged
+    /// `resolves`).
+    static func effectProposalRevision(
+        from facts: Components.Schemas.EffectProposalFactsSnapshot,
+        resolves: Bool
+    ) -> Components.Schemas.EffectProposalRevisionInput? {
+        guard let closure = facts.source_issue_closure?.value1,
+            resolves != closure.resolves
+        else { return nil }
+        return .init(source_issue_closure: .init(resolves: resolves))
+    }
+
     static func parseExpectedCost(_ text: String) -> Int? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let value = Int(trimmed), (1...1_000_000).contains(value) else { return nil }
@@ -1924,9 +1968,21 @@ struct DecisionDetailView: View {
     ) -> [AttentionDisplay.BindingRow] {
         var rows = AttentionDisplay.detailBindingRows(
             item,
-            priorProposalDigest: model.proposalFacts?.supersedes?.value1.proposal_digest,
+            priorProposalDigest: model.proposalFacts?.supersedes?.value1.proposal_digest
+                ?? model.effectProposalFacts?.supersedes?.value1.proposal_digest,
             proposalDigest: model.proposalFacts?.proposal_digest
+                ?? model.effectProposalFacts?.proposal_digest
         )
+        // The card's "Bound to" row abbreviates the head and base to eight
+        // characters, but the approval authorizes this exact prospective
+        // merge, so Details keeps the full head, base ref and SHA, and
+        // publication identity for audit and copy (two bases sharing an
+        // eight-character prefix are otherwise indistinguishable).
+        if let merge = model.effectProposalFacts?.source_issue_closure?.value1.merge {
+            rows.append(.init(label: "Bound head", value: merge.candidate_head_sha))
+            rows.append(.init(label: "Bound base", value: "\(merge.base_ref)@\(merge.base_sha)"))
+            rows.append(.init(label: "Publication identity", value: merge.publication_identity))
+        }
         rows.append(
             contentsOf: AttentionDisplay.unavailableActionRows(actionRanking(item).unavailable))
         return rows
@@ -3003,6 +3059,8 @@ struct DecisionDetailView: View {
             messageEditor = .returnToAgent
         case .start_with_changes:
             proposalEditor = .revision
+        case .approve_with_changes:
+            proposalEditor = .effectRevision
         case .snooze:
             proposalEditor = .snooze
         case .choose_alternative_route:
@@ -3209,6 +3267,100 @@ struct TaskProposalRevisionSheet: View {
         #else
             field
         #endif
+    }
+}
+
+/// The single-control edit sheet for a source-issue-closure proposal: one
+/// toggle for whether the PR closes the issue. The daemon owns the target,
+/// provenance, and origin, so nothing else is editable here (issue #1443).
+struct EffectProposalRevisionSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var resolves: Bool
+    private let originalFacts: Components.Schemas.EffectProposalFactsSnapshot
+    let submit: (Components.Schemas.EffectProposalRevisionInput) -> Void
+
+    init(
+        facts: Components.Schemas.EffectProposalFactsSnapshot,
+        submit: @escaping (Components.Schemas.EffectProposalRevisionInput) -> Void
+    ) {
+        _resolves = State(initialValue: facts.source_issue_closure?.value1.resolves ?? false)
+        originalFacts = facts
+        self.submit = submit
+    }
+
+    private var toggleTitle: String {
+        guard let closure = originalFacts.source_issue_closure?.value1 else {
+            return "Close the issue when this PR merges"
+        }
+        return "Close #\(closure.target.issue_number) when this PR merges"
+    }
+
+    private var revision: Components.Schemas.EffectProposalRevisionInput? {
+        DecisionDetailView.effectProposalRevision(from: originalFacts, resolves: resolves)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            FreesideSheetHeader(title: "Approve with changes")
+            Form {
+                Toggle(toggleTitle, isOn: $resolves)
+                    .listRowBackground(Color.ground2)
+            }
+            .formStyle(.grouped)
+            .font(FreesideFont.body)
+            .foregroundStyle(Color.ink)
+            .tint(.accentText)
+            .scrollContentBackground(.hidden)
+
+            // The submit is a body control in the primary recipe, not a
+            // toolbar item; Return and Escape still reach it. It stays
+            // disabled until `resolves` differs, because the daemon rejects an
+            // unchanged revision.
+            FreesideSheetActionRow(
+                submitLabel: "Approve",
+                isSubmitEnabled: revision != nil,
+                submit: {
+                    if let revision {
+                        submit(revision)
+                        dismiss()
+                    }
+                },
+                cancel: { dismiss() })
+        }
+        .background(Color.ground)
+        .freesideSheetPresentation()
+        .frame(minWidth: 380, minHeight: 220)
+    }
+
+    /// The project-owned composition without the AppKit-backed Toggle, which
+    /// ImageRenderer cannot draw off-screen on macOS; the state renders as
+    /// text instead.
+    func screenshotContent() -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Approve with changes")
+                .font(FreesideFont.sectionTitle)
+            VStack(alignment: .leading, spacing: 8) {
+                KeywordLabel(text: "On merge")
+                Text(resolves ? "Closes the issue" : "Doesn't close the issue")
+                Divider()
+                Text(toggleTitle)
+            }
+            .padding(14)
+            .freesideCard()
+            Text("Approving with changes flips only whether the pull request closes the issue.")
+                .font(FreesideFont.caption)
+                .foregroundStyle(Color.inkDim)
+            FreesideSheetActionRow(
+                submitLabel: "Approve",
+                isSubmitEnabled: revision != nil,
+                submit: {}, cancel: {})
+        }
+        .padding(24)
+        .frame(maxWidth: 560, alignment: .leading)
+        .foregroundStyle(Color.ink)
+        // The sheet's own ground, so the dusk composition reads dusk ink on
+        // dusk ground rather than on the harness's light canvas.
+        .background(Color.ground)
     }
 }
 

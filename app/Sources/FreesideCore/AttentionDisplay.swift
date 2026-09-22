@@ -256,6 +256,83 @@ enum AttentionDisplay {
         }
     }
 
+    /// The authenticated-proposal card facts for a source-issue-closure
+    /// effect proposal, as pure label/value pairs so a display test asserts
+    /// the wording without a view. Every value is a daemon fact from the
+    /// snapshot; the card names no PR (the facts carry none). Returns [] for
+    /// an effect kind the card does not render, so a future kind stays blank
+    /// until it grows its own rows rather than mislabelling closure facts.
+    static func effectProposalRows(
+        _ facts: Components.Schemas.EffectProposalFactsSnapshot
+    ) -> [FactRow] {
+        guard let closure = facts.source_issue_closure?.value1 else { return [] }
+        var rows: [FactRow] = [
+            .init("Effect", effectKindLabel(facts.effect_kind)),
+            .init(
+                "Target", "\(closure.target.repo)#\(closure.target.issue_number)",
+                monospaced: true),
+            .init(
+                "On merge",
+                closure.resolves ? "Closes the issue" : "Doesn't close the issue"),
+            .init("Reference", closureProvenanceExplanation(closure.provenance)),
+            .init("Origin", closureOriginLabel(closure.origin)),
+            .init(
+                "Bound to",
+                "Head \(shortRevision(closure.merge.candidate_head_sha)) · "
+                    + "Base \(closure.merge.base_ref)@\(shortRevision(closure.merge.base_sha))",
+                monospaced: true),
+        ]
+        if let prior = facts.supersedes?.value1 {
+            let priorPhrase =
+                switch prior.source_issue_closure?.resolves {
+                case .some(true): "was closing the issue"
+                case .some(false): "was leaving the issue open"
+                case nil: "differed"
+                }
+            // The full prior digest, as the sibling "Prior proposal" binding
+            // row shows it: shortRevision only abbreviates a bare hex object
+            // name, and a Digest is algorithm-prefixed, so shortening here
+            // would be a no-op that only reads as if it did something.
+            rows.append(
+                .init(
+                    "Superseded proposal",
+                    "Previously \(priorPhrase) (\(prior.proposal_digest))"))
+        }
+        return rows
+    }
+
+    /// The effect kind, named neutrally: the "On merge" row carries whether
+    /// approving closes the issue, so this row must not assert the closing
+    /// action, or a resolve-false proposal (every daemon_fallback, and any
+    /// resolve-false inference-site one) would contradict it.
+    static func effectKindLabel(_ kind: Components.Schemas.EffectKind) -> String {
+        switch kind {
+        case .run_proposal: return "Run proposal"
+        case .source_issue_closure: return "Source issue closure"
+        }
+    }
+
+    static func closureProvenanceExplanation(
+        _ provenance: Components.Schemas.ClosureProvenance
+    ) -> String {
+        switch provenance {
+        case .verified: return "The daemon bound this issue reference at intake."
+        case .recommended:
+            return "From the submission's source URL; approving confirms this reference."
+        }
+    }
+
+    /// The mechanism that produced the closure flag (schema ClosureFlagOrigin,
+    /// plan §5.13): the inference site that authored the publication emitted
+    /// it, or the daemon minted a resolve-false fallback because that site or
+    /// its admission failed. Not the human work proposal.
+    static func closureOriginLabel(_ origin: Components.Schemas.ClosureFlagOrigin) -> String {
+        switch origin {
+        case .propose_site: return "Emitted by the inference site"
+        case .daemon_fallback: return "Daemon resolve-false fallback"
+        }
+    }
+
     static func costSoFar(_ cost: Components.Schemas.CostSoFar) -> String {
         let invocations =
             cost.invocations == 1 ? "1 invocation" : "\(cost.invocations) invocations"
@@ -346,7 +423,18 @@ enum AttentionDisplay {
         case .stop_unattended:
             return "New unattended work will not start until unattended operation is resumed."
         case .decline:
-            return "The proposal is dismissed and no run starts."
+            // An effect proposal has no run to start: declining a closure
+            // proposal only drops the proposed effect, so the shared task
+            // wording would misdescribe it.
+            switch item._type {
+            case .effect_proposal:
+                return "The proposal is dismissed and the effect is not applied."
+            case .spec_approval, .execution_failure, .agent_question,
+                .review_diminishing_returns, .review_dispute, .review_contradiction,
+                .review_configuration, .finding_adjudication, .ready_for_final_review,
+                .publish_blocked, .task_proposal, .system_health, .blocked:
+                return "The proposal is dismissed and no run starts."
+            }
         case .dismiss:
             return "The item closes without taking the requested action."
         case .approve, .request_changes, .discuss, .finish_now, .apply_then_finish,

@@ -27,10 +27,10 @@ Mac and iOS match on every line unless a line says otherwise.
   facts, the recommendation-led finding-adjudication card and typed
   route picker, plus the text-only conversation thread and composer,
   and the New Task composer on the Tasks tab (⌘N on Mac).
-- **Generic:** six of the fourteen card types use only the shared decision
+- **Generic:** seven of the fourteen card types use only the shared decision
   shell; five additional types compose card-specific orderings from the shared
   graphic module set.
-- **Not yet:** one card type (`effect_proposal`), conversation attachments, the evidence
+- **Not yet:** conversation attachments, the evidence
   packet viewer, proposal batches, the
   initiative view, push notifications.
 - **Open:** twelve placement questions, listed at the end.
@@ -77,7 +77,7 @@ lists open issues that will change the card.
 | `publish_blocked` | rerun trust check, inspect the failure, stop | Done: the card leads with the failed trust rule or shared readable hold reason from the typed field, retaining the exact hold code in Details; inspection opens expanded technical details in the Mac inspector or scrolls to inline details on iPhone before recording engagement, preserving the publication hold; the alternate-profile action is retired from the vocabulary (#936, plan revision 44) | |
 | `ready_for_final_review` | view PR, return to agent, mark seen, dismiss, stop | Done: the card leads with the readiness checklist. Its first line is the verdict word followed by the counts of the rows beneath it; those rows run failed and waived first, then advisory, then notes, with the passed ones behind a disclosure closed by default whose closed line still names each. The checklist carries the bound head and base, every requirement of the evaluated set with its state, each waiver's id, dimension, and granting authority, and a stale verdict shown against the observed head or base. Per-round yield follows, keeping the typed diff stats last before the actions, alone: the bound head and base render in the checklist's "Bound to" row and in Details, never a third time as facts. That row sits inside the collapsed passed disclosure while the binding is current, its label still on the closed line and its coordinates one disclosure away; it leads the checklist as a failed row once the daemon marks the binding stale, so the coordinates are on the face of the card exactly when they contradict the verdict. The labeled agent summary follows the checklist, with full recognized concerns and an explicit warning for legacy excerpts. The complete original report expands below evidence without enclosing actions or authenticated facts; missing inline text stays unavailable and does not fetch a preview | |
 | `task_proposal` | start, start with changes, decline, snooze | Done for actions and facts, including the declaration-bound path count shown read-only in revisions; the full proposal artifact and the revised-digest diff are Not yet | Batch grouping (see Screens) |
-| `effect_proposal` | approve, approve with changes, decline, snooze; target picked from a daemon-supplied list | Not yet | Lands with the §5.13 effect registry in 1B |
+| `effect_proposal` | approve, approve with changes, decline, snooze | Done for actions and facts: the first effect is the source-issue closure proposal, and the card shows the effect, the daemon-fixed target issue, whether approving closes it, the reference's trust (verified or recommended), the closure-flag origin, and the merge the approval binds to (candidate head and base ref@sha); approve with changes edits only the `resolves` flag through a sheet, and the daemon rebuilds the proposal. The card shows no PR number yet (the facts carry none); the full proposal artifact and the revised-digest diff are Not yet | Card lands ahead of the wider §5.13 effect registry (1B); PR reference on the facts is a filed `kind:contract` deferral |
 | `system_health` | acknowledge, run doctor, stop or resume unattended, resolve re-enrollment | Done: the card and row lead with the typed diagnostic code and the capability it impairs, daemon facts only (posture badge and re-enrollment details shown) | #868 (account-probe items), #867 (retired-identity items) |
 | `blocked` | read only | Done: the card and row lead with the typed wait, its coarse duration, and the blocking item or pull request, daemon facts only; the exact wait start stays in the technical bindings | |
 
@@ -147,7 +147,7 @@ both dismiss (`devlog/2026-09-12-0945-chrome-under-design-language.md`).
 The plan implies each of these but doesn't say where it lives. They stay
 open until a unit answers them; answering is a design decision.
 
-1. **Editing a proposal before approving.** Today a sheet on `task_proposal`. Is that also right for `effect_proposal` and for batches?
+1. **Editing a proposal before approving.** A sheet on `task_proposal` and on `effect_proposal` (one control, whether the PR closes the issue). Is that also right for batches?
 2. **Where project- and system-level items go.** There is no project or system screen until the deferred ones land.
 3. **Turning a repeated preference into a policy PR.** One action today; no authoring or preview flow is described.
 4. **A standing "unattended stopped" indicator.** A stop is a durable state; one inbox item isn't a persistent signal. Menu bar, banner, or both? Tracked by #980 (plan §11, wave 8).

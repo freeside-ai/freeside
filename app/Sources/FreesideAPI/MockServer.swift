@@ -21,6 +21,8 @@ public actor MockServer {
         @Sendable (Components.Schemas.ConversationSnapshot) -> Components.Schemas.ConversationSnapshot
     public typealias BootstrapTransform =
         @Sendable (Components.Schemas.BootstrapSnapshot) -> Components.Schemas.BootstrapSnapshot
+    public typealias EffectProposalFactsTransform =
+        @Sendable (Components.Schemas.EffectProposalFactsSnapshot) -> Components.Schemas.EffectProposalFactsSnapshot
 
     /// Thrown from a `beforeRespond` hook to make the mock answer with a
     /// specific HTTP status and a generic error-shaped body, modelling a
@@ -115,6 +117,7 @@ public actor MockServer {
     private var commandResultTransform: CommandResultTransform?
     private var conversationTransform: ConversationTransform?
     private var bootstrapTransform: BootstrapTransform?
+    private var effectProposalFactsTransform: EffectProposalFactsTransform?
     private let automaticallyCompletesAgentWork: Bool
     /// The trusted approved-recipe set the evidence gate re-runs
     /// against; policy state owned by the server, never by the rows.
@@ -320,6 +323,13 @@ public actor MockServer {
     /// so clients can exercise canonical-frontier trust boundaries.
     public func setBootstrapTransform(_ transform: BootstrapTransform?) {
         bootstrapTransform = transform
+    }
+
+    /// Mutates only the returned effect-proposal facts, never the server's
+    /// stored rows, so a client can exercise the facts-versus-item version
+    /// match gate that keeps a stale facts snapshot off the card.
+    public func setEffectProposalFactsTransform(_ transform: EffectProposalFactsTransform?) {
+        effectProposalFactsTransform = transform
     }
 
     /// Controls the mock process boundary independently of synchronized
@@ -1255,6 +1265,17 @@ public actor MockServer {
             return facts
         }
         return AttentionFixtures.effectProposalFacts(for: snapshot)
+    }
+
+    /// The facts endpoint's response-boundary read: the authoritative facts
+    /// with the test transform applied. The transform mutates only what the
+    /// client reads, never the authority the command paths (revision
+    /// validation and application) validate and apply against, so those paths
+    /// call `effectProposalFacts` directly.
+    func effectProposalFactsResponse(
+        itemID: String
+    ) throws -> Components.Schemas.EffectProposalFactsSnapshot? {
+        try effectProposalFacts(itemID: itemID).map { effectProposalFactsTransform?($0) ?? $0 }
     }
 
     /// The actor's convenience wrapper over
