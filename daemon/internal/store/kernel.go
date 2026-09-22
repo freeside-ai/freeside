@@ -44,6 +44,13 @@ var ErrRowInconsistent = errors.New("stored row body inconsistent with its key c
 // tolerates only byte-identical replays: a retry converges, a rewrite fails.
 var ErrImmutableConflict = errors.New("immutable row already exists with different content")
 
+// ErrClosureApprovalActorConflict is returned when a source-issue-closure
+// instance would carry approvals from both recorders at once: a human decision
+// row and a policy approval row. The human gate is per project, so exactly one
+// recorder applies; the store refuses the second one at write time, and the
+// reconstruction fails closed if both somehow exist (#1487).
+var ErrClosureApprovalActorConflict = errors.New("closure approval already recorded by the other actor")
+
 // ErrStaleWrite is returned (wrapped, with the entity and id) when an update
 // to a transition-guarded current-state aggregate does not move its state
 // forward: an attention item whose item_version is not beyond the stored one,

@@ -23,6 +23,9 @@
 //   - work_unit.go    the §5.18 capture records: declarations, bindings, observed facts
 //   - trust_profile.go automation trust profile and workflow audit (§5.5)
 //   - authorization.go candidate authorization and finding classes (§5.6, §5.8)
+//   - closure_approval.go, source_issue_closure.go, closure_outcome.go
+//     the source-issue-closure approval binding, its re-gate, and the pure
+//     outcome matrix mapping a proposal and its approval to reference/hold/item (§5.13)
 //
 // See docs/plan.md §4 (the attention model), §5.3 (execution identities),
 // §5.12 (findings and policy resolution), §5.14 (conversations and sync), and

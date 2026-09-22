@@ -143,6 +143,32 @@ func (o ClosureFlagOrigin) valid() bool {
 	}
 }
 
+// ClosureApprovalActor records who recorded a source-issue-closure approval: a
+// human deciding the effect_proposal attention item, or the project's policy
+// actor approving at publication when the human gate is off (plan revision 68,
+// #1487). It does not change what an approval authorizes (the five-field merge
+// binding is unchanged); it names the recorder so the publisher can mark the
+// Source issue line and so the store's second-actor rule can refuse a second
+// recorder for one instance. The zero value is invalid.
+type ClosureApprovalActor string
+
+const (
+	ClosureApprovalActorHuman  ClosureApprovalActor = "human"
+	ClosureApprovalActorPolicy ClosureApprovalActor = "policy"
+)
+
+// AllClosureApprovalActors is the single registration point for the actor.
+var AllClosureApprovalActors = []ClosureApprovalActor{ClosureApprovalActorHuman, ClosureApprovalActorPolicy}
+
+func (a ClosureApprovalActor) valid() bool {
+	switch a {
+	case ClosureApprovalActorHuman, ClosureApprovalActorPolicy:
+		return true
+	default:
+		return false
+	}
+}
+
 // ProposalAdmissionSource identifies the durable occurrence identity supplied
 // at proposal admission. Semantic proposal content is deliberately absent.
 type ProposalAdmissionSource string

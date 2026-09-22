@@ -42,14 +42,17 @@ func (m ProspectiveMerge) Validate() error {
 // closure-side of the §7 rule that a prospective-merge change invalidates prior
 // review and verification.
 type ClosureApproval struct {
-	ProposalDigest      Digest `json:"proposal_digest"`
-	PublicationIdentity Digest `json:"publication_identity"`
-	CandidateHeadSHA    string `json:"candidate_head_sha"`
-	BaseRef             string `json:"base_ref"`
-	BaseSHA             string `json:"base_sha"`
+	ProposalDigest      Digest               `json:"proposal_digest"`
+	PublicationIdentity Digest               `json:"publication_identity"`
+	CandidateHeadSHA    string               `json:"candidate_head_sha"`
+	BaseRef             string               `json:"base_ref"`
+	BaseSHA             string               `json:"base_sha"`
+	Actor               ClosureApprovalActor `json:"actor"`
 }
 
-// Validate reports whether the binding is well-formed.
+// Validate reports whether the binding is well-formed. The zero-value actor is
+// invalid, so an approval reconstructed without a recorder fails closed here and,
+// through the Validate call in AuthorizesClose, authorizes no close.
 func (a ClosureApproval) Validate() error {
 	if !contentaddr.Valid(string(a.ProposalDigest)) {
 		return fmt.Errorf("closure approval proposal_digest %q: %w", a.ProposalDigest, ErrClosureApprovalInconsistent)
@@ -63,6 +66,9 @@ func (a ClosureApproval) Validate() error {
 		if v == "" {
 			return fmt.Errorf("closure approval %s: %w", name, ErrClosureApprovalInconsistent)
 		}
+	}
+	if !a.Actor.valid() {
+		return fmt.Errorf("closure approval actor %q: %w", a.Actor, ErrClosureApprovalInconsistent)
 	}
 	return nil
 }

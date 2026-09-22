@@ -941,6 +941,17 @@ func (tx *WriteTx) RecordProposalDecision(
 	default:
 		return fmt.Errorf("record proposal decision command %q action %q: %w", commandID, action, domain.ErrTransitionCommandMismatch)
 	}
+	// The second-actor rule: a policy approval and a human decision are the two
+	// recorders of one closure, and the per-project gate mode admits exactly one.
+	// Refuse a human decision once a policy approval exists (RecordPolicyClosure-
+	// Approval refuses the mirror), so the two never coexist on one instance.
+	policies, err := tx.countPolicyClosureApprovals(ctx, instanceID)
+	if err != nil {
+		return fmt.Errorf("record proposal decision command %q policy approvals: %w", commandID, err)
+	}
+	if policies > 0 {
+		return fmt.Errorf("record proposal decision command %q: %w", commandID, ErrClosureApprovalActorConflict)
+	}
 	var selected any
 	if selectedDigest != nil {
 		selected = *selectedDigest
@@ -954,17 +965,197 @@ func (tx *WriteTx) RecordProposalDecision(
 	return nil
 }
 
+// RecordPolicyClosureApproval records the project policy actor's approval of a
+// source-issue closure at publication, bound to the merge the daemon observes
+// now. It is the policy counterpart of a human decision: there is no attention
+// item and no command, so the approval is its own durable row. It re-gates
+// before writing exactly as AllocateProposalInstance does (GetProposalInstance
+// re-runs the closable-source gate against current rows), refuses a proposal
+// that is not a propose_site closure, and refuses the second actor when a human
+// decision already exists. One row per instance, upserted, so a moved merge
+// replaces the prior binding (which AuthorizesClose would reject anyway). The
+// returned ClosureApproval carries the policy actor and the instance's current
+// proposal digest.
+func (tx *WriteTx) RecordPolicyClosureApproval(
+	ctx context.Context,
+	instanceID domain.ProposalInstanceID,
+	merge domain.ProspectiveMerge,
+	approvedAt time.Time,
+) (domain.ClosureApproval, error) {
+	if approvedAt.IsZero() {
+		return domain.ClosureApproval{}, fmt.Errorf("record policy closure approval %q: %w", instanceID, domain.ErrEmptyField)
+	}
+	if err := merge.Validate(); err != nil {
+		return domain.ClosureApproval{}, fmt.Errorf("record policy closure approval %q merge: %w", instanceID, err)
+	}
+	// GetProposalInstance re-runs the closed effect-registry gate against current
+	// rows, so a source that is no longer closable admits no approval.
+	instance, err := tx.GetProposalInstance(ctx, instanceID)
+	if err != nil {
+		return domain.ClosureApproval{}, fmt.Errorf("record policy closure approval %q: %w", instanceID, err)
+	}
+	closure := instance.Proposal.ClosureProposal
+	if instance.Proposal.Kind != domain.EffectSourceIssueClosure || closure == nil {
+		return domain.ClosureApproval{}, fmt.Errorf("record policy closure approval %q: not a closure proposal: %w",
+			instanceID, domain.ErrEffectProposalInconsistent)
+	}
+	// A daemon_fallback closure gets the non-holding notice item, never a policy
+	// approval: its resolves flag is always false, so an approval would authorize
+	// no close, and admitting one here would blur the two recorders.
+	if closure.Origin == domain.ClosureFlagOriginDaemonFallback {
+		return domain.ClosureApproval{}, fmt.Errorf("record policy closure approval %q: daemon_fallback: %w",
+			instanceID, domain.ErrEffectProposalInconsistent)
+	}
+	decisions, err := tx.countProposalDecisions(ctx, instanceID)
+	if err != nil {
+		return domain.ClosureApproval{}, fmt.Errorf("record policy closure approval %q decisions: %w", instanceID, err)
+	}
+	if decisions > 0 {
+		return domain.ClosureApproval{}, fmt.Errorf("record policy closure approval %q: %w", instanceID, ErrClosureApprovalActorConflict)
+	}
+	if _, err := tx.tx.ExecContext(ctx, `INSERT INTO effect_proposal_policy_approvals
+		(instance_id, proposal_digest, publication_identity, candidate_head_sha, base_ref, base_sha, approved_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (instance_id) DO UPDATE SET
+			proposal_digest = excluded.proposal_digest,
+			publication_identity = excluded.publication_identity,
+			candidate_head_sha = excluded.candidate_head_sha,
+			base_ref = excluded.base_ref,
+			base_sha = excluded.base_sha,
+			approved_at = excluded.approved_at`,
+		instanceID, instance.Proposal.Digest, string(merge.PublicationIdentity),
+		merge.CandidateHeadSHA, merge.BaseRef, merge.BaseSHA, formatTime(approvedAt.UTC())); err != nil {
+		return domain.ClosureApproval{}, fmt.Errorf("record policy closure approval %q: %w", instanceID, err)
+	}
+	approval := domain.ClosureApproval{
+		ProposalDigest:      instance.Proposal.Digest,
+		PublicationIdentity: merge.PublicationIdentity,
+		CandidateHeadSHA:    merge.CandidateHeadSHA,
+		BaseRef:             merge.BaseRef,
+		BaseSHA:             merge.BaseSHA,
+		Actor:               domain.ClosureApprovalActorPolicy,
+	}
+	if err := approval.Validate(); err != nil {
+		return domain.ClosureApproval{}, fmt.Errorf("record policy closure approval %q: %w", instanceID, err)
+	}
+	return approval, nil
+}
+
+// countProposalDecisions counts the terminal decision rows for an instance, over
+// every action. It is the second-actor guard for the policy-approval write and
+// the human-versus-policy branch selector in ClosureApprovalForInstance.
+func (tx *ReadTx) countProposalDecisions(ctx context.Context, instanceID domain.ProposalInstanceID) (int, error) {
+	var n int
+	if err := tx.tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM effect_proposal_decisions WHERE instance_id = ?`, instanceID).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// countPolicyClosureApprovals counts the policy-approval rows for an instance
+// (zero or one, by the primary key). It is the mirror second-actor guard for the
+// human decision write and the branch selector in ClosureApprovalForInstance.
+func (tx *ReadTx) countPolicyClosureApprovals(ctx context.Context, instanceID domain.ProposalInstanceID) (int, error) {
+	var n int
+	if err := tx.tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM effect_proposal_policy_approvals WHERE instance_id = ?`, instanceID).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 // ClosureApprovalForInstance rebuilds the source-issue-closure approval binding
-// an approve or approve_with_changes decision established, from the durable
-// decision row, its authoring command, the decided item, and that item's stored
-// prospective merge. It returns nil for an undecided or declined instance (the
-// caller reads "no approval" as no close). It fails closed: a non-closure
-// instance, an absent or partial merge, a candidate head that disagrees with the
-// item's PRHeadSHA, an approved digest that no authenticated proposal or
-// revision backs, or a malformed ClosureApproval all yield an error, never a
-// silently weakened approval. #1419 passes the result to
+// for an instance, from whichever recorder established it: a human decision on
+// the effect_proposal item, or the project policy actor at publication. It first
+// counts both recorders. Both present is a corrupt state (the gate mode is per
+// project, and both writes refuse the other actor) and fails closed; neither is
+// nil (the caller reads "no approval" as no close). A policy-only instance is
+// rebuilt from the policy row, a human-only instance from the decision row.
+// Every arm fails closed: a non-closure instance, a source no longer closable, a
+// digest that does not match the instance's current proposal, an absent or
+// partial merge, a candidate head that disagrees with the item's PRHeadSHA, an
+// approved digest no authenticated proposal or revision backs, or a malformed
+// ClosureApproval all yield an error. #1419 passes the result to
 // ClosureApproval.AuthorizesClose with the merge it observes now.
 func (tx *ReadTx) ClosureApprovalForInstance(
+	ctx context.Context,
+	instanceID domain.ProposalInstanceID,
+) (*domain.ClosureApproval, error) {
+	decisions, err := tx.countProposalDecisions(ctx, instanceID)
+	if err != nil {
+		return nil, fmt.Errorf("closure approval for instance %q decisions: %w", instanceID, err)
+	}
+	policies, err := tx.countPolicyClosureApprovals(ctx, instanceID)
+	if err != nil {
+		return nil, fmt.Errorf("closure approval for instance %q policy approvals: %w", instanceID, err)
+	}
+	switch {
+	case decisions > 0 && policies > 0:
+		return nil, fmt.Errorf("closure approval for instance %q: both actors recorded: %w", instanceID, errRowInconsistent)
+	case policies > 0:
+		return tx.policyClosureApproval(ctx, instanceID)
+	case decisions > 0:
+		return tx.humanClosureApproval(ctx, instanceID)
+	default:
+		return nil, nil
+	}
+}
+
+// policyClosureApproval rebuilds a policy-actor approval from its durable row. It
+// re-reads the instance through GetProposalInstance, so a source that is no
+// longer closable fails closed on read too, and requires a propose_site closure
+// whose current proposal digest equals the row's (the write only records
+// propose_site, so a fallback or a stale digest here is corruption). The merge
+// columns are validated through ClosureApproval.Validate, so a blank column that
+// slipped a CHECK cannot become a trusted binding value.
+func (tx *ReadTx) policyClosureApproval(
+	ctx context.Context,
+	instanceID domain.ProposalInstanceID,
+) (*domain.ClosureApproval, error) {
+	var proposalDigest, publicationIdentity, candidateHeadSHA, baseRef, baseSHA string
+	if err := tx.tx.QueryRowContext(ctx, `SELECT proposal_digest, publication_identity,
+		candidate_head_sha, base_ref, base_sha FROM effect_proposal_policy_approvals WHERE instance_id = ?`,
+		instanceID).Scan(&proposalDigest, &publicationIdentity, &candidateHeadSHA, &baseRef, &baseSHA); err != nil {
+		return nil, fmt.Errorf("closure approval for instance %q policy row: %w", instanceID, notFoundOr(err))
+	}
+	instance, err := tx.GetProposalInstance(ctx, instanceID)
+	if err != nil {
+		return nil, fmt.Errorf("closure approval for instance %q: %w", instanceID, err)
+	}
+	closure := instance.Proposal.ClosureProposal
+	if instance.Proposal.Kind != domain.EffectSourceIssueClosure || closure == nil {
+		return nil, fmt.Errorf("closure approval for instance %q: %w", instanceID, errRowInconsistent)
+	}
+	if closure.Origin != domain.ClosureFlagOriginProposeSite {
+		return nil, fmt.Errorf("closure approval for instance %q: policy row on a %q closure: %w",
+			instanceID, closure.Origin, errRowInconsistent)
+	}
+	if domain.Digest(proposalDigest) != instance.Proposal.Digest {
+		return nil, fmt.Errorf("closure approval for instance %q: policy digest disagrees with current proposal: %w",
+			instanceID, errRowInconsistent)
+	}
+	approval := domain.ClosureApproval{
+		ProposalDigest:      instance.Proposal.Digest,
+		PublicationIdentity: domain.Digest(publicationIdentity),
+		CandidateHeadSHA:    candidateHeadSHA,
+		BaseRef:             baseRef,
+		BaseSHA:             baseSHA,
+		Actor:               domain.ClosureApprovalActorPolicy,
+	}
+	if err := approval.Validate(); err != nil {
+		return nil, fmt.Errorf("closure approval for instance %q: %w: %w", instanceID, errRowInconsistent, err)
+	}
+	return &approval, nil
+}
+
+// humanClosureApproval rebuilds the source-issue-closure approval binding an
+// approve or approve_with_changes decision established, from the durable decision
+// row, its authoring command, the decided item, and that item's stored
+// prospective merge. It returns nil for a declined instance (a decline is a
+// decision row with no approve action), the caller reading "no approval" as no
+// close.
+func (tx *ReadTx) humanClosureApproval(
 	ctx context.Context,
 	instanceID domain.ProposalInstanceID,
 ) (*domain.ClosureApproval, error) {
@@ -1045,6 +1236,7 @@ func (tx *ReadTx) ClosureApprovalForInstance(
 		CandidateHeadSHA:    merge.CandidateHeadSHA,
 		BaseRef:             merge.BaseRef,
 		BaseSHA:             merge.BaseSHA,
+		Actor:               domain.ClosureApprovalActorHuman,
 	}
 	if err := approval.Validate(); err != nil {
 		return nil, fmt.Errorf("closure approval for instance %q: %w: %w", instanceID, errRowInconsistent, err)
