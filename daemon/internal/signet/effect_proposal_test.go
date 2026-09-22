@@ -137,6 +137,15 @@ func (f closureFixture) open(t *testing.T, merge domain.ProspectiveMerge) domain
 	return item
 }
 
+func (f closureFixture) openNotice(t *testing.T, merge domain.ProspectiveMerge) domain.AttentionItem {
+	t.Helper()
+	item, err := f.service.OpenEffectProposalNotice(context.Background(), f.instance.ID, merge)
+	if err != nil {
+		t.Fatalf("OpenEffectProposalNotice: %v", err)
+	}
+	return item
+}
+
 func (f closureFixture) decision(item domain.AttentionItem, id string, action domain.Action) signet.ClientCommand {
 	return signet.ClientCommand{
 		CommandID: id, DeviceID: f.device.ID, ExpectedEntityVersion: 1,
@@ -369,6 +378,96 @@ func TestEffectProposalStartActionRejected(t *testing.T) {
 	item := f.open(t, f.merge)
 	if _, err := f.service.Submit(context.Background(), f.decision(item, "wrong-family", domain.ActionStart)); err == nil {
 		t.Fatal("closure item accepted a start action")
+	}
+}
+
+// TestOpenEffectProposalNoticeExceptionalAndActions proves the fallback notice
+// opens as an exceptional interruption offering approve / decline / snooze (no
+// approve_with_changes, a fallback cannot be revised to resolve).
+func TestOpenEffectProposalNoticeExceptionalAndActions(t *testing.T) {
+	f := newClosureFixture(t, true, domain.ClosureFlagOriginDaemonFallback)
+	item := f.openNotice(t, f.merge)
+	if item.Type != domain.AttentionEffectProposal || item.Status != domain.StatusOpen {
+		t.Fatalf("notice = type %q status %q", item.Type, item.Status)
+	}
+	if item.InterruptionClass != domain.InterruptionExceptional {
+		t.Fatalf("notice interruption class = %q, want exceptional", item.InterruptionClass)
+	}
+	got := map[domain.Action]bool{}
+	for _, a := range item.RequestedDecision {
+		got[a] = true
+	}
+	want := map[domain.Action]bool{
+		domain.ActionApprove: true, domain.ActionDecline: true, domain.ActionSnooze: true,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("notice actions = %v, want %v", item.RequestedDecision, want)
+	}
+	for a := range want {
+		if !got[a] {
+			t.Fatalf("notice actions = %v, want %v", item.RequestedDecision, want)
+		}
+	}
+}
+
+// TestOpenEffectProposalNoticeApprovalNeverCloses proves approving the notice
+// records a human decision whose reconstructed approval never authorizes a
+// close: the fallback proposal does not resolve, so AuthorizesClose is false.
+func TestOpenEffectProposalNoticeApprovalNeverCloses(t *testing.T) {
+	f := newClosureFixture(t, true, domain.ClosureFlagOriginDaemonFallback)
+	item := f.openNotice(t, f.merge)
+	if _, err := f.service.Submit(context.Background(), f.decision(item, "notice-approve", domain.ActionApprove)); err != nil {
+		t.Fatalf("approve notice: %v", err)
+	}
+	approval := f.approval(t)
+	if approval == nil {
+		t.Fatal("approving the notice recorded no approval binding")
+	}
+	if approval.AuthorizesClose(f.instance.Proposal, f.merge) {
+		t.Fatal("a notice approval authorized a close")
+	}
+}
+
+// TestOpenEffectProposalNoticeSupersedesOnMergeChange proves a changed merge
+// supersedes the open notice and opens a fresh one, exactly as the gate item.
+func TestOpenEffectProposalNoticeSupersedesOnMergeChange(t *testing.T) {
+	f := newClosureFixture(t, true, domain.ClosureFlagOriginDaemonFallback)
+	first := f.openNotice(t, f.merge)
+	changed := f.merge
+	changed.CandidateHeadSHA = "head-bbb"
+	second := f.openNotice(t, changed)
+	if second.ID == first.ID {
+		t.Fatal("changed merge must open a new notice id")
+	}
+	if superseded := f.readItem(t, first.ID); superseded.Status != domain.StatusSuperseded {
+		t.Fatalf("first notice status = %q, want superseded", superseded.Status)
+	}
+}
+
+// TestOpenEffectProposalNoticeRefusesProposeSite proves the notice is only for a
+// daemon_fallback proposal; a propose_site instance takes the gate card instead.
+func TestOpenEffectProposalNoticeRefusesProposeSite(t *testing.T) {
+	f := newClosureFixture(t, true, domain.ClosureFlagOriginProposeSite)
+	if _, err := f.service.OpenEffectProposalNotice(context.Background(), f.instance.ID, f.merge); !errors.Is(err, domain.ErrEffectProposalInconsistent) {
+		t.Fatalf("notice on propose_site error = %v, want ErrEffectProposalInconsistent", err)
+	}
+}
+
+// TestEffectProposalNoticeFactsServed proves the facts route serves an open
+// fallback notice the same as a gate item: it is a visible effect_proposal.
+func TestEffectProposalNoticeFactsServed(t *testing.T) {
+	f := newClosureFixture(t, true, domain.ClosureFlagOriginDaemonFallback)
+	item := f.openNotice(t, f.merge)
+	facts, err := f.service.GetEffectProposalFacts(context.Background(), item.ID)
+	if err != nil {
+		t.Fatalf("GetEffectProposalFacts(notice): %v", err)
+	}
+	if facts.EffectKind != domain.EffectSourceIssueClosure || facts.SourceIssueClosure == nil {
+		t.Fatalf("notice facts = %#v, want a source_issue_closure arm", facts)
+	}
+	if facts.SourceIssueClosure.Origin != domain.ClosureFlagOriginDaemonFallback ||
+		facts.SourceIssueClosure.Resolves {
+		t.Fatalf("notice closure facts = %#v, want daemon_fallback and resolves=false", facts.SourceIssueClosure)
 	}
 }
 

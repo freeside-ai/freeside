@@ -29,8 +29,45 @@ func (s *Service) OpenEffectProposalItem(
 	instanceID domain.ProposalInstanceID,
 	merge domain.ProspectiveMerge,
 ) (domain.AttentionItem, error) {
+	return s.openEffectProposalItem(ctx, instanceID, merge, false)
+}
+
+// OpenEffectProposalNotice opens (or returns) the default-policy fallback notice
+// for a daemon_fallback closure proposal: the same effect_proposal card, but an
+// exceptional interruption whose reason says the pull request is not held, and
+// whose approval never authorizes a close (the fallback's resolves flag is
+// always false, so ClosureApproval.AuthorizesClose yields false). It refuses a
+// propose_site instance, which takes the gate card instead. Idempotency and
+// supersession key on the merge exactly as the gate item does. The plan tracks
+// the exceptional-interruption rate as a health signal (§3.2), which is what a
+// closure-site failure is (plan revision 68, #1487).
+func (s *Service) OpenEffectProposalNotice(
+	ctx context.Context,
+	instanceID domain.ProposalInstanceID,
+	merge domain.ProspectiveMerge,
+) (domain.AttentionItem, error) {
+	return s.openEffectProposalItem(ctx, instanceID, merge, true)
+}
+
+// openEffectProposalItem is the shared open routine behind the gate item and the
+// fallback notice. The notice flag selects the interruption class and reason and
+// restricts the origin: the gate card admits any closure instance (a
+// daemon_fallback under an on gate is a planned gate too), while the notice is
+// only for a daemon_fallback under the default policy.
+func (s *Service) openEffectProposalItem(
+	ctx context.Context,
+	instanceID domain.ProposalInstanceID,
+	merge domain.ProspectiveMerge,
+	notice bool,
+) (domain.AttentionItem, error) {
 	if err := merge.Validate(); err != nil {
 		return domain.AttentionItem{}, fmt.Errorf("open effect proposal item %q: %w", instanceID, err)
+	}
+	class := domain.InterruptionPlannedGate
+	reason := "Decide the proposed effect on the source issue"
+	if notice {
+		class = domain.InterruptionExceptional
+		reason = "The source issue could not be closed automatically; decide the fallback. This notice does not hold the pull request."
 	}
 	var result domain.AttentionItem
 	err := s.store.Write(ctx, func(tx *store.WriteTx) error {
@@ -42,6 +79,12 @@ func (s *Service) OpenEffectProposalItem(
 		}
 		if instance.Proposal.Kind != domain.EffectSourceIssueClosure || instance.Proposal.ClosureProposal == nil {
 			return fmt.Errorf("open effect proposal item %q: not a closure proposal: %w",
+				instanceID, domain.ErrEffectProposalInconsistent)
+		}
+		// The notice is the daemon_fallback variant; a propose_site instance takes
+		// the gate card instead, never a non-holding notice.
+		if notice && instance.Proposal.ClosureProposal.Origin != domain.ClosureFlagOriginDaemonFallback {
+			return fmt.Errorf("open effect proposal notice %q: not a daemon_fallback proposal: %w",
 				instanceID, domain.ErrEffectProposalInconsistent)
 		}
 		openItem, openMerge, found, err := tx.OpenEffectItemForInstance(ctx, instanceID)
@@ -60,7 +103,7 @@ func (s *Service) OpenEffectProposalItem(
 				return fmt.Errorf("open effect proposal item %q supersede: %w", instanceID, err)
 			}
 		}
-		item, artifact, err := s.newEffectProposalItem(ctx, tx, instance, merge)
+		item, artifact, err := s.newEffectProposalItem(ctx, tx, instance, merge, class, reason)
 		if err != nil {
 			return fmt.Errorf("open effect proposal item %q: %w", instanceID, err)
 		}
@@ -87,11 +130,15 @@ func (s *Service) OpenEffectProposalItem(
 // the approval binding judge the same head. approve_with_changes is offered only
 // when the proposal can be revised to resolve, which a daemon_fallback proposal
 // cannot (SourceIssueClosureParameters.Validate forbids a resolving fallback).
+// The interruption class and reason are the caller's: the gate card is a planned
+// gate, the fallback notice an exceptional interruption that does not hold.
 func (s *Service) newEffectProposalItem(
 	ctx context.Context,
 	tx *store.WriteTx,
 	instance domain.ProposalInstance,
 	merge domain.ProspectiveMerge,
+	class domain.InterruptionClass,
+	reason string,
 ) (domain.AttentionItem, domain.Artifact, error) {
 	closure := instance.Proposal.ClosureProposal
 	declaration, _, err := tx.ResolveProposalSubject(ctx, closure.SubjectHandle)
@@ -127,12 +174,12 @@ func (s *Service) newEffectProposalItem(
 		Subject:           subject,
 		Type:              domain.AttentionEffectProposal,
 		Priority:          domain.PriorityNormal,
-		Reason:            "Decide the proposed effect on the source issue",
+		Reason:            reason,
 		RequestedDecision: actions,
 		EvidenceSnapshot:  []domain.Artifact{artifact},
 		ItemVersion:       1,
 		DisplayNames:      names,
-		InterruptionClass: domain.InterruptionPlannedGate,
+		InterruptionClass: class,
 		Status:            domain.StatusOpen,
 		PRHeadSHA:         merge.CandidateHeadSHA,
 		CreatedAt:         &now,
