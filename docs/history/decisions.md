@@ -1963,3 +1963,26 @@ Revision 61 ("Durable Task Cancellation Requests"):
    The positions are the issue's recommendations as refined by the
    implementing session, decided by the owner through this revision's review;
    [decision note](../../devlog/2026-09-20-0903-spec-issue-comment.md).)
+
+## Revision 67 ("The Publication Author's Pinned-Binding Interim")
+
+1. **The publication author ships on the deployment-pinned binding first, then
+   joins the lineup at #1425.** Revisions 64 and 65 made the author a lineup
+   role that picks its agent, model and effort like every other judgment site.
+   Every such site runs on the deployment-pinned `inference.Binding` today, the
+   interim flag path of Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), and #1425 moves them all to
+   the lineup together. By owner decision the author joins that interim rather
+   than waiting for its own lineup wiring, because the lineup path runs through
+   several unmerged units while today's client PRs still carry fixed boilerplate
+   and no close reference. The author stays a lineup role in the plan; only the
+   order it arrives in changes, and until #1425 nobody can tune its agent or
+   prompt per role. Sections [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) and [5.15](#515-evidence-and-images) carry the
+   interim; the wardless admission class and role-name lineup keys are unchanged.
+2. **The source-issue closure proposal is the first `effect_proposal`
+   instance.** Section [4](#4-the-attention-model) and the Wave 8 row named
+   human-gated follow-up issue filing as the first instance. The closure
+   proposal (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) now comes first, and follow-up filing reuses
+   the same card. This rewords the Section [11](#11-roadmap-build-order-and-coordination) Wave 8 clause but
+   schedules nothing: it adds, moves, and removes no unit.
+
+(Owner decision of 2026-09-20, owner-assigned #1442; [decision note](../../devlog/2026-09-20-1017-author-pinned-interim.md).)
