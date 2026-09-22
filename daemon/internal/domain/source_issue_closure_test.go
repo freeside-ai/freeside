@@ -223,9 +223,18 @@ func TestClosureApprovalGoldenAndSupersession(t *testing.T) {
 	approval := domain.ClosureApproval{
 		ProposalDigest: proposal.Digest, PublicationIdentity: identity,
 		CandidateHeadSHA: "cafebabe", BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
+		Actor: domain.ClosureApprovalActorHuman,
 	}
+	// The policy actor binds the same five values; only the recorder differs, so
+	// a second golden pins the policy rendering beside the human one.
+	policyApproval := approval
+	policyApproval.Actor = domain.ClosureApprovalActorPolicy
 
-	for name, value := range map[string]any{"closure_approval": approval, "prospective_merge": merge} {
+	for name, value := range map[string]any{
+		"closure_approval":        approval,
+		"closure_approval_policy": policyApproval,
+		"prospective_merge":       merge,
+	} {
 		body, err := json.MarshalIndent(value, "", "  ")
 		if err != nil {
 			t.Fatal(err)
@@ -234,13 +243,27 @@ func TestClosureApprovalGoldenAndSupersession(t *testing.T) {
 	}
 
 	if !approval.AuthorizesClose(proposal, merge) {
-		t.Fatal("matching approval does not authorize close")
+		t.Fatal("matching human approval does not authorize close")
+	}
+	if !policyApproval.AuthorizesClose(proposal, merge) {
+		t.Fatal("matching policy approval does not authorize close")
 	}
 
 	// no approval never authorizes: an ill-formed (zero) approval is fail-closed,
 	// so admission alone cannot authorize a close.
 	if (domain.ClosureApproval{}).AuthorizesClose(proposal, merge) {
 		t.Fatal("empty approval authorized close")
+	}
+
+	// A binding with no actor is invalid, and AuthorizesClose (which validates
+	// first) refuses it: an approval reconstructed without a recorder fails closed.
+	noActor := approval
+	noActor.Actor = ""
+	if err := noActor.Validate(); err == nil {
+		t.Fatal("zero-actor approval validated")
+	}
+	if noActor.AuthorizesClose(proposal, merge) {
+		t.Fatal("zero-actor approval authorized close")
 	}
 
 	newHead := merge
@@ -273,5 +296,28 @@ func TestClosureApprovalGoldenAndSupersession(t *testing.T) {
 	unsetApproval.ProposalDigest = unset.Digest
 	if unsetApproval.AuthorizesClose(unset, merge) {
 		t.Fatal("unset resolves flag authorized close")
+	}
+}
+
+// TestClosureApprovalActorRegistered proves every registered actor is a valid
+// binding recorder and an unregistered actor is rejected, so the actor is a
+// closed enum on the approval like every other domain vocabulary.
+func TestClosureApprovalActorRegistered(t *testing.T) {
+	proposal := verifiedClosureProposal(t)
+	base := domain.ClosureApproval{
+		ProposalDigest: proposal.Digest, PublicationIdentity: domain.Digest("sha256:" + strings.Repeat("b", 64)),
+		CandidateHeadSHA: "cafebabe", BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
+	}
+	for _, actor := range domain.AllClosureApprovalActors {
+		approval := base
+		approval.Actor = actor
+		if err := approval.Validate(); err != nil {
+			t.Fatalf("actor %q: Validate = %v, want nil", actor, err)
+		}
+	}
+	bogus := base
+	bogus.Actor = "operator"
+	if err := bogus.Validate(); !errors.Is(err, domain.ErrClosureApprovalInconsistent) {
+		t.Fatalf("bogus actor Validate = %v, want ErrClosureApprovalInconsistent", err)
 	}
 }

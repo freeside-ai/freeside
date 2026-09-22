@@ -4,5 +4,5 @@
   "candidate_head_sha": "cafebabe",
   "base_ref": "refs/heads/main",
   "base_sha": "deadbeef",
-  "actor": "human"
+  "actor": "policy"
 }

@@ -1045,6 +1045,7 @@ func (tx *ReadTx) ClosureApprovalForInstance(
 		CandidateHeadSHA:    merge.CandidateHeadSHA,
 		BaseRef:             merge.BaseRef,
 		BaseSHA:             merge.BaseSHA,
+		Actor:               domain.ClosureApprovalActorHuman,
 	}
 	if err := approval.Validate(); err != nil {
 		return nil, fmt.Errorf("closure approval for instance %q: %w: %w", instanceID, errRowInconsistent, err)
