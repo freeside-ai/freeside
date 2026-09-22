@@ -2611,6 +2611,15 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	); err != nil {
 		return productionTaskOutcome{}, productionPublicationRetryableError(err)
 	}
+	// Admit the source-issue-closure proposal for this reviewed candidate and
+	// bind the merge observed now, right after the author run where the author
+	// input is available (§7 order). It is idempotent and never blocks: a source
+	// that is not closable records a durable no-close answer (issue #1419 Part D).
+	if err := w.reconcilePublicationClosure(
+		ctx, task, binding, checkpoint, reviewInstructions, checkoutDir, report,
+	); err != nil {
+		return productionTaskOutcome{}, productionPublicationRetryableError(err)
+	}
 	candidate, err := w.productionCandidate(ctx, task, binding, checkpoint, adoptedProfile, nil, report)
 	if err != nil {
 		return w.holdPublicMetadataTask(ctx, task, checkpoint.Imported, err)
@@ -5991,8 +6000,9 @@ func (w *productionPublicationWorkflow) productionCandidate(
 	recipe := binding.image.RecipeDigest
 	authorization := checkpoint.Authorization.ID
 	profile := binding.profile.ProfileDigest
-	return publish.Candidate{
+	candidate := publish.Candidate{
 		Repo: binding.admission.Base.Repo, BaseRef: binding.admission.Base.BaseRef,
+		BaseSHA: binding.admission.Base.BaseSHA,
 		HeadSHA: task.HeadSHA, Title: title, Branch: task.Publication.Branch,
 		Body: body, DispositionHistory: dispositionHistory,
 		VerificationReport: report, ImportResult: &checkpoint.Imported,
@@ -6002,7 +6012,15 @@ func (w *productionPublicationWorkflow) productionCandidate(
 		InvocationID: task.PublicationID, RunID: task.RunID,
 		AuthorizationID: &authorization, TrustProfileDigest: &profile,
 		AdoptedTrustProfileDigest: adoptedProfile,
-	}, nil
+	}
+	// Hand the publisher the source-issue reference for this candidate. Every
+	// publication path (forward, recovery, drift repair) composes through here,
+	// so the same reference replays byte-identically; a v1 record keeps its
+	// prose "Source issue:" line and sets nothing here (issue #1419 Part D).
+	if err := w.applyClosureReference(ctx, task, &candidate); err != nil {
+		return publish.Candidate{}, err
+	}
+	return candidate, nil
 }
 
 // adoptedReviewProfileDigest returns the profile revision an effective
