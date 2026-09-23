@@ -1986,3 +1986,27 @@ Revision 61 ("Durable Task Cancellation Requests"):
    schedules nothing: it adds, moves, and removes no unit.
 
 (Owner decision of 2026-09-20, owner-assigned #1442; [decision note](../../devlog/2026-09-20-1017-author-pinned-interim.md).)
+
+## Revision 68 ("Policy Approves the Source-Issue Closure")
+
+1. **Verified and recommended closures are approved by project policy at
+   publication.** A `verified` proposal (daemon-bound `issue_subject` source)
+   and a `recommended` proposal (same-repository client-supplied source URL)
+   both get a recorded approval from the project's policy actor, binding the
+   same fields a human approval binds (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) and superseded by a new
+   merge exactly as before. The publisher writes `Closes` for a `resolves=true`
+   proposal (a valid `resolves=false` result finalizes `Refs`), and the PR opens
+   mergeable.
+2. **A `daemon_fallback` proposal publishes `Refs` and holds nothing.** When
+   the closure site or its admission fails, the publisher writes the descriptive
+   `Refs` or Source issue link, the PR opens mergeable, and at most a
+   non-blocking attention item surfaces the missed close for a person to close
+   manually after the fact; the item never writes `Closes` and never holds the
+   merge.
+3. **The human decision survives as a manual override and a policy option.** A
+   project policy switch restores the prior behavior (attention item, the
+   draft-or-required-check hold); with the gate on, the `effect_proposal` card
+   (Section [4](#4-the-attention-model)) still lets a person decline or flip a
+   policy-approved closure before merge.
+
+(Owner decision of 2026-09-21, owner-assigned #1482; [decision note](../../devlog/2026-09-21-2151-closure-policy-approval.md).)

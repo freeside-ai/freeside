@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 68
+revision: 69
 status: active
-updated: 2026-09-21
+updated: 2026-09-23
 ---
 
 # Freeside
@@ -101,6 +101,7 @@ why.
   - [Measurement](#measurement)
   - [Document Change Discipline](#document-change-discipline)
 - [10. Operations and Onboarding](#10-operations-and-onboarding)
+  - [Environments: Prod, Dev, and Ephemeral](#environments-prod-dev-and-ephemeral)
   - [GitHub App Agent Identity](#github-app-agent-identity)
 - [11. Roadmap, Build Order, and Coordination](#11-roadmap-build-order-and-coordination)
   - [The First Repository Is Deliberately Boring](#the-first-repository-is-deliberately-boring)
@@ -727,6 +728,9 @@ and the operator app.
   helper. It gives boot-time start, logout survival, and operator isolation.
   It stays the end state but is not scheduled in Phase 1.
 
+`prod` and `dev` are the supervised environment tiers and `ephemeral` is the
+bare foreground run (Section [10](#10-operations-and-onboarding), Environments).
+
 **The daemon never runs as root.** One-time privileged work, such as creating
 the user and installing the LaunchDaemon on the hardened path, lives in a
 narrow elevation helper. Privileged services bind only to loopback or
@@ -812,9 +816,10 @@ implementation exists.
   start time under a supervisor). Everything richer stays on the
   authenticated surfaces (Sections [4](#4-the-attention-model) and [5.14](#514-client-synchronization-and-conversations)); the route tells an unpaired
   caller nothing more.
-- Under supervision, the unit file sets an explicit fixed loopback listen
-  address, never the ephemeral default. Bare foreground runs keep
-  `127.0.0.1:0`.
+- Under supervision, the unit file sets an explicit fixed listen port per
+  tier, never the ephemeral default (Section [10](#10-operations-and-onboarding), Environments), on loopback or
+  on the exact verified Tailscale-owned address with its loopback twin
+  (Reachability above). Bare foreground runs keep `127.0.0.1:0`.
 - The daemon durably publishes readiness (`{api_url, pairing_code}`, today's
   one-shot stdout line) to a `0600` runtime file in the state directory on
   every start. Under a supervisor there is no terminal to read stdout, and
@@ -4770,6 +4775,143 @@ out-of-band surface for the one failure the attention system cannot report: a
 dead daemon. Richer operational state on that surface (doctor results, the 1B.1
 signals) layers on in later waves.
 
+### Environments: Prod, Dev, and Ephemeral
+
+Freeside develops Freeside, so a daemon started for testing runs on the same
+host as the operator's real deployment. From revision 69 every Freeside
+instance belongs to exactly one environment tier, and the tier fixes which
+paths, ports, labels, and credentials the instance may use. Before this,
+production was a set of hard-coded paths, a port, and a launchd label, and
+nothing kept a development or agent process off them. A test daemon handed a
+production path could overwrite production's readiness file, inherit its
+GitHub App credentials, or block its restart under launchd `KeepAlive`. The
+per-database lock refuses a second daemon on the same `-db` and nothing else.
+
+- **`prod`:** one instance, launchd-supervised (Section [5.2](#52-the-daemon-and-its-supervisor)): the operator's
+  real deployment.
+- **`dev`:** one instance, launchd-supervised: the operator's own development
+  install. It coexists with `prod` and shares none of its identifiers.
+- **`ephemeral`:** any number of instances, unsupervised: a foreground run per
+  worktree or `mktemp -d` root, listening on `127.0.0.1:0` by default, with no
+  launchd registration and no installed app bundle. Agents run this tier and
+  no other. The operator's real-run harness (`scripts/run-real-work.sh`) is
+  also `ephemeral`.
+  A debug app build is `ephemeral`.
+
+**Derived identifiers.** `prod` and `dev` derive the identifiers below from
+the tier, so no caller chooses those paths. The state root is the parent of
+both the publication authority state directory and the credentials
+directory. `freesided onboard`'s `-state-dir` is the GitHub App authority
+state directory (the daemon's `-publication-state-dir`, not its
+`-state-dir`), and onboard defaults its credentials directory to the
+`credentials` sibling of that directory. The table puts the authority state
+directory at `<root>/daemon/`, so the default lands on `<root>/credentials/`;
+a root one level lower would leave the credentials outside it.
+
+| Identifier | `prod` | `dev` |
+| --- | --- | --- |
+| State root | `~/Library/Application Support/Freeside/` | `~/Library/Application Support/Freeside Dev/` |
+| Daemon state directory (`-state-dir`) | `<root>/daemon/` | `<root>/daemon/` |
+| Publication authority state directory (daemon `-publication-state-dir`, onboard `-state-dir`) | `<root>/daemon/` | `<root>/daemon/` |
+| Database (`-db`) | `<root>/daemon/freeside.db` | `<root>/daemon/freeside.db` |
+| Readiness file | `<root>/daemon/readiness.json` | `<root>/daemon/readiness.json` |
+| Daemon log | `<root>/daemon/freesided.log` | `<root>/daemon/freesided.log` |
+| Credentials directory | `<root>/credentials/` | `<root>/credentials/` |
+| launchd label | `ai.freeside.daemon` | `ai.freeside.daemon.dev` |
+| Bundled LaunchAgent plist | `ai.freeside.daemon.plist` | `ai.freeside.daemon.dev.plist` |
+| App bundle ID | `ai.freeside.app.macos` | `ai.freeside.app.macos.dev` |
+| Display name | Freeside | Freeside Dev |
+| Listen port | `7331` | `7332` |
+
+The listen address follows the Section [5.2](#52-the-daemon-and-its-supervisor) reachability contract in both
+supervised tiers: loopback, or the exact verified Tailscale-owned address
+with its loopback twin on the same port. The same-host app always connects
+over loopback, so its daemon URL is `http://127.0.0.1:<port>` either way.
+
+Two more stores split with the root without a row of their own, because both
+sit beside the database: the ntfy device-topic key (`<db>.ntfy-topic.key`)
+and the local encrypted checkpoints of Section [5.10](#510-coherent-backup-encrypted-checkpoints). They stay separate only
+while the database stays inside its tier's state root.
+
+`ephemeral` derives nothing. The caller supplies `-db`, `-state-dir`,
+`-listen`, and every credential root, and puts the database and state
+directory under one caller-owned root (a worktree subdirectory or a
+`mktemp -d` directory), so the topic key, checkpoints, and readiness file
+stay with that run.
+
+**Resolution.**
+
+- **App:** the `FREESIDE_ENV` environment variable, then the installed
+  bundle's `FreesideEnvironment` Info.plist key, then the build
+  configuration: a `DEBUG` build is `ephemeral`, a release build is `prod`.
+- **Daemon:** the `-environment` flag. A missing flag means `ephemeral`, so a
+  bare run never assumes a supervised identity; the bundled LaunchAgent plists
+  pass `-environment prod` or `-environment dev` explicitly.
+- **Unknown values fail at launch** in both resolvers.
+
+**Rules.**
+
+- **Production publication credentials stay in `prod`, except in attended
+  real work.** A `dev` or `ephemeral` instance starts with no publication
+  credentials: its `-publication-credentials-dir` and onboard
+  `-credentials-dir` resolve under its own root, which starts empty. Test and
+  agent instances never hold the `prod` GitHub App's credentials. The one
+  exception is an attended real-work run (today the real-run harness,
+  `scripts/run-real-work.sh`, and phase-exit runs): it may deliberately
+  enroll the `prod` App's credentials into its `ephemeral` instance, because
+  it is real work and publishes as the real App. The path rules fix where
+  credentials live, not whose they are, so this rule is operator discipline,
+  not a check.
+- **A non-prod instance never names a prod root.** Provider credentials are
+  explicit paths, not derived: the Codex auth stores take `-auth-store-root`
+  and `-input-root`, and `freesided setup` takes `-config-dir`. None of them,
+  nor any other path flag, may resolve under the `prod` state root from a
+  `dev` or `ephemeral` instance.
+- **Host-side runners are `ephemeral` only.** A runner class that executes on
+  the host rather than in a ward runs only under the `attended_dev` operating
+  mode (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)) and only in an `ephemeral` instance.
+- **Supervised tiers keep fixed ports.** The app keys its Keychain device
+  credential by a hash of the daemon URL, so moving a supervised port orphans
+  the pairing. `ephemeral` listens on port `0` by default and pairs afresh on
+  each run. It may take an explicit fixed nonzero port when a paired client
+  must reach the run (the real-run harness pins its listener for the
+  specification-approval gate), but never `7331` or `7332`, the supervised
+  tiers' ports.
+- **Only `prod` carries a remote backup destination.** A Section [5.10](#510-coherent-backup-encrypted-checkpoints)
+  `BackupPolicy.destination` is allowed in `prod` alone; every tier keeps its
+  local checkpoints under its own root.
+- **Exclusive database locking waits for IPC.** Opening the `prod` and `dev`
+  databases with `locking_mode=EXCLUSIVE` is the intended end state, but
+  Freeside's own direct-store clients open the live file today: `freesided
+  follow` and `submit`, and `preflight`, `approve-shadow-review`,
+  `renew-codex`, `comprehension`, and `rig`. An exclusive lock would fail
+  each of them against a running supervised daemon. Exclusive locking is
+  gated on moving those clients to a daemon IPC transport, with the private
+  Unix socket `pairing-code` uses (Section [5.2](#52-the-daemon-and-its-supervisor)) as the natural base, plus a
+  snapshot command for offline `sqlite3` inspection. Until then every tier
+  keeps the default locking mode.
+- **No script stops the production label.** No script, test, or agent stops,
+  unloads, or re-registers `ai.freeside.daemon`. The one exception is the
+  installer: `prod` adopts a merged daemon change when the operator re-runs
+  `app/scripts/install-mac-app.sh --daemon-path ...` (no self-updater
+  exists), and that re-run's re-registration is the one sanctioned stop.
+
+`dev` ships with the first installer change, alongside `prod`: the installer's
+identity constants become parameters of the environment either way, so a
+second tier costs a second plist and registration, not a second installer.
+
+**End state.** The hardened dedicated-user mode (Section [5.2](#52-the-daemon-and-its-supervisor), deferred) is the
+guarantee these rules approximate: a separate account owns the `prod` state
+root, so no process running as the operator can reach it at all. Until it is
+scheduled, the Phase 1 stand-in is the ephemeral guard: an `ephemeral` daemon
+refuses to start when a database, state, or credentials path resolves under a
+supervised tier's state root, or when it is asked to listen on a supervised
+tier's port.
+Every such guard runs in the process it constrains. The guards stop
+accidental misuse, not a process that deliberately claims `prod`. Until
+exclusive locking lands, production holds no protection of its own beyond
+the per-database lock that refuses a second daemon on the same `-db`.
+
 ### GitHub App Agent Identity
 
 Each Freeside operator is a distinct agent principal and holds their own GitHub
@@ -5353,29 +5495,62 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 68 ("Policy Approves the Source-Issue Closure"):
+Revision 69 ("Prod, Dev, and Ephemeral Environments"):
 
-1. **Verified and recommended closures are approved by project policy at
-   publication.** A `verified` proposal (daemon-bound `issue_subject` source)
-   and a `recommended` proposal (same-repository client-supplied source URL)
-   both get a recorded approval from the project's policy actor, binding the
-   same fields a human approval binds (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) and superseded by a new
-   merge exactly as before. The publisher writes `Closes` for a `resolves=true`
-   proposal (a valid `resolves=false` result finalizes `Refs`), and the PR opens
-   mergeable.
-2. **A `daemon_fallback` proposal publishes `Refs` and holds nothing.** When
-   the closure site or its admission fails, the publisher writes the descriptive
-   `Refs` or Source issue link, the PR opens mergeable, and at most a
-   non-blocking attention item surfaces the missed close for a person to close
-   manually after the fact; the item never writes `Closes` and never holds the
-   merge.
-3. **The human decision survives as a manual override and a policy option.** A
-   project policy switch restores the prior behavior (attention item, the
-   draft-or-required-check hold); with the gate on, the `effect_proposal` card
-   (Section [4](#4-the-attention-model)) still lets a person decline or flip a
-   policy-approved closure before merge.
+1. **Every instance belongs to one of three environment tiers.** `prod` and
+   `dev` are single, launchd-supervised instances; `ephemeral` is any number
+   of unsupervised foreground runs, and it is the only tier an agent may run.
+   `prod` and `dev` derive every identifier (state root, label, bundle ID,
+   display name, port, readiness, log, and credentials paths) from the tier;
+   `ephemeral` derives nothing (Section [10](#10-operations-and-onboarding), Environments). A two-tier
+   `prod`/`dev` shape was rejected because agents need many unsupervised
+   instances that share nothing with the operator's own install.
+2. **The environment resolves by a fixed precedence and fails closed.** The
+   app reads `FREESIDE_ENV`, then the bundle's `FreesideEnvironment` key, then
+   the build configuration (`DEBUG` is `ephemeral`); the daemon reads
+   `-environment`, and a missing flag means `ephemeral`. An unknown value fails
+   at launch.
+3. **Non-prod instances never touch prod credentials, ports, or supervision.**
+   A `dev` or `ephemeral` instance starts with no publication credentials and
+   never names a prod root (item 5 is the one credential exception); a
+   host-side runner class runs only under
+   `attended_dev` in an `ephemeral` instance; supervised tiers keep fixed ports
+   because the app's device credential is keyed by the daemon URL, on the
+   Section [5.2](#52-the-daemon-and-its-supervisor) reachability addresses; only `prod` carries a remote backup
+   destination; and nothing but the installer's re-run stops the production
+   label.
+4. **`ephemeral` refuses the supervised ports, not every fixed port.** It
+   listens on port `0` by default and may take an explicit fixed nonzero port
+   other than `7331` or `7332` when a paired client must reach the run, so the
+   real-run harness (`scripts/run-real-work.sh`) stays a valid `ephemeral`
+   run.
+5. **Only an attended real-work run shares the `prod` GitHub App.** Test and
+   agent instances never hold the `prod` App's credentials. An attended
+   real-work run (today the real-run harness and phase-exit runs) may
+   deliberately enroll them into its `ephemeral` instance, because it is real
+   work and publishes as the real App. A distinct App for non-prod instances
+   was rejected: `dev` need not publish, and real work should publish as the
+   real App.
+6. **Exclusive locking of supervised databases is deferred until IPC.**
+   `locking_mode=EXCLUSIVE` on `prod` and `dev` stays the intended end state,
+   the one guard that would not depend on the errant process cooperating. It
+   would also lock out Freeside's direct-store clients (`follow`, `submit`,
+   and the operational commands), so it waits until they move to a daemon
+   IPC transport; until then every tier keeps the default locking mode.
+7. **`dev` ships with the first installer change.** The installer's identity
+   constants become parameters of the environment either way, so `dev` costs a
+   second plist and registration, not a second installer.
+8. **A GitHub-side lease between daemons is declined.** Under item 5, two
+   daemons share the `prod` App only in an attended real-work run the
+   operator starts and watches, so there is no unattended contention for a
+   lease to arbitrate. The hardened
+   dedicated-user mode (Section [5.2](#52-the-daemon-and-its-supervisor)) stays the end-state guarantee.
 
-(Owner decision of 2026-09-21, owner-assigned #1482; [decision note](../devlog/2026-09-21-2151-closure-policy-approval.md).)
+(Owner-assigned #1499, 2026-09-23. Decision 7 adopts the issue's
+recommendation, decided by the owner through this revision's review.
+Decisions 4, 5, and 6, and the lease decline's basis in item 8, are owner
+decisions of 2026-09-23 made in this revision's review;
+[decision note](../devlog/2026-09-23-0939-environment-tiers.md).)
 
 ## 14. Risks
 
