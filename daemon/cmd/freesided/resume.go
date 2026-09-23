@@ -6,13 +6,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/observe"
-	"github.com/freeside-ai/freeside/daemon/internal/observe/observedb"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -60,30 +60,26 @@ func runResumeCommand(ctx context.Context, args []string, stdout, stderr io.Writ
 		return fmt.Errorf("%w: -freshness-window must be positive, got %s", observe.ErrUsage, *window)
 	}
 	if *taskID != "" {
-		st, _, err := openStoreWithTopicKey(ctx, *dbPath, store.Options{})
+		handle, client, err := openCommandStore(ctx, *dbPath, store.Options{}, storeMigrating)
 		if err != nil {
 			return err
 		}
-		readErr := st.Read(ctx, func(tx *store.ReadTx) error {
-			task, err := tx.GetTask(ctx, domain.TaskID(*taskID))
-			if err != nil {
-				return fmt.Errorf("task %q: %w", *taskID, err)
-			}
-			runs, err := tx.TaskRunIDs(ctx, task.ID)
-			if err != nil {
+		if client != nil {
+			defer client.Close()
+			var latest domain.RunID
+			if err := client.get(ctx, "/tasks/"+url.PathEscape(*taskID)+"/latest-run", nil, &latest); err != nil {
 				return err
 			}
-			if len(runs) == 0 {
-				return fmt.Errorf("%w: task %q has no runs", observe.ErrUsage, task.ID)
+			*runID = string(latest)
+		} else {
+			latest, readErr := latestTaskRun(ctx, handle.store, domain.TaskID(*taskID))
+			if err := errors.Join(readErr, handle.Close()); err != nil {
+				return err
 			}
-			*runID = string(runs[len(runs)-1])
-			return nil
-		})
-		if err := errors.Join(readErr, st.Close()); err != nil {
-			return err
+			*runID = string(latest)
 		}
 	}
-	st, err := observedb.Open(ctx, *dbPath)
+	st, err := openObservation(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -102,7 +98,27 @@ func runResumeCommand(ctx context.Context, args []string, stdout, stderr io.Writ
 	if *once {
 		followArgs = append(followArgs, "-once")
 	}
-	return observe.Run(ctx, followArgs, stdout, stderr)
+	return observe.Run(ctx, followArgs, stdout, stderr, openObservation)
+}
+
+func latestTaskRun(ctx context.Context, st *store.Store, taskID domain.TaskID) (domain.RunID, error) {
+	var latest domain.RunID
+	err := st.Read(ctx, func(tx *store.ReadTx) error {
+		task, err := tx.GetTask(ctx, taskID)
+		if err != nil {
+			return fmt.Errorf("task %q: %w", taskID, err)
+		}
+		runs, err := tx.TaskRunIDs(ctx, task.ID)
+		if err != nil {
+			return err
+		}
+		if len(runs) == 0 {
+			return fmt.Errorf("%w: task %q has no runs", observe.ErrUsage, task.ID)
+		}
+		latest = runs[len(runs)-1]
+		return nil
+	})
+	return latest, err
 }
 
 func terminalResumeError(runID domain.RunID, conclusion domain.RunConclusion) error {

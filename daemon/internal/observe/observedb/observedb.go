@@ -5,7 +5,7 @@
 // imports the store to build on them.
 //
 // Its own proof is not another assertion: it is that this file is short
-// enough to read in full and exports exactly three things. An import
+// enough to read in full and exports only the openers, bounded reads, and close. An import
 // allowlist bounds which packages a caller can name, never which methods of
 // a permitted package it calls, so the regress has to stop at a surface
 // small enough to check by eye. This is that surface, and
@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -32,7 +33,22 @@ import (
 
 // Store is a read-only view of one daemon database's run observations.
 type Store struct {
-	store *store.Store
+	store           *store.Store
+	borrowed        bool
+	approvedRecipes []domain.Digest
+}
+
+// Borrow reads through the daemon's already-open store without taking ownership.
+// Its recipe scope can only restrict the daemon's approvals, never widen them.
+func Borrow(st *store.Store, approvedRecipes ...domain.Digest) *Store {
+	return &Store{store: st, borrowed: true, approvedRecipes: slices.Clone(approvedRecipes)}
+}
+
+func (s *Store) read(ctx context.Context, fn func(*store.ReadTx) error) error {
+	if s.borrowed {
+		return s.store.ReadWithRecipeScope(ctx, s.approvedRecipes, fn)
+	}
+	return s.store.Read(ctx, fn)
 }
 
 // AttentionItem is the bounded, non-prose part of an open AttentionItem that
@@ -185,7 +201,7 @@ func (s *Store) ObserveRun(
 	ctx context.Context, runID domain.RunID,
 ) (domain.RunObservation, error) {
 	var observation domain.RunObservation
-	if err := s.store.Read(ctx, func(tx *store.ReadTx) error {
+	if err := s.read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		observation, err = tx.ObserveRun(ctx, runID)
 		return err
@@ -204,7 +220,7 @@ func (s *Store) ObserveConclusion(
 ) (domain.RunObservation, domain.RunConclusion, error) {
 	var observation domain.RunObservation
 	var conclusion domain.RunConclusion
-	if err := s.store.Read(ctx, func(tx *store.ReadTx) error {
+	if err := s.read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		observation, err = tx.ObserveRun(ctx, runID)
 		if err != nil {
@@ -248,7 +264,7 @@ func (s *Store) ObserveConclusion(
 // no raw SQLite handle or mutable store capability crosses this package.
 func (s *Store) ObserveSnapshot(ctx context.Context, runID domain.RunID) (Snapshot, error) {
 	var snapshot Snapshot
-	if err := s.store.Read(ctx, func(tx *store.ReadTx) error {
+	if err := s.read(ctx, func(tx *store.ReadTx) error {
 		observation, err := tx.ObserveRun(ctx, runID)
 		if err != nil {
 			return err
@@ -558,6 +574,9 @@ func lastStage(run domain.Run) string {
 
 // Close releases the database handle.
 func (s *Store) Close() error {
+	if s.borrowed {
+		return nil
+	}
 	if err := s.store.Close(); err != nil {
 		return fmt.Errorf("close store: %w", err)
 	}

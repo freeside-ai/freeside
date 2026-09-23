@@ -258,6 +258,24 @@ func (f *LocalBackupFiles) NewCheckpointHealthSource(
 	return newEncryptedCheckpointHealthSource(opts, f)
 }
 
+// NewScopedCheckpointHealthSource narrows the initialized file set's recipe
+// approvals for one caller. It shares the producer's generation lease and
+// live-closure-gap state without changing producer policy or other evaluators.
+func (f *LocalBackupFiles) NewScopedCheckpointHealthSource(requested map[domain.Digest]bool) (BackupHealthSource, error) {
+	if f == nil {
+		return nil, errors.New("encrypted checkpoint health: nil backup files")
+	}
+	approved := map[domain.Digest]bool{}
+	for recipe, requested := range requested {
+		if requested && (recipe == domain.EffectProposalRecipeDigest || f.approvedRecipes[recipe]) {
+			approved[recipe] = true
+		}
+	}
+	return newEncryptedCheckpointHealthSource(LocalCheckpointHealthOptions{
+		Artifacts: f.artifacts, ApprovedRecipes: approved, PayloadExtractors: f.payloadExtractors,
+	}, f)
+}
+
 // NewLocalCheckpointHealthSource retains the pre-encryption evaluator for
 // compatibility tests. It always reports encryption unhealthy, so it cannot
 // admit unattended work in this build.

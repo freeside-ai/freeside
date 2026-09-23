@@ -28,7 +28,7 @@ import (
 func runFollowMain(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	err := observe.Run(ctx, args, os.Stdout, os.Stderr)
+	err := observe.Run(ctx, args, os.Stdout, os.Stderr, openObservation)
 	if err == nil {
 		return
 	}

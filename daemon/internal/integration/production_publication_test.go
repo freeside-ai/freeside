@@ -32,6 +32,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	inferencefake "github.com/freeside-ai/freeside/daemon/internal/inference/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/observe"
+	"github.com/freeside-ai/freeside/daemon/internal/observe/observedb"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -39,6 +40,10 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/topicstore"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
+
+func openIntegrationObservation(ctx context.Context, path string, recipes ...domain.Digest) (observe.Source, error) {
+	return observedb.Open(ctx, path, recipes...)
+}
 
 type productionRoom struct {
 	recipe []byte
@@ -1199,7 +1204,7 @@ func TestProductionPublicationSupervisionRejectsUnboundReadyMilestone(t *testing
 		"-run", string(p.runID),
 		"-snapshot",
 		"-approved-recipe", string(p.recipeD),
-	}, &stdout, &stderr)
+	}, &stdout, &stderr, openIntegrationObservation)
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("follow forged publication_ready = %v, want ErrNotFound (stderr: %s)",
 			err, stderr.String())
@@ -1222,7 +1227,7 @@ func productionSupervisionState(
 		"-run", string(p.runID),
 		"-snapshot",
 		"-approved-recipe", string(p.recipeD),
-	}, &stdout, &stderr)
+	}, &stdout, &stderr, openIntegrationObservation)
 	if err != nil {
 		t.Fatalf("follow -snapshot: %v (stderr: %s)", err, stderr.String())
 	}
@@ -5475,7 +5480,7 @@ func TestProductionPublicationRerunTrustEvaluationSurvivesRestart(t *testing.T) 
 	var followOut, followErr bytes.Buffer
 	if err := observe.Run(p.ctx, []string{
 		"-db", p.dbPath, "-run", string(p.runID), "-once",
-	}, &followOut, &followErr); err != nil {
+	}, &followOut, &followErr, openIntegrationObservation); err != nil {
 		t.Fatalf("follow ready-after-blocked: %v (stderr: %s)", err, followErr.String())
 	}
 	if !strings.Contains(followOut.String(), "outcome  published") ||

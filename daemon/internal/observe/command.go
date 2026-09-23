@@ -25,12 +25,22 @@ import (
 // second.
 var ErrUsage = errors.New("invalid invocation")
 
-// Run parses the follow verb's flags, opens the daemon's store, and follows
+// Source is the bounded observation surface supplied by the command shim.
+type Source interface {
+	ObserveRun(context.Context, domain.RunID) (domain.RunObservation, error)
+	ObserveConclusion(context.Context, domain.RunID) (domain.RunObservation, domain.RunConclusion, error)
+	ObserveSnapshot(context.Context, domain.RunID) (observedb.Snapshot, error)
+	Close() error
+}
+
+type Opener func(context.Context, string, ...domain.Digest) (Source, error)
+
+// Run parses the follow verb's flags, opens the selected observation source, and follows
 // the selected run to a final outcome, an interrupt, or (with -once) a single
 // snapshot. Observing a run whose own outcome is blocked or failed succeeds:
 // the command reports what the daemon saw, and the printed outcome line
 // carries the run's verdict.
-func Run(ctx context.Context, args []string, stdout, stderr io.Writer) (err error) {
+func Run(ctx context.Context, args []string, stdout, stderr io.Writer, open Opener) (err error) {
 	flags := flag.NewFlagSet("freesided follow", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	dbPath := flags.String("db", "", "SQLite database path (required)")
@@ -60,14 +70,13 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) (err erro
 	case *approvedRecipe != "" && !*snapshot:
 		return fmt.Errorf("%w: -approved-recipe requires -snapshot", ErrUsage)
 	}
-	// observedb is the only database access this package has, and its whole
-	// exported surface is open, two bounded reads, close: no write,
+	// Source is the only database access this package has: no write,
 	// checkpoint, restore, or backup-file capability reaches the follow path.
 	var approvedRecipes []domain.Digest
 	if *approvedRecipe != "" {
 		approvedRecipes = append(approvedRecipes, domain.Digest(*approvedRecipe))
 	}
-	db, err := observedb.Open(ctx, *dbPath, approvedRecipes...)
+	db, err := open(ctx, *dbPath, approvedRecipes...)
 	if err != nil {
 		return err
 	}

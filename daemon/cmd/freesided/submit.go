@@ -209,6 +209,29 @@ type submissionFile struct {
 	body   []byte
 }
 
+// submitApplyRequest is the validated, journaled input crossing the private
+// control socket. File paths stay in the client; the daemon receives bytes.
+type submitApplyRequest struct {
+	SubmissionID          string
+	LegacyRunID           domain.RunID
+	ProjectID             domain.ProjectID
+	SpecBody              []byte
+	SpecDigest            domain.Digest
+	PolicyBody            []byte
+	PolicyDigest          domain.Digest
+	Publication           engine.ProductionPublication
+	PublicationDigest     domain.Digest
+	PublicationBodyDigest domain.Digest
+	WorkUnitDigest        domain.Digest
+	Keys                  []domain.PolicyKey
+	WorkUnit              *domain.WorkUnitDeclarationInput
+	ResolvedPolicy        domain.ResolvedPolicy
+	ImplementationRunID   domain.RunID
+	SpecificationRunID    domain.RunID
+	CampaignID            domain.CampaignID
+	CompositionDigest     domain.Digest
+}
+
 // readSubmissionFile hashes one input file under the size cap. The digest is
 // computed here, never trusted from the caller, so the registered artifact
 // and the run's trusted configuration name exactly the bytes read.
@@ -425,11 +448,55 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		return runSubmitCommand(ctx, submitCommandConfig{DBPath: cfg.DBPath, RetrySubmissionID: cfg.SubmissionID})
 	}
 
-	st, _, err := openStoreWithTopicKey(ctx, cfg.DBPath, store.Options{})
+	req := submitApplyRequest{
+		SubmissionID: cfg.SubmissionID, LegacyRunID: cfg.RunID, ProjectID: cfg.ProjectID,
+		SpecBody: spec.body, SpecDigest: spec.digest, PolicyBody: policy.body,
+		PolicyDigest: policy.digest, Publication: publication, PublicationDigest: publicationDigest,
+		PublicationBodyDigest: publicationFile.digest, WorkUnitDigest: workUnitDigest,
+		Keys: keys, WorkUnit: workUnit, ResolvedPolicy: resolvedPolicy,
+		ImplementationRunID: implementationRunID, SpecificationRunID: specificationRunID,
+		CampaignID: campaignID, CompositionDigest: composition.digest,
+	}
+	handle, client, err := openCommandStore(ctx, cfg.DBPath, store.Options{}, storeMigrating)
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: open store: %w", err)
 	}
-	defer func() { _ = st.Close() }()
+	if client != nil {
+		defer client.Close()
+		var result submitResult
+		err := client.call(ctx, "/submissions", req, &result)
+		return result, err
+	}
+	defer func() { _ = handle.Close() }()
+	blobs, err := signet.NewBlobStore(cfg.DBPath + ".blobs")
+	if err != nil {
+		return submitResult{}, fmt.Errorf("submit: open blob store: %w", err)
+	}
+	return applySubmission(ctx, handle.store, blobs, req)
+}
+
+// applySubmission runs the same store transaction for offline and daemon-routed
+// submissions. The caller owns the store and blob store.
+func applySubmission(ctx context.Context, st *store.Store, blobs *signet.BlobStore, req submitApplyRequest) (submitResult, error) {
+	if err := validateSubmitApply(req); err != nil {
+		return submitResult{}, fmt.Errorf("submit: invalid prepared request: %w", err)
+	}
+	cfg := submitCommandConfig{SubmissionID: req.SubmissionID, RunID: req.LegacyRunID, ProjectID: req.ProjectID}
+	spec := submissionFile{digest: req.SpecDigest, body: req.SpecBody}
+	policy := submissionFile{digest: req.PolicyDigest, body: req.PolicyBody}
+	publication := req.Publication
+	publicationDigest := req.PublicationDigest
+	keys := req.Keys
+	workUnit := req.WorkUnit
+	resolvedPolicy := req.ResolvedPolicy
+	publicationFile := submissionFile{digest: req.PublicationBodyDigest}
+	workUnitDigest := req.WorkUnitDigest
+	policyDigest := resolvedPolicy.Digest
+	implementationRunID := req.ImplementationRunID
+	specificationRunID := req.SpecificationRunID
+	campaignID := req.CampaignID
+	composition := submissionFile{digest: req.CompositionDigest}
+	var err error
 	// A database written before the rename holds this task's intake
 	// state under the legacy specification identity; converge on it instead
 	// of minting a second specification run for the same implementation.
@@ -441,11 +508,6 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 			return submitResult{}, fmt.Errorf("submit: validate resolved policy: %w", err)
 		}
 	}
-	blobs, err := signet.NewBlobStore(cfg.DBPath + ".blobs")
-	if err != nil {
-		return submitResult{}, fmt.Errorf("submit: open blob store: %w", err)
-	}
-
 	// Bytes land before metadata: an artifact row must never name a digest
 	// the blob store cannot serve, since admission materializes stage inputs
 	// by digest.
@@ -563,6 +625,72 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		result.WorkUnitID = domain.WorkUnitIDForRun(submitted.ImplementationRunID)
 	}
 	return result, nil
+}
+
+func validateSubmitApply(req submitApplyRequest) error {
+	if len(req.SpecBody) == 0 || len(req.SpecBody) > maxSubmissionFileBytes ||
+		len(req.PolicyBody) == 0 || len(req.PolicyBody) > maxSubmissionFileBytes ||
+		submissionBytes(req.SpecBody).digest != req.SpecDigest ||
+		submissionBytes(req.PolicyBody).digest != req.PolicyDigest {
+		return errors.New("input bytes do not match their digests or size limits")
+	}
+	if err := req.Publication.Validate(); err != nil {
+		return err
+	}
+	publicationBody, err := json.Marshal(req.Publication)
+	if err != nil {
+		return err
+	}
+	if submissionBytes(publicationBody).digest != req.PublicationBodyDigest {
+		return errors.New("publication digest does not match its body")
+	}
+	policy, err := domain.NewResolvedPolicy(req.SpecificationRunID, req.Keys)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(policy, req.ResolvedPolicy) || req.PolicyDigest != policy.Digest {
+		return errors.New("resolved policy does not match its keys and digest")
+	}
+	if err := engine.SubmittedPathBoundary(policy); err != nil {
+		return err
+	}
+	wantSpec, err := engine.SpecificationRunIDForImplementation(req.ImplementationRunID)
+	if err != nil || wantSpec != req.SpecificationRunID {
+		return errors.New("specification run identity mismatch")
+	}
+	wantCampaign, err := engine.ProductionCampaignIDForImplementation(req.ImplementationRunID)
+	if err != nil || wantCampaign != req.CampaignID {
+		return errors.New("campaign identity mismatch")
+	}
+	if req.WorkUnit == nil {
+		if req.WorkUnitDigest != "" {
+			return errors.New("work-unit digest without declaration")
+		}
+	} else {
+		declared := submittedWorkUnit{
+			CompletionCriterion: req.WorkUnit.CompletionCriterion, BoundIssue: req.WorkUnit.BoundIssue,
+			DependsOnIssues: req.WorkUnit.DependsOnIssues, ContractSerialized: req.WorkUnit.ContractSerialized,
+		}
+		body, err := json.Marshal(declared)
+		if err != nil {
+			return err
+		}
+		if submissionBytes(body).digest != req.WorkUnitDigest ||
+			!slices.Equal(req.WorkUnit.DeclaredPaths, engine.DeclaredPathScope(req.Keys)) {
+			return errors.New("work-unit declaration does not match its digest or policy paths")
+		}
+	}
+	if req.LegacyRunID != "" {
+		if req.LegacyRunID != req.ImplementationRunID {
+			return errors.New("legacy run identity mismatch")
+		}
+	} else {
+		if req.SubmissionID == "" || req.PublicationDigest != req.PublicationBodyDigest ||
+			engine.ManualSubmissionRunID("cli:"+req.SubmissionID, req.ProjectID, req.SpecDigest, policy.Digest, req.PublicationBodyDigest, req.WorkUnitDigest) != req.ImplementationRunID {
+			return errors.New("manual submission identity mismatch")
+		}
+	}
+	return nil
 }
 
 // validateSubmissionComposition binds a passing preflight manifest to the

@@ -832,7 +832,8 @@ implementation exists.
   is separate from startup readiness; a conflicting owner is refused and
   shutdown removes only owned control resources. The command prints the
   endpoint, code and expiry, without restarting or changing the workflow.
-  There is no network mint route or new paired-device authority.
+  The same socket carries operational commands that serve the running daemon;
+  there is no network mint route or new paired-device authority.
 - The away-from-host liveness probe stays outside the process (Section [5.16](#516-the-durable-scheduler)
   keeps process heartbeats as plain tickers). An external probe polls
   `/health` and notifies over ntfy when the daemon is unreachable or

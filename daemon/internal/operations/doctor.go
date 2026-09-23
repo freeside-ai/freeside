@@ -31,8 +31,12 @@ type DoctorReport struct {
 // Doctor evaluates existing durable conformance and live backup primitives,
 // then converges their system_health items.
 type Doctor struct {
-	Store               *store.Store
-	Attention           *signet.Service
+	Store     *store.Store
+	Attention *signet.Service
+	// BackupHealthSource optionally narrows a one-shot caller's checkpoint
+	// policy. The store validates its result against a coherent live snapshot;
+	// nil uses the store's ordinary source.
+	BackupHealthSource  store.BackupHealthSource
 	ProjectID           domain.ProjectID
 	Backend             domain.RunnerBackendClass
 	ConfigurationDigest domain.Digest
@@ -160,7 +164,12 @@ func (d Doctor) Run(ctx context.Context) (DoctorReport, error) {
 		return DoctorReport{}, err
 	}
 	findings = append(findings, reviewConfiguration)
-	backup, err := d.Store.BackupHealth(ctx)
+	var backup domain.BackupHealth
+	if d.BackupHealthSource == nil {
+		backup, err = d.Store.BackupHealth(ctx)
+	} else {
+		backup, err = d.Store.BackupHealthWithSource(ctx, d.BackupHealthSource)
+	}
 	if err != nil {
 		return DoctorReport{}, fmt.Errorf("doctor: backup health: %w", err)
 	}

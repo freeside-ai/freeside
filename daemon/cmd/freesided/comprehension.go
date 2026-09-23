@@ -50,11 +50,15 @@ func runComprehensionMeasures(ctx context.Context, args []string, stdout, stderr
 	if *dbPath == "" {
 		return errors.New("-db is required")
 	}
-	st, err := store.OpenExisting(ctx, *dbPath, store.Options{})
+	handle, client, err := openCommandStore(ctx, *dbPath, store.Options{}, storeExisting)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
-	defer func() { err = errors.Join(err, st.Close()) }()
+	if client != nil {
+		return getCommand(ctx, client, "/comprehension/measures", stdout)
+	}
+	defer func() { err = errors.Join(err, handle.Close()) }()
+	st := handle.store
 
 	var (
 		events   []domain.ComprehensionEvent
@@ -125,11 +129,15 @@ func runComprehensionRecordDefect(ctx context.Context, args []string, stdout, st
 		ItemID: domain.ItemID(*item), ClaimDigest: domain.Digest(*claim),
 		RecordedAt: time.Now().UTC(), Reason: *reason,
 	}
-	st, err := store.OpenExisting(ctx, *dbPath, store.Options{})
+	handle, client, err := openCommandStore(ctx, *dbPath, store.Options{}, storeExisting)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
-	defer func() { err = errors.Join(err, st.Close()) }()
+	if client != nil {
+		return callCommand(ctx, client, "/comprehension/defects", append([]string{"record-defect"}, args...), stdout)
+	}
+	defer func() { err = errors.Join(err, handle.Close()) }()
+	st := handle.store
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordComprehensionDefect(ctx, defect)
 	}); err != nil {

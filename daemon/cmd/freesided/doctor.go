@@ -70,32 +70,72 @@ func runDoctorCommand(
 	if mode == domain.ModeUnattended && *reviewConfigurationDigest == "" {
 		return errors.New("-review-configuration-digest is required in unattended mode")
 	}
-	blobs, err := signet.NewBlobStore(*dbPath + ".blobs")
-	if err != nil {
-		return fmt.Errorf("open artifact store: %w", err)
+	if daemon, borrowed := ctx.Value(daemonStoreContextKey{}).(daemonStoreContext); borrowed {
+		canonical, err := canonicalDatabasePath(*dbPath)
+		if err != nil {
+			return err
+		}
+		if canonical != daemon.dbPath {
+			return errors.New("database path mismatch")
+		}
 	}
-	files, err := store.NewDefaultLocalBackupFiles(*dbPath)
-	if err != nil {
-		return err
+	var access storeAccess
+	if _, borrowed := ctx.Value(daemonStoreContextKey{}).(daemonStoreContext); !borrowed {
+		access, err = openStoreOrControl(*dbPath)
+		if err != nil {
+			return err
+		}
+		if access.client != nil {
+			return callCommand(ctx, access.client, "/doctor", args, stdout)
+		}
+		defer func() { err = errors.Join(err, access.Close()) }()
 	}
-	health, err := files.NewCheckpointHealthSource(
-		blobs,
-		approvedRecipes,
-		backupPayloadExtractors(),
-	)
-	if err != nil {
-		return err
+	var blobs *signet.BlobStore
+	var st *store.Store
+	var backupHealth store.BackupHealthSource
+	if daemon, borrowed := ctx.Value(daemonStoreContextKey{}).(daemonStoreContext); borrowed {
+		for digest := range approvedRecipes {
+			if digest != domain.EffectProposalRecipeDigest && !daemon.approvedRecipes[digest] {
+				return fmt.Errorf("recipe %s is not approved by the running daemon", digest)
+			}
+		}
+		st = daemon.store
+		blobs = daemon.blobs
+		backupHealth, err = daemon.backupFiles.NewScopedCheckpointHealthSource(approvedRecipes)
+		if err != nil {
+			return err
+		}
+	} else {
+		blobs, err = signet.NewBlobStore(*dbPath + ".blobs")
+		if err != nil {
+			return fmt.Errorf("open artifact store: %w", err)
+		}
+		files, err := store.NewDefaultLocalBackupFiles(*dbPath)
+		if err != nil {
+			return err
+		}
+		health, err := files.NewCheckpointHealthSource(
+			blobs,
+			approvedRecipes,
+			backupPayloadExtractors(),
+		)
+		if err != nil {
+			return err
+		}
+		opened, _, openErr := openStoreWithTopicKey(ctx, *dbPath, store.Options{
+			ApprovedRecipes: approvedRecipes, BackupHealthSource: health,
+		})
+		if openErr != nil {
+			return openErr
+		}
+		st = opened
 	}
-	st, _, err := openStoreWithTopicKey(ctx, *dbPath, store.Options{
-		ApprovedRecipes: approvedRecipes, BackupHealthSource: health,
-	})
-	if err != nil {
-		return err
+	if _, borrowed := ctx.Value(daemonStoreContextKey{}).(daemonStoreContext); !borrowed {
+		defer func() { err = errors.Join(err, st.Close()) }()
 	}
-	defer func() { err = errors.Join(err, st.Close()) }()
 	attention := signet.NewService(st, signet.WithBlobStore(blobs))
 	report, err := (operations.Doctor{
-		Store: st, Attention: attention,
+		Store: st, Attention: attention, BackupHealthSource: backupHealth,
 		ProjectID:                 domain.ProjectID(*projectID),
 		Backend:                   domain.BackendFreshVMReadOnlyVolumeHandoff,
 		ConfigurationDigest:       domain.Digest(*configurationDigest),
