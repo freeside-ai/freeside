@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
@@ -73,8 +74,8 @@ func TestDaemonRecoversAcrossSIGKILL(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			marker := filepath.Join(root, "kill-checkpoint")
-			first := startProcessFixture(t, binary, root, ntfy.URL, tc.checkpoint, marker)
 			seedKillRecoveryReadiness(t, filepath.Join(root, "freeside.db"))
+			first := startProcessFixture(t, binary, root, ntfy.URL, tc.checkpoint, marker)
 			client := pairProcessDevice(t, first.ready)
 			approval := client.waitForItem(t, domain.ItemID("approval-"+string(defaultFakeRunID)))
 			client.submit(t, "approve-kill-recovery", approval, domain.ActionApprove, "")
@@ -103,7 +104,9 @@ func waitForDurableStop(t *testing.T, root string) {
 	t.Helper()
 	deadline := time.Now().Add(processWaitBound)
 	for time.Now().Before(deadline) {
-		st, err := store.Open(context.Background(), filepath.Join(root, "freeside.db"), store.Options{})
+		// Read-only: a writable open would contend for the write lock the
+		// recovering daemon holds on every transaction (#1333).
+		st, err := store.OpenReadOnly(context.Background(), filepath.Join(root, "freeside.db"), store.Options{})
 		if err == nil {
 			var found bool
 			err = st.Read(context.Background(), func(tx *store.ReadTx) error {
@@ -172,20 +175,44 @@ func killRecoveryReadinessOptions(grant domain.Digest) store.Options {
 
 func seedKillRecoveryReadiness(t *testing.T, path string) {
 	t.Helper()
-	ctx := context.Background()
 	resolution, waiver, event := killRecoveryReadinessFixture(t)
-	st := storetest.Open(t, path, killRecoveryReadinessOptions(waiver.GrantDigest))
+	if err := seedKillRecoveryReadinessRecords(path, resolution, waiver, event); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// seedKillRecoveryReadinessRecords writes the readiness rows while holding the
+// daemon lock. A live daemon takes SQLite's write lock on every transaction, so
+// a concurrent writable open here starves on busy_timeout (#1333); the daemon
+// lock turns that intermittent SQLITE_BUSY into an immediate
+// daemonlock.ErrAlreadyRunning. Callers seed before starting the daemon, and
+// the open goes through the daemon's own path so a new store gets the ntfy
+// topic key the daemon requires of an existing one.
+func seedKillRecoveryReadinessRecords(
+	path string,
+	resolution domain.RequirementResolution,
+	waiver domain.ValidatedDegradedWaiver,
+	event domain.WaiverLifecycleEvent,
+) (err error) {
+	lock, err := daemonlock.Acquire(path)
+	if err != nil {
+		return fmt.Errorf("seed readiness: %w", err)
+	}
+	defer func() { err = errors.Join(err, lock.Close()) }()
+	ctx := context.Background()
+	st, _, err := openStoreWithTopicKey(ctx, path, killRecoveryReadinessOptions(waiver.GrantDigest))
+	if err != nil {
+		return fmt.Errorf("seed readiness: open store: %w", err)
+	}
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		if err := tx.RecordRequirementResolution(ctx, resolution); err != nil {
 			return err
 		}
 		return tx.RecordValidatedDegradedWaiver(ctx, waiver, event)
 	}); err != nil {
-		t.Fatal(err)
+		return errors.Join(fmt.Errorf("seed readiness: write: %w", err), st.Close())
 	}
-	if err := st.Close(); err != nil {
-		t.Fatal(err)
-	}
+	return st.Close()
 }
 
 func assertKillRecoveryReadiness(t *testing.T, path string) {
