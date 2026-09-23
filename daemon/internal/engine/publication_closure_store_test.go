@@ -151,7 +151,7 @@ func TestReconcileClosureDefaultPolicyRecordsBindingApproval(t *testing.T) {
 	want := productionClosureCheckpoint{
 		Version: productionClosureCheckpointVersion, RunID: task.RunID, PublicationID: task.PublicationID,
 	}
-	decided, admitted, err := w.admitClosureProposal(ctx, key, want, task, source, target, domain.ClosureFlagOriginProposeSite, true)
+	decided, admitted, err := w.admitClosureProposal(ctx, key, want, task, source, target, domain.ClosureFlagOriginProposeSite, true, "")
 	if err != nil {
 		t.Fatalf("admit closure proposal: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestBindClosureMergeRefusesForeignInstance(t *testing.T) {
 	want := productionClosureCheckpoint{
 		Version: productionClosureCheckpointVersion, RunID: task.RunID, PublicationID: task.PublicationID,
 	}
-	decided, admitted, err := w.admitClosureProposal(ctx, key, want, task, source, target, domain.ClosureFlagOriginProposeSite, true)
+	decided, admitted, err := w.admitClosureProposal(ctx, key, want, task, source, target, domain.ClosureFlagOriginProposeSite, true, "")
 	if err != nil || !admitted {
 		t.Fatalf("admit closure proposal: admitted=%t err=%v", admitted, err)
 	}

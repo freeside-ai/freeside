@@ -34,7 +34,8 @@ const (
 const (
 	maxAuthorDiffBytes        = 256 << 10
 	maxAuthorIssueBodyBytes   = 64 << 10
-	maxAuthorControlFileBytes = 64 << 10
+	maxAuthorTemplateBytes    = 64 << 10
+	maxAuthorInstructionBytes = 256 << 10
 
 	diffTruncationMarker      = "\n\n[content truncated to fit the model input budget]"
 	issueBodyTruncationMarker = "\n\n[content truncated to fit the model input budget]"
@@ -88,22 +89,55 @@ type ControlFile struct {
 	TrustedBaseCommit string
 }
 
+// AuthorControlFileError reports a fixed validation cause without copying
+// control-plane content into a checkpoint or preflight manifest.
+type AuthorControlFileError struct {
+	Field string
+	Bytes int
+	Limit int
+	Cause string
+}
+
+func (e *AuthorControlFileError) Error() string {
+	return fmt.Sprintf("%s: %d bytes (limit %d): %s", e.Field, e.Bytes, e.Limit, e.Cause)
+}
+
+// ValidateAuthorControlFile is shared by preflight and both runtime sites.
+// Callers pass only the two fixed author field names.
+func ValidateAuthorControlFile(field string, cf ControlFile) error {
+	limit := 0
+	switch field {
+	case "pr_template":
+		limit = maxAuthorTemplateBytes
+	case "instruction_snapshot":
+		limit = maxAuthorInstructionBytes
+	default:
+		return errors.New("unknown author control field")
+	}
+	cause := ""
+	switch {
+	case cf.TrustedBaseCommit == "":
+		cause = "missing trusted-base commit"
+	case len(cf.Content) > limit:
+		cause = "exceeds author input budget"
+	case !utf8.ValidString(cf.Content):
+		cause = "invalid UTF-8"
+	case cf.Digest != contentaddr.Sum([]byte(cf.Content)):
+		cause = "digest mismatch"
+	}
+	if cause != "" {
+		return &AuthorControlFileError{Field: field, Bytes: len(cf.Content), Limit: limit, Cause: cause}
+	}
+	return nil
+}
+
 // checked returns the control file's content only when it is digest-consistent,
 // carries a trusted-base commit, is valid UTF-8, and fits the input budget. Any
 // failure aborts the call to its fail-safe: the type has no field that could
 // carry a candidate-head copy, so a rejected control file cannot be smuggled in.
-func (cf ControlFile) checked() (string, error) {
-	if cf.TrustedBaseCommit == "" {
-		return "", errors.New("control file has no trusted-base commit")
-	}
-	if len(cf.Content) > maxAuthorControlFileBytes {
-		return "", errors.New("control file exceeds the input budget")
-	}
-	if !utf8.ValidString(cf.Content) {
-		return "", errors.New("control file is not valid UTF-8")
-	}
-	if cf.Digest != contentaddr.Sum([]byte(cf.Content)) {
-		return "", errors.New("control file digest does not match its content")
+func (cf ControlFile) checked(field string) (string, error) {
+	if err := ValidateAuthorControlFile(field, cf); err != nil {
+		return "", err
 	}
 	return cf.Content, nil
 }
@@ -160,11 +194,11 @@ func (in PublicationAuthorInput) build() (builtRequest, error) {
 	}
 	targetClass := in.TargetVisibility.sensitivityClass()
 	sourceClass := in.SourceVisibility.sensitivityClass()
-	template, err := in.PRTemplate.checked()
+	template, err := in.PRTemplate.checked("pr_template")
 	if err != nil {
 		return builtRequest{}, err
 	}
-	snapshot, err := in.InstructionSnapshot.checked()
+	snapshot, err := in.InstructionSnapshot.checked("instruction_snapshot")
 	if err != nil {
 		return builtRequest{}, err
 	}
@@ -426,25 +460,35 @@ func screenAuthorText(text string, maxBytes int) error {
 // builds and stores domain.PublicationAuthoring from it; this unit writes no
 // advisory-store entry for the prose.
 type AuthoredPublication struct {
-	Title          string
-	Body           string
-	ReviewerNotes  *string
-	OutcomeSummary string
-	EvidenceRefs   []domain.PublicationEvidenceReference
-	Producer       string
-	InputDigest    string
-	TargetClass    domain.SensitivityClass
-	InputClasses   map[string]domain.SensitivityClass
-	Fallback       bool
+	Title              string
+	Body               string
+	ReviewerNotes      *string
+	OutcomeSummary     string
+	EvidenceRefs       []domain.PublicationEvidenceReference
+	Producer           string
+	InputDigest        string
+	TargetClass        domain.SensitivityClass
+	InputClasses       map[string]domain.SensitivityClass
+	Fallback           bool
+	InputRefusalReason string
 }
 
 // ProposedClosure is the propose site's bounded recommendation. It fails safe
 // to "no close" independently of the explain site.
 type ProposedClosure struct {
-	Resolves    bool
-	Producer    string
-	InputDigest string
-	Fallback    bool
+	Resolves           bool
+	Producer           string
+	InputDigest        string
+	Fallback           bool
+	InputRefusalReason string
+}
+
+func authorInputRefusalReason(err error) string {
+	var controlErr *AuthorControlFileError
+	if errors.As(err, &controlErr) {
+		return controlErr.Error()
+	}
+	return ""
 }
 
 // AuthorPublication runs the explain site and returns the validated prose plus
@@ -456,7 +500,7 @@ type ProposedClosure struct {
 func (c *Client) AuthorPublication(ctx context.Context, input PublicationAuthorInput) (AuthoredPublication, error) {
 	built, err := input.build()
 	if err != nil {
-		return AuthoredPublication{Fallback: true}, nil
+		return AuthoredPublication{Fallback: true, InputRefusalReason: authorInputRefusalReason(err)}, nil
 	}
 	result, callErr := c.Call(ctx, PublicationAuthorExplainSiteID, input.Project, input.RootLineage, built.fields)
 	if callErr != nil && !result.Fallback {
@@ -492,7 +536,7 @@ func (c *Client) AuthorPublication(ctx context.Context, input PublicationAuthorI
 func (c *Client) ProposeSourceIssueClosure(ctx context.Context, input PublicationAuthorInput) (ProposedClosure, error) {
 	built, err := input.build()
 	if err != nil {
-		return ProposedClosure{Fallback: true}, nil
+		return ProposedClosure{Fallback: true, InputRefusalReason: authorInputRefusalReason(err)}, nil
 	}
 	result, callErr := c.Call(ctx, PublicationAuthorProposeSiteID, input.Project, input.RootLineage, built.fields)
 	if callErr != nil && !result.Fallback {

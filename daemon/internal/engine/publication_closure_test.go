@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -86,6 +87,13 @@ func TestValidateClosureCheckpoint(t *testing.T) {
 	})
 	if err := validateClosureCheckpoint(proposal, want); err != nil {
 		t.Fatalf("valid proposal checkpoint rejected: %v", err)
+	}
+	var legacy productionClosureCheckpoint
+	if err := json.Unmarshal([]byte(`{"version":"1","run_id":"run-x","publication_id":"pub-x","has_proposal":true,"instance_id":"proposal-1","origin":"propose_site"}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Reason != "" || validateClosureCheckpoint(legacy, want) != nil {
+		t.Fatalf("legacy checkpoint rejected: %+v", legacy)
 	}
 	noProposal := valid(func(c *productionClosureCheckpoint) {})
 	if err := validateClosureCheckpoint(noProposal, want); err != nil {

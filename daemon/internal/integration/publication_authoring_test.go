@@ -1,8 +1,10 @@
 package integration_test
 
 import (
+	"encoding/json"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -36,9 +38,22 @@ func newAuthoredMetadataHarness(
 	t *testing.T, metadata engine.ProductionPublication, extraKeys []domain.PolicyKey,
 ) *productionPublicationHarness {
 	t.Helper()
-	p := newProductionPublicationHarnessWithMetadata(t, newPublicationHarness(t), "", extraKeys, nil, nil, metadata, nil)
+	return newAuthoredMetadataHarnessFromBase(t, newPublicationHarness(t), metadata, extraKeys, nil)
+}
+
+func newAuthoredMetadataHarnessFromBase(
+	t *testing.T, base *publicationHarness, metadata engine.ProductionPublication, extraKeys []domain.PolicyKey,
+	candidateFiles map[string]string,
+) *productionPublicationHarness {
+	t.Helper()
+	p := newProductionPublicationHarnessWithMetadata(t, base, "", extraKeys, nil, candidateFiles, metadata, nil)
+	declaredPaths := []string{"README.md"}
+	for path := range candidateFiles {
+		declaredPaths = append(declaredPaths, path)
+	}
+	slices.Sort(declaredPaths)
 	declaration, err := domain.NewWorkUnitDeclaration(domain.WorkUnitDeclarationInput{
-		CompletionCriterion: domain.CompletionBoundPRMerged, DeclaredPaths: []string{"README.md"},
+		CompletionCriterion: domain.CompletionBoundPRMerged, DeclaredPaths: declaredPaths,
 	}, p.runID, p.projectID, p.now)
 	if err != nil {
 		t.Fatal(err)
@@ -50,6 +65,140 @@ func newAuthoredMetadataHarness(
 	}
 	p.declaration = &declaration
 	return p
+}
+
+func TestPublicationAuthorOversizedRuntimeInputReasonsSurviveRestart(t *testing.T) {
+	metadata := productionPublicationMetadata()
+	metadata.Title, metadata.Body = "", ""
+	metadata.Recipe = "freeside.client-publication/v2"
+	metadata.SourceIssue = "https://github.com/" + fakePublicationRepo + "/issues/82"
+	longRules := strings.Repeat("a", 256<<10)
+	base := newPublicationHarnessWithBaseFiles(t,
+		[]byte(`{"commands":[["/usr/bin/true"]],"capture":"none"}`),
+		map[string]string{"AGENTS.md": longRules},
+	)
+	p := newAuthoredMetadataHarnessFromBase(t, base, metadata, nil, map[string]string{"AGENTS.md": "candidate rules\n"})
+	p.replay = withPublicAccount(t, p, p.replay, publicAccount)
+	driver := scriptPublicationSites(t, p,
+		inferencefake.Script{Response: inference.Response{Output: []byte(authoredExplainOutput), ComputeUnits: 5}},
+		&inferencefake.Script{Response: inference.Response{Output: []byte(`{"resolves":true}`), ComputeUnits: 1}},
+	)
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatal(err)
+	}
+	prs := p.forge.pullRequests()
+	if len(prs) != 1 || strings.Contains(prs[0].Body, "Closes #82") || len(driver.Requests()) != 0 {
+		t.Fatalf("oversized input published a close or reached the driver: prs=%d calls=%d", len(prs), len(driver.Requests()))
+	}
+	authorKey := "production-authoring/" + string(p.runID) + "/" + prs[0].HeadSHA + "/" + p.baseSHA
+	closureKey := "production-closure/" + string(p.runID) + "/publish-production-" + string(p.runID)
+	assertReasons := func() {
+		t.Helper()
+		for _, key := range []string{authorKey, closureKey} {
+			var reason string
+			if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+				entry, err := tx.GetInbox(p.ctx, key)
+				if err != nil {
+					return err
+				}
+				var row struct {
+					Reason string `json:"reason"`
+				}
+				if err := json.Unmarshal(entry.Payload, &row); err != nil {
+					return err
+				}
+				reason = row.Reason
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(reason, "instruction_snapshot:") || !strings.Contains(reason, "limit 262144") || strings.Contains(reason, "aaaa") {
+				t.Fatalf("checkpoint %q reason = %q", key, reason)
+			}
+		}
+	}
+	assertReasons()
+	p.restartDurableState(t)
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatal(err)
+	}
+	assertReasons()
+	if len(driver.Requests()) != 0 {
+		t.Fatal("restart called an author site after a durable input refusal")
+	}
+}
+
+func TestPublicationAuthorStoresTextAndPolicyApprovedClose(t *testing.T) {
+	metadata := productionPublicationMetadata()
+	metadata.Title, metadata.Body = "", ""
+	metadata.Recipe = "freeside.client-publication/v2"
+	metadata.SourceIssue = "https://github.com/" + fakePublicationRepo + "/issues/82"
+	p := newAuthoredMetadataHarness(t, metadata, nil)
+	p.replay = withPublicAccount(t, p, p.replay, publicAccount)
+	driver := scriptPublicationSites(t, p,
+		inferencefake.Script{Response: inference.Response{Output: []byte(authoredExplainOutput), ComputeUnits: 5}},
+		&inferencefake.Script{Response: inference.Response{Output: []byte(`{"resolves":true}`), ComputeUnits: 1}},
+	)
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatal(err)
+	}
+	if body := assertAuthoredMetadata(t, p); !strings.Contains(body, "Closes #82") {
+		t.Fatal("publisher omitted the policy-approved close reference")
+	}
+	if p.forge.pullRequests()[0].Draft || len(driver.Requests()) != 2 {
+		t.Fatal("valid inputs did not reach both author sites and publish a ready PR")
+	}
+	key := "production-closure/" + string(p.runID) + "/publish-production-" + string(p.runID)
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		entry, err := tx.GetInbox(p.ctx, key)
+		if err != nil {
+			return err
+		}
+		var checkpoint struct {
+			InstanceID domain.ProposalInstanceID `json:"instance_id"`
+		}
+		if err := json.Unmarshal(entry.Payload, &checkpoint); err != nil {
+			return err
+		}
+		approval, err := tx.ClosureApprovalForInstance(p.ctx, checkpoint.InstanceID)
+		if err != nil {
+			return err
+		}
+		if approval == nil || approval.Actor != domain.ClosureApprovalActorPolicy {
+			t.Fatalf("closure approval = %+v, want policy actor", approval)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPublicationAuthorScreenFailureKeepsIndependentClosure(t *testing.T) {
+	metadata := productionPublicationMetadata()
+	metadata.Title, metadata.Body = "", ""
+	metadata.Recipe = "freeside.client-publication/v2"
+	metadata.SourceIssue = "https://github.com/" + fakePublicationRepo + "/issues/82"
+	p := newAuthoredMetadataHarness(t, metadata, nil)
+	p.replay = withPublicAccount(t, p, p.replay, publicAccount)
+	driver := scriptPublicationSites(t, p,
+		inferencefake.Script{Response: inference.Response{Output: []byte(`{"title":"Authored PR title","body":"Closes #82","reviewer_notes":null,"evidence_refs":[],"outcome_summary":"Done"}`), ComputeUnits: 5}},
+		&inferencefake.Script{Response: inference.Response{Output: []byte(`{"resolves":true}`), ComputeUnits: 1}},
+	)
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatal(err)
+	}
+	prs := p.forge.pullRequests()
+	if len(prs) != 1 || !strings.Contains(prs[0].Body, "## Agent-reported implementation (claim)") ||
+		!strings.Contains(prs[0].Body, "Closes #82") || len(driver.Requests()) != 2 {
+		t.Fatalf("screen fallback suppressed separately approved closure: prs=%d calls=%d", len(prs), len(driver.Requests()))
+	}
 }
 
 // scriptPublicationAuthor builds the harness inference client with the

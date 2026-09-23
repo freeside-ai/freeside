@@ -105,7 +105,11 @@ func (w *productionPublicationWorkflow) reconcilePublicationAuthoring(
 		return w.recordAuthoringFallback(ctx, key, base, "author call failed: "+err.Error())
 	}
 	if authored.Fallback {
-		return w.recordAuthoringFallback(ctx, key, base, "author returned a fallback")
+		reason := authored.InputRefusalReason
+		if reason == "" {
+			reason = "author returned a fallback"
+		}
+		return w.recordAuthoringFallback(ctx, key, base, reason)
 	}
 	artifact, err := domain.NewPublicationAuthoring(domain.PublicationAuthoringInput{
 		RunID: task.RunID, Title: authored.Title, Body: authored.Body,
@@ -538,6 +542,19 @@ func trustedControlFile(content, baseSHA string) inference.ControlFile {
 	}
 }
 
+// PublicationPRTemplatePaths is the common trusted-base selection order for
+// runtime resolution and read-only preflight.
+func PublicationPRTemplatePaths() []string {
+	return []string{
+		".github/PULL_REQUEST_TEMPLATE.md",
+		".github/pull_request_template.md",
+		"PULL_REQUEST_TEMPLATE.md",
+		"pull_request_template.md",
+		"docs/PULL_REQUEST_TEMPLATE.md",
+		"docs/pull_request_template.md",
+	}
+}
+
 // readPRTemplate reads the repository's pull-request template from the trusted
 // base commit's objects, best effort. The production FetchBase checkout has no
 // working tree (transport.go: HEAD detached at the base, no working-tree
@@ -562,14 +579,7 @@ func readPRTemplate(ctx context.Context, workDir, checkoutDir, baseSHA string) s
 	if _, err := runner.PinCheckout(ctx, checkoutDir); err != nil {
 		return ""
 	}
-	for _, rel := range []string{
-		".github/PULL_REQUEST_TEMPLATE.md",
-		".github/pull_request_template.md",
-		"PULL_REQUEST_TEMPLATE.md",
-		"pull_request_template.md",
-		"docs/PULL_REQUEST_TEMPLATE.md",
-		"docs/pull_request_template.md",
-	} {
+	for _, rel := range PublicationPRTemplatePaths() {
 		// cat-file blob resolves the path within the base tree and errors if the
 		// object is missing or not a blob, so a missing template or a same-named
 		// directory is skipped rather than mistaken for content.

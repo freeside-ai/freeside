@@ -390,6 +390,46 @@ func TestPreflightRejectsShadowCredentialAsReviewInstructions(t *testing.T) {
 	}
 }
 
+func TestPreflightRejectsOversizedComposedAuthorInstructions(t *testing.T) {
+	args, environment := preflightFixture(t)
+	repo, base := authorPreflightRepository(t, map[string]string{"AGENTS.md": "trusted repository rules\n"})
+	for i := range args {
+		switch args[i] {
+		case "-repository-checkout":
+			args[i+1] = repo
+		case "-base-sha":
+			args[i+1] = base
+		case "-review-instructions":
+			if err := os.WriteFile(args[i+1], []byte(strings.Repeat("h", 256<<10)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	args = append(args, "-judgment-publication-author-prompt", filepath.Join(t.TempDir(), "author-prompt.md"))
+	var stdout bytes.Buffer
+	err := runPreflightCommandWithEnvironment(t.Context(), args, &stdout, &bytes.Buffer{}, environment,
+		time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC), "2dce6570ee23")
+	if !errors.Is(err, errCompositionPreflight) {
+		t.Fatalf("preflight error = %v, want refusal", err)
+	}
+	var manifest compositionManifest
+	if err := json.Unmarshal(stdout.Bytes(), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range manifest.Checks {
+		if check.Name != "publication_author_inputs" {
+			continue
+		}
+		if check.Status != compositionFailed || !strings.Contains(check.Evidence, "instruction_snapshot:") ||
+			!strings.Contains(check.Evidence, "limit 262144") || strings.Contains(check.Evidence, "hhhh") ||
+			!strings.Contains(check.Remediation, "host rules") {
+			t.Fatalf("author input check = %+v", check)
+		}
+		return
+	}
+	t.Fatal("preflight omitted publication_author_inputs check")
+}
+
 func enableShadowReviewFixture(t *testing.T, args *[]string) string {
 	t.Helper()
 	var inputRoot string
