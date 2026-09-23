@@ -258,6 +258,21 @@ device builds need periodic re-signing; the guide covers that maintenance.
   Run `bash scripts/check.sh --list` for available checks, then
   `bash scripts/check.sh <component>` for the component you changed.
 
+### Repository Skills
+
+The repository's `exit-run`, `plan-wave`, and `review-wave` skills are
+available to both Claude Code and Codex. Edit their shared source in
+`.claude/skills/`; `.agents/skills/` contains relative symlinks to those same
+folders, including their supporting references. When adding a skill, add its
+matching link under `.agents/skills/` too.
+
+In Codex, invoke them as `$exit-run`, `$plan-wave`, or `$review-wave`, followed
+by the inputs the skill needs. Claude Code uses `/exit-run`, `/plan-wave`, and
+`/review-wave`. For example, `$plan-wave 8` and `/plan-wave 8` select the same
+workflow. Codex supports these repository-local symlinks through its
+[skill discovery](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills).
+If a skill does not appear after updating the checkout, restart Codex.
+
 ## License
 
 This work is licensed under [AGPL-3.0-or-later](./LICENSE).
