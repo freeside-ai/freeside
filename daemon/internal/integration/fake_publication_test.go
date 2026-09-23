@@ -33,7 +33,11 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
 
-const fakePublicationRepo = "freeside-ai/evidence-repo"
+const (
+	fakePublicationRepo       = "freeside-ai/evidence-repo"
+	fakePublicationIssueTitle = "Preserve retry results"
+	fakePublicationIssueBody  = "Keep recorded results when a publication retries after restart."
+)
 
 var fakePublicationTime = time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
 
@@ -90,6 +94,9 @@ type integrationForge struct {
 	requestHook          func(method, path string) bool
 	visibility           string
 	failRepoRead         bool
+	failIssueRead        bool
+	issueReads           int
+	issueTitle           *string
 }
 
 func newIntegrationForge(t *testing.T) (*integrationForge, *httptest.Server) {
@@ -126,6 +133,16 @@ func (f *integrationForge) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"id": 424242, "visibility": f.visibility, "private": f.visibility != "public",
+		})
+	case r.Method == http.MethodGet && r.URL.Path == root+"/issues/82":
+		f.issueReads++
+		if f.failIssueRead {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"number": 82, "state": "open", "title": f.publicationIssueTitle(),
+			"body": fakePublicationIssueBody,
 		})
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, root+"/git/ref/heads/"):
 		branch := strings.TrimPrefix(r.URL.Path, root+"/git/ref/heads/")
@@ -235,6 +252,13 @@ func (f *integrationForge) handle(w http.ResponseWriter, r *http.Request) {
 		f.t.Errorf("unexpected forge request %s %s: %s", r.Method, r.URL.Path, body)
 		w.WriteHeader(http.StatusNotFound)
 	}
+}
+
+func (f *integrationForge) publicationIssueTitle() string {
+	if f.issueTitle != nil {
+		return *f.issueTitle
+	}
+	return fakePublicationIssueTitle
 }
 
 // handleDraftMutation serves the publisher's GraphQL

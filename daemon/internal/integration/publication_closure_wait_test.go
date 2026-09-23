@@ -80,7 +80,7 @@ func newHeldClosureHarness(t *testing.T) (*productionPublicationHarness, domain.
 		}},
 	})
 	p.replay = withPublicAccount(t, p, p.replay, publicAccount)
-	scriptPublicationSites(t, p,
+	driver := scriptPublicationSites(t, p,
 		inferencefake.Script{Response: inference.Response{Output: []byte(authoredExplainOutput), ComputeUnits: 5}},
 		&inferencefake.Script{Response: inference.Response{Output: []byte(`{"resolves":true}`), ComputeUnits: 1}})
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
@@ -88,11 +88,91 @@ func newHeldClosureHarness(t *testing.T) (*productionPublicationHarness, domain.
 	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatal(err)
 	}
+	seen := map[string]bool{}
+	for _, request := range driver.Requests() {
+		if request.SiteID != inference.PublicationAuthorExplainSiteID && request.SiteID != inference.PublicationAuthorProposeSiteID {
+			continue
+		}
+		if request.Fields["source_issue_title"] != fakePublicationIssueTitle ||
+			request.Fields["source_issue_body"] != fakePublicationIssueBody {
+			t.Fatalf("%s source issue text = (%q, %q), want issue #82 text",
+				request.SiteID, request.Fields["source_issue_title"], request.Fields["source_issue_body"])
+		}
+		seen[request.SiteID] = true
+	}
+	if !seen[inference.PublicationAuthorExplainSiteID] || !seen[inference.PublicationAuthorProposeSiteID] {
+		t.Fatalf("publication author sites called = %v, want explain and propose", seen)
+	}
+	if p.forge.issueReads != 1 {
+		t.Fatalf("source issue reads = %d, want one shared observation", p.forge.issueReads)
+	}
 	held := p.forge.pullRequests()
 	if len(held) != 1 || !held[0].Draft || strings.Contains(held[0].Body, "Closes #82") {
 		t.Fatalf("held PR = %+v, want one draft with no Closes", held)
 	}
 	return p, pendingClosureWaitInstance(t, p)
+}
+
+// TestSourceIssueReadFailureFallsBack proves a failed issue read cannot drive
+// either author site or approve a closure proposal. The fallback is durable
+// when the issue becomes readable on a later pass at the same head and base.
+func TestSourceIssueReadFailureFallsBack(t *testing.T) {
+	t.Run("API failure", func(t *testing.T) { testSourceIssueReadFailureFallsBack(t, false) })
+	t.Run("malformed title", func(t *testing.T) { testSourceIssueReadFailureFallsBack(t, true) })
+}
+
+func testSourceIssueReadFailureFallsBack(t *testing.T, malformedTitle bool) {
+	t.Helper()
+	metadata := productionPublicationMetadata()
+	metadata.Title, metadata.Body = "", ""
+	metadata.Recipe = "freeside.client-publication/v2"
+	metadata.SourceIssue = "https://github.com/" + fakePublicationRepo + "/issues/82"
+	p := newAuthoredMetadataHarness(t, metadata, nil)
+	p.replay = withPublicAccount(t, p, p.replay, publicAccount)
+	p.forge.failIssueRead = !malformedTitle
+	if malformedTitle {
+		empty := ""
+		p.forge.issueTitle = &empty
+	}
+	p.forge.requestHook = func(method, path string) bool {
+		if method == "GET" && strings.HasSuffix(path, "/issues/82") && p.forge.issueReads == 1 {
+			p.forge.failIssueRead = false
+			p.forge.issueTitle = nil
+			return true
+		}
+		return false
+	}
+	driver := scriptPublicationSites(t, p,
+		inferencefake.Script{Response: inference.Response{Output: []byte(authoredExplainOutput), ComputeUnits: 5}},
+		&inferencefake.Script{Response: inference.Response{Output: []byte(`{"resolves":true}`), ComputeUnits: 1}})
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatal(err)
+	}
+	prs := p.forge.pullRequests()
+	if len(prs) != 1 || prs[0].Draft || !strings.Contains(prs[0].Body, "Refs #82") ||
+		strings.Contains(prs[0].Body, "Closes #82") {
+		t.Fatalf("failed issue read PR = %+v, want ready with Refs #82", prs)
+	}
+	if len(driver.Requests()) != 0 || len(pendingClosureWaits(t, p)) != 0 {
+		t.Fatal("failed issue read reached an author site or armed a closure wait")
+	}
+	if p.forge.issueReads != 1 {
+		t.Fatalf("source issue reads = %d, want failed read shared by both sites", p.forge.issueReads)
+	}
+
+	p.forge.mu.Lock()
+	p.forge.failIssueRead = false
+	p.forge.issueTitle = nil
+	p.forge.mu.Unlock()
+	writes := p.forge.writeCountSnapshot()
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatal(err)
+	}
+	if len(driver.Requests()) != 0 || !equalCounts(writes, p.forge.writeCountSnapshot()) {
+		t.Fatal("same candidate retried authoring after its durable fallback")
+	}
 }
 
 // TestHumanGateClosureWaitNeverWedgesTheLane proves a closure wait cannot stop

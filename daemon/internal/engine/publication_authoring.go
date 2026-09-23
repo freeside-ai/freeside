@@ -93,6 +93,9 @@ func (w *productionPublicationWorkflow) reconcilePublicationAuthoring(
 	}
 	input, err := w.buildPublicationAuthorInput(ctx, task, binding, checkpoint, reviewInstructions, checkoutDir, report)
 	if err != nil {
+		if errors.Is(err, errSourceIssueCheckpoint) {
+			return err
+		}
 		return w.recordAuthoringFallback(ctx, key, base, "resolve author input: "+err.Error())
 	}
 	authored, err := w.inference.AuthorPublication(ctx, input)
@@ -169,9 +172,16 @@ func (w *productionPublicationWorkflow) buildPublicationAuthorInput(
 		return inference.PublicationAuthorInput{}, fmt.Errorf("summarize review outcome: %w", err)
 	}
 
-	sourceIssueRef, err := w.authorSourceIssueRef(ctx, task, binding)
+	sourceIssueRef, sourceIssueNumber, sameRepo, err := w.authorSourceIssue(ctx, task, binding)
 	if err != nil {
 		return inference.PublicationAuthorInput{}, fmt.Errorf("read source issue: %w", err)
+	}
+	var issueText publish.IssueText
+	if sameRepo {
+		issueText, err = w.publicationSourceIssueText(ctx, task, binding, sourceIssueNumber)
+		if err != nil {
+			return inference.PublicationAuthorInput{}, fmt.Errorf("read source issue text: %w", err)
+		}
 	}
 
 	baseSHA := binding.admission.Base.BaseSHA
@@ -182,10 +192,11 @@ func (w *productionPublicationWorkflow) buildPublicationAuthorInput(
 		TargetRepository: binding.admission.Base.Repo,
 		TargetVisibility: visibility,
 
-		SourceIssueRef: sourceIssueRef,
-		// Only the reference reaches the author: the source issue's title and
-		// body stay empty until the engine has a trusted issue read. With no
-		// prose input the source visibility is the target's.
+		SourceIssueRef:   sourceIssueRef,
+		SourceIssueTitle: issueText.Title,
+		SourceIssueBody:  issueText.Body,
+		// Same-repository issue text has the target's visibility. A source
+		// from another repository contributes only its reference.
 		SourceVisibility: visibility,
 
 		Diff:                diff,
@@ -200,14 +211,15 @@ func (w *productionPublicationWorkflow) buildPublicationAuthorInput(
 	}, nil
 }
 
-// authorSourceIssueRef names the source issue both author sites read. A
+// authorSourceIssue names the source issue both author sites read. A
 // label-intake record carries no source_issue (its literal checks ban one), so
 // a task bound to an issue subject takes its reference from that daemon-bound
 // subject, the same issue decideClosableSource targets; otherwise the client
-// record's source URL, if any, is the reference.
-func (w *productionPublicationWorkflow) authorSourceIssueRef(
+// record's source URL, if any, is the reference. Only a source bound to the
+// target repository yields an issue number for a forge read.
+func (w *productionPublicationWorkflow) authorSourceIssue(
 	ctx context.Context, task productionPublicationTask, binding productionBinding,
-) (string, error) {
+) (ref string, number int, sameRepo bool, err error) {
 	var source *domain.SpecificationSource
 	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		fetched, err := tx.GetTask(ctx, binding.run.TaskID)
@@ -217,12 +229,21 @@ func (w *productionPublicationWorkflow) authorSourceIssueRef(
 		source = fetched.Source
 		return nil
 	}); err != nil {
-		return "", err
+		return "", 0, false, err
 	}
 	if source != nil && source.Kind == domain.SpecificationSourceIssueSubject && source.IssueSubject != nil {
-		return fmt.Sprintf("https://github.com/%s/issues/%d", source.IssueSubject.Repo, source.IssueSubject.IssueNumber), nil
+		subject := source.IssueSubject
+		ref := fmt.Sprintf("https://github.com/%s/issues/%d", subject.Repo, subject.IssueNumber)
+		if subject.Repo == binding.admission.Base.Repo && subject.RepositoryID == binding.admission.Base.RepositoryID {
+			return ref, subject.IssueNumber, true, nil
+		}
+		return ref, 0, false, nil
 	}
-	return task.Publication.SourceIssue, nil
+	ownerRepo, number, ok := parseSourceIssueURL(task.Publication.SourceIssue)
+	if ok && ownerRepo == binding.admission.Base.Repo {
+		return task.Publication.SourceIssue, number, true, nil
+	}
+	return task.Publication.SourceIssue, 0, false, nil
 }
 
 // authoredReviewOutcome summarizes the run's latest clean review for the author.

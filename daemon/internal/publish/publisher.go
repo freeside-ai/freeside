@@ -239,6 +239,32 @@ func (p *Publisher) RepositoryClass(ctx context.Context, c Candidate) (domain.Se
 	return class, nil
 }
 
+// IssueText is the source issue prose read for the publication author.
+type IssueText struct {
+	Title string
+	Body  string
+}
+
+// SourceIssueText reads advisory source issue prose from the target repository
+// for the publication author (plan §5.15). The text is never policy input.
+func (p *Publisher) SourceIssueText(ctx context.Context, c Candidate, number int) (IssueText, error) {
+	repo, err := parseRepo(c.Repo)
+	if err != nil {
+		return IssueText{}, fmt.Errorf("source issue text: %w", err)
+	}
+	read, err := p.forge.getIssue(ctx, repo, number, "")
+	if err != nil {
+		return IssueText{}, fmt.Errorf("source issue text: %w", err)
+	}
+	if read.NotModified {
+		return IssueText{}, errors.New("source issue text: unsolicited not-modified response")
+	}
+	if strings.TrimSpace(read.Issue.Title) == "" {
+		return IssueText{}, errors.New("source issue text: response carries no title")
+	}
+	return IssueText{Title: read.Issue.Title, Body: read.Issue.Body}, nil
+}
+
 // classForRepositoryVisibility maps a repository-visibility response to a
 // sensitivity class, failing closed on an untrusted returned object. GitHub
 // sends both the modern "visibility" and the legacy "private" bool; a partial or
