@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1186,6 +1187,62 @@ func (*listenerStub) Accept() (net.Conn, error) {
 }
 func (l *listenerStub) Close() error   { l.closed = true; return nil }
 func (l *listenerStub) Addr() net.Addr { return l.addr }
+
+func TestSameHostReadinessFile(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name           string
+		primary        string
+		twin           string
+		wantPrimaryURL string
+	}{
+		{name: "Tailscale IPv4", primary: "100.64.0.7:8443", twin: "127.0.0.1:8443", wantPrimaryURL: "http://100.64.0.7:8443"},
+		{name: "Tailscale IPv6", primary: "[fd7a:115c:a1e0::7]:8443", twin: "127.0.0.1:8443", wantPrimaryURL: "http://[fd7a:115c:a1e0::7]:8443"},
+		{name: "loopback only", primary: "127.0.0.1:8443", wantPrimaryURL: "http://127.0.0.1:8443"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			primary, err := net.ResolveTCPAddr("tcp", tc.primary)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d := &daemon{listener: &listenerStub{addr: primary}, pairingCode: "test-code"}
+			if tc.twin != "" {
+				twin, err := net.ResolveTCPAddr("tcp", tc.twin)
+				if err != nil {
+					t.Fatal(err)
+				}
+				d.loopbackTwin = &listenerStub{addr: twin}
+			}
+			if got := d.readiness().APIURL; got != tc.wantPrimaryURL {
+				t.Fatalf("primary readiness URL = %q, want %q", got, tc.wantPrimaryURL)
+			}
+			stateDir := t.TempDir()
+			if err := publishReadiness(stateDir, d.sameHostReadiness()); err != nil {
+				t.Fatal(err)
+			}
+			body, err := os.ReadFile(filepath.Join(stateDir, readinessFileName)) //nolint:gosec // test-owned temporary path
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ready readiness
+			if err := json.Unmarshal(body, &ready); err != nil {
+				t.Fatal(err)
+			}
+			if ready.APIURL != "http://127.0.0.1:8443" || ready.PairingCode != "test-code" {
+				t.Fatalf("same-host file readiness = %+v", ready)
+			}
+			parsed, err := url.Parse(ready.APIURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" || parsed.Port() != "8443" ||
+				parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+				t.Fatalf("file URL is not a same-host app URL: %q", ready.APIURL)
+			}
+		})
+	}
+}
 
 func TestListenPrivilegedAcceptsOnlyTailscaleOwnedAddresses(t *testing.T) {
 	for _, addr := range []string{"100.64.0.7:8443", "[fd7a:115c:a1e0::7]:8443"} {
