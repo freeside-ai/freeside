@@ -21,6 +21,8 @@ import (
 type issueState struct {
 	Number int
 	State  string
+	Title  string
+	Body   string
 }
 
 // issueRead is a conditional issue observation; see prRead.
@@ -44,13 +46,20 @@ func (f *forge) getIssue(ctx context.Context, repo repoRef, number int, etag str
 	switch resp.StatusCode {
 	case http.StatusOK:
 		var decoded struct {
-			Number      int    `json:"number"`
-			State       string `json:"state"`
+			Number      int     `json:"number"`
+			State       string  `json:"state"`
+			Title       string  `json:"title"`
+			Body        *string `json:"body"`
 			PullRequest *struct {
 				URL string `json:"url"`
 			} `json:"pull_request"`
 		}
-		if err := decodeResponse(resp.Body, &decoded); err != nil {
+		// Check the response bytes before JSON decoding: the shared decoder
+		// tolerates invalid UTF-8 by replacing it, which would lose evidence
+		// that source text from the forge was malformed.
+		if err := strictjson.DecodeReaderAllowingUnknownFields(
+			resp.Body, &decoded, strictjson.RejectInvalidUTF8, strictjson.Limit(maxForgeResponseBytes),
+		); err != nil {
 			return issueRead{}, fmt.Errorf("get issue: decode response: %w", err)
 		}
 		if decoded.Number != number {
@@ -64,8 +73,12 @@ func (f *forge) getIssue(ctx context.Context, repo repoRef, number int, etag str
 		if decoded.State == "" {
 			return issueRead{}, errors.New("get issue: response carries no state")
 		}
+		body := ""
+		if decoded.Body != nil {
+			body = *decoded.Body
+		}
 		return issueRead{
-			Issue: issueState{Number: decoded.Number, State: decoded.State},
+			Issue: issueState{Number: decoded.Number, State: decoded.State, Title: decoded.Title, Body: body},
 			ETag:  resp.Header.Get("ETag"),
 		}, nil
 	case http.StatusNotModified:

@@ -28,6 +28,16 @@ const (
 // work-unit declaration. It returns the store, the resolved policy, and the
 // task id so a caller can build a productionBinding.
 func seedClosureChain(t *testing.T, runID domain.RunID) (*store.Store, domain.ResolvedPolicy, domain.TaskID) {
+	source := &domain.SpecificationSource{
+		Kind: domain.SpecificationSourceIssueSubject,
+		IssueSubject: &domain.IssueSubjectRef{
+			Repo: closureStoreRepo, RepositoryID: closureStoreRepoID, IssueNumber: closureStoreIssue,
+		},
+	}
+	return seedClosureChainWithSource(t, runID, source)
+}
+
+func seedClosureChainWithSource(t *testing.T, runID domain.RunID, source *domain.SpecificationSource) (*store.Store, domain.ResolvedPolicy, domain.TaskID) {
 	t.Helper()
 	ctx := context.Background()
 	s := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{})
@@ -39,27 +49,30 @@ func seedClosureChain(t *testing.T, runID domain.RunID) (*store.Store, domain.Re
 	if err != nil {
 		t.Fatalf("resolved policy: %v", err)
 	}
-	source := domain.SpecificationSource{
-		Kind: domain.SpecificationSourceIssueSubject,
-		IssueSubject: &domain.IssueSubjectRef{
-			Repo: closureStoreRepo, RepositoryID: closureStoreRepoID, IssueNumber: closureStoreIssue,
-		},
-	}
 	var taskID domain.TaskID
 	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.RegisterProject(ctx, domain.Project{ID: closureStoreProject, Repo: closureStoreRepo, RepositoryID: closureStoreRepoID}); err != nil {
 			return err
 		}
-		task, err := tx.GetOrCreateTask(ctx, closureStoreProject, source)
-		if err != nil {
-			return err
+		if source != nil {
+			task, err := tx.GetOrCreateTask(ctx, closureStoreProject, *source)
+			if err != nil {
+				return err
+			}
+			taskID = task.ID
 		}
-		taskID = task.ID
 		if err := tx.PutRun(ctx, domain.Run{
-			ID: runID, ProjectID: closureStoreProject, TaskID: task.ID,
+			ID: runID, ProjectID: closureStoreProject, TaskID: taskID,
 			SpecDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)), PolicyDigest: policy.Digest, Stages: []domain.Stage{},
 		}); err != nil {
 			return err
+		}
+		if taskID == "" {
+			run, err := tx.GetRun(ctx, runID)
+			if err != nil {
+				return err
+			}
+			taskID = run.TaskID
 		}
 		if err := tx.PutResolvedPolicy(ctx, policy); err != nil {
 			return err
@@ -250,21 +263,51 @@ func TestBindClosureMergeRefusesForeignInstance(t *testing.T) {
 	}
 }
 
-// TestAuthorSourceIssueRefUsesBoundIssueSubject proves a label-intake record,
-// which carries no source_issue, still gives both author sites its source issue
-// reference, taken from the task's daemon-bound issue subject.
-func TestAuthorSourceIssueRefUsesBoundIssueSubject(t *testing.T) {
+// TestAuthorSourceIssueSelection proves both author sites use the bound issue
+// subject for intake and read client source text only from the target repo.
+func TestAuthorSourceIssueSelection(t *testing.T) {
 	s, policy, taskID := seedClosureChain(t, "run-author-ref")
 	w := &productionPublicationWorkflow{store: s}
 	task := productionPublicationTask{
 		RunID: policy.RunID, PublicationID: "pub-1", HeadSHA: closureStoreHead,
 		Publication: ProductionPublication{Recipe: IntakePublicationRecipe, Title: "Resolve owner/repo#7", Body: "literal"},
 	}
-	ref, err := w.authorSourceIssueRef(context.Background(), task, closureStoreBinding(policy, taskID))
+	ref, number, sameRepo, err := w.authorSourceIssue(context.Background(), task, closureStoreBinding(policy, taskID))
 	if err != nil {
-		t.Fatalf("author source issue ref: %v", err)
+		t.Fatalf("author source issue: %v", err)
 	}
-	if want := "https://github.com/owner/repo/issues/7"; ref != want {
-		t.Errorf("source issue ref = %q, want %q", ref, want)
+	if want := "https://github.com/owner/repo/issues/7"; ref != want || number != 7 || !sameRepo {
+		t.Errorf("intake source = (%q, %d, %t), want (%q, 7, true)", ref, number, sameRepo, want)
+	}
+	rebound := closureStoreBinding(policy, taskID)
+	rebound.admission.Base.RepositoryID++
+	ref, number, sameRepo, err = w.authorSourceIssue(context.Background(), task, rebound)
+	if err != nil {
+		t.Fatalf("author rebound source issue: %v", err)
+	}
+	if ref != "https://github.com/owner/repo/issues/7" || number != 0 || sameRepo {
+		t.Errorf("rebound intake source = (%q, %d, %t), want reference only", ref, number, sameRepo)
+	}
+
+	s, policy, taskID = seedClosureChainWithSource(t, "run-client-ref", nil)
+	w = &productionPublicationWorkflow{store: s}
+	task.RunID = policy.RunID
+	task.Publication = ProductionPublication{Recipe: clientPublicationRecipeV2, SourceIssue: "https://github.com/owner/repo/issues/9"}
+	binding := closureStoreBinding(policy, taskID)
+	ref, number, sameRepo, err = w.authorSourceIssue(context.Background(), task, binding)
+	if err != nil {
+		t.Fatalf("author client source issue: %v", err)
+	}
+	if ref != task.Publication.SourceIssue || number != 9 || !sameRepo {
+		t.Errorf("same-repo client source = (%q, %d, %t), want (%q, 9, true)", ref, number, sameRepo, task.Publication.SourceIssue)
+	}
+
+	task.Publication.SourceIssue = "https://github.com/other/repo/issues/9"
+	ref, number, sameRepo, err = w.authorSourceIssue(context.Background(), task, binding)
+	if err != nil {
+		t.Fatalf("author cross-repo source issue: %v", err)
+	}
+	if ref != task.Publication.SourceIssue || number != 0 || sameRepo {
+		t.Errorf("cross-repo client source = (%q, %d, %t), want (%q, 0, false)", ref, number, sameRepo, task.Publication.SourceIssue)
 	}
 }

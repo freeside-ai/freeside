@@ -80,8 +80,14 @@ type fakeIssueEvent struct {
 
 type fakeIssue struct {
 	State  string
+	Title  string
+	Body   *string
 	Events []fakeIssueEvent
 	Labels []string
+	// ResponseStatus and ResponseBody let returned-object tests serve a
+	// malformed response without changing the other fake issue fields.
+	ResponseStatus int
+	ResponseBody   string
 	// IsPR marks the number as secretly a pull request: the issues API
 	// serves both, flagged by a pull_request object.
 	IsPR bool
@@ -576,13 +582,21 @@ func (g *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
+		if issue.ResponseStatus != 0 {
+			w.WriteHeader(issue.ResponseStatus)
+			return
+		}
+		if issue.ResponseBody != "" {
+			_, _ = io.WriteString(w, issue.ResponseBody)
+			return
+		}
 		etag := fmt.Sprintf(`"issue-%d-%d"`, number, g.issueRevs[number])
 		if r.Header.Get("If-None-Match") == etag {
 			w.WriteHeader(http.StatusNotModified)
 			return
 		}
 		w.Header().Set("ETag", etag)
-		body := map[string]any{"number": number, "state": issue.State}
+		body := map[string]any{"number": number, "state": issue.State, "title": issue.Title, "body": issue.Body}
 		if issue.IsPR {
 			body["pull_request"] = map[string]any{"url": "http://" + r.Host + testRepoPath + "/pulls/" + strconv.Itoa(number)}
 		}
@@ -912,6 +926,100 @@ func newTestPublisherFull(t *testing.T, gh *fakeGitHub, ledger publish.IntentLed
 	t.Helper()
 	srv := gh.server()
 	return publish.NewPublisher(testTokenSource(), srv.Client(), srv.URL, sourceWorkflowAuditor{source: trust}, ledger, trust, authz)
+}
+
+func TestSourceIssueText(t *testing.T) {
+	body := "The issue requirements"
+	tests := []struct {
+		name      string
+		issue     *fakeIssue
+		want      publish.IssueText
+		wantError string
+	}{
+		{
+			name:  "title and body",
+			issue: &fakeIssue{State: "open", Title: "Fix the reader", Body: &body},
+			want:  publish.IssueText{Title: "Fix the reader", Body: body},
+		},
+		{
+			name:  "null body",
+			issue: &fakeIssue{State: "open", Title: "Empty body"},
+			want:  publish.IssueText{Title: "Empty body"},
+		},
+		{
+			name:      "pull request number",
+			issue:     &fakeIssue{State: "open", Title: "A PR", IsPR: true},
+			wantError: "response names a pull request",
+		},
+		{
+			name:      "different issue number",
+			issue:     &fakeIssue{ResponseBody: `{"number":8,"state":"open","title":"Other","body":"Other"}`},
+			wantError: "response names a different issue number",
+		},
+		{
+			name:      "missing title",
+			issue:     &fakeIssue{ResponseBody: `{"number":7,"state":"open","body":null}`},
+			wantError: "response carries no title",
+		},
+		{
+			name:      "null title",
+			issue:     &fakeIssue{ResponseBody: `{"number":7,"state":"open","title":null,"body":null}`},
+			wantError: "response carries no title",
+		},
+		{
+			name:      "empty title",
+			issue:     &fakeIssue{State: "open", Body: &body},
+			wantError: "response carries no title",
+		},
+		{
+			name:      "whitespace title",
+			issue:     &fakeIssue{State: "open", Title: " \t\n", Body: &body},
+			wantError: "response carries no title",
+		},
+		{
+			name:      "missing issue",
+			wantError: "404",
+		},
+		{
+			name:      "unsolicited 304",
+			issue:     &fakeIssue{ResponseStatus: http.StatusNotModified},
+			wantError: "unsolicited not-modified response",
+		},
+		{
+			name:      "invalid UTF-8 title",
+			issue:     &fakeIssue{ResponseBody: "{\"number\":7,\"state\":\"open\",\"title\":\"\xff\",\"body\":\"ok\"}"},
+			wantError: "not valid UTF-8",
+		},
+		{
+			name:      "invalid UTF-8 body",
+			issue:     &fakeIssue{ResponseBody: "{\"number\":7,\"state\":\"open\",\"title\":\"Title\",\"body\":\"\xff\"}"},
+			wantError: "not valid UTF-8",
+		},
+		{
+			name:      "response exceeds bound",
+			issue:     &fakeIssue{ResponseBody: `{"number":7,"state":"open","body":"` + strings.Repeat("x", 16<<20) + `"}`},
+			wantError: "exceeds the byte limit",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gh := newFakeGitHub(t)
+			if tt.issue != nil {
+				gh.issues[7] = *tt.issue
+			}
+			p := newTestPublisher(t, gh, newMemoryLedger())
+			got, err := p.SourceIssueText(context.Background(), publish.Candidate{Repo: "freeside-ai/evidence-repo"}, 7)
+			if tt.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+					t.Fatalf("SourceIssueText error = %v, want %q", err, tt.wantError)
+				}
+				return
+			}
+			if err != nil || got != tt.want {
+				t.Fatalf("SourceIssueText = (%+v, %v), want (%+v, nil)", got, err, tt.want)
+			}
+		})
+	}
 }
 
 // TestPublishCreatesBranchAndPR is the clean-path publication (issue
