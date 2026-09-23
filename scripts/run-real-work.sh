@@ -95,6 +95,9 @@
 #   FREESIDE_REAL_RUN_JUDGMENT_MODEL explicit Claude model for daemon judgments
 #   FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT existing setup-token file relative
 #                                    to REVIEW_INPUT_ROOT; all four go together
+#   When all four are set, bind the publication-author role prompt from this
+#   checkout's prompts/publication-author.md. Preflight includes its content
+#   digest in judgment_configuration_digest.
 #   FREESIDE_REAL_RUN_TIMEOUT_SECONDS global supervision deadline in seconds;
 #                                    a positive integer (default 3600). Bounds
 #                                    the whole supervised workflow (spec-approval
@@ -679,10 +682,13 @@ if [[ -n "${FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN:-}${FREESIDE_REAL_RUN_JUDGMENT
       exit 2
     fi
   done
+  # The clean-checkout check pins this versioned prompt to the daemon build;
+  # preflight records its content digest.
   judgment_args=(-judgment-claude-bin "$FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN"
     -judgment-claude-sha256 "$FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256"
     -judgment-model "$FREESIDE_REAL_RUN_JUDGMENT_MODEL"
-    -judgment-auth-snapshot "$FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT")
+    -judgment-auth-snapshot "$FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT"
+    -judgment-publication-author-prompt "$repo_root/prompts/publication-author.md")
   preflight_args+=("${judgment_args[@]}")
 fi
 if [[ -n "${FREESIDE_REAL_RUN_BUILD_PROXY:-}" ]]; then
