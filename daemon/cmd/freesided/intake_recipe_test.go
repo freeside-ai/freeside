@@ -2,10 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -67,14 +70,56 @@ func TestIntakeFreezesIntakeRecipeOnFirstAdmission(t *testing.T) {
 	if started != frozen {
 		t.Fatalf("started publication = %+v, want the frozen record %+v", started, frozen)
 	}
+	if err := importer.ScreenMessage(frozen.Title, importer.Policy{}); err != nil {
+		t.Fatalf("frozen title contains a closing directive: %v", err)
+	}
+	if err := importer.ScreenMessage(frozen.Body, importer.Policy{}); err != nil {
+		t.Fatalf("frozen body contains a closing directive: %v", err)
+	}
+}
+
+func TestIntakeFreezesPublicationWithoutLabelDirectives(t *testing.T) {
+	t.Parallel()
+	f := newIntakeFixture(t)
+	init := intakeInitiatorFor(t, domain.InitiatorModeAutoStart, domain.ProvenanceOverride, 1)
+	init.Label = "fix #42"
+	if err := init.validate(); err != nil {
+		t.Fatalf("directive label is not an accepted initiator configuration: %v", err)
+	}
+	f.reconciler([]intakeInitiator{init}, labeledOpen(7), nil).reconcile(t.Context(), nil)
+	var o domain.IntakeOccurrence
+	var found bool
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		o, found, err = tx.LatestIntakeOccurrence(t.Context(), init.RepositoryID, 7, init.Label)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !found || o.Admission == nil || !f.started(t, o.Admission.Subject.SpecificationRunID) {
+		t.Fatal("occurrence with a directive label was not admitted and started")
+	}
+	_, frozen, started := f.admittedPublication(t, o)
+	if started != frozen {
+		t.Fatalf("started publication = %+v, want the frozen record %+v", started, frozen)
+	}
+	if strings.Contains(frozen.Body, init.Label) {
+		t.Fatal("frozen publication contains the raw label")
+	}
+	if err := importer.ScreenMessage(frozen.Title, importer.Policy{}); err != nil {
+		t.Fatalf("frozen title failed the publishing-message screen: %v", err)
+	}
+	if err := importer.ScreenMessage(frozen.Body, importer.Policy{}); err != nil {
+		t.Fatalf("frozen body failed the publishing-message screen: %v", err)
+	}
 }
 
 // TestIntakePreChangeOccurrenceReplaysLiteralRecord proves an occurrence whose
-// first attempt was frozen before the intake recipe existed keeps its literal
-// record. The seed is the one write the recipe changes: the attempt a
-// pre-change admission stored before crashing ahead of BindIntakeAdmission. The
-// re-run admission must converge on those bytes instead of failing the
-// attempt's immutability check, and the start must submit the same record.
+// first attempt was frozen with the pre-#1491 title keeps its literal record.
+// The seed is the attempt a pre-change admission stored before crashing ahead
+// of BindIntakeAdmission. The re-run admission must converge on those bytes
+// instead of failing the attempt's immutability check, and the start must
+// submit the same record.
 func TestIntakePreChangeOccurrenceReplaysLiteralRecord(t *testing.T) {
 	t.Parallel()
 	f := newIntakeFixture(t)
@@ -97,7 +142,14 @@ func TestIntakePreChangeOccurrenceReplaysLiteralRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	literal, err := json.Marshal(intakeLiteralPublication(init, occurrence))
+	literal, err := json.Marshal(engine.ProductionPublication{
+		Title: fmt.Sprintf("Resolve %s#%d", occurrence.Repo, occurrence.IssueNumber),
+		Body: fmt.Sprintf(
+			"Automated resolution of issue #%d in %s, initiated by the %q label. "+
+				"The implementation is derived from the specified specification, not the issue text.",
+			occurrence.IssueNumber, occurrence.Repo, occurrence.Label),
+		CommitAuthor: init.CommitAuthor,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,5 +175,20 @@ func TestIntakePreChangeOccurrenceReplaysLiteralRecord(t *testing.T) {
 	}
 	if started != frozen {
 		t.Fatalf("started publication = %+v, want the literal record %+v", started, frozen)
+	}
+}
+
+func TestIntakeLegacyLiteralPublication(t *testing.T) {
+	t.Parallel()
+	init := intakeInitiatorFor(t, domain.InitiatorModeAutoStart, domain.ProvenanceOverride, 1)
+	occurrence := domain.IntakeOccurrence{
+		Repo: intakeTestRepo, IssueNumber: 7, Label: intakeTestLabel,
+	}
+	publication := intakeLegacyLiteralPublication(init, occurrence)
+	wantTitle := "Resolve freeasinbird/freeside#7"
+	wantBody := "Automated resolution of issue #7 in freeasinbird/freeside, initiated by the \"freeside\" label. " +
+		"The implementation is derived from the specified specification, not the issue text."
+	if publication.Title != wantTitle || publication.Body != wantBody || publication.CommitAuthor != init.CommitAuthor {
+		t.Fatalf("legacy publication = %+v, want title %q and body %q", publication, wantTitle, wantBody)
 	}
 }
