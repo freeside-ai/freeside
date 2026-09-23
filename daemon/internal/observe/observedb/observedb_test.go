@@ -71,6 +71,7 @@ var wantSurface = map[string]bool{
 	"Lineage.PublicationDigest":                   true,
 	"Lineage.SourceDigest":                        true,
 	"Open":                                        true,
+	"Borrow":                                      true,
 	"Snapshot":                                    true,
 	"Snapshot.Adjudications":                      true,
 	"Snapshot.Admissions":                         true,

@@ -15,6 +15,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/observe/observedb"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/topicstore"
 )
@@ -106,7 +107,9 @@ func recordFollowHold(t *testing.T, st *store.Store, reason domain.RunHoldReason
 func runFollowCLI(t *testing.T, args ...string) (string, error) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
-	err := Run(context.Background(), args, &stdout, &stderr)
+	err := Run(context.Background(), args, &stdout, &stderr, func(ctx context.Context, path string, recipes ...domain.Digest) (Source, error) {
+		return observedb.Open(ctx, path, recipes...)
+	})
 	if stderr.Len() > 0 {
 		t.Logf("stderr: %s", stderr.String())
 	}

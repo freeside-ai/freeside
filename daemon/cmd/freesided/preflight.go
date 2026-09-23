@@ -1140,6 +1140,12 @@ func (productionPreflightEnvironment) InspectDatabase(
 	ctx context.Context, cfg preflightConfig, reviewDigest domain.Digest,
 ) databaseInspection {
 	inspection := databaseInspection{ShadowReviewAuthorized: cfg.ShadowReviewImage == ""}
+	lock, err := daemonlock.Acquire(cfg.DBPath)
+	if err != nil {
+		inspection.OpenError = err
+		return inspection
+	}
+	defer lock.Close() //nolint:errcheck // inspection reports the database result
 	st, err := store.OpenReadOnly(ctx, cfg.DBPath, store.Options{
 		ApprovedRecipes: map[domain.Digest]bool{cfg.ApprovedRecipe: true},
 	})

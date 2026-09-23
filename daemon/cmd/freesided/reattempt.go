@@ -72,11 +72,19 @@ func runReattemptCommand(ctx context.Context, cfg reattemptCommandConfig) (submi
 	if err := validateReattemptConfig(cfg); err != nil {
 		return submitResult{}, fmt.Errorf("reattempt: %w", err)
 	}
-	st, _, err := openStoreWithTopicKey(ctx, cfg.DBPath, store.Options{})
+	handle, client, err := openCommandStore(ctx, cfg.DBPath, store.Options{}, storeMigrating)
 	if err != nil {
 		return submitResult{}, fmt.Errorf("reattempt: open store: %w", err)
 	}
-	defer func() { _ = st.Close() }()
+	if client != nil {
+		defer client.Close()
+		cfg.DBPath = client.dbPath
+		var result submitResult
+		err := client.call(ctx, "/tasks/reattempt", cfg, &result)
+		return result, err
+	}
+	defer func() { _ = handle.Close() }()
+	st := handle.store
 	if cfg.TaskID != "" {
 		if err := st.Read(ctx, func(tx *store.ReadTx) error {
 			task, err := tx.GetTask(ctx, cfg.TaskID)

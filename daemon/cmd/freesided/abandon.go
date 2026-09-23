@@ -78,11 +78,19 @@ func runAbandonCommand(ctx context.Context, cfg abandonCommandConfig) (abandonRe
 	if err := validateAbandonConfig(cfg); err != nil {
 		return abandonResult{}, fmt.Errorf("abandon: %w", err)
 	}
-	st, _, err := openStoreWithTopicKey(ctx, cfg.DBPath, store.Options{})
+	handle, client, err := openCommandStore(ctx, cfg.DBPath, store.Options{}, storeMigrating)
 	if err != nil {
 		return abandonResult{}, fmt.Errorf("abandon: open store: %w", err)
 	}
-	defer func() { _ = st.Close() }()
+	if client != nil {
+		defer client.Close()
+		cfg.DBPath = client.dbPath
+		var result abandonResult
+		err := client.call(ctx, "/tasks/abandon", cfg, &result)
+		return result, err
+	}
+	defer func() { _ = handle.Close() }()
+	st := handle.store
 	var released bool
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		released, err = tx.AbandonTask(ctx, cfg.TaskID, time.Now().UTC())

@@ -42,7 +42,14 @@ func (f BackupHealthSourceFunc) BackupHealth(
 // Unhealthy dimensions are returned as data; only a missing source, source
 // failure, or malformed signal is an error.
 func (s *Store) BackupHealth(ctx context.Context) (domain.BackupHealth, error) {
-	if s.backupHealthSource == nil {
+	return s.BackupHealthWithSource(ctx, s.backupHealthSource)
+}
+
+// BackupHealthWithSource evaluates a request-specific source against one
+// coherent live-state snapshot. It applies the same result validation as
+// BackupHealth without changing the source used by admission or other callers.
+func (s *Store) BackupHealthWithSource(ctx context.Context, source BackupHealthSource) (domain.BackupHealth, error) {
+	if source == nil {
 		return domain.BackupHealth{}, domain.ErrBackupHealthUnavailable
 	}
 	var health domain.BackupHealth
@@ -51,7 +58,7 @@ func (s *Store) BackupHealth(ctx context.Context) (domain.BackupHealth, error) {
 		if err != nil {
 			return err
 		}
-		health, err = s.backupHealthSource.BackupHealth(ctx, state)
+		health, err = source.BackupHealth(ctx, state)
 		return err
 	})
 	if err != nil {

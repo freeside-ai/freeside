@@ -96,6 +96,11 @@ func runOnboardCommand(
 	if _, err := verify.ParseRecipe(recipe); err != nil {
 		return fmt.Errorf("detected recipe: %w", err)
 	}
+	lock, err := requireNoDaemon("onboard", cfg.DBPath)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, lock.Close()) }()
 	st, _, err := openStoreWithTopicKey(ctx, cfg.DBPath, store.Options{})
 	if err != nil {
 		return err

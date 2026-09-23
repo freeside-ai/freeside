@@ -43,11 +43,15 @@ func runApproveShadowReviewCommand(
 	if err != nil {
 		return err
 	}
-	st, err := store.OpenExisting(ctx, cfg.DBPath, store.Options{})
+	handle, client, err := openCommandStore(ctx, cfg.DBPath, store.Options{}, storeExisting)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
-	defer func() { err = errors.Join(err, st.Close()) }()
+	if client != nil {
+		return callCommand(ctx, client, "/shadow-review/configuration-approvals", args, stdout)
+	}
+	defer func() { err = errors.Join(err, handle.Close()) }()
+	st := handle.store
 	result, err := (operations.ShadowReviewConfigurationApprover{
 		Store: st, Now: time.Now,
 	}).Run(ctx, operations.ShadowReviewConfigurationApprovalRequest{

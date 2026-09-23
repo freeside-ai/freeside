@@ -58,7 +58,7 @@ var permittedImports = map[string]bool{
 // only reaches as far as the smallest permitted surface, and the regress has
 // to stop somewhere a human can check by eye. It stops at observe/observedb:
 // one short file exporting open, two bounded read views, and close. Opening the
-// operator's -db path is the intended capability, and nothing here
+// operator's -db path is passed to the injected opener, and nothing here
 // distinguishes a careful use of it from a careless one.
 func TestFollowReachesNoWriterSurface(t *testing.T) {
 	entries, err := os.ReadDir(".")

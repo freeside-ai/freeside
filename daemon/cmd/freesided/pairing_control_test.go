@@ -248,7 +248,8 @@ func pairingTestHealth(t *testing.T, endpoint string) signet.HealthResponse {
 func startPairingControlTest(t *testing.T, peerUID func(*net.UnixConn) (uint32, error)) (*pairingControl, *atomic.Int64) {
 	t.Helper()
 	var calls atomic.Int64
-	p, err := newPairingControl(t.TempDir())
+	stateDir := t.TempDir()
+	p, err := newPairingControl(filepath.Join(stateDir, "freeside.db"), stateDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +310,7 @@ func TestPairingControlRejectsWrongDaemonAndConflictingOwner(t *testing.T) {
 	if err == nil || stdout.Len() != 0 || calls.Load() != 0 {
 		t.Fatal("wrong state directory minted on another daemon")
 	}
-	other, err := newPairingControl(p.stateDir)
+	other, err := newPairingControl(p.dbPath, p.stateDir)
 	if err == nil {
 		_ = other.Close()
 		t.Fatal("second daemon acquired the same control directory")
@@ -367,7 +368,7 @@ func TestPairingCodeRefusesUnavailableDaemon(t *testing.T) {
 	if err := runPairingCodeCommand(t.Context(), []string{"-state-dir", p.stateDir}, io.Discard, io.Discard); err == nil {
 		t.Fatal("stale endpoint returned success")
 	}
-	replacement, err := newPairingControl(p.stateDir)
+	replacement, err := newPairingControl(p.dbPath, p.stateDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +388,7 @@ func TestPairingControlCreatesStateOnlyOnDaemonStartup(t *testing.T) {
 	if _, err := os.Stat(stateDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("command created state")
 	}
-	p, err := newPairingControl(stateDir)
+	p, err := newPairingControl(filepath.Join(filepath.Dir(filepath.Dir(stateDir)), "freeside.db"), stateDir)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -540,18 +540,15 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	if cfg.StateDir == "" && cfg.Claude != nil {
 		cfg.StateDir = cfg.Claude.StateDir
 	}
-	var pairing *pairingControl
-	if cfg.StateDir != "" {
-		pairing, err = newPairingControl(cfg.StateDir)
-		if err != nil {
-			return nil, err
-		}
-		defer func() {
-			if !lockTransferred {
-				_ = pairing.Close()
-			}
-		}()
+	pairing, err := newPairingControl(cfg.DBPath, cfg.StateDir)
+	if err != nil {
+		return nil, err
 	}
+	defer func() {
+		if !lockTransferred {
+			_ = pairing.Close()
+		}
+	}()
 	if cfg.FakeDriverEnabled && cfg.FakeDriverDir == "" {
 		cfg.FakeDriverDir = cfg.DBPath + ".fake-stage-driver"
 	}
@@ -1050,9 +1047,8 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	if claudeWiring != nil {
 		d.sessionCloser = claudeWiring.closer
 	}
-	if d.pairing != nil {
-		d.pairing.configure(d.readiness().APIURL, attention.MintPairingCode)
-	}
+	d.pairing.configure(d.readiness().APIURL, attention.MintPairingCode)
+	d.pairing.registerControlRoutes(d.pairing.mux, st, blobs, localBackupFiles, cfg.ApprovedRecipes)
 	var fakeSched *scheduler.Scheduler
 	var claudeSched *scheduler.Scheduler
 	var activeReconciler *activeResourceReconciler

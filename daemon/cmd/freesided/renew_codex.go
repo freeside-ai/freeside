@@ -68,6 +68,11 @@ func runRenewCodexCommandWithRefresher(
 		return errors.New("-auth-store is required")
 	}
 
+	lock, err := requireNoDaemon("renew-codex", *dbPath)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, lock.Close()) }()
 	if err := topicstore.InspectKey(*dbPath); err != nil {
 		return fmt.Errorf("inspect store topic key: %w", err)
 	}

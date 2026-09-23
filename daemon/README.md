@@ -34,7 +34,21 @@ authorization. Its token stays in process memory and must not be printed.
 - **Scope boundary:** daemon-side code only. The daemon/client contract is defined in `api/`; server-side code implementing it lives here, never hand-authored to diverge from the spec.
 - **Status:** every lane in `internal/` holds real, tested Go code, not placeholders, and the daemon builds as `freesided` (`cmd/freesided`). Per-wave implementation progress lives in the pinned `Wave N (…) tracking` issue, resolved by the plan's [wave-tracker rule](../docs/plan.md#implementation-coordination-building-freeside-with-agents).
 
-## Renew A Pairing Code
+## Control Socket and Pairing Codes
+
+Every daemon run owns one private Unix control socket. It publishes the socket
+address as `<db>.control.json` beside the database with mode `0600`. Commands
+that take `-db` first acquire `<db>.daemon.lock`. If the lock is free, they
+hold it while opening the store directly. If the daemon holds it, live commands
+use the socket and maintenance commands ask the operator to stop the daemon.
+An older daemon that holds the lock without advertising a socket is refused;
+the client never opens its live database as a fallback. Requests name the
+canonical database path, and both ends check kernel peer credentials.
+Live snapshots and Doctor checkpoint scans restrict evidence reconstruction to
+the caller's requested recipes that the daemon also approves. Doctor shares the
+daemon's checkpoint files and live closure-gap state without changing its
+ordinary health policy. Control operations use the caller's
+cancellation and deadline, including long-running Doctor scans.
 
 If the startup code expires, run this command as the daemon's OS user:
 
@@ -49,7 +63,7 @@ one device; ordinary daemon logs do not contain it. Existing codes retain
 their original expiry and redemption state.
 
 The CLI contacts the daemon through its private `pairing-control.json`
-advertisement and Unix socket. Both ends check kernel peer credentials on
+advertisement and the same Unix socket. Both ends check kernel peer credentials on
 macOS and Linux. The socket lives in a short `0700` temporary directory because
 macOS cannot bind Unix sockets under long state paths; the socket and
 advertisement are `0600`. A state-directory lock prevents competing daemons
@@ -299,7 +313,8 @@ refresh token in a real provider rotation, verifies an access-only agent
 snapshot, and binds the resulting store digest and expiry to a recovery
 attention item. It never prints or persists token bytes in the database.
 
-Stop `freesided` before running this direct-store maintenance command. Create
+Stop `freesided` before running this direct-store maintenance command; it
+refuses a database held by the daemon. Create
 two non-overlapping owner-only directories: a temporary input root for the
 fresh `codex login` result and the durable review-input root that will contain
 the daemon-owned live auth store. The command refuses group/world-accessible
@@ -348,7 +363,8 @@ maintenance command alone, clears the revoked-identity marker.
 ### Renew A Codex Subscription Credential
 
 Use `freesided renew-codex` when an existing subscription store has an expired
-access token but still has a refresh token. Stop the daemon first. Renewal
+access token but still has a refresh token. Stop the daemon first; renewal
+refuses its live database. Renewal
 holds the identity's mutation lease and uses the same durable refresh
 transaction as review launch. It creates no re-enrollment hold and does not
 create a task or start execution.
@@ -384,7 +400,8 @@ Pass any additional approved recipes to the recovery harness with repeatable
 `--approved-recipe` arguments so it can reconstruct retained evidence during
 paired-client sync.
 
-`freesided onboard <owner/name>` packages the previously manual path. It:
+`freesided onboard <owner/name>` packages the previously manual path. Stop the
+daemon first; onboarding refuses a database it holds. It:
 
 1. resolves the repository ID through exactly one selected installation across
    every local App registration in the operator-authored authority document,
@@ -479,7 +496,7 @@ before preflight. Reusing it with different input values is refused. Legacy
 create work. Attaching to a retained real-work session observes its existing
 identity without submitting again.
 
-`freesided preflight` is the production-composition gate used by
+`freesided preflight` is the pre-start production-composition gate used by
 `scripts/run-real-work.sh` before it submits work. Its deterministic JSON
 manifest binds the exact database schema, daemon build, listener, repository
 and base, active profile, review configuration, source identities, seed,
@@ -518,8 +535,9 @@ reports the outcome as `pending`. Exit status reports whether the run could
 be observed, never the run's own verdict: following a blocked or failed run
 to its outcome succeeds.
 
-Following is a read of the daemon's own durable observation projection over
-the same direct-store transport as `freesided submit`. It never reads a live
+Following reads the daemon's own durable observation projection through the
+control socket when it is running and through a locked direct store when it is
+stopped, the same routing rule as `freesided submit`. It never reads a live
 writer's filesystem, stdout, stderr, or transcript; see the Run Observation
 Contract below for that boundary and its limits.
 
@@ -565,16 +583,16 @@ The run-monitoring contract (issue #394; plan §8) lets an operator client
 follow an unattended run from submission through admission or hold,
 invocation start, terminal collection and import, and final outcome. The
 model lives in `internal/domain/observation.go`; the read surface is
-`store.ReadTx.ObserveRun`, consumed over the same direct-store transport as
-`freesided submit` (the client opens the daemon's SQLite database; the
-timeline is persisted, so reconnect and daemon restart preserve it). Its
+`store.ReadTx.ObserveRun`, consumed through the control socket while the daemon
+is running and directly under the daemon lock while it is stopped. The
+timeline is persisted, so reconnect and daemon restart preserve it. Its
 first consumer is `freesided follow` (issue #409), whose display lives in
 `internal/observe`. That package is the whole verb, and its imports are held
 to a closed allowlist that names no way to open a file, start a process, or
 open a socket, so the containment below is structural rather than a promise;
 the `cmd/freesided` file is a shim supplying streams, interrupt, and exit
 code. The database is reached only through `internal/observe/observedb`,
-whose exported surface is open, read one run's aggregate, and close, so no
+whose exported surface is a direct or borrowed opener, bounded reads, and close, so no
 write, checkpoint, restore, or backup-file capability is in the follow path
 at all.
 

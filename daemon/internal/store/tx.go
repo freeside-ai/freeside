@@ -191,6 +191,24 @@ func (s *Store) Read(ctx context.Context, fn func(*ReadTx) error) error {
 	return nil
 }
 
+// ReadWithRecipeScope runs a read under only the requested recipes that the
+// store also approves. An empty scope approves no configured recipe. The
+// compiled effect-proposal recipe remains approved, as it is for every store
+// open. Restriction happens before reconstruction and affects only this
+// transaction, never the store's policy or another concurrent reader.
+func (s *Store) ReadWithRecipeScope(ctx context.Context, recipes []domain.Digest, fn func(*ReadTx) error) error {
+	return s.Read(ctx, func(tx *ReadTx) error {
+		approved := map[domain.Digest]bool{domain.EffectProposalRecipeDigest: true}
+		for _, recipe := range recipes {
+			if s.approvedRecipes[recipe] {
+				approved[recipe] = true
+			}
+		}
+		tx.approvedRecipes = approved
+		return fn(tx)
+	})
+}
+
 // ReadUsage runs fn against the dedicated observation-only usage surface.
 // Ordinary ReadTx callbacks cannot access these rows, keeping usage out of
 // admission and policy decisions by construction.

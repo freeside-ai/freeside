@@ -38,10 +38,12 @@ type pairingCodeResult struct {
 // network listener and device authority. The state-directory lock prevents two
 // daemons with different databases from advertising over each other's endpoint.
 type pairingControl struct {
+	dbPath     string
 	stateDir   string
 	lock       *daemonlock.Lock
 	listener   *net.UnixListener
 	server     *http.Server
+	mux        *http.ServeMux
 	peerUID    func(*net.UnixConn) (uint32, error)
 	owned      []pairingControlFile
 	closeOnce  sync.Once
@@ -53,26 +55,30 @@ type pairingControlFile struct {
 	info os.FileInfo
 }
 
-func newPairingControl(stateDir string) (_ *pairingControl, err error) {
-	if stateDir == "" {
-		return nil, errors.New("pairing control state directory is required")
-	}
-	// Production composition already supports a fresh state root. Reserve it
-	// before those consumers run; command-side discovery never creates it.
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
-		return nil, fmt.Errorf("create pairing control state directory: %w", err)
-	}
-	stateDir, err = canonicalPairingStateDir(stateDir)
+func newPairingControl(dbPath, stateDir string) (_ *pairingControl, err error) {
+	dbPath, err = canonicalDatabasePath(dbPath)
 	if err != nil {
 		return nil, err
 	}
-	lock, err := daemonlock.Acquire(filepath.Join(stateDir, pairingControlFileName))
-	if err != nil {
-		return nil, fmt.Errorf("acquire pairing control: %w", err)
+	// Production composition already supports a fresh state root. Reserve it
+	// before those consumers run; command-side discovery never creates it.
+	var lock *daemonlock.Lock
+	if stateDir != "" {
+		if err := os.MkdirAll(stateDir, 0o700); err != nil {
+			return nil, fmt.Errorf("create pairing control state directory: %w", err)
+		}
+		stateDir, err = canonicalPairingStateDir(stateDir)
+		if err != nil {
+			return nil, err
+		}
+		lock, err = daemonlock.Acquire(filepath.Join(stateDir, pairingControlFileName))
+		if err != nil {
+			return nil, fmt.Errorf("acquire pairing control: %w", err)
+		}
 	}
 	p := &pairingControl{
-		stateDir: stateDir, lock: lock, peerUID: unixPeerUID,
-		server: &http.Server{ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 5 * time.Second},
+		dbPath: dbPath, stateDir: stateDir, lock: lock, peerUID: unixPeerUID,
+		server: &http.Server{ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second},
 	}
 	defer func() {
 		if err != nil {
@@ -106,27 +112,30 @@ func newPairingControl(stateDir string) (_ *pairingControl, err error) {
 
 func (p *pairingControl) configure(apiURL string, mint func(context.Context) (string, domain.PairingCode, error)) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /pairing-code", func(w http.ResponseWriter, r *http.Request) {
-		var request pairingCodeRequest
-		if err := strictjson.DecodeReader(r.Body, &request, strictjson.RejectInvalidUTF8, 16<<10); err != nil ||
-			request.StateDir != p.stateDir {
-			http.Error(w, "pairing control state directory mismatch or invalid request", http.StatusBadRequest)
-			return
-		}
-		code, record, err := mint(r.Context())
-		if err != nil {
-			// The response and ordinary logs must never echo a code or a
-			// credential-bearing service error.
-			http.Error(w, "could not mint pairing code", http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "no-store")
-		_ = json.NewEncoder(w).Encode(pairingCodeResult{
-			APIURL: apiURL, PairingCode: code, ExpiresAt: record.ExpiresAt,
+	if p.stateDir != "" {
+		mux.HandleFunc("POST /pairing-code", func(w http.ResponseWriter, r *http.Request) {
+			var request pairingCodeRequest
+			if err := strictjson.DecodeReader(r.Body, &request, strictjson.RejectInvalidUTF8, 16<<10); err != nil ||
+				request.StateDir != p.stateDir {
+				http.Error(w, "pairing control state directory mismatch or invalid request", http.StatusBadRequest)
+				return
+			}
+			code, record, err := mint(r.Context())
+			if err != nil {
+				// The response and ordinary logs must never echo a code or a
+				// credential-bearing service error.
+				http.Error(w, "could not mint pairing code", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Cache-Control", "no-store")
+			_ = json.NewEncoder(w).Encode(pairingCodeResult{
+				APIURL: apiURL, PairingCode: code, ExpiresAt: record.ExpiresAt,
+			})
 		})
-	})
+	}
 	p.server.Handler = mux
+	p.mux = mux
 }
 
 func canonicalPairingStateDir(path string) (string, error) {
@@ -158,11 +167,21 @@ func (p *pairingControl) publish() error {
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(p.stateDir, pairingControlFileName)
+	path := p.dbPath + ".control.json"
 	if err := atomicfile.WriteFile(path, append(body, '\n'), 0o600); err != nil {
-		return fmt.Errorf("publish pairing control address: %w", err)
+		return fmt.Errorf("publish database control address: %w", err)
 	}
-	return p.remember(path)
+	if err := p.remember(path); err != nil {
+		return err
+	}
+	if p.stateDir != "" {
+		path = filepath.Join(p.stateDir, pairingControlFileName)
+		if err := atomicfile.WriteFile(path, append(body, '\n'), 0o600); err != nil {
+			return fmt.Errorf("publish pairing control address: %w", err)
+		}
+		return p.remember(path)
+	}
+	return nil
 }
 
 func (p *pairingControl) Serve() error {
@@ -201,7 +220,10 @@ func (p *pairingControl) Close() error {
 				errs = append(errs, os.Remove(owned.path))
 			}
 		}
-		p.closeError = errors.Join(append(errs, p.lock.Close())...)
+		if p.lock != nil {
+			errs = append(errs, p.lock.Close())
+		}
+		p.closeError = errors.Join(errs...)
 	})
 	return p.closeError
 }

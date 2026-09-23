@@ -64,6 +64,11 @@ func runFakePublicationCommand(
 	ctx context.Context,
 	cfg fakePublicationCommandConfig,
 ) (_ fakePublicationCommandResult, err error) {
+	lock, err := requireNoDaemon("fake-publication", cfg.DBPath)
+	if err != nil {
+		return fakePublicationCommandResult{}, err
+	}
+	defer func() { err = errors.Join(err, lock.Close()) }()
 	replayFound, err := prepareFakePublicationConfig(
 		ctx, &cfg, fakePublicationReplayBinding,
 	)
