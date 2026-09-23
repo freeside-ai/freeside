@@ -48,7 +48,9 @@ func publicationMetadata(p ProductionPublication, producer domain.InvocationID, 
 	if err := p.Validate(); err != nil {
 		return "", "", errors.New("publication metadata has invalid immutable recipe inputs")
 	}
-	if p.Recipe == "" {
+	// A literal record and the intake recipe's fallback both render the stored
+	// literal text; neither reads the agent's publication claim.
+	if p.Recipe == "" || p.Recipe == IntakePublicationRecipe {
 		return p.Title, p.Body, nil
 	}
 	var selected *domain.AgentClaim
@@ -90,11 +92,11 @@ func publicationMetadata(p ProductionPublication, producer domain.InvocationID, 
 	// original artifact stays private and unchanged; it is never uploaded.
 	body := fmt.Sprintf("## Agent-reported implementation (claim)\n\nProducer:\n\n<pre><code>%s</code></pre>\n\nArtifact digest: `%s`\n\n<pre>%s</pre>",
 		html.EscapeString(string(producer)), c.Digest, html.EscapeString(strings.TrimSpace(description)))
-	// A v1 record names the source issue in its prose. A v2 record (even when it
-	// falls back to v1 rendering) leaves the reference to the publisher-owned
-	// source-reference section, which writes Closes/Refs or the descriptive link
-	// (issue #1419 Part D, plan step 15).
-	if p.SourceIssue != "" && p.Recipe != clientPublicationRecipeV2 {
+	// A v1 record names the source issue in its prose. An authored record (even
+	// when it falls back to v1 rendering) leaves the reference to the
+	// publisher-owned source-reference section, which writes Closes/Refs or the
+	// descriptive link (issue #1419 Part D, plan step 15).
+	if p.SourceIssue != "" && !authoredPublicationRecipe(p.Recipe) {
 		body += "\n\nSource issue: " + p.SourceIssue
 	}
 	if err := publish.ValidateCandidateBody(body); err != nil {

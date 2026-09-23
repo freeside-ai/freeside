@@ -1694,6 +1694,7 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 		joined = errors.Join(joined, fmt.Errorf("reconcile returned operator feedback: %w", err))
 	}
 	var pending []store.QueueEntry
+	var releasedWaits, concludedWaits []string
 	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		pending, err = tx.ListPendingOutbox(ctx, KindProductionPublicationRequested)
@@ -1710,9 +1711,23 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 			return err
 		}
 		pending = append(pending, continuations...)
+		// A published task whose human-gate closure decision has landed
+		// re-enters beside the pending rows (publication_closure_wait.go).
+		released, concluded, err := releasedClosureWaitTasks(ctx, tx, pending)
+		if err != nil {
+			return err
+		}
+		for _, entry := range released {
+			releasedWaits = append(releasedWaits, entry.IdempotencyKey)
+		}
+		concludedWaits = concluded
+		pending = append(pending, released...)
 		return nil
 	}); err != nil {
 		return result, errors.Join(joined, err)
+	}
+	if err := w.retireClosureWaits(ctx, concludedWaits); err != nil {
+		joined = errors.Join(joined, fmt.Errorf("retire concluded closure waits: %w", err))
 	}
 	w.pruneHeldTaskRetries(pending)
 	for _, entry := range pending {
@@ -1846,6 +1861,14 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 				}
 				w.deferHeldTask(task)
 			} else {
+				// A published task re-entered only to release its closure hold
+				// fails loud once, not on every pass: its wait retires first, so a
+				// pull request the repair cannot reach (for example one merged
+				// before the pass observed it) stays a draft rather than wedging
+				// the lane across restarts.
+				if slices.Contains(releasedWaits, entry.IdempotencyKey) {
+					reconcileErr = errors.Join(reconcileErr, w.retireClosureWaits(ctx, []string{entry.IdempotencyKey}))
+				}
 				joined = errors.Join(joined, fmt.Errorf("task %q: %w", entry.IdempotencyKey, reconcileErr))
 			}
 			continue
@@ -4738,7 +4761,11 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 				errors.Join(err, errProductionCrashSeam))
 		}
 	}
-	if err := w.finishTask(ctx, task); err != nil {
+	// A pull request a human-gate closure decision still holds as a draft is
+	// revisited once the decision lands; one no longer held retires its wait.
+	// The wait settles in the transaction that retires the task row
+	// (publication_closure_wait.go).
+	if err := w.finishPublishedTask(ctx, task, binding); err != nil {
 		return productionTaskOutcome{}, err
 	}
 	return productionTaskOutcome{

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -71,8 +72,9 @@ type integrationPR struct {
 	HeadSHA string
 	BaseRef string
 	// Draft is emitted in the PR response; GitHub always sends the field and
-	// the forge fails closed on its absence. Production keeps it false
-	// (unmanaged draft state, plan §5.15).
+	// the forge fails closed on its absence. It stays false unless the
+	// publisher holds a human-gate closure (plan §5.15), which opens the PR as a
+	// draft and toggles it through the GraphQL mutations below.
 	Draft bool
 }
 
@@ -170,6 +172,7 @@ func (f *integrationForge) handle(w http.ResponseWriter, r *http.Request) {
 			Body  string `json:"body"`
 			Head  string `json:"head"`
 			Base  string `json:"base"`
+			Draft bool   `json:"draft"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			f.t.Errorf("decode PR request: %v", err)
@@ -179,6 +182,7 @@ func (f *integrationForge) handle(w http.ResponseWriter, r *http.Request) {
 		pr := integrationPR{
 			Number: f.nextPR, Title: request.Title, Body: request.Body,
 			HeadRef: request.Head, HeadSHA: f.refs[request.Head], BaseRef: request.Base,
+			Draft: request.Draft,
 		}
 		f.nextPR++
 		f.prs = append(f.prs, pr)
@@ -224,11 +228,52 @@ func (f *integrationForge) handle(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		w.WriteHeader(http.StatusNotFound)
+	case r.Method == http.MethodPost && r.URL.Path == "/graphql":
+		f.handleDraftMutation(w, r)
 	default:
 		body, _ := io.ReadAll(r.Body)
 		f.t.Errorf("unexpected forge request %s %s: %s", r.Method, r.URL.Path, body)
 		w.WriteHeader(http.StatusNotFound)
 	}
+}
+
+// handleDraftMutation serves the publisher's GraphQL
+// markPullRequestReadyForReview / convertPullRequestToDraft call against the PR
+// its node id names, answering in the shape the publisher verifies.
+func (f *integrationForge) handleDraftMutation(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Query     string `json:"query"`
+		Variables struct {
+			ID string `json:"id"`
+		} `json:"variables"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	field, draft := "markPullRequestReadyForReview", false
+	if strings.Contains(request.Query, "convertPullRequestToDraft") {
+		field, draft = "convertPullRequestToDraft", true
+	}
+	for i := range f.prs {
+		if integrationPRNodeID(f.prs[i].Number) != request.Variables.ID {
+			continue
+		}
+		f.prs[i].Draft = draft
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{field: map[string]any{
+			"pullRequest": map[string]any{
+				"number": f.prs[i].Number, "isDraft": draft,
+				"repository": map[string]string{"nameWithOwner": fakePublicationRepo},
+			},
+		}}})
+		return
+	}
+	f.t.Errorf("draft mutation names unknown node %q", request.Variables.ID)
+	w.WriteHeader(http.StatusNotFound)
+}
+
+func integrationPRNodeID(number int) string {
+	return "PR_node_" + strconv.Itoa(number)
 }
 
 func (f *integrationForge) interceptRequest(hook func(method, path string) bool) {
@@ -244,7 +289,7 @@ func integrationPRJSON(pr integrationPR) map[string]any {
 	}
 	return map[string]any{
 		"number": pr.Number, "state": state, "title": pr.Title, "body": pr.Body,
-		"draft": pr.Draft,
+		"draft": pr.Draft, "node_id": integrationPRNodeID(pr.Number),
 		"head": map[string]any{
 			"ref": pr.HeadRef, "sha": pr.HeadSHA,
 			"repo": map[string]string{"full_name": fakePublicationRepo},
@@ -275,6 +320,12 @@ func (f *integrationForge) counts() (refs, prs int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.refs), len(f.prs)
+}
+
+func (f *integrationForge) writeCountSnapshot() map[string]int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return maps.Clone(f.writeCounts)
 }
 
 func (f *integrationForge) pullRequests() []integrationPR {

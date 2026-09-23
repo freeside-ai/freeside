@@ -181,12 +181,14 @@ func TestRenderAuthoredBodyProseNeutralizesGFMExtensions(t *testing.T) {
 
 func TestClientPublicationRecipeV2Identifier(t *testing.T) {
 	t.Parallel()
-	// The v2 recipe identifier is a stored-record contract string: a frozen v2
-	// record names this recipe, and the recipe switch (issue #1419 Part E) will
-	// dispatch on it. Pin it so a rename is a deliberate, reviewed change rather
-	// than a silent drift from the v1 identifier.
+	// The recipe identifiers are stored-record contract strings: a frozen record
+	// names its recipe and the engine dispatches on it. Pin them so a rename is a
+	// deliberate, reviewed change rather than a silent drift.
 	if clientPublicationRecipeV2 != "freeside.client-publication/v2" {
 		t.Errorf("recipe identifier drifted: %q", clientPublicationRecipeV2)
+	}
+	if IntakePublicationRecipe != "freeside.intake-publication/v1" {
+		t.Errorf("intake recipe identifier drifted: %q", IntakePublicationRecipe)
 	}
 }
 

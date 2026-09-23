@@ -46,8 +46,13 @@ func NewTaskSubmitter(blobs *signet.BlobStore, initiator func(domain.ProjectID) 
 // project with no configured initiator is reported as store.ErrNotFound so the
 // boundary answers 404 without enumerating projects. An operator name that
 // fails the canonical bound is refused as ErrInvalidSubmitTaskPayload before
-// any write.
+// any write. A new command freezes recipe v2; a command recorded under v1 is
+// replayed by the boundary and never recomposed here, so it keeps its v1 record.
 func (t *TaskSubmitter) SubmitTask(ctx context.Context, tx *store.WriteTx, in signet.TaskSubmissionInput) (signet.TaskSubmissionResult, error) {
+	return t.submit(ctx, tx, in, clientPublicationRecipeV2)
+}
+
+func (t *TaskSubmitter) submit(ctx context.Context, tx *store.WriteTx, in signet.TaskSubmissionInput, recipe string) (signet.TaskSubmissionResult, error) {
 	if t.blobs == nil {
 		return signet.TaskSubmissionResult{}, errors.New("task submitter has no blob store")
 	}
@@ -80,7 +85,7 @@ func (t *TaskSubmitter) SubmitTask(ctx context.Context, tx *store.WriteTx, in si
 		return signet.TaskSubmissionResult{}, fmt.Errorf("project %q has no configured submission policy: %w", in.ProjectID, store.ErrNotFound)
 	}
 	publication := ProductionPublication{
-		Recipe:       clientPublicationRecipeV1,
+		Recipe:       recipe,
 		SourceIssue:  canonicalSourceIssue(strings.TrimSpace(string(in.Source))),
 		CommitAuthor: init.CommitAuthor,
 	}

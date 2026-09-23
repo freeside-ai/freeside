@@ -50,7 +50,7 @@ func TestSubmitTaskBindsRecipeIndependentOfName(t *testing.T) {
 					return err
 				}
 				p := request.Publication
-				if p.Recipe != "freeside.client-publication/v1" || p.SourceIssue != source || p.Title != "" || p.Body != "" {
+				if p.Recipe != "freeside.client-publication/v2" || p.SourceIssue != source || p.Title != "" || p.Body != "" {
 					t.Fatal("client source/name replaced the immutable recipe")
 				}
 				return nil
@@ -74,6 +74,81 @@ func TestSubmitTaskBindsRecipeIndependentOfName(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+// TestSubmitTaskReplaysRecordedV1Command pins the recipe switch's replay
+// contract: a command recorded while submissions froze v1 replays to its
+// unchanged v1 record under the current submitter, which freezes v2 only for a
+// new command.
+func TestSubmitTaskReplaysRecordedV1Command(t *testing.T) {
+	ctx := t.Context()
+	s := storetest.Open(t, t.TempDir()+"/engine.db", store.Options{})
+	t.Cleanup(func() { _ = s.Close() })
+	blobs, err := signet.NewBlobStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	holder := &initiatorHolder{byProject: map[domain.ProjectID]engine.ManualInitiator{
+		"project-1": submissionInitiator("daemon/**"),
+	}}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutDevice(ctx, domain.Device{
+			ID: "device-1", DisplayName: "Mac", Status: domain.DeviceActive,
+			PairedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	current := engine.NewTaskSubmitter(blobs, holder.lookup)
+	before := signet.NewService(s, signet.WithBlobStore(blobs),
+		signet.WithTaskSubmitter(engine.V1TaskSubmitter{TaskSubmitter: current}))
+	after := signet.NewService(s, signet.WithBlobStore(blobs), signet.WithTaskSubmitter(current))
+
+	const source = "https://github.com/example/project/issues/82"
+	recipeOf := func(runID domain.RunID) (string, []byte) {
+		t.Helper()
+		var payload []byte
+		if err := s.Read(ctx, func(tx *store.ReadTx) error {
+			entry, err := tx.GetOutbox(ctx, string(domain.SpecificationInvocationID(runID, 1)))
+			payload = entry.Payload
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		var request struct {
+			Publication engine.ProductionPublication `json:"publication"`
+		}
+		if err := json.Unmarshal(payload, &request); err != nil {
+			t.Fatal(err)
+		}
+		return request.Publication.Recipe, payload
+	}
+
+	recorded, err := before.Submit(ctx, submitCmd("cmd-v1", "project-1", source, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipe, original := recipeOf(recorded.Submission.SpecificationRunID)
+	if recipe != "freeside.client-publication/v1" {
+		t.Fatalf("recorded recipe = %q, want v1", recipe)
+	}
+	replayed, err := after.Submit(ctx, submitCmd("cmd-v1", "project-1", source, ""))
+	if err != nil || replayed.Submission.SpecificationRunID != recorded.Submission.SpecificationRunID {
+		t.Fatalf("replay = %+v, %v; want the recorded run", replayed.Submission, err)
+	}
+	if recipe, payload := recipeOf(replayed.Submission.SpecificationRunID); recipe != "freeside.client-publication/v1" ||
+		string(payload) != string(original) {
+		t.Fatalf("replayed recipe = %q (payload changed: %t), want the unchanged v1 record",
+			recipe, string(payload) != string(original))
+	}
+
+	fresh, err := after.Submit(ctx, submitCmd("cmd-v2", "project-1", source, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recipe, _ := recipeOf(fresh.Submission.SpecificationRunID); recipe != "freeside.client-publication/v2" {
+		t.Fatalf("new command recipe = %q, want v2", recipe)
 	}
 }
 

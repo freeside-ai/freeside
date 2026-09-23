@@ -11,10 +11,23 @@ import (
 // clientPublicationRecipeV2 is the recipe that renders the publication-author
 // role's prose as live, screened GitHub-Flavored Markdown. Records freeze their
 // recipe, so a stored v2 record renders through renderAuthoredPublication while
-// a v1 record keeps the frozen v1 rendering (plan §5.15, §5.12). Nothing freezes
-// a v2 record until the recipe switch (issue #1419 Part E); these functions are
-// the pure renderer the later parts call.
+// a v1 record keeps the frozen v1 rendering (plan §5.15, §5.12). New client
+// submissions freeze it (TaskSubmitter.SubmitTask).
 const clientPublicationRecipeV2 = "freeside.client-publication/v2"
+
+// IntakePublicationRecipe is label intake's publication-author contract (plan
+// §5.15): a new label-initiated run freezes it beside the literal title and body
+// the intake path writes, runs the same author role as client v2, and renders
+// the literal text as its fallback. A label record with no recipe keeps its
+// literal text and replay bytes.
+const IntakePublicationRecipe = "freeside.intake-publication/v1"
+
+// authoredPublicationRecipe reports whether a frozen recipe runs the
+// publication-author role, the source-issue closure, and the publisher-owned
+// source-reference section. v1 and literal records do none of these.
+func authoredPublicationRecipe(recipe string) bool {
+	return recipe == clientPublicationRecipeV2 || recipe == IntakePublicationRecipe
+}
 
 // screenAuthoredText refuses an authored artifact whose free-text fields would
 // be unsafe as public output. It runs the identical v1 content checks (the

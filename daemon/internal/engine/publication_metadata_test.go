@@ -199,6 +199,37 @@ func TestPublicationRecipePreservesLiteralEncodingAndCanonicalRecovery(t *testin
 	}
 }
 
+// TestIntakePublicationRecipeKeepsLiteralFallback pins the intake recipe's
+// record shape: it carries the literal title and body as its fallback, renders
+// them without reading the agent's publication claim, and refuses a source
+// issue or empty literal text like a literal record.
+func TestIntakePublicationRecipeKeepsLiteralFallback(t *testing.T) {
+	p := ProductionPublication{
+		Title: "Resolve owner/repo#7", Body: "Automated resolution of issue #7.",
+		CommitAuthor: recipePublicationFixture().CommitAuthor, Recipe: IntakePublicationRecipe,
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatalf("intake record refused: %v", err)
+	}
+	if !authoredPublicationRecipe(p.Recipe) {
+		t.Fatal("intake recipe does not run the publication-author role")
+	}
+	if title, body, err := publicationMetadata(p, "current", nil); err != nil || title != p.Title || body != p.Body {
+		t.Fatalf("intake fallback = %q, %q, %v; want the literal text", title, body, err)
+	}
+	for _, mutate := range []func(*ProductionPublication){
+		func(p *ProductionPublication) { p.SourceIssue = "https://github.com/example/project/issues/82" },
+		func(p *ProductionPublication) { p.Title = "" },
+		func(p *ProductionPublication) { p.Body = "" },
+	} {
+		invalid := p
+		mutate(&invalid)
+		if invalid.Validate() == nil || invalid.validateRetained() == nil {
+			t.Fatalf("invalid intake record accepted: %+v", invalid)
+		}
+	}
+}
+
 func TestCanonicalPublicationSourceIssue(t *testing.T) {
 	canonical := "https://github.com/example/project/issues/82"
 	if canonicalSourceIssue(canonical) != canonical {

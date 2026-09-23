@@ -97,7 +97,7 @@ func (w *productionPublicationWorkflow) reconcilePublicationClosure(
 	checkoutDir string,
 	report []byte,
 ) error {
-	if task.Publication.Recipe != clientPublicationRecipeV2 {
+	if !authoredPublicationRecipe(task.Publication.Recipe) {
 		return nil
 	}
 	closure, err := w.reconcileClosureDecision(ctx, task, binding, checkpoint, reviewInstructions, checkoutDir, report)
@@ -421,7 +421,7 @@ func (w *productionPublicationWorkflow) applyClosureReference(
 	task productionPublicationTask,
 	candidate *publish.Candidate,
 ) error {
-	if task.Publication.Recipe != clientPublicationRecipeV2 {
+	if !authoredPublicationRecipe(task.Publication.Recipe) {
 		return nil
 	}
 	key := productionClosureCheckpointKey(task.RunID, task.PublicationID)
