@@ -589,7 +589,7 @@ func (r *intakeReconciler) startSpec(
 		attempt, err = tx.GetProductionAttempt(ctx, campaignID, 1)
 		return err
 	})
-	publication := intakeLiteralPublication(init, occurrence)
+	publication := intakeLegacyLiteralPublication(init, occurrence)
 	publicationDigest := domain.Digest("")
 	publicationBytes := json.RawMessage(nil)
 	if attemptErr == nil {
@@ -923,11 +923,11 @@ func intakeWorkItemDocument(occurrence domain.IntakeOccurrence) []byte {
 }
 
 // intakePublication composes the publication a first admission freezes for a
-// label-initiated run: the literal metadata under the intake recipe, so the
+// label-initiated run: the new literal metadata under the intake recipe, so the
 // publication-author role writes the PR text and the literal text is its
 // fallback (plan §5.15). Only a first admission uses it; a replay decodes the
 // admitted attempt's stored bytes (admit, startSpec), so an occurrence admitted
-// before the recipe existed keeps its literal record.
+// before this title change keeps its frozen record.
 func intakePublication(init intakeInitiator, occurrence domain.IntakeOccurrence) engine.ProductionPublication {
 	publication := intakeLiteralPublication(init, occurrence)
 	publication.Recipe = engine.IntakePublicationRecipe
@@ -936,10 +936,24 @@ func intakePublication(init intakeInitiator, occurrence domain.IntakeOccurrence)
 
 // intakeLiteralPublication composes the daemon-authored pull-request metadata
 // for a label-initiated run from the occurrence coordinates and the initiator's
-// configured commit-author identity. It carries no observed issue content. A
-// legacy reservation with no admitted attempt was reserved before the intake
-// recipe existed, so it reconstructs this recipe-free form.
+// configured commit-author identity. It omits raw label text because a label
+// can contain GitHub directives; only the publisher's approved closure outcome
+// may close the source issue.
 func intakeLiteralPublication(init intakeInitiator, occurrence domain.IntakeOccurrence) engine.ProductionPublication {
+	return engine.ProductionPublication{
+		Title: fmt.Sprintf("Address %s#%d", occurrence.Repo, occurrence.IssueNumber),
+		Body: fmt.Sprintf(
+			"Automated resolution of issue #%d in %s, initiated by a repository label. "+
+				"The implementation is derived from the specified specification, not the issue text.",
+			occurrence.IssueNumber, occurrence.Repo),
+		CommitAuthor: init.CommitAuthor,
+	}
+}
+
+// intakeLegacyLiteralPublication rebuilds the pre-#1491 text that a legacy
+// reservation with no admitted attempt froze. Keep these bytes unchanged so
+// startSpec can replay that reservation without changing its publication.
+func intakeLegacyLiteralPublication(init intakeInitiator, occurrence domain.IntakeOccurrence) engine.ProductionPublication {
 	return engine.ProductionPublication{
 		Title: fmt.Sprintf("Resolve %s#%d", occurrence.Repo, occurrence.IssueNumber),
 		Body: fmt.Sprintf(
