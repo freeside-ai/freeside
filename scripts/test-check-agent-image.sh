@@ -411,6 +411,10 @@ if [ "${1:-}" = preflight ]; then
 		printf '%s\n' '{"version":"freeside-production-composition-v1","status":"failed","checks":[{"name":"reviewer_image","status":"failed","evidence":"reviewer image is stale","remediation":"rebuild and re-pin the reviewer image"}]}'
 		exit 1
 	fi
+	if [ "${GO_STUB_PREFLIGHT_MODE:-ok}" = author-limit ]; then
+		printf '%s\n' '{"version":"freeside-production-composition-v1","status":"failed","checks":[{"name":"publication_author_inputs","status":"failed","evidence":"instruction_snapshot: 262145 bytes (limit 262144): exceeds author input budget","remediation":"correct the host rules"}]}'
+		exit 1
+	fi
 	if [[ -f "$STUB_DIR/old/composition-manifest.json" ]]; then
 		[[ "${RESUME_STUB_MODE:-}" != post-migration-fail ]] || exit 91
 		cat "$STUB_DIR/old/composition-manifest.json"
@@ -1346,6 +1350,12 @@ run_real_work test-fail current ok ok success fail
 assert_rc 2
 assert_contains '"name":"reviewer_image"'
 assert_contains "production composition preflight failed"
+assert_not_exists "$CASE_DIR/submit.called"
+
+begin_case "42a oversized author composition prevents submission"
+run_real_work test-fail current ok ok success author-limit
+assert_rc 2
+assert_contains '"name":"publication_author_inputs"'
 assert_not_exists "$CASE_DIR/submit.called"
 
 begin_case "43 clean composition evidence is saved outside the temporary workdir"

@@ -392,6 +392,9 @@ func newCompositionManifest(cfg preflightConfig, daemonBuild string, now time.Ti
 	if cfg.Judgments != (judgmentConfig{}) {
 		names = append(names, "judgment_configuration")
 	}
+	if cfg.Judgments.PublicationAuthorPrompt != "" {
+		names = append(names, "publication_author_inputs")
+	}
 	checks := make([]compositionCheck, 0, len(names))
 	for _, name := range names {
 		checks = append(checks, compositionCheck{Name: name, Status: compositionNotRun, Evidence: "not evaluated"})
@@ -554,6 +557,7 @@ func evaluateComposition(
 	if cfg.ShadowReviewAuthSnapshot != "" {
 		forbiddenInstructionPaths = append(forbiddenInstructionPaths, cfg.ShadowReviewAuthSnapshot)
 	}
+	var hostInstructions engine.ReviewHostInstructions
 	if shadowReviewProtectedAccessBlocked {
 		notRunCheck(manifest, "review_instructions", "approved shadow review configuration is required before instruction access")
 	} else if instructions, err := engine.SnapshotReviewHostInstructions(
@@ -561,6 +565,7 @@ func evaluateComposition(
 	); err != nil {
 		failCheck(manifest, "review_instructions", "review host instructions are absent, unreadable, or invalid", "provide a stable review-instructions file outside the credential snapshot")
 	} else {
+		hostInstructions = instructions
 		manifest.ReviewInstructionsPresent = instructions.Present
 		manifest.ReviewInstructionsDigest = instructions.Digest
 		passCheck(manifest, "review_instructions", "review host instructions can be snapshotted before submission")
@@ -679,6 +684,15 @@ func evaluateComposition(
 		passCheck(manifest, "codex_credentials", "Codex API-key snapshot is ready; no expiry is declared")
 	} else {
 		passCheck(manifest, "codex_credentials", "Codex access snapshot is ready until "+credential.ExpiresAt.UTC().Format(time.RFC3339))
+	}
+	if cfg.Judgments.PublicationAuthorPrompt != "" {
+		if !compositionChecksPassed(manifest, "repository_base", "review_instructions", "codex_credentials", "claude_credentials") {
+			notRunCheck(manifest, "publication_author_inputs", "repository and credential access gates must pass first")
+		} else if err := checkPreflightAuthorInputs(ctx, cfg, hostInstructions); err != nil {
+			failCheck(manifest, "publication_author_inputs", err.Error(), "correct the host rules if they duplicate repository AGENTS.md, or reduce the named author input before submission")
+		} else {
+			passCheck(manifest, "publication_author_inputs", "trusted-base instruction bundle and PR template fit their separate author field limits")
+		}
 	}
 
 	if err := projectimage.ValidateBuildProxy(cfg.BuildProxy); err != nil {
@@ -1304,10 +1318,35 @@ func (productionPreflightEnvironment) InspectRepositoryAuthority(
 }
 
 func runPreflightGit(ctx context.Context, checkout string, args ...string) ([]byte, error) {
+	return runPreflightGitCommand(ctx, checkout, 64<<10,
+		append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_NO_LAZY_FETCH=1"), args...)
+}
+
+func runPreflightAuthorGit(ctx context.Context, checkout string, limit int, args ...string) ([]byte, error) {
+	// Match the daemon-owned git runner's isolated environment. Inherited Git
+	// overrides or refs/replace can make an exact-base observation read a
+	// different object from the one runtime later consumes.
+	env := []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + os.DevNull,
+		"XDG_CONFIG_HOME=" + os.DevNull,
+		"GIT_CONFIG_GLOBAL=" + os.DevNull,
+		"GIT_CONFIG_SYSTEM=" + os.DevNull,
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_OPTIONAL_LOCKS=0",
+		"GIT_NO_REPLACE_OBJECTS=1",
+		"GIT_NO_LAZY_FETCH=1",
+		"LC_ALL=C",
+	}
+	return runPreflightGitCommand(ctx, checkout, limit, env, args...)
+}
+
+func runPreflightGitCommand(ctx context.Context, checkout string, limit int, env []string, args ...string) ([]byte, error) {
 	argv := append([]string{"-C", checkout}, args...)
 	command := osexec.CommandContext(ctx, "git", argv...) //nolint:gosec // G204: fixed git verb argv carries validated repo coordinates as separate opaque arguments
-	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_NO_LAZY_FETCH=1")
-	stdout := &preflightOutput{max: 64 << 10}
+	command.Env = env
+	stdout := &preflightOutput{max: limit}
 	stderr := &preflightOutput{max: 64 << 10}
 	command.Stdout = stdout
 	command.Stderr = stderr

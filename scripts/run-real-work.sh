@@ -56,7 +56,9 @@
 #   FREESIDE_REAL_RUN_REVIEW_AUTH_MODE subscription or api_key
 #   FREESIDE_REAL_RUN_REVIEW_AUTH_IDENTITY Codex reviewer auth identity id
 #   FREESIDE_REAL_RUN_REVIEW_AUTH_SNAPSHOT Codex auth snapshot under the input root
-#   FREESIDE_REAL_RUN_REVIEW_INSTRUCTIONS composed AGENTS.md snapshot under the input root
+#   FREESIDE_REAL_RUN_REVIEW_INSTRUCTIONS operator-host rules under the input root;
+#                                    trusted-base repository AGENTS.md files are
+#                                    discovered and composed separately
 #   FREESIDE_REAL_RUN_REVIEW_MODEL   explicit Codex reviewer model
 #   FREESIDE_REAL_RUN_REVIEW_REASONING explicit reviewer reasoning effort
 #   FREESIDE_REAL_RUN_REVIEW_COST_OWNER account charged for review

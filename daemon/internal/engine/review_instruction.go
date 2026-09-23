@@ -106,7 +106,7 @@ type reviewInstructionCandidates struct {
 }
 
 func discoverCodexReviewInstructions(root string) ([]exec.ReviewInstructionSourceInput, error) {
-	candidates := make(map[string]reviewInstructionCandidates)
+	var paths []string
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -120,47 +120,64 @@ func discoverCodexReviewInstructions(root string) ([]exec.ReviewInstructionSourc
 		if entry.Name() != "AGENTS.override.md" && entry.Name() != "AGENTS.md" {
 			return nil
 		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		paths = append(paths, filepath.ToSlash(rel))
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("discover exact-base Codex review instructions: %w", err)
+	}
+	selected := SelectCodexReviewInstructionPaths(paths)
+	sources := make([]exec.ReviewInstructionSourceInput, 0, len(selected))
+	remaining := int64(domain.MaxVendorInstructionBytes)
+	for _, rel := range selected {
+		body, err := readExactBaseReviewInstruction(filepath.Join(root, filepath.FromSlash(rel)), remaining)
+		if err != nil {
+			return nil, err
+		}
+		remaining -= int64(len(body))
+		sources = append(sources, exec.ReviewInstructionSourceInput{Path: rel, Body: body})
+	}
+	return sources, nil
+}
+
+// SelectCodexReviewInstructionPaths applies the same per-directory override
+// precedence to filesystem discovery and exact-tree preflight discovery.
+func SelectCodexReviewInstructionPaths(paths []string) []string {
+	candidates := make(map[string]reviewInstructionCandidates)
+	for _, path := range paths {
+		name := filepath.Base(path)
+		if name != "AGENTS.override.md" && name != "AGENTS.md" {
+			continue
+		}
 		dir := filepath.Dir(path)
 		found := candidates[dir]
-		if entry.Name() == "AGENTS.override.md" {
+		if name == "AGENTS.override.md" {
 			found.override = path
 		} else {
 			found.agents = path
 		}
 		candidates[dir] = found
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("discover exact-base Codex review instructions: %w", err)
 	}
 	dirs := make([]string, 0, len(candidates))
 	for dir := range candidates {
 		dirs = append(dirs, dir)
 	}
 	sort.Strings(dirs)
-	sources := make([]exec.ReviewInstructionSourceInput, 0, len(dirs))
-	remaining := int64(domain.MaxVendorInstructionBytes)
+	selected := make([]string, 0, len(dirs))
 	for _, dir := range dirs {
 		for _, path := range []string{candidates[dir].override, candidates[dir].agents} {
 			if path == "" {
 				continue
 			}
-			body, err := readExactBaseReviewInstruction(path, remaining)
-			if err != nil {
-				return nil, err
-			}
-			remaining -= int64(len(body))
-			rel, err := filepath.Rel(root, path)
-			if err != nil {
-				return nil, err
-			}
-			sources = append(sources, exec.ReviewInstructionSourceInput{
-				Path: filepath.ToSlash(rel), Body: body,
-			})
+			selected = append(selected, path)
 			break
 		}
 	}
-	return sources, nil
+	return selected
 }
 
 func readExactBaseReviewInstruction(path string, remaining int64) ([]byte, error) {

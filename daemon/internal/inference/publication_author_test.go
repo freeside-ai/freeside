@@ -281,24 +281,58 @@ func TestAuthorInputVisibilityClasses(t *testing.T) {
 func TestAuthorControlFileRejections(t *testing.T) {
 	base := controlFile("valid content")
 	for _, tc := range []struct {
-		label string
-		file  inference.ControlFile
+		label    string
+		file     inference.ControlFile
+		field    string
+		accepted bool
 	}{
-		{"digest mismatch", inference.ControlFile{Content: "valid content", Digest: contentaddr.Sum([]byte("other")), TrustedBaseCommit: "base-sha"}},
-		{"missing trusted-base", inference.ControlFile{Content: base.Content, Digest: base.Digest}},
-		{"oversized", controlFile(strings.Repeat("x", (64<<10)+1))},
+		{"template digest mismatch", inference.ControlFile{Content: "valid content", Digest: contentaddr.Sum([]byte("other")), TrustedBaseCommit: "base-sha"}, "pr_template", false},
+		{"instruction missing trusted-base", inference.ControlFile{Content: base.Content, Digest: base.Digest}, "instruction_snapshot", false},
+		{"template invalid UTF-8", controlFile(string([]byte{0xff})), "pr_template", false},
+		{"template at limit", controlFile(strings.Repeat("t", 64<<10)), "pr_template", true},
+		{"template over limit", controlFile(strings.Repeat("t", (64<<10)+1)), "pr_template", false},
+		{"instruction at limit", controlFile(strings.Repeat("i", 256<<10)), "instruction_snapshot", true},
+		{"instruction over limit", controlFile(strings.Repeat("i", (256<<10)+1)), "instruction_snapshot", false},
+		{"legitimate 84401-byte composition", controlFile(strings.Repeat("i", 84401)), "instruction_snapshot", true},
 	} {
-		t.Run(tc.label, func(t *testing.T) {
-			driver := fake.New()
-			client, _, _ := testClient(t, driver, 10)
-			input := authorInput()
-			input.PRTemplate = tc.file
-			result, err := client.AuthorPublication(t.Context(), input)
-			if err != nil || !result.Fallback || len(driver.Requests()) != 0 {
-				t.Fatalf("control-file rejection = %+v, %v, requests=%d", result, err, len(driver.Requests()))
-			}
-		})
+		for _, site := range []string{"explain", "propose"} {
+			t.Run(tc.label+"/"+site, func(t *testing.T) {
+				driver := fake.New()
+				scriptExplain(driver, `{"title":"Valid title","body":"Valid body","reviewer_notes":null,"evidence_refs":[],"outcome_summary":"Valid summary"}`)
+				scriptPropose(driver, `{"resolves":true}`)
+				client, _, _ := testClient(t, driver, 10)
+				input := authorInput()
+				if tc.field == "pr_template" {
+					input.PRTemplate = tc.file
+				} else {
+					input.InstructionSnapshot = tc.file
+				}
+				var fallback bool
+				var reason string
+				var err error
+				if site == "explain" {
+					result, callErr := client.AuthorPublication(t.Context(), input)
+					fallback, reason, err = result.Fallback, result.InputRefusalReason, callErr
+				} else {
+					result, callErr := client.ProposeSourceIssueClosure(t.Context(), input)
+					fallback, reason, err = result.Fallback, result.InputRefusalReason, callErr
+				}
+				if err != nil || fallback == tc.accepted || len(driver.Requests()) != boolToInt(tc.accepted) {
+					t.Fatalf("control-file result: fallback=%t reason=%q err=%v calls=%d", fallback, reason, err, len(driver.Requests()))
+				}
+				if !tc.accepted && (!strings.Contains(reason, tc.field) || strings.Contains(reason, tc.file.Content)) {
+					t.Fatalf("unsafe or missing refusal reason: %q", reason)
+				}
+			})
+		}
 	}
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func TestAuthorEvidenceFiltering(t *testing.T) {
