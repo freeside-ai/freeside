@@ -501,6 +501,7 @@ type daemon struct {
 	workflow      *engine.Engine
 	driver        *fake.StageDriver
 	listener      net.Listener
+	loopbackTwin  net.Listener
 	server        *http.Server
 	pairing       *pairingControl
 	cancel        context.CancelFunc
@@ -1029,7 +1030,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	d := &daemon{
 		lock:  lock,
 		store: st, attention: attention, workflow: workflow, driver: driver,
-		listener: listener, pairing: pairing, cancel: cancel, errs: make(chan error, 1),
+		listener: listener, loopbackTwin: loopbackTwin, pairing: pairing, cancel: cancel, errs: make(chan error, 1),
 		logger: logger, now: cfg.now,
 		server: &http.Server{
 			Handler: signet.NewHTTPHandler(attention, signet.NewRequestAuthorizer(st), signet.HealthResponse{
@@ -1198,7 +1199,9 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		return nil, fmt.Errorf("mint startup pairing code: %w", err)
 	}
 	d.pairingCode = pairingCode
-	if err := publishReadiness(cfg.StateDir, d.readiness()); err != nil {
+	// The file's same-host app reader uses loopback; stdout and pairing keep the
+	// primary URL for remote devices (plan §5.2 Reachability).
+	if err := publishReadiness(cfg.StateDir, d.sameHostReadiness()); err != nil {
 		return nil, err
 	}
 	if d.pairing != nil {
@@ -1291,6 +1294,14 @@ func (d autoScriptStageDriver) Inspect(ctx context.Context, id domain.Invocation
 
 func (d *daemon) readiness() readiness {
 	return readiness{APIURL: "http://" + d.listener.Addr().String(), PairingCode: d.pairingCode}
+}
+
+func (d *daemon) sameHostReadiness() readiness {
+	ready := d.readiness()
+	if d.loopbackTwin != nil {
+		ready.APIURL = "http://" + d.loopbackTwin.Addr().String()
+	}
+	return ready
 }
 
 // Wait returns when the process context is canceled or any long-running
