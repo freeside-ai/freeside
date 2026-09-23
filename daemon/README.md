@@ -204,6 +204,12 @@ the PEM-copy pattern that can be detected from one machine.
 
 ## Operational Commands
 
+`-environment` selects `prod`, `dev`, or `ephemeral`. Without the flag, the
+daemon uses `ephemeral` and refuses paths under either supervised state root
+and ports `7331` and `7332`. Supervised LaunchAgent plists must pass their tier
+explicitly (the plist change is tracked in #1500). See the
+[environment rules](../docs/plan.md#environments-prod-dev-and-ephemeral).
+
 The long-running daemon defaults to `-driver disabled`. It serves pairing,
 health, stored state, and backups without starting an execution engine or
 simulating work. Its inbox explains that agent execution is not configured.

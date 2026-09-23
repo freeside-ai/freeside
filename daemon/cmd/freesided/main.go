@@ -18,6 +18,7 @@ import (
 	"os"
 	osexec "os/exec"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -88,6 +89,19 @@ func (f *repositoryIDFlag) Value() *int64 {
 	}
 	value := *f.value
 	return &value
+}
+
+// currentAccountHome comes from the operating system's account record rather
+// than the caller-controlled HOME environment variable.
+func currentAccountHome() (string, error) {
+	account, err := user.Current()
+	if err != nil {
+		return "", err
+	}
+	if account.HomeDir == "" {
+		return "", errors.New("current account has no home directory")
+	}
+	return account.HomeDir, nil
 }
 
 func main() {
@@ -214,6 +228,8 @@ func main() {
 	operatingMode := flags.String(
 		"operating-mode", string(domain.ModeAttendedDev),
 		"operating mode: attended_dev (default) or unattended")
+	environmentFlag := flags.String("environment", string(defaultEnvironment),
+		"environment tier: prod, dev, or ephemeral (default; refuses supervised roots and ports)")
 	doctorInterval := flags.Duration(
 		"doctor-interval", defaultDoctorInterval,
 		"scheduled operational-health cadence in production driver mode")
@@ -236,6 +252,39 @@ func main() {
 		fmt.Fprintln(os.Stderr, "freesided:", err)
 		os.Exit(2)
 	}
+	env, err := parseEnvironment(*environmentFlag)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "freesided:", err)
+		os.Exit(2)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "freesided:", err)
+		os.Exit(2)
+	}
+	paths := environmentPaths{
+		DB:                        *dbPath,
+		StateDir:                  *stateDir,
+		PublicationStateDir:       *publicationStateDir,
+		PublicationCredentialsDir: *publicationCredentialsDir,
+		ReviewInputRoot:           *reviewInputRoot,
+	}
+	if err := checkEnvironment(env, home, paths, *listenAddr); err != nil {
+		fmt.Fprintln(os.Stderr, "freesided:", err)
+		os.Exit(2)
+	}
+	if env == environmentEphemeral {
+		accountHome, err := currentAccountHome()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "freesided:", err)
+			os.Exit(2)
+		}
+		if err := checkEnvironment(env, accountHome, paths, *listenAddr); err != nil {
+			fmt.Fprintln(os.Stderr, "freesided:", err)
+			os.Exit(2)
+		}
+	}
+	logger.Info("environment", "tier", env)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
