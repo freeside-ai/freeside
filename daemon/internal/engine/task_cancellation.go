@@ -198,6 +198,9 @@ func (e *Engine) ReconcileTaskCancellations(ctx context.Context) error {
 		select {
 		case <-attempt.done:
 			delete(e.cancellation.attempts, c.RequestID)
+			if attempt.err != nil && e.logger != nil {
+				e.logger.Warn("task stop proof failed", "request", c.RequestID, "error", attempt.err)
+			}
 			if err := e.acknowledgeTaskStop(ctx, *c, attempt.err == nil); err != nil {
 				return err
 			}

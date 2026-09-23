@@ -144,3 +144,101 @@ func TestCancelBoundedWaitDoesNotInventTermination(t *testing.T) {
 		}
 	})
 }
+
+func TestTaskCancellationLiveHandoffCommitsCanceledResult(t *testing.T) {
+	entered := make(chan struct{})
+	cancellationRecorded := false
+	journalClosed := false
+	absenceErr := errors.New("fixture owned runtime still present")
+	recoveryCalls := 0
+	gate := &stubGate{
+		cancelFn: func(string) error {
+			cancellationRecorded = true
+			return nil
+		},
+		handoffCtxFn: func(ctx context.Context, _ ward.HandoffSpec) (*ward.HandoffResult, error) {
+			close(entered)
+			<-ctx.Done()
+			if !cancellationRecorded {
+				t.Fatal("writer stopped before cancellation intent")
+			}
+			journalClosed = true
+			return nil, ward.ErrHandoffCanceled
+		},
+		quiescentFn: func(string) error {
+			if !journalClosed {
+				t.Fatal("absence proof preceded journal closure")
+			}
+			return absenceErr
+		},
+		recoverFn: func(string, ward.HandoffSpec) (*ward.RecoveryResult, error) {
+			recoveryCalls++
+			if !journalClosed {
+				t.Fatal("recovery preceded journal closure")
+			}
+			return &ward.RecoveryResult{Outcome: ward.RecoveryCanceled}, nil
+		},
+	}
+	records := newStubExports()
+	d := newTestDriver(t, gate, records)
+	fencedRecoveryCalls := 0
+	d.SetRecoveryLauncher(func(context.Context, domain.RunID, func(context.Context) error) error {
+		fencedRecoveryCalls++
+		return ErrTaskCancelled
+	})
+	spec := testStartSpec()
+	inputs := stageInputs(t, &spec)
+	if err := d.StartWithInputs(t.Context(), testInvoke, spec,
+		func(context.Context) (exec.StageInputs, error) { return inputs, nil }); err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	if err := d.CancelAndConfirm(t.Context(), testInvoke); !errors.Is(err, absenceErr) {
+		t.Fatalf("unproven absence confirmed Stop: %v", err)
+	}
+	in, err := d.loadIntent(t.Context(), testInvoke)
+	if err != nil || in.Phase != phaseRunning || in.Result != nil || recoveryCalls != 0 {
+		t.Fatalf("failed absence proof advanced stage: %+v, recoveries=%d, err=%v", in, recoveryCalls, err)
+	}
+	absenceErr = nil
+	writeErr := errors.New("fixture terminal write unavailable")
+	records.outcomeErr = writeErr
+	if err := d.CancelAndConfirm(t.Context(), testInvoke); !errors.Is(err, writeErr) {
+		t.Fatalf("failed terminal write confirmed Stop: %v", err)
+	}
+	in, err = d.loadIntent(t.Context(), testInvoke)
+	if err != nil || in.Phase != phaseRunning || in.Result != nil {
+		t.Fatalf("failed terminal write advanced stage: %+v, %v", in, err)
+	}
+	records.outcomeErr = nil
+	if err := d.CancelAndConfirm(t.Context(), testInvoke); err != nil {
+		t.Fatal(err)
+	}
+	result, err := d.Collect(t.Context(), testInvoke)
+	if err != nil || result.Status != exec.StatusCanceled {
+		t.Fatalf("live cancellation did not commit a collectable result: %+v, %v", result, err)
+	}
+	if err := d.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(Config{
+		ErrorPrefix: "test driver", DisplayName: "Test",
+		Provider:        testProvider{volumes: stubVolumes{volume: testAuthVol}},
+		CredentialMount: testCredentialMountPolicy, Lifetime: context.Background(),
+		Dir: d.dir, SeedRoot: d.seedRoot, ExportRoot: d.exportRoot,
+		Gate: gate, Seeder: stubSeeder{}, Exports: records,
+		ImportStarts: records, Outcomes: records, Authority: stubAuthority{},
+		Artifacts: newStubArtifacts(), Now: func() time.Time { return fixedNow },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close(context.Background()) })
+	if err := reopened.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	result, err = reopened.Collect(t.Context(), testInvoke)
+	if err != nil || result.Status != exec.StatusCanceled || recoveryCalls != 2 || fencedRecoveryCalls != 2 {
+		t.Fatalf("reopened cancellation = %+v, err=%v, ward recoveries=%d, fenced recoveries=%d", result, err, recoveryCalls, fencedRecoveryCalls)
+	}
+}

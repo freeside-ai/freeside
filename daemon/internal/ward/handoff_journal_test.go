@@ -31,12 +31,77 @@ func TestHandoffJournalsCancellationBeforeStoppingWriter(t *testing.T) {
 		rec.Outcome == nil || *rec.Outcome != HandoffCanceled {
 		t.Fatalf("record = %+v, want durable canceled outcome", rec)
 	}
+	if rec.WriterComplete || rec.ExportDir != "" {
+		t.Fatalf("cancellation released an export: writer_complete=%v export_dir=%q", rec.WriterComplete, rec.ExportDir)
+	}
+	if err := backend.RequestCancellation(context.Background(), hs.RunID); err != nil {
+		t.Fatalf("repeat cancellation of closed canceled journal: %v", err)
+	}
 	mark := fx.rt.callIndex("journal-cancellation-requested " + hs.RunID)
 	stop := fx.rt.callIndex("stop-container " + names.Agent)
 	if mark == -1 || stop == -1 || mark > stop {
 		t.Fatalf("cancellation mark=%d stop=%d, want durable mark before stop", mark, stop)
 	}
 	fx.assertReaped(t)
+	if err := backend.HandoffQuiescent(context.Background(), hs.RunID); err != nil {
+		t.Fatalf("fresh absence audit: %v", err)
+	}
+	recovered, err := backend.Recover(context.Background(), hs.RunID, hs)
+	if err != nil || recovered.Outcome != RecoveryCanceled {
+		t.Fatalf("reopen canceled journal = %+v, %v", recovered, err)
+	}
+	if fx.rt.callIndex("start-container "+names.Agent) == -1 {
+		t.Fatal("fixture did not start a writer")
+	}
+	loss := HandoffLoss
+	rec.CancellationRequested = false
+	rec.Outcome = &loss
+	j.put(*rec)
+	if err := backend.RequestCancellation(context.Background(), hs.RunID); err == nil {
+		t.Fatal("closed non-canceled journal acquired cancellation intent")
+	}
+}
+
+func TestHandoffQuiescentRequiresFreshOwnedAbsence(t *testing.T) {
+	fx := newHandoffFixture(t)
+	j := fx.journalled()
+	hs := testHandoffSpec()
+	names := namesFor(hs.RunID)
+	fx.rt.runningInspects[names.Agent] = 100
+	ctx, cancel := context.WithCancel(context.Background())
+	fx.rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
+		if id == names.Agent && rep.State == StateRunning {
+			cancel()
+		}
+		return rep, nil
+	}
+	backend := fx.backend(t)
+	if _, err := backend.Handoff(ctx, hs); !errors.Is(err, ErrHandoffCanceled) {
+		t.Fatalf("canceled handoff = %v", err)
+	}
+	owner := Label{Key: ownershipLabelKey, Value: j.snapshot(hs.RunID).OwnershipToken}
+
+	fx.rt.ctrs["relocated-owned"] = &fakeCtr{spec: ContainerSpec{Labels: []Label{owner}}, stopped: true}
+	if err := backend.HandoffQuiescent(context.Background(), hs.RunID); err == nil {
+		t.Fatal("surviving owned container passed absence audit")
+	}
+	delete(fx.rt.ctrs, "relocated-owned")
+	fx.rt.onListContainers = func([]ContainerSummary) ([]ContainerSummary, error) {
+		return nil, errors.New("fixture runtime listing unavailable")
+	}
+	if err := backend.HandoffQuiescent(context.Background(), hs.RunID); err == nil {
+		t.Fatal("unavailable runtime listing passed absence audit")
+	}
+	fx.rt.onListContainers = func(list []ContainerSummary) ([]ContainerSummary, error) {
+		return append(list, ContainerSummary{ID: "unobserved"}), nil
+	}
+	if err := backend.HandoffQuiescent(context.Background(), hs.RunID); err == nil {
+		t.Fatal("unobservable runtime row passed absence audit")
+	}
+	fx.rt.onListContainers = nil
+	if err := backend.HandoffQuiescent(context.Background(), hs.RunID); err != nil {
+		t.Fatalf("fresh retry after repaired observation: %v", err)
+	}
 }
 
 func TestCancellationJournalFailureStillReapsWriter(t *testing.T) {

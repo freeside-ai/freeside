@@ -457,7 +457,15 @@ func (b *Backend) RequestCancellation(ctx context.Context, runID string) error {
 		return fmt.Errorf("%w: handoff journal is required", ErrInvalidConfig)
 	}
 	if err := b.cfg.Journal.MarkCancellationRequested(ctx, runID); err != nil {
-		return fmt.Errorf("request cancellation for %q: %w", runID, err)
+		// A live handoff may have closed canceled between the first amendment
+		// and a Stop retry. The store rejects amendments to closed records;
+		// read the durable intent back before treating that refusal as a
+		// failure. No other closed outcome can acquire cancellation intent.
+		rec, readErr := b.cfg.Journal.Get(ctx, runID)
+		if readErr == nil && rec.RunID == runID && rec.Validate() == nil && rec.CancellationRequested {
+			return nil
+		}
+		return fmt.Errorf("request cancellation for %q: %w", runID, errors.Join(err, readErr))
 	}
 	return nil
 }

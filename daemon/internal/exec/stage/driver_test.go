@@ -219,6 +219,7 @@ type stubGate struct {
 	handoffCtxFn   func(context.Context, ward.HandoffSpec) (*ward.HandoffResult, error)
 	handoffStarted func(string) (bool, error)
 	cancelFn       func(string) error
+	quiescentFn    func(string) error
 	recoverFn      func(string, ward.HandoffSpec) (*ward.RecoveryResult, error)
 	authenticateFn func(string, string) error
 }
@@ -248,6 +249,13 @@ func (g *stubGate) RequestCancellation(_ context.Context, runID string) error {
 		return nil
 	}
 	return g.cancelFn(runID)
+}
+
+func (g *stubGate) HandoffQuiescent(_ context.Context, runID string) error {
+	if g.quiescentFn == nil {
+		return nil
+	}
+	return g.quiescentFn(runID)
 }
 
 func (g *stubGate) Recover(_ context.Context, runID string, hs ward.HandoffSpec) (*ward.RecoveryResult, error) {
@@ -428,6 +436,7 @@ type stubExports struct {
 	outcomes     map[domain.InvocationID]domain.ExecutionOutcome
 	rejections   map[domain.InvocationID]domain.ExportRejection
 	rejectErr    error
+	outcomeErr   error
 	lookupErr    error
 }
 
@@ -515,6 +524,9 @@ func (e *stubExports) RecordExecutionOutcome(
 ) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.outcomeErr != nil {
+		return e.outcomeErr
+	}
 	if _, ok := e.records[record.InvocationID]; ok {
 		return domain.ErrImmutableTransition
 	}
