@@ -212,6 +212,88 @@ func TestTaskCancellationWithoutRuntimeProofKeepsWIP(t *testing.T) {
 	}
 }
 
+func TestTaskCancellationRetryAfterMissingProofReleasesOnlyBoundWIP(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		st := watchTestStore(t)
+		c := cancelledTaskFixture(t, st, 1, true)
+		e := &Engine{store: st}
+		calls := 0
+		e.cancellation.runtime = TaskCancellationRuntime{
+			Timeout: time.Second,
+			StopRun: func(context.Context, domain.Run, []domain.ReviewRequestRecord) error {
+				calls++
+				if calls == 1 {
+					return errors.New("fixture owned-resource absence unproven")
+				}
+				return nil
+			},
+		}
+		if err := e.ReconcileTaskCancellations(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		if err := e.ReconcileTaskCancellations(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		failed := cancellationTask(t, st, c.Target.TaskID)
+		if failed.Cancellation.State != domain.TaskCancellationFailed || !domain.TaskWIP(failed) || len(failed.LifecycleFacts) != 1 {
+			t.Fatalf("missing proof released or duplicated task work: %+v", failed)
+		}
+		if err := e.ReconcileTaskCancellations(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		if err := e.ReconcileTaskCancellations(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		confirmed := cancellationTask(t, st, c.Target.TaskID)
+		if confirmed.Cancellation.State != domain.TaskCancellationConfirmed || domain.TaskWIP(confirmed) ||
+			len(confirmed.LifecycleFacts) != 2 || confirmed.LifecycleFacts[1].Kind != domain.TaskLifecycleAbandoned || calls != 3 {
+			t.Fatalf("fresh retry failed to release bound WIP once: task=%+v calls=%d", confirmed, calls)
+		}
+		if ack := confirmed.Cancellation.Acknowledgement; ack == nil || ack.RequestID != c.RequestID ||
+			ack.TargetDigest != c.TargetDigest || ack.State != domain.TaskCancellationConfirmed {
+			t.Fatalf("confirmed acknowledgement lost its request or target binding: %+v", ack)
+		}
+		if _, _, err := e.BeginRunWork(t.Context(), "run-stop-1"); !errors.Is(err, store.ErrTaskCancellationFenced) {
+			t.Fatalf("stopped task admitted a successor: %v", err)
+		}
+		var other domain.Task
+		if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
+			var err error
+			other, err = tx.GetOrCreateTask(t.Context(), "project-1", domain.SpecificationSource{
+				Kind:         domain.SpecificationSourceIssueSubject,
+				IssueSubject: &domain.IssueSubjectRef{Repo: "owner/repo", RepositoryID: 1, IssueNumber: 2},
+			})
+			if err != nil {
+				return err
+			}
+			return tx.PutRun(t.Context(), domain.Run{
+				ID: "run-other", TaskID: other.ID, ProjectID: other.ProjectID,
+				SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+			})
+		}); err != nil {
+			t.Fatal(err)
+		}
+		_, finish, err := e.BeginRunWork(t.Context(), "run-other")
+		if err != nil {
+			t.Fatalf("another task was not admitted after release: %v", err)
+		}
+		finish()
+		before, err := st.ServerState(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := e.ReconcileTaskCancellations(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		after, err := st.ServerState(t.Context())
+		if err != nil || before != after {
+			t.Fatalf("replayed proof changed receipt state: before=%+v after=%+v err=%v", before, after, err)
+		}
+	})
+}
+
 func TestTaskCancellationTimeoutDoesNotBlockDiscoveryOrConfirm(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		st := watchTestStore(t)

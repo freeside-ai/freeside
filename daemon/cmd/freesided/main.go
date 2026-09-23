@@ -887,30 +887,38 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 				// Still request exact known teardown for an uncovered legacy task,
 				// but never equate its missing private records with absence.
 				state, err := st.ServerState(stopCtx)
-				joined = errors.Join(err, coverage.Covers(run.TaskID, state.SyncEpoch))
+				if err != nil {
+					joined = errors.Join(joined, fmt.Errorf("server state: %w", err))
+				} else if err := coverage.Covers(run.TaskID, state.SyncEpoch); err != nil {
+					joined = errors.Join(joined, fmt.Errorf("runtime coverage: %w", err))
+				}
 				var mu sync.Mutex
 				var children sync.WaitGroup
-				stop := func(call func() error) {
+				stop := func(owner string, call func() error) {
 					children.Go(func() {
 						err := call()
 						mu.Lock()
-						joined = errors.Join(joined, err)
+						if err != nil {
+							joined = errors.Join(joined, fmt.Errorf("%s: %w", owner, err))
+						}
 						mu.Unlock()
 					})
 				}
 				for _, stage := range run.Stages {
 					for _, attempt := range stage.Attempts {
-						stop(func() error { return claudeWiring.driver.CancelAndConfirm(stopCtx, attempt.InvocationID) })
+						stop("stage "+string(attempt.InvocationID), func() error {
+							return claudeWiring.driver.CancelAndConfirm(stopCtx, attempt.InvocationID)
+						})
 					}
 				}
 				for _, review := range reviews {
-					stop(func() error {
+					stop("review "+string(review.InvocationID), func() error {
 						return engine.StopTaskReviews(stopCtx, st, review, claudeWiring.reviewSource, claudeWiring.shadowReviewSource)
 					})
 				}
-				stop(func() error { return verificationOwnership.StopRun(stopCtx, run.TaskID, run.ID) })
-				stop(func() error { return ownedJudgments.ConfirmRun(stopCtx, run.TaskID, run.ID) })
-				stop(func() error { return claudeWiring.publisher.ReconcileCancelledRun(stopCtx, run.ID) })
+				stop("verification", func() error { return verificationOwnership.StopRun(stopCtx, run.TaskID, run.ID) })
+				stop("judgments", func() error { return ownedJudgments.ConfirmRun(stopCtx, run.TaskID, run.ID) })
+				stop("publication", func() error { return claudeWiring.publisher.ReconcileCancelledRun(stopCtx, run.ID) })
 				children.Wait()
 				return joined
 			},

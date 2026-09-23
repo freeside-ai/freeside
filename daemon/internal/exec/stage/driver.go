@@ -866,7 +866,50 @@ func (d *Driver) CancelAndConfirm(ctx context.Context, id domain.InvocationID) e
 	if !ok {
 		return errors.New("handoff runtime cannot prove task cancellation quiescence")
 	}
-	return proof.HandoffQuiescent(ctx, in.RunID)
+	if err := proof.HandoffQuiescent(ctx, in.RunID); err != nil {
+		return fmt.Errorf("invocation %s owned-runtime absence: %w", id, err)
+	}
+	// A canceled live handoff can close its ward journal while the generic
+	// pipeline deliberately leaves phaseRunning unchanged. Recover that closed
+	// disposition before confirming Stop, so the stage result is collectable
+	// and a failed terminal write keeps the task's WIP held for retry.
+	in, live, err := d.cancellationIntent(ctx, id)
+	if err != nil {
+		return err
+	}
+	if live {
+		return fmt.Errorf("%w: invocation %s still has a registered session", ErrRecoveryRetryable, id)
+	}
+	if in.Phase != phaseCommitted && in.Phase != phaseLost {
+		if err := d.reconcileIntent(ctx, in); err != nil {
+			return fmt.Errorf("invocation %s terminal cancellation recovery: %w", id, err)
+		}
+		in, live, err = d.cancellationIntent(ctx, id)
+		if err != nil {
+			return err
+		}
+	}
+	if live || (in.Phase != phaseCommitted && in.Phase != phaseLost) {
+		return fmt.Errorf("%w: invocation %s has no durable terminal disposition", ErrRecoveryRetryable, id)
+	}
+	return nil
+}
+
+// cancellationIntent retries retained terminal writes under the immutable
+// admission. A policy change may block new work, but it must not prevent Stop
+// from committing an already-admitted invocation's terminal result.
+func (d *Driver) cancellationIntent(ctx context.Context, id domain.InvocationID) (intent, bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err := d.retryPendingIntentLocked(id); err != nil {
+		return intent{}, false, err
+	}
+	if err := d.retryPendingResultLocked(id); err != nil {
+		return intent{}, false, err
+	}
+	in, err := d.loadIntentAdmission(ctx, id)
+	_, live := d.running[id]
+	return in, live, err
 }
 
 // commitPreJournalCancellation makes a successful user cancellation terminal
