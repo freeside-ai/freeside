@@ -96,16 +96,19 @@ func (w *productionPublicationWorkflow) reconcilePublicationAuthoring(
 		if errors.Is(err, errSourceIssueCheckpoint) {
 			return err
 		}
-		return w.recordAuthoringFallback(ctx, key, base, "resolve author input: "+err.Error())
+		return w.recordAuthoringFallback(ctx, key, base, "resolve author input failed")
 	}
 	authored, err := w.inference.AuthorPublication(ctx, input)
 	if err != nil {
 		// An error paired with a non-fallback result is a hard inference fault;
 		// treat it as a fallback so the author role never blocks publication.
-		return w.recordAuthoringFallback(ctx, key, base, "author call failed: "+err.Error())
+		return w.recordAuthoringFallback(ctx, key, base, "author call failed")
 	}
 	if authored.Fallback {
 		reason := authored.InputRefusalReason
+		if reason == "" {
+			reason = authored.OutputRefusalReason
+		}
 		if reason == "" {
 			reason = "author returned a fallback"
 		}
@@ -124,7 +127,7 @@ func (w *productionPublicationWorkflow) reconcilePublicationAuthoring(
 		CreatedAt:        w.attentionCreatedAt(),
 	})
 	if err != nil {
-		return w.recordAuthoringFallback(ctx, key, base, "build authored artifact: "+err.Error())
+		return w.recordAuthoringFallback(ctx, key, base, "build authored artifact failed")
 	}
 	// Screen the free-text fields before storing or rendering: v2 is at least as
 	// strict as v1, and a refused artifact falls back rather than reaching a PR.

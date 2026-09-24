@@ -11,6 +11,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
+	"github.com/freeside-ai/freeside/daemon/internal/publicationtext"
 )
 
 // identityEncodingVersion tags the canonical encoding DeriveIdentity
@@ -24,18 +25,17 @@ const identityEncodingVersion = "freeside-publication/v1"
 // marker (plan §5.15 rule 4) that binds a pull request to its
 // publication identity.
 const (
-	markerPrefix            = "<!-- freeside:publication-identity="
-	markerSuffix            = " -->"
-	maxPullRequestBodyBytes = 64 << 10
-	identityDigestBytes     = len("sha256:") + sha256.Size*2
-	identityMarkerBytes     = len(markerPrefix) + identityDigestBytes + len(markerSuffix)
+	markerPrefix            = publicationtext.MarkerPrefix
+	markerSuffix            = publicationtext.MarkerSuffix
+	maxPullRequestBodyBytes = publicationtext.MaxPullRequestBodyBytes
+	identityDigestBytes     = publicationtext.IdentityDigestBytes
+	identityMarkerBytes     = publicationtext.IdentityMarkerBytes
 	// maxCandidateBodyBytes reserves the worst-case publisher-owned body:
 	// five separators, the identity marker, the fixed section ceilings,
 	// and the disposition-history floor. Any prose accepted here therefore
 	// composes within GitHub's body ceiling without truncating that prose;
 	// disposition history may shrink from its 48 KiB ceiling to this floor.
-	maxCandidateBodyBytes = maxPullRequestBodyBytes - 6*len("\n\n") -
-		identityMarkerBytes - maxRenderedVerificationBytes - maxRenderedAdvisoriesBytes - maxRenderedScopeDecisionBytes - maxRenderedSourceReferenceBytes - minRenderedDispositionHistoryBytes
+	maxCandidateBodyBytes = publicationtext.MaxCandidateBodyBytes
 )
 
 // IdentityInput is the candidate material a publication identity is
@@ -187,38 +187,7 @@ func ParseMarker(body string) (domain.Digest, bool) {
 // ValidateCandidateBody rejects prose that could be interpreted as a
 // publication marker before the caller commits immutable workflow state. The
 // publisher appends the one authoritative marker itself.
-func ValidateCandidateBody(body string) error {
-	if len(body) > maxPullRequestBodyBytes {
-		return fmt.Errorf("candidate body exceeds %d bytes", maxPullRequestBodyBytes)
-	}
-	if len(body) > maxCandidateBodyBytes {
-		return fmt.Errorf(
-			"candidate body exceeds %d bytes after reserving the publisher-owned sections",
-			maxCandidateBodyBytes,
-		)
-	}
-	for line := range strings.Lines(body) {
-		if strings.HasPrefix(strings.TrimSpace(line), markerPrefix) {
-			return errors.New("candidate body contains a publication identity marker")
-		}
-	}
-	if containsDispositionHistoryMarker(body) {
-		return errors.New("candidate body contains a disposition history marker")
-	}
-	if containsAdvisoriesMarker(body) {
-		return errors.New("candidate body contains a control-plane advisories marker or heading")
-	}
-	if containsScopeDecisionMarker(body) {
-		return errors.New("candidate body contains a scope decision marker or heading")
-	}
-	if containsVerificationMarker(body) {
-		return errors.New("candidate body contains a verification section marker or heading")
-	}
-	if containsSourceReferenceMarker(body) {
-		return errors.New("candidate body contains a source reference marker or heading")
-	}
-	return nil
-}
+func ValidateCandidateBody(body string) error { return publicationtext.ValidateCandidateBody(body) }
 
 // validIdentityDigest reports whether raw is exactly "sha256:" plus 64
 // lowercase hex digits — the only form DeriveIdentity produces.

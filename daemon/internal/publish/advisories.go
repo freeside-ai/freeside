@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/publicationtext"
 )
 
 // The advisories section is publisher-owned like the disposition history:
@@ -12,10 +13,10 @@ import (
 // cannot forge a section, above or below the real one, that claims fewer
 // or different advisories than the authorization binds.
 const (
-	advisoriesMarkerName  = "freeside:control-plane-advisories"
+	advisoriesMarkerName  = publicationtext.AdvisoriesMarkerName
 	advisoriesOpenMarker  = "<!-- " + advisoriesMarkerName + " -->"
 	advisoriesCloseMarker = "<!-- /" + advisoriesMarkerName + " -->"
-	advisoriesHeading     = "## Freeside Control-Plane Advisories"
+	advisoriesHeading     = publicationtext.AdvisoriesHeading
 	// maxRenderedAdvisories caps the entry count; each entry's path, kind,
 	// and detail render as bounded claims, so the whole section has a fixed
 	// byte ceiling (maxRenderedAdvisoriesBytes, pinned by test) and a
@@ -23,9 +24,9 @@ const (
 	// composed body past the forge limit and fail its own publication. The
 	// omitted remainder is counted, and the complete set stays bound in the
 	// candidate authorization.
-	maxRenderedAdvisories         = 8
-	maxRenderedAdvisoryClaimBytes = 512
-	maxRenderedAdvisoriesBytes    = maxRenderedAdvisories*3*maxRenderedAdvisoryClaimBytes + 1<<10
+	maxRenderedAdvisories         = publicationtext.MaxRenderedAdvisories
+	maxRenderedAdvisoryClaimBytes = publicationtext.MaxRenderedAdvisoryClaimBytes
+	maxRenderedAdvisoriesBytes    = publicationtext.MaxRenderedAdvisoriesBytes
 )
 
 // AdvisoryFindings returns the advisory-disposition findings of an
@@ -82,8 +83,3 @@ func renderAdvisories(findings []domain.CandidateFinding) string {
 
 // containsAdvisoriesMarker reports whether prose carries the section's
 // marker or heading, in any letter case.
-func containsAdvisoriesMarker(body string) bool {
-	lower := strings.ToLower(body)
-	return strings.Contains(lower, advisoriesMarkerName) ||
-		strings.Contains(lower, strings.ToLower(advisoriesHeading))
-}

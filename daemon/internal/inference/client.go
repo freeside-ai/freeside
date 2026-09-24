@@ -221,7 +221,12 @@ func (c *Client) Call(ctx context.Context, siteID, project, root string, fields 
 		return c.fallback(site, "driver response exceeded contract"), nil
 	}
 	if err := site.ValidateOutput(response.Output); err != nil {
-		return c.fallback(site, "output schema rejected response"), nil
+		result := c.fallback(site, "output schema rejected response")
+		var refusal *authorOutputRefusal
+		if site.ID == PublicationAuthorExplainSiteID && errors.As(err, &refusal) {
+			result.AuthorOutputRefusalReason = refusal.reason
+		}
+		return result, nil
 	}
 	result := CallResult{Output: bytes.Clone(response.Output), Producer: c.binding.producer(), InputDigest: digest}
 	if err := c.audit(ctx, site, record, result); err != nil {

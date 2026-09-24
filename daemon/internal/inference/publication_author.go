@@ -5,13 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"time"
 	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/internal/importer"
+	"github.com/freeside-ai/freeside/daemon/internal/publicationtext"
 )
 
 // The publication-author role (plan §5.13, §5.15) runs as two judgment sites
@@ -369,40 +368,39 @@ func PublicationAuthorProposeSite(budget Budget) Site {
 	}
 }
 
+// authorOutputRefusal is constructed only from fixed schema text or the shared
+// screen's content-free diagnostic. Client.Call never forwards arbitrary errors.
+type authorOutputRefusal struct{ reason string }
+
+func (e *authorOutputRefusal) Error() string { return e.reason }
+
 func validatePublicationAuthorExplain(data []byte) error {
 	var output publicationAuthorExplainOutput
 	if err := decodeStrictObject(data, &output, 64<<10); err != nil {
-		return err
+		return &authorOutputRefusal{reason: "publication author output: schema"}
 	}
 	for _, f := range []struct {
-		value string
-		max   int
+		name, value string
+		max         int
 	}{
-		{output.Title, domain.MaxPublicationAuthoringTitleBytes},
-		{output.Body, domain.MaxPublicationAuthoringBodyBytes},
-		{output.OutcomeSummary, domain.MaxPublicationAuthoringOutcomeSummaryBytes},
+		{"title", output.Title, domain.MaxPublicationAuthoringTitleBytes},
+		{"body", output.Body, domain.MaxPublicationAuthoringBodyBytes},
+		{"outcome_summary", output.OutcomeSummary, domain.MaxPublicationAuthoringOutcomeSummaryBytes},
 	} {
-		if f.value == "" {
-			return errors.New("empty publication author text field")
-		}
-		if len(f.value) > f.max {
-			return errors.New("publication author text field exceeds its bound")
-		}
-		if err := screenAuthorText(f.value, f.max); err != nil {
-			return err
+		if err := publicationtext.ScreenField(f.name, f.value, f.max); err != nil {
+			return &authorOutputRefusal{reason: err.Error()}
 		}
 	}
-	// reviewer_notes is optional; an empty string is treated as absent by the
-	// client method. A present, non-empty value is bounded and screened.
+	// Empty optional notes retain their existing absent-value behavior.
 	if output.ReviewerNotes != nil && *output.ReviewerNotes != "" {
-		if len(*output.ReviewerNotes) > domain.MaxPublicationAuthoringReviewerNotesBytes {
-			return errors.New("publication author reviewer_notes exceeds its bound")
-		}
-		if err := screenAuthorText(*output.ReviewerNotes, domain.MaxPublicationAuthoringReviewerNotesBytes); err != nil {
-			return err
+		if err := publicationtext.ScreenField("reviewer_notes", *output.ReviewerNotes, domain.MaxPublicationAuthoringReviewerNotesBytes); err != nil {
+			return &authorOutputRefusal{reason: err.Error()}
 		}
 	}
-	return validateEvidenceRefIDs(output.EvidenceRefs)
+	if err := validateEvidenceRefIDs(output.EvidenceRefs); err != nil {
+		return &authorOutputRefusal{reason: "publication author output: schema"}
+	}
+	return nil
 }
 
 func validatePublicationAuthorPropose(data []byte) error {
@@ -436,41 +434,22 @@ func validateEvidenceRefIDs(ids []string) error {
 	return nil
 }
 
-// screenAuthorText rejects close keywords, CI-skip markers, spoofable trailers,
-// control characters (every one except line feed), and secrets, re-screening
-// after each HTML unescape so a directive hidden behind an entity cannot slip
-// through. It mirrors the engine's screenPublicationText loop without importing
-// engine (which imports inference).
-func screenAuthorText(text string, maxBytes int) error {
-	for {
-		if importer.ScreenMessage(text, importer.Policy{
-			MaxCommitMessageBytes: maxBytes, MessageRuleset: domain.MessageRulesetGitHub1,
-		}) != nil || importer.ContainsSecret([]byte(text)) {
-			return errors.New("publication author text carries unsafe content or an automation directive")
-		}
-		decoded := html.UnescapeString(text)
-		if decoded == text {
-			return nil
-		}
-		text = decoded
-	}
-}
-
 // AuthoredPublication is the validated, producer-labeled explain result. #1419
 // builds and stores domain.PublicationAuthoring from it; this unit writes no
 // advisory-store entry for the prose.
 type AuthoredPublication struct {
-	Title              string
-	Body               string
-	ReviewerNotes      *string
-	OutcomeSummary     string
-	EvidenceRefs       []domain.PublicationEvidenceReference
-	Producer           string
-	InputDigest        string
-	TargetClass        domain.SensitivityClass
-	InputClasses       map[string]domain.SensitivityClass
-	Fallback           bool
-	InputRefusalReason string
+	Title               string
+	Body                string
+	ReviewerNotes       *string
+	OutcomeSummary      string
+	EvidenceRefs        []domain.PublicationEvidenceReference
+	Producer            string
+	InputDigest         string
+	TargetClass         domain.SensitivityClass
+	InputClasses        map[string]domain.SensitivityClass
+	Fallback            bool
+	InputRefusalReason  string
+	OutputRefusalReason string
 }
 
 // ProposedClosure is the propose site's bounded recommendation. It fails safe
@@ -507,7 +486,7 @@ func (c *Client) AuthorPublication(ctx context.Context, input PublicationAuthorI
 		return AuthoredPublication{}, callErr
 	}
 	if result.Fallback {
-		return AuthoredPublication{Fallback: true}, nil
+		return AuthoredPublication{Fallback: true, OutputRefusalReason: result.AuthorOutputRefusalReason}, nil
 	}
 	var output publicationAuthorExplainOutput
 	if err := json.Unmarshal(result.Output, &output); err != nil {

@@ -96,6 +96,39 @@ func TestClientReportsRegisteredSites(t *testing.T) {
 	}
 }
 
+func TestAuthorRefusalDoesNotForwardArbitraryValidatorErrors(t *testing.T) {
+	secret := "ghp_" + strings.Repeat("x", 36)
+	driver := fake.New()
+	scriptExplain(driver, `{"title":"Safe title","body":"Safe body.","reviewer_notes":null,"evidence_refs":[],"outcome_summary":"Safe summary."}`)
+	dir := t.TempDir()
+	claims, err := advisory.Open(filepath.Join(dir, "advisory.json"), 100, 16<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	site := inference.PublicationAuthorExplainSite(testBudget(10))
+	site.AuditEvery = 1
+	site.ValidateOutput = func([]byte) error { return errors.New(secret) }
+	client, err := inference.New(inference.Config{
+		StatePath: filepath.Join(dir, "ledger.json"),
+		Binding:   inference.Binding{Provider: "fake", Model: "test", Driver: driver},
+		Sites:     []inference.Site{site}, Advisory: claims,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := client.AuthorPublication(t.Context(), authorInput())
+	if err != nil || !result.Fallback || result.OutputRefusalReason != "" {
+		t.Fatal("arbitrary validator error became a diagnostic")
+	}
+	entries, err := claims.List(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatal("validator rejection reached advisory storage")
+	}
+}
+
 func TestClassifierAllowlistRedactionDigestAndProducer(t *testing.T) {
 	driver := fake.New()
 	driver.Script(inference.ClassifierSiteID, fake.Script{Response: inference.Response{

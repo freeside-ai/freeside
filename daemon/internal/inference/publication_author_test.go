@@ -3,6 +3,7 @@ package inference_test
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -180,6 +181,122 @@ func TestAuthorPublicationCitesUnsuppliedID(t *testing.T) {
 	result, err := client.AuthorPublication(t.Context(), authorInput())
 	if err != nil || !result.Fallback {
 		t.Fatalf("citing an unsupplied id should fall back: %+v, %v", result, err)
+	}
+}
+
+func TestAuthorOutputRefusalsBeforeAudit(t *testing.T) {
+	secret := "ghp_" + strings.Repeat("x", 36)
+	spliced := "ghp_" + strings.Repeat("x", 18) + "**xx**" + strings.Repeat("x", 16)
+	for _, field := range []string{"title", "body", "reviewer_notes", "outcome_summary"} {
+		for _, tc := range []struct{ name, text, category string }{
+			{"secret", secret, "secret_detection"},
+			{"spliced secret", spliced, "secret_detection"},
+			{"reserved heading", "## Verification", "candidate_body_size_or_reserved_section"},
+			{"marker", "freeside:unrecognized", "publisher_marker"},
+			{"encoded closing", "F&amp;#105;xes #42", "message_rules"},
+			{"ci", "[skip ci]", "message_rules"},
+			{"trailer", "Reviewed-by: someone", "message_rules"},
+			{"control", "a\tb", "message_rules"},
+		} {
+			t.Run(field+"/"+tc.name, func(t *testing.T) {
+				output := map[string]any{"title": "Safe title", "body": "Safe body.", "reviewer_notes": nil, "evidence_refs": []string{}, "outcome_summary": "Safe summary."}
+				output[field] = tc.text
+				raw, err := json.Marshal(output)
+				if err != nil {
+					t.Fatal(err)
+				}
+				driver := fake.New()
+				scriptExplain(driver, string(raw))
+				client, claims, statePath := testClient(t, driver, 10) // Every call is audit-due.
+				result, err := client.AuthorPublication(t.Context(), authorInput())
+				want := "publication author " + field + ": " + tc.category
+				if err != nil || !result.Fallback || result.OutputRefusalReason != want {
+					t.Fatalf("refusal = %q, fallback=%v, err=%v; want %q", result.OutputRefusalReason, result.Fallback, err, want)
+				}
+				entries, err := claims.List(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, e := range entries {
+					if e.Kind == "audit_sample" {
+						t.Fatal("rejected answer reached the audit store")
+					}
+				}
+				state, err := os.ReadFile(statePath) //nolint:gosec // statePath is the ledger created by testClient under t.TempDir, never provider input.
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, forbidden := range []string{secret, spliced, tc.text} {
+					if strings.Contains(string(state), forbidden) || strings.Contains(result.OutputRefusalReason, forbidden) {
+						t.Fatal("refusal retained rejected content")
+					}
+				}
+				// Refusal must not consume the next accepted answer's audit obligation.
+				scriptExplain(driver, `{"title":"Safe title","body":"Safe body.","reviewer_notes":null,"evidence_refs":[],"outcome_summary":"Safe summary."}`)
+				accepted, err := client.AuthorPublication(t.Context(), authorInput())
+				if err != nil || accepted.Fallback {
+					t.Fatal("accepted answer failed after refusal")
+				}
+				entries, err = claims.List(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				samples := 0
+				for _, e := range entries {
+					if e.Kind == "audit_sample" {
+						samples++
+					}
+				}
+				if samples != 1 {
+					t.Fatalf("accepted audit samples = %d", samples)
+				}
+			})
+		}
+	}
+}
+
+func TestAuthorOutputSchemaAndBoundsDiagnostics(t *testing.T) {
+	for _, field := range []string{"title", "body", "reviewer_notes", "outcome_summary"} {
+		bounds := map[string]int{"title": domain.MaxPublicationAuthoringTitleBytes, "body": domain.MaxPublicationAuthoringBodyBytes, "reviewer_notes": domain.MaxPublicationAuthoringReviewerNotesBytes, "outcome_summary": domain.MaxPublicationAuthoringOutcomeSummaryBytes}
+		t.Run(field, func(t *testing.T) {
+			output := map[string]any{"title": "Safe title", "body": "Safe body.", "reviewer_notes": nil, "evidence_refs": []string{}, "outcome_summary": "Safe summary."}
+			output[field] = strings.Repeat("x", bounds[field]+1)
+			raw, err := json.Marshal(output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			driver := fake.New()
+			scriptExplain(driver, string(raw))
+			client, _, _ := testClient(t, driver, 10)
+			result, err := client.AuthorPublication(t.Context(), authorInput())
+			if err != nil || !result.Fallback || result.OutputRefusalReason != "publication author "+field+": encoding_or_size" {
+				t.Fatalf("bad bounded refusal: %q, %v", result.OutputRefusalReason, err)
+			}
+		})
+	}
+	secret := "ghp_" + strings.Repeat("x", 36)
+	for _, raw := range []string{`{"` + secret + `":true}`, `{"title":"` + secret + `"`, `{"title":"ok","body":"ok","outcome_summary":"ok","evidence_refs":["` + secret + `","` + secret + `"]}`} {
+		driver := fake.New()
+		scriptExplain(driver, raw)
+		client, claims, _ := testClient(t, driver, 10)
+		result, err := client.AuthorPublication(t.Context(), authorInput())
+		if err != nil || !result.Fallback || result.OutputRefusalReason != "publication author output: schema" {
+			t.Fatalf("schema refusal=%q, %v", result.OutputRefusalReason, err)
+		}
+		entries, err := claims.List(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 0 {
+			t.Fatal("schema refusal stored advisory data")
+		}
+	}
+	driver := fake.New()
+	driver.Script(inference.PublicationAuthorExplainSiteID, fake.Script{Err: errors.New(secret)})
+	client, _, _ := testClient(t, driver, 10)
+	result, err := client.AuthorPublication(t.Context(), authorInput())
+	if err != nil || !result.Fallback || result.OutputRefusalReason != "" {
+		t.Fatal("provider error became an output diagnostic")
 	}
 }
 

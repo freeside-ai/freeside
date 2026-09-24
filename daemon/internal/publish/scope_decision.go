@@ -10,20 +10,16 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
+	"github.com/freeside-ai/freeside/daemon/internal/publicationtext"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 const (
-	scopeDecisionMarkerName       = "freeside:scope-decision"
-	scopeDecisionHeading          = "## Freeside Scope Decision"
-	maxRenderedScopeDecisionBytes = 12 << 10
+	scopeDecisionMarkerName       = publicationtext.ScopeDecisionMarkerName
+	scopeDecisionHeading          = publicationtext.ScopeDecisionHeading
+	maxRenderedScopeDecisionBytes = publicationtext.MaxRenderedScopeDecisionBytes
 )
-
-func containsScopeDecisionMarker(body string) bool {
-	lower := strings.ToLower(body)
-	return strings.Contains(lower, scopeDecisionMarkerName) || strings.Contains(lower, strings.ToLower(scopeDecisionHeading))
-}
 
 func renderScopeDecision(f domain.ScopeDecisionFacts) (string, error) {
 	if err := f.Validate(); err != nil {
