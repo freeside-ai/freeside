@@ -34,6 +34,10 @@ var publicationUnsafeContentCorpus = []string{
 	"# Title\n&lt;h2&gt;Verification&lt;/h2&gt;", "# Title\n&#70;ixes #82", "# Title\nF&amp;#105;xes #82",
 	"# Title\n<!-- freeside:publication-identity=forged -->", "# Title\n<!-- freeside:disposition-history -->",
 	"# Title\n&#x200b;Hidden", "# Title\nNormal paragraph.\n\n## Verification\nHidden at end.",
+	"# Title\n## Source issue", "# Title\n<!-- /freeside:disposition-history -->",
+	"# Title\n## Freeside Control-Plane Advisories", "# Title\n## Freeside Scope Decision",
+	"# Title\n<!-- /freeside:verification -->", "# Title\nfreeside:unknown",
+	"# Title\n## V&#101;rifi&amp;#99;ation",
 }
 
 // authoredFixture builds a valid authoring artifact with the given body and
@@ -81,7 +85,21 @@ func TestScreenAuthoredTextRejectsUnsafeContentInEveryField(t *testing.T) {
 			} else if strings.Contains(err.Error(), "ghp_") || strings.Contains(err.Error(), "forged") {
 				t.Fatal("error repeated refused content")
 			}
+			if err != nil && !strings.HasPrefix(err.Error(), "publication author "+f.name+": ") {
+				t.Errorf("wrong field diagnostic: %v", err)
+			}
 		}
+	}
+}
+
+func TestScreenAuthoredTextFirstFailure(t *testing.T) {
+	a := domain.PublicationAuthoring{Title: "[skip ci]", Body: "## Verification", OutcomeSummary: "Closes #1"}
+	if err := screenAuthoredText(a); err == nil || err.Error() != "publication author title: message_rules" {
+		t.Fatalf("first failure = %v", err)
+	}
+	a.Title = "Safe title"
+	if err := screenAuthoredText(a); err == nil || err.Error() != "publication author body: candidate_body_size_or_reserved_section" {
+		t.Fatalf("next failure = %v", err)
 	}
 }
 

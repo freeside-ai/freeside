@@ -7,11 +7,11 @@ import (
 	"html"
 	"regexp"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
+	"github.com/freeside-ai/freeside/daemon/internal/publicationtext"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 )
 
@@ -119,33 +119,5 @@ func screenPublicationText(text string) error {
 // ceiling is refused here and falls back to v1 rather than composing a PR body
 // that cannot fit. v1 keeps its 8 KiB cap through screenPublicationText.
 func screenPublicationTextWithin(text string, maxBytes int) error {
-	return screenPublicationTextImpl(text, maxBytes, false)
-}
-
-// screenPublicationTextImpl screens text against the shared content rules,
-// re-checking after each html.UnescapeString pass so an encoded form cannot
-// hide an unsafe token. When collapseMarkdown is set (recipe v2 authored
-// fields), each pass also folds out the Markdown delimiters GitHub removes from
-// its visible output; see collapseMarkdownDelimiters for why. v1 (collapseMarkdown
-// false) keeps the source-only screen unchanged.
-func screenPublicationTextImpl(text string, maxBytes int, collapseMarkdown bool) error {
-	if !utf8.ValidString(text) || len(text) > maxBytes {
-		return errors.New("publication metadata must be valid UTF-8 within the public-output byte limit")
-	}
-	for {
-		if importer.ScreenMessage(text, importer.Policy{
-			MaxCommitMessageBytes: maxBytes, MessageRuleset: domain.MessageRulesetGitHub1,
-		}) != nil || importer.ContainsSecret([]byte(text)) || publish.ValidateCandidateBody(text) != nil ||
-			strings.Contains(strings.ToLower(text), "freeside:") {
-			return errors.New("publication metadata contains unsafe text, automation directives, or a reserved publisher section")
-		}
-		decoded := html.UnescapeString(text)
-		if collapseMarkdown {
-			decoded = collapseMarkdownDelimiters(decoded)
-		}
-		if decoded == text {
-			return nil
-		}
-		text = decoded
-	}
+	return publicationtext.Screen(text, maxBytes, false)
 }

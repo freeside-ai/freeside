@@ -3,6 +3,8 @@ package integration_test
 import (
 	"encoding/json"
 	"errors"
+	"html"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -136,10 +138,26 @@ func TestPublicationAuthorStoresTextAndPolicyApprovedClose(t *testing.T) {
 	metadata.Title, metadata.Body = "", ""
 	metadata.Recipe = "freeside.client-publication/v2"
 	metadata.SourceIssue = "https://github.com/" + fakePublicationRepo + "/issues/82"
-	p := newAuthoredMetadataHarness(t, metadata, nil)
+	// Public gh-imgup template at 5ad83e9b8e7fe096af323128d7af6d1d4020cfcc.
+	template, err := os.ReadFile("../publicationtext/testdata/gh-imgup-template.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := newPublicationHarnessWithBaseFiles(t,
+		[]byte(`{"commands":[["/usr/bin/true"]],"capture":"none"}`),
+		map[string]string{".github/pull_request_template.md": string(template)},
+	)
+	p := newAuthoredMetadataHarnessFromBase(t, base, metadata, nil,
+		map[string]string{".github/pull_request_template.md": string(template)})
+	const disclosure = "Check evidence and the source reference are supplied separately by the publisher. Its fixed check format does not use the template's requested status prefixes."
+	const body = "## Why\n\nAuthored body prose from the recipe v2 author.\n\n## What\n\n- Handle empty input.\n\n## Review Notes\n\n" + disclosure
+	output, err := json.Marshal(map[string]any{"title": "Authored PR title", "body": body, "reviewer_notes": nil, "evidence_refs": []string{}, "outcome_summary": "Reported checks passed."})
+	if err != nil {
+		t.Fatal(err)
+	}
 	p.replay = withPublicAccount(t, p, p.replay, publicAccount)
 	driver := scriptPublicationSites(t, p,
-		inferencefake.Script{Response: inference.Response{Output: []byte(authoredExplainOutput), ComputeUnits: 5}},
+		inferencefake.Script{Response: inference.Response{Output: output, ComputeUnits: 5}},
 		&inferencefake.Script{Response: inference.Response{Output: []byte(`{"resolves":true}`), ComputeUnits: 1}},
 	)
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
@@ -149,6 +167,38 @@ func TestPublicationAuthorStoresTextAndPolicyApprovedClose(t *testing.T) {
 	}
 	if body := assertAuthoredMetadata(t, p); !strings.Contains(body, "Closes #82") {
 		t.Fatal("publisher omitted the policy-approved close reference")
+	}
+	rendered := p.forge.pullRequests()[0].Body
+	if strings.Count(rendered, "## Verification") != 1 || !strings.Contains(rendered, html.EscapeString(disclosure)) {
+		t.Fatal("publisher ownership or visible conflict disclosure lost")
+	}
+	for _, request := range driver.Requests() {
+		if request.Fields["pr_template"] != string(template) {
+			t.Fatal("trusted template was changed before the author call")
+		}
+	}
+	authorKey := "production-authoring/" + string(p.runID) + "/" + p.forge.pullRequests()[0].HeadSHA + "/" + p.baseSHA
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		entry, err := tx.GetInbox(p.ctx, authorKey)
+		if err != nil {
+			return err
+		}
+		var cp struct {
+			ArtifactDigest domain.Digest `json:"artifact_digest"`
+		}
+		if err := json.Unmarshal(entry.Payload, &cp); err != nil {
+			return err
+		}
+		artifact, err := tx.GetPublicationAuthoring(p.ctx, cp.ArtifactDigest)
+		if err != nil {
+			return err
+		}
+		if artifact.Body != body {
+			t.Fatal("stored authoring differs from the compatible fragment")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 	if p.forge.pullRequests()[0].Draft || len(driver.Requests()) != 2 {
 		t.Fatal("valid inputs did not reach both author sites and publish a ready PR")
@@ -179,25 +229,96 @@ func TestPublicationAuthorStoresTextAndPolicyApprovedClose(t *testing.T) {
 }
 
 func TestPublicationAuthorScreenFailureKeepsIndependentClosure(t *testing.T) {
-	metadata := productionPublicationMetadata()
-	metadata.Title, metadata.Body = "", ""
-	metadata.Recipe = "freeside.client-publication/v2"
-	metadata.SourceIssue = "https://github.com/" + fakePublicationRepo + "/issues/82"
-	p := newAuthoredMetadataHarness(t, metadata, nil)
-	p.replay = withPublicAccount(t, p, p.replay, publicAccount)
-	driver := scriptPublicationSites(t, p,
-		inferencefake.Script{Response: inference.Response{Output: []byte(`{"title":"Authored PR title","body":"Closes #82","reviewer_notes":null,"evidence_refs":[],"outcome_summary":"Done"}`), ComputeUnits: 5}},
-		&inferencefake.Script{Response: inference.Response{Output: []byte(`{"resolves":true}`), ComputeUnits: 1}},
-	)
-	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
-	p.startAndRecordExport(t)
-	if _, err := p.reconcileLanes(); err != nil {
-		t.Fatal(err)
-	}
-	prs := p.forge.pullRequests()
-	if len(prs) != 1 || !strings.Contains(prs[0].Body, "## Agent-reported implementation (claim)") ||
-		!strings.Contains(prs[0].Body, "Closes #82") || len(driver.Requests()) != 2 {
-		t.Fatalf("screen fallback suppressed separately approved closure: prs=%d calls=%d", len(prs), len(driver.Requests()))
+	secret := "ghp_" + strings.Repeat("x", 36)
+	for _, tc := range []struct {
+		name, body, reason string
+		providerErr        error
+	}{
+		{"closing directive", "Closes #82", "publication author body: message_rules", nil},
+		{"reserved section", "## Verification\n\nAll passed.", "publication author body: candidate_body_size_or_reserved_section", nil},
+		{"spliced secret", "ghp_" + strings.Repeat("x", 18) + "**xx**" + strings.Repeat("x", 16), "publication author body: secret_detection", nil},
+		{"provider error", "", "author returned a fallback", errors.New(secret)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			metadata := productionPublicationMetadata()
+			metadata.Title, metadata.Body = "", ""
+			metadata.Recipe = "freeside.client-publication/v2"
+			metadata.SourceIssue = "https://github.com/" + fakePublicationRepo + "/issues/82"
+			p := newAuthoredMetadataHarness(t, metadata, nil)
+			p.replay = withPublicAccount(t, p, p.replay, publicAccount)
+			output, err := json.Marshal(map[string]any{"title": "Authored PR title", "body": tc.body, "reviewer_notes": nil, "evidence_refs": []string{}, "outcome_summary": "Done"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			driver := scriptPublicationSites(t, p,
+				inferencefake.Script{Response: inference.Response{Output: output, ComputeUnits: 5}, Err: tc.providerErr},
+				&inferencefake.Script{Response: inference.Response{Output: []byte(`{"resolves":true}`), ComputeUnits: 1}},
+			)
+			p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+			p.startAndRecordExport(t)
+			if _, err := p.reconcileLanes(); err != nil {
+				t.Fatal(err)
+			}
+			prs := p.forge.pullRequests()
+			if len(prs) != 1 || !strings.Contains(prs[0].Body, "## Agent-reported implementation (claim)") ||
+				!strings.Contains(prs[0].Body, "Closes #82") || len(driver.Requests()) != 2 {
+				t.Fatalf("screen fallback suppressed separately approved closure: prs=%d calls=%d", len(prs), len(driver.Requests()))
+			}
+			authorKey := "production-authoring/" + string(p.runID) + "/" + prs[0].HeadSHA + "/" + p.baseSHA
+			assertCheckpoint := func() {
+				t.Helper()
+				if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+					entry, err := tx.GetInbox(p.ctx, authorKey)
+					if err != nil {
+						return err
+					}
+					var cp struct {
+						Fallback       bool   `json:"fallback"`
+						Reason         string `json:"reason"`
+						ArtifactDigest string `json:"artifact_digest"`
+					}
+					if err := json.Unmarshal(entry.Payload, &cp); err != nil {
+						return err
+					}
+					if !cp.Fallback || cp.ArtifactDigest != "" || cp.Reason != tc.reason {
+						t.Fatalf("unexpected durable refusal: %+v", cp)
+					}
+					if strings.Contains(string(entry.Payload), secret) {
+						t.Fatal("checkpoint retained a secret")
+					}
+					closure, err := tx.GetInbox(p.ctx, "production-closure/"+string(p.runID)+"/publish-production-"+string(p.runID))
+					if err != nil {
+						return err
+					}
+					var row struct {
+						InstanceID domain.ProposalInstanceID `json:"instance_id"`
+					}
+					if err := json.Unmarshal(closure.Payload, &row); err != nil {
+						return err
+					}
+					approval, err := tx.ClosureApprovalForInstance(p.ctx, row.InstanceID)
+					if err != nil {
+						return err
+					}
+					if approval == nil || approval.Actor != domain.ClosureApprovalActorPolicy {
+						t.Fatal("independent policy approval missing")
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			assertCheckpoint()
+			p.restartDurableState(t)
+			p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+			if _, err := p.reconcileLanes(); err != nil {
+				t.Fatal(err)
+			}
+			assertCheckpoint()
+			if len(driver.Requests()) != 2 || p.forge.pullRequests()[0].Body != prs[0].Body {
+				t.Fatal("restart re-authored or changed the fallback")
+			}
+		})
 	}
 }
 

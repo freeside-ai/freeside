@@ -370,6 +370,9 @@ type CallResult struct {
 	InputDigest string
 	Fallback    bool
 	Reason      string
+	// AuthorOutputRefusalReason is set only for a classified explain-site refusal.
+	// It contains fixed field/category text, never a provider or validator error.
+	AuthorOutputRefusalReason string
 }
 
 // ErrUnavailable is the fail-safe inference-down condition.

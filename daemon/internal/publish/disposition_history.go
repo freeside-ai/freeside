@@ -13,12 +13,13 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/publicationtext"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
 const (
 	dispositionHistoryEncodingVersion = "freeside-disposition-history/v1"
-	dispositionHistoryMarkerName      = "freeside:disposition-history"
+	dispositionHistoryMarkerName      = publicationtext.DispositionHistoryMarkerName
 	dispositionHistoryOpenMarker      = "<!-- " + dispositionHistoryMarkerName + " version=" + dispositionHistoryEncodingVersion + " -->"
 	dispositionHistoryCloseMarker     = "<!-- /" + dispositionHistoryMarkerName + " -->"
 )
@@ -68,7 +69,7 @@ const (
 	// candidate prose is accepted to a 48 KiB ceiling used when the other body
 	// parts leave room. Composition shrinks only this section within that range,
 	// and every truncation remains bound to the complete rendered digest.
-	minRenderedDispositionHistoryBytes = 8 << 10
+	minRenderedDispositionHistoryBytes = publicationtext.MinRenderedDispositionHistoryBytes
 	maxRenderedDispositionHistoryBytes = 48 << 10
 )
 
@@ -684,9 +685,4 @@ func boundedDispositionHistory(rendered string, limit int) string {
 
 func dispositionLabel(value string) string {
 	return html.EscapeString(strings.ReplaceAll(value, "_", " "))
-}
-
-func containsDispositionHistoryMarker(body string) bool {
-	lower := strings.ToLower(body)
-	return strings.Contains(lower, dispositionHistoryMarkerName)
 }

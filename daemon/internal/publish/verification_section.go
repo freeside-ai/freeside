@@ -7,23 +7,19 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
+	"github.com/freeside-ai/freeside/daemon/internal/publicationtext"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
 
 const (
-	verificationMarkerName           = "freeside:verification"
+	verificationMarkerName           = publicationtext.VerificationMarkerName
 	verificationOpenMarker           = "<!-- " + verificationMarkerName + " -->"
 	verificationCloseMarker          = "<!-- /" + verificationMarkerName + " -->"
 	verificationHeading              = "## Verification"
 	maxRenderedVerificationSteps     = 24
 	maxRenderedVerificationArgvBytes = 512
-	maxRenderedVerificationBytes     = 8 << 10
+	maxRenderedVerificationBytes     = publicationtext.MaxRenderedVerificationBytes
 )
-
-func containsVerificationMarker(body string) bool {
-	return strings.Contains(strings.ToLower(body), verificationMarkerName) || publicationrecord.ContainsVerificationHeading(body)
-}
 
 // candidateVerificationReport binds the rendered bytes to an evidence artifact.
 // The authorization gate separately binds that artifact set and the import result

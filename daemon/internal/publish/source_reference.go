@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/publicationtext"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -22,11 +22,11 @@ import (
 // (domain.ClosureOutcomeFor). A stale approval (one AuthorizesClose rejects for
 // the current merge) closes nothing.
 const (
-	sourceReferenceMarkerName       = "freeside:source-reference"
+	sourceReferenceMarkerName       = publicationtext.SourceReferenceMarkerName
 	sourceReferenceOpenMarker       = "<!-- " + sourceReferenceMarkerName + " -->"
 	sourceReferenceCloseMarker      = "<!-- /" + sourceReferenceMarkerName + " -->"
-	sourceReferenceHeading          = "## Source issue"
-	maxRenderedSourceReferenceBytes = 1 << 10
+	sourceReferenceHeading          = publicationtext.SourceReferenceHeading
+	maxRenderedSourceReferenceBytes = publicationtext.MaxRenderedSourceReferenceBytes
 )
 
 // policySourceIssueClosureGate names the resolved-policy switch that turns on the
@@ -55,18 +55,7 @@ func parseSourceIssueClosureHumanGate(policy domain.ResolvedPolicy) bool {
 }
 
 func containsSourceReferenceMarker(body string) bool {
-	if strings.Contains(strings.ToLower(body), sourceReferenceMarkerName) {
-		return true
-	}
-	// Match the section heading as a whole line, not the v1 prose line
-	// "Source issue: <url>", which a v1 record keeps in its body.
-	heading := strings.ToLower(sourceReferenceHeading)
-	for line := range strings.Lines(body) {
-		if strings.ToLower(strings.TrimSpace(line)) == heading {
-			return true
-		}
-	}
-	return false
+	return publicationtext.ContainsSourceReferenceMarker(body)
 }
 
 // closureResolution is the publisher's reduced view of a candidate's source
