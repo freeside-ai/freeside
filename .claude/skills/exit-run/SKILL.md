@@ -144,10 +144,33 @@ operator needs to know when their step is next.
    the composer. Then run
    `real-work-session.sh select-target <session-directory> <task-id>` with
    the retained session directory and the task id they report, and record
-   the acceptance.
+   the acceptance. If the derived exit contract requires source-issue closure,
+   give the exact bare canonical GitHub issue URL before submission, with no
+   prose or trailing punctuation. `Please handle <URL>.` creates valid work
+   without a saved publication source reference.
 4. **Checkpoint:** the specification-approval card. The operator approves it
    in a client; record which device and which actions the card offered.
    Leave the human gate on unless the contract says otherwise.
+
+   **For closure-specific client-target runs, first run**
+   `real-work-session.sh verify-source <session-directory> <expected-issue-url>`
+   after target acceptance and before asking for specification approval.
+   Record the successful local receipt: task ID, specification-run ID,
+   repository, source issue, and `recommended` provenance. The command reads
+   the selected task's saved specification/publication input; neither displayed
+   spec prose nor the seed's publication file is evidence of this binding.
+   A refusal blocks this proof and leaves approval pending. If implementation
+   already exists, the check cannot count as a pre-implementation proof.
+   A corrected source needs a fresh task/session under the one-target rule;
+   never repair the retained task or clear its checkpoint. An older verifier
+   without this mode needs a reviewed runtime/session, not a reused receipt.
+
+   This is an operator procedure gate for closure-specific runs. A pass proves
+   eligibility at that read, not verified issue provenance, closing authority,
+   or a later proposal. In the live proof on the merged runtime, record the
+   same task/run's actual closure proposal path, including its `propose_site`
+   result; fallback or `has_proposal=false` does not satisfy that proof. The
+   later proposal, policy/human approval, and publisher checks remain required.
 5. Follow implementation to publication. Record the specification and
    implementation run ids, the campaign and attempt, base and head SHAs, the
    review id, model, and outcome, the verifier result, and the spend.

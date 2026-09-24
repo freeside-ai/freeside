@@ -77,6 +77,44 @@ func TestSubmitTaskBindsRecipeIndependentOfName(t *testing.T) {
 	}
 }
 
+func TestSubmitTaskPublicationSourceRequiresBareURL(t *testing.T) {
+	const issue = "https://github.com/example/project/issues/82"
+	for _, tc := range []struct{ name, source, want string }{
+		{"bare URL", issue, issue},
+		{"prose wrapped URL", "Please handle " + issue + ".", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service, s, _ := newSubmitTaskHarness(t)
+			result, err := service.Submit(t.Context(), submitCmd("cmd-source", "project-1", tc.source, ""))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Read(t.Context(), func(tx *store.ReadTx) error {
+				key, present, err := tx.FirstSpecificationMarkerKey(t.Context(), result.Submission.SpecificationRunID)
+				if err != nil || !present {
+					t.Fatalf("specification marker: present=%t err=%v", present, err)
+				}
+				entry, err := tx.GetOutbox(t.Context(), key)
+				if err != nil {
+					return err
+				}
+				var request struct {
+					Publication engine.ProductionPublication `json:"publication"`
+				}
+				if err := json.Unmarshal(entry.Payload, &request); err != nil {
+					return err
+				}
+				if request.Publication.SourceIssue != tc.want {
+					t.Fatalf("saved source = %q, want %q", request.Publication.SourceIssue, tc.want)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 // TestSubmitTaskReplaysRecordedV1Command pins the recipe switch's replay
 // contract: a command recorded while submissions froze v1 replays to its
 // unchanged v1 record under the current submitter, which freezes v2 only for a
