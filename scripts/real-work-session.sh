@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Usage: real-work-session.sh complete|recover|verify <retained-session-directory> [installed-daemon-path]
 #        real-work-session.sh select-target <client-target-session-directory> <task-id>
+#        real-work-session.sh verify-source <client-target-session-directory> <expected-issue-url>
 # Recovery never signals a stored PID. The rig command proves stale ownership,
 # database/listener exclusion and exact-resource cleanup before clearing a gate.
 # select-target only records the operator's chosen client task; the foreground
@@ -9,13 +10,96 @@ set -euo pipefail
 umask 077
 action=${1:-}
 session=${2:-}
-if [[ "$action" != complete && "$action" != recover && "$action" != verify && "$action" != select-target ]] || [[ ! -f "$session/status" ]]; then
+if [[ "$action" != complete && "$action" != recover && "$action" != verify && "$action" != select-target && "$action" != verify-source ]] || [[ ! -f "$session/status" ]]; then
 	echo 'usage: real-work-session.sh complete|recover|verify <session-directory>' >&2
 	echo '       real-work-session.sh select-target <session-directory> <task-id>' >&2
+	echo '       real-work-session.sh verify-source <session-directory> <expected-issue-url>' >&2
 	exit 2
 fi
 session=$(cd "$session" && pwd)
 status=$(cat "$session/status")
+if [[ "$action" == verify-source ]]; then
+	if [[ -z "${3:-}" || $# != 3 ]]; then
+		echo 'usage: real-work-session.sh verify-source <session-directory> <expected-issue-url>' >&2
+		exit 2
+	fi
+	[[ -f "$session/mode" && "$(cat "$session/mode")" == client-target ]] || {
+		echo 'Source verification requires a client-target session.' >&2; exit 1
+	}
+	[[ -f "$session/target.json" ]] || {
+		echo 'Source verification requires an accepted target.json; leave specification approval pending.' >&2; exit 1
+	}
+	[[ -x "$session/verify-real-run" && -f "$session/verification-env.sh" ]] || {
+		echo 'This session lacks a retained verifier or configuration; use a reviewed runtime/session.' >&2; exit 1
+	}
+	# Only the harness-generated configuration and accepted target select the
+	# store and identities. Ambient variables must not fill missing saved inputs.
+	unset FREESIDE_REAL_RUN_STATE_ROOT FREESIDE_REAL_RUN_PROJECT FREESIDE_REAL_RUN_APPROVED_RECIPE
+	# shellcheck source=/dev/null
+	source "$session/verification-env.sh"
+	python3 - "$session" "$3" <<'PY'
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+session, expected = Path(sys.argv[1]), sys.argv[2]
+def refuse(reason):
+    raise SystemExit(reason + "; leave specification approval pending.")
+
+try:
+    target = json.loads((session / "target.json").read_text())
+    keys = ("task_id", "project", "specification_run_id")
+    if any(not isinstance(target.get(k), str) or not target[k] or
+           any(c.isspace() for c in target[k]) for k in keys):
+        refuse("Saved target has missing or invalid identities")
+except (OSError, ValueError, AttributeError):
+    refuse("Saved target is unreadable or malformed")
+if any(not os.environ.get(k) for k in (
+        "FREESIDE_REAL_RUN_STATE_ROOT", "FREESIDE_REAL_RUN_PROJECT",
+        "FREESIDE_REAL_RUN_APPROVED_RECIPE")):
+    refuse("Saved verification configuration is incomplete")
+if target["project"] != os.environ["FREESIDE_REAL_RUN_PROJECT"]:
+    refuse("Saved target and session project disagree")
+
+# Each invocation needs a fresh result. A prior receipt is historical evidence
+# only, including when an older verifier skips this unsupported mode.
+fd, log = tempfile.mkstemp(prefix="source-verification.", dir=session)
+receipt = log + ".json"
+env = dict(os.environ, FREESIDE_REAL_RUN_CLIENT_TARGET="verify-source",
+           FREESIDE_REAL_RUN_TARGET_TASK_ID=target["task_id"],
+           FREESIDE_REAL_RUN_PROJECT=target["project"],
+           FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID=target["specification_run_id"],
+           FREESIDE_REAL_RUN_EXPECTED_SOURCE_ISSUE=expected,
+           FREESIDE_REAL_RUN_TARGET_PATH=receipt)
+with os.fdopen(fd, "w") as output:
+    try:
+        result = subprocess.run([str(session / "verify-real-run"),
+                                 "-test.run", "^TestRealRunClientTarget$", "-test.count=1"],
+                                env=env, stdout=output, stderr=subprocess.STDOUT)
+    except OSError:
+        refuse("Could not start retained verifier; diagnostics: " + log)
+if result.returncode:
+    refuse("Source verifier failed; diagnostics: " + log)
+try:
+    decision = json.loads(Path(receipt).read_text())
+    if decision.get("outcome") != "source-verified":
+        refuse("Source check refused: " + str(decision.get("reason", "no successful proof")))
+    if (any(decision.get(k) != target[k] for k in keys) or
+            decision.get("source_issue") != expected or
+            decision.get("provenance") != "recommended" or
+            not isinstance(decision.get("repository"), str) or
+            not expected.startswith("https://github.com/" + decision["repository"] + "/issues/")):
+        refuse("Source receipt does not match the selected task and expected issue")
+except (OSError, ValueError, AttributeError):
+    refuse("Retained verifier returned no readable source receipt; use a reviewed runtime/session. Diagnostics: " + log)
+print("Source eligibility verified with recommended provenance; this grants no closing authority.")
+print("Preapproval source receipt: " + receipt)
+PY
+	exit 0
+fi
 if [[ "$action" == select-target ]]; then
 	target_task_id=${3:-}
 	# A task ID with whitespace can never name a stored task and would corrupt

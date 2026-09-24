@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,9 +13,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 // Client-target mode: the operator submits the real work item from a Freeside
@@ -30,6 +34,7 @@ const (
 	realRunSeedSpecificationRunIDEnv = "FREESIDE_REAL_RUN_SEED_SPECIFICATION_RUN_ID"
 	realRunDaemonStartedAtEnv        = "FREESIDE_REAL_RUN_DAEMON_STARTED_AT"
 	realRunTargetPathEnv             = "FREESIDE_REAL_RUN_TARGET_PATH"
+	realRunExpectedSourceIssueEnv    = "FREESIDE_REAL_RUN_EXPECTED_SOURCE_ISSUE"
 )
 
 // productionImplementationInvocationPrefix mirrors engine.productionInvocationID
@@ -149,8 +154,9 @@ func bindClientTarget(
 
 // clientTargetDecision is the JSON the resolver tool writes for the harness.
 // Outcome is one of: selected, refused (select mode), bound, pending, error
-// (bind mode). A refusal or a bind error is a clean decision, not a tool
-// failure, so the tool still exits 0 and the shell reads the outcome.
+// (bind mode), or source-verified, refused (verify-source mode). A refusal or
+// a bind error is a clean decision, not a tool failure, so the tool still
+// exits 0 and the shell reads the outcome.
 type clientTargetDecision struct {
 	Outcome                    string `json:"outcome"`
 	Reason                     string `json:"reason,omitempty"`
@@ -159,17 +165,112 @@ type clientTargetDecision struct {
 	SpecificationRunID         string `json:"specification_run_id,omitempty"`
 	ImplementationRunID        string `json:"implementation_run_id,omitempty"`
 	ImplementationInvocationID string `json:"implementation_invocation_id,omitempty"`
+	Repository                 string `json:"repository,omitempty"`
+	SourceIssue                string `json:"source_issue,omitempty"`
+	Provenance                 string `json:"provenance,omitempty"`
+}
+
+// clientSourceRequest reads only the fields needed for the source proof from
+// engine's private specification-request/v1 format. Version and identity checks
+// must stay aligned with that format; this receipt grants no closing authority.
+type clientSourceRequest struct {
+	Version             string                       `json:"version"`
+	SpecificationRunID  domain.RunID                 `json:"specification_run_id"`
+	ImplementationRunID domain.RunID                 `json:"implementation_run_id"`
+	ProjectID           domain.ProjectID             `json:"project_id"`
+	InvocationID        domain.InvocationID          `json:"invocation_id"`
+	Iteration           int                          `json:"iteration"`
+	Publication         engine.ProductionPublication `json:"publication"`
+	PublicationDigest   domain.Digest                `json:"publication_digest"`
+}
+
+func verifyClientTargetSource(ctx context.Context, tx *store.ReadTx, sel clientTargetSelection, expected string) (clientTargetDecision, error) {
+	refuse := func(reason string) (clientTargetDecision, error) {
+		return clientTargetDecision{}, errors.New(reason)
+	}
+	// Reuse the production whole-URL validator, including its byte and syntax
+	// limits, without adding another parser or trusting a substring match.
+	expectedPublication := engine.ProductionPublication{
+		Recipe: "freeside.client-publication/v2", SourceIssue: expected,
+		CommitAuthor: engine.ProductionCommitAuthor{AppSlug: "source-check", BotUserID: 1},
+	}
+	if expected == "" || expectedPublication.Validate() != nil {
+		return refuse("expected source must be a bare canonical GitHub issue URL")
+	}
+	selected, err := selectClientTarget(ctx, tx, sel.TaskID, sel.ProjectID, "", time.Time{})
+	if err != nil {
+		return refuse("selected task is missing, unreadable, stopped, or has inconsistent ownership")
+	}
+	if selected != sel {
+		return refuse("selected specification run does not match the task's first run")
+	}
+	_, _, bound, err := bindClientTarget(ctx, tx, sel)
+	if err != nil {
+		return refuse("cannot verify implementation ownership")
+	}
+	if bound {
+		return refuse("implementation already exists; this cannot prove source eligibility before implementation")
+	}
+	project, err := tx.GetProject(ctx, sel.ProjectID)
+	if err != nil {
+		return refuse("selected project is missing or unreadable")
+	}
+	key, present, err := tx.FirstSpecificationMarkerKey(ctx, sel.SpecificationRunID)
+	if err != nil || !present {
+		return refuse("selected specification dispatch marker is missing or unreadable")
+	}
+	entry, err := tx.GetOutbox(ctx, key)
+	if err != nil || entry.Kind != engine.KindSpecificationInvocationRequested || entry.Quarantined() {
+		return refuse("selected specification dispatch marker is invalid or unreadable")
+	}
+	var request clientSourceRequest
+	if err := strictjson.DecodeAllowingUnknownFields(entry.Payload, &request, strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {
+		return refuse("selected specification request is malformed")
+	}
+	if request.Version != "freeside.specification-request/v1" ||
+		request.SpecificationRunID != sel.SpecificationRunID || request.ProjectID != sel.ProjectID ||
+		request.ImplementationRunID == "" || !domain.SpecificationRunIDMatchesImplementation(sel.SpecificationRunID, request.ImplementationRunID) ||
+		request.Iteration < 1 || request.InvocationID != domain.SpecificationInvocationID(sel.SpecificationRunID, request.Iteration) ||
+		string(request.InvocationID) != key || entry.IdempotencyKey != key {
+		return refuse("selected specification request version or ownership does not match")
+	}
+	publication := request.Publication
+	if publication.Validate() != nil {
+		return refuse("saved publication input is invalid")
+	}
+	body, err := json.Marshal(publication)
+	if err != nil || request.PublicationDigest != domain.Digest(contentaddr.Sum(body)) {
+		return refuse("saved publication digest is missing or mismatched")
+	}
+	if publication.SourceIssue == "" {
+		return refuse("saved publication has no source issue; prose-wrapped URLs do not bind a source")
+	}
+	if publication.SourceIssue != expected {
+		return refuse("saved source issue does not equal the expected issue URL")
+	}
+	repository, issueNumber, _ := strings.Cut(strings.TrimPrefix(expected, "https://github.com/"), "/issues/")
+	if repository != project.Repo {
+		return refuse("saved source issue belongs to a different repository than the selected project")
+	}
+	if number, err := strconv.Atoi(issueNumber); err != nil || number < 1 {
+		return refuse("source issue number cannot be used by the closure proposal path")
+	}
+	return clientTargetDecision{
+		Outcome: "source-verified", TaskID: string(sel.TaskID), Project: string(sel.ProjectID),
+		SpecificationRunID: string(sel.SpecificationRunID), Repository: project.Repo,
+		SourceIssue: publication.SourceIssue, Provenance: string(domain.ClosureProvenanceRecommended),
+	}, nil
 }
 
 // TestRealRunClientTarget is the resolver entry point the harness runs from the
 // retained verifier binary, switched on by FREESIDE_REAL_RUN_CLIENT_TARGET. It
-// opens the live production store read-only, resolves the selection or binding,
-// and writes the decision JSON. It never writes to the database. An ordinary
-// `go test ./internal/integration` leaves the variable unset and skips it.
+// opens the live production store read-only, resolves selection, binding, or
+// source eligibility, and writes decision JSON. It never writes to the database.
+// An ordinary `go test ./internal/integration` leaves the variable unset and skips it.
 func TestRealRunClientTarget(t *testing.T) {
 	mode := os.Getenv(realRunClientTargetEnv)
-	if mode != "select" && mode != "bind" {
-		t.Skip("set " + realRunClientTargetEnv + "=select|bind to resolve a client target; scripts/run-real-work.sh sets it")
+	if mode != "select" && mode != "bind" && mode != "verify-source" {
+		t.Skip("set " + realRunClientTargetEnv + "=select|bind|verify-source to resolve a client target; scripts/run-real-work.sh sets it")
 	}
 	stateRoot := requireEnv(t, "FREESIDE_REAL_RUN_STATE_ROOT")
 	project := domain.ProjectID(requireEnv(t, realRunProjectEnv))
@@ -180,8 +281,8 @@ func TestRealRunClientTarget(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	// Read-only, alongside the running daemon. The resolver reads only tasks
-	// and runs, which do not re-run the admission policy gate, so it needs no
+	// Read-only, alongside the running daemon. These identity and source reads
+	// do not re-run the artifact admission policy gate, so they need no
 	// backup-health source; opening one before any checkpoint exists (client
 	// selection happens well before publication) would be fragile. This is a
 	// deliberate divergence from the final verifier's option set.
@@ -202,6 +303,22 @@ func TestRealRunClientTarget(t *testing.T) {
 
 	var decision clientTargetDecision
 	switch mode {
+	case "verify-source":
+		sel := clientTargetSelection{
+			TaskID: taskID, ProjectID: project,
+			SpecificationRunID: domain.RunID(requireEnv(t, realRunSpecificationRunIDEnv)),
+		}
+		expected := requireEnv(t, realRunExpectedSourceIssueEnv)
+		if err := st.Read(ctx, func(tx *store.ReadTx) error {
+			var sourceErr error
+			decision, sourceErr = verifyClientTargetSource(ctx, tx, sel, expected)
+			if sourceErr != nil {
+				decision = clientTargetDecision{Outcome: "refused", Reason: sourceErr.Error()}
+			}
+			return nil
+		}); err != nil {
+			t.Fatal("source check could not read the selected task")
+		}
 	case "select":
 		seedSpecification := domain.RunID(os.Getenv(realRunSeedSpecificationRunIDEnv))
 		startedAt, parseErr := parseDaemonStartedAt(os.Getenv(realRunDaemonStartedAtEnv))
@@ -461,4 +578,194 @@ func TestBindClientTarget(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+}
+
+func TestVerifyClientTargetSource(t *testing.T) {
+	const issue = "https://github.com/example/project/issues/82"
+	const project = domain.ProjectID("project-1")
+	const impl = domain.RunID("run-client-source")
+	for _, tc := range []struct {
+		name string
+		want string
+	}{
+		{"bare URL", ""},
+		{"revision first marker", ""},
+		{"prose wrapped URL", "no source issue"},
+		{"different issue", "does not equal"},
+		{"cross repository", "different repository"},
+		{"malformed expected URL", "bare canonical"},
+		{"oversized issue number", "issue number"},
+		{"missing project", "project is missing"},
+		{"missing marker", "marker is missing"},
+		{"wrong marker kind", "marker is missing"},
+		{"corrupt marker", "request is malformed"},
+		{"missing publication", "publication input is invalid"},
+		{"corrupt publication", "publication input is invalid"},
+		{"missing digest", "digest is missing"},
+		{"wrong digest", "digest is missing"},
+		{"unknown version", "version or ownership"},
+		{"marker wrong project", "version or ownership"},
+		{"marker wrong spec", "version or ownership"},
+		{"marker wrong impl", "version or ownership"},
+		{"marker wrong invocation", "version or ownership"},
+		{"marker wrong iteration", "version or ownership"},
+		{"wrong task", "inconsistent ownership"},
+		{"wrong project", "inconsistent ownership"},
+		{"wrong spec ownership", "does not match"},
+		{"stopped task", "stopped"},
+		{"implementation exists", "implementation already exists"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			path := filepath.Join(t.TempDir(), "freeside.db")
+			opts := store.Options{AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{domain.ModeAttendedDev: {}}}
+			st := storetest.Open(t, path, opts)
+			task, spec := seedClientTargetTask(t, ctx, st, project, impl, tc.name == "implementation exists")
+			sel := clientTargetSelection{TaskID: task, ProjectID: project, SpecificationRunID: spec}
+			expected := issue
+			iteration := 1
+			if tc.name == "revision first marker" {
+				iteration = 2
+			}
+			key := string(domain.SpecificationInvocationID(spec, iteration))
+			kind := engine.KindSpecificationInvocationRequested
+			request := clientSourceRequest{
+				Version: "freeside.specification-request/v1", SpecificationRunID: spec,
+				ImplementationRunID: impl, ProjectID: project,
+				InvocationID: domain.InvocationID(key), Iteration: iteration,
+				Publication: engine.ProductionPublication{
+					Recipe: "freeside.client-publication/v2", SourceIssue: issue,
+					CommitAuthor: engine.ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345},
+				},
+			}
+			switch tc.name {
+			case "prose wrapped URL":
+				// The real Submit regression pins how prose produces this input.
+				request.Publication.SourceIssue = ""
+			case "different issue":
+				expected = "https://github.com/example/project/issues/83"
+			case "cross repository":
+				expected = "https://github.com/example/other/issues/82"
+				request.Publication.SourceIssue = expected
+			case "malformed expected URL":
+				expected = "Please handle " + issue + "."
+			case "oversized issue number":
+				expected = "https://github.com/example/project/issues/" + strings.Repeat("9", 40)
+				request.Publication.SourceIssue = expected
+			case "missing publication":
+				request.Publication = engine.ProductionPublication{}
+			case "corrupt publication":
+				request.Publication.SourceIssue = "Please handle " + issue + "."
+			case "unknown version":
+				request.Version = "freeside.specification-request/v999"
+			case "marker wrong project":
+				request.ProjectID = "project-other"
+			case "marker wrong spec":
+				request.SpecificationRunID = "spec-other"
+			case "marker wrong impl":
+				request.ImplementationRunID = "impl-other"
+			case "marker wrong invocation":
+				request.InvocationID = "inv-other"
+			case "marker wrong iteration":
+				request.Iteration = 9
+			case "wrong task":
+				sel.TaskID = "task-missing"
+			case "wrong project":
+				sel.ProjectID = "project-other"
+			case "wrong spec ownership":
+				_, sel.SpecificationRunID = seedClientTargetTask(t, ctx, st, project, "impl-other", false)
+			case "wrong marker kind":
+				kind = "other-marker"
+			case "stopped task":
+				state, err := st.ServerState(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := st.Write(ctx, func(tx *store.WriteTx) error {
+					_, _, err := tx.StopTask(ctx, domain.StopTaskRequest{
+						CommandID: "stop", DeviceID: "device", TaskID: task, ProjectID: project,
+						ExpectedSyncEpoch: state.SyncEpoch, ExpectedEntityVersion: state.Revision,
+					}, time.Now().UTC())
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			publication, err := json.Marshal(request.Publication)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.PublicationDigest = domain.Digest(contentaddr.Sum(publication))
+			switch tc.name {
+			case "missing digest":
+				request.PublicationDigest = ""
+			case "wrong digest":
+				request.PublicationDigest = domain.Digest("sha256:" + strings.Repeat("0", 64))
+			}
+			payload, err := json.Marshal(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.name == "corrupt marker" {
+				payload = []byte(`{"publication":`)
+			}
+			if err := st.Write(ctx, func(tx *store.WriteTx) error {
+				if tc.name != "missing project" {
+					if err := tx.RegisterProject(ctx, domain.Project{ID: project, Repo: "example/project", RepositoryID: 123}); err != nil {
+						return err
+					}
+				}
+				if tc.name == "missing marker" {
+					return nil
+				}
+				_, _, err := tx.EnqueueOutbox(ctx, key, kind, payload)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			// Close the writer so the main file contains the complete fixture,
+			// then prove that the real read-only entry point changes no DB bytes.
+			if err := st.Close(); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(path) //nolint:gosec // G304: fixture database under t.TempDir.
+			if err != nil {
+				t.Fatal(err)
+			}
+			receipt := filepath.Join(t.TempDir(), "source.json")
+			t.Setenv(realRunClientTargetEnv, "verify-source")
+			t.Setenv("FREESIDE_REAL_RUN_STATE_ROOT", filepath.Dir(path))
+			t.Setenv("FREESIDE_REAL_RUN_APPROVED_RECIPE", "sha256:"+strings.Repeat("a", 64))
+			t.Setenv(realRunProjectEnv, string(sel.ProjectID))
+			t.Setenv(realRunTargetTaskIDEnv, string(sel.TaskID))
+			t.Setenv(realRunSpecificationRunIDEnv, string(sel.SpecificationRunID))
+			t.Setenv(realRunExpectedSourceIssueEnv, expected)
+			t.Setenv(realRunTargetPathEnv, receipt)
+			t.Run("read-only entry point", TestRealRunClientTarget)
+			body, err := os.ReadFile(receipt) //nolint:gosec // G304: verifier receipt under t.TempDir.
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got clientTargetDecision
+			if err := json.Unmarshal(body, &got); err != nil {
+				t.Fatal(err)
+			}
+			if tc.want != "" {
+				if got.Outcome != "refused" || !strings.Contains(got.Reason, tc.want) {
+					t.Fatalf("decision = %+v; want refusal containing %q", got, tc.want)
+				}
+			} else if got.Outcome != "source-verified" || got.TaskID != string(task) ||
+				got.SpecificationRunID != string(spec) || got.Project != string(project) ||
+				got.Repository != "example/project" || got.SourceIssue != issue || got.Provenance != "recommended" {
+				t.Fatalf("unexpected receipt: %+v", got)
+			}
+			after, err := os.ReadFile(path) //nolint:gosec // G304: same fixture database under t.TempDir.
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(before, after) {
+				t.Fatal("source verifier changed the database")
+			}
+		})
+	}
 }

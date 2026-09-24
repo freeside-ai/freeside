@@ -78,6 +78,12 @@ Look for each of these before and during the run; most have bitten twice.
 
 ## Mode And Flags Past Trackers Required
 
+- #1530 found that `Please handle <URL>.` saves no publication source issue.
+  For a closure-specific client-target run, give the bare canonical issue URL
+  before submission and require the retained `verify-source` receipt before
+  specification approval. Client URL provenance is `recommended`; the receipt
+  proves eligibility, not closing authority or a later proposal. Correcting a
+  source requires a fresh task/session, never editing the old run's binding.
 - #1211 required the task to come from the client composer
   (`--client-target`) with the human specification gate on, and a live Stop
   from a real client.

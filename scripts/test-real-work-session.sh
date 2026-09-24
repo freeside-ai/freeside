@@ -226,4 +226,91 @@ if bash "$sel/real-work-session.sh" select-target "$sel" task-99 >"$sel/out" 2>&
 fi
 [[ ! -f "$sel/target.request" ]]
 
-echo 'PASS: session completion, stale recovery, retained diagnostics and restoration'
+# The source proof uses only the retained configuration and exact accepted
+# target, leaves selection/approval untouched, and never reuses an old receipt.
+source_session=$tmp/source
+mkdir "$source_session"
+cp "$root/scripts/real-work-session.sh" "$source_session/"
+printf 'awaiting-specification\n' >"$source_session/status"
+printf 'client-target\n' >"$source_session/mode"
+printf '{"task_id":"task-selected","project":"project-selected","specification_run_id":"spec-selected"}\n' >"$source_session/target.json"
+cat >"$source_session/verification-env.sh" <<'CONFIG'
+export FREESIDE_REAL_RUN_STATE_ROOT=/fixture/state
+export FREESIDE_REAL_RUN_PROJECT=project-selected
+export FREESIDE_REAL_RUN_APPROVED_RECIPE=fixture-recipe
+export FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID=spec-seed
+export FREESIDE_REAL_RUN_TARGET_TASK_ID=task-seed
+CONFIG
+cat >"$source_session/verify-real-run" <<'STUB'
+#!/usr/bin/env python3
+import json, os, pathlib, sys
+assert sys.argv[1:] == ["-test.run", "^TestRealRunClientTarget$", "-test.count=1"]
+assert os.environ["FREESIDE_REAL_RUN_CLIENT_TARGET"] == "verify-source"
+assert os.environ["FREESIDE_REAL_RUN_STATE_ROOT"] == "/fixture/state"
+assert os.environ["FREESIDE_REAL_RUN_APPROVED_RECIPE"] == "fixture-recipe"
+assert os.environ["FREESIDE_REAL_RUN_TARGET_TASK_ID"] == "task-selected"
+assert os.environ["FREESIDE_REAL_RUN_PROJECT"] == "project-selected"
+assert os.environ["FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID"] == "spec-selected"
+assert os.environ["FREESIDE_REAL_RUN_EXPECTED_SOURCE_ISSUE"] == "https://github.com/example/project/issues/82"
+mode = os.environ.get("SOURCE_FIXTURE_MODE", "success")
+if mode == "error": sys.exit(9)
+if mode in ("missing-result", "older-verifier"): sys.exit(0)
+decision = dict(outcome="source-verified", task_id="task-selected", project="project-selected",
+                specification_run_id="spec-selected", repository="example/project",
+                source_issue="https://github.com/example/project/issues/82", provenance="recommended")
+if mode == "refusal": decision = dict(outcome="refused", reason="saved publication has no source issue")
+if mode == "error-result": decision = dict(outcome="error")
+if mode.startswith("wrong-"): decision[mode[6:]] = "wrong"
+pathlib.Path(os.environ["FREESIDE_REAL_RUN_TARGET_PATH"]).write_text(
+    "corrupt" if mode == "corrupt-result" else json.dumps(decision))
+STUB
+chmod +x "$source_session/verify-real-run"
+cp "$source_session/target.json" "$source_session/target.original"
+cp "$source_session/verification-env.sh" "$source_session/config.original"
+run_source() {
+	FREESIDE_REAL_RUN_STATE_ROOT=/ambient/incorrect FREESIDE_REAL_RUN_PROJECT=ambient-project \
+	FREESIDE_REAL_RUN_APPROVED_RECIPE=ambient-recipe FREESIDE_REAL_RUN_TARGET_TASK_ID=ambient-task \
+	FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID=ambient-spec \
+		bash "$source_session/real-work-session.sh" verify-source "$source_session" \
+		'https://github.com/example/project/issues/82' >"$source_session/output" 2>&1
+}
+run_source
+grep -q 'recommended provenance' "$source_session/output"
+receipt=$(sed -n 's/^Preapproval source receipt: //p' "$source_session/output")
+[[ -s "$receipt" ]]
+python3 - "$receipt" <<'PY'
+import os, sys
+assert os.stat(sys.argv[1]).st_mode & 0o777 == 0o600
+PY
+for mode in refusal error error-result missing-result older-verifier corrupt-result \
+	wrong-task_id wrong-project wrong-specification_run_id wrong-repository wrong-source_issue wrong-provenance; do
+	export SOURCE_FIXTURE_MODE=$mode
+	if run_source; then echo "source verifier accepted $mode" >&2; exit 1; fi
+	grep -q 'leave specification approval pending' "$source_session/output"
+	# A valid receipt already exists; every failed attempt must still fail.
+	[[ -s "$receipt" ]]
+done
+unset SOURCE_FIXTURE_MODE
+for file in mode target.json verification-env.sh verify-real-run; do
+	mv "$source_session/$file" "$source_session/$file.saved"
+	if run_source; then echo "source verifier accepted missing $file" >&2; exit 1; fi
+	mv "$source_session/$file.saved" "$source_session/$file"
+done
+printf 'ordinary\n' >"$source_session/mode"
+if run_source; then echo 'source verifier accepted ordinary mode' >&2; exit 1; fi
+printf 'client-target\n' >"$source_session/mode"
+for invalid in '{}' 'malformed' '[]' '{"task_id":"task-selected","project":"other","specification_run_id":"spec-selected"}'; do
+	printf '%s\n' "$invalid" >"$source_session/target.json"
+	if run_source; then echo 'source verifier accepted invalid target' >&2; exit 1; fi
+done
+cp "$source_session/target.original" "$source_session/target.json"
+: >"$source_session/verification-env.sh"
+if run_source; then echo 'ambient environment filled missing configuration' >&2; exit 1; fi
+cp "$source_session/config.original" "$source_session/verification-env.sh"
+run_source
+cmp "$source_session/target.json" "$source_session/target.original"
+cmp "$source_session/verification-env.sh" "$source_session/config.original"
+[[ "$(cat "$source_session/status")" == awaiting-specification ]]
+[[ ! -f "$source_session/target.request" && ! -f "$source_session/complete.request" ]]
+
+echo 'PASS: session completion, recovery, restoration, and read-only source proof'

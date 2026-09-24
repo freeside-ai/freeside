@@ -425,8 +425,12 @@ implementation.
 1. Confirm the chosen project has no existing task for your source. Project
    discovery is tracked separately in #1332; the seed above supplies the
    visibility this exercise needs. For the requested gh-imgup exercise, use
-   `Please handle https://github.com/freeasinbird/gh-imgup/issues/82.` as one
-   line. Never pre-create that source through the CLI.
+   `https://github.com/freeasinbird/gh-imgup/issues/82` as one line. When the
+   exit condition requires source-issue closure, the agent must give the
+   operator the exact bare canonical URL before submission, with no prose or
+   trailing punctuation. Prose-wrapped URLs remain valid task input but do not
+   save a publication source reference. Never pre-create that source through
+   the CLI.
 2. When the harness prints `awaiting a client target`, enter that source in the
    client composer and submit. Record the command result, the new task ID, its
    specification-run ID, and the returned sync state. Verify the task name and
@@ -447,7 +451,37 @@ implementation.
    be replaced in the same session, and choosing another target means starting
    a new client-target session. Selection binds by trusted task and run
    identity from the task's recorded run list, never by matching source text.
-4. Follow the normal clarification or specification flow for the selected task.
+4. **Before specification approval, prove the source when closure is required.**
+   After the harness accepts the target, run the retained session command with
+   the exact expected issue URL:
+
+   ```sh
+   bash /absolute/session/real-work-session.sh verify-source \
+     /absolute/session https://github.com/freeasinbird/gh-imgup/issues/82
+   ```
+
+   Save the printed local receipt path in the run record before asking the
+   operator to approve. The read-only check inspects the selected task's saved
+   specification/publication input, task/project/run ownership, exact issue
+   URL, and project repository. It records the task ID, specification-run ID,
+   repository, source issue, and `recommended` provenance. Displayed spec prose
+   and the visibility seed's publication file cannot prove this binding.
+
+   A refusal leaves approval pending and the closure proof blocked. Missing,
+   corrupt, mismatched, or cross-repository inputs fail; an existing
+   implementation run makes a pre-implementation proof too late. An older
+   retained verifier without this mode requires a reviewed runtime/session.
+   Do not edit the retained task or clear a checkpoint. A corrected source
+   needs a fresh task and client-target session under the one-target rule.
+
+   A successful receipt proves eligibility at that read, with recommended
+   client provenance. It neither creates a daemon-bound `issue_subject` nor
+   grants closing authority. The later proposal, policy/human approval, and
+   publisher checks still apply. In the separately authorized live proof on
+   the merged runtime, record the later closure proposal for this same task
+   and run; a receipt alone proves neither a proposal nor issue closure.
+   This checkpoint is required only for closure-specific exit exercises.
+5. Follow the normal clarification or specification flow for the selected task.
    Leave the human specification approval gate in place. Each deliberate client
    submission of the same project and source creates a distinct task, so a
    second submission is a second task, not proof of reuse; select exactly one
