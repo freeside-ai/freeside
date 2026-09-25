@@ -46,8 +46,14 @@ target=${!#}
 case "${1:-}" in
 -extract)
     case "$2" in
-    CFBundleIdentifier) printf '%s\n' "${STUB_BUNDLE_ID:-ai.freeside.app.macos}" ;;
-    'com\.apple\.application-identifier' | \
+    CFBundleIdentifier)
+        # The stub build writes the ID it was asked for; a seeded fixture
+        # without one is a production client.
+        built_id=$(sed -n 's/^CFBundleIdentifier=//p' "$target")
+        printf '%s\n' "${STUB_BUNDLE_ID:-${built_id:-ai.freeside.app.macos}}"
+        ;;
+    CFBundleDisplayName | FreesideEnvironment | \
+        'com\.apple\.application-identifier' | \
         'com\.apple\.developer\.team-identifier' | keychain-access-groups.* | \
         TeamIdentifier.0 | ApplicationIdentifierPrefix.0 | DeveloperCertificates.* | \
         'Entitlements.com\.apple\.application-identifier' | \
@@ -104,9 +110,9 @@ case "${1:-}" in
         fi
         exit 1
         ;;
-    StandardErrorPath)
-        awk '
-            /<key>StandardErrorPath<\/key>/ {
+    StandardErrorPath | Label)
+        awk -v key="<key>$2</key>" '
+            index($0, key) {
                 getline
                 sub(/^[[:space:]]*<string>/, "")
                 sub(/<\/string>[[:space:]]*$/, "")
@@ -175,6 +181,22 @@ case "${1:-}" in
     StandardErrorPath)
         escaped=$(printf '%s' "$4" | sed 's/[\\&|]/\\&/g')
         sed "s|__FREESIDE_STDERR_PATH__|$escaped|" "$target" >"$target.tmp"
+        mv "$target.tmp" "$target"
+        exit 0
+        ;;
+    Label)
+        [[ "$3" == -string ]] || exit 1
+        STUB_VALUE="$4" awk '
+            /<key>Label<\/key>/ { print; getline; print "\t<string>" ENVIRON["STUB_VALUE"] "</string>"; next }
+            { print }
+        ' "$target" >"$target.tmp" && mv "$target.tmp" "$target"
+        exit 0
+        ;;
+    CFBundleDisplayName | FreesideEnvironment)
+        # The synthetic Info.plist is key=value lines; -replace inserts or
+        # overwrites, as real plutil does.
+        [[ "$3" == -string ]] || exit 1
+        { grep -v "^$2=" "$target" || true; printf '%s=%s\n' "$2" "$4"; } >"$target.tmp"
         mv "$target.tmp" "$target"
         exit 0
         ;;
@@ -254,18 +276,21 @@ if [[ -n "${STUB_BUILD_SUCCEEDS:-}" ]]; then
     built_app="$STUB_CASE_DIR/Build/Build/Products/Release/FreesideMac.app"
     mkdir -p "$built_app/Contents"
     printf 'new client\n' >"$built_app/Contents/marker"
-    printf 'fixture\n' >"$built_app/Contents/Info.plist"
     mkdir -p "$built_app/Contents/Library/LaunchAgents"
     cp "$STUB_AGENT_TEMPLATE" \
         "$built_app/Contents/Library/LaunchAgents/ai.freeside.daemon.plist"
     team_id=''
+    bundle_id=ai.freeside.app.macos
     for argument in "$@"; do
         case "$argument" in
         DEVELOPMENT_TEAM=*) team_id=${argument#DEVELOPMENT_TEAM=} ;;
+        FREESIDE_MAC_BUNDLE_ID=*) bundle_id=${argument#FREESIDE_MAC_BUNDLE_ID=} ;;
         esac
     done
+    # The project default, or the installer's override, as a real build binds it.
+    printf 'CFBundleIdentifier=%s\n' "$bundle_id" >"$built_app/Contents/Info.plist"
     signed_team=${STUB_SIGNED_TEAM_ID:-$team_id}
-    signed_application=${STUB_SIGNED_APPLICATION_ID:-$signed_team.ai.freeside.app.macos}
+    signed_application=${STUB_SIGNED_APPLICATION_ID:-$signed_team.$bundle_id}
     signed_group=${STUB_SIGNED_KEYCHAIN_GROUP:-$signed_application}
     cat >"$built_app/Contents/entitlements.fixture" <<EOF
 com.apple.application-identifier=$signed_application
@@ -274,7 +299,7 @@ keychain-access-groups.0=$signed_group
 EOF
     profile_team=${STUB_PROFILE_TEAM_ID:-$team_id}
     profile_prefix=${STUB_PROFILE_APPLICATION_PREFIX:-$profile_team}
-    profile_application=${STUB_PROFILE_APPLICATION_ID:-$profile_prefix.ai.freeside.app.macos}
+    profile_application=${STUB_PROFILE_APPLICATION_ID:-$profile_prefix.$bundle_id}
     profile_group=${STUB_PROFILE_KEYCHAIN_GROUP:-$profile_application}
     profile_team_entitlement=${STUB_PROFILE_TEAM_ENTITLEMENT:-$profile_team}
     profile_certificate=${STUB_PROFILE_CERTIFICATE:-Zml4dHVyZSBjZXJ0aWZpY2F0ZQ==}
@@ -478,11 +503,15 @@ cat >"$STUB_AGENT_TEMPLATE" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0">
 <dict>
+	<key>Label</key>
+	<string>ai.freeside.daemon</string>
 	<key>BundleProgram</key>
 	<string>Contents/Resources/freesided</string>
 	<key>ProgramArguments</key>
 	<array>
 		<string>freesided</string>
+		<string>-environment</string>
+		<string>__FREESIDE_ENVIRONMENT__</string>
 		<string>-db</string>
 		<string>__FREESIDE_STATE_DIR__/freeside.db</string>
 		<string>-state-dir</string>
@@ -538,7 +567,7 @@ begin_case() {
     unset STUB_PROFILE_CERTIFICATE_1
     unset STUB_SIGNER_CERTIFICATE
     unset STUB_CODESIGN_DROP_ENTITLEMENTS
-    unset RUN_HOME
+    unset RUN_STATE_ROOT
     echo "case: $CASE"
 }
 
@@ -548,8 +577,13 @@ report_failure() {
     printf '%s\n' "$OUT" | sed 's/^/    | /'
 }
 
+# The ordinary prod install, confirmed as a script must confirm it.
 run_installer() {
-    run_installer_raw --daemon-path "$CASE_DIR/freesided" "$@"
+    run_installer_raw --prod --daemon-path "$CASE_DIR/freesided" "$@"
+}
+
+run_dev_installer() {
+    run_installer_raw dev --daemon-path "$CASE_DIR/freesided"
 }
 
 run_installer_raw() {
@@ -559,8 +593,9 @@ run_installer_raw() {
         FREESIDE_MAC_INSTALL_DIR="$CASE_DIR/Applications" \
         FREESIDE_MAC_BUILD_DIR="$CASE_DIR/Build" \
         FREESIDE_MAC_SIGNING_IDENTITY="${STUB_SIGNING_IDENTITY-Test Identity}" \
-        HOME="${RUN_HOME:-$CASE_DIR/home}" \
-        bash "$INSTALLER" "$@" 2>&1)
+        FREESIDE_MAC_STATE_ROOT="${RUN_STATE_ROOT:-}" \
+        HOME="$CASE_DIR/home" \
+        bash "$INSTALLER" "$@" 2>&1 </dev/null)
     RC=$?
     set -e
 }
@@ -1429,13 +1464,19 @@ assert_file_contains "$agent" "Contents/Resources/freesided"
 assert_file_contains \
     "$agent" "$CASE_DIR/home/Library/Application Support/Freeside/daemon/freesided.log"
 assert_file_omits "$agent" "__FREESIDE_"
-# Exact vector: freesided binds -db, -state-dir, and the fixed listener with
-# no surviving placeholder and no doubled positional args (#762).
+# Exact vector: freesided binds its tier, -db, -state-dir, and the fixed
+# listener with no surviving placeholder and no doubled positional args (#762).
 assert_program_arguments "$agent" \
     freesided \
+    -environment prod \
     -db "$daemon_dir/freeside.db" \
     -state-dir "$daemon_dir" \
     -listen 127.0.0.1:7331
+assert_file_contains "$agent" "<string>ai.freeside.daemon</string>"
+assert_file_contains "$destination/Contents/Info.plist" "CFBundleIdentifier=ai.freeside.app.macos"
+assert_file_contains "$destination/Contents/Info.plist" "FreesideEnvironment=prod"
+assert_file_contains "$destination/Contents/Info.plist" "CFBundleDisplayName=Freeside"
+assert_file_contains "$CASE_DIR/xcodebuild-args" "FREESIDE_MAC_BUNDLE_ID=ai.freeside.app.macos"
 assert_file_contains "$destination/Contents/Resources/freesided" "#!/usr/bin/env bash"
 assert_exists "$CASE_DIR/codesign-sign-called"
 assert_file_contains "$CASE_DIR/xcodebuild-args" "-allowProvisioningUpdates"
@@ -1452,59 +1493,67 @@ assert_file_contains \
     "$SCRIPT_DIR/../app/Apps/macOS/LaunchAgents/ai.freeside.daemon.plist" \
     "Contents/Resources/freesided"
 assert_file_contains \
+    "$SCRIPT_DIR/../app/Apps/macOS/LaunchAgents/ai.freeside.daemon.plist" \
+    "__FREESIDE_ENVIRONMENT__"
+assert_file_contains \
     "$CASE_DIR/defaults-calls" \
     "before-build delete ai.freeside.app.macos FreesideLaunchAgentRegistrationCurrent"
 assert_file_contains \
     "$CASE_DIR/defaults-calls" \
     "after-build delete ai.freeside.app.macos FreesideLaunchAgentRegistrationCurrent"
 
-# A state path bearing a JSON metacharacter must bind byte-for-byte. Here HOME
-# carries a literal backslash before `t`; a raw interpolation into the `-json`
+# A state path bearing a JSON metacharacter must bind byte-for-byte. Here the
+# state root carries a literal backslash before `t`; a raw interpolation into the `-json`
 # fragment would let plutil decode `\t` into a tab and bind a path that is not
 # the created directory. The exact-vector assertion pins the literal backslash,
 # so dropping json_string's encoding reddens this case.
 begin_case "state paths with a JSON metacharacter bind literally" json-metachar
 export STUB_BUILD_SUCCEEDS=true
 bs=$'\\'
-meta_home="$CASE_DIR/home${bs}tstate"
-RUN_HOME=$meta_home run_installer
+meta_root="$CASE_DIR/state${bs}troot"
+RUN_STATE_ROOT=$meta_root run_installer
 assert_rc 0
 agent=$CASE_DIR/Applications/Freeside.app/Contents/Library/LaunchAgents/ai.freeside.daemon.plist
-meta_dir=$meta_home/Library/Application\ Support/Freeside/daemon
+meta_dir=$meta_root/daemon
 assert_program_arguments "$agent" \
     freesided \
+    -environment prod \
     -db "$meta_dir/freeside.db" \
     -state-dir "$meta_dir" \
     -listen 127.0.0.1:7331
+# The override replaces the derived root outright.
+assert_absent "$CASE_DIR/home/Library"
 
-# A legal home path may itself contain "__FREESIDE_"; the guard must verify the
+# A legal state path may itself contain "__FREESIDE_"; the guard must verify the
 # bound values exactly, not reject that substring, or it would abort every
 # install for such an operator. The old prefix guard reddens this case.
 begin_case "state paths containing __FREESIDE_ install cleanly" freeside-substr
 export STUB_BUILD_SUCCEEDS=true
-sub_home="$CASE_DIR/__FREESIDE_home"
-RUN_HOME=$sub_home run_installer
+sub_root="$CASE_DIR/__FREESIDE_root"
+RUN_STATE_ROOT=$sub_root run_installer
 assert_rc 0
 agent=$CASE_DIR/Applications/Freeside.app/Contents/Library/LaunchAgents/ai.freeside.daemon.plist
-sub_dir=$sub_home/Library/Application\ Support/Freeside/daemon
+sub_dir=$sub_root/daemon
 assert_program_arguments "$agent" \
     freesided \
+    -environment prod \
     -db "$sub_dir/freeside.db" \
     -state-dir "$sub_dir" \
     -listen 127.0.0.1:7331
 
-# XML metacharacters in a legal home path must round-trip literally through the
+# XML metacharacters in a legal state path must round-trip literally through the
 # raw per-element guard: an xml1 re-extraction would hand them back escaped
 # (&amp; etc.) and abort a valid install. Enumerate &, <, and > together.
 begin_case "state paths with XML metacharacters install cleanly" xml-metachar
 export STUB_BUILD_SUCCEEDS=true
-xml_home="$CASE_DIR/home&a<b>c"
-RUN_HOME=$xml_home run_installer
+xml_root="$CASE_DIR/state&a<b>c"
+RUN_STATE_ROOT=$xml_root run_installer
 assert_rc 0
 agent=$CASE_DIR/Applications/Freeside.app/Contents/Library/LaunchAgents/ai.freeside.daemon.plist
-xml_dir=$xml_home/Library/Application\ Support/Freeside/daemon
+xml_dir=$xml_root/daemon
 assert_program_arguments "$agent" \
     freesided \
+    -environment prod \
     -db "$xml_dir/freeside.db" \
     -state-dir "$xml_dir" \
     -listen 127.0.0.1:7331
@@ -1517,16 +1566,103 @@ assert_program_arguments "$agent" \
 # stub is lenient, so this case exercises the encode/decode plumbing.)
 begin_case "state paths with a control character install cleanly" ctrl-char
 export STUB_BUILD_SUCCEEDS=true
-tab_home="$CASE_DIR/home"$'\t'"state"
-RUN_HOME=$tab_home run_installer
+tab_root="$CASE_DIR/state"$'\t'"root"
+RUN_STATE_ROOT=$tab_root run_installer
 assert_rc 0
 agent=$CASE_DIR/Applications/Freeside.app/Contents/Library/LaunchAgents/ai.freeside.daemon.plist
-tab_dir=$tab_home/Library/Application\ Support/Freeside/daemon
+tab_dir=$tab_root/daemon
 assert_program_arguments "$agent" \
     freesided \
+    -environment prod \
     -db "$tab_dir/freeside.db" \
     -state-dir "$tab_dir" \
     -listen 127.0.0.1:7331
+
+# The dev tier derives every identifier from its own row of the plan table,
+# so a dev install sits beside the production one instead of replacing it.
+# It also needs no --prod and no terminal: only prod is interlocked.
+begin_case "dev install derives its own identity and leaves prod untouched" dev-install
+export STUB_BUILD_SUCCEEDS=true
+prod_app=$CASE_DIR/Applications/Freeside.app
+make_recovery_app "$prod_app"
+prod_inode=$(inode "$prod_app")
+run_dev_installer
+assert_rc 0
+destination="$CASE_DIR/Applications/Freeside Dev.app"
+agent_dir=$destination/Contents/Library/LaunchAgents
+agent=$agent_dir/ai.freeside.daemon.dev.plist
+dev_dir="$CASE_DIR/home/Library/Application Support/Freeside Dev/daemon"
+assert_absent "$agent_dir/ai.freeside.daemon.plist"
+assert_file_contains "$agent" "<string>ai.freeside.daemon.dev</string>"
+assert_file_omits "$agent" "__FREESIDE_"
+assert_program_arguments "$agent" \
+    freesided \
+    -environment dev \
+    -db "$dev_dir/freeside.db" \
+    -state-dir "$dev_dir" \
+    -listen 127.0.0.1:7332
+assert_file_contains "$agent" "$dev_dir/freesided.log"
+assert_file_contains "$destination/Contents/Info.plist" "CFBundleIdentifier=ai.freeside.app.macos.dev"
+assert_file_contains "$destination/Contents/Info.plist" "FreesideEnvironment=dev"
+assert_file_contains "$destination/Contents/Info.plist" "CFBundleDisplayName=Freeside Dev"
+assert_file_contains "$CASE_DIR/xcodebuild-args" "FREESIDE_MAC_BUNDLE_ID=ai.freeside.app.macos.dev"
+assert_file_contains \
+    "$destination/Contents/entitlements.fixture" \
+    "keychain-access-groups.0=ABCDE12345.ai.freeside.app.macos.dev"
+assert_file_contains \
+    "$CASE_DIR/defaults-calls" \
+    "before-build delete ai.freeside.app.macos.dev FreesideLaunchAgentRegistrationCurrent"
+assert_file_omits \
+    "$CASE_DIR/defaults-calls" \
+    "delete ai.freeside.app.macos FreesideLaunchAgentRegistrationCurrent"
+assert_inode "$prod_app" "$prod_inode" "a dev install replaced the production app"
+assert_file_contains "$prod_app/Contents/marker" "old client"
+assert_absent "$CASE_DIR/home/Library/Application Support/Freeside"
+assert_contains "installed $destination"
+
+# A script or agent that omits the tier must not replace the operator's real
+# client. The refusal comes before anything touches the install paths: an
+# interrupted install that the next real run would restore stays put.
+begin_case "prod refuses a caller with no terminal unless --prod confirms it" prod-interlock
+destination=$CASE_DIR/Applications/Freeside.app
+superseded=$destination.install-superseded
+make_recovery_app "$superseded"
+for target_args in "" prod; do
+    # shellcheck disable=SC2086 # the empty tier must vanish, not pass ""
+    run_installer_raw $target_args --daemon-path "$CASE_DIR/freesided"
+    assert_rc 1
+    assert_contains "refusing to replace the production install without a terminal"
+    assert_contains "pass --prod to confirm"
+    assert_exists "$superseded"
+    assert_absent "$destination"
+    assert_absent "$CASE_DIR/defaults-calls"
+    assert_absent "$CASE_DIR/xcodebuild-called"
+    assert_absent "$CASE_DIR/home/Library"
+done
+run_installer_raw prod --prod --daemon-path "$CASE_DIR/freesided"
+assert_contains "restored an install interrupted before replacement"
+assert_exists "$CASE_DIR/xcodebuild-called"
+
+run_rejected_target_case() {
+    begin_case "$1" "$2"
+    local expected=$3
+    shift 3
+    RUN_STATE_ROOT=${REJECTED_STATE_ROOT:-} run_installer_raw "$@" \
+        --daemon-path "$CASE_DIR/freesided"
+    assert_rc 1
+    assert_contains "$expected"
+    assert_absent "$CASE_DIR/xcodebuild-called"
+    assert_absent "$CASE_DIR/defaults-calls"
+}
+run_rejected_target_case "an unknown target is refused" target-unknown \
+    "unknown argument: staging" staging
+run_rejected_target_case "--prod does not confirm the dev target" target-prod-dev \
+    "--prod confirms only the prod target, not dev" dev --prod
+run_rejected_target_case "a second target is refused" target-twice \
+    "the target was given twice: dev and prod" dev prod
+REJECTED_STATE_ROOT=relative/root run_rejected_target_case \
+    "a relative state root is refused" state-root-relative \
+    "FREESIDE_MAC_STATE_ROOT must be absolute: relative/root" dev
 
 begin_case "registration invalidation precedes a later build failure" 30
 run_installer

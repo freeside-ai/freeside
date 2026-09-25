@@ -2,11 +2,24 @@
 # install-mac-app.sh — install and update FreesideMac as the operator's
 # real client (plan §10, issue #444).
 #
-# Usage: install-mac-app.sh --daemon-path <absolute-path> [--server-url <url>] [--launch]
+# Usage: install-mac-app.sh [dev|prod] [--prod] --daemon-path <absolute-path>
+#                           [--server-url <url>] [--launch]
+#
+# The target is an environment tier (plan "Environments: Prod, Dev, and
+# Ephemeral"; default prod). Each tier derives its own identity, so the two
+# installs coexist and never replace each other:
+#
+#   tier  app                 bundle ID                  LaunchAgent label       port
+#   prod  Freeside.app        ai.freeside.app.macos      ai.freeside.daemon      7331
+#   dev   Freeside Dev.app    ai.freeside.app.macos.dev  ai.freeside.daemon.dev  7332
+#
+# The prod target replaces the operator's real client and daemon, so it runs
+# only from an interactive terminal or with an explicit --prod; a script or
+# agent with no TTY cannot reach it by omitting the tier.
 #
 # Builds the Release product with automatic provisioning, signs it with a
 # stable Apple Development identity, and
-# installs or replaces Freeside.app at a fixed path. Re-running it after
+# installs or replaces the tier's app at a fixed path. Re-running it after
 # a source change updates the installed app in place without disturbing
 # the Data Protection Keychain-held device credential: the provisioned App ID
 # prefix and bundle identifier stay fixed across runs, while the Team ID is
@@ -35,20 +48,18 @@
 #
 # Environment:
 #   FREESIDE_MAC_INSTALL_DIR  install root (default: ~/Applications)
-#   FREESIDE_MAC_BUILD_DIR    derived data (default: app/DerivedData/mac-install)
+#   FREESIDE_MAC_BUILD_DIR    derived data (default: app/DerivedData/mac-install-<tier>)
+#   FREESIDE_MAC_STATE_ROOT   absolute tier state root (default:
+#                             ~/Library/Application Support/<app name>); the
+#                             daemon's state directory is <root>/daemon
 #
 # Requires: macOS, Xcode.
 set -euo pipefail
 
 app_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-bundle_id="ai.freeside.app.macos"
-install_dir="${FREESIDE_MAC_INSTALL_DIR:-$HOME/Applications}"
-build_dir="${FREESIDE_MAC_BUILD_DIR:-$app_dir/DerivedData/mac-install}"
-destination="$install_dir/Freeside.app"
-superseded="$destination.install-superseded"
-rejected="$destination.install-rejected"
-recovery_guard="$destination.install-recovery-guard"
 
+target=""
+prod_confirmed=false
 server_url=""
 server_url_given=false
 daemon_path=""
@@ -123,19 +134,56 @@ while [[ $# -gt 0 ]]; do
         launch_after_install=true
         shift
         ;;
+    --prod)
+        prod_confirmed=true
+        shift
+        ;;
+    dev | prod)
+        [[ -z "$target" ]] || die "the target was given twice: $target and $1"
+        target="$1"
+        shift
+        ;;
     *)
         die "unknown argument: $1"
         ;;
     esac
 done
 
+target="${target:-prod}"
+[[ "$prod_confirmed" == false || "$target" == prod ]] ||
+    die "--prod confirms only the prod target, not $target"
+# The tier table (plan "Derived identifiers"). FreesideEnvironment.swift is
+# the app's copy; nothing else writes these strings.
+case "$target" in
+prod)
+    bundle_id="ai.freeside.app.macos"
+    display_name="Freeside"
+    daemon_label="ai.freeside.daemon"
+    listen_addr="127.0.0.1:7331"
+    ;;
+dev)
+    bundle_id="ai.freeside.app.macos.dev"
+    display_name="Freeside Dev"
+    daemon_label="ai.freeside.daemon.dev"
+    listen_addr="127.0.0.1:7332"
+    ;;
+esac
+install_dir="${FREESIDE_MAC_INSTALL_DIR:-$HOME/Applications}"
+build_dir="${FREESIDE_MAC_BUILD_DIR:-$app_dir/DerivedData/mac-install-$target}"
+destination="$install_dir/$display_name.app"
+superseded="$destination.install-superseded"
+rejected="$destination.install-rejected"
+recovery_guard="$destination.install-recovery-guard"
+state_root="${FREESIDE_MAC_STATE_ROOT:-$HOME/Library/Application Support/$display_name}"
+[[ "$state_root" == /* ]] ||
+    die "FREESIDE_MAC_STATE_ROOT must be absolute: $state_root"
+daemon_state_dir="$state_root/daemon"
+
 [[ "$daemon_path_given" == true ]] ||
     die "--daemon-path is required so the bundled LaunchAgent can run freesided"
 [[ "$daemon_path" == /* ]] || die "--daemon-path must be absolute: $daemon_path"
 [[ -f "$daemon_path" && -x "$daemon_path" ]] ||
     die "--daemon-path is not an executable file: $daemon_path"
-
-daemon_state_dir="$HOME/Library/Application Support/Freeside/daemon"
 
 # The daemon URL becomes a durable preference of the installed app, so a
 # malformed one would strand every later launch on the mock composition
@@ -340,6 +388,14 @@ restore_interrupted_install() {
     fi
     echo "install-mac-app: restored an install interrupted before replacement" >&2
 }
+
+# After every argument check and before anything touches the install or state
+# paths: a caller with no terminal must say --prod to replace the operator's
+# real client.
+if [[ "$target" == prod && "$prod_confirmed" == false && ! -t 0 ]]; then
+    die "refusing to replace the production install without a terminal;
+  pass --prod to confirm, or install the dev target (install-mac-app.sh dev)"
+fi
 
 restore_interrupted_install
 
@@ -623,6 +679,7 @@ if ! xcodebuild \
     CODE_SIGN_STYLE=Automatic \
     CODE_SIGN_IDENTITY="Apple Development" \
     DEVELOPMENT_TEAM="$team_id" \
+    FREESIDE_MAC_BUNDLE_ID="$bundle_id" \
     build >"$build_log" 2>&1; then
     tail -40 "$build_log" >&2
     die "build failed; full log at $build_log"
@@ -632,9 +689,28 @@ built_app="$build_dir/Build/Products/Release/FreesideMac.app"
 [[ -d "$built_app" ]] || die "build produced no app at $built_app"
 preserved_entitlements="$build_dir/FreesideMac.xcode.entitlements"
 verify_provisioned_app "$built_app" "$preserved_entitlements"
-launch_agent_plist="$built_app/Contents/Library/LaunchAgents/ai.freeside.daemon.plist"
-[[ -f "$launch_agent_plist" ]] ||
-    die "the built app contains no bundled LaunchAgent at $launch_agent_plist"
+# The tier the app resolves at launch, and the name Finder and the Dock show.
+# The provisioning profile binds neither, and the re-sign below seals both.
+built_info="$built_app/Contents/Info.plist"
+plutil -replace CFBundleDisplayName -string "$display_name" "$built_info" ||
+    die "could not set the app display name"
+plutil -replace FreesideEnvironment -string "$target" "$built_info" ||
+    die "could not set the app environment"
+require_plist_value "$built_info" CFBundleDisplayName "$display_name" "the app display name"
+require_plist_value "$built_info" FreesideEnvironment "$target" "the app environment"
+# The app registers the plist its FreesideEnvironment names, so a dev bundle
+# ships its own file and label rather than a second ai.freeside.daemon.
+launch_agent_dir="$built_app/Contents/Library/LaunchAgents"
+launch_agent_plist="$launch_agent_dir/$daemon_label.plist"
+[[ -f "$launch_agent_dir/ai.freeside.daemon.plist" ]] ||
+    die "the built app contains no bundled LaunchAgent at $launch_agent_dir/ai.freeside.daemon.plist"
+if [[ "$launch_agent_dir/ai.freeside.daemon.plist" != "$launch_agent_plist" ]]; then
+    mv "$launch_agent_dir/ai.freeside.daemon.plist" "$launch_agent_plist" ||
+        die "could not rename the bundled LaunchAgent for $daemon_label"
+fi
+plutil -replace Label -string "$daemon_label" "$launch_agent_plist" ||
+    die "could not bind the LaunchAgent label"
+require_plist_value "$launch_agent_plist" Label "$daemon_label" "the LaunchAgent label"
 bundled_daemon="$built_app/Contents/Resources/freesided"
 mkdir -p "$(dirname "$bundled_daemon")"
 ditto "$daemon_path" "$bundled_daemon" ||
@@ -653,10 +729,9 @@ chmod 755 "$bundled_daemon"
 # injecting arguments; see json_string for why a raw interpolation does not
 # fail closed on those bytes.
 db_path="$daemon_state_dir/freeside.db"
-listen_addr="127.0.0.1:7331"
 stderr_path="$daemon_state_dir/freesided.log"
 plutil -replace ProgramArguments -json \
-    "[\"freesided\",\"-db\",\"$(json_string "$db_path")\",\"-state-dir\",\"$(json_string "$daemon_state_dir")\",\"-listen\",\"$(json_string "$listen_addr")\"]" \
+    "[\"freesided\",\"-environment\",\"$target\",\"-db\",\"$(json_string "$db_path")\",\"-state-dir\",\"$(json_string "$daemon_state_dir")\",\"-listen\",\"$(json_string "$listen_addr")\"]" \
     "$launch_agent_plist" || die "could not bind the daemon program arguments"
 plutil -replace StandardErrorPath -string "$stderr_path" \
     "$launch_agent_plist" || die "could not bind the daemon stderr log path"
@@ -671,7 +746,7 @@ plutil -replace StandardErrorPath -string "$stderr_path" \
 # spuriously mismatch. The entry past the last expected index must be absent,
 # so a doubled vector (the #762 defect) is caught, not just per-element drift.
 # Fails closed on every real install (#762).
-expected_args=(freesided -db "$db_path" -state-dir "$daemon_state_dir" -listen "$listen_addr")
+expected_args=(freesided -environment "$target" -db "$db_path" -state-dir "$daemon_state_dir" -listen "$listen_addr")
 for i in "${!expected_args[@]}"; do
     got=$(plutil -extract "ProgramArguments.$i" raw -o - "$launch_agent_plist") ||
         die "the templated daemon program arguments are shorter than expected (see #762)"
