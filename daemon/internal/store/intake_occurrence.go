@@ -390,8 +390,9 @@ func (tx *ReadTx) authenticatedIntakeProposal(
 // after round 11 #1). The admission-time presence of the artifact is checked
 // separately on the write path (authenticateIntakePolicyArtifact). The
 // declaration's project, by contrast, IS re-resolved here and required to belong
-// to the occurrence's repository (issue #740): the projects row is write-once and
-// undeletable, so an authentic binding always resolves it — the
+// to the occurrence's repository (issue #740): the projects row is undeletable
+// and its repository id never changes (only its name follows a rename, #1537),
+// so an authentic binding always resolves it — the
 // availability-vs-integrity distinction cuts the other way than for the policy
 // artifact. This closes the tampered cross-repo case #720's re-gate could not
 // check: the stored binding faithfully mirrors a declaration whose project maps
@@ -415,8 +416,8 @@ func (tx *ReadTx) deriveIntakeAdmission(
 			"intake admission work unit is not bound to the occurrence's issue %d: %w", o.IssueNumber, ErrIntakeAdmissionInconsistent)
 	}
 	// The declaration's project must belong to the occurrence's own repository
-	// (#740). The projects row is write-once and undeletable, so for an authentic
-	// binding it always reconstructs. A *durable* reconstruction failure —
+	// (#740). The projects row is undeletable and its repository id never
+	// changes, so for an authentic binding it always reconstructs. A *durable* reconstruction failure —
 	// unregistered (ErrNotFound), or a corrupt/tampered row
 	// (errRowInconsistent, which scanProject also carries for a body that fails
 	// to decode or re-validate) — is authority corruption, so classify it as

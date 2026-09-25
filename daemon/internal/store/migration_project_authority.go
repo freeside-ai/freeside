@@ -13,12 +13,16 @@ const projectAuthorityBackfillMigration = "0081_project_authority_backfill.sql"
 
 // backfillProjectAuthority registers the projects row that
 // RecordExecutionAdmission now writes, for admissions recorded before it did.
-// Each project takes the base repository its admissions name. A project whose
-// admissions name two repositories fails the migration by name: the store
-// already contradicts itself, and picking one would guess at authority. A
-// project that already has a row is left alone; a disagreeing row surfaces at
-// that project's next admission, not here. An admission, or the run it names,
-// that does not reconstruct contributes nothing.
+// Each project takes the base repository its admissions name. The repository
+// id is the identity (#1537), so admissions under two names of one repository
+// id are one authority, and the project takes the name from its latest
+// admission, the one a rename left current. A project whose admissions name
+// two repository ids fails the migration by name: the store already
+// contradicts itself, and picking one would guess at authority. A project that
+// already has a row is left alone; a disagreeing id surfaces at that project's
+// next admission, which also moves an older name to the current one. An
+// admission, or the run it names, that does not reconstruct contributes
+// nothing.
 func backfillProjectAuthority(ctx context.Context, tx *sql.Tx) error {
 	admissions, err := readableAdmissions(ctx, tx)
 	if err != nil {
@@ -26,7 +30,8 @@ func backfillProjectAuthority(ctx context.Context, tx *sql.Tx) error {
 	}
 	w := &InternalTx{ReadTx: ReadTx{tx: tx}}
 	// Admissions are keyed per project in first-admission order, so the
-	// registration order and any conflict report are deterministic.
+	// registration order and any conflict report are deterministic. Admissions
+	// list in recording order, so the last base kept is the latest.
 	var order []domain.ProjectID
 	bound := map[domain.ProjectID]domain.BaseRevision{}
 	for _, admission := range admissions {
@@ -44,17 +49,15 @@ func backfillProjectAuthority(ctx context.Context, tx *sql.Tx) error {
 			// unreadable admission; every read of that run still fails closed.
 			continue
 		}
-		first, seen := bound[run.ProjectID]
+		earlier, seen := bound[run.ProjectID]
 		if !seen {
 			order = append(order, run.ProjectID)
-			bound[run.ProjectID] = admission.Base
-			continue
-		}
-		if first.Repo != admission.Base.Repo || first.RepositoryID != admission.Base.RepositoryID {
+		} else if earlier.RepositoryID != admission.Base.RepositoryID {
 			return fmt.Errorf("project %q is admitted against both %s (%d) and %s (%d): %w",
-				run.ProjectID, first.Repo, first.RepositoryID,
+				run.ProjectID, earlier.Repo, earlier.RepositoryID,
 				admission.Base.Repo, admission.Base.RepositoryID, ErrImmutableConflict)
 		}
+		bound[run.ProjectID] = admission.Base
 	}
 	for _, projectID := range order {
 		var exists bool
@@ -66,7 +69,7 @@ func backfillProjectAuthority(ctx context.Context, tx *sql.Tx) error {
 		if exists {
 			continue
 		}
-		if err := w.registerAdmittedProject(ctx, projectID, bound[projectID]); err != nil {
+		if err := w.registerAdmittedProject(ctx, projectID, bound[projectID], true); err != nil {
 			return err
 		}
 	}

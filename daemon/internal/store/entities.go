@@ -564,8 +564,9 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 			}
 			// The project label is derived from the projects row, which an
 			// admission or the 0081 backfill can add after the item was
-			// stored (#1535). Like the task name it cannot force a new
-			// version; a later real transition picks up the new label.
+			// stored (#1535), and a repository rename can change (#1537).
+			// Like the task name it cannot force a new version; a later real
+			// transition picks up the new label.
 			if item.DisplayNames != nil && decoded.DisplayNames != nil {
 				names := *item.DisplayNames
 				names.Project = decoded.DisplayNames.Project

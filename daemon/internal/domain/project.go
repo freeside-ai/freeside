@@ -5,8 +5,8 @@ import (
 	"strings"
 )
 
-// Project is the durable, write-once authority binding a daemon-assigned
-// project identity to the one repository it operates on (issue #740). It exists
+// Project is the durable authority binding a daemon-assigned project identity
+// to the one repository it operates on (issue #740). It exists
 // so a label-intake admission can verify that an implementation run's project
 // belongs to the occurrence's own repository: a Run carries only a ProjectID and
 // a ProjectImage carries a RepositoryID but no ProjectID, so before this record
@@ -14,17 +14,20 @@ import (
 // repository's project could bind an occurrence in another repository sharing an
 // issue number.
 //
-// The record is immutable for the project's life: no state machine, no update
-// path. That durability is what lets the read boundary require it — for an
-// authentic binding the projects row can never legitimately be absent, so a
-// missing row is corruption to fail closed on, not a transient availability the
-// boundary must tolerate (unlike a policy artifact, whose current absence is a
-// start-time concern; issue #720 round 11, owner-ratified).
+// The binding is permanent for the project's life: no state machine, no
+// delete, and the repository it names never changes. That durability is what
+// lets the read boundary require it — for an authentic binding the projects row
+// can never legitimately be absent, so a missing row is corruption to fail
+// closed on, not a transient availability the boundary must tolerate (unlike a
+// policy artifact, whose current absence is a start-time concern; issue #720
+// round 11, owner-ratified).
 //
-// RepositoryID is the forge's canonical numeric identity and is authoritative
-// for equality; Repo is the human-facing name, which can be transferred or
-// reused. The pair matches the repository identity BaseRevision, ProjectImage,
-// and IntakeOccurrence already carry.
+// RepositoryID is the forge's canonical numeric identity: it is the binding's
+// identity, never changes, and alone decides whether two records name the same
+// repository. Repo is the human-facing name, which a rename changes; it is the
+// name the daemon is currently configured with, so the record's one update is
+// a same-id rename (issue #1537). The pair matches the repository identity
+// BaseRevision, ProjectImage, and IntakeOccurrence already carry.
 type Project struct {
 	ID           ProjectID `json:"id"`
 	Repo         string    `json:"repo"`

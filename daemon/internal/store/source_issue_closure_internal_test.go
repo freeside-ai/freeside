@@ -283,3 +283,95 @@ func TestClosureProposalStoreRoundTripAndReGate(t *testing.T) {
 		})
 	}
 }
+
+// TestClosureFollowsRepositoryRename pins the #1537 rule on the closure path:
+// the repository id decides, so after a rename (same id, new name) a task
+// bound under the old name still earns a verified closure, proposals admitted
+// under the new name pass the store re-gate, and proposals admitted before the
+// rename still reconstruct.
+func TestClosureFollowsRepositoryRename(t *testing.T) {
+	ctx := context.Background()
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+
+	oldNameSource := domain.SpecificationSource{
+		Kind:         domain.SpecificationSourceIssueSubject,
+		IssueSubject: &domain.IssueSubjectRef{Repo: "owner/repo", RepositoryID: 123, IssueNumber: 42},
+	}
+	verifiedPolicy, verifiedHandle := closureScaffold(t, ctx, st, "project-verified", &oldNameSource)
+	recommendedPolicy, recommendedHandle := closureScaffold(t, ctx, st, "project-recommended", nil)
+
+	proposals := func(repo string) (verified, recommended domain.EffectProposal) {
+		t.Helper()
+		verified, err := domain.NewEffectProposal(domain.EffectSourceIssueClosure, domain.SourceIssueClosureInput{
+			SubjectHandle: verifiedHandle,
+			Source: domain.ClosableSource{
+				Present: true, Provenance: domain.ClosureProvenanceVerified, Repo: repo, RepositoryID: 123, IssueNumber: 42,
+			},
+			Origin: domain.ClosureFlagOriginProposeSite, Resolves: true,
+		}, verifiedPolicy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		recommended, err = domain.NewEffectProposal(domain.EffectSourceIssueClosure, domain.SourceIssueClosureInput{
+			SubjectHandle: recommendedHandle,
+			Source: domain.ClosableSource{
+				Present: true, Provenance: domain.ClosureProvenanceRecommended, Repo: repo, RepositoryID: 123,
+			},
+			ProposedTarget: domain.IssueSubjectRef{Repo: repo, RepositoryID: 123, IssueNumber: 9},
+			Origin:         domain.ClosureFlagOriginProposeSite, Resolves: true,
+		}, recommendedPolicy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return verified, recommended
+	}
+
+	oldVerified, oldRecommended := proposals("owner/repo")
+	instances := []domain.ProposalInstance{
+		allocateClosure(t, ctx, st, oldVerified, "event-old-verified"),
+		allocateClosure(t, ctx, st, oldRecommended, "event-old-recommended"),
+	}
+
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		for _, id := range []domain.ProjectID{"project-verified", "project-recommended"} {
+			if err := tx.RegisterProject(ctx, domain.Project{ID: id, Repo: "owner/renamed", RepositoryID: 123}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("rename projects: %v", err)
+	}
+
+	var closable domain.ClosableSource
+	if err := st.Read(ctx, func(tx *ReadTx) error {
+		declaration, err := tx.GetWorkUnitDeclarationByRun(ctx, verifiedPolicy.RunID)
+		if err != nil {
+			return err
+		}
+		closable, err = tx.closableSource(ctx, declaration)
+		return err
+	}); err != nil {
+		t.Fatalf("closable source after rename: %v", err)
+	}
+	want := domain.ClosableSource{
+		Present: true, Provenance: domain.ClosureProvenanceVerified, Repo: "owner/renamed", RepositoryID: 123, IssueNumber: 42,
+	}
+	if closable != want {
+		t.Fatalf("closable source after rename = %+v, want %+v", closable, want)
+	}
+
+	newVerified, newRecommended := proposals("owner/renamed")
+	instances = append(instances,
+		allocateClosure(t, ctx, st, newVerified, "event-new-verified"),
+		allocateClosure(t, ctx, st, newRecommended, "event-new-recommended"),
+	)
+	for _, instance := range instances {
+		if err := st.Read(ctx, func(tx *ReadTx) error {
+			_, err := tx.GetProposalInstance(ctx, instance.ID)
+			return err
+		}); err != nil {
+			t.Fatalf("reconstruct %s after rename: %v", instance.ID, err)
+		}
+	}
+}

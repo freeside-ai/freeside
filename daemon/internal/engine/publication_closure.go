@@ -188,7 +188,9 @@ func (w *productionPublicationWorkflow) decideClosableSource(
 	}
 	if taskSource != nil && taskSource.Kind == domain.SpecificationSourceIssueSubject && taskSource.IssueSubject != nil {
 		subject := taskSource.IssueSubject
-		if subject.Repo != repo || subject.RepositoryID != repositoryID {
+		// The repository id decides (#1537): a subject bound before a rename
+		// keeps the old name and is still this repository's.
+		if subject.RepositoryID != repositoryID {
 			// A cross-repository issue subject never earns a verified close.
 			return domain.ClosableSource{}, domain.IssueSubjectRef{}, false, nil
 		}

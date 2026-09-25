@@ -14,7 +14,8 @@ type SourceIssueClosureParameters struct {
 	SubjectHandle OpaqueSubjectHandle `json:"subject_handle"`
 	// Target is the issue the daemon selected. It is never a value an agent
 	// supplied directly; for a recommended provenance the daemon confirmed it
-	// names the same repository.
+	// names the same repository id. Its name is the one current when the
+	// proposal was made and may predate a rename.
 	Target IssueSubjectRef `json:"target"`
 	// Resolves reports whether this proposal, if approved, would write the
 	// close. A daemon_fallback proposal always carries false.
@@ -164,9 +165,9 @@ func (in SourceIssueClosureInput) closureTarget() (IssueSubjectRef, error) {
 			return IssueSubjectRef{}, fmt.Errorf("recommended closure target: %w", err)
 		}
 		// The client chose the issue number; the daemon confirms only that the
-		// target names the same repository. A cross-repository target yields no
-		// proposal (plan §5.13).
-		if target.Repo != in.Source.Repo || target.RepositoryID != in.Source.RepositoryID {
+		// target names the same repository id, the identity a rename keeps
+		// (#1537). A cross-repository target yields no proposal (plan §5.13).
+		if target.RepositoryID != in.Source.RepositoryID {
 			return IssueSubjectRef{}, fmt.Errorf("recommended closure target %q/%d outside source repository: %w",
 				target.Repo, target.RepositoryID, ErrClosureTargetMismatch)
 		}
@@ -178,9 +179,11 @@ func (in SourceIssueClosureInput) closureTarget() (IssueSubjectRef, error) {
 // GateSourceIssueClosure re-gates a closure proposal against the daemon's
 // current closable-source determination. It rejects any proposal whose target
 // or provenance the current state does not grant, and any proposal at all when
-// there is no closable source (fail closed). The verified arm requires an exact
-// target match; the recommended arm matches the repository only, since the
-// daemon cannot re-derive the client's chosen issue number.
+// there is no closable source (fail closed). The verified arm requires the
+// same repository id and issue number; the recommended arm matches the
+// repository id only, since the daemon cannot re-derive the client's chosen
+// issue number. Neither compares names: the repository id is the identity, and
+// a proposal made before a rename keeps the old name (#1537).
 func GateSourceIssueClosure(proposal EffectProposal, closable ClosableSource) error {
 	if proposal.Kind != EffectSourceIssueClosure || proposal.ClosureProposal == nil {
 		return ErrEffectProposalInconsistent
@@ -200,13 +203,12 @@ func GateSourceIssueClosure(proposal EffectProposal, closable ClosableSource) er
 	}
 	switch closable.Provenance {
 	case ClosureProvenanceVerified:
-		if c.Target.Repo != closable.Repo || c.Target.RepositoryID != closable.RepositoryID ||
-			c.Target.IssueNumber != closable.IssueNumber {
+		if c.Target.RepositoryID != closable.RepositoryID || c.Target.IssueNumber != closable.IssueNumber {
 			return ErrClosureTargetMismatch
 		}
 		return nil
 	case ClosureProvenanceRecommended:
-		if c.Target.Repo != closable.Repo || c.Target.RepositoryID != closable.RepositoryID {
+		if c.Target.RepositoryID != closable.RepositoryID {
 			return ErrClosureTargetMismatch
 		}
 		return nil

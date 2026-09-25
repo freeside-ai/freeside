@@ -139,25 +139,65 @@ func TestExecutionAdmissionReplayHealsMissingProject(t *testing.T) {
 // TestExecutionAdmissionRefusesProjectRebinding: a daemon pointed at another
 // repository cannot run a task whose project is bound elsewhere. The
 // admission fails whole, so no work is admitted.
+// The repository id decides, so a different id under the same name is a
+// rebinding too.
 func TestExecutionAdmissionRefusesProjectRebinding(t *testing.T) {
 	t.Parallel()
-	s, admission := seedAdmission(t, nil)
-	other := admission.Base
-	other.Repo, other.RepositoryID = "owner/other", 515151
+	for name, repo := range map[string]string{
+		"other repository":            "owner/other",
+		"same name, other repository": "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s, admission := seedAdmission(t, nil)
+			other := admission.Base
+			other.RepositoryID = 515151
+			if repo != "" {
+				other.Repo = repo
+			}
 
-	rebinding, err := recordProjectAdmission(t, s, admission, "run-2", "proj-1", other)
-	if !errors.Is(err, ErrImmutableConflict) {
-		t.Fatalf("rebinding admission err = %v, want ErrImmutableConflict", err)
+			rebinding, err := recordProjectAdmission(t, s, admission, "run-2", "proj-1", other)
+			if !errors.Is(err, ErrImmutableConflict) {
+				t.Fatalf("rebinding admission err = %v, want ErrImmutableConflict", err)
+			}
+			if n := countAdmissions(t, s, rebinding.InvocationID); n != 0 {
+				t.Fatalf("rebinding admission rows = %d, want 0", n)
+			}
+			want := domain.Project{ID: "proj-1", Repo: admission.Base.Repo, RepositoryID: admission.Base.RepositoryID}
+			if got, err := readProject(t, s, "proj-1"); err != nil || got != want {
+				t.Fatalf("project after refused rebinding = %+v, %v; want %+v", got, err, want)
+			}
+		})
 	}
-	if n := countAdmissions(t, s, rebinding.InvocationID); n != 0 {
-		t.Fatalf("rebinding admission rows = %d, want 0", n)
+}
+
+// TestExecutionAdmissionFollowsRepositoryRename pins the #1537 rule: the
+// repository id is the project's identity, so an admission under a renamed
+// repository (same id) succeeds and moves the row to the new name, and an
+// exact replay of an admission recorded under the old name verifies the id
+// without renaming the row back.
+func TestExecutionAdmissionFollowsRepositoryRename(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, admission := seedAdmission(t, nil)
+	renamed := admission.Base
+	renamed.Repo = "owner/renamed"
+
+	if _, err := recordProjectAdmission(t, s, admission, "run-2", "proj-1", renamed); err != nil {
+		t.Fatalf("admission under the renamed repository: %v", err)
 	}
-	got, err := readProject(t, s, "proj-1")
-	if err != nil {
-		t.Fatal(err)
+	want := domain.Project{ID: "proj-1", Repo: renamed.Repo, RepositoryID: renamed.RepositoryID}
+	if got, err := readProject(t, s, "proj-1"); err != nil || got != want {
+		t.Fatalf("project after rename = %+v, %v; want %+v", got, err, want)
 	}
-	if got.Repo != admission.Base.Repo {
-		t.Fatalf("project rebound to %q", got.Repo)
+
+	if err := s.Write(ctx, func(tx *WriteTx) error {
+		return tx.RecordExecutionAdmission(ctx, admission)
+	}); err != nil {
+		t.Fatalf("replay of the old-name admission: %v", err)
+	}
+	if got, err := readProject(t, s, "proj-1"); err != nil || got != want {
+		t.Fatalf("project after old-name replay = %+v, %v; want %+v", got, err, want)
 	}
 }
 
@@ -174,7 +214,8 @@ func rerunProjectAuthorityBackfill(t *testing.T, s *Store) error {
 
 // TestProjectAuthorityBackfill covers migration 0081: a store with admissions
 // and no projects rows gains them from the admissions, an existing row is left
-// alone, and a project admitted against two repositories fails by name.
+// alone, a project admitted under two names of one repository takes the
+// latest name, and a project admitted against two repositories fails by name.
 func TestProjectAuthorityBackfill(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -273,6 +314,26 @@ func TestProjectAuthorityBackfill(t *testing.T) {
 		}
 		if got != existing {
 			t.Fatalf("project = %+v, want untouched %+v", got, existing)
+		}
+	})
+
+	t.Run("one repository id under two names takes the latest name", func(t *testing.T) {
+		t.Parallel()
+		s, admission := seedAdmission(t, nil)
+		renamed := admission.Base
+		renamed.Repo = "owner/renamed"
+		if _, err := recordProjectAdmission(t, s, admission, "run-2", "proj-1", renamed); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM projects`); err != nil {
+			t.Fatal(err)
+		}
+		if err := rerunProjectAuthorityBackfill(t, s); err != nil {
+			t.Fatalf("backfill: %v", err)
+		}
+		want := domain.Project{ID: "proj-1", Repo: renamed.Repo, RepositoryID: renamed.RepositoryID}
+		if got, err := readProject(t, s, "proj-1"); err != nil || got != want {
+			t.Fatalf("project after backfill = %+v, %v; want %+v", got, err, want)
 		}
 	})
 
