@@ -25,7 +25,7 @@ import (
 
 var ErrCodexReviewOutcomeNotFound = errors.New("codex review outcome not found")
 
-const codexProductionReviewPromptVersion = "codex-production-review-prompt-v4"
+const codexProductionReviewPromptVersion = "codex-production-review-prompt-v5"
 
 const codexProductionReviewRules = `Apply these daemon-owned Freeside review rules:
 1. Trust re-derivation
@@ -682,6 +682,12 @@ Locate each finding using a canonical repository-relative path in the exact revi
 - When a change makes unchanged code incorrect, anchor the finding on the causal changed line and explain the failure in the unchanged code. Do not pad the range to manufacture overlap or cite an unrelated change.
 - For a finding caused by a pure-deletion hunk with no relevant candidate-side changed line, use whole_file:true on the touched path and identify the removed code and its causal failure precisely in the explanation.
 - Also use whole_file:true for a candidate-deleted file with no new-side line, or an otherwise wholly file-level finding on a changed file. When a relevant candidate-side changed line exists, use a concrete range; never substitute whole_file for a concrete location that fails overlap.
+
+Separately from the defect test above, admit a missing repository-required artifact finding only when all of these are true:
+- A repository instruction block in your instruction bundle names this kind of change as requiring a specific artifact, such as a decision note or a doc update, in mandatory terms.
+- The candidate's changed files plausibly fall under that kind of change.
+- The required artifact is absent from the candidate.
+Use severity P3. Locate it with whole_file:true on the changed file that most clearly triggers the rule. Start the explanation with "Repository-required artifact missing:", then quote the rule text and name the Scope of the repository instruction block that states it, so the operator can judge whether the rule applies. Do not flag a change that the repository instruction exempts, treats as routine, or covers only in discretionary terms. Count only an artifact that belongs in the candidate tree; do not flag process or forge state that cannot exist before publication, such as an open pull request, passing checks, or review responses. This class is not a defect finding and does not loosen the defect test above.
 
 %s
 

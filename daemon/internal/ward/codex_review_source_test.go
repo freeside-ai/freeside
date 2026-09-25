@@ -100,8 +100,35 @@ func TestCodexProductionReviewPromptAppliesPrecisionFirstAdmissionBar(t *testing
 			t.Fatalf("production review prompt omitted %q:\n%s", want, prompt)
 		}
 	}
-	if codexProductionReviewPromptVersion != "codex-production-review-prompt-v4" {
+	if codexProductionReviewPromptVersion != "codex-production-review-prompt-v5" {
 		t.Fatalf("prompt protocol = %q", codexProductionReviewPromptVersion)
+	}
+}
+
+// The missing-artifact class is admitted apart from the defect test, which
+// TestCodexProductionReviewPromptAppliesPrecisionFirstAdmissionBar pins
+// unchanged, so the defect bar does not move to make room for it.
+func TestCodexProductionReviewPromptAdmitsMissingRepositoryRequiredArtifact(t *testing.T) {
+	prompt := codexProductionReviewPrompt(exec.ReviewRequest{
+		BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
+		Verification: testReviewVerificationEvidence(),
+	})
+	for _, want := range []string{
+		"Separately from the defect test above, admit a missing repository-required artifact finding only when all of these are true:",
+		"names this kind of change as requiring a specific artifact, such as a decision note or a doc update, in mandatory terms",
+		"The candidate's changed files plausibly fall under that kind of change.",
+		"The required artifact is absent from the candidate.",
+		"Use severity P3.",
+		"Locate it with whole_file:true on the changed file that most clearly triggers the rule.",
+		`Start the explanation with "Repository-required artifact missing:"`,
+		"quote the rule text and name the Scope of the repository instruction block that states it",
+		"Do not flag a change that the repository instruction exempts, treats as routine, or covers only in discretionary terms.",
+		"Count only an artifact that belongs in the candidate tree; do not flag process or forge state that cannot exist before publication, such as an open pull request, passing checks, or review responses.",
+		"does not loosen the defect test above",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("production review prompt omitted %q:\n%s", want, prompt)
+		}
 	}
 }
 
