@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
+
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
@@ -82,6 +85,7 @@ func TestOpenPragmas(t *testing.T) {
 		{"synchronous", got.Synchronous, 2}, // 2 is FULL
 		{"foreign_keys", got.ForeignKeys, true},
 		{"busy_timeout", got.BusyTimeout, 2 * time.Second},
+		{"locking_mode", got.LockingMode, "normal"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -293,4 +297,77 @@ func TestOpenExistingRejectsStaleSchemaWithoutMigrating(t *testing.T) {
 	if gotVersion != wantVersion-1 {
 		t.Fatalf("schema version after refused open = %d, want %d", gotVersion, wantVersion-1)
 	}
+}
+
+// TestOpenExclusiveLockingRefusesSecondHandle: a store opened with
+// ExclusiveLocking holds its file from the moment Open returns, before any
+// later write, so a second handle fails busy on its first query. The raw
+// handle stands in for another process (a sqlite3 shell or an older binary);
+// the read-only store stands in for a direct-store command.
+//
+// The file already exists at head, as it does when a supervised daemon
+// restarts, so Open has no migration to write.
+func TestOpenExclusiveLockingRefusesSecondHandle(t *testing.T) {
+	t.Parallel()
+	path := tempDBPath(t)
+	existing, err := store.Open(t.Context(), path, store.Options{})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := existing.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	s := openStoreAt(t, path, store.Options{ExclusiveLocking: true})
+	got, err := s.Pragmas(t.Context())
+	if err != nil {
+		t.Fatalf("Pragmas: %v", err)
+	}
+	if got.LockingMode != "exclusive" || got.JournalMode != "wal" {
+		t.Fatalf("locking_mode, journal_mode = %q, %q, want exclusive, wal", got.LockingMode, got.JournalMode)
+	}
+
+	if err := querySecondHandle(t, path); !isBusy(err) {
+		t.Fatalf("raw second handle: err = %v, want SQLITE_BUSY", err)
+	}
+	ro, err := store.OpenReadOnly(t.Context(), path, store.Options{BusyTimeout: 50 * time.Millisecond})
+	if err == nil {
+		_ = ro.Close()
+	}
+	if !isBusy(err) {
+		t.Fatalf("OpenReadOnly: err = %v, want SQLITE_BUSY", err)
+	}
+}
+
+// TestOpenNormalLockingAllowsSecondHandle is the ephemeral and test path:
+// without ExclusiveLocking a second handle reads the live file.
+func TestOpenNormalLockingAllowsSecondHandle(t *testing.T) {
+	t.Parallel()
+	path := tempDBPath(t)
+	openStoreAt(t, path, store.Options{})
+	if err := querySecondHandle(t, path); err != nil {
+		t.Fatalf("raw second handle: %v", err)
+	}
+	ro, err := store.OpenReadOnly(t.Context(), path, store.Options{BusyTimeout: 50 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("OpenReadOnly: %v", err)
+	}
+	if err := ro.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+func querySecondHandle(t *testing.T, path string) error {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(50)")
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	var tables int
+	return db.QueryRowContext(t.Context(), `SELECT count(*) FROM sqlite_master`).Scan(&tables)
+}
+
+func isBusy(err error) bool {
+	var driverErr *sqlite.Error
+	return errors.As(err, &driverErr) && driverErr.Code()&0xff == sqlite3.SQLITE_BUSY
 }
