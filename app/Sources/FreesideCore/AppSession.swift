@@ -29,6 +29,20 @@ public final class AppSession {
 
     private var connection: Connection?
     private let persistServerURL: (URL) -> Void
+    /// This tier's same-host supervised daemon, whose readiness file the Mac
+    /// app watches; nil when the launch has none (`ephemeral`, iOS).
+    private let localDaemonURL: URL?
+    /// Where a live connection keeps its disk cache: the tier's state root,
+    /// so a non-prod app never writes under the prod root, or nil for an
+    /// in-memory cache (`ephemeral` derives no path). `connect(serverURL:)`
+    /// reuses it with `persistServerURL`, so a typed server follows the same
+    /// rules as the launch.
+    private let cacheRoot: URL?
+    /// Where a live connection keeps its device credential, per deployment:
+    /// the Keychain for a supervised tier or a remote client, memory for
+    /// `ephemeral`, which pairs afresh on each run. `connect(serverURL:)`
+    /// reuses it like `cacheRoot`.
+    private let credentialStore: (URL) -> any DeviceCredentialStore
     /// The last readiness the session was handed (`applyReadiness`),
     /// remembered so `rePair()` can prefill the fresh pairing screen the
     /// same way a launch does: on the Mac readiness is delivered only when
@@ -43,12 +57,18 @@ public final class AppSession {
         pairingCode: String = "",
         displayName: String? = nil,
         deploymentURL: URL? = nil,
+        localDaemonURL: URL? = nil,
+        cacheRoot: URL? = AppSession.defaultCacheRoot,
+        credentialStore: @escaping (URL) -> any DeviceCredentialStore = AppSession.keychainCredentialStore,
         persistServerURL: @escaping (URL) -> Void = AppSession.persistServerURLToDefaults
     ) {
         self.connection = Connection(
             client: client, credentials: credentials, cache: cache,
             deploymentURL: deploymentURL, displayName: displayName)
         self.persistServerURL = persistServerURL
+        self.localDaemonURL = localDaemonURL
+        self.cacheRoot = cacheRoot
+        self.credentialStore = credentialStore
         // An unreadable credential is indistinguishable from an absent
         // one here, and the recovery is the same either way: pairing
         // mints a new device (#64; a lost token is revoke-and-repair).
@@ -139,14 +159,23 @@ public final class AppSession {
         applyReadiness(lastReadiness)
     }
 
-    private init() {
+    private init(
+        localDaemonURL: URL?, cacheRoot: URL?,
+        credentialStore: @escaping (URL) -> any DeviceCredentialStore,
+        persistServerURL: @escaping (URL) -> Void
+    ) {
         connection = nil
-        persistServerURL = Self.persistServerURLToDefaults
+        self.persistServerURL = persistServerURL
+        self.localDaemonURL = localDaemonURL
+        self.cacheRoot = cacheRoot
+        self.credentialStore = credentialStore
         phase = .needsConnection
     }
 
     public func connect(serverURL: URL) {
-        let selected = Self.live(serverURL: serverURL)
+        let selected = Self.live(
+            serverURL: serverURL, localDaemonURL: localDaemonURL, cacheRoot: cacheRoot,
+            credentialStore: credentialStore, persistServerURL: persistServerURL)
         connection = selected.connection
         phase = selected.phase
     }
@@ -170,8 +199,8 @@ public final class AppSession {
             case .needsPairing(let model) = phase
         else { return }
         guard let readiness else {
-            if Self.deploymentKey(for: deploymentURL)
-                == Self.deploymentKey(for: DaemonReadinessReader.supervisedAPIURL)
+            if let localDaemonURL,
+                Self.deploymentKey(for: deploymentURL) == Self.deploymentKey(for: localDaemonURL)
             {
                 model.clearPairingCodePrefill()
             }
@@ -246,6 +275,89 @@ public final class AppSession {
         return .needsConnection
     }
 
+    public enum LaunchError: Error, Equatable, CustomStringConvertible {
+        case readinessDirectoryInSupervisedTier(FreesideEnvironment)
+        case readinessDirectoryNotAbsolute(String)
+        case readinessDirectoryUnderSupervisedRoot(String, FreesideEnvironment)
+
+        public var description: String {
+            switch self {
+            case .readinessDirectoryInSupervisedTier(let environment):
+                "-FreesideReadinessDir is only for an ephemeral app; this app is \(environment.rawValue)"
+            case .readinessDirectoryNotAbsolute(let path):
+                "-FreesideReadinessDir must be an absolute path, not \"\(path)\""
+            case .readinessDirectoryUnderSupervisedRoot(let path, let environment):
+                "-FreesideReadinessDir \"\(path)\" is inside the \(environment.rawValue) state root; an ephemeral app never reads a supervised daemon's readiness"
+            }
+        }
+    }
+
+    /// The Mac's tier-aware resolution, which feeds the generic one above. A
+    /// supervised tier reads its own derived readiness file and falls back to
+    /// its own fixed port. `ephemeral` has no local daemon of its own: it
+    /// follows the run named by `-FreesideReadinessDir` or asks for a
+    /// connection, and never takes the persisted URL, which an earlier launch
+    /// may have pointed at a supervised daemon. It never probes the Keychain
+    /// either: its credentials live in memory (`credentialStore(for:)`), and
+    /// a Debug build shares prod's Keychain identity, so a probe could prompt
+    /// or migrate a prod item. The readiness directory is
+    /// refused in a supervised tier so a stray argument cannot point the
+    /// operator's app at another daemon, and refused under any supervised
+    /// state root so an ephemeral run never consumes a supervised daemon's
+    /// one-time pairing code (plan: a non-prod instance never names a prod
+    /// root; `freesided` refuses both supervised roots the same way).
+    static func launchMode(
+        environment: FreesideEnvironment,
+        argumentServerURL: String?,
+        pairingDemo: Bool,
+        mockMode: Bool,
+        readinessDirectory: String?,
+        persistedServerURL: String?,
+        readReadiness: (URL) -> DaemonReadiness?,
+        hasCredential: (URL) -> Bool,
+        fileManager: FileManager = .default
+    ) throws(LaunchError) -> LaunchMode {
+        let readinessDirectoryURL: URL?
+        if let readinessDirectory {
+            guard !environment.isSupervised else {
+                throw .readinessDirectoryInSupervisedTier(environment)
+            }
+            guard readinessDirectory.hasPrefix("/") else {
+                throw .readinessDirectoryNotAbsolute(readinessDirectory)
+            }
+            let directory = URL(fileURLWithPath: readinessDirectory, isDirectory: true)
+            if let owner = supervisedRootOwner(of: directory, fileManager: fileManager) {
+                throw .readinessDirectoryUnderSupervisedRoot(readinessDirectory, owner)
+            }
+            readinessDirectoryURL = directory
+        } else {
+            readinessDirectoryURL = environment.daemonStateDirectory()
+        }
+        return launchMode(
+            argumentServerURL: argumentServerURL,
+            pairingDemo: pairingDemo,
+            mockMode: mockMode,
+            readiness: readinessDirectoryURL.flatMap {
+                readReadiness(DaemonReadinessReader.fileURL(inStateDirectory: $0))
+            },
+            persistedServerURL: environment.isSupervised ? persistedServerURL : nil,
+            localDaemonURL: environment.supervisedAPIURL,
+            hasCredential: environment.isSupervised ? hasCredential : { _ in false })
+    }
+
+    /// The supervised tier whose state root contains `directory`, compared
+    /// after resolving symlinks on both sides so an alias cannot slip past.
+    private static func supervisedRootOwner(
+        of directory: URL, fileManager: FileManager
+    ) -> FreesideEnvironment? {
+        let path = directory.resolvingSymlinksInPath().standardizedFileURL.path
+        return FreesideEnvironment.allCases.first { environment in
+            guard let root = environment.stateRoot(fileManager: fileManager) else { return false }
+            let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
+            return path == rootPath || path.hasPrefix(rootPath + "/")
+        }
+    }
+
     static func serverURL(from value: String) -> URL? {
         guard
             let components = URLComponents(string: value.trimmingCharacters(in: .whitespacesAndNewlines)),
@@ -262,41 +374,103 @@ public final class AppSession {
     /// Explicit launch inputs stay the development override. Otherwise a
     /// daemon-host readiness file selects and prefills the local deployment,
     /// unless only the persisted deployment holds a device credential. The
-    /// local daemon is the Mac fallback; other devices ask for a connection.
-    /// Sample data requires an explicit mock or pairing-demo launch argument.
-    public static func fromEnvironment() -> AppSession {
-        let defaults = UserDefaults.standard
-        let arguments = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
-        let readiness = DaemonReadinessReader.defaultFileURL()
-            .flatMap { DaemonReadinessReader().read(at: $0) }
-        let persistedServerURL = Bundle.main.bundleIdentifier
-            .flatMap { defaults.persistentDomain(forName: $0)?["FreesideServerURL"] as? String }
-        #if os(macOS)
-            let localDaemonURL: URL? = DaemonReadinessReader.supervisedAPIURL
-        #else
-            let localDaemonURL: URL? = nil
-        #endif
-        switch launchMode(
+    /// Mac's local daemon, readiness file, and persisted-URL rule come from
+    /// its tier (`launchMode(environment:...)`). Sample data requires an
+    /// explicit mock or pairing-demo launch argument.
+    public static func fromEnvironment(
+        environment: FreesideEnvironment
+    ) throws(LaunchError) -> AppSession {
+        let arguments = argumentDomain()
+        let mode = try launchMode(
+            environment: environment,
             argumentServerURL: arguments["FreesideServerURL"] as? String,
             pairingDemo: arguments["FreesidePairingDemo"] as? String == "YES",
             mockMode: arguments["FreesideMock"] as? String == "YES",
-            readiness: readiness,
-            persistedServerURL: persistedServerURL,
-            localDaemonURL: localDaemonURL,
-            hasCredential: {
-                (try? KeychainCredentialStore(
-                    service: "ai.freeside.device-credential/\(deploymentKey(for: $0))"
-                ).load()) != nil
-            }
-        ) {
+            readinessDirectory: arguments["FreesideReadinessDir"] as? String,
+            persistedServerURL: persistedServerURL(),
+            readReadiness: { DaemonReadinessReader().read(at: $0) },
+            hasCredential: hasStoredCredential)
+        // The ephemeral app shares the production bundle ID, and so its
+        // preferences domain; recording a throwaway run there would send the
+        // installed app to a dead daemon on its next launch.
+        let persist: (URL) -> Void =
+            environment.isSupervised ? { persistServerURLToDefaults($0) } : { _ in }
+        return session(
+            for: mode, localDaemonURL: environment.supervisedAPIURL,
+            cacheRoot: environment.stateRoot(), credentialStore: credentialStore(for: environment),
+            persistServerURL: persist)
+    }
+
+    /// A supervised tier keeps its device credential in the Keychain, keyed
+    /// by its fixed daemon URL. `ephemeral` keeps it in memory: a run may
+    /// reuse a fixed port with a fresh credential database, so a Keychain
+    /// credential from an earlier run would skip that run's pairing and send
+    /// a stale token (plan: `ephemeral` pairs afresh on each run).
+    static func credentialStore(
+        for environment: FreesideEnvironment
+    ) -> (URL) -> any DeviceCredentialStore {
+        if environment.isSupervised {
+            return { keychainCredentialStore(for: $0) }
+        }
+        return { _ in InMemoryCredentialStore() }
+    }
+
+    /// A remote client (iOS) with no same-host daemon: explicit inputs, then
+    /// the persisted deployment, then the connect screen.
+    public static func fromEnvironment() -> AppSession {
+        let arguments = argumentDomain()
+        let mode = launchMode(
+            argumentServerURL: arguments["FreesideServerURL"] as? String,
+            pairingDemo: arguments["FreesidePairingDemo"] as? String == "YES",
+            mockMode: arguments["FreesideMock"] as? String == "YES",
+            readiness: nil,
+            persistedServerURL: persistedServerURL(),
+            localDaemonURL: nil,
+            hasCredential: hasStoredCredential)
+        return session(
+            for: mode, localDaemonURL: nil, cacheRoot: defaultCacheRoot,
+            credentialStore: keychainCredentialStore, persistServerURL: persistServerURLToDefaults)
+    }
+
+    private static func argumentDomain() -> [String: Any] {
+        UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+    }
+
+    private static func persistedServerURL() -> String? {
+        Bundle.main.bundleIdentifier.flatMap {
+            UserDefaults.standard.persistentDomain(forName: $0)?["FreesideServerURL"] as? String
+        }
+    }
+
+    private static func hasStoredCredential(_ url: URL) -> Bool {
+        (try? keychainCredentialStore(for: url).load()) != nil
+    }
+
+    /// The deployment's Keychain credential. `nonisolated` so it satisfies
+    /// the plain closure default without a main-actor hop, like
+    /// `persistServerURLToDefaults`.
+    public nonisolated static func keychainCredentialStore(for url: URL) -> any DeviceCredentialStore {
+        KeychainCredentialStore(service: "ai.freeside.device-credential/\(deploymentKey(for: url))")
+    }
+
+    private static func session(
+        for mode: LaunchMode, localDaemonURL: URL?, cacheRoot: URL?,
+        credentialStore: @escaping (URL) -> any DeviceCredentialStore,
+        persistServerURL: @escaping (URL) -> Void
+    ) -> AppSession {
+        switch mode {
         case .needsConnection:
-            return AppSession()
+            AppSession(
+                localDaemonURL: localDaemonURL, cacheRoot: cacheRoot, credentialStore: credentialStore,
+                persistServerURL: persistServerURL)
         case .live(let url, let pairingCode):
-            return live(serverURL: url, pairingCode: pairingCode)
+            live(
+                serverURL: url, pairingCode: pairingCode, localDaemonURL: localDaemonURL,
+                cacheRoot: cacheRoot, credentialStore: credentialStore, persistServerURL: persistServerURL)
         case .pairingDemo:
-            return pairingDemo()
+            pairingDemo()
         case .mock:
-            return mock()
+            mock()
         }
     }
 
@@ -317,22 +491,32 @@ public final class AppSession {
     }
 
     /// A real daemon: the credential lives in the Keychain and nowhere
-    /// else, and the disk cache lives in the app container (plan §5.14).
-    /// Both are scoped to the daemon deployment: a device credential is
-    /// minted by one daemon, so the Keychain lookup keys on the server
-    /// URL and a token can never be attached to a request for another
-    /// daemon; the cached rows are likewise one deployment's state.
-    public static func live(serverURL: URL, pairingCode: String = "") -> AppSession {
-        let credentials = KeychainCredentialStore(
-            service: "ai.freeside.device-credential/\(deploymentKey(for: serverURL))")
+    /// else (or only in memory for `ephemeral`), and the disk cache lives
+    /// in the app container (plan §5.14). Both are scoped to the daemon
+    /// deployment: a device credential is minted by one daemon, so the
+    /// credential store keys on the server URL and a token can never be
+    /// attached to a request for another daemon; the cached rows are
+    /// likewise one deployment's state.
+    public static func live(
+        serverURL: URL, pairingCode: String = "", localDaemonURL: URL? = nil,
+        cacheRoot: URL? = AppSession.defaultCacheRoot,
+        credentialStore: @escaping (URL) -> any DeviceCredentialStore = AppSession.keychainCredentialStore,
+        persistServerURL: @escaping (URL) -> Void = AppSession.persistServerURLToDefaults
+    ) -> AppSession {
+        let credentials = credentialStore(serverURL)
         return AppSession(
             client: APIClientFactory.live(serverURL: serverURL) {
                 (try? credentials.load())?.token
             },
             credentials: credentials,
-            cache: DiskCacheStore(directory: cacheDirectory(for: serverURL)),
+            cache: cacheRoot.map { DiskCacheStore(directory: cacheDirectory(for: serverURL, in: $0)) }
+                ?? InMemoryCacheStore(),
             pairingCode: pairingCode,
-            deploymentURL: serverURL
+            deploymentURL: serverURL,
+            localDaemonURL: localDaemonURL,
+            cacheRoot: cacheRoot,
+            credentialStore: credentialStore,
+            persistServerURL: persistServerURL
         )
     }
 
@@ -341,7 +525,7 @@ public final class AppSession {
     /// path distinguish deployments, and a bare trailing slash does not.
     /// Do not fall back to the former decoded-path key for encoded paths:
     /// it cannot prove which of two colliding deployments owns a credential.
-    public static func deploymentKey(for url: URL) -> String {
+    public nonisolated static func deploymentKey(for url: URL) -> String {
         let scheme = url.scheme?.lowercased() ?? "http"
         let host = url.host?.lowercased() ?? ""
         let port = url.port.map { ":\($0)" } ?? ""
@@ -356,16 +540,19 @@ public final class AppSession {
     /// separator replacement collapsed distinct keys into one
     /// directory); the host prefix exists only for a human reading the
     /// container.
-    public static func cacheDirectory(for url: URL) -> URL {
+    public static func cacheDirectory(for url: URL, in root: URL = defaultCacheRoot) -> URL {
         let digest = SHA256.hash(data: Data(deploymentKey(for: url).utf8))
             .map { String(format: "%02x", $0) }.joined().prefix(16)
         let host = (url.host?.lowercased() ?? "daemon")
             .replacingOccurrences(of: ":", with: "_")
-        return FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        )[0]
-        .appendingPathComponent("Freeside")
-        .appendingPathComponent("\(host)-\(digest)")
+        return root.appendingPathComponent("\(host)-\(digest)")
+    }
+
+    /// The cache root before tiers existed; the prod state root on the Mac
+    /// (so existing prod caches stay put) and the iOS container's.
+    public static var defaultCacheRoot: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Freeside")
     }
 
     /// An explicitly requested demo: a permissive mock and a pre-paired

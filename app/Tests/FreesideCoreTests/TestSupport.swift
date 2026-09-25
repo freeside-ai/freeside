@@ -25,6 +25,10 @@ actor AsyncGate {
 
 struct InjectedFailure: Error {}
 
+/// The production tier's same-host daemon, the local daemon most tests use.
+// swift-format-ignore: NeverForceUnwrap
+let prodDaemonURL = FreesideEnvironment.prod.supervisedAPIURL!
+
 func testDeviceToken(for deviceID: String, secretByte: UInt8 = 1) -> String {
     func base64URL(_ data: Data) -> String {
         data.base64EncodedString()

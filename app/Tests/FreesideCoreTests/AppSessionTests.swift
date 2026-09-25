@@ -378,7 +378,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
             AppSession.launchMode(
                 argumentServerURL: "not-a-server", pairingDemo: true, mockMode: true,
                 readiness: nil, persistedServerURL: "https://daemon.example",
-                localDaemonURL: DaemonReadinessReader.supervisedAPIURL,
+                localDaemonURL: prodDaemonURL,
                 hasCredential: { _ in false }) == .needsConnection)
     }
 
@@ -404,7 +404,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
                 mockMode: true,
                 readiness: local,
                 persistedServerURL: "https://daemon.example",
-                localDaemonURL: DaemonReadinessReader.supervisedAPIURL,
+                localDaemonURL: prodDaemonURL,
                 hasCredential: { _ in false })
                 == .live(URL(string: "http://127.0.0.1:9000")!, pairingCode: ""))
         #expect(
@@ -414,7 +414,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
                 mockMode: true,
                 readiness: local,
                 persistedServerURL: "https://daemon.example",
-                localDaemonURL: DaemonReadinessReader.supervisedAPIURL,
+                localDaemonURL: prodDaemonURL,
                 hasCredential: { _ in false }) == .pairingDemo)
         #expect(
             AppSession.launchMode(
@@ -423,7 +423,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
                 mockMode: true,
                 readiness: local,
                 persistedServerURL: "https://daemon.example",
-                localDaemonURL: DaemonReadinessReader.supervisedAPIURL,
+                localDaemonURL: prodDaemonURL,
                 hasCredential: { _ in false }) == .mock)
         #expect(
             AppSession.launchMode(
@@ -432,7 +432,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
                 mockMode: false,
                 readiness: local,
                 persistedServerURL: "https://daemon.example",
-                localDaemonURL: DaemonReadinessReader.supervisedAPIURL,
+                localDaemonURL: prodDaemonURL,
                 hasCredential: { _ in false })
                 == .live(local.apiURL, pairingCode: "483911"))
         let staleLocal = DaemonReadiness(
@@ -444,9 +444,9 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
                 mockMode: false,
                 readiness: staleLocal,
                 persistedServerURL: nil,
-                localDaemonURL: DaemonReadinessReader.supervisedAPIURL,
+                localDaemonURL: prodDaemonURL,
                 hasCredential: { _ in false })
-                == .live(DaemonReadinessReader.supervisedAPIURL, pairingCode: ""))
+                == .live(prodDaemonURL, pairingCode: ""))
         #expect(
             AppSession.launchMode(
                 argumentServerURL: nil,
@@ -454,7 +454,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
                 mockMode: false,
                 readiness: nil,
                 persistedServerURL: "https://daemon.example",
-                localDaemonURL: DaemonReadinessReader.supervisedAPIURL,
+                localDaemonURL: prodDaemonURL,
                 hasCredential: { _ in false })
                 == .live(URL(string: "https://daemon.example")!, pairingCode: ""))
         #expect(
@@ -464,9 +464,9 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
                 mockMode: false,
                 readiness: nil,
                 persistedServerURL: nil,
-                localDaemonURL: DaemonReadinessReader.supervisedAPIURL,
+                localDaemonURL: prodDaemonURL,
                 hasCredential: { _ in false })
-                == .live(DaemonReadinessReader.supervisedAPIURL, pairingCode: ""))
+                == .live(prodDaemonURL, pairingCode: ""))
     }
 
     @Test func launchResolutionPrefersTheDeploymentWithACredential() {
@@ -533,6 +533,190 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
         }
     }
 
+    /// Runs the tier-aware resolution with no explicit launch mode, recording
+    /// which readiness files it reads.
+    private func tierLaunchMode(
+        _ environment: FreesideEnvironment,
+        readinessDirectory: String? = nil,
+        persistedServerURL: String? = nil,
+        readiness: DaemonReadiness? = nil,
+        fileManager: FileManager = .default,
+        hasCredential: (URL) -> Bool = { _ in false },
+        readPaths: inout [String]
+    ) throws(AppSession.LaunchError) -> AppSession.LaunchMode {
+        var paths: [String] = []
+        defer { readPaths = paths }
+        return try AppSession.launchMode(
+            environment: environment,
+            argumentServerURL: nil,
+            pairingDemo: false,
+            mockMode: false,
+            readinessDirectory: readinessDirectory,
+            persistedServerURL: persistedServerURL,
+            readReadiness: {
+                paths.append($0.path)
+                return readiness
+            },
+            hasCredential: hasCredential,
+            fileManager: fileManager)
+    }
+
+    @Test func supervisedTiersReadTheirOwnReadinessAndFallBackToTheirOwnPort() throws {
+        for (environment, root, port) in [
+            (FreesideEnvironment.prod, "/Freeside/daemon/readiness.json", 7331),
+            (.dev, "/Freeside Dev/daemon/readiness.json", 7332),
+        ] {
+            var readPaths: [String] = []
+            let url = try #require(URL(string: "http://127.0.0.1:\(port)"))
+            #expect(try tierLaunchMode(environment, readPaths: &readPaths) == .live(url, pairingCode: ""))
+            #expect(readPaths.count == 1)
+            #expect(readPaths.first?.hasSuffix("/Application Support\(root)") == true)
+
+            let readiness = DaemonReadiness(apiURL: url, pairingCode: "483911")
+            #expect(
+                try tierLaunchMode(environment, readiness: readiness, readPaths: &readPaths)
+                    == .live(url, pairingCode: "483911"))
+            // Another tier's daemon URL in this tier's file is not this tier's daemon.
+            let foreign = DaemonReadiness(
+                apiURL: try #require(URL(string: "http://127.0.0.1:\(port == 7331 ? 7332 : 7331)")),
+                pairingCode: "foreign")
+            #expect(
+                try tierLaunchMode(environment, readiness: foreign, readPaths: &readPaths)
+                    == .live(url, pairingCode: ""))
+            #expect(
+                try tierLaunchMode(
+                    environment, persistedServerURL: "https://daemon.example", readPaths: &readPaths)
+                    == .live(try #require(URL(string: "https://daemon.example")), pairingCode: ""))
+        }
+    }
+
+    @Test func ephemeralWithoutArgumentsAsksForAConnection() throws {
+        var readPaths: [String] = []
+        #expect(
+            try tierLaunchMode(.ephemeral, persistedServerURL: prodDaemonURL.absoluteString, readPaths: &readPaths)
+                == .needsConnection)
+        #expect(readPaths.isEmpty)
+        #expect(
+            try tierLaunchMode(
+                .ephemeral, persistedServerURL: "https://daemon.example", readPaths: &readPaths)
+                == .needsConnection)
+    }
+
+    @Test func ephemeralFollowsTheNamedReadinessDirectory() throws {
+        let runURL = try #require(URL(string: "http://127.0.0.1:52811"))
+        var readPaths: [String] = []
+        #expect(
+            try tierLaunchMode(
+                .ephemeral, readinessDirectory: "/tmp/run-1",
+                persistedServerURL: prodDaemonURL.absoluteString,
+                readiness: DaemonReadiness(apiURL: runURL, pairingCode: "483911"),
+                readPaths: &readPaths)
+                == .live(runURL, pairingCode: "483911"))
+        #expect(readPaths == ["/tmp/run-1/readiness.json"])
+        // A run that has not published (or whose code aged out) asks rather
+        // than falling back to any other daemon.
+        #expect(
+            try tierLaunchMode(
+                .ephemeral, readinessDirectory: "/tmp/run-1",
+                persistedServerURL: prodDaemonURL.absoluteString, readPaths: &readPaths)
+                == .needsConnection)
+    }
+
+    @Test func ephemeralNeverProbesStoredCredentials() throws {
+        // Ephemeral credentials live in memory, and a Debug build shares
+        // prod's Keychain identity, so resolution must not load a Keychain
+        // item even when it follows a readiness file.
+        let runURL = try #require(URL(string: "http://127.0.0.1:52811"))
+        var probed: [URL] = []
+        var readPaths: [String] = []
+        #expect(
+            try tierLaunchMode(
+                .ephemeral, readinessDirectory: "/tmp/run-1",
+                persistedServerURL: prodDaemonURL.absoluteString,
+                readiness: DaemonReadiness(apiURL: runURL, pairingCode: "483911"),
+                hasCredential: {
+                    probed.append($0)
+                    return true
+                },
+                readPaths: &readPaths)
+                == .live(runURL, pairingCode: "483911"))
+        #expect(probed.isEmpty)
+    }
+
+    @Test func readinessDirectoryIsRefusedOutsideEphemeralOrWhenRelative() {
+        var readPaths: [String] = []
+        for environment in [FreesideEnvironment.prod, .dev] {
+            #expect(throws: AppSession.LaunchError.readinessDirectoryInSupervisedTier(environment)) {
+                try tierLaunchMode(environment, readinessDirectory: "/tmp/run-1", readPaths: &readPaths)
+            }
+        }
+        #expect(throws: AppSession.LaunchError.readinessDirectoryNotAbsolute("run-1")) {
+            try tierLaunchMode(.ephemeral, readinessDirectory: "run-1", readPaths: &readPaths)
+        }
+        #expect(readPaths.isEmpty)
+    }
+
+    @Test func ephemeralRefusesAReadinessDirectoryInsideASupervisedRoot() throws {
+        let sandbox = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tier-roots-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+        let applicationSupport = sandbox.appendingPathComponent("Application Support", isDirectory: true)
+        let prodRoot = applicationSupport.appendingPathComponent("Freeside", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: prodRoot.appendingPathComponent("daemon"), withIntermediateDirectories: true)
+        let alias = sandbox.appendingPathComponent("alias")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: prodRoot)
+        let fileManager = ApplicationSupportOverride(applicationSupport)
+
+        var readPaths: [String] = []
+        for (path, owner) in [
+            (prodRoot.path, FreesideEnvironment.prod),
+            (prodRoot.appendingPathComponent("daemon").path, .prod),
+            (applicationSupport.appendingPathComponent("Freeside Dev/daemon").path, .dev),
+            // An alias resolves to the root it names.
+            (alias.appendingPathComponent("daemon").path, .prod),
+        ] {
+            #expect(throws: AppSession.LaunchError.readinessDirectoryUnderSupervisedRoot(path, owner)) {
+                try tierLaunchMode(
+                    .ephemeral, readinessDirectory: path, fileManager: fileManager, readPaths: &readPaths)
+            }
+        }
+        #expect(readPaths.isEmpty)
+
+        // A sibling that only shares the root's name as a prefix is not inside it.
+        let sibling = applicationSupport.appendingPathComponent("Freeside Devious/daemon").path
+        #expect(
+            try tierLaunchMode(
+                .ephemeral, readinessDirectory: sibling, fileManager: fileManager, readPaths: &readPaths)
+                == .needsConnection)
+        #expect(readPaths == [sibling + "/readiness.json"])
+    }
+
+    @Test func explicitLaunchModesStillWinInEveryTier() throws {
+        for environment in FreesideEnvironment.allCases {
+            #expect(
+                try AppSession.launchMode(
+                    environment: environment, argumentServerURL: nil, pairingDemo: false,
+                    mockMode: true, readinessDirectory: nil, persistedServerURL: nil,
+                    readReadiness: { _ in nil }, hasCredential: { _ in false }) == .mock)
+        }
+    }
+
+    @Test func aSessionWithoutALocalDaemonKeepsItsPrefillWhenReadinessDisappears() {
+        let session = AppSession(
+            client: APIClientFactory.mock(),
+            credentials: InMemoryCredentialStore(),
+            cache: InMemoryCacheStore(),
+            pairingCode: "run-code",
+            deploymentURL: prodDaemonURL)
+        guard case .needsPairing(let model) = session.phase else {
+            Issue.record("expected pairing")
+            return
+        }
+        session.applyReadiness(nil)
+        #expect(model.pairingCode == "RUNC0DE")
+    }
+
     @Test func readinessPrefillsPairingWithoutChangingManualFallback() {
         let empty = AppSession(
             client: APIClientFactory.mock(),
@@ -560,63 +744,66 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
             credentials: InMemoryCredentialStore(),
             cache: InMemoryCacheStore(),
             pairingCode: "stale-code",
-            deploymentURL: DaemonReadinessReader.supervisedAPIURL)
+            deploymentURL: prodDaemonURL,
+            localDaemonURL: prodDaemonURL)
         guard case .needsPairing(let staleModel) = stale.phase else {
             Issue.record("expected stale readiness-backed pairing")
             return
         }
         stale.applyReadiness(
             DaemonReadiness(
-                apiURL: DaemonReadinessReader.supervisedAPIURL, pairingCode: "fresh-code"))
+                apiURL: prodDaemonURL, pairingCode: "fresh-code"))
         #expect(staleModel.pairingCode == "FRESHC0DE")
         stale.applyReadiness(nil)
         #expect(staleModel.pairingCode.isEmpty)
         stale.applyReadiness(
             DaemonReadiness(
-                apiURL: DaemonReadinessReader.supervisedAPIURL, pairingCode: "replacement-code"))
+                apiURL: prodDaemonURL, pairingCode: "replacement-code"))
         #expect(staleModel.pairingCode == "REP1ACEMENTC0DE")
         staleModel.pairingCode = ""
         stale.applyReadiness(
             DaemonReadiness(
-                apiURL: DaemonReadinessReader.supervisedAPIURL, pairingCode: "newer-code"))
+                apiURL: prodDaemonURL, pairingCode: "newer-code"))
         #expect(staleModel.pairingCode.isEmpty)
         staleModel.pairingCode = "operator-input"
         stale.applyReadiness(
             DaemonReadiness(
-                apiURL: DaemonReadinessReader.supervisedAPIURL, pairingCode: "newest-code"))
+                apiURL: prodDaemonURL, pairingCode: "newest-code"))
         #expect(staleModel.pairingCode == "operator-input")
 
         empty.applyReadiness(
             DaemonReadiness(
-                apiURL: DaemonReadinessReader.supervisedAPIURL, pairingCode: "later-code"))
+                apiURL: prodDaemonURL, pairingCode: "later-code"))
         #expect(emptyModel.pairingCode.isEmpty)
 
         let local = AppSession(
             client: APIClientFactory.mock(),
             credentials: InMemoryCredentialStore(),
             cache: InMemoryCacheStore(),
-            deploymentURL: DaemonReadinessReader.supervisedAPIURL)
+            deploymentURL: prodDaemonURL,
+            localDaemonURL: prodDaemonURL)
         guard case .needsPairing(let localModel) = local.phase else {
             Issue.record("expected local manual pairing")
             return
         }
         local.applyReadiness(
             DaemonReadiness(
-                apiURL: DaemonReadinessReader.supervisedAPIURL, pairingCode: "later-code"))
+                apiURL: prodDaemonURL, pairingCode: "later-code"))
         #expect(localModel.pairingCode == "1ATERC0DE")
         localModel.pairingCode = "operator-input"
         local.applyReadiness(nil)
         #expect(localModel.pairingCode == "operator-input")
         local.applyReadiness(
             DaemonReadiness(
-                apiURL: DaemonReadinessReader.supervisedAPIURL, pairingCode: "newer-code"))
+                apiURL: prodDaemonURL, pairingCode: "newer-code"))
         #expect(localModel.pairingCode == "operator-input")
 
         let editedBeforeReadiness = AppSession(
             client: APIClientFactory.mock(),
             credentials: InMemoryCredentialStore(),
             cache: InMemoryCacheStore(),
-            deploymentURL: DaemonReadinessReader.supervisedAPIURL)
+            deploymentURL: prodDaemonURL,
+            localDaemonURL: prodDaemonURL)
         guard case .needsPairing(let editedModel) = editedBeforeReadiness.phase else {
             Issue.record("expected local manual pairing before readiness")
             return
@@ -625,7 +812,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
         editedModel.pairingCode = ""
         editedBeforeReadiness.applyReadiness(
             DaemonReadiness(
-                apiURL: DaemonReadinessReader.supervisedAPIURL, pairingCode: "late-code"))
+                apiURL: prodDaemonURL, pairingCode: "late-code"))
         #expect(editedModel.pairingCode.isEmpty)
     }
 
@@ -799,6 +986,40 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
         }
         #expect(try credentials.load() == credential)
         #expect(persisted == [deploymentURL])
+    }
+
+    @Test func ephemeralKeepsDeviceCredentialsInMemory() {
+        // An ephemeral run may reuse a fixed port with a fresh credential
+        // database; a Keychain credential from an earlier run would skip
+        // that run's pairing, so only the supervised tiers use the Keychain.
+        let url = URL(string: "http://127.0.0.1:7400")!
+        #expect(AppSession.credentialStore(for: .ephemeral)(url) is InMemoryCredentialStore)
+        #expect(AppSession.credentialStore(for: .prod)(url) is KeychainCredentialStore)
+        #expect(AppSession.credentialStore(for: .dev)(url) is KeychainCredentialStore)
+    }
+
+    @Test func aTypedServerUsesTheSessionsCredentialStore() {
+        // `connect(serverURL:)` keeps the launch's credential rule, so a
+        // server typed into an ephemeral app never reaches the Keychain.
+        let typedURL = URL(string: "http://127.0.0.1:7400")!
+        var requested: [URL] = []
+        let session = AppSession(
+            client: APIClientFactory.mock(), credentials: InMemoryCredentialStore(),
+            cache: InMemoryCacheStore(), cacheRoot: nil,
+            credentialStore: { url in
+                requested.append(url)
+                return InMemoryCredentialStore()
+            },
+            persistServerURL: { _ in })
+
+        session.changeServer()
+        session.connect(serverURL: typedURL)
+
+        #expect(requested == [typedURL])
+        guard case .needsPairing = session.phase else {
+            Issue.record("expected pairing, got \(session.phase)")
+            return
+        }
     }
 
     @Test func aCredentialReadyLiveSessionPersistsItsDeploymentURL() async throws {
@@ -1039,7 +1260,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
         // #1458 acceptance 5: the fresh pairing screen prefills from the last
         // readiness the session received, the same as a launch does, and an
         // operator-typed code is never overwritten.
-        let deploymentURL = DaemonReadinessReader.supervisedAPIURL
+        let deploymentURL = prodDaemonURL
         let credentials = InMemoryCredentialStore(
             credential: DeviceCredential(
                 deviceID: "device-old", token: testDeviceToken(for: "device-old"),
@@ -1069,5 +1290,23 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
         session.applyReadiness(
             DaemonReadiness(apiURL: deploymentURL, pairingCode: "newer-code"))
         #expect(model.pairingCode == "operator-input")
+    }
+}
+
+/// Points the user-domain Application Support directory at a test sandbox,
+/// so tier state roots resolve there.
+private final class ApplicationSupportOverride: FileManager, @unchecked Sendable {
+    private let applicationSupport: URL
+
+    init(_ applicationSupport: URL) {
+        self.applicationSupport = applicationSupport
+        super.init()
+    }
+
+    override func urls(
+        for directory: FileManager.SearchPathDirectory, in domainMask: FileManager.SearchPathDomainMask
+    ) -> [URL] {
+        directory == .applicationSupportDirectory && domainMask == .userDomainMask
+            ? [applicationSupport] : super.urls(for: directory, in: domainMask)
     }
 }

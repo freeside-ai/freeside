@@ -62,14 +62,13 @@
 
     @MainActor
     public final class SMAppDaemonService: DaemonServiceControlling {
-        public static let plistName = "ai.freeside.daemon.plist"
         public static let registrationCurrentKey = "FreesideLaunchAgentRegistrationCurrent"
         public static let operatorDisabledKey = "FreesideLaunchAgentOperatorDisabled"
 
         private let service: any DaemonServiceRegistering
         private let defaults: UserDefaults
 
-        public init(plistName: String = plistName, defaults: UserDefaults = .standard) {
+        public init(plistName: String, defaults: UserDefaults = .standard) {
             service = SystemDaemonServiceRegistration(plistName: plistName)
             self.defaults = defaults
         }
