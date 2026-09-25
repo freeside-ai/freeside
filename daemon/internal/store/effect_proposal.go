@@ -725,13 +725,15 @@ func (tx *ReadTx) closableSource(
 		// cross-repository source yields no proposal (plan §5.13). Re-anchor the
 		// verified target to project.RepositoryID here, alongside the run and
 		// task ProjectID joins above, so a tampered task-source row cannot label
-		// a foreign-repository close as verified and mislead an approver.
-		if subject.Repo != project.Repo || subject.RepositoryID != project.RepositoryID {
+		// a foreign-repository close as verified and mislead an approver. The id
+		// alone decides (#1537): a subject bound before a rename keeps the old
+		// name, and the target reports the project's current one.
+		if subject.RepositoryID != project.RepositoryID {
 			return domain.ClosableSource{}, errRowInconsistent
 		}
 		return domain.ClosableSource{
 			Present: true, Provenance: domain.ClosureProvenanceVerified,
-			Repo: subject.Repo, RepositoryID: subject.RepositoryID, IssueNumber: subject.IssueNumber,
+			Repo: project.Repo, RepositoryID: project.RepositoryID, IssueNumber: subject.IssueNumber,
 		}, nil
 	}
 	return domain.ClosableSource{

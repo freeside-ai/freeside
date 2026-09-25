@@ -126,6 +126,28 @@ func TestDecideClosableSourceVerifiesIssueSubject(t *testing.T) {
 	if target != (domain.IssueSubjectRef{}) {
 		t.Errorf("verified source carries a proposed target %+v; want none", target)
 	}
+
+	// The repository id decides (#1537): after a rename the daemon runs under
+	// the new name, the subject bound under the old name stays verified, and the
+	// source reports the current name.
+	renamed := closureStoreBinding(policy, taskID)
+	renamed.admission.Base.Repo = "owner/renamed"
+	source, _, ok, err = w.decideClosableSource(ctx, task, renamed)
+	if err != nil || !ok {
+		t.Fatalf("decide closable source after rename: ok=%t err=%v", ok, err)
+	}
+	want := domain.ClosableSource{
+		Present: true, Provenance: domain.ClosureProvenanceVerified,
+		Repo: "owner/renamed", RepositoryID: closureStoreRepoID, IssueNumber: closureStoreIssue,
+	}
+	if source != want {
+		t.Errorf("source after rename = %+v, want %+v", source, want)
+	}
+	rebound := closureStoreBinding(policy, taskID)
+	rebound.admission.Base.RepositoryID++
+	if _, _, ok, err := w.decideClosableSource(ctx, task, rebound); err != nil || ok {
+		t.Errorf("same-name foreign-id binding: ok=%t err=%v, want no proposal", ok, err)
+	}
 }
 
 // TestReconcileClosureDefaultPolicyRecordsBindingApproval proves the engine
@@ -278,6 +300,17 @@ func TestAuthorSourceIssueSelection(t *testing.T) {
 	}
 	if want := "https://github.com/owner/repo/issues/7"; ref != want || number != 7 || !sameRepo {
 		t.Errorf("intake source = (%q, %d, %t), want (%q, 7, true)", ref, number, sameRepo, want)
+	}
+	// After a rename (#1537) the subject bound under the old name is still the
+	// target repository's, and the reference carries the current name.
+	renamed := closureStoreBinding(policy, taskID)
+	renamed.admission.Base.Repo = "owner/renamed"
+	ref, number, sameRepo, err = w.authorSourceIssue(context.Background(), task, renamed)
+	if err != nil {
+		t.Fatalf("author renamed source issue: %v", err)
+	}
+	if want := "https://github.com/owner/renamed/issues/7"; ref != want || number != 7 || !sameRepo {
+		t.Errorf("renamed intake source = (%q, %d, %t), want (%q, 7, true)", ref, number, sameRepo, want)
 	}
 	rebound := closureStoreBinding(policy, taskID)
 	rebound.admission.Base.RepositoryID++

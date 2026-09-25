@@ -240,11 +240,14 @@ func (w *productionPublicationWorkflow) authorSourceIssue(
 	}
 	if source != nil && source.Kind == domain.SpecificationSourceIssueSubject && source.IssueSubject != nil {
 		subject := source.IssueSubject
-		ref := fmt.Sprintf("https://github.com/%s/issues/%d", subject.Repo, subject.IssueNumber)
-		if subject.Repo == binding.admission.Base.Repo && subject.RepositoryID == binding.admission.Base.RepositoryID {
-			return ref, subject.IssueNumber, true, nil
+		// The repository id decides (#1537): a subject bound before a rename
+		// keeps the old name, so a same-repository reference takes the
+		// current one.
+		if subject.RepositoryID == binding.admission.Base.RepositoryID {
+			return fmt.Sprintf("https://github.com/%s/issues/%d", binding.admission.Base.Repo, subject.IssueNumber),
+				subject.IssueNumber, true, nil
 		}
-		return ref, 0, false, nil
+		return fmt.Sprintf("https://github.com/%s/issues/%d", subject.Repo, subject.IssueNumber), 0, false, nil
 	}
 	ownerRepo, number, ok := parseSourceIssueURL(task.Publication.SourceIssue)
 	if ok && ownerRepo == binding.admission.Base.Repo {

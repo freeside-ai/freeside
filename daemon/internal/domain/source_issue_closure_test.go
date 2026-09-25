@@ -134,6 +134,24 @@ func TestSourceIssueClosureConstructorRejectsForeignInput(t *testing.T) {
 	if !errors.Is(err, domain.ErrClosureTargetMismatch) {
 		t.Fatalf("cross-repository target error = %v, want ErrClosureTargetMismatch", err)
 	}
+	// The repository id decides (#1537): a target under the source's name but
+	// another id is cross-repository, and one under an older name of the same
+	// id is not.
+	_, err = domain.NewEffectProposal(domain.EffectSourceIssueClosure, domain.SourceIssueClosureInput{
+		SubjectHandle: "subject-opaque-1", Source: recommendedClosureSource(),
+		ProposedTarget: domain.IssueSubjectRef{Repo: closureRepo, RepositoryID: 99, IssueNumber: 9},
+		Origin:         domain.ClosureFlagOriginProposeSite, Resolves: true,
+	}, policy)
+	if !errors.Is(err, domain.ErrClosureTargetMismatch) {
+		t.Fatalf("same-name foreign-id target error = %v, want ErrClosureTargetMismatch", err)
+	}
+	if _, err := domain.NewEffectProposal(domain.EffectSourceIssueClosure, domain.SourceIssueClosureInput{
+		SubjectHandle: "subject-opaque-1", Source: recommendedClosureSource(),
+		ProposedTarget: domain.IssueSubjectRef{Repo: "octo/old-name", RepositoryID: closureRepositoryID, IssueNumber: 9},
+		Origin:         domain.ClosureFlagOriginProposeSite, Resolves: true,
+	}, policy); err != nil {
+		t.Fatalf("old-name same-id target error = %v, want nil", err)
+	}
 	// Absent closable source: no proposal.
 	_, err = domain.NewEffectProposal(domain.EffectSourceIssueClosure, domain.SourceIssueClosureInput{
 		SubjectHandle: "subject-opaque-1", Source: domain.ClosableSource{},
@@ -185,6 +203,19 @@ func TestGateSourceIssueClosure(t *testing.T) {
 	if err := domain.GateSourceIssueClosure(recommended, recommendedClosureSource()); err != nil {
 		t.Fatalf("recommended gate = %v, want nil", err)
 	}
+	// The repository id is the identity (#1537): after a rename the current
+	// source carries the new name, and a proposal naming the old one still
+	// passes.
+	renamedVerified := verifiedClosureSource()
+	renamedVerified.Repo = "owner/renamed"
+	if err := domain.GateSourceIssueClosure(verified, renamedVerified); err != nil {
+		t.Fatalf("verified gate after rename = %v, want nil", err)
+	}
+	renamedRecommended := recommendedClosureSource()
+	renamedRecommended.Repo = "owner/renamed"
+	if err := domain.GateSourceIssueClosure(recommended, renamedRecommended); err != nil {
+		t.Fatalf("recommended gate after rename = %v, want nil", err)
+	}
 
 	cases := []struct {
 		name     string
@@ -202,6 +233,14 @@ func TestGateSourceIssueClosure(t *testing.T) {
 		{"recommended repository mismatch", recommended, domain.ClosableSource{
 			Present: true, Provenance: domain.ClosureProvenanceRecommended,
 			Repo: "other/repo", RepositoryID: 99,
+		}, domain.ErrClosureTargetMismatch},
+		{"verified repository id mismatch under the same name", verified, domain.ClosableSource{
+			Present: true, Provenance: domain.ClosureProvenanceVerified,
+			Repo: closureRepo, RepositoryID: 99, IssueNumber: 7,
+		}, domain.ErrClosureTargetMismatch},
+		{"recommended repository id mismatch under the same name", recommended, domain.ClosableSource{
+			Present: true, Provenance: domain.ClosureProvenanceRecommended,
+			Repo: closureRepo, RepositoryID: 99,
 		}, domain.ErrClosureTargetMismatch},
 	}
 	for _, tc := range cases {
