@@ -40,6 +40,8 @@ func applyDataMigration(
 		return backfillTaskLifecycleFacts(ctx, tx)
 	case version == 62 && name == readyReturnActionMigration:
 		return addReturnActionToProductionReadyItems(ctx, tx)
+	case version == 81 && name == projectAuthorityBackfillMigration:
+		return backfillProjectAuthority(ctx, tx)
 	default:
 		return nil
 	}

@@ -67,8 +67,8 @@ func TestTaskProposalVocabularyMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatal(err)
 	}
-	if got := rawVersion(t, db); got != 80 {
-		t.Fatalf("schema version = %d, want 80", got)
+	if got := rawVersion(t, db); got != 81 {
+		t.Fatalf("schema version = %d, want 81", got)
 	}
 
 	afterType, afterEV, afterRev := readItemRow(t, ctx, db, itemID)
