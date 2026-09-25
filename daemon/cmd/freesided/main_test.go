@@ -105,6 +105,7 @@ func TestRunDrainsBackgroundWorkersBeforeClosingStoreOnStartupFailure(t *testing
 	const signalRestoredLog = "signal disposition restored"
 	var logsAtStoreClose string
 	cfg := config{
+		Environment:       environmentEphemeral,
 		FakeDriverEnabled: true,
 		DBPath:            filepath.Join(root, "freeside.db"),
 		FakeDriverDir:     filepath.Join(root, "driver"),
@@ -163,7 +164,8 @@ func TestRunDrainsBackgroundWorkersBeforeClosingStoreOnStartupFailure(t *testing
 		}
 	}
 	retry, err := run(t.Context(), nil, config{
-		DBPath: filepath.Join(root, "freeside.db"), FakeDriverDir: filepath.Join(root, "retry-driver"),
+		Environment: environmentEphemeral,
+		DBPath:      filepath.Join(root, "freeside.db"), FakeDriverDir: filepath.Join(root, "retry-driver"),
 		StateDir: root, ListenAddr: "127.0.0.1:0",
 	})
 	if err != nil {
@@ -183,6 +185,7 @@ func TestRunReturnsAfterPostBackgroundStartFailure(t *testing.T) {
 	}, 1)
 	go func() {
 		h, err := run(t.Context(), nil, config{
+			Environment:          environmentEphemeral,
 			DBPath:               filepath.Join(root, "freeside.db"),
 			FakeDriverDir:        filepath.Join(root, "driver"),
 			ListenAddr:           "127.0.0.1:0",
@@ -213,6 +216,7 @@ func TestRunServesSignetAndStops(t *testing.T) {
 	root := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	h, err := run(ctx, nil, config{
+		Environment:   environmentEphemeral,
 		DBPath:        filepath.Join(root, "freeside.db"),
 		FakeDriverDir: filepath.Join(root, "driver"),
 		ListenAddr:    "127.0.0.1:0", ReconcileInterval: 10 * time.Millisecond,
@@ -247,7 +251,8 @@ func TestRunConvergesLegacyFakePublicationBeforeStartingScheduler(t *testing.T) 
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "freeside.db")
 	cfg := config{
-		DBPath: dbPath, FakeDriverDir: filepath.Join(root, "driver"),
+		Environment: environmentEphemeral,
+		DBPath:      dbPath, FakeDriverDir: filepath.Join(root, "driver"),
 		FakeDriverEnabled: true,
 		ListenAddr:        "127.0.0.1:0", ReconcileInterval: 10 * time.Millisecond,
 	}
@@ -297,6 +302,7 @@ func TestRunStartsWithADurableRowItCannotReconstruct(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "freeside.db")
 	cfg := config{
+		Environment:   environmentEphemeral,
 		DBPath:        dbPath,
 		FakeDriverDir: filepath.Join(root, "driver"),
 		ListenAddr:    "127.0.0.1:0", ReconcileInterval: 10 * time.Millisecond,
@@ -662,7 +668,8 @@ func TestRunPairsFreshDevice(t *testing.T) {
 	root := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	h, err := run(ctx, nil, config{
-		DBPath: filepath.Join(root, "freeside.db"), ListenAddr: "127.0.0.1:0",
+		Environment: environmentEphemeral,
+		DBPath:      filepath.Join(root, "freeside.db"), ListenAddr: "127.0.0.1:0",
 		ReconcileInterval: 10 * time.Millisecond,
 	})
 	if err != nil {
@@ -812,12 +819,13 @@ func TestTopicKeyPersistsAndRejectsUntrustedFiles(t *testing.T) {
 func TestRunValidatesConfiguration(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	if _, err := run(ctx, nil, config{ListenAddr: "127.0.0.1:0"}); err == nil {
+	if _, err := run(ctx, nil, config{Environment: environmentEphemeral, ListenAddr: "127.0.0.1:0"}); err == nil {
 		t.Fatal("run accepted an empty database path")
 	}
 	if _, err := run(ctx, nil, config{
-		DBPath:     filepath.Join(t.TempDir(), "freeside.db"),
-		ListenAddr: "127.0.0.1:0", ReconcileInterval: -time.Second,
+		Environment: environmentEphemeral,
+		DBPath:      filepath.Join(t.TempDir(), "freeside.db"),
+		ListenAddr:  "127.0.0.1:0", ReconcileInterval: -time.Second,
 	}); err == nil {
 		t.Fatal("run accepted a negative reconcile interval")
 	}
@@ -962,6 +970,7 @@ func TestRunDrivesFakeWorkflow(t *testing.T) {
 	root := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	h, err := run(ctx, nil, config{
+		Environment:   environmentEphemeral,
 		DBPath:        filepath.Join(root, "freeside.db"),
 		FakeDriverDir: filepath.Join(root, "driver"),
 		ListenAddr:    "127.0.0.1:0", ReconcileInterval: 5 * time.Millisecond,
@@ -1053,6 +1062,7 @@ func TestRunWithoutSeedFlagLeavesTheStoreEmpty(t *testing.T) {
 	root := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	h, err := run(ctx, nil, config{
+		Environment:       environmentEphemeral,
 		FakeDriverEnabled: true,
 		DBPath:            filepath.Join(root, "freeside.db"),
 		FakeDriverDir:     filepath.Join(root, "driver"),
@@ -1499,6 +1509,7 @@ func TestRunRefusesNonLoopbackBeforeCreatingState(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	driverDir := filepath.Join(t.TempDir(), "driver")
 	h, err := run(context.Background(), nil, config{
+		Environment:   environmentEphemeral,
 		DBPath:        dbPath,
 		ListenAddr:    "0.0.0.0:0",
 		FakeDriverDir: driverDir,

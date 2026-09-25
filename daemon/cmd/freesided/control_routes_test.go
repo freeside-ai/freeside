@@ -28,7 +28,7 @@ import (
 func TestControlLegacySubmissionNearInputLimits(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "freeside.db")
-	h, err := run(t.Context(), nil, config{DBPath: dbPath, ListenAddr: "127.0.0.1:0"})
+	h, err := run(t.Context(), nil, config{Environment: environmentEphemeral, DBPath: dbPath, ListenAddr: "127.0.0.1:0"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestControlLegacySubmissionNearInputLimits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("offline legacy replay: %v", err)
 	}
-	restarted, err := run(t.Context(), nil, config{DBPath: dbPath, ListenAddr: "127.0.0.1:0"})
+	restarted, err := run(t.Context(), nil, config{Environment: environmentEphemeral, DBPath: dbPath, ListenAddr: "127.0.0.1:0"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,8 @@ func TestControlRoutesUseRunningDaemonStore(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "freeside.db")
 	h, err := run(t.Context(), nil, config{
-		DBPath: dbPath, ListenAddr: "127.0.0.1:0",
+		Environment: environmentEphemeral,
+		DBPath:      dbPath, ListenAddr: "127.0.0.1:0",
 		FakeDriverEnabled: true, SeedWalkingSkeleton: true,
 	})
 	if err != nil {
@@ -437,7 +438,7 @@ func TestControlReattemptUsesRunningDaemonStore(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	h, err := run(t.Context(), nil, config{DBPath: dbPath, ListenAddr: "127.0.0.1:0"})
+	h, err := run(t.Context(), nil, config{Environment: environmentEphemeral, DBPath: dbPath, ListenAddr: "127.0.0.1:0"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -467,7 +468,7 @@ func TestControlFindsDatabaseBehindDanglingSymlink(t *testing.T) {
 	if err := os.Symlink(target, alias); err != nil {
 		t.Fatal(err)
 	}
-	h, err := run(t.Context(), nil, config{DBPath: alias, ListenAddr: "127.0.0.1:0"})
+	h, err := run(t.Context(), nil, config{Environment: environmentEphemeral, DBPath: alias, ListenAddr: "127.0.0.1:0"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,7 +495,7 @@ func TestControlFindsDatabaseBehindDanglingSymlink(t *testing.T) {
 func TestControlRejectsAnotherDatabaseAtSocket(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "daemon.db")
-	h, err := run(t.Context(), nil, config{DBPath: dbPath, ListenAddr: "127.0.0.1:0"})
+	h, err := run(t.Context(), nil, config{Environment: environmentEphemeral, DBPath: dbPath, ListenAddr: "127.0.0.1:0"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -586,7 +587,8 @@ func TestControlSnapshotPreservesRequestedRecipes(t *testing.T) {
 	recipeB := domain.Digest("sha256:" + strings.Repeat("b", 64))
 	approved := map[domain.Digest]bool{recipeA: true, recipeB: true}
 	h, err := run(t.Context(), nil, config{
-		DBPath: dbPath, ListenAddr: "127.0.0.1:0", ApprovedRecipes: approved,
+		Environment: environmentEphemeral,
+		DBPath:      dbPath, ListenAddr: "127.0.0.1:0", ApprovedRecipes: approved,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -701,7 +703,7 @@ func TestControlDoctorUsesDaemonBlobStoreThroughSymlink(t *testing.T) {
 	if err := os.Symlink(target, alias); err != nil {
 		t.Fatal(err)
 	}
-	h, err := run(t.Context(), nil, config{DBPath: alias, ListenAddr: "127.0.0.1:0"})
+	h, err := run(t.Context(), nil, config{Environment: environmentEphemeral, DBPath: alias, ListenAddr: "127.0.0.1:0"})
 	if err != nil {
 		t.Fatal(err)
 	}

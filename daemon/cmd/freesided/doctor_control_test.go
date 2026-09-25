@@ -57,7 +57,7 @@ func TestControlDoctorPreservesRequestedCheckpointRecipes(t *testing.T) {
 	if err := errors.Join(writeErr, seed.Close()); err != nil {
 		t.Fatal(err)
 	}
-	h, err := run(t.Context(), nil, config{DBPath: dbPath, ListenAddr: "127.0.0.1:0", ApprovedRecipes: approved})
+	h, err := run(t.Context(), nil, config{Environment: environmentEphemeral, DBPath: dbPath, ListenAddr: "127.0.0.1:0", ApprovedRecipes: approved})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,8 +2,11 @@ import SwiftUI
 
 /// First launch on a device that has no local daemon or saved deployment.
 /// No client, credentials, or sample data are created until a server is chosen.
+/// A refused readiness file (#1504) is explained above the address field;
+/// typing an address stays the operator's explicit override.
 struct DaemonConnectionView: View {
     @Binding var address: String
+    var refusal: DaemonReadinessRefusal?
     let onConnect: (URL) -> Void
 
     private var serverURL: URL? { AppSession.serverURL(from: address) }
@@ -11,6 +14,15 @@ struct DaemonConnectionView: View {
     var body: some View {
         NavigationStack {
             Form {
+                if let refusal {
+                    Section {
+                        Text(refusal.description)
+                            .foregroundStyle(Color.waxText)
+                    } header: {
+                        Text("Daemon Refused")
+                    }
+                    .listRowBackground(Color.ground2)
+                }
                 Section {
                     Text("Enter the address of the Freeside daemon running on your Mac.")
                     addressField

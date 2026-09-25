@@ -365,7 +365,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
             #expect(
                 AppSession.launchMode(
                     argumentServerURL: nil, pairingDemo: pairingDemo, mockMode: mock,
-                    readiness: nil, persistedServerURL: nil, localDaemonURL: nil,
+                    readiness: .absent, persistedServerURL: nil, localDaemonURL: nil,
                     hasCredential: { _ in
                         Issue.record("An unconfigured launch must not look up credentials")
                         return false
@@ -377,7 +377,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
         #expect(
             AppSession.launchMode(
                 argumentServerURL: "not-a-server", pairingDemo: true, mockMode: true,
-                readiness: nil, persistedServerURL: "https://daemon.example",
+                readiness: .absent, persistedServerURL: "https://daemon.example",
                 localDaemonURL: prodDaemonURL,
                 hasCredential: { _ in false }) == .needsConnection)
     }
@@ -395,14 +395,14 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
 
     @Test func launchResolutionUsesExplicitModesThenReadinessThenPersisted() {
         let local = DaemonReadiness(
-            apiURL: URL(string: "http://127.0.0.1:7331")!, pairingCode: "483911")
+            apiURL: URL(string: "http://127.0.0.1:7331")!, pairingCode: "483911", environment: .prod, runID: "test-run")
 
         #expect(
             AppSession.launchMode(
                 argumentServerURL: "http://127.0.0.1:9000",
                 pairingDemo: false,
                 mockMode: true,
-                readiness: local,
+                readiness: .ready(local),
                 persistedServerURL: "https://daemon.example",
                 localDaemonURL: prodDaemonURL,
                 hasCredential: { _ in false })
@@ -412,7 +412,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
                 argumentServerURL: nil,
                 pairingDemo: true,
                 mockMode: true,
-                readiness: local,
+                readiness: .ready(local),
                 persistedServerURL: "https://daemon.example",
                 localDaemonURL: prodDaemonURL,
                 hasCredential: { _ in false }) == .pairingDemo)
@@ -421,7 +421,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
                 argumentServerURL: nil,
                 pairingDemo: false,
                 mockMode: true,
-                readiness: local,
+                readiness: .ready(local),
                 persistedServerURL: "https://daemon.example",
                 localDaemonURL: prodDaemonURL,
                 hasCredential: { _ in false }) == .mock)
@@ -430,19 +430,20 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
                 argumentServerURL: nil,
                 pairingDemo: false,
                 mockMode: false,
-                readiness: local,
+                readiness: .ready(local),
                 persistedServerURL: "https://daemon.example",
                 localDaemonURL: prodDaemonURL,
                 hasCredential: { _ in false })
                 == .live(local.apiURL, pairingCode: "483911"))
         let staleLocal = DaemonReadiness(
-            apiURL: URL(string: "http://127.0.0.1:49152")!, pairingCode: "stale-code")
+            apiURL: URL(string: "http://127.0.0.1:49152")!, pairingCode: "stale-code", environment: .prod,
+            runID: "test-run")
         #expect(
             AppSession.launchMode(
                 argumentServerURL: nil,
                 pairingDemo: false,
                 mockMode: false,
-                readiness: staleLocal,
+                readiness: .ready(staleLocal),
                 persistedServerURL: nil,
                 localDaemonURL: prodDaemonURL,
                 hasCredential: { _ in false })
@@ -452,7 +453,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
                 argumentServerURL: nil,
                 pairingDemo: false,
                 mockMode: false,
-                readiness: nil,
+                readiness: .absent,
                 persistedServerURL: "https://daemon.example",
                 localDaemonURL: prodDaemonURL,
                 hasCredential: { _ in false })
@@ -462,7 +463,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
                 argumentServerURL: nil,
                 pairingDemo: false,
                 mockMode: false,
-                readiness: nil,
+                readiness: .absent,
                 persistedServerURL: nil,
                 localDaemonURL: prodDaemonURL,
                 hasCredential: { _ in false })
@@ -472,14 +473,15 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
     @Test func launchResolutionPrefersTheDeploymentWithACredential() {
         let readinessURL = URL(string: "http://127.0.0.1:7331")!
         let persistedURL = URL(string: "http://127.0.0.1:8677")!
-        let readiness = DaemonReadiness(apiURL: readinessURL, pairingCode: "483911")
+        let readiness = DaemonReadiness(
+            apiURL: readinessURL, pairingCode: "483911", environment: .prod, runID: "test-run")
 
         #expect(
             AppSession.launchMode(
                 argumentServerURL: nil,
                 pairingDemo: false,
                 mockMode: false,
-                readiness: readiness,
+                readiness: .ready(readiness),
                 persistedServerURL: persistedURL.absoluteString,
                 localDaemonURL: readinessURL,
                 hasCredential: { $0 == persistedURL })
@@ -489,7 +491,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
                 argumentServerURL: nil,
                 pairingDemo: false,
                 mockMode: false,
-                readiness: readiness,
+                readiness: .ready(readiness),
                 persistedServerURL: persistedURL.absoluteString,
                 localDaemonURL: readinessURL,
                 hasCredential: { _ in false })
@@ -499,7 +501,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
                 argumentServerURL: nil,
                 pairingDemo: false,
                 mockMode: false,
-                readiness: readiness,
+                readiness: .ready(readiness),
                 persistedServerURL: persistedURL.absoluteString,
                 localDaemonURL: readinessURL,
                 hasCredential: { $0 == readinessURL || $0 == persistedURL })
@@ -509,7 +511,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
                 argumentServerURL: "http://127.0.0.1:9000",
                 pairingDemo: false,
                 mockMode: false,
-                readiness: readiness,
+                readiness: .ready(readiness),
                 persistedServerURL: persistedURL.absoluteString,
                 localDaemonURL: readinessURL,
                 hasCredential: { $0 == persistedURL })
@@ -521,7 +523,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
                     argumentServerURL: nil,
                     pairingDemo: false,
                     mockMode: false,
-                    readiness: readiness,
+                    readiness: .ready(readiness),
                     persistedServerURL: malformedURL,
                     localDaemonURL: readinessURL,
                     hasCredential: {
@@ -539,7 +541,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
         _ environment: FreesideEnvironment,
         readinessDirectory: String? = nil,
         persistedServerURL: String? = nil,
-        readiness: DaemonReadiness? = nil,
+        readiness: DaemonReadinessOutcome = .absent,
         fileManager: FileManager = .default,
         hasCredential: (URL) -> Bool = { _ in false },
         readPaths: inout [String]
@@ -572,16 +574,17 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
             #expect(readPaths.count == 1)
             #expect(readPaths.first?.hasSuffix("/Application Support\(root)") == true)
 
-            let readiness = DaemonReadiness(apiURL: url, pairingCode: "483911")
+            let readiness = DaemonReadiness(
+                apiURL: url, pairingCode: "483911", environment: environment, runID: "test-run")
             #expect(
-                try tierLaunchMode(environment, readiness: readiness, readPaths: &readPaths)
+                try tierLaunchMode(environment, readiness: .ready(readiness), readPaths: &readPaths)
                     == .live(url, pairingCode: "483911"))
             // Another tier's daemon URL in this tier's file is not this tier's daemon.
             let foreign = DaemonReadiness(
                 apiURL: try #require(URL(string: "http://127.0.0.1:\(port == 7331 ? 7332 : 7331)")),
-                pairingCode: "foreign")
+                pairingCode: "foreign", environment: environment, runID: "test-run")
             #expect(
-                try tierLaunchMode(environment, readiness: foreign, readPaths: &readPaths)
+                try tierLaunchMode(environment, readiness: .ready(foreign), readPaths: &readPaths)
                     == .live(url, pairingCode: ""))
             #expect(
                 try tierLaunchMode(
@@ -609,7 +612,8 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
             try tierLaunchMode(
                 .ephemeral, readinessDirectory: "/tmp/run-1",
                 persistedServerURL: prodDaemonURL.absoluteString,
-                readiness: DaemonReadiness(apiURL: runURL, pairingCode: "483911"),
+                readiness: .ready(
+                    DaemonReadiness(apiURL: runURL, pairingCode: "483911", environment: .ephemeral, runID: "test-run")),
                 readPaths: &readPaths)
                 == .live(runURL, pairingCode: "483911"))
         #expect(readPaths == ["/tmp/run-1/readiness.json"])
@@ -633,7 +637,8 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
             try tierLaunchMode(
                 .ephemeral, readinessDirectory: "/tmp/run-1",
                 persistedServerURL: prodDaemonURL.absoluteString,
-                readiness: DaemonReadiness(apiURL: runURL, pairingCode: "483911"),
+                readiness: .ready(
+                    DaemonReadiness(apiURL: runURL, pairingCode: "483911", environment: .ephemeral, runID: "test-run")),
                 hasCredential: {
                     probed.append($0)
                     return true
@@ -693,13 +698,66 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
     }
 
     @Test func explicitLaunchModesStillWinInEveryTier() throws {
+        let explicitURL = try #require(URL(string: "http://127.0.0.1:9000"))
         for environment in FreesideEnvironment.allCases {
-            #expect(
+            // A refused file is present; every explicit mode wins over it.
+            let refused = DaemonReadinessOutcome.refused(.daemonTooOld(app: environment))
+            let readinessDirectory = environment.isSupervised ? nil : "/tmp/run-1"
+            let resolve = { (argumentServerURL: String?, pairingDemo: Bool, mockMode: Bool) throws in
                 try AppSession.launchMode(
-                    environment: environment, argumentServerURL: nil, pairingDemo: false,
-                    mockMode: true, readinessDirectory: nil, persistedServerURL: nil,
-                    readReadiness: { _ in nil }, hasCredential: { _ in false }) == .mock)
+                    environment: environment, argumentServerURL: argumentServerURL,
+                    pairingDemo: pairingDemo, mockMode: mockMode,
+                    readinessDirectory: readinessDirectory, persistedServerURL: nil,
+                    readReadiness: { _ in refused }, hasCredential: { _ in false })
+            }
+            #expect(try resolve(nil, false, true) == .mock)
+            #expect(try resolve(nil, true, false) == .pairingDemo)
+            #expect(try resolve(explicitURL.absoluteString, false, false) == .live(explicitURL, pairingCode: ""))
+            #expect(try resolve(nil, false, false) == .refused(.daemonTooOld(app: environment)))
         }
+    }
+
+    /// Each tier refuses a readiness file stamped for another environment
+    /// and never falls through to its persisted URL or fixed port (#1504).
+    @Test func aRefusedReadinessFileStopsAtTheConnectScreenInEveryTier() throws {
+        for (environment, other) in [
+            (FreesideEnvironment.prod, FreesideEnvironment.dev), (.dev, .prod), (.ephemeral, .dev),
+        ] {
+            let mismatch = DaemonReadinessRefusal.environmentMismatch(app: environment, daemon: other)
+            var readPaths: [String] = []
+            #expect(
+                try tierLaunchMode(
+                    environment,
+                    readinessDirectory: environment.isSupervised ? nil : "/tmp/run-1",
+                    persistedServerURL: "https://daemon.example",
+                    readiness: .refused(mismatch),
+                    hasCredential: { _ in true },
+                    readPaths: &readPaths)
+                    == .refused(mismatch))
+            #expect(readPaths.count == 1)
+            #expect(
+                try tierLaunchMode(
+                    environment,
+                    readinessDirectory: environment.isSupervised ? nil : "/tmp/run-1",
+                    readiness: .refused(.daemonTooOld(app: environment)),
+                    readPaths: &readPaths)
+                    == .refused(.daemonTooOld(app: environment)))
+        }
+    }
+
+    @Test func aRefusedLaunchShowsTheRefusalUntilAnAddressIsTyped() throws {
+        let refusal = DaemonReadinessRefusal.environmentMismatch(app: .prod, daemon: .dev)
+        let session = AppSession.session(
+            for: .refused(refusal), localDaemonURL: prodDaemonURL, cacheRoot: nil,
+            credentialStore: { _ in InMemoryCredentialStore() }, persistServerURL: { _ in })
+        guard case .needsConnection = session.phase else {
+            Issue.record("expected the connect screen")
+            return
+        }
+        #expect(session.connectionRefusal == refusal)
+
+        session.connect(serverURL: try #require(URL(string: "http://127.0.0.1:9000")))
+        #expect(session.connectionRefusal == nil)
     }
 
     @Test func aSessionWithoutALocalDaemonKeepsItsPrefillWhenReadinessDisappears() {
@@ -752,28 +810,28 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
         }
         stale.applyReadiness(
             DaemonReadiness(
-                apiURL: prodDaemonURL, pairingCode: "fresh-code"))
+                apiURL: prodDaemonURL, pairingCode: "fresh-code", environment: .prod, runID: "test-run"))
         #expect(staleModel.pairingCode == "FRESHC0DE")
         stale.applyReadiness(nil)
         #expect(staleModel.pairingCode.isEmpty)
         stale.applyReadiness(
             DaemonReadiness(
-                apiURL: prodDaemonURL, pairingCode: "replacement-code"))
+                apiURL: prodDaemonURL, pairingCode: "replacement-code", environment: .prod, runID: "test-run"))
         #expect(staleModel.pairingCode == "REP1ACEMENTC0DE")
         staleModel.pairingCode = ""
         stale.applyReadiness(
             DaemonReadiness(
-                apiURL: prodDaemonURL, pairingCode: "newer-code"))
+                apiURL: prodDaemonURL, pairingCode: "newer-code", environment: .prod, runID: "test-run"))
         #expect(staleModel.pairingCode.isEmpty)
         staleModel.pairingCode = "operator-input"
         stale.applyReadiness(
             DaemonReadiness(
-                apiURL: prodDaemonURL, pairingCode: "newest-code"))
+                apiURL: prodDaemonURL, pairingCode: "newest-code", environment: .prod, runID: "test-run"))
         #expect(staleModel.pairingCode == "operator-input")
 
         empty.applyReadiness(
             DaemonReadiness(
-                apiURL: prodDaemonURL, pairingCode: "later-code"))
+                apiURL: prodDaemonURL, pairingCode: "later-code", environment: .prod, runID: "test-run"))
         #expect(emptyModel.pairingCode.isEmpty)
 
         let local = AppSession(
@@ -788,14 +846,14 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
         }
         local.applyReadiness(
             DaemonReadiness(
-                apiURL: prodDaemonURL, pairingCode: "later-code"))
+                apiURL: prodDaemonURL, pairingCode: "later-code", environment: .prod, runID: "test-run"))
         #expect(localModel.pairingCode == "1ATERC0DE")
         localModel.pairingCode = "operator-input"
         local.applyReadiness(nil)
         #expect(localModel.pairingCode == "operator-input")
         local.applyReadiness(
             DaemonReadiness(
-                apiURL: prodDaemonURL, pairingCode: "newer-code"))
+                apiURL: prodDaemonURL, pairingCode: "newer-code", environment: .prod, runID: "test-run"))
         #expect(localModel.pairingCode == "operator-input")
 
         let editedBeforeReadiness = AppSession(
@@ -812,7 +870,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
         editedModel.pairingCode = ""
         editedBeforeReadiness.applyReadiness(
             DaemonReadiness(
-                apiURL: prodDaemonURL, pairingCode: "late-code"))
+                apiURL: prodDaemonURL, pairingCode: "late-code", environment: .prod, runID: "test-run"))
         #expect(editedModel.pairingCode.isEmpty)
     }
 
@@ -916,7 +974,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
                 argumentServerURL: nil,
                 pairingDemo: false,
                 mockMode: false,
-                readiness: nil,
+                readiness: .absent,
                 persistedServerURL: persisted.first?.absoluteString,
                 localDaemonURL: nil,
                 hasCredential: { _ in true })
@@ -1052,7 +1110,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
                 argumentServerURL: nil,
                 pairingDemo: false,
                 mockMode: false,
-                readiness: nil,
+                readiness: .absent,
                 persistedServerURL: persisted.first?.absoluteString,
                 localDaemonURL: nil,
                 hasCredential: { _ in true })
@@ -1273,7 +1331,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
         // The Mac delivers readiness on change, so a ready session receives
         // it well before it re-pairs; it is remembered, not applied yet.
         session.applyReadiness(
-            DaemonReadiness(apiURL: deploymentURL, pairingCode: "fresh-code"))
+            DaemonReadiness(apiURL: deploymentURL, pairingCode: "fresh-code", environment: .prod, runID: "test-run"))
         guard case .ready = session.phase else {
             Issue.record("expected a ready session, got \(session.phase)")
             return
@@ -1288,7 +1346,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
 
         model.pairingCode = "operator-input"
         session.applyReadiness(
-            DaemonReadiness(apiURL: deploymentURL, pairingCode: "newer-code"))
+            DaemonReadiness(apiURL: deploymentURL, pairingCode: "newer-code", environment: .prod, runID: "test-run"))
         #expect(model.pairingCode == "operator-input")
     }
 }

@@ -17,6 +17,7 @@ func TestHTTPOnlyRunDoctorRejectsRetainedArmedSchedule(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	root := t.TempDir()
 	h, err := run(ctx, nil, config{
+		Environment:   environmentEphemeral,
 		DBPath:        filepath.Join(root, "freeside.db"),
 		FakeDriverDir: filepath.Join(root, "driver"), ListenAddr: "127.0.0.1:0",
 	})

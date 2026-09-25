@@ -238,7 +238,9 @@
                         startedAt: Date(timeIntervalSince1970: 1_725_184_800)))
             ])
             let readiness = try DaemonReadiness.parse(
-                Data(#"{"api_url":"http://127.0.0.1:7331","pairing_code":"483911"}"#.utf8))
+                Data(
+                    #"{"api_url":"http://127.0.0.1:7331","pairing_code":"483911","environment":"prod","run_id":"test-run"}"#
+                        .utf8))
             let model = DaemonMenuModel(
                 service: service,
                 healthChecker: health,
@@ -261,7 +263,9 @@
                         startedAt: Date(timeIntervalSince1970: 1_725_184_800)))
             ])
             let staleReadiness = try DaemonReadiness.parse(
-                Data(#"{"api_url":"http://127.0.0.1:49152","pairing_code":"stale"}"#.utf8))
+                Data(
+                    #"{"api_url":"http://127.0.0.1:49152","pairing_code":"stale","environment":"prod","run_id":"test-run"}"#
+                        .utf8))
             let model = DaemonMenuModel(
                 service: service,
                 healthChecker: health,
@@ -275,6 +279,24 @@
             #expect(await health.lastURL == prodDaemonURL)
         }
 
+        @Test func theWatchNeverFollowsARefusedReadinessFile() throws {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let file = DaemonReadinessReader.fileURL(inStateDirectory: root)
+
+            try Data(
+                #"{"api_url":"http://127.0.0.1:7332","pairing_code":"483911","environment":"dev","run_id":"r1"}"#
+                    .utf8
+            ).write(to: file)
+            #expect(DaemonMenuModel.followedReadiness(at: file, environment: .prod) == nil)
+            #expect(DaemonMenuModel.followedReadiness(at: file, environment: .dev)?.pairingCode == "483911")
+
+            try Data(#"{"api_url":"http://127.0.0.1:7331","pairing_code":"483911"}"#.utf8).write(to: file)
+            #expect(DaemonMenuModel.followedReadiness(at: file, environment: .prod) == nil)
+        }
+
         @Test func devModelProbesItsOwnPortAndIgnoresProdReadiness() async throws {
             let devURL = try #require(FreesideEnvironment.dev.supervisedAPIURL)
             let health = ScriptedDaemonHealth([
@@ -283,7 +305,8 @@
                         version: "1.0.0",
                         startedAt: Date(timeIntervalSince1970: 1_725_184_800)))
             ])
-            let prodReadiness = DaemonReadiness(apiURL: prodDaemonURL, pairingCode: "483911")
+            let prodReadiness = DaemonReadiness(
+                apiURL: prodDaemonURL, pairingCode: "483911", environment: .prod, runID: "test-run")
             let model = DaemonMenuModel(
                 service: FakeDaemonService(status: .enabled),
                 healthChecker: health,

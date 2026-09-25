@@ -38,7 +38,8 @@ func TestPairingCodeRenewsRunningDaemon(t *testing.T) {
 	}
 	ctx := t.Context()
 	h, err := run(ctx, nil, config{
-		DBPath: filepath.Join(root, "freeside.db"), StateDir: stateDir,
+		Environment: environmentEphemeral,
+		DBPath:      filepath.Join(root, "freeside.db"), StateDir: stateDir,
 		ListenAddr: "127.0.0.1:0", Logger: logger,
 		FakeDriverEnabled: true, SeedWalkingSkeleton: true,
 		now: func() time.Time {
@@ -326,7 +327,7 @@ func TestPairingControlRejectsWrongDaemonAndConflictingOwner(t *testing.T) {
 func TestRunRejectsPairingConflictBeforeOpeningDatabase(t *testing.T) {
 	p, _ := startPairingControlTest(t, nil)
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
-	h, err := run(t.Context(), nil, config{DBPath: dbPath, StateDir: p.stateDir, ListenAddr: "127.0.0.1:0"})
+	h, err := run(t.Context(), nil, config{Environment: environmentEphemeral, DBPath: dbPath, StateDir: p.stateDir, ListenAddr: "127.0.0.1:0"})
 	if err == nil {
 		_ = h.Close()
 		t.Fatal("second daemon acquired a shared state directory")
