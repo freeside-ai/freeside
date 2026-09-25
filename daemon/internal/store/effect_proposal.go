@@ -696,6 +696,10 @@ func (tx *ReadTx) closableSource(
 	declaration domain.WorkUnitDeclaration,
 ) (domain.ClosableSource, error) {
 	project, err := tx.GetProject(ctx, declaration.ProjectID)
+	if errors.Is(err, ErrNotFound) {
+		return domain.ClosableSource{}, fmt.Errorf("closable source: project %q: %w",
+			declaration.ProjectID, ErrProjectAuthorityMissing)
+	}
 	if err != nil {
 		return domain.ClosableSource{}, err
 	}

@@ -304,3 +304,22 @@ func TestProjectAuthorityBackfill(t *testing.T) {
 		}
 	})
 }
+
+// TestClosableSourceReportsMissingProject: after #1535 a missing project on
+// the closure path is corruption, reported as ErrProjectAuthorityMissing and
+// not as ErrNotFound, which the closure gate would read as "not closable".
+func TestClosableSourceReportsMissingProject(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openTemplateStore(t, Options{})
+	err := s.Read(ctx, func(tx *ReadTx) error {
+		_, err := tx.closableSource(ctx, domain.WorkUnitDeclaration{ProjectID: "proj-missing", RunID: "run-1"})
+		return err
+	})
+	if !errors.Is(err, ErrProjectAuthorityMissing) {
+		t.Fatalf("closable source err = %v, want ErrProjectAuthorityMissing", err)
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Fatalf("closable source err = %v wraps ErrNotFound", err)
+	}
+}

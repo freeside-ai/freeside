@@ -1904,7 +1904,8 @@ func productionPublicationStateContradiction(err error) bool {
 		errors.Is(err, domain.ErrPathBoundaryMismatch) ||
 		errors.Is(err, store.ErrNotFound) ||
 		errors.Is(err, store.ErrImmutableConflict) ||
-		errors.Is(err, store.ErrStaleWrite)
+		errors.Is(err, store.ErrStaleWrite) ||
+		errors.Is(err, store.ErrProjectAuthorityMissing)
 }
 
 func productionPublicationRetryableError(err error) error {

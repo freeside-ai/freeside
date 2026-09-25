@@ -523,6 +523,20 @@ func TestProductionHoldRetryPruning(t *testing.T) {
 	}
 }
 
+// TestClosureMissingProjectIsNotAGateRejection pins #1535: a missing project
+// on the closure path escapes both closure steps instead of degrading to "no
+// proposal", so the publisher cannot quietly write Refs in place of Closes.
+func TestClosureMissingProjectIsNotAGateRejection(t *testing.T) {
+	t.Parallel()
+	err := fmt.Errorf("closable source: project %q: %w", "proj-1", store.ErrProjectAuthorityMissing)
+	if isClosureGateRejection(err) {
+		t.Fatal("missing project classified as a closure gate rejection")
+	}
+	if !errors.Is(closureBindNonBlocking(err), store.ErrProjectAuthorityMissing) {
+		t.Fatal("closure bind swallowed a missing project")
+	}
+}
+
 func TestProductionPublicationErrorClassification(t *testing.T) {
 	t.Parallel()
 	for _, err := range []error{
@@ -533,6 +547,7 @@ func TestProductionPublicationErrorClassification(t *testing.T) {
 		store.ErrNotFound,
 		store.ErrImmutableConflict,
 		store.ErrStaleWrite,
+		store.ErrProjectAuthorityMissing,
 	} {
 		if !productionPublicationStateContradiction(fmt.Errorf("reconcile task: %w", err)) {
 			t.Errorf("%v was not classified as a durable contradiction", err)
