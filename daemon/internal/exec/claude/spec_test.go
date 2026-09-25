@@ -644,10 +644,14 @@ func TestPublicMetadataLauncherAndPromptContract(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, required := range []string{export.PublicationEvidencePath, "entire current change", "8 KiB", "256 UTF-8 bytes", "Do not copy the private summary", "Agent-reported implementation (claim)"} {
+		for _, required := range []string{export.PublicationEvidencePath, "entire current change", "8 KiB", "256 UTF-8 bytes", "`# ` followed by the title you write", "Do not copy the private summary", "Agent-reported implementation (claim)"} {
 			if !bytes.Contains(body, []byte(required)) {
 				t.Errorf("%s omits %s", name, required)
 			}
+		}
+		// Agents copied this placeholder verbatim as the PR title (#1464).
+		if bytes.Contains(body, []byte("Outcome title")) {
+			t.Errorf("%s shows a copyable placeholder title", name)
 		}
 	}
 }
