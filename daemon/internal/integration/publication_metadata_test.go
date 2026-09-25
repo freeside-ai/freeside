@@ -27,9 +27,16 @@ import (
 
 const publicAccount = "# Preserve retries after restart\n\nKeep the whole approved change and preserve recorded results.\n\nScope excludes live deployment; live checks remain unrun.\n"
 
+// clientPublicationSource is the task source a client submission carries by
+// default: an issue in a repository other than the daemon's, so it earns no
+// closure proposal.
+const clientPublicationSource = "https://github.com/example/project/issues/82"
+
 // Exercise the real client command, specification return and human approval,
 // then hand the exact reserved implementation run to the publication fixture.
-func submitClientForPublication(t *testing.T, h *publicationHarness, image domain.ProjectImage, project domain.ProjectID, name, commandID string, prior *productionPublicationHarness) (engine.ProductionRun, []byte) {
+// The project's authority row comes only from the specification stage's
+// recorded admission, never from the fixture (#1535).
+func submitClientForPublication(t *testing.T, h *publicationHarness, image domain.ProjectImage, project domain.ProjectID, source, name, commandID string, prior *productionPublicationHarness) (engine.ProductionRun, []byte) {
 	t.Helper()
 	prov := domain.KeyProvenance{Source: domain.ProvenancePreset, Digest: productionDigest([]byte("client-policy"))}
 	keys := []domain.PolicyKey{
@@ -51,10 +58,13 @@ func submitClientForPublication(t *testing.T, h *publicationHarness, image domai
 	}
 	result, err := service.Submit(h.ctx, signet.ClientCommand{
 		CommandID: commandID, DeviceID: "client-device", Kind: domain.CommandKindSubmitTask,
-		SubmitTask: signet.SubmitTaskPayload{ProjectID: project, Source: "https://github.com/example/project/issues/82", Name: name},
+		SubmitTask: signet.SubmitTaskPayload{ProjectID: project, Source: source, Name: name},
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if prior == nil {
+		assertProjectAuthority(t, h, project, false)
 	}
 	var request struct {
 		ImplementationRunID domain.RunID `json:"implementation_run_id"`
@@ -112,6 +122,9 @@ func submitClientForPublication(t *testing.T, h *publicationHarness, image domai
 	if _, err := workflow.Reconcile(h.ctx); err != nil {
 		t.Fatal(err)
 	}
+	// The specification stage's admission, not submission, bound the
+	// project, and it did so before the specification can be approved.
+	assertProjectAuthority(t, h, project, true)
 	approval, err := service.GetAttentionItem(h.ctx, domain.ItemID("spec-approval-"+string(request.ImplementationRunID)+"-1"))
 	if err != nil {
 		t.Fatal(err)
@@ -142,6 +155,26 @@ func submitClientForPublication(t *testing.T, h *publicationHarness, image domai
 		t.Fatalf("read approved specification: %v, %v", err, closeErr)
 	}
 	return engine.ProductionRun{Run: run, InvocationID: productionInvocationForRun(run.ID), StageID: domain.StageID("implement-" + string(run.ID))}, body
+}
+
+// assertProjectAuthority checks whether the project has an authority row and,
+// when it does, that the row binds the daemon's own repository.
+func assertProjectAuthority(t *testing.T, h *publicationHarness, id domain.ProjectID, want bool) {
+	t.Helper()
+	var project domain.Project
+	err := h.store.Read(h.ctx, func(tx *store.ReadTx) error {
+		var err error
+		project, err = tx.GetProject(h.ctx, id)
+		return err
+	})
+	switch {
+	case !want && !errors.Is(err, store.ErrNotFound):
+		t.Fatalf("project %q before admission: %+v, %v; want no row", id, project, err)
+	case want && err != nil:
+		t.Fatalf("project %q after specification admission: %v", id, err)
+	case want && (project.Repo != h.profile.Repo || project.RepositoryID != h.profile.RepositoryID):
+		t.Fatalf("project %q = %+v, want %s (%d)", id, project, h.profile.Repo, h.profile.RepositoryID)
+	}
 }
 
 func TestClientSubmissionPublishesCandidateMetadata(t *testing.T) {

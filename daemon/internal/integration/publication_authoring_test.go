@@ -228,6 +228,63 @@ func TestPublicationAuthorStoresTextAndPolicyApprovedClose(t *testing.T) {
 	}
 }
 
+// TestClientSubmissionPublishesPolicyApprovedClose is the #1535 end-to-end
+// proof: a real client submission whose source is a bare issue URL in the
+// daemon's own repository reaches the closure gate with no fixture-registered
+// project, records a policy-approved proposal, and publishes Closes.
+func TestClientSubmissionPublishesPolicyApprovedClose(t *testing.T) {
+	source := engine.ProductionPublication{SourceIssue: "https://github.com/" + fakePublicationRepo + "/issues/82"}
+	p := newProductionPublicationHarnessWithMetadata(t, newPublicationHarness(t), "", nil, nil, nil, source, nil, "")
+	output, err := json.Marshal(map[string]any{
+		"title": "Authored PR title", "body": "## Why\n\nAuthored body prose.\n\n## What\n\n- Handle empty input.",
+		"reviewer_notes": nil, "evidence_refs": []string{}, "outcome_summary": "Reported checks passed.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.replay = withPublicAccount(t, p, p.replay, publicAccount)
+	scriptPublicationSites(t, p,
+		inferencefake.Script{Response: inference.Response{Output: output, ComputeUnits: 5}},
+		&inferencefake.Script{Response: inference.Response{Output: []byte(`{"resolves":true}`), ComputeUnits: 1}},
+	)
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatal(err)
+	}
+	prs := p.forge.pullRequests()
+	if len(prs) != 1 || !strings.Contains(prs[0].Body, "Closes #82") {
+		t.Fatalf("client submission did not publish the policy-approved close reference: %d PRs", len(prs))
+	}
+	key := "production-closure/" + string(p.runID) + "/publish-production-" + string(p.runID)
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		entry, err := tx.GetInbox(p.ctx, key)
+		if err != nil {
+			return err
+		}
+		var checkpoint struct {
+			HasProposal bool                      `json:"has_proposal"`
+			InstanceID  domain.ProposalInstanceID `json:"instance_id"`
+		}
+		if err := json.Unmarshal(entry.Payload, &checkpoint); err != nil {
+			return err
+		}
+		if !checkpoint.HasProposal {
+			t.Fatal("closure checkpoint recorded no proposal")
+		}
+		approval, err := tx.ClosureApprovalForInstance(p.ctx, checkpoint.InstanceID)
+		if err != nil {
+			return err
+		}
+		if approval == nil || approval.Actor != domain.ClosureApprovalActorPolicy {
+			t.Fatalf("closure approval = %+v, want policy actor", approval)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPublicationAuthorScreenFailureKeepsIndependentClosure(t *testing.T) {
 	secret := "ghp_" + strings.Repeat("x", 36)
 	for _, tc := range []struct {

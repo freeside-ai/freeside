@@ -123,6 +123,16 @@ FROM export_rejections WHERE invocation_id = ?`
 // Write-once: a byte-identical replay converges on the stored row, and a
 // second admission of the same invocation with different content fails with
 // ErrImmutableConflict.
+//
+// It also registers the run's project against the admission's base repository
+// in the same transaction (issue #1535), so a run with a recorded admission
+// always has a projects row bound to that repository. The base is the
+// daemon's own configured repository, never task text; for unattended work
+// the gates above also re-check it against the trusted profile. Every task's
+// first admission is its specification stage, so the row exists before the
+// specification can be approved, whichever path submitted the task. A
+// project already bound to a different repository fails the admission with
+// ErrImmutableConflict.
 func (tx *WriteTx) RecordExecutionAdmission(ctx context.Context, admission domain.ExecutionAdmission) error {
 	if admission.BackupEncryptionWaiver != nil {
 		return fmt.Errorf("record execution admission %q: %w",
@@ -147,7 +157,14 @@ func (tx *WriteTx) RecordExecutionAdmission(ctx context.Context, admission domai
 	if err := tx.RequireBackendConformant(ctx, admission); err != nil {
 		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
 	}
-	if err := tx.requireRecordedAttempt(ctx, admission); err != nil {
+	run, err := tx.requireRecordedAttempt(ctx, admission)
+	if err != nil {
+		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
+	}
+	// Register on the replay path too: RegisterProject converges on a matching
+	// row, so a replay heals a store that recorded the admission before this
+	// write existed, and a rebinding fails before any work is admitted.
+	if err := tx.registerAdmittedProject(ctx, run.ProjectID, admission.Base); err != nil {
 		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
 	}
 	existing, err := tx.existingBody(ctx, selectExecutionAdmissionBodySQL, admission.InvocationID)
@@ -735,12 +752,15 @@ func (tx *ReadTx) transactionBackupHealth(ctx context.Context) (*domain.BackupHe
 }
 
 // requireRecordedAttempt checks that the run carries the exact attempt the
-// admission claims. It reads the run in the writer's own transaction, so a
-// concurrent writer cannot append the attempt after this passed.
-func (tx *InternalTx) requireRecordedAttempt(ctx context.Context, admission domain.ExecutionAdmission) error {
+// admission claims, returning the run it read. It reads the run in the
+// writer's own transaction, so a concurrent writer cannot append the attempt
+// after this passed.
+func (tx *InternalTx) requireRecordedAttempt(
+	ctx context.Context, admission domain.ExecutionAdmission,
+) (domain.Run, error) {
 	run, err := tx.GetRun(ctx, admission.RunID)
 	if err != nil {
-		return err
+		return domain.Run{}, err
 	}
 	// The run's spec and policy digests are fixed at creation, and the record
 	// is what the driver is later started from, so an admission that names
@@ -748,10 +768,10 @@ func (tx *InternalTx) requireRecordedAttempt(ctx context.Context, admission doma
 	// bound to. They are available right here; take them from the run rather
 	// than from the caller's word for them.
 	if err := tx.requireBoundInputs(ctx, admission); err != nil {
-		return err
+		return domain.Run{}, err
 	}
 	if admission.SpecDigest != run.SpecDigest || admission.PolicyDigest != run.PolicyDigest {
-		return fmt.Errorf(
+		return domain.Run{}, fmt.Errorf(
 			"admission %q names spec %s and policy %s, run %q is bound to %s and %s: %w",
 			admission.InvocationID, admission.SpecDigest, admission.PolicyDigest,
 			run.ID, run.SpecDigest, run.PolicyDigest, domain.ErrParentKeyMismatch)
@@ -765,13 +785,13 @@ func (tx *InternalTx) requireRecordedAttempt(ctx context.Context, admission doma
 				continue
 			}
 			if attempt.ID != admission.AttemptID {
-				return fmt.Errorf("run %q binds invocation %q to attempt %q, admission names %q: %w",
+				return domain.Run{}, fmt.Errorf("run %q binds invocation %q to attempt %q, admission names %q: %w",
 					run.ID, admission.InvocationID, attempt.ID, admission.AttemptID, domain.ErrParentKeyMismatch)
 			}
-			return nil
+			return run, nil
 		}
 	}
-	return fmt.Errorf("run %q carries no attempt %q for invocation %q in stage %q: %w",
+	return domain.Run{}, fmt.Errorf("run %q carries no attempt %q for invocation %q in stage %q: %w",
 		run.ID, admission.AttemptID, admission.InvocationID, admission.StageID, domain.ErrParentKeyMismatch)
 }
 

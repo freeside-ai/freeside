@@ -110,8 +110,8 @@
   "finding_adjudication": null,
   "display_names": {
     "project": {
-      "text": "proj-1",
-      "source": "identifier"
+      "text": "owner/repo",
+      "source": "name"
     },
     "task": {
       "text": "task-1",

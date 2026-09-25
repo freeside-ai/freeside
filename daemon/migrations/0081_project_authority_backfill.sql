@@ -1,0 +1,4 @@
+-- Register the project authority binding for every project whose runs have
+-- recorded execution admissions but no projects row (issue #1535). The rows
+-- derive only from those admissions' base repositories, so the work runs in
+-- the store data migration, which shares this migration's transaction.

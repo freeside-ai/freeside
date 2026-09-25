@@ -75,7 +75,8 @@ func migrationsBeforeReadyResource(t *testing.T) fs.FS {
 			entry.Name() == "0077_source_issue_closure_kind.sql" ||
 			entry.Name() == "0078_publication_authorings.sql" ||
 			entry.Name() == "0079_effect_proposal_approvals.sql" ||
-			entry.Name() == "0080_effect_proposal_policy_approvals.sql" || entry.IsDir() {
+			entry.Name() == "0080_effect_proposal_policy_approvals.sql" ||
+			entry.Name() == "0081_project_authority_backfill.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())
@@ -164,8 +165,8 @@ func TestAttentionPRReferenceMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
-	if got := rawVersion(t, db); got != 80 {
-		t.Fatalf("schema version = %d, want 80", got)
+	if got := rawVersion(t, db); got != 81 {
+		t.Fatalf("schema version = %d, want 81", got)
 	}
 	got, snapshot, err := scanAttentionItemRecord(db.QueryRowContext(ctx,
 		`SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, subject_task_id,

@@ -108,7 +108,10 @@ func (f corpusFixture) mustWriteInternal(t *testing.T, mutate func(tx *store.Int
 func (f corpusFixture) seedPublicationReevaluationAuthority(t *testing.T) {
 	t.Helper()
 	ctx := context.Background()
-	profile := configRecoveryTestProfile(t, "sha256:corpus-publication-reevaluation")
+	// The corpus admits every run against owner/repo, and recording an
+	// admission binds the project to its base repository, so the project and
+	// its trust profile must name that same repository.
+	profile := trustTestProfile(t, "owner/repo", corpusRepositoryID, "sha256:corpus-publication-reevaluation")
 	project, err := domain.NewProject("proj-1", profile.Repo, profile.RepositoryID)
 	if err != nil {
 		t.Fatal(err)

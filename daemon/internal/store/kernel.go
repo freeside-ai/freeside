@@ -44,6 +44,14 @@ var ErrRowInconsistent = errors.New("stored row body inconsistent with its key c
 // tolerates only byte-identical replays: a retry converges, a rewrite fails.
 var ErrImmutableConflict = errors.New("immutable row already exists with different content")
 
+// ErrProjectAuthorityMissing is returned when the closure path finds no
+// projects row for a run's project. Every recorded execution admission
+// registers its project (RecordExecutionAdmission, issue #1535), so reaching a
+// closure without one means the store contradicts itself. It deliberately does
+// not wrap ErrNotFound: the closure gate treats a missing row as "no longer
+// closable" and would otherwise publish Refs without saying why.
+var ErrProjectAuthorityMissing = errors.New("project authority binding missing")
+
 // ErrClosureApprovalActorConflict is returned when a source-issue-closure
 // instance would carry approvals from both recorders at once: a human decision
 // row and a policy approval row. The human gate is per project, so exactly one

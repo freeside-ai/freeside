@@ -444,6 +444,71 @@ func (f specificationFixture) reopen(t *testing.T) specificationFixture {
 	return f
 }
 
+// TestCLISubmissionBindsProjectAtSpecificationAdmission pins #1535 for the
+// transaction `freesided submit` runs: submission writes no projects row, and
+// the specification stage's recorded admission binds the project to the
+// admission base before the specification can be approved.
+func TestCLISubmissionBindsProjectAtSpecificationAdmission(t *testing.T) {
+	f := newSpecificationFixture(t, true, 2)
+	driver := f.newDriver(t)
+	if err := specifyfake.Script(driver, specificationInvocationID("specification-run", 1), 0, 0, specify.Output{
+		Specification: &specify.Specification{
+			Summary: "The implementation contract is ready.", Body: "# Specification\n\nBind the project.",
+			Addressals: []specify.Addressal{},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		_, err := SubmitSpecificationRunTx(t.Context(), tx, SpecificationRunSpec{
+			SpecificationRunID: "specification-run", ImplementationRunID: "implementation-run",
+			ProjectID: "project-1", SourceArtifactID: f.source.ID, PolicyArtifactID: f.policyArt.ID,
+			ResolvedPolicy: f.policy,
+			Publication: ProductionPublication{
+				Title: "Implement approved work item", Body: "Implements the operator-approved specification.",
+				CommitAuthor: ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345},
+			},
+		})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	project := func() (domain.Project, error) {
+		var got domain.Project
+		err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+			var err error
+			got, err = tx.GetProject(t.Context(), "project-1")
+			return err
+		})
+		return got, err
+	}
+	if got, err := project(); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("project after submission = %+v, %v; want no row", got, err)
+	}
+
+	workflow := f.newEngine(t, driver)
+	for pass := 1; pass <= 3; pass++ {
+		if _, err := workflow.Reconcile(t.Context()); err != nil {
+			t.Fatalf("reconcile pass %d: %v", pass, err)
+		}
+		if _, err := f.signet.GetAttentionItem(t.Context(), "spec-approval-implementation-run-1"); err == nil {
+			break
+		}
+	}
+	item, _ := f.item(t, "spec-approval-implementation-run-1")
+	if item.Status != domain.StatusOpen {
+		t.Fatalf("specification approval status = %s, want open", item.Status)
+	}
+	got, err := project()
+	if err != nil {
+		t.Fatalf("project after specification admission: %v", err)
+	}
+	want := domain.Project{ID: "project-1", Repo: "owner/repo", RepositoryID: 1}
+	if got != want {
+		t.Fatalf("project = %+v, want %+v", got, want)
+	}
+}
+
 func TestSpecificationRestartsAcrossDurableBoundaries(t *testing.T) {
 	for _, transition := range []DurableTransition{
 		DurableTransitionSpecificationOutcome,

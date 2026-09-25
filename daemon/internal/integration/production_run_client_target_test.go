@@ -711,6 +711,11 @@ func TestVerifyClientTargetSource(t *testing.T) {
 			}
 			if err := st.Write(ctx, func(tx *store.WriteTx) error {
 				if tc.name != "missing project" {
+					// Stands in for the row the specification stage's
+					// admission records (#1535); this hand-built store has
+					// no engine to admit it. The admission write itself is
+					// proved by TestClientSubmissionPublishesPolicyApprovedClose
+					// and TestCLISubmissionBindsProjectAtSpecificationAdmission.
 					if err := tx.RegisterProject(ctx, domain.Project{ID: project, Repo: "example/project", RepositoryID: 123}); err != nil {
 						return err
 					}
