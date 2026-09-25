@@ -53,6 +53,20 @@ func (tx *InternalTx) RegisterProject(ctx context.Context, project domain.Projec
 	return nil
 }
 
+// registerAdmittedProject binds a run's project to the repository its
+// execution admission names. It is the one production writer outside label
+// intake, and the store's backfill replays it for admissions recorded before
+// it existed.
+func (tx *InternalTx) registerAdmittedProject(
+	ctx context.Context, projectID domain.ProjectID, base domain.BaseRevision,
+) error {
+	project, err := domain.NewProject(projectID, base.Repo, base.RepositoryID)
+	if err != nil {
+		return fmt.Errorf("admitted project %q: %w", projectID, err)
+	}
+	return tx.RegisterProject(ctx, project)
+}
+
 // GetProject reconstructs one project↔repository authority binding, reporting
 // ErrNotFound when absent. decode re-validates the body (Project.Validate is the
 // fail-closed reconstruction gate) and the extracted repository_id is

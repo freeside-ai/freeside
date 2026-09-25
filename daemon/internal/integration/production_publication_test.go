@@ -322,16 +322,9 @@ func newProductionPublicationHarnessWithMetadata(
 	}
 
 	runID := domain.RunID("run-production-publication")
+	// No direct project registration: the run's first recorded admission
+	// binds the project to its base repository, as in production (#1535).
 	projectID := domain.ProjectID("project-production-publication")
-	project, err := domain.NewProject(projectID, h.profile.Repo, h.profile.RepositoryID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := h.store.WriteInternal(h.ctx, func(tx *store.InternalTx) error {
-		return tx.RegisterProject(h.ctx, project)
-	}); err != nil {
-		t.Fatal(err)
-	}
 	policyKeys := append([]domain.PolicyKey{{
 		Key: "paths", Value: strings.Join(candidatePaths, ","),
 		Provenance: domain.KeyProvenance{
@@ -350,7 +343,14 @@ func newProductionPublicationHarnessWithMetadata(
 		if len(clientName) > 1 {
 			commandID = clientName[1]
 		}
-		submitted, specBody = submitClientForPublication(t, h, image, projectID, clientName[0], commandID, prior)
+		// A client submission's source is its task text; the metadata's
+		// source issue, when a test sets one, stands in for what the client
+		// typed.
+		source := clientPublicationSource
+		if publication.SourceIssue != "" {
+			source = publication.SourceIssue
+		}
+		submitted, specBody = submitClientForPublication(t, h, image, projectID, source, clientName[0], commandID, prior)
 		runID, spec.Digest = submitted.Run.ID, submitted.Run.SpecDigest
 	} else {
 		submitted, err = engine.SubmitProductionRun(h.ctx, h.store, engine.ProductionRunSpec{

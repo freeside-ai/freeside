@@ -708,6 +708,37 @@ func TestAttentionItemCardFactReplayPreservesStoredRepresentation(t *testing.T) 
 	}
 }
 
+// TestAttentionItemReplayConvergesAcrossProjectRegistration: an item created
+// before its project had an authority row carries the identifier label. After
+// admission or the 0081 backfill registers the project (#1535), a
+// same-version constructor replay derives the repository label; it must
+// converge on the stored item rather than be refused as stale.
+func TestAttentionItemReplayConvergesAcrossProjectRegistration(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
+	f := newFixtures(t)
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutConversation(ctx, f.conversation); err != nil {
+			return err
+		}
+		return f.putItem(ctx, tx)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RegisterProject(ctx, domain.Project{ID: f.item.ProjectID, Repo: "owner/repo", RepositoryID: 424242})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error { return f.putItem(ctx, tx) }); err != nil {
+		t.Fatalf("same-version replay after project registration: %v", err)
+	}
+	if f.item.DisplayNames == nil || f.item.DisplayNames.Project.Source != domain.DisplayNameSourceName {
+		t.Fatalf("replay did not derive the repository label: %#v", f.item.DisplayNames)
+	}
+}
+
 // TestAttentionItemStaleWriteRejected: a changed item body must advance
 // item_version, or a stale copy could roll back a later transition (a
 // resolved v2 overwritten by an open v1); a byte-identical replay converges

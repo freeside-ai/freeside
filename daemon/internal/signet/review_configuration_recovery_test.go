@@ -13,9 +13,16 @@ import (
 
 func configRecoveryTestProfile(t *testing.T, configDigest domain.Digest) domain.AutomationTrustProfile {
 	t.Helper()
+	return trustTestProfile(t, "acme/widgets", 7, configDigest)
+}
+
+func trustTestProfile(
+	t *testing.T, repo string, repositoryID int64, configDigest domain.Digest,
+) domain.AutomationTrustProfile {
+	t.Helper()
 	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
-		Repo:                       "acme/widgets",
-		RepositoryID:               7,
+		Repo:                       repo,
+		RepositoryID:               repositoryID,
 		PRExecution:                domain.PRExecutionAuditedSameRepo,
 		CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
