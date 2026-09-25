@@ -19,6 +19,7 @@ pattern; a routine run needs no row.
 | #1211 run-82, 2026-09-15 to 16 | #1211 | gh-imgup#82 to PR #110, merged | Client target | Preparation was blocked twice before launch: no production submission-policy configuration (#1360), then an expired Codex token at composition preflight (the recovery gap is #1363). The client-created run produced 19 findings mapped to 21 units, 13 required for exit. The PR merged without the `Closes #82` its template required, which started tracker #1445. |
 | #1211 run-70, 2026-09-21 | #1211 | gh-imgup#70 to PR #111, ready for review | Client target | Implementation aborted at ten minutes on the writer stop timeout (fixed in-run, PR #1456, validated on a resumed implementation of about 29 minutes). Publication blocked because a stale implementer prompt package was reused. Nine findings (#1457 to #1465); the recommendation held exit only on Stop working from a real client (#1457). The owner then narrowed the gate to a live Stop check and made the next run also the #1445 proof. |
 | #1445 run-113 after #1535, 2026-09-25 | #1445 | gh-imgup#113 to PR #120, merged | Client target | The first passing policy-approved closure proof: `verify-source` receipt, stored authoring, a `propose_site` proposal, a policy approval, and publisher-written `Closes #113`; the merge closed the issue. The first session died at preflight because Claude Code auto-update pruned the pinned judgment CLI. `return_to_agent` worked live for the first time: the feedback run republished onto the same PR. Two clean reviews still passed a PR missing the decision note its repository's AGENTS.md required, because the review rubric only admits defects with a failure path (#1542). The successor publication raised a self-clearing "repair external state" card (#1544). Restore stalled at `registered=false` again. |
+| #1445 run-114 human gate, 2026-09-25 | #1445, #1211 | gh-imgup#114 to PR #121, merged by the owner | Client target | The human-gated proof passed and closed #1445: the PR stayed a draft with `Refs #114` until the closure card was approved on the iPhone, then the publisher wrote `Closes #114`. The first session died at preflight because a review-prompt bump (PR #1546) invalidated the onboarded reviewer digest. The reviewer flagged the missing decision note live (#1542 working), but the adjudicator recommended parking an in-scope fix twice; two Discuss rounds reached `remediate` (#1550). A #1211 sketch exercise afterwards bricked the daemon with a durable stop once its clarified spec was ready (#1556). Restore stalled at `registered=false` a third time, probably because nobody was handed the menu Start step. |
 
 ## Recurring Pitfalls
 
@@ -64,6 +65,15 @@ Look for each of these before and during the run; most have bitten twice.
 - **Restore is not proved by asking.** Supervised restoration has timed out
   with `registered=false` more than once; verify registration and `/health`
   on the normal port before calling the session complete.
+- **Hand over the menu Start step at restore.** `complete` only requests
+  completion; the foreground harness then stops the campaign daemon,
+  releases the rig, and runs the restore helper, which prints "Restore the
+  supervised daemon from the installed Freeside menu: ... choose Start" and
+  waits 120 s. Watch the harness output and tell the operator to choose
+  Start when that prompt appears, not before: an early Start can launch
+  the supervised daemon while the run is still cleaning up. Run-114 never
+  handed it over and stalled at `registered=false`, which is probably why
+  earlier runs stalled too.
 - **Auto-update prunes a pinned CLI.** A judgment pin that points into
   Claude Code's auto-updated `versions/` directory disappears between runs.
   Copy the binary into the run root and pin that copy by path and SHA256.
@@ -92,10 +102,38 @@ Look for each of these before and during the run; most have bitten twice.
   campaign daemon. Stop it again and record it.
 - **Inherited approvals get rejected.** Preflight refuses a reviewer
   configuration approval from an earlier deployment; expect to approve the
-  current proposal before the first submission.
+  current proposal before the first submission. A review-prompt version bump
+  changes the reviewer configuration digest, so check `git log` for prompt
+  changes since the last onboarding and re-run onboarding with the new
+  `-review-config-digest` before launch (run-114 lost a session to this).
+- **A recommended park route can be wrong.** An adjudication card's
+  recommendation isn't proof that accepting it moves the run. Per the engine
+  code (not yet observed live), accepting `park_revision` or
+  `park_separate_work` records no disposition and starts no remediation, so
+  the run would stall. When the fix fits the declared paths,
+  answer with Discuss and ask the adjudicator to return compatibility and
+  route `null`, so the engine's `allowed` verdict gives `remediate` (#1550).
+- **Pair the Mac through loopback.** Run-114's Mac client couldn't pair
+  against the campaign's tailnet URL; launched with
+  `-FreesideServerURL http://127.0.0.1:<port>` it paired at once (#1557). The
+  iPhone pairs through the tailnet URL as before.
+- **Run a sketch exercise after every proof you need.** Answering a sketch's
+  clarification questions put the daemon in a durable stop once the spec was
+  ready (#1556). Until that's fixed, run sketch or clarification checks last
+  in a session, and don't Acknowledge or doctor the stop: it's evidence.
 - **Private details leak through the run record.** The first Wave 7 comment
   posted a tailnet address and a device name; the template now asks for
   build commits only.
+- **Session logs carry the pairing code.** The daemon log prints the startup
+  pairing code on one line. Filter it out (`grep -v pairing_code`) before
+  tailing or grepping the log into a transcript. The harness's own failure
+  paths dump an unfiltered `tail -50` of that log until #1559 lands, so
+  keep a failure's stderr out of the record too.
+- **Reading the store after the daemon stops.** A `?mode=ro` open fails once
+  the daemon is gone. Copy `freeside.db` with its `-wal` and `-shm` files,
+  if present (never the neighboring key files), to scratch and open the
+  copy normally. Copying the database alone, or opening it with
+  `?immutable=1`, skips commits still in the WAL after an unclean exit.
 
 ## Mode And Flags Past Trackers Required
 
