@@ -7,7 +7,10 @@ import Observation
 /// submit_task ClientCommand with a fresh command id and no decision envelope,
 /// accepts the returned result only
 /// through the trust gate, then refreshes for read-your-write and reports the
-/// submitted task id. A lost response keeps the built command so
+/// submitted task id. Before a new submission is built, one sync round
+/// issued after the tap must end `.fresh`, so the command is only ever sent
+/// against validated current state (§5.14). A lost response keeps the built
+/// command so
 /// `retry` can resend the identical command id; the daemon converges a repeat
 /// of the same command on one task. A daemon answer that authoritatively
 /// rejects the submission is a `.rejected` typed reason, not a retry.
@@ -23,9 +26,11 @@ public final class TaskSubmissionModel {
         /// may have committed with its response lost, so it stays retryable. Retrying
         /// reuses the command id, so the daemon converges on one task.
         case lost
-        /// The daemon answered authoritatively that it did not record the
-        /// submission (a non-authentication 4xx). The reason is shown and retry
-        /// is not offered.
+        /// Nothing was recorded and retry is not offered: the daemon answered
+        /// authoritatively that it did not record the submission (a
+        /// non-authentication 4xx), or the submission was stopped before
+        /// sending (no validated state, or no durable retention). The reason
+        /// is shown.
         case rejected(String)
     }
 
@@ -40,19 +45,39 @@ public final class TaskSubmissionModel {
         self.coordinator = coordinator
     }
 
-    /// Whether the composer may submit under `freshness`. A submission has no
-    /// per-item version to validate, so unlike a decision's `actionsEnabled`
-    /// it opens only on a settled sync round-trip (`.fresh`), the "validated
-    /// current state" §5.14 requires.
+    /// Whether the composer may open and submit under `freshness`. A
+    /// submission has no per-item version to validate, so it needs the
+    /// "validated current state" §5.14 requires; `submit` gets that by
+    /// running its own round before sending. The composer therefore stays
+    /// available while the cache is merely `.unvalidated`, which a busy
+    /// daemon makes the steady state (#1554), and closes only when sync is
+    /// failing, where a validation round could not succeed.
     public static func canCompose(freshness: InboxStore.Freshness) -> Bool {
-        freshness == .fresh
+        composeBlockedReason(freshness: freshness) == nil
+    }
+
+    /// Why the composer is closed under `freshness`, or nil when it is open.
+    /// Shown beside the disabled New Task action so the operator is not left
+    /// guessing.
+    public static func composeBlockedReason(freshness: InboxStore.Freshness) -> String? {
+        switch freshness {
+        case .fresh, .unvalidated:
+            return nil
+        case .unreachable:
+            return "New tasks need the daemon, which is unreachable."
+        case .syncFailing:
+            return "New tasks need a working sync with the daemon."
+        case .contractMismatch:
+            return "New tasks need a daemon on a matching version."
+        case .unauthenticated:
+            return "New tasks need this device to be paired again."
+        }
     }
 
     /// The coordinator's current sync freshness, observed so the composer can
-    /// keep its submit action gated on `.fresh` for the sheet's whole lifetime,
-    /// not only when it opens: a heartbeat or foreground refresh can degrade
-    /// freshness while the operator composes, and a stale-epoch submit would
-    /// carry an out-of-date project selection.
+    /// keep its submit action gated by `canCompose` for the sheet's whole
+    /// lifetime, not only when it opens: sync can fail while the operator
+    /// composes.
     public var freshness: InboxStore.Freshness { coordinator.store.freshness }
 
     public var pendingSubmissions: [Components.Schemas.ClientCommand] {
@@ -75,6 +100,23 @@ public final class TaskSubmissionModel {
     /// last one. A submit_task command carries no decision envelope.
     @discardableResult
     public func submit(projectID: String, source: String, name: String? = nil) async -> String? {
+        state = .submitting
+        // The operator composed against the cache as it stood, and a stale
+        // epoch would carry an out-of-date project selection. A round whose
+        // first read is issued after the tap validates that state; send only
+        // if it ended `.fresh`.
+        guard await coordinator.refreshAfterCommit() else {
+            state = .rejected(
+                "Freeside couldn't confirm the daemon's current state. Nothing was sent. Try again.")
+            return nil
+        }
+        // The round runs in its own task, so cancelling the caller (the sheet
+        // dismissed mid-validation) does not stop it. Honor the cancel here,
+        // before anything is retained or sent.
+        guard !Task.isCancelled else {
+            state = .idle
+            return nil
+        }
         let command = Components.Schemas.ClientCommand(
             command_id: UUID().uuidString,
             device_id: coordinator.store.device.deviceID,

@@ -35,29 +35,32 @@ import Testing
         let reached = AsyncGate()
         let release = AsyncGate()
         let committed = AsyncGate()
-        // Hold the in-flight refresh on its run-list read, its last daemon read,
-        // so all of its reads precede the commit and it cannot close the gap
-        // itself; only a round begun after the commit surfaces the task. Signal
-        // the commit from an after-respond hook: the transport runs
-        // before-respond ahead of routing (MockServerTransport), so a
-        // before-respond signal would open `committed` before submitCommand has
-        // actually committed.
-        let firstRunList = ScriptedResponses([.hold(reached: reached, release: release)])
-        await server.setAfterRespond { operationID in
-            switch operationID {
-            case "submitCommand": await committed.open()
-            case "listRuns": try await firstRunList.next()
-            default: break
+        // Submit runs its validation round first, so the in-flight refresh
+        // must start after that round and before the commit: the send's
+        // before-respond hook starts it and holds it on its run-list read,
+        // its last daemon read, so all of its reads precede the commit and it
+        // cannot close the gap itself; only a round begun after the commit
+        // surfaces the task. Signal the commit from an after-respond hook:
+        // the transport runs before-respond ahead of routing
+        // (MockServerTransport), so a before-respond signal would open
+        // `committed` before submitCommand has actually committed.
+        await server.setBeforeRespond { operationID in
+            guard operationID == "submitCommand" else { return }
+            let firstRunList = ScriptedResponses([.hold(reached: reached, release: release)])
+            await server.setAfterRespond { operationID in
+                switch operationID {
+                case "submitCommand": await committed.open()
+                case "listRuns": try await firstRunList.next()
+                default: break
+                }
             }
+            Task { @MainActor in await coordinator.refresh() }
+            await reached.wait()
         }
 
-        // A refresh begun before the submit, held on its pre-commit reads.
-        let preCommitRound = Task { await coordinator.refresh() }
-        await reached.wait()
-
-        // Submit through the model while that round is in flight. `submit`
-        // awaits `refreshAfterCommit`, which must run a round that observes the
-        // committed task rather than coalescing onto the pre-commit round.
+        // `submit` awaits `refreshAfterCommit` after the send, which must run
+        // a round that observes the committed task rather than coalescing
+        // onto the pre-commit round.
         let submission = Task {
             await model.submit(projectID: "project-1", source: "# Health check")
         }
@@ -67,12 +70,86 @@ import Testing
         // would leave the task unseen, as the SyncCoordinator coalescing test does.
         await Task.yield()
         await release.open()
-        await preCommitRound.value
         let taskID = await submission.value
 
         let id = try #require(taskID)
         #expect(model.state == .submitted(taskID: id))
         #expect(coordinator.tasks.contains { $0.task.id == id })
+    }
+
+    @Test func submitValidatesAnUnvalidatedCacheBeforeSending() async throws {
+        let server = MockServer()
+        let coordinator = coordinator(server: server)
+        await coordinator.bootstrap()
+        // A partial read past the last full snapshot leaves the cache
+        // `.unvalidated`, the steady state against a busy daemon (#1554).
+        await server.advanceRun(id: RunFixtures.activeRunID)
+        await coordinator.refreshRuns()
+        #expect(coordinator.store.freshness == .unvalidated)
+        #expect(TaskSubmissionModel.canCompose(freshness: coordinator.store.freshness))
+
+        let operations = OperationLog()
+        await server.setBeforeRespond { await operations.append($0) }
+        let model = TaskSubmissionModel(coordinator: coordinator)
+        let taskID = await model.submit(projectID: "project-1", source: "# Health check")
+
+        let id = try #require(taskID)
+        #expect(model.state == .submitted(taskID: id))
+        // The validation round's first read precedes the send.
+        let issued = await operations.ids
+        let send = try #require(issued.firstIndex(of: "submitCommand"))
+        #expect(issued[..<send].contains("getSyncRevision"))
+    }
+
+    @Test func cancellingDuringValidationSendsNothing() async {
+        let server = MockServer()
+        let coordinator = coordinator(server: server)
+        await coordinator.bootstrap()
+        let reached = AsyncGate()
+        let release = AsyncGate()
+        let validationRead = ScriptedResponses([.hold(reached: reached, release: release)])
+        let operations = OperationLog()
+        await server.setBeforeRespond { operationID in
+            await operations.append(operationID)
+            if operationID == "getSyncRevision" { try await validationRead.next() }
+        }
+
+        let model = TaskSubmissionModel(coordinator: coordinator)
+        let submission = Task {
+            await model.submit(projectID: "project-1", source: "# Health check")
+        }
+        await reached.wait()
+        // The operator dismisses the sheet while the validation round runs.
+        submission.cancel()
+        await release.open()
+        let taskID = await submission.value
+
+        #expect(taskID == nil)
+        #expect(model.state == .idle)
+        #expect(model.pendingSubmissions.isEmpty)
+        #expect(!(await operations.ids).contains("submitCommand"))
+    }
+
+    @Test func unreachableDaemonSendsNothing() async {
+        let server = MockServer()
+        let coordinator = coordinator(server: server)
+        await coordinator.bootstrap()
+        let operations = OperationLog()
+        await server.setBeforeRespond { operationID in
+            await operations.append(operationID)
+            throw InjectedFailure()
+        }
+
+        let model = TaskSubmissionModel(coordinator: coordinator)
+        let taskID = await model.submit(projectID: "project-1", source: "# Health check")
+
+        #expect(taskID == nil)
+        guard case .rejected = model.state else {
+            Issue.record("expected a rejection; state \(model.state)")
+            return
+        }
+        #expect(model.pendingSubmissions.isEmpty)
+        #expect(!(await operations.ids).contains("submitCommand"))
     }
 
     @Test func sameSourceCreatesDistinctTasks() async {
@@ -148,7 +225,12 @@ import Testing
         let client = APIClientFactory.mock(server: server) { grant.device_token }
         let coordinator = SyncCoordinator(
             client: client, device: DeviceIdentity(deviceID: active.id), cache: InMemoryCacheStore())
-        _ = try await coordinator.store.client.revokeDevice(path: .init(device_id: active.id)).ok
+        // Revoke between the validation round and the send, the one window
+        // in which a submission can still meet a rejected credential.
+        await server.setBeforeRespond { operationID in
+            guard operationID == "submitCommand" else { return }
+            _ = try await client.revokeDevice(path: .init(device_id: active.id)).ok
+        }
 
         let model = TaskSubmissionModel(coordinator: coordinator)
         let taskID = await model.submit(projectID: "project-1", source: "Work after revocation.")
@@ -160,17 +242,37 @@ import Testing
         #expect(coordinator.store.freshness == .unauthenticated)
     }
 
-    @Test func canComposeOnlyWhenFresh() {
+    @Test func canComposeUnlessSyncIsFailing() {
+        // `.unvalidated` stays open: submit validates with its own round.
         #expect(TaskSubmissionModel.canCompose(freshness: .fresh))
-        let nonFresh: [InboxStore.Freshness] = [
-            .unvalidated,
-            .unreachable,
-            .syncFailing,
-            .contractMismatch(daemonContract: "sha256:" + String(repeating: "0", count: 64)),
-            .unauthenticated,
-        ]
-        for freshness in nonFresh {
+        #expect(TaskSubmissionModel.canCompose(freshness: .unvalidated))
+        for freshness in Self.failingFreshness {
             #expect(!TaskSubmissionModel.canCompose(freshness: freshness))
         }
+    }
+
+    @Test func everyClosedComposerStatesItsReason() {
+        #expect(TaskSubmissionModel.composeBlockedReason(freshness: .fresh) == nil)
+        #expect(TaskSubmissionModel.composeBlockedReason(freshness: .unvalidated) == nil)
+        for freshness in Self.failingFreshness {
+            let reason = TaskSubmissionModel.composeBlockedReason(freshness: freshness)
+            #expect(reason?.isEmpty == false)
+        }
+    }
+
+    private static let failingFreshness: [InboxStore.Freshness] = [
+        .unreachable,
+        .syncFailing,
+        .contractMismatch(daemonContract: "sha256:" + String(repeating: "0", count: 64)),
+        .unauthenticated,
+    ]
+}
+
+/// The daemon operations a test observed, in issue order.
+private actor OperationLog {
+    private(set) var ids: [String] = []
+
+    func append(_ id: String) {
+        ids.append(id)
     }
 }
