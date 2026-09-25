@@ -269,6 +269,30 @@ func implementationSourceInvocation(item domain.AttentionItem, run domain.Run) (
 	})
 }
 
+// requireUnchangedFeedbackItem is the in-transaction check that an answered
+// item still matches the copy reconcileOperatorFeedbackActions loaded. The
+// gated read runs first so its current-policy gates still fail closed, but the
+// comparison is record to record: the caller loaded item through
+// GetAttentionItemRecord, and GetAttentionItem projects the task's current
+// name into DisplayNames, so a task rename after the answer (a specification
+// title or heading, the task namer) would otherwise reject every consumed
+// answer on every later pass (#1556).
+func requireUnchangedFeedbackItem(
+	ctx context.Context, tx *store.ReadTx, item domain.AttentionItem,
+) (domain.AttentionItem, error) {
+	if _, err := tx.GetAttentionItem(ctx, item.ID); err != nil {
+		return domain.AttentionItem{}, err
+	}
+	record, err := tx.GetAttentionItemRecord(ctx, item.ID)
+	if err != nil {
+		return domain.AttentionItem{}, err
+	}
+	if !reflect.DeepEqual(record, item) {
+		return domain.AttentionItem{}, domain.ErrParentKeyMismatch
+	}
+	return record, nil
+}
+
 func (e *Engine) reconcileOperatorFeedback(ctx context.Context) (int, error) {
 	return e.reconcileOperatorFeedbackActions(ctx, domain.ActionAnswerAndRetry)
 }
@@ -502,12 +526,12 @@ func (e *Engine) enqueueSpecificationAnswer(
 		if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, run.ID); err != nil {
 			return err
 		}
-		current, err := tx.GetAttentionItem(ctx, item.ID)
+		current, err := requireUnchangedFeedbackItem(ctx, &tx.ReadTx, item)
 		if err != nil {
 			return err
 		}
 		stored, err := tx.GetCommand(ctx, command.CommandID)
-		if err != nil || !reflect.DeepEqual(current, item) || !reflect.DeepEqual(stored, command) ||
+		if err != nil || !reflect.DeepEqual(stored, command) ||
 			!operatorFeedbackCommandMatchesItem(stored, current) {
 			return errors.Join(err, domain.ErrParentKeyMismatch)
 		}
@@ -613,12 +637,12 @@ func (e *Engine) enqueueSpecificationRevisionCampaign(
 	}
 	inserted := false
 	err = e.store.Write(ctx, func(tx *store.WriteTx) error {
-		currentItem, err := tx.GetAttentionItem(ctx, item.ID)
+		currentItem, err := requireUnchangedFeedbackItem(ctx, &tx.ReadTx, item)
 		if err != nil {
 			return err
 		}
 		storedCommand, err := tx.GetCommand(ctx, command.CommandID)
-		if err != nil || !reflect.DeepEqual(currentItem, item) || !reflect.DeepEqual(storedCommand, command) ||
+		if err != nil || !reflect.DeepEqual(storedCommand, command) ||
 			!operatorFeedbackCommandMatchesItem(storedCommand, currentItem) {
 			return errors.Join(err, domain.ErrParentKeyMismatch)
 		}
@@ -875,12 +899,12 @@ func (e *Engine) persistImplementationFeedback(
 		if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, runID); err != nil {
 			return err
 		}
-		current, err := tx.GetAttentionItem(ctx, item.ID)
+		current, err := requireUnchangedFeedbackItem(ctx, &tx.ReadTx, item)
 		if err != nil {
 			return err
 		}
 		stored, err := tx.GetCommand(ctx, command.CommandID)
-		if err != nil || !reflect.DeepEqual(current, item) || !reflect.DeepEqual(stored, command) ||
+		if err != nil || !reflect.DeepEqual(stored, command) ||
 			!operatorFeedbackCommandMatchesItem(stored, current) {
 			return errors.Join(err, domain.ErrParentKeyMismatch)
 		}
