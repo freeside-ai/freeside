@@ -3422,8 +3422,8 @@ effect registry), which binds the proposal digest. The approval comes from the
 project's policy actor for both provenances, or from the `effect_proposal` action
 when project policy keeps the human gate on: a label-intake `issue_subject`
 source is a verified close, and a same-repository client-supplied source URL is a
-recommendation, marked as such on the proposal and in the PR body's Source issue
-line so the person merging sees it for what it is. A cross-repository source URL,
+recommendation, marked as such on the proposal and in the PR body's Source Issue
+section so the person merging sees it for what it is. A cross-repository source URL,
 or any failure to admit or approve the closure proposal or resolve its metadata,
 yields `Refs` or the descriptive Source issue link and no close. A prose-screening
 failure is independent: it falls the body back to v1 rendering but still carries an

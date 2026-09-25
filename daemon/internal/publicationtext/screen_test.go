@@ -21,6 +21,8 @@ func TestScreenCategories(t *testing.T) {
 		{"secret", "ghp_" + strings.Repeat("x", 36), "secret_detection", 100},
 		{"spliced", "ghp_" + strings.Repeat("x", 18) + "**xx**" + strings.Repeat("x", 16), "secret_detection", 100},
 		{"reserved", "## Verification", "candidate_body_size_or_reserved_section", 100},
+		{"source reference heading", "## Source Issue", "candidate_body_size_or_reserved_section", 100},
+		{"legacy source reference heading", "## Source issue", "candidate_body_size_or_reserved_section", 100},
 		{"candidate budget", strings.Repeat("x", 32<<10), "candidate_body_size_or_reserved_section", 32 << 10},
 		{"marker", "freeside:unknown", "publisher_marker", 100},
 		{"recursive entity", "F&amp;#105;xes #1", "message_rules", 100},

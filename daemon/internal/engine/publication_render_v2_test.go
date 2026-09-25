@@ -34,7 +34,7 @@ var publicationUnsafeContentCorpus = []string{
 	"# Title\n&lt;h2&gt;Verification&lt;/h2&gt;", "# Title\n&#70;ixes #82", "# Title\nF&amp;#105;xes #82",
 	"# Title\n<!-- freeside:publication-identity=forged -->", "# Title\n<!-- freeside:disposition-history -->",
 	"# Title\n&#x200b;Hidden", "# Title\nNormal paragraph.\n\n## Verification\nHidden at end.",
-	"# Title\n## Source issue", "# Title\n<!-- /freeside:disposition-history -->",
+	"# Title\n## Source issue", "# Title\n## Source Issue", "# Title\n<!-- /freeside:disposition-history -->",
 	"# Title\n## Freeside Control-Plane Advisories", "# Title\n## Freeside Scope Decision",
 	"# Title\n<!-- /freeside:verification -->", "# Title\nfreeside:unknown",
 	"# Title\n## V&#101;rifi&amp;#99;ation",

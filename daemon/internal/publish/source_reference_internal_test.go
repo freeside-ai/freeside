@@ -82,6 +82,7 @@ func TestContainsSourceReferenceMarker(t *testing.T) {
 	reject := []string{
 		sourceReferenceOpenMarker,
 		"prose\n\n## Source issue\n\nCloses #7",
+		"prose\n\n## Source Issue\n\nCloses #7",
 		"<!-- freeside:source-reference -->",
 	}
 	for _, body := range reject {
@@ -115,7 +116,7 @@ func TestRenderSourceReference(t *testing.T) {
 		{
 			name:     "closes verified",
 			res:      closureResolution{outcome: domain.ClosureOutcome{Reference: domain.ClosureReferenceCloses}, target: 7},
-			contains: []string{sourceReferenceOpenMarker, "## Source issue", "Closes #7", sourceReferenceCloseMarker},
+			contains: []string{sourceReferenceOpenMarker, "## Source Issue", "Closes #7", sourceReferenceCloseMarker},
 			absent:   []string{"recommended"},
 		},
 		{
@@ -171,6 +172,51 @@ func TestRenderSourceReference(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestDesiredPRContentPlacesSourceReferenceFirst: the source-reference
+// section heads the body, above the authored prose and Verification, so the
+// person merging reads the close reference under the title (#1540); with no
+// reference the prose leads as before.
+func TestDesiredPRContentPlacesSourceReferenceFirst(t *testing.T) {
+	t.Parallel()
+	c, _ := verificationFixture(t)
+	c.Title, c.Body = "Placement", "## Why\n\nAuthored prose."
+	identity, err := DeriveIdentity(IdentityInput{
+		Repo: "freeside-ai/repo", BaseRef: "main", SourceHeadSHA: c.HeadSHA,
+		ArtifactDigests: []domain.Digest{c.Artifacts[0].Digest},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	closes := closureResolution{outcome: domain.ClosureOutcome{Reference: domain.ClosureReferenceCloses}, target: 7}
+	_, body, err := desiredPRContent(identity, c, closes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(body, sourceReferenceOpenMarker) {
+		t.Fatalf("body does not open with the source-reference section:\n%s", body)
+	}
+	order := []string{
+		sourceReferenceOpenMarker, "## Source Issue", "Closes #7", sourceReferenceCloseMarker,
+		"## Why", "## Verification", identity.Marker(),
+	}
+	last := -1
+	for _, want := range order {
+		at := strings.Index(body, want)
+		if at <= last {
+			t.Fatalf("%q at %d, want after %d:\n%s", want, at, last, body)
+		}
+		last = at
+	}
+
+	_, plain, err := desiredPRContent(identity, c, closureResolution{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(plain, c.Body) || strings.Contains(plain, sourceReferenceMarkerName) {
+		t.Fatalf("reference-free body does not lead with the prose:\n%s", plain)
 	}
 }
 
