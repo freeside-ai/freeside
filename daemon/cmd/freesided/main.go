@@ -38,6 +38,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/procbound"
 	"github.com/freeside-ai/freeside/daemon/internal/scheduler"
+	"github.com/freeside-ai/freeside/daemon/internal/seedfixture"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -188,6 +189,8 @@ func main() {
 	flags.StringVar(&judgmentsConfig.ExpectedDigest, "judgment-configuration-digest", "", "required preflight digest when subscription judgments are enabled")
 	seedWalkingSkeleton := flags.Bool("seed-walking-skeleton", false,
 		"seed the 1A.0 walking-skeleton demo run under the fake driver (off by default so a production store stays empty, #1127)")
+	seedFixture := flags.String("seed-fixture", "",
+		"load a named development fixture into an empty ephemeral store (requires -driver disabled): representative")
 	agentImage := flags.String("agent-image", "", "digest-pinned Claude agent image")
 	exporterImage := flags.String("exporter-image", "", "digest-pinned export helper image")
 	containerBin := flags.String("container-bin", "container", "Apple container CLI path")
@@ -320,6 +323,8 @@ func main() {
 		ApprovedRecipes:                    approvedRecipes,
 		BackupEncryptionWaiverRepositoryID: backupEncryptionWaiverRepositoryID.Value(),
 		SeedWalkingSkeleton:                *seedWalkingSkeleton,
+		SeedFixture:                        *seedFixture,
+		Environment:                        env,
 		Logger:                             logger,
 	}
 	mode, err := parseOperatingMode(*operatingMode)
@@ -441,6 +446,15 @@ type config struct {
 	// SeedWalkingSkeleton seeds the 1A.0 walking-skeleton demo run at startup
 	// under an explicitly selected fake driver. Seeding alone never enables it.
 	SeedWalkingSkeleton bool
+	// SeedFixture names a seedfixture loaded into an empty store at startup
+	// (#1503). It is refused outside the ephemeral tier and with any driver,
+	// so fixture state never reaches a supervised store and the seeding start
+	// runs no engine. The fixture's dispatch intents are recorded already
+	// dispatched, so a later driver start on the store has none to execute.
+	SeedFixture string
+	// Environment is the tier the daemon serves. It gates SeedFixture and the
+	// ephemeral driverless admission floor in storeOptions.
+	Environment environment
 	// IntakeInitiators are the configured label initiators the label-intake
 	// reconciler observes (#659). Empty leaves the loop supervised but idle; the
 	// rein resolver and workflow-definition parsing that populate it are a later
@@ -508,6 +522,17 @@ func (cfg config) storeOptions() (store.Options, error) {
 			domain.ErrBackupEncryptionWaiverUnsupported)
 	}
 	if cfg.Claude == nil {
+		if cfg.Environment == environmentEphemeral && !cfg.FakeDriverEnabled {
+			// An ephemeral daemon without a driver admits nothing itself, so
+			// the only admissions in its store are seeded fixture records.
+			// The attended_dev floor lets those read back, on the seeding
+			// start and on every restart of the same store; without it the
+			// re-gate fails them closed. Decision:
+			// devlog/2026-09-25-1608-seed-fixture-admission-floor.md.
+			opts.AdmissionFloors = map[domain.OperatingMode]domain.CapabilitySnapshot{
+				domain.ModeAttendedDev: admissionCapabilitySnapshot(domain.ModeAttendedDev),
+			}
+		}
 		return opts, nil
 	}
 	// The store re-gates every recorded admission against the operator's
@@ -571,6 +596,12 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	}
 	if cfg.SeedWalkingSkeleton && !cfg.FakeDriverEnabled {
 		return nil, errors.New("-seed-walking-skeleton requires -driver fake")
+	}
+	var fixture seedfixture.Name
+	if cfg.SeedFixture != "" {
+		if fixture, err = parseSeedFixture(cfg); err != nil {
+			return nil, err
+		}
 	}
 	manualInitiator, err := loadManualSubmissionConfig(cfg.ManualSubmissionConfigPath)
 	if err != nil {
@@ -719,6 +750,24 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	defer func() {
 		err = errors.Join(err, closeStartupSessions(success, startupSessionCloser, stop))
 	}()
+	if fixture != "" {
+		inventory, err := seedfixture.Seed(parent, st, fixture)
+		if errors.Is(err, seedfixture.ErrStoreNotEmpty) {
+			return nil, fmt.Errorf("-seed-fixture: store %q already holds runs or attention items", cfg.DBPath)
+		}
+		if err != nil {
+			// The fixture commits in several transactions, so a failure after
+			// the first leaves a partial fixture that the emptiness check then
+			// refuses to reseed.
+			return nil, fmt.Errorf("-seed-fixture %s: %w (store %q may be partially seeded; delete it before retrying)",
+				fixture, err, cfg.DBPath)
+		}
+		if cfg.Logger != nil {
+			cfg.Logger.Info("seeded fixture", "fixture", fixture,
+				"projects", inventory.Projects, "tasks", inventory.Tasks, "runs", inventory.Runs,
+				"attention_items", inventory.AttentionItems)
+		}
+	}
 	// Backup evidence is maintained before anything can admit work. Orphan
 	// reconciliation below resumes writers through the unattended admission
 	// gate, which reads backup health, so a pass that has not yet scanned the
