@@ -519,7 +519,10 @@ func enabledShadowReviewRate(source exec.ReviewSource, configured float64) float
 }
 
 func (cfg config) storeOptions() (store.Options, error) {
-	opts := store.Options{ApprovedRecipes: maps.Clone(cfg.ApprovedRecipes)}
+	opts := store.Options{
+		ApprovedRecipes:  maps.Clone(cfg.ApprovedRecipes),
+		ExclusiveLocking: cfg.Environment.locksDatabaseExclusively(),
+	}
 	if cfg.BackupEncryptionWaiverRepositoryID != nil {
 		return store.Options{}, fmt.Errorf(
 			"-backup-encryption-waiver-repository-id: %w",

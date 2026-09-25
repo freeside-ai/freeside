@@ -30,6 +30,31 @@ func TestParseEnvironment(t *testing.T) {
 	}
 }
 
+// TestEnvironmentDatabaseLocking: the supervised tiers hold their live
+// database exclusively and ephemeral does not, and the daemon's store
+// options follow its tier.
+func TestEnvironmentDatabaseLocking(t *testing.T) {
+	t.Parallel()
+	want := map[environment]bool{
+		environmentProd:      true,
+		environmentDev:       true,
+		environmentEphemeral: false,
+	}
+	for _, env := range AllEnvironments {
+		t.Run(string(env), func(t *testing.T) {
+			t.Parallel()
+			got := env.locksDatabaseExclusively()
+			if got != want[env] {
+				t.Fatalf("locksDatabaseExclusively() = %v, want %v", got, want[env])
+			}
+			opts, err := config{Environment: env}.storeOptions()
+			if err != nil || opts.ExclusiveLocking != want[env] {
+				t.Fatalf("storeOptions().ExclusiveLocking = %v, %v; want %v", opts.ExclusiveLocking, err, want[env])
+			}
+		})
+	}
+}
+
 func TestEnvironmentPaths(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
