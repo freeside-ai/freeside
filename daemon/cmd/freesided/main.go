@@ -157,6 +157,9 @@ func main() {
 		case "comprehension":
 			runComprehensionMain(os.Args[2:])
 			return
+		case "snapshot":
+			runSnapshotMain(os.Args[2:])
+			return
 		}
 	}
 	flags := flag.NewFlagSet("freesided", flag.ContinueOnError)
