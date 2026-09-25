@@ -25,13 +25,17 @@ public struct FreesideRootView: View {
     private let launchProjectID: String?
     private let launchDetailsExpanded: Bool
     private let launchDynamicTypeSize: DynamicTypeSize?
+    private let environment: FreesideEnvironment
 
+    /// `environment` defaults to `.prod`, which draws no badge, so every
+    /// screenshot surface renders as it did before tiers existed.
     @MainActor
     public init(
         session: AppSession,
         launchInputs: LaunchInputs = .standard(),
         navigation: NavigationModel? = nil,
-        flowPreferences: DecisionFlowPreferences? = nil
+        flowPreferences: DecisionFlowPreferences? = nil,
+        environment: FreesideEnvironment = .prod
     ) {
         FreesideFont.registration
         FreesideNavigationChrome.apply()
@@ -48,6 +52,7 @@ public struct FreesideRootView: View {
         launchProjectID = launchInputs.projectID
         launchDetailsExpanded = launchInputs.detailsExpanded
         launchDynamicTypeSize = launchInputs.dynamicTypeSize
+        self.environment = environment
     }
 
     /// Composes from launch arguments (see AppSession.fromEnvironment
@@ -72,6 +77,14 @@ public struct FreesideRootView: View {
                     onPaired: { credential in session.completePairing(credential) })
             case .ready(let coordinator):
                 synced(coordinator)
+            }
+        }
+        // Above the phase switch, so the connect, pairing, and synced
+        // screens all say which daemon tier the operator is looking at.
+        .overlay(alignment: .topTrailing) {
+            if let badgeTitle = environment.badgeTitle {
+                EnvironmentBadge(title: badgeTitle)
+                    .padding(8)
             }
         }
         .dynamicTypeSize(launchDynamicTypeSize ?? systemDynamicTypeSize)
@@ -711,4 +724,20 @@ public struct FreesideRootView: View {
         }
     }
 
+}
+
+/// The non-production tier marker; production draws nothing.
+struct EnvironmentBadge: View {
+    let title: String
+
+    var body: some View {
+        KeywordLabel(text: title, color: .accentText)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(Color.accentWash))
+            .overlay(Capsule().strokeBorder(Color.accentBorder))
+            .allowsHitTesting(false)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Environment: \(title)")
+    }
 }

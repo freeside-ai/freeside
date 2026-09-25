@@ -9,6 +9,7 @@ struct FreesideMacApp: App {
     @State private var navigation: NavigationModel
     @State private var flowPreferences: DecisionFlowPreferences
     private let launchInputs: LaunchInputs
+    private let environment: FreesideEnvironment
 
     init() {
         #if DEBUG
@@ -29,6 +30,7 @@ struct FreesideMacApp: App {
         }
         let launchInputs = LaunchInputs.standard()
         self.launchInputs = launchInputs
+        self.environment = environment
         _session = State(initialValue: session)
         _daemon = State(initialValue: Self.daemonModel(environment: environment))
         _navigation = State(initialValue: NavigationModel(launchInputs: launchInputs))
@@ -47,14 +49,16 @@ struct FreesideMacApp: App {
                             session: session,
                             launchInputs: launchInputs,
                             navigation: navigation,
-                            flowPreferences: flowPreferences)
+                            flowPreferences: flowPreferences,
+                            environment: environment)
                     }
                 #else
                     FreesideRootView(
                         session: session,
                         launchInputs: launchInputs,
                         navigation: navigation,
-                        flowPreferences: flowPreferences)
+                        flowPreferences: flowPreferences,
+                        environment: environment)
                 #endif
             }
             .task { daemon.startMonitoring() }
