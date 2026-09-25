@@ -59,7 +59,7 @@ type reviewProvider interface {
 	// "codex-review-configuration-v3").
 	configurationVersion() string
 	// promptProtocol identifies the review prompt contract carried in the
-	// configuration envelope (Codex: "codex-production-review-prompt-v4").
+	// configuration envelope (Codex: "codex-production-review-prompt-v5").
 	promptProtocol() string
 	// reviewCommand builds the in-container review argv from the read-only
 	// workspace target and the deployment-pinned model configuration.

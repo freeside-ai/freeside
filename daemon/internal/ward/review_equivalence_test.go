@@ -40,7 +40,7 @@ const (
 	currentResultEvidenceVersion = "codex-review-result-v4"
 	currentConfigurationVersion  = "codex-review-configuration-v4"
 	// #1291 aligns location guidance with the existing diff-overlap gate.
-	currentPromptProtocol = "codex-production-review-prompt-v4"
+	currentPromptProtocol = "codex-production-review-prompt-v5"
 )
 
 // TestReviewProviderConstantsMatchBase pins the Codex provider's value seam to
