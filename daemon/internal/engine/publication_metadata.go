@@ -18,6 +18,9 @@ import (
 const (
 	clientPublicationRecipeV1 = "freeside.client-publication/v1"
 	maxPublicMetadataBytes    = 8 << 10
+	// Older producer prompts showed this placeholder as the title line, and
+	// agents copied it verbatim into published PR titles (#1464).
+	promptPlaceholderTitle = "Outcome title"
 )
 
 var sourceIssueURL = regexp.MustCompile(`^https://github\.com/[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*$`)
@@ -86,7 +89,10 @@ func publicationMetadata(p ProductionPublication, producer domain.InvocationID, 
 	title := strings.TrimPrefix(opening, "# ")
 	if !found || title == opening || title == "" || title != strings.TrimSpace(title) ||
 		len(title) > maxProductionPublicationTitleBytes || strings.TrimSpace(description) == "" {
-		return "", "", errors.New("publication metadata needs an opening '# Outcome title' line (at most 256 bytes) and a nonempty whole-change description")
+		return "", "", errors.New("publication metadata needs an opening '# ' title line (at most 256 bytes) and a nonempty whole-change description")
+	}
+	if strings.EqualFold(title, promptPlaceholderTitle) {
+		return "", "", errors.New("publication metadata title is the prompt placeholder '" + promptPlaceholderTitle + "'; the agent must write its own title for the change")
 	}
 	// Raw HTML with escaped text keeps Markdown, HTML and entities inert. The
 	// original artifact stays private and unchanged; it is never uploaded.
