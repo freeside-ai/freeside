@@ -122,57 +122,54 @@ func TestCheckboxSelectionAcceptsMaximumGraphQLInt(t *testing.T) {
 	}
 }
 
-func TestWaveTitlePatternIsExact(t *testing.T) {
-	valid := []string{"Wave 6 (1B.0) tracking", "Wave 12 (anything) tracking"}
-	invalid := []string{"Wave 6 tracking", "prefix Wave 6 (1B.0) tracking", "Wave 6 () tracking extra"}
-	for _, title := range valid {
-		if !waveTitlePattern.MatchString(title) {
-			t.Errorf("valid title did not match: %q", title)
-		}
+// Plan Section 11 reads the wave tracker from the tracker label plus a
+// milestone, never the title: one is active-wave, none is inter-wave, and
+// only more than one is ambiguous.
+func TestWaveTrackerCountFollowsTheResolver(t *testing.T) {
+	tests := []struct {
+		name       string
+		milestones [2]any
+		titles     [2]string
+		want       int
+		ambiguous  bool
+	}{
+		{name: "active wave", milestones: [2]any{map[string]any{"title": "1B"}, nil}, titles: [2]string{"Wave 8: Example", "Reliability tracking"}, want: 1},
+		{name: "inter-wave", milestones: [2]any{nil, nil}, titles: [2]string{"Wave 8: Example", "Reliability tracking"}, want: 0},
+		{name: "title alone is not a wave tracker", milestones: [2]any{nil, nil}, titles: [2]string{"Wave 8 (1B.2) tracking", "Wave 9: Example"}, want: 0},
+		{name: "competing wave trackers", milestones: [2]any{map[string]any{"title": "1B"}, map[string]any{"title": "1B"}}, titles: [2]string{"Wave 8: Example", "Wave 9: Example"}, want: 2, ambiguous: true},
 	}
-	for _, title := range invalid {
-		if waveTitlePattern.MatchString(title) {
-			t.Errorf("invalid title matched: %q", title)
-		}
-	}
-}
-
-func TestZeroAndMultipleWaveTitleMatchesAreAmbiguous(t *testing.T) {
-	for name, titles := range map[string][]string{
-		"zero":     {"Not a wave", "Reliability tracking"},
-		"multiple": {"Wave 6 (1B.0) tracking", "Wave 7 (1B.1) tracking"},
-	} {
-		t.Run(name, func(t *testing.T) {
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			runner := loadFixtureRunner(t)
-			setPinnedTitle(t, runner, "PinnedIssues::", titles[0])
-			setPinnedTitle(t, runner, "PinnedIssues::next", titles[1])
+			setTracker(t, runner, "OpenTrackers::", test.titles[0], test.milestones[0])
+			setTracker(t, runner, "OpenTrackers::next", test.titles[1], test.milestones[1])
 			snapshot, err := Collect(context.Background(), fixtureConfig(""), runner, fixedClock)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(snapshot.Ambiguities) != 1 || snapshot.Ambiguities[0].Code != "wave-title-count" {
+			if snapshot.OpenWaveTrackerCount != test.want {
+				t.Fatalf("open wave trackers = %d, want %d", snapshot.OpenWaveTrackerCount, test.want)
+			}
+			ambiguous := len(snapshot.Ambiguities) == 1 && snapshot.Ambiguities[0].Code == "wave-tracker-count"
+			if ambiguous != test.ambiguous || (!test.ambiguous && len(snapshot.Ambiguities) != 0) {
 				t.Fatalf("ambiguities = %#v", snapshot.Ambiguities)
 			}
 		})
 	}
 }
 
-func TestSingleClosedWaveTitleMatchIsValidInterWaveEvidence(t *testing.T) {
+func TestOpenTrackerQueryRejectsAClosedIssue(t *testing.T) {
 	runner := loadFixtureRunner(t)
 	var response map[string]any
-	if err := json.Unmarshal(runner.responses["PinnedIssues::"], &response); err != nil {
+	if err := json.Unmarshal(runner.responses["OpenTrackers::"], &response); err != nil {
 		t.Fatal(err)
 	}
-	issue := response["data"].(map[string]any)["repository"].(map[string]any)["pinnedIssues"].(map[string]any)["nodes"].([]any)[0].(map[string]any)["issue"].(map[string]any)
+	issue := response["data"].(map[string]any)["repository"].(map[string]any)["issues"].(map[string]any)["nodes"].([]any)[0].(map[string]any)
 	issue["state"] = "CLOSED"
-	runner.responses["PinnedIssues::"], _ = json.Marshal(response)
+	runner.responses["OpenTrackers::"], _ = json.Marshal(response)
 
-	snapshot, err := Collect(context.Background(), fixtureConfig(""), runner, fixedClock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if snapshot.OpenWaveTitleMatchCount != 0 || len(snapshot.Ambiguities) != 0 {
-		t.Fatalf("open matches=%d ambiguities=%#v", snapshot.OpenWaveTitleMatchCount, snapshot.Ambiguities)
+	if _, err := Collect(context.Background(), fixtureConfig(""), runner, fixedClock); err == nil || !strings.Contains(err.Error(), "open-tracker query returned issue #835") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
@@ -324,14 +321,15 @@ func cloneJSONMap(t *testing.T, value map[string]any) map[string]any {
 	return clone
 }
 
-func setPinnedTitle(t *testing.T, runner *fixtureRunner, key, title string) {
+func setTracker(t *testing.T, runner *fixtureRunner, key, title string, milestone any) {
 	t.Helper()
 	var response map[string]any
 	if err := json.Unmarshal(runner.responses[key], &response); err != nil {
 		t.Fatal(err)
 	}
-	nodes := response["data"].(map[string]any)["repository"].(map[string]any)["pinnedIssues"].(map[string]any)["nodes"].([]any)
-	nodes[0].(map[string]any)["issue"].(map[string]any)["title"] = title
+	nodes := response["data"].(map[string]any)["repository"].(map[string]any)["issues"].(map[string]any)["nodes"].([]any)
+	nodes[0].(map[string]any)["title"] = title
+	nodes[0].(map[string]any)["milestone"] = milestone
 	runner.responses[key], _ = json.Marshal(response)
 }
 
@@ -385,13 +383,54 @@ func TestScopeExtractionParsesCommaSeparatedProse(t *testing.T) {
 func TestDuplicateTrackerEntriesAreAmbiguous(t *testing.T) {
 	runner := loadFixtureRunner(t)
 	c := &collector{config: fixtureConfig(""), runner: runner, issueCache: map[int]UnitEvidence{}, prCache: map[int]PullRequestRef{}}
-	issue := graphIssue{ID: "tracker", DatabaseID: 100, Number: 100, State: "OPEN", Body: "- [ ] #935 first\n2. [x] #935 second\n\n## Implementation Order\nPending"}
-	trackers, _, err := c.buildContainingTrackers(context.Background(), []graphIssue{issue}, []IssueSummary{{Number: 935}})
+	issue := graphIssue{ID: "tracker", DatabaseID: 100, Number: 100, State: "OPEN", Body: "## Status\nPending\n\n## Units\n- [ ] #935 first\n2. [x] #935 second"}
+	trackers, _, err := c.buildContainingTrackers(context.Background(), []graphIssue{issue}, []IssueSummary{{Number: 935}}, map[int]bool{100: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(trackers) != 1 || len(c.ambiguities) != 1 || c.ambiguities[0].Code != "duplicate-tracker-entry" {
 		t.Fatalf("trackers=%d ambiguities=%#v", len(trackers), c.ambiguities)
+	}
+}
+
+func TestUnlabeledChecklistIsNotATracker(t *testing.T) {
+	runner := loadFixtureRunner(t)
+	c := &collector{config: fixtureConfig(""), runner: runner, issueCache: map[int]UnitEvidence{}, prCache: map[int]PullRequestRef{}}
+	issue := graphIssue{ID: "task", DatabaseID: 101, Number: 101, State: "OPEN", Body: "## Status\nPending\n\n## Units\n- [ ] #935"}
+	trackers, _, err := c.buildContainingTrackers(context.Background(), []graphIssue{issue}, []IssueSummary{{Number: 935}}, map[int]bool{100: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(trackers) != 0 || len(c.ambiguities) != 1 || c.ambiguities[0].Code != "tracker-label" {
+		t.Fatalf("trackers=%d ambiguities=%#v", len(trackers), c.ambiguities)
+	}
+}
+
+func TestTrackerMembershipComesFromUnitsOnly(t *testing.T) {
+	tests := []struct {
+		name     string
+		body     string
+		trackers int
+	}{
+		{name: "exit line cites a listed unit", body: "## Status\nPending\n\n## Units\n- [ ] #935\n\n## Exit\n- [ ] #935 lands. Evidence: #935.", trackers: 1},
+		{name: "exit line cites an unlisted unit", body: "## Status\nPending\n\n## Units\n- [ ] #936\n\n## Exit\n- [ ] #935 lands. Evidence: #935.", trackers: 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runner := loadFixtureRunner(t)
+			c := &collector{config: fixtureConfig(""), runner: runner, issueCache: map[int]UnitEvidence{}, prCache: map[int]PullRequestRef{}}
+			issue := graphIssue{ID: "tracker", DatabaseID: 100, Number: 100, State: "OPEN", Body: test.body}
+			trackers, _, err := c.buildContainingTrackers(context.Background(), []graphIssue{issue}, []IssueSummary{{Number: 935}}, map[int]bool{100: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(trackers) != test.trackers || len(c.ambiguities) != 0 {
+				t.Fatalf("trackers=%d ambiguities=%#v", len(trackers), c.ambiguities)
+			}
+			if test.trackers == 1 && len(trackers[0].Entries) != 1 {
+				t.Fatalf("entries = %#v, want the Units line only", trackers[0].Entries)
+			}
+		})
 	}
 }
 
@@ -401,16 +440,17 @@ func TestContainingTrackerRequiresTrackerStructureAndValidEntries(t *testing.T) 
 		body string
 		code string
 	}{
-		{name: "ordinary task", body: "## Acceptance\n- [ ] #935", code: "tracker-structure"},
-		{name: "duplicate order sections", body: "- [ ] #935\n\n## Implementation Order\nFirst\n\n## Implementation Order\nSecond", code: "tracker-structure"},
-		{name: "checkbox number exceeds forge Int", body: "- [ ] #935\n- [ ] #2147483648\n\n## Implementation Order\nPending", code: "malformed-tracker-entry"},
+		{name: "labeled issue without tracker sections", body: "## Acceptance\n- [ ] #935", code: "tracker-structure"},
+		{name: "old implementation-order shape", body: "## Units\n- [ ] #935\n\n## Implementation Order\nPending", code: "tracker-structure"},
+		{name: "duplicate status sections", body: "## Status\nFirst\n\n## Status\nSecond\n\n## Units\n- [ ] #935", code: "tracker-structure"},
+		{name: "checkbox number exceeds forge Int", body: "## Status\nPending\n\n## Units\n- [ ] #935\n- [ ] #2147483648", code: "malformed-tracker-entry"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			runner := loadFixtureRunner(t)
 			c := &collector{config: fixtureConfig(""), runner: runner, issueCache: map[int]UnitEvidence{}, prCache: map[int]PullRequestRef{}}
 			issue := graphIssue{ID: "candidate", DatabaseID: 100, Number: 100, State: "OPEN", Body: test.body}
-			trackers, _, err := c.buildContainingTrackers(context.Background(), []graphIssue{issue}, []IssueSummary{{Number: 935}})
+			trackers, _, err := c.buildContainingTrackers(context.Background(), []graphIssue{issue}, []IssueSummary{{Number: 935}}, map[int]bool{100: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -744,7 +784,7 @@ func TestTruncatedOpenIssueInventoryNeverReportsValidZeroWork(t *testing.T) {
 }
 
 func TestIncompleteTrackerSelectionNeverReportsValidZeroWork(t *testing.T) {
-	for _, code := range []string{"tracker-structure", "malformed-tracker-entry"} {
+	for _, code := range []string{"tracker-structure", "malformed-tracker-entry", "tracker-label"} {
 		t.Run(code, func(t *testing.T) {
 			snapshot := Snapshot{
 				MergedPullRequest: MergedPullRequest{ClosingIssues: []IssueSummary{{Number: 935}}},
@@ -864,8 +904,8 @@ func TestFixtureCollectionDrainsPaginationAndIsDeterministic(t *testing.T) {
 	if RenderReport(first) != RenderReport(second) {
 		t.Fatal("report is not deterministic")
 	}
-	if len(first.PinnedIssues) != 2 {
-		t.Fatalf("pagination retained %d pinned issues, want 2", len(first.PinnedIssues))
+	if len(first.OpenTrackers) != 2 || first.OpenTrackers[0].Milestone != "" || first.OpenTrackers[1].Milestone != "1B" {
+		t.Fatalf("pagination retained open trackers %#v, want #100 without a milestone and #835 with 1B", first.OpenTrackers)
 	}
 	if len(first.OpenIssueInventory) != 1 || first.OpenIssueInventory[0].Number != 100 {
 		t.Fatalf("open-issue inventory = %#v", first.OpenIssueInventory)

@@ -201,8 +201,29 @@ func validIntField(fields map[string]json.RawMessage, name string) bool {
 	return json.Unmarshal(raw, &value) == nil
 }
 
-type graphPinnedIssue struct {
-	Issue graphIssue `json:"issue"`
+// graphTrackerIssue decodes an issue node plus its milestone. graphIssue
+// has its own UnmarshalJSON, so embedding it would drop the milestone.
+type graphTrackerIssue struct {
+	Issue     graphIssue
+	Milestone string
+}
+
+func (tracker *graphTrackerIssue) UnmarshalJSON(data []byte) error {
+	if err := json.Unmarshal(data, &tracker.Issue); err != nil {
+		return err
+	}
+	var extra struct {
+		Milestone *struct {
+			Title string `json:"title"`
+		} `json:"milestone"`
+	}
+	if err := json.Unmarshal(data, &extra); err != nil {
+		return err
+	}
+	if extra.Milestone != nil {
+		tracker.Milestone = extra.Milestone.Title
+	}
+	return nil
 }
 
 type collector struct {
@@ -262,7 +283,7 @@ func Collect(ctx context.Context, config Config, runner QueryRunner, clock func(
 			c.ambiguous("unit-origin", fmt.Sprintf("pull request #%d", config.PullRequest), "no attributed closing issue; prompt-backed direct-unit provenance requires --direct")
 		}
 	}
-	pinned, err := c.fetchPinnedIssues(ctx)
+	openTrackers, err := c.fetchOpenTrackers(ctx)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -282,7 +303,11 @@ func Collect(ctx context.Context, config Config, runner QueryRunner, clock func(
 		openPullRequests[i].LinkedIssues = linked
 	}
 
-	trackers, commentIssueNumbers, err := c.buildContainingTrackers(ctx, openIssues, merged.ClosingIssues)
+	labeledTrackers := make(map[int]bool, len(openTrackers))
+	for _, tracker := range openTrackers {
+		labeledTrackers[tracker.Number] = true
+	}
+	trackers, commentIssueNumbers, err := c.buildContainingTrackers(ctx, openIssues, merged.ClosingIssues, labeledTrackers)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -294,18 +319,16 @@ func Collect(ctx context.Context, config Config, runner QueryRunner, clock func(
 		return Snapshot{}, err
 	}
 
-	waveTitleMatches := 0
-	openWaveMatches := 0
-	for _, issue := range pinned {
-		if issue.TitleMatchesWavePattern {
-			waveTitleMatches++
-			if issue.State == "OPEN" {
-				openWaveMatches++
-			}
+	// Plan Section 11: one open milestoned tracker is active-wave and none is
+	// inter-wave; only more than one is an invalid authority state.
+	openWaveTrackers := 0
+	for _, issue := range openTrackers {
+		if issue.Milestone != "" {
+			openWaveTrackers++
 		}
 	}
-	if waveTitleMatches != 1 {
-		c.ambiguous("wave-title-count", "pinned issues", fmt.Sprintf("found %d issues matching the canonical wave-tracker title", waveTitleMatches))
+	if openWaveTrackers > 1 {
+		c.ambiguous("wave-tracker-count", "open trackers", fmt.Sprintf("found %d open issues with the tracker label and a milestone", openWaveTrackers))
 	}
 
 	sort.Slice(c.ambiguities, func(i, j int) bool {
@@ -319,17 +342,17 @@ func Collect(ctx context.Context, config Config, runner QueryRunner, clock func(
 	})
 
 	snapshot := Snapshot{
-		SchemaVersion:           SchemaVersion,
-		Repository:              config.Repository.String(),
-		Collection:              CollectionStamp{DefaultBranchHeadSHA: headSHA, StartedAt: startedAt, CompletedAt: clock().UTC()},
-		MergedPullRequest:       merged,
-		PinnedIssues:            pinned,
-		OpenWaveTitleMatchCount: openWaveMatches,
-		OpenIssueInventory:      buildOpenIssueInventory(openIssues),
-		ContainingTrackers:      trackers,
-		OpenPullRequests:        openPullRequests,
-		MarkerComments:          comments,
-		Ambiguities:             c.ambiguities,
+		SchemaVersion:        SchemaVersion,
+		Repository:           config.Repository.String(),
+		Collection:           CollectionStamp{DefaultBranchHeadSHA: headSHA, StartedAt: startedAt, CompletedAt: clock().UTC()},
+		MergedPullRequest:    merged,
+		OpenTrackers:         openTrackers,
+		OpenWaveTrackerCount: openWaveTrackers,
+		OpenIssueInventory:   buildOpenIssueInventory(openIssues),
+		ContainingTrackers:   trackers,
+		OpenPullRequests:     openPullRequests,
+		MarkerComments:       comments,
+		Ambiguities:          c.ambiguities,
 	}
 	normalizeSnapshot(&snapshot)
 	return snapshot, nil
@@ -339,8 +362,8 @@ func normalizeSnapshot(snapshot *Snapshot) {
 	if snapshot.MergedPullRequest.ClosingIssues == nil {
 		snapshot.MergedPullRequest.ClosingIssues = []IssueSummary{}
 	}
-	if snapshot.PinnedIssues == nil {
-		snapshot.PinnedIssues = []PinnedIssue{}
+	if snapshot.OpenTrackers == nil {
+		snapshot.OpenTrackers = []TrackerIssue{}
 	}
 	if snapshot.ContainingTrackers == nil {
 		snapshot.ContainingTrackers = []ContainingTracker{}
@@ -691,28 +714,28 @@ func issueAttributedToPullRequest(issue graphIssue, pullRequestNumber int, merge
 	}
 }
 
-func (c *collector) fetchPinnedIssues(ctx context.Context) ([]PinnedIssue, error) {
+func (c *collector) fetchOpenTrackers(ctx context.Context) ([]TrackerIssue, error) {
 	vars := c.baseVariables()
 	var cursor *string
-	var result []PinnedIssue
+	var result []TrackerIssue
 	for page := 1; ; page++ {
 		vars["cursor"] = cursor
-		raw, err := c.runner.Query(ctx, pinnedIssuesQuery, vars)
+		raw, err := c.runner.Query(ctx, openTrackersQuery, vars)
 		if err != nil {
-			return nil, fmt.Errorf("collect pinned issues: %w", err)
+			return nil, fmt.Errorf("collect open trackers: %w", err)
 		}
 		var data struct {
 			Repository *struct {
-				Pinned *graphConnection[graphPinnedIssue] `json:"pinnedIssues"`
+				Issues *graphConnection[graphTrackerIssue] `json:"issues"`
 			} `json:"repository"`
 		}
 		if err := decodeResponse(raw, &data); err != nil {
 			return nil, err
 		}
 		if data.Repository == nil {
-			return nil, errors.New("repository not found while collecting pinned issues")
+			return nil, errors.New("repository not found while collecting open trackers")
 		}
-		nodes, pageInfo, err := requireConnection("pinned issues", data.Repository.Pinned)
+		nodes, pageInfo, err := requireConnection("open trackers", data.Repository.Issues)
 		if err != nil {
 			return nil, err
 		}
@@ -720,9 +743,12 @@ func (c *collector) fetchPinnedIssues(ctx context.Context) ([]PinnedIssue, error
 			if err := validateIssue(node.Issue); err != nil {
 				return nil, err
 			}
-			result = append(result, PinnedIssue{IssueSummary: issueSummary(node.Issue), TitleMatchesWavePattern: waveTitlePattern.MatchString(node.Issue.Title)})
+			if node.Issue.State != "OPEN" {
+				return nil, fmt.Errorf("open-tracker query returned issue #%d in state %q", node.Issue.Number, node.Issue.State)
+			}
+			result = append(result, TrackerIssue{IssueSummary: issueSummary(node.Issue), Milestone: node.Milestone})
 		}
-		next, more, err := c.nextCursor("pinned issues", page, pageInfo)
+		next, more, err := c.nextCursor("open trackers", page, pageInfo)
 		if err != nil {
 			return nil, err
 		}
@@ -907,7 +933,12 @@ func (c *collector) fetchPullRequestClosingIssues(ctx context.Context, number in
 	return result, nil
 }
 
-func (c *collector) buildContainingTrackers(ctx context.Context, openIssues []graphIssue, closing []IssueSummary) ([]ContainingTracker, map[int]bool, error) {
+// buildContainingTrackers returns the open trackers whose Units section lists
+// a closing issue. labeledTrackers holds the open issues carrying the
+// `tracker` label; any other issue whose checklist names a closing issue is
+// reported as ambiguous rather than refreshed, since a checklist alone
+// doesn't make an issue a tracker.
+func (c *collector) buildContainingTrackers(ctx context.Context, openIssues []graphIssue, closing []IssueSummary, labeledTrackers map[int]bool) ([]ContainingTracker, map[int]bool, error) {
 	closingSet := make(map[int]bool, len(closing))
 	for _, issue := range closing {
 		closingSet[issue.Number] = true
@@ -923,13 +954,30 @@ func (c *collector) buildContainingTrackers(ctx context.Context, openIssues []gr
 		if !containsClosing {
 			continue
 		}
+		if !labeledTrackers[issue.Number] {
+			c.ambiguous("tracker-label", fmt.Sprintf("issue #%d", issue.Number), "lists a merged unit but lacks the tracker label")
+			continue
+		}
 		if len(invalidNumbers) > 0 {
 			c.ambiguous("malformed-tracker-entry", fmt.Sprintf("issue #%d", issue.Number), fmt.Sprintf("invalid issue numbers: %s", strings.Join(invalidNumbers, ", ")))
 			continue
 		}
-		implementationOrder := extractSections(issue.Body, "Implementation order")
-		if len(implementationOrder) != 1 {
-			c.ambiguous("tracker-structure", fmt.Sprintf("issue #%d", issue.Number), fmt.Sprintf("expected exactly one Implementation order section, found %d", len(implementationOrder)))
+		// docs/tracker-format.md: every tracker has one Status and one Units
+		// section. An issue that merely holds a checklist has neither.
+		status := extractSections(issue.Body, "Status")
+		units := extractSections(issue.Body, "Units")
+		if len(status) != 1 || len(units) != 1 {
+			c.ambiguous("tracker-structure", fmt.Sprintf("issue #%d", issue.Number), fmt.Sprintf("expected exactly one Status and one Units section, found %d and %d", len(status), len(units)))
+			continue
+		}
+		// Membership comes from Units alone: Exit and Notes may hold
+		// checklist lines that cite a unit without listing it.
+		entries, _ = parseCheckboxEntries(units[0])
+		containsClosing = false
+		for _, entry := range entries {
+			containsClosing = containsClosing || closingSet[entry.UnitNumber]
+		}
+		if !containsClosing {
 			continue
 		}
 		tracker := ContainingTracker{Number: issue.Number, Title: issue.Title, Body: issue.Body, Stamp: issueStamp(issue), Entries: entries}

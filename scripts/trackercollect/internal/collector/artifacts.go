@@ -89,14 +89,18 @@ func RenderReport(snapshot Snapshot) string {
 	}
 	fmt.Fprintln(&report)
 
-	fmt.Fprintln(&report, "## Wave-Title Matches")
+	fmt.Fprintln(&report, "## Open Trackers")
 	fmt.Fprintln(&report)
-	if snapshotHasAmbiguity(snapshot, "page-cap-truncation", "pinned issues") {
-		fmt.Fprintln(&report, "Pinned-issue inventory is incomplete; counts below cover retained pages only.")
+	if snapshotHasAmbiguity(snapshot, "page-cap-truncation", "open trackers") {
+		fmt.Fprintln(&report, "Open-tracker inventory is incomplete; counts below cover retained pages only.")
 	}
-	fmt.Fprintf(&report, "Open canonical-title match count: **%d**. This is evidence, not a wave-state verdict.\n", snapshot.OpenWaveTitleMatchCount)
-	for _, issue := range snapshot.PinnedIssues {
-		fmt.Fprintf(&report, "- #%d %s (%s), title match: %t\n", issue.Number, issue.Title, issue.State, issue.TitleMatchesWavePattern)
+	fmt.Fprintf(&report, "Open trackers with a milestone (wave trackers): **%d**. This is evidence, not a wave-state verdict.\n", snapshot.OpenWaveTrackerCount)
+	for _, issue := range snapshot.OpenTrackers {
+		milestone := issue.Milestone
+		if milestone == "" {
+			milestone = "none"
+		}
+		fmt.Fprintf(&report, "- #%d %s, milestone: %s\n", issue.Number, issue.Title, milestone)
 	}
 	fmt.Fprintln(&report)
 
@@ -107,6 +111,7 @@ func RenderReport(snapshot Snapshot) string {
 		!snapshotHasAmbiguityCode(snapshot, "closing-issue-state") &&
 		!snapshotHasAmbiguityCode(snapshot, "tracker-structure") &&
 		!snapshotHasAmbiguityCode(snapshot, "malformed-tracker-entry") &&
+		!snapshotHasAmbiguityCode(snapshot, "tracker-label") &&
 		(snapshot.MergedPullRequest.DirectUnit || len(snapshot.MergedPullRequest.ClosingIssues) > 0)
 	if openIssuesTruncated {
 		fmt.Fprintln(&report, "Containing-tracker selection is incomplete because the open-issue inventory reached its page cap; see **AMBIGUOUS**.")

@@ -2,7 +2,7 @@ package collector
 
 import "time"
 
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 type Repository struct {
 	Host  string
@@ -23,17 +23,17 @@ type Config struct {
 }
 
 type Snapshot struct {
-	SchemaVersion           int                 `json:"schema_version"`
-	Repository              string              `json:"repository"`
-	Collection              CollectionStamp     `json:"collection"`
-	MergedPullRequest       MergedPullRequest   `json:"merged_pull_request"`
-	PinnedIssues            []PinnedIssue       `json:"pinned_issues"`
-	OpenWaveTitleMatchCount int                 `json:"open_wave_title_match_count"`
-	OpenIssueInventory      []IssueIdentity     `json:"open_issue_inventory"`
-	ContainingTrackers      []ContainingTracker `json:"containing_trackers"`
-	OpenPullRequests        []OpenPullRequest   `json:"open_pull_requests"`
-	MarkerComments          []MarkerComment     `json:"marker_comments"`
-	Ambiguities             []Ambiguity         `json:"ambiguities"`
+	SchemaVersion        int                 `json:"schema_version"`
+	Repository           string              `json:"repository"`
+	Collection           CollectionStamp     `json:"collection"`
+	MergedPullRequest    MergedPullRequest   `json:"merged_pull_request"`
+	OpenTrackers         []TrackerIssue      `json:"open_trackers"`
+	OpenWaveTrackerCount int                 `json:"open_wave_tracker_count"`
+	OpenIssueInventory   []IssueIdentity     `json:"open_issue_inventory"`
+	ContainingTrackers   []ContainingTracker `json:"containing_trackers"`
+	OpenPullRequests     []OpenPullRequest   `json:"open_pull_requests"`
+	MarkerComments       []MarkerComment     `json:"marker_comments"`
+	Ambiguities          []Ambiguity         `json:"ambiguities"`
 }
 
 type CollectionStamp struct {
@@ -73,9 +73,12 @@ type MergedPullRequest struct {
 	DirectUnit     bool           `json:"direct_session_contained_unit"`
 }
 
-type PinnedIssue struct {
+// TrackerIssue is an open issue carrying the tracker label. Milestone is
+// empty when it has none; a milestone is what marks a wave tracker (plan
+// Section 11), so the title is recorded but never interpreted.
+type TrackerIssue struct {
 	IssueSummary
-	TitleMatchesWavePattern bool `json:"title_matches_wave_pattern"`
+	Milestone string `json:"milestone"`
 }
 
 type ContainingTracker struct {

@@ -19,7 +19,6 @@ var (
 	releaseMarkerPattern  = regexp.MustCompile(`(?m)^[ \t]*<!-- freeside-work-release:v1 -->[ \t]*$`)
 	reserveMarkerPattern  = regexp.MustCompile(`(?m)^[ \t]*<!-- freeside-planning-reservation:v1 -->[ \t]*$`)
 	repositoryPartPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
-	waveTitlePattern      = regexp.MustCompile(`^Wave [0-9]+ \([^)]*\) tracking$`)
 	checkboxPattern       = regexp.MustCompile(`(?m)^[ \t]*(?:-|[0-9]+\.) \[([ xX])\][ \t]+#([0-9]+)(?:[ \t]+.*)?$`)
 	headingPattern        = regexp.MustCompile(`^(#{1,6})[ \t]+(.+?)[ \t]*$`)
 	scopeLinePattern      = regexp.MustCompile(`(?im)^Scope:[ \t]*.*$`)
