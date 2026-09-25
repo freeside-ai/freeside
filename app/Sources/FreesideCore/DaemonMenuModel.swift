@@ -87,6 +87,7 @@
 
         private let service: any DaemonServiceControlling
         private let healthChecker: any DaemonHealthChecking
+        private let daemonURL: URL
         private let readReadiness: () -> DaemonReadiness?
         private let pollingInterval: Duration
         private let registerOnFirstRun: Bool
@@ -101,25 +102,37 @@
             case stop
         }
 
-        public convenience init() {
+        /// The supervised tier's own LaunchAgent, port, and readiness file.
+        /// `ephemeral` has none of these, so it never builds a live model.
+        public convenience init(environment: FreesideEnvironment) {
+            guard
+                let plistName = environment.launchAgentPlistName,
+                let daemonURL = environment.supervisedAPIURL
+            else {
+                preconditionFailure("the \(environment.rawValue) app has no supervised daemon")
+            }
+            let readinessURL = environment.daemonStateDirectory()
+                .map(DaemonReadinessReader.fileURL(inStateDirectory:))
             self.init(
-                service: SMAppDaemonService(),
+                service: SMAppDaemonService(plistName: plistName),
                 healthChecker: APIDaemonHealthChecker(),
+                daemonURL: daemonURL,
                 readReadiness: {
-                    DaemonReadinessReader.defaultFileURL()
-                        .flatMap { DaemonReadinessReader().read(at: $0) }
+                    readinessURL.flatMap { DaemonReadinessReader().read(at: $0) }
                 })
         }
 
         public init(
             service: any DaemonServiceControlling,
             healthChecker: any DaemonHealthChecking,
+            daemonURL: URL,
             pollingInterval: Duration = .seconds(5),
             registerOnFirstRun: Bool = true,
             readReadiness: @escaping () -> DaemonReadiness?
         ) {
             self.service = service
             self.healthChecker = healthChecker
+            self.daemonURL = daemonURL
             self.pollingInterval = pollingInterval
             self.registerOnFirstRun = registerOnFirstRun
             self.readReadiness = readReadiness
@@ -197,13 +210,10 @@
                 state = .unavailable
             case .enabled:
                 let currentReadiness = readReadiness().flatMap { readiness in
-                    readiness.apiURL == DaemonReadinessReader.supervisedAPIURL
-                        ? readiness : nil
+                    readiness.apiURL == daemonURL ? readiness : nil
                 }
                 readiness = currentReadiness
-                let serverURL =
-                    currentReadiness?.apiURL
-                    ?? DaemonReadinessReader.supervisedAPIURL
+                let serverURL = currentReadiness?.apiURL ?? daemonURL
                 do {
                     let health = try await healthChecker.health(at: serverURL)
                     guard generation == refreshGeneration, service.status == .enabled else {

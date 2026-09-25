@@ -9,6 +9,8 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>freesided</string>
+		<string>-environment</string>
+		<string>__FREESIDE_ENVIRONMENT__</string>
 		<string>-db</string>
 		<string>__FREESIDE_STATE_DIR__/freeside.db</string>
 		<string>-state-dir</string>

@@ -12,7 +12,8 @@ The SwiftUI multiplatform client: the macOS + iOS attention inbox, decision deta
 
 Launch arguments select the composition (`AppSession.fromEnvironment`):
 
-- macOS default: the supervised daemon at `http://127.0.0.1:7331`; a readable readiness file selects the same deployment and prefills its pairing code, unless only the persisted deployment holds a device credential. A missing file leaves manual pairing entry available.
+- macOS default: the app's environment tier decides (`FREESIDE_ENV`, then the installed bundle's `FreesideEnvironment` key, then the build configuration: a Debug build is `ephemeral`, Release is `prod`; an unknown value fails at launch). `prod` and `dev` use their own supervised daemon (`http://127.0.0.1:7331` or `:7332`); that tier's readiness file selects the same deployment and prefills its pairing code, unless only the persisted deployment holds a device credential. A missing file leaves manual pairing entry available. `ephemeral` has no daemon of its own: it asks for an address, never reuses or records the persisted one, keeps its cache in memory, and never registers or controls a LaunchAgent. Each supervised tier keeps its cache under its own state root. A non-production window shows a `Dev` or `Ephemeral` badge.
+- `-FreesideReadinessDir <absolute-path>` (`ephemeral` only; refused at launch in `prod` and `dev`, and when it resolves inside either supervised state root): follow the `readiness.json` that an `ephemeral` daemon run publishes in that `-state-dir`, for its URL and pairing code.
 - iOS default: reconnect to the saved daemon, or ask for its address on a fresh installation. Continue to device pairing before the inbox opens. Missing or invalid configuration never selects sample data.
 - `-FreesideMock YES`: the permissive in-process mock, used by unsigned development and screenshot launches.
 - `-FreesidePairingDemo YES`: the full pairing flow against an enforcing mock; the code is `483911`.
@@ -45,20 +46,31 @@ Launch arguments also pin the presentation per launch (`LaunchInputs`), so scree
 
 ## Installing the Operator Client
 
-`scripts/install-mac-app.sh` makes FreesideMac the operator's actually-installed client rather than an Xcode-run artifact (plan §10). It builds Release, signs with a stable identity, and installs or replaces `~/Applications/Freeside.app`:
+`scripts/install-mac-app.sh` makes FreesideMac the operator's actually-installed client rather than an Xcode-run artifact (plan §10). It builds Release, signs with a stable identity, and installs or replaces the tier's app. The first argument is the tier, `prod` (the default) or `dev`, and each tier derives its own identity, so the two installs coexist:
+
+| Tier | App | Bundle ID | LaunchAgent label | Port | State root |
+| --- | --- | --- | --- | --- | --- |
+| `prod` | `~/Applications/Freeside.app` | `ai.freeside.app.macos` | `ai.freeside.daemon` | `7331` | `~/Library/Application Support/Freeside` |
+| `dev` | `~/Applications/Freeside Dev.app` | `ai.freeside.app.macos.dev` | `ai.freeside.daemon.dev` | `7332` | `~/Library/Application Support/Freeside Dev` |
 
 ```sh
-./scripts/install-mac-app.sh \
+./scripts/install-mac-app.sh dev \
+  --daemon-path /absolute/path/to/freesided \
+  --launch
+
+./scripts/install-mac-app.sh prod --prod \
   --daemon-path /absolute/path/to/freesided \
   --server-url http://127.0.0.1:7331 \
   --launch
 ```
 
-Re-run it after a source change and it updates the installed app in place. The supplied daemon is copied into `Contents/Resources` before the bundle is sealed; the app re-registers that bundled helper once after each install. Xcode automatically provisions the private Keychain access group, and the installer preserves those entitlements while sealing the modified outer bundle. Before replacement it verifies the signature, the exact signing certificate against the embedded profile, native macOS `com.apple.application-identifier`, Team ID, and access group; profile values may authorize the exact identifier through a trailing wildcard, while the signed values must remain exact. The stable credential identity is the profile's application-identifier prefix plus `ai.freeside.app.macos`; that prefix normally equals the Team ID, but older accounts can retain a distinct bundle-seed prefix, which the installer verifies separately from the signing team. Rebuilds and updates under the same prefix and bundle ID retain the pairing. A build under another application-identifier prefix or bundle ID has a different Keychain identity and appears unpaired; pair it as a new client and revoke the old device if that identity change was intentional.
+The `prod` target replaces the operator's real client and daemon, so without a terminal on stdin (a script or an agent) it refuses unless `--prod` confirms it. The installed LaunchAgent passes `-environment <tier>` to `freesided`, which requires a daemon built with the `-environment` flag.
+
+Re-run it after a source change and it updates the installed app in place. The supplied daemon is copied into `Contents/Resources` before the bundle is sealed; the app re-registers that bundled helper once after each install. Xcode automatically provisions the private Keychain access group, and the installer preserves those entitlements while sealing the modified outer bundle. Before replacement it verifies the signature, the exact signing certificate against the embedded profile, native macOS `com.apple.application-identifier`, Team ID, and access group; profile values may authorize the exact identifier through a trailing wildcard, while the signed values must remain exact. The stable credential identity is the profile's application-identifier prefix plus the tier's bundle ID (the Keychain access group is `$(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER)`, so a `dev` install pairs as its own client); that prefix normally equals the Team ID, but older accounts can retain a distinct bundle-seed prefix, which the installer verifies separately from the signing team. Rebuilds and updates under the same prefix and bundle ID retain the pairing. A build under another application-identifier prefix or bundle ID has a different Keychain identity and appears unpaired; pair it as a new client and revoke the old device if that identity change was intentional.
 
 On the first launch after this change, an existing valid credential under the exact current deployment service is copied from the legacy file-based Keychain into the Data Protection Keychain, read back in full, and only then removed from the legacy store. That one-time legacy read or cleanup may present one final Keychain ACL password prompt. Once migration completes, ordinary launches and same-identity updates use the provisioned Data Protection Keychain silently. A separate `codesign wants to sign using key` prompt concerns access to the Apple Development private key during installation; it is not a Freeside credential prompt and this installer does not alter that key's ACL.
 
-Signing needs an `Apple Development` identity, which Xcode mints from the free personal team once an Apple ID is added under Settings > Accounts. `FREESIDE_MAC_SIGNING_IDENTITY` overrides the choice by certificate name or SHA-1 fingerprint. Ad-hoc signing (`-`) is rejected because it cannot carry the profile-authorized private Keychain access group. `FREESIDE_MAC_INSTALL_DIR` and `FREESIDE_MAC_BUILD_DIR` move the install root and derived-data path. The supervised daemon state directory is fixed at `~/Library/Application Support/Freeside/daemon`, matching the app's readiness reader; launchd captures its structured stderr at `freesided.log` in that protected directory.
+Signing needs an `Apple Development` identity, which Xcode mints from the free personal team once an Apple ID is added under Settings > Accounts. `FREESIDE_MAC_SIGNING_IDENTITY` overrides the choice by certificate name or SHA-1 fingerprint. Ad-hoc signing (`-`) is rejected because it cannot carry the profile-authorized private Keychain access group. `FREESIDE_MAC_INSTALL_DIR` and `FREESIDE_MAC_BUILD_DIR` move the install root and derived-data path (default `DerivedData/mac-install-<tier>`). The daemon state directory is `<state root>/daemon`, matching the app's readiness reader; launchd captures its structured stderr at `freesided.log` in that protected directory. `FREESIDE_MAC_STATE_ROOT` replaces the derived state root with another absolute path; the app still reads the derived one, so the override is for the installer's tests, not for a daemon the app should find. The first `dev` install registers a new App ID on the personal team, which counts against its weekly App ID quota.
 
 ## Installing on an iOS Device
 

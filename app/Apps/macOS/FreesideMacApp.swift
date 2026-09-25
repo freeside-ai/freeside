@@ -9,12 +9,30 @@ struct FreesideMacApp: App {
     @State private var navigation: NavigationModel
     @State private var flowPreferences: DecisionFlowPreferences
     private let launchInputs: LaunchInputs
+    private let environment: FreesideEnvironment
 
     init() {
+        #if DEBUG
+            let isDebugBuild = true
+        #else
+            let isDebugBuild = false
+        #endif
+        // A tier or launch input this app cannot honour exits before any
+        // window or LaunchAgent work, rather than guessing a daemon.
+        let environment: FreesideEnvironment
+        let session: AppSession
+        do {
+            environment = try FreesideEnvironment.current(isDebugBuild: isDebugBuild)
+            session = try Self.session(environment: environment)
+        } catch {
+            FileHandle.standardError.write(Data("FreesideMac: \(error)\n".utf8))
+            exit(EX_CONFIG)
+        }
         let launchInputs = LaunchInputs.standard()
         self.launchInputs = launchInputs
-        _session = State(initialValue: Self.session())
-        _daemon = State(initialValue: Self.daemonModel())
+        self.environment = environment
+        _session = State(initialValue: session)
+        _daemon = State(initialValue: Self.daemonModel(environment: environment))
         _navigation = State(initialValue: NavigationModel(launchInputs: launchInputs))
         _flowPreferences = State(initialValue: DecisionFlowPreferences())
     }
@@ -31,14 +49,16 @@ struct FreesideMacApp: App {
                             session: session,
                             launchInputs: launchInputs,
                             navigation: navigation,
-                            flowPreferences: flowPreferences)
+                            flowPreferences: flowPreferences,
+                            environment: environment)
                     }
                 #else
                     FreesideRootView(
                         session: session,
                         launchInputs: launchInputs,
                         navigation: navigation,
-                        flowPreferences: flowPreferences)
+                        flowPreferences: flowPreferences,
+                        environment: environment)
                 #endif
             }
             .task { daemon.startMonitoring() }
@@ -78,22 +98,27 @@ struct FreesideMacApp: App {
     }
 
     @MainActor
-    private static func session() -> AppSession {
+    private static func session(environment: FreesideEnvironment) throws -> AppSession {
         #if DEBUG
             if UserDefaults.standard.string(forKey: "FreesideDaemonMenuDemo") != nil {
                 return AppSession.mock()
             }
         #endif
-        return AppSession.fromEnvironment()
+        return try AppSession.fromEnvironment(environment: environment)
     }
 
     @MainActor
-    private static func daemonModel() -> DaemonMenuModel {
+    private static func daemonModel(environment: FreesideEnvironment) -> DaemonMenuModel {
         #if DEBUG
             if let demo = UserDefaults.standard.string(forKey: "FreesideDaemonMenuDemo") {
                 return DaemonMenuDemo.model(named: demo)
             }
         #endif
+        guard environment.isSupervised else {
+            // An ephemeral app has no LaunchAgent of its own, and every
+            // supervised one belongs to an installed app.
+            return DaemonMenuDemo.model(named: "stopped")
+        }
         let arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
         let hasExplicitServer =
             (arguments["FreesideServerURL"] as? String)
@@ -106,7 +131,7 @@ struct FreesideMacApp: App {
             // demo model keeps the menu inert without touching SMAppService.
             return DaemonMenuDemo.model(named: "stopped")
         }
-        return DaemonMenuModel()
+        return DaemonMenuModel(environment: environment)
     }
 }
 
@@ -286,6 +311,8 @@ private enum DaemonMenuDemo {
         return DaemonMenuModel(
             service: DemoDaemonService(status: status),
             healthChecker: DemoHealthChecker(result: health),
+            // The demo checker ignores the URL; no daemon is contacted.
+            daemonURL: URL(fileURLWithPath: "/dev/null"),
             registerOnFirstRun: false,
             readReadiness: { nil })
     }

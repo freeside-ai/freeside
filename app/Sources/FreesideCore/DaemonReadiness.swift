@@ -53,12 +53,6 @@ public struct DaemonReadinessReader: Sendable {
     // mints immediately before atomic publication; the file timestamp is
     // therefore the app-visible start of this one-shot code's lifetime.
     public static let pairingCodeLifetime: TimeInterval = 10 * 60
-    public static var supervisedAPIURL: URL {
-        guard let url = URL(string: "http://127.0.0.1:7331") else {
-            preconditionFailure("the fixed supervised daemon URL is invalid")
-        }
-        return url
-    }
 
     private let now: @Sendable () -> Date
     private let modificationDate: @Sendable (URL) -> Date?
@@ -82,14 +76,10 @@ public struct DaemonReadinessReader: Sendable {
         return try? DaemonReadiness.parse(data)
     }
 
-    public static func stateDirectory(fileManager: FileManager = .default) -> URL? {
-        fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("Freeside", isDirectory: true)
-            .appendingPathComponent("daemon", isDirectory: true)
-    }
-
-    public static func defaultFileURL(fileManager: FileManager = .default) -> URL? {
-        stateDirectory(fileManager: fileManager)?
-            .appendingPathComponent(fileName, isDirectory: false)
+    /// The readiness file a daemon publishes in its `-state-dir`: the
+    /// supervised tier's derived directory, or an `ephemeral` run's
+    /// `-FreesideReadinessDir`.
+    public static func fileURL(inStateDirectory directory: URL) -> URL {
+        directory.appendingPathComponent(fileName, isDirectory: false)
     }
 }

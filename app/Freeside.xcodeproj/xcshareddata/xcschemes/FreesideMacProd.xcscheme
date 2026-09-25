@@ -13,7 +13,7 @@
       <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="100000000000000000000041" BuildableName="FreesideMac.app" BlueprintName="FreesideMac" ReferencedContainer="container:Freeside.xcodeproj"/>
     </BuildableProductRunnable>
     <EnvironmentVariables>
-      <EnvironmentVariable key="FREESIDE_ENV" value="ephemeral" isEnabled="YES"/>
+      <EnvironmentVariable key="FREESIDE_ENV" value="prod" isEnabled="YES"/>
     </EnvironmentVariables>
   </LaunchAction>
   <ProfileAction buildConfiguration="Release" shouldUseLaunchSchemeArgsEnv="YES" useCustomWorkingDirectory="NO" debugDocumentVersioning="YES"/>

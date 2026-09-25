@@ -48,6 +48,7 @@
             let model = DaemonMenuModel(
                 service: service,
                 healthChecker: health,
+                daemonURL: prodDaemonURL,
                 registerOnFirstRun: false,
                 readReadiness: { nil })
 
@@ -94,6 +95,7 @@
             let model = DaemonMenuModel(
                 service: service,
                 healthChecker: health,
+                daemonURL: prodDaemonURL,
                 registerOnFirstRun: false,
                 readReadiness: { nil })
 
@@ -114,6 +116,7 @@
             let model = DaemonMenuModel(
                 service: service,
                 healthChecker: health,
+                daemonURL: prodDaemonURL,
                 registerOnFirstRun: false,
                 readReadiness: { nil })
 
@@ -138,6 +141,7 @@
             let model = DaemonMenuModel(
                 service: service,
                 healthChecker: health,
+                daemonURL: prodDaemonURL,
                 registerOnFirstRun: false,
                 readReadiness: { nil })
 
@@ -162,6 +166,7 @@
             let model = DaemonMenuModel(
                 service: service,
                 healthChecker: health,
+                daemonURL: prodDaemonURL,
                 registerOnFirstRun: false,
                 readReadiness: { nil })
 
@@ -186,6 +191,7 @@
                 let model = DaemonMenuModel(
                     service: service,
                     healthChecker: ScriptedDaemonHealth(),
+                    daemonURL: prodDaemonURL,
                     registerOnFirstRun: false,
                     readReadiness: { nil })
 
@@ -207,6 +213,7 @@
             let model = DaemonMenuModel(
                 service: service,
                 healthChecker: health,
+                daemonURL: prodDaemonURL,
                 registerOnFirstRun: false,
                 readReadiness: { nil })
             let olderRefresh = Task { await model.refresh() }
@@ -235,6 +242,7 @@
             let model = DaemonMenuModel(
                 service: service,
                 healthChecker: health,
+                daemonURL: prodDaemonURL,
                 registerOnFirstRun: false,
                 readReadiness: { readiness })
 
@@ -257,13 +265,36 @@
             let model = DaemonMenuModel(
                 service: service,
                 healthChecker: health,
+                daemonURL: prodDaemonURL,
                 registerOnFirstRun: false,
                 readReadiness: { staleReadiness })
 
             await model.refresh()
 
             #expect(model.readiness == nil)
-            #expect(await health.lastURL == DaemonReadinessReader.supervisedAPIURL)
+            #expect(await health.lastURL == prodDaemonURL)
+        }
+
+        @Test func devModelProbesItsOwnPortAndIgnoresProdReadiness() async throws {
+            let devURL = try #require(FreesideEnvironment.dev.supervisedAPIURL)
+            let health = ScriptedDaemonHealth([
+                .health(
+                    DaemonHealth(
+                        version: "1.0.0",
+                        startedAt: Date(timeIntervalSince1970: 1_725_184_800)))
+            ])
+            let prodReadiness = DaemonReadiness(apiURL: prodDaemonURL, pairingCode: "483911")
+            let model = DaemonMenuModel(
+                service: FakeDaemonService(status: .enabled),
+                healthChecker: health,
+                daemonURL: devURL,
+                registerOnFirstRun: false,
+                readReadiness: { prodReadiness })
+
+            await model.refresh()
+
+            #expect(model.readiness == nil)
+            #expect(await health.lastURL == devURL)
         }
     }
 
