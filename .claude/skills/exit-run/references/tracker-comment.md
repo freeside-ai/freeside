@@ -1,10 +1,10 @@
 # Tracker Comment Templates
 
-Three records an exit run writes on the tracker. The format rules for the
-implementation-order digest and the diagram are in docs/coordination.md
-(Tracking Issues); this file only fixes the section order so consecutive
-runs read alike. Replace every bracketed placeholder; delete a section that
-has nothing to say rather than leaving it empty.
+Three records an exit run writes on the tracker. The diagram follows
+`docs/tracker-format.md` (§status) with Freeside's additions in
+docs/coordination.md (Tracking Issues); this file only fixes the section
+order so consecutive runs read alike. Replace every bracketed placeholder;
+delete a section that has nothing to say rather than leaving it empty.
 
 ## Exit-Run Comment
 
@@ -58,13 +58,11 @@ please confirm.
 
 Conditionally blocking, needs one check before deciding: <#n: the check>.
 
-### Implementation Order (Proposal For The Exit Set)
+### Start Order (Proposal For The Exit Set)
 
 Prerequisites: <what is already merged; `main` at `<sha>`>.
 
-**Startable now (structural only):** <units or none>.
-
-**Mergeable next:** <open PRs or none>.
+**Startable now (structural only):** <units, or why none is startable>.
 
 **Typed chains:** <every arrow is `starts-after` unless marked>. <lane
 group>: #a → #b → #c. <lane group>: ...
@@ -80,18 +78,23 @@ shared-file one-writer chains; the four-front cap>.
 
 ```mermaid
 flowchart LR
-  classDef contract fill:#fdd,stroke:#c66,color:#000
-  classDef investigation fill:#fff2cc,stroke:#a80,color:#000
-  U1[["#<merged unit>"]] --> U2["#<open unit>"]
-  U2 -.-> U3["#<unit that merges-after U2>"]
-  class U1 contract
+    i<A>[["#<A> <three to five words>"]]
+    i<B>["#<B> <three to five words>"]
+    i<C>["#<C> <three to five words>"]
+    i<A> ==> i<B>
+    i<B> -.-> i<C>
+    classDef contract fill:#fde2c8,stroke:#c2410c,color:#000
+    classDef owner fill:#e5e7eb,stroke:#6b7280,stroke-dasharray:5 5,color:#000
+    classDef startable stroke:#15803d,stroke-width:3px
+    classDef investigation fill:#fff2cc,stroke:#a80,color:#000
+    class i<A> contract
+    class i<B> startable
 ```
 
-Legend: `A --> B` means B `starts-after` A; `A -.-> B` means B
-`merges-after` A; `A ==> B` means B is `stacked-on` A; `A -.- B` means A is
-`exclusive-with` B. A double-bordered node (`[["#N"]]`) is merged. Red fill
-marks `kind:contract` units, yellow the required investigation; colors and
-borders encode no ordering. Deferred issues are omitted.
+**Legend:** thick arrow critical path · arrow starts-after · double border merged · green outline startable now · orange contract · grey dashed owner-run.
+
+**Edges:** dotted arrow `merges-after`; a `stacked-on` edge is labeled.
+Yellow fill marks a required investigation. Deferred issues are omitted.
 
 **Authority:** each unit issue's Dependencies field is authoritative; this
 digest and diagram are projections, and where they diverge the issue wins
@@ -140,25 +143,25 @@ Resume after <condition>, using <the documented path>.
 Make these edits to the body in the same operation as the comment, after
 reading the current body:
 
-- Under the close condition, add one sentence linking the exit-run comment
-  as the owner-approved (or proposed) exit follow-up, so "all units merged"
-  is no longer read as sufficient on its own.
-- Add or extend an `## Exit Follow-Up Units` list, one line per listed
-  finding issue, `- [ ] #<n> — <short name>. Finding <k>; **Exit required**.`
-  (or `**Investigate before exit**`). Which findings the list admits
-  depends on the tracker kind. On a wave tracker, listing is half of
-  scheduling (AGENTS.md Work Units): list only the exit set, the findings
-  the owner made Required or Investigate before exit, set the phase
-  milestone on each in the same edit, and keep a deferred finding off the
-  list; its `deferral` label and the comment's table are its whole record.
-  A `needs-human` finding stays unmilestoned and off the list too, whatever
-  its disposition; the close condition reaches it through the comment.
-  On an ad hoc tracker, which schedules nothing, list every finding with
-  its disposition (`**Deferred beyond exit**` for a deferred one), matching
-  the comment's table exactly.
-- Refresh **Startable now** and **Mergeable next** in the Implementation
-  order section, and the diagram if the body carries one, so the body and
-  the comment project the same state: both cover the exit set. A deferred
-  finding an ad hoc tracker lists is named in those projections as outside
-  the exit (#1211 writes "deferred structurally startable ... outside this
-  exit"), never projected as startable exit work.
+- When the exit set isn't empty, add one bullet to `## Exit` linking the
+  exit-run comment as the owner-approved (or proposed) exit follow-up,
+  ending with `Evidence:` and the exit-set units, chained as
+  `Evidence: #N, then #M` when the proof lands in steps, so "all units
+  merged" is no longer read as sufficient on its own. If Exit already
+  has six bullets, the format's maximum, extend the closest existing
+  bullet's text and Evidence instead. A clean run adds no Exit bullet: the
+  comment is the record, and the owner ticks the existing bullets.
+- Add the exit set, the findings the owner made Required or Investigate
+  before exit, to `## Units` as bare `- [ ] #<n>` lines under their lane
+  group. On a wave tracker, listing is half of scheduling (AGENTS.md Work
+  Units): set the phase milestone on each in the same edit. An ad hoc
+  tracker schedules nothing and sets no milestone. A `needs-human` finding
+  in the exit set goes under `### Owner-run`, unmilestoned.
+- Keep a deferred finding out of Units and the diagram on either kind of
+  tracker. Record the adopted dispositions in the Notes block, one bullet
+  per disposition group with its date and a link to the comment, for
+  example `**Deferred beyond exit (owner-adopted <date>):** #<n>, #<m>.`
+  The comment's table stays the full record.
+- Refresh the Status section: add the exit-set units as nodes with their
+  edges and recompute **Startable now**, so the body and the comment
+  project the same state.
