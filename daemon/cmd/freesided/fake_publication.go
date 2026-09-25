@@ -69,6 +69,9 @@ func runFakePublicationCommand(
 		return fakePublicationCommandResult{}, err
 	}
 	defer func() { err = errors.Join(err, lock.Close()) }()
+	if err := cfg.withDefaults(); err != nil {
+		return fakePublicationCommandResult{}, err
+	}
 	replayFound, err := prepareFakePublicationConfig(
 		ctx, &cfg, fakePublicationReplayBinding,
 	)
