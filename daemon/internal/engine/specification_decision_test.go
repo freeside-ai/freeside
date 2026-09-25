@@ -579,3 +579,188 @@ func TestSpecificationSketchRoundAsksThenSpecifiesUnderBudgetOfTwo(t *testing.T)
 		}
 	})
 }
+
+// taskName reads the specification run's task name, so a test can prove the
+// rename that used to trip answer replay (#1556) really happened.
+func (f specificationFixture) taskName(t *testing.T) domain.DisplayName {
+	t.Helper()
+	var name domain.DisplayName
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		run, err := tx.GetRun(t.Context(), "specification-run")
+		if err != nil {
+			return err
+		}
+		task, err := tx.GetTask(t.Context(), run.TaskID)
+		name = task.Name
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return name
+}
+
+// assertAnswerReplayConverges runs the passes a daemon repeats after a
+// consumed answer: none may fail, since a reconcile error is a durable stop,
+// and none may create anything.
+func assertAnswerReplayConverges(t *testing.T, engine *Engine, step string) {
+	t.Helper()
+	for pass := 1; pass <= 2; pass++ {
+		if created, err := engine.reconcileOperatorFeedback(t.Context()); err != nil || created != 0 {
+			t.Fatalf("%s: operator feedback pass %d = %d, %v", step, pass, created, err)
+		}
+		if _, err := engine.Reconcile(t.Context()); err != nil {
+			t.Fatalf("%s: reconcile pass %d: %v", step, pass, err)
+		}
+	}
+}
+
+// answerRounds scripts one decisions turn per answer, answers each, and ends
+// on the scripted specification, running the field sequence of #1556.
+func answerRounds(t *testing.T, f specificationFixture, engine *Engine, answers int) {
+	t.Helper()
+	if result, err := engine.Reconcile(t.Context()); err != nil || result.ResultsAccepted != 1 {
+		t.Fatalf("first reconcile = %+v, %v", result, err)
+	}
+	for round := 1; round <= answers; round++ {
+		questionID := domain.ItemID("question-" + string(specificationInvocationID("specification-run", round)))
+		f.answerQuestion(t, questionID, fmt.Sprintf("answer-%d", round), "Ship the importer, daemon only.")
+		if created, err := engine.reconcileOperatorFeedback(t.Context()); err != nil || created != 1 {
+			t.Fatalf("answer %d: reconcileOperatorFeedback = %d, %v", round, created, err)
+		}
+		if result, err := engine.Reconcile(t.Context()); err != nil || result.ResultsAccepted != 1 {
+			t.Fatalf("answer %d: reconcile = %+v, %v", round, result, err)
+		}
+	}
+}
+
+// TestSpecificationAnswerReplaySurvivesTaskRename pins #1556: once a
+// specification renames the task, every later pass still recognizes the
+// consumed answers instead of rejecting them with ErrParentKeyMismatch,
+// which escaped Reconcile as a durable stop.
+func TestSpecificationAnswerReplaySurvivesTaskRename(t *testing.T) {
+	const title = "Import the sketch"
+	for _, tc := range []struct {
+		name         string
+		specApproval bool
+		answers      int
+		title        *string
+		wantName     domain.DisplayName
+	}{
+		{
+			name: "spec_approval titled one answer", specApproval: true, answers: 1, title: new(title),
+			wantName: domain.DisplayName{Text: title, Source: domain.DisplayNameSourceAgent},
+		},
+		{
+			name: "spec_approval titled two answers", specApproval: true, answers: 2, title: new(title),
+			wantName: domain.DisplayName{Text: title, Source: domain.DisplayNameSourceAgent},
+		},
+		{
+			name: "auto-approval heading one answer", specApproval: false, answers: 1,
+			wantName: domain.DisplayName{Text: "Sketch Importer", Source: domain.DisplayNameSourceSpecification},
+		},
+		{
+			name: "auto-approval heading two answers", specApproval: false, answers: 2,
+			wantName: domain.DisplayName{Text: "Sketch Importer", Source: domain.DisplayNameSourceSpecification},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newSpecificationFixture(t, tc.specApproval, 4)
+			driver := f.newDriver(t)
+			for round := 1; round <= tc.answers; round++ {
+				if err := specifyfake.Script(driver, specificationInvocationID("specification-run", round), 0, 0,
+					specify.Output{Decisions: sketchDecisionsFixture()}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := specifyfake.Script(driver, specificationInvocationID("specification-run", tc.answers+1), 0, 0,
+				specify.Output{Specification: &specify.Specification{
+					Title: tc.title, Summary: "The implementation plan is ready.",
+					Body: "# Sketch Importer\n\nShip the importer, daemon only.", Addressals: []specify.Addressal{},
+				}}); err != nil {
+				t.Fatal(err)
+			}
+			f.submit(t)
+			engine := f.newEngine(t, driver)
+			answerRounds(t, f, engine, tc.answers)
+			if tc.specApproval {
+				approvalID := domain.ItemID(fmt.Sprintf("spec-approval-implementation-run-%d", tc.answers+1))
+				if item, _ := f.item(t, approvalID); item.Status != domain.StatusOpen {
+					t.Fatalf("approval item status = %s, want open", item.Status)
+				}
+			} else if _, err := f.run("implementation-run"); err != nil {
+				t.Fatalf("auto-approved implementation = %v", err)
+			}
+			if got := f.taskName(t); got != tc.wantName {
+				t.Fatalf("task name = %+v, want %+v", got, tc.wantName)
+			}
+			assertAnswerReplayConverges(t, engine, "after the specification")
+		})
+	}
+}
+
+// TestSpecificationAnswerReplaySurvivesApprovalRevision carries a consumed
+// answer through request_changes, a revised specification, and approval
+// (#1556), replaying reconcile after each step; the approval renames the task
+// again from the approved heading.
+func TestSpecificationAnswerReplaySurvivesApprovalRevision(t *testing.T) {
+	f := newSpecificationFixture(t, true, 4)
+	driver := f.newDriver(t)
+	if err := specifyfake.Script(driver, specificationInvocationID("specification-run", 1), 0, 0,
+		specify.Output{Decisions: sketchDecisionsFixture()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := specifyfake.Script(driver, specificationInvocationID("specification-run", 2), 0, 0,
+		specify.Output{Specification: &specify.Specification{
+			Title: new("Import the sketch"), Summary: "The implementation plan is ready.",
+			Body: "# Sketch Importer\n\nShip the importer, daemon only.", Addressals: []specify.Addressal{},
+		}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := specifyfake.Script(driver, specificationInvocationID("specification-run", 3), 0, 0,
+		specify.Output{Specification: &specify.Specification{
+			Summary: "The revised implementation plan is ready.",
+			Body:    "# Approved Specification\n\nShip the importer and name its replay invariant.",
+			Addressals: []specify.Addressal{{
+				CommentID: "revise-answered-spec", Response: "Named the replay invariant.",
+			}},
+		}}); err != nil {
+		t.Fatal(err)
+	}
+	f.submit(t)
+	engine := f.newEngine(t, driver)
+	answerRounds(t, f, engine, 1)
+	assertAnswerReplayConverges(t, engine, "after the titled specification")
+
+	approval, snapshot := f.item(t, "spec-approval-implementation-run-2")
+	if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
+		CommandID: "revise-answered-spec", DeviceID: "device-1", ExpectedEntityVersion: snapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: approval.ID, Action: domain.ActionRequestChanges, ItemVersion: approval.ItemVersion,
+			ArtifactDigests: approval.ArtifactDigests, Message: "Name the replay invariant.",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertAnswerReplayConverges(t, engine, "after request_changes")
+
+	revised, revisedSnapshot := f.item(t, "spec-approval-implementation-run-3")
+	if revised.Status != domain.StatusOpen {
+		t.Fatalf("revised approval status = %s, want open", revised.Status)
+	}
+	if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
+		CommandID: "approve-answered-spec", DeviceID: "device-1", ExpectedEntityVersion: revisedSnapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: revised.ID, Action: domain.ActionApprove, ItemVersion: revised.ItemVersion,
+			ArtifactDigests: revised.ArtifactDigests,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertAnswerReplayConverges(t, engine, "after approval")
+	if _, err := f.run("implementation-run"); err != nil {
+		t.Fatalf("approved implementation = %v", err)
+	}
+	if got := f.taskName(t); got.Text != "Approved Specification" || got.Source != domain.DisplayNameSourceSpecification {
+		t.Fatalf("task name after approval = %+v", got)
+	}
+}

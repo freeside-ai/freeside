@@ -481,10 +481,14 @@ func TestReturnToAgentRecordsFeedbackAndCandidatePatchForResumedWork(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Rename the task between the answer and its first delivery (#1556), and
+	// load the item through the record tier as reconcileOperatorFeedbackActions
+	// does: the delivery must not mistake the projected rename for drift.
+	renameRunTask(t, f.store, runID)
 	var concluded domain.AttentionItem
 	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
 		var err error
-		concluded, err = tx.GetAttentionItem(t.Context(), item.ID)
+		concluded, err = tx.GetAttentionItemRecord(t.Context(), item.ID)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -591,6 +595,128 @@ func TestReturnToAgentRecordsFeedbackAndCandidatePatchForResumedWork(t *testing.
 	if err != nil || quarantine.Item.Status != domain.StatusOpen ||
 		quarantine.Item.Reason != operatorFeedbackQuarantineUnreadable {
 		t.Fatalf("feedback quarantine = %#v, %v", quarantine, err)
+	}
+}
+
+// renameRunTask gives the run's task an agent-sourced name, the rename a
+// titled specification applies, and fails the test if the rename did not
+// take: SetTaskName keeps an operator or specification name silently, and a
+// test relying on the rename would then not exercise #1556.
+func renameRunTask(t *testing.T, st *store.Store, runID domain.RunID) {
+	t.Helper()
+	want := domain.DisplayName{Text: "Renamed after the answer", Source: domain.DisplayNameSourceAgent}
+	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
+		run, err := tx.GetRun(t.Context(), runID)
+		if err != nil {
+			return err
+		}
+		if err := tx.SetTaskName(t.Context(), run.TaskID, want); err != nil {
+			return err
+		}
+		task, err := tx.GetTask(t.Context(), run.TaskID)
+		if err == nil && task.Name != want {
+			t.Fatalf("task name after rename = %+v, want %+v", task.Name, want)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestSpecificationAnswerAfterRenameFailsClosedOnDrift pins the other side of
+// #1556: comparing record to record tolerates a task rename, but a loaded item
+// or command that no longer matches its stored record is still refused with
+// ErrParentKeyMismatch and enqueues nothing.
+func TestSpecificationAnswerAfterRenameFailsClosedOnDrift(t *testing.T) {
+	f := newSpecificationFixture(t, false, 4)
+	f.submit(t)
+	engine := f.newEngine(t, f.newDriver(t))
+	run, _, question := seedSpecificationQuestion(t, f, engine)
+	snapshot, err := f.signet.GetAttentionItem(t.Context(), question.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := f.signet.Submit(t.Context(), signet.ClientCommand{
+		CommandID: "answer-then-rename", DeviceID: "device-1",
+		ExpectedEntityVersion: snapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: question.ID, Action: domain.ActionAnswerAndRetry,
+			ItemVersion: question.ItemVersion, ArtifactDigests: question.ArtifactDigests,
+			Message: "Target the current API version only.",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	renameRunTask(t, f.store, run.ID)
+	var item domain.AttentionItem
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		item, err = tx.GetAttentionItemRecord(t.Context(), question.ID)
+		if err != nil {
+			return err
+		}
+		projected, err := tx.GetAttentionItem(t.Context(), question.ID)
+		if err == nil && reflect.DeepEqual(projected, item) {
+			t.Fatal("rename left the projected item equal to its record; the test would not exercise #1556")
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	command := result.Record
+	otherRun := domain.RunID("other-run")
+	for _, tc := range []struct {
+		name    string
+		item    func(domain.AttentionItem) domain.AttentionItem
+		command func(domain.Command) domain.Command
+	}{
+		{name: "item reason", item: func(item domain.AttentionItem) domain.AttentionItem {
+			item.Reason += " (edited)"
+			return item
+		}},
+		{name: "item version", item: func(item domain.AttentionItem) domain.AttentionItem {
+			item.ItemVersion++
+			return item
+		}},
+		{name: "item run", item: func(item domain.AttentionItem) domain.AttentionItem {
+			item.Subject.RunID = &otherRun
+			return item
+		}},
+		{name: "command message", command: func(command domain.Command) domain.Command {
+			command.Message = "A different answer."
+			return command
+		}},
+		{name: "command item version", command: func(command domain.Command) domain.Command {
+			command.ItemVersion++
+			return command
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			drifted, driftedCommand := item, command
+			if tc.item != nil {
+				drifted = tc.item(item)
+			}
+			if tc.command != nil {
+				driftedCommand = tc.command(command)
+			}
+			made, err := engine.enqueueSpecificationAnswer(t.Context(), run, drifted, driftedCommand)
+			if made || !errors.Is(err, domain.ErrParentKeyMismatch) {
+				t.Fatalf("drifted answer = %t, %v, want ErrParentKeyMismatch", made, err)
+			}
+			if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+				_, err := tx.GetOutbox(t.Context(), string(specificationInvocationID(run.ID, 2)))
+				return err
+			}); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("drifted answer's next iteration = %v, want ErrNotFound", err)
+			}
+		})
+	}
+	if made, err := engine.enqueueSpecificationAnswer(t.Context(), run, item, command); err != nil || !made {
+		t.Fatalf("renamed-task answer = %t, %v, want enqueued", made, err)
+	}
+	if created, err := engine.reconcileOperatorFeedback(t.Context()); err != nil || created != 0 {
+		t.Fatalf("replayed renamed-task answer = %d, %v", created, err)
 	}
 }
 
