@@ -1,6 +1,6 @@
 ---
 name: plan-wave
-description: Run the spine wave-planning session for a numbered wave of the docs/plan.md §11 coordination table — verify the prior wave closed, create the pinned wave tracking issue, sweep the unscheduled deferral queue, and decompose the wave into scheduled unit issues. Use when the user asks to "plan wave N", "run wave planning", "schedule wave N", or "create the Wave N tracking issue". Not for executing a scheduled unit (ordinary work-unit flow) and not for editing docs/plan.md (a plan revision is its own gated work).
+description: Run the spine wave-planning session for a numbered wave of the docs/plan.md §11 coordination table — verify the prior wave closed, create the wave tracker (`Wave N: <Name>`, per docs/tracker-format.md), sweep the unscheduled deferral queue, and decompose the wave into scheduled unit issues. Use when the user asks to "plan wave N", "run wave planning", "schedule wave N", or "create the Wave N tracking issue". Not for executing a scheduled unit (ordinary work-unit flow) and not for editing docs/plan.md (a plan revision is its own gated work).
 ---
 
 # Wave Planning (Spine)
@@ -29,7 +29,8 @@ source. Read, in order:
 3. The current revision in docs/plan.md §13, plus any
    docs/history/decisions.md entries binding this wave, and the devlog
    note each cites when one exists.
-4. The prior wave's pinned tracking issue, end to end.
+4. The prior wave's tracking issue, end to end. Waves before revision 70
+   titled it `Wave N (...) tracking`; later ones title it `Wave N: <Name>`.
 
 Before proceeding, write down: the wave's units in order; each unit's
 acceptance source (the plan's exit list where the row targets one, the
@@ -42,9 +43,9 @@ open owner decision the wave must anchor to as the plan says it stands.
 Verify each; on any failure, stop and report for human direction rather
 than planning around it:
 
-- The prior wave's unit list is all merged (a needs-human prerequisite
-  in the tracker's own prerequisites section is not a unit).
-  Stragglers: list them and stop.
+- The prior wave's unit list is all merged (a `needs-human` item under
+  the tracker's `### Owner-run` group, or in an older tracker's
+  prerequisites section, is not a unit). Stragglers: list them and stop.
 - The prior wave's fresh-context adversarial review (§11) has its findings
   summary on that tracking issue, and every filed finding is closed,
   deferral-labeled, or declined with a note.
@@ -55,8 +56,10 @@ than planning around it:
 - Every wave-specific gate the derivation surfaced holds: probe results
   recorded, spike outcomes declared, owner decisions the row depends on
   actually made.
-- No prior `/plan-wave N` attempt left artifacts behind: an existing
-  "Wave N tracking" issue, or unit issues a prior run already created or
+- No prior `/plan-wave N` attempt left artifacts behind: an open issue
+  with the `tracker` label and a milestone other than the prior wave's
+  tracker (which Create the Tracking Issue closes next), an issue titled
+  `Wave N:`, or unit issues a prior run already created or
   scheduled for this wave. Either means stop and report for
   resume-or-repair direction rather than creating duplicates.
   Pre-existing deferred or longstanding issues the wave's work list
@@ -65,23 +68,29 @@ than planning around it:
 
 ## Create the Tracking Issue
 
-Close and unpin the prior wave's tracking issue first (its close
-condition was verified above), so coordination sessions see exactly one
-current wave; then create the pinned "Wave N tracking" issue as a
-shell: the wave's close condition and a reminder that the wave ends
-with the fresh-context adversarial review whose findings summary lands
-on this issue. The unit list in order (the §11 table records only shape
-and sequencing) is added at Close Out publication, never here: a
+Read `docs/tracker-format.md` first; it fixes the tracker's title and
+sections, and docs/coordination.md (Tracking Issues) adds Freeside's rules.
+Close the prior wave's tracking issue first (its close condition was
+verified above) and unpin it, so the §11 resolver sees at most one open
+wave tracker. Then create the new tracker titled `Wave N: <Name>`, taking
+the name from the wave's §11 row or subsection, with the `tracker` label
+and the phase milestone, and pin it for visibility. The label plus the
+milestone is what makes it the wave tracker; the title and pin carry no
+authority. Create it as a shell: the format's intro (the bold name
+sentence and the **Gate** and **Plan** bullets) and an `## Exit` section
+holding the wave's close condition, including that the wave ends with the
+fresh-context adversarial review whose findings summary lands on this
+issue. Status and Units are added at Close Out publication, never here: a
 listing before milestones exist is the half-scheduled state the sweep
 repairs.
 
 ## Sweep the Deferral Queue
 
-First reconcile half-scheduled state: an open issue carrying the phase
-milestone without an entry on the current tracker's unit list, or
-unit-listed without the milestone, is a spine-repair error (AGENTS.md,
-Work units),
-not a scheduled unit, and the no-milestone filter below would skip it.
+First reconcile half-scheduled state: an open issue other than the wave
+tracker itself carrying the phase milestone without an entry on the
+current tracker's unit list, or listed in a lane group without the
+milestone, is a spine-repair error (AGENTS.md, Work units), not a
+scheduled unit, and the no-milestone filter below would skip it.
 Repair each one, into this wave's staging or by stripping the stray
 field with a dated comment, before filtering.
 
@@ -149,10 +158,10 @@ File `needs-human` issues for maintainer-only prerequisites the
 decomposition surfaces, as dependencies of the units that need them: no
 lane, and no milestone, the phase-milestone rule above notwithstanding.
 They stay unmilestoned and fiat-only (AGENTS.md, Coordination gates).
-On the tracker they belong in the separate prerequisites section, never
-the unit list: a unit-list entry would read as the half-scheduled state
-the sweep repairs, and the next wave's merged-units precondition would
-count the fiat-only issue as a straggler. An
+On the tracker they go under `### Owner-run` with the `owner` class,
+never in a lane group: an Owner-run entry isn't a scheduling listing, so
+the sweep's half-scheduled check skips it and the next wave's merged-units
+precondition doesn't count it as a straggler. An
 open owner fork the plan deliberately carries unresolved is not a blocker:
 plan under the shape the plan says stands, surface the fork on the
 tracking issue, and neither file it as blocking nor resolve it.
@@ -164,14 +173,18 @@ tracking issue, and neither file it as blocking nor resolve it.
   created unit's phase milestone and add it to the tracker's unit list
   as one planning operation (either field alone is a spine-repair
   error; AGENTS.md, Work units).
-- Populate the tracking issue in order: the unit list with
-  dependencies, then an Implementation order section per the
-  tracking-issue format (docs/coordination.md, Tracking Issues),
-  derived from the finished unit issues' Dependencies fields, then
-  separate sections for needs-human prerequisites, sweep dispositions,
-  and surfaced forks. Wave specifics for that format: the serialized
-  contract chain takes the repo-wide-exclusivity highlight, and a
-  strictly serial wave states its chain in prose with no diagram.
+- Populate the tracker per `docs/tracker-format.md` (§template) and
+  docs/coordination.md (Tracking Issues), derived from the finished unit
+  issues' Dependencies fields: the Status diagram and **Startable now**,
+  Units grouped by lane with `needs-human` items under `### Owner-run`,
+  and three to six Exit bullets from the wave's close condition and exit
+  list, each naming its evidence unit except the adversarial-review
+  bullet (docs/coordination.md, Tracking Issues, Exit). Sweep
+  dispositions, surfaced forks, and scheduling rationale go in the
+  collapsed Notes block, after
+  the derived-page note. The serialized contract chain takes the
+  `contract` class. Every tracker has a diagram, a strictly serial wave
+  included.
 - Devlog note only when a decision-note trigger applies
   (devlog/README.md): consequential rescoping or scheduling rationale
   that would otherwise exist only in chat. Decomposition and sweep

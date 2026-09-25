@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 69
+revision: 70
 status: active
-updated: 2026-09-23
+updated: 2026-09-25
 ---
 
 # Freeside
@@ -5344,7 +5344,7 @@ Contracts and fakes coordinate implementation. CI keeps lanes honest.
 | **6 (1B.0): convergence and yield** | Integrated | Convergence policy and the Section [7](#7-review-policy) finding-adjudication routing (#697; the spine assigns its contract splits at wave planning); the Claude shadow arm with second adjudication and sampled classification accuracy; automatic re-review of remediation heads as a standing integration test; yield history on ready-for-final-review; the full chain on the real backlog. iOS on-device install (Section [10](#10-operations-and-onboarding)). 1B.0 exit. |
 | **7 (1B.1): the decision surface** | Parallel lanes | The decision surface closes and reads from the phone. Contract-first, one serialized chain whose positions the spine assigns at planning: the revision-40 attention-presentation cluster (the Section [4](#4-the-attention-model) recommendation shape and Section [9](#9-comprehension) typed minimum card facts, #917, which must retire `adjudicate` or reassign it to an executable `review_dispute` transaction before client adoption; decision-surface identity, #942; per-type card facts, #724; adjudication finding context, #892; per-invocation cost observations, #901), then transaction closure for the remaining Phase 1 pending actions (#918, #919, #920, #921) and the retirement of `choose_alternate_profile` (#936), then Section [5.15](#515-evidence-and-images) evidence metadata (#922), pairing identity facts (#923), readiness rendering (#982), and the Section [8](#8-observability-and-optimization-telemetry)/9 comprehension-telemetry contracts the wave-10 exit evaluation reads (#924, the first unit to slip to wave 8 if review bandwidth binds). Beside the chain: the daemon fact producers, client adoption (the provisional Swift `ActionOutcome` and mock server converge with the daemon's `discuss` and spec-approval `request_changes`), and the Section [9](#9-comprehension) summary layer (#723, stage-agent-sourced, no daemon-inference call). The adjudication-size contract (#961) is placed here or in wave 9 at planning. Deferral drain: the attention-presentation and card-fact clusters only. Exit proof: every rendered Phase 1 action executes on Mac and iPhone; no action stays pending, disabled, or decorative; every card is self-contained at its Section [9](#9-comprehension) altitude; facts stay distinct from claims. |
 | **8 (1B.1): operational closure** | Parallel lanes | Freeside runs unattended, says when it is stuck, and lets published-PR activity back in. The `effect_proposal` card, arriving with the source-issue closure proposal (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) and reused by human-gated follow-up filing (Section [5.17](#517-follow-up-issue-filing)); the doctor credential-integrity probe (Section [10](#10-operations-and-onboarding)); the stall heartbeat (Section [5.12](#512-workflow-definition-initiators-and-artifacts)); the external daemon-liveness probe (Section [5.2](#52-the-daemon-and-its-supervisor), #510); the held-work item (#766); the review drift audit (Section [7](#7-review-policy); the #1048 contract, then #1049–#1053, floor before model site); the standing stopped-operation indicator (#980); device listing and revocation (#981); the clean-machine onboarding proof (#428); and the egress floor's first capabilities above it (Sections [5.4](#54-credential-modes-egress-profiles-and-concurrency), [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, `kind:contract` because `EgressProfile` is a domain enum carried in the admission record, then (b) the policy-gated project-image rebuild in the reusable builder, `starts-after` (a) because its gate reads the registry set (a) declares; both build on merged #302 and #334. Re-entry after a ready-item invalidation (#502; the spine splits its contract half at planning) and external review ingestion on published PRs (#524) share the re-entry trigger shape and land together. Deferral drain: the operational and re-entry clusters. Exit proof: a clean machine reaches an unattended real run; daemon death, crash loops, stalls, held work, a stopped state, a review loop that grows past its specification, and external review each alert without terminal patrol or manual polling. |
-| **9 (1B.1): provider diversity** | Parallel lanes; split-eligible | One agent vocabulary and a second real provider. The agent-vocabulary contract chain, positions assigned at planning: review admission and provenance (#898), the cross-lane failure model (#899), judgment roles in the lineup (#900, decided in revision 65: every agent activity is a lineup role), the role-name lineup keys and wardless admission class that decision needs (#1421, `starts-after` #900), then agent and run facts in the clients (#979). The Codex tail: the adapter registration (#406, `starts-after` the merged admitted-agent contract #894), ward's second vendor topology (#407), the continuation compatibility digest (#873), then #397 by explicit owner decision on shadow evidence (none existed at the wave-6 exit because the shadow configuration was never approved for a project, #1001; #397 `starts-after` #898 and #869 `starts-after` #899 are recorded under the ambiguity rule for wave-9 planning to confirm), then the StageDriver binding (#408, `merges-after` #873; Section [7](#7-review-policy) keeps #397 ahead of it so that Codex-implements plus Codex-reviews does not become the default pairing); the alternate-provider retry card (#869, `starts-after` #406 and #408). The ward front with no open prerequisite, startable at wave start or earlier by fiat: the Codex probe refresh-safety spike (#866). Guided enrollment with the two-step cutover (#867) `starts-after` #1421, because `freesided auth adopt` emits the first real lineup and must not emit stage-named keys (owner decision, revision 65); until then #867 no longer starts early by fiat. The doctor account probe (#868) `starts-after` #406 and #866. The pi adapter, enrollment, and specification agent (#895) `starts-after` #897 and #867, specification only, with its pre-adoption gates run against the pinned build. The spine splits this wave into 9a (contracts) and 9b (adapters) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because tracker titles must match this section's resolver pattern. Deferral drain: the agent and provider clusters. Exit proof: a real unattended Codex run and a pi specification; provider switching explicit in the lineup and visible in the clients; correct cost and independence records (#901); quota and capacity failures recover through the retry card, never a silent fallback. 1B.1 exit evaluation. |
+| **9 (1B.1): provider diversity** | Parallel lanes; split-eligible | One agent vocabulary and a second real provider. The agent-vocabulary contract chain, positions assigned at planning: review admission and provenance (#898), the cross-lane failure model (#899), judgment roles in the lineup (#900, decided in revision 65: every agent activity is a lineup role), the role-name lineup keys and wardless admission class that decision needs (#1421, `starts-after` #900), then agent and run facts in the clients (#979). The Codex tail: the adapter registration (#406, `starts-after` the merged admitted-agent contract #894), ward's second vendor topology (#407), the continuation compatibility digest (#873), then #397 by explicit owner decision on shadow evidence (none existed at the wave-6 exit because the shadow configuration was never approved for a project, #1001; #397 `starts-after` #898 and #869 `starts-after` #899 are recorded under the ambiguity rule for wave-9 planning to confirm), then the StageDriver binding (#408, `merges-after` #873; Section [7](#7-review-policy) keeps #397 ahead of it so that Codex-implements plus Codex-reviews does not become the default pairing); the alternate-provider retry card (#869, `starts-after` #406 and #408). The ward front with no open prerequisite, startable at wave start or earlier by fiat: the Codex probe refresh-safety spike (#866). Guided enrollment with the two-step cutover (#867) `starts-after` #1421, because `freesided auth adopt` emits the first real lineup and must not emit stage-named keys (owner decision, revision 65); until then #867 no longer starts early by fiat. The doctor account probe (#868) `starts-after` #406 and #866. The pi adapter, enrollment, and specification agent (#895) `starts-after` #897 and #867, specification only, with its pre-adoption gates run against the pinned build. The spine splits this wave into 9a (contracts) and 9b (adapters) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because a wave tracker is titled `Wave N: <Name>`. Deferral drain: the agent and provider clusters. Exit proof: a real unattended Codex run and a pi specification; provider switching explicit in the lineup and visible in the clients; correct cost and independence records (#901); quota and capacity failures recover through the retry card, never a silent fallback. 1B.1 exit evaluation. |
 | **10 (1B.2): the initiative view** | Integrated | Many work units become one picture. Typed relationship kinds in the Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection) capture records (#884, `exclusive-with` every open contract unit), the frontier projection, and the deterministic initiative view rendering the dependency graph (#885). 1B exit evaluation against recorded comprehension and operational evidence. |
 
 Wave 7's transaction closure also retires the `publish_blocked`
@@ -5365,51 +5365,40 @@ scheduled unit trips its recorded boundary condition.
 Review bandwidth limits parallel width. Every wave ends with a fresh-context
 adversarial review by an agent given only the repository and its documents,
 never this design history. `AGENTS.md` defines the issue protocol. Each wave's
-unit list lives in its pinned tracking issue; this table records shape and
-sequencing. Live wave status has a single source: a deterministic three-state
-resolver over every pinned issue whose title matches
-`^Wave [0-9]+ \([^)]*\) tracking$`. It is evaluated on the set of title matches
-before filtering by issue state:
+unit list lives in its tracking issue, which follows the shared tracker format
+in `docs/tracker-format.md`; this table records shape and sequencing. Live wave
+status has a single source: a deterministic three-state resolver over the open
+issues that carry the `tracker` label and a milestone. Only a wave tracker
+carries both; its title reads `Wave N: <Name>`, and the resolver never reads
+titles or pins.
 
-1. **Active-wave:** exactly one matching tracker, open. It resolves the
-   current phase, wave, and active implementation front. Its title gives the
-   wave and internal exit; this table's row gives the phase and shape; and its
-   Implementation order digest gives the active front. The scheduling door is
-   open.
-2. **Inter-wave:** exactly one matching tracker, closed. The closed tracker
-   records the wave that just completed. There is no active implementation
-   front, and the scheduling door is closed. This is a legitimate observed state
-   between a wave's close and the next wave's planning, not a defect. Explicit
-   `Plan #N` and `Handle #N` fiat still proceed, because fiat is independent of
-   wave state. Scheduled self-selection does not proceed, because it needs an
-   open current tracker.
-3. **Invalid:** zero or multiple matching trackers. This is a spine-repair
-   error. It must be escalated to the human, never guessed through. Pinning
-   alone is not enough, because other tracker types may also be pinned, and the
-   resolver cannot choose among absent or competing authorities.
+1. **Active-wave:** exactly one such issue. It resolves the current phase,
+   wave, and active implementation front. Its title gives the wave; this
+   table's row gives the phase, shape, and internal exit; and its **Startable
+   now** bullet gives the active front. The scheduling door is open.
+2. **Inter-wave:** none. The wave that just completed is the one whose wave
+   tracker closed last (before revision 70, the pinned `Wave N (...) tracking`
+   issue, #1001 for Wave 7). There is no active implementation front, and the scheduling
+   door is closed. This is a legitimate observed state between a wave's close
+   and the next wave's planning, not a defect. Explicit `Plan #N` and
+   `Handle #N` fiat still proceed, because fiat is independent of wave state.
+   Scheduled self-selection does not proceed, because it needs an open current
+   tracker.
+3. **Invalid:** more than one. This is a spine-repair error. It must be
+   escalated to the human, never guessed through, because the resolver cannot
+   choose among competing authorities.
 
-A wave-boundary procedure keeps exactly one wave-title-matching issue pinned.
-Unrelated trackers (for example the standing audit and reliability trackers)
-stay pinned for their own purposes and never count toward wave state. Closing a
-wave leaves its closed tracker pinned as the inter-wave marker. The next
-wave-planning operation moves that wave-title match to the new populated
-tracker.
+A lost label or milestone on the open wave tracker reads as inter-wave, which
+fails closed: the scheduling door shuts and fiat is unaffected. Wave planning
+closes the prior wave's tracker before it opens the next, and its artifact
+check stops on a half-created tracker rather than creating a second. Pins
+are for visibility only; see docs/coordination.md (Tracking Issues).
 
-Those standing pins occupy slots under GitHub's three-pin cap, so the capacity
-left for wave trackers varies with how many are pinned at the time. The
-transition stays a swap whatever that capacity is, because exactly one
-wave-title match stays pinned. With no atomic pin swap, the transition is
-non-atomic. The spine's wave-planning operation performs it idempotently and
-recovery-safely: it discovers and reuses any orphaned open-unpinned tracker
-rather than creating a second, and the resolver escalates on an invalid
-wave-title cardinality. That executor owns the detailed interruption-safe
-procedure; see docs/coordination.md and #828.
-
-The digest remains a derived view of the authoritative Dependencies fields in
-the tracked unit issues. If they diverge, the unit issue wins and the tracker is
-repaired in the same operation. Readers still use the tracker as the one
-entrypoint for live status, rather than searching unit issues or stable files
-for a competing projection.
+The Status section remains a derived view of the authoritative Dependencies
+fields in the tracked unit issues. If they diverge, the unit issue wins and the
+tracker is repaired in the same operation. Readers still use the tracker as the
+one entrypoint for live status, rather than searching unit issues or stable
+files for a competing projection.
 
 Stable repository documents point to that resolution rule instead of asserting
 live phase or wave status. Any competing assertion is a coherence defect. Verify
@@ -5496,62 +5485,27 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 69 ("Prod, Dev, and Ephemeral Environments"):
+Revision 70 ("Shared Tracker Format"):
 
-1. **Every instance belongs to one of three environment tiers.** `prod` and
-   `dev` are single, launchd-supervised instances; `ephemeral` is any number
-   of unsupervised foreground runs, and it is the only tier an agent may run.
-   `prod` and `dev` derive every identifier (state root, label, bundle ID,
-   display name, port, readiness, log, and credentials paths) from the tier;
-   `ephemeral` derives nothing (Section [10](#10-operations-and-onboarding), Environments). A two-tier
-   `prod`/`dev` shape was rejected because agents need many unsupervised
-   instances that share nothing with the operator's own install.
-2. **The environment resolves by a fixed precedence and fails closed.** The
-   app reads `FREESIDE_ENV`, then the bundle's `FreesideEnvironment` key, then
-   the build configuration (`DEBUG` is `ephemeral`); the daemon reads
-   `-environment`, and a missing flag means `ephemeral`. An unknown value fails
-   at launch.
-3. **Non-prod instances never touch prod credentials, ports, or supervision.**
-   A `dev` or `ephemeral` instance starts with no publication credentials and
-   never names a prod root (item 5 is the one credential exception); a
-   host-side runner class runs only under
-   `attended_dev` in an `ephemeral` instance; supervised tiers keep fixed ports
-   because the app's device credential is keyed by the daemon URL, on the
-   Section [5.2](#52-the-daemon-and-its-supervisor) reachability addresses; only `prod` carries a remote backup
-   destination; and nothing but the installer's re-run stops the production
-   label.
-4. **`ephemeral` refuses the supervised ports, not every fixed port.** It
-   listens on port `0` by default and may take an explicit fixed nonzero port
-   other than `7331` or `7332` when a paired client must reach the run, so the
-   real-run harness (`scripts/run-real-work.sh`) stays a valid `ephemeral`
-   run.
-5. **Only an attended real-work run shares the `prod` GitHub App.** Test and
-   agent instances never hold the `prod` App's credentials. An attended
-   real-work run (today the real-run harness and phase-exit runs) may
-   deliberately enroll them into its `ephemeral` instance, because it is real
-   work and publishes as the real App. A distinct App for non-prod instances
-   was rejected: `dev` need not publish, and real work should publish as the
-   real App.
-6. **Exclusive locking of supervised databases is deferred until IPC.**
-   `locking_mode=EXCLUSIVE` on `prod` and `dev` stays the intended end state,
-   the one guard that would not depend on the errant process cooperating. It
-   would also lock out Freeside's direct-store clients (`follow`, `submit`,
-   and the operational commands), so it waits until they move to a daemon
-   IPC transport; until then every tier keeps the default locking mode.
-7. **`dev` ships with the first installer change.** The installer's identity
-   constants become parameters of the environment either way, so `dev` costs a
-   second plist and registration, not a second installer.
-8. **A GitHub-side lease between daemons is declined.** Under item 5, two
-   daemons share the `prod` App only in an attended real-work run the
-   operator starts and watches, so there is no unattended contention for a
-   lease to arbitrate. The hardened
-   dedicated-user mode (Section [5.2](#52-the-daemon-and-its-supervisor)) stays the end-state guarantee.
+1. **Every tracker follows the shared tracker format.** `docs/tracker-format.md`,
+   copied verbatim from the owner's agent-setup skill, fixes the shape of wave,
+   feature, and backlog trackers; docs/coordination.md keeps only Freeside's
+   additions. A tracker carries start order only: the **Mergeable next**
+   projection and the Implementation order section leave the tracker. The
+   `merges-after` relation stays in the Dependencies vocabulary, checked at
+   handoff and before integration, because open units still use it.
+2. **The Section [11](#11-roadmap-build-order-and-coordination) resolver identifies the wave tracker by the `tracker`
+   label and a milestone, not by title.** Revision 34 matched pinned issues
+   titled `Wave N (...) tracking`, which tied authority to a title pattern and
+   a non-atomic pin swap. Now exactly one open issue with the label and a
+   milestone is active-wave, none is inter-wave, and more than one is invalid.
+   Revision 34 rejected "no match means inter-wave" because an unpinned
+   tracker looked the same as a missing one; pins no longer carry authority,
+   and a lost label or milestone fails closed by shutting the scheduling door.
+   The title becomes `Wave N: <Name>`.
 
-(Owner-assigned #1499, 2026-09-23. Decision 7 adopts the issue's
-recommendation, decided by the owner through this revision's review.
-Decisions 4, 5, and 6, and the lease decline's basis in item 8, are owner
-decisions of 2026-09-23 made in this revision's review;
-[decision note](../devlog/2026-09-23-0939-environment-tiers.md).)
+(Owner decisions of 2026-09-25, owner-assigned #1548;
+[decision note](../devlog/2026-09-25-1035-shared-tracker-format.md).)
 
 ## 14. Risks
 

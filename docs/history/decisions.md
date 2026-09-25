@@ -2010,3 +2010,60 @@ Revision 61 ("Durable Task Cancellation Requests"):
    policy-approved closure before merge.
 
 (Owner decision of 2026-09-21, owner-assigned #1482; [decision note](../../devlog/2026-09-21-2151-closure-policy-approval.md).)
+
+## Revision 69 ("Prod, Dev, and Ephemeral Environments")
+
+1. **Every instance belongs to one of three environment tiers.** `prod` and
+   `dev` are single, launchd-supervised instances; `ephemeral` is any number
+   of unsupervised foreground runs, and it is the only tier an agent may run.
+   `prod` and `dev` derive every identifier (state root, label, bundle ID,
+   display name, port, readiness, log, and credentials paths) from the tier;
+   `ephemeral` derives nothing (Section [10](../plan.md#10-operations-and-onboarding), Environments). A two-tier
+   `prod`/`dev` shape was rejected because agents need many unsupervised
+   instances that share nothing with the operator's own install.
+2. **The environment resolves by a fixed precedence and fails closed.** The
+   app reads `FREESIDE_ENV`, then the bundle's `FreesideEnvironment` key, then
+   the build configuration (`DEBUG` is `ephemeral`); the daemon reads
+   `-environment`, and a missing flag means `ephemeral`. An unknown value fails
+   at launch.
+3. **Non-prod instances never touch prod credentials, ports, or supervision.**
+   A `dev` or `ephemeral` instance starts with no publication credentials and
+   never names a prod root (item 5 is the one credential exception); a
+   host-side runner class runs only under
+   `attended_dev` in an `ephemeral` instance; supervised tiers keep fixed ports
+   because the app's device credential is keyed by the daemon URL, on the
+   Section [5.2](../plan.md#52-the-daemon-and-its-supervisor) reachability addresses; only `prod` carries a remote backup
+   destination; and nothing but the installer's re-run stops the production
+   label.
+4. **`ephemeral` refuses the supervised ports, not every fixed port.** It
+   listens on port `0` by default and may take an explicit fixed nonzero port
+   other than `7331` or `7332` when a paired client must reach the run, so the
+   real-run harness (`scripts/run-real-work.sh`) stays a valid `ephemeral`
+   run.
+5. **Only an attended real-work run shares the `prod` GitHub App.** Test and
+   agent instances never hold the `prod` App's credentials. An attended
+   real-work run (today the real-run harness and phase-exit runs) may
+   deliberately enroll them into its `ephemeral` instance, because it is real
+   work and publishes as the real App. A distinct App for non-prod instances
+   was rejected: `dev` need not publish, and real work should publish as the
+   real App.
+6. **Exclusive locking of supervised databases is deferred until IPC.**
+   `locking_mode=EXCLUSIVE` on `prod` and `dev` stays the intended end state,
+   the one guard that would not depend on the errant process cooperating. It
+   would also lock out Freeside's direct-store clients (`follow`, `submit`,
+   and the operational commands), so it waits until they move to a daemon
+   IPC transport; until then every tier keeps the default locking mode.
+7. **`dev` ships with the first installer change.** The installer's identity
+   constants become parameters of the environment either way, so `dev` costs a
+   second plist and registration, not a second installer.
+8. **A GitHub-side lease between daemons is declined.** Under item 5, two
+   daemons share the `prod` App only in an attended real-work run the
+   operator starts and watches, so there is no unattended contention for a
+   lease to arbitrate. The hardened
+   dedicated-user mode (Section [5.2](../plan.md#52-the-daemon-and-its-supervisor)) stays the end-state guarantee.
+
+(Owner-assigned #1499, 2026-09-23. Decision 7 adopts the issue's
+recommendation, decided by the owner through this revision's review.
+Decisions 4, 5, and 6, and the lease decline's basis in item 8, are owner
+decisions of 2026-09-23 made in this revision's review;
+[decision note](../../devlog/2026-09-23-0939-environment-tiers.md).)

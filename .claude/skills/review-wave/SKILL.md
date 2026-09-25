@@ -10,7 +10,9 @@ and emits a reviewer prompt, nothing else: it writes no code, files no
 issues, posts no comments, and never performs the review itself.
 
 The wave number N comes from the invocation argument. If it is missing,
-or no pinned or recent "Wave N tracking" issue exists, stop and ask.
+or no tracker for wave N exists, stop and ask. Wave trackers carry the
+`tracker` label and a milestone, and the title names the wave: `Wave N:
+<Name>`, or `Wave N (...) tracking` for waves before plan revision 70.
 
 ## Why a Prompt, Not a Review
 
@@ -35,9 +37,11 @@ cannot go stale the way a stored plan would.
 Wave content is never hard-coded here; derive it at run time. Read, in
 order:
 
-1. The "Wave N tracking" issue, end to end: units, shape (serial,
-   parallel lanes, integrated), preconditions, surfaced forks, close
-   condition, and any comments after the body.
+1. The wave's tracking issue, end to end: Status (diagram and
+   **Startable now**), Units, Exit, the Notes block with its surfaced
+   forks and planning rationale, and any comments after the body.
+   `docs/tracker-format.md` describes the sections; waves before plan
+   revision 70 used an older layout with the same content.
 2. The wave's merged PRs, mapped from each PR's closing references,
    never from the tracker's checklist alone: a checklist can be stale,
    and a wave PR that closed an issue the tracker body recorded as
@@ -74,8 +78,10 @@ order:
 
 ## Preconditions (Stop on Failure)
 
-- Every unit on the tracker is closed by a merged PR. Stragglers mean
-  the wave has not exited; list them and stop.
+- Every unit in the tracker's lane groups is closed by a merged PR.
+  Stragglers mean the wave has not exited; list them and stop. Entries
+  under `### Owner-run` aren't units: report an open one as an
+  unresolved maintainer item and continue.
 - No findings summary from a prior exit review is already on the
   tracking issue. One present means the review ran; stop and report
   for resume-or-repair direction rather than generating a second
@@ -188,20 +194,19 @@ text itself.
      as a compact table or appendix beneath the summary, never as the
      lead;
    - post beneath it a proposed remediation plan (a proposal, not a
-     schedule) modeled on a wave tracker's own Units and Implementation
-     order sections, i.e. the tracking-issue format in
-     `docs/coordination.md`, which the reviewer has: one compact unit
+     schedule) modeled on a tracker's Status and Units sections, i.e.
+     `docs/tracker-format.md` with Freeside's additions in
+     `docs/coordination.md` (Tracking Issues), which the reviewer has:
+     one compact unit
      line per proposed remediation unit (the filed finding issue it
      closes, a one-line objective, lane and kind, and its key typed
      dependency), since the full contract already lives in the filed
-     issue and is not restated; list a `needs-human` finding separately
-     instead, as a short prerequisite line with no lane and no unit
-     line, since it stays fiat-only and outside the schedulable phases
-     until a maintainer acts; then an Implementation order digest
-     (Startable now, Mergeable next, the typed `starts-after`,
-     `merges-after`, `stacked-on`, and `exclusive-with` relationships,
-     and the maximum concurrent fronts); and, when the relationship
-     graph is nontrivial, a Mermaid diagram with the standard legend.
+     issue and is not restated; put a `needs-human` finding under an
+     Owner-run group instead of a lane, since it stays fiat-only and
+     outside the schedulable phases until a maintainer acts; then **Startable now**, the typed
+     `starts-after`, `merges-after`, `stacked-on`, and `exclusive-with`
+     relationships, and the maximum concurrent fronts; and a Mermaid
+     diagram drawn per those two documents, with the format's legend.
      Order the contract units as a serial `kind:contract` phase first
      (anything touching `daemon/internal/domain`, `daemon/migrations`,
      `api/`, or shared interfaces, sequenced by dependency under the

@@ -249,7 +249,8 @@ device builds need periodic re-signing; the guide covers that maintenance.
 
 - **Project goals:** [Introduction](docs/intro.md).
 - **Architecture and roadmap:** [Project plan](docs/plan.md). Live phase and
-  wave status comes from the pinned `Wave N (...) tracking` issue in
+  wave status comes from the open wave tracker (`Wave N: <Name>`, labeled
+  `tracker` with a milestone) in
   [GitHub Issues](https://github.com/freeside-ai/freeside/issues), using the
   plan's [wave-tracker resolution rule](docs/plan.md#implementation-coordination-building-freeside-with-agents).
 - **Component guides:** [App](app/README.md), [daemon](daemon/README.md),

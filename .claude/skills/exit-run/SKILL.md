@@ -1,6 +1,6 @@
 ---
 name: exit-run
-description: Run a live exit run, the real-backlog production exercise that closes a wave tracker or an ad hoc tracker. Drive scripts/run-real-work.sh against a real issue in a real project from the default-branch tip, walk the operator through the Mac and iPhone checks, file an issue per finding, propose which findings must be fixed before exit, and record the run, the dispositions, and the implementation order as a tracking comment on the tracker. Use when the user asks to "run the exit run", "run the exit exercise", "do the exit run for #N", "close out wave N with a real run", "prove the close condition", "run gh-imgup#<n> through production for #1211", or names a tracker plus a target issue to run, even without the words "exit run". Also use to re-run a prior exit run or to file and disposition a finished run's findings. Not for the fresh-context adversarial review (review-wave), wave planning (plan-wave), implementing an exit-required unit (ordinary work-unit flow), or a hermetic test run.
+description: Run a live exit run, the real-backlog production exercise that closes a wave tracker or an ad hoc tracker. Drive scripts/run-real-work.sh against a real issue in a real project from the default-branch tip, walk the operator through the Mac and iPhone checks, file an issue per finding, propose which findings must be fixed before exit, and record the run, the dispositions, and the start order as a tracking comment on the tracker. Use when the user asks to "run the exit run", "run the exit exercise", "do the exit run for #N", "close out wave N with a real run", "prove the close condition", "run gh-imgup#<n> through production for #1211", or names a tracker plus a target issue to run, even without the words "exit run". Also use to re-run a prior exit run or to file and disposition a finished run's findings. Not for the fresh-context adversarial review (review-wave), wave planning (plan-wave), implementing an exit-required unit (ordinary work-unit flow), or a hermetic test run.
 ---
 
 # Exit Run (Spine)
@@ -37,7 +37,7 @@ never pick a target by browsing the target repository's backlog.
 
 The run **mode** is derived, not chosen: CLI mode (`freesided submit` seeds
 the task) or client-target mode (`--client-target`, the task comes from the
-client composer). Read it from the tracker's close condition and its latest
+client composer). Read it from the tracker's Exit section and its latest
 exit-gate comment, which may also pin daemon flags or target properties
 (`references/prior-runs.md` lists the ones past trackers required). State
 the derived mode, its reason, and the expected spend, then wait for the
@@ -50,9 +50,11 @@ reading should cost one message, not a run.
 Before preparing anything, write down what this run has to prove. Read, in
 order:
 
-1. The tracker body: the close condition, the exit gates, and the unit list
-   with each unit's exit disposition (`Exit required`, `Deferred beyond
-   exit`, and so on).
+1. The tracker body: its Exit gate, its Units, and the exit dispositions
+   (`Exit required`, `Deferred beyond exit`, and so on) recorded in its
+   Notes block. A tracker written before `docs/tracker-format.md` carries
+   the close condition in its intro and the dispositions on its unit
+   lines.
 2. Every prior exit-run comment on the same tracker, newest first. They
    carry the gates still open, the evidence gaps a previous run left (an
    action nobody exercised on a real item, a check that ran as a no-op), and
@@ -307,10 +309,10 @@ tracker with its date; until then the comment says "proposal".
 ## Record on the Tracker
 
 The tracker comment is the durable record; chat is not. Write it with the
-template in `references/tracker-comment.md` and the tracking-issue format in
-docs/coordination.md (Tracking Issues): prose digest first, then the diagram
-when the graph is more than one chain, fixed edge semantics with the legend
-line, double borders on merged units, and the authority disclaimer.
+template in `references/tracker-comment.md`. Its proposal diagram follows
+`docs/tracker-format.md` (§status) with Freeside's additions in
+docs/coordination.md (Tracking Issues), and it ends with the authority
+note.
 
 - **Bottom line first:** can the tracker close, and if not, what stands
   between here and closure, in two sentences.
@@ -321,11 +323,11 @@ line, double borders on merged units, and the authority disclaimer.
   evidenced with why.
 - **Findings table:** issue, what's wrong, severity, lane, disposition,
   reason or trigger.
-- **Implementation order** for the exit set (Required and Investigate
-  before exit; a diagnosis must finish before closure): Startable now,
-  Mergeable next, typed chains, cross-cutting gates (contract serialization,
-  refute-first, four-front cap), critical path, parallel lanes, and the
-  Mermaid diagram. Derive it from the issues' Dependencies fields.
+- **Start order** for the exit set (Required and Investigate before exit;
+  a diagnosis must finish before closure): Startable now, typed chains,
+  cross-cutting gates (contract serialization, refute-first, four-front
+  cap), critical path, parallel lanes, and the Mermaid diagram. Derive it
+  from the issues' Dependencies fields.
 - **What was verified and what wasn't,** in `Passed:`, `Checked:`,
   `Not run:` form, including any evidence caveat (a store edit, a device
   that wasn't available).
@@ -333,11 +335,12 @@ line, double borders on merged units, and the authority disclaimer.
   decision that needs a devlog note, and in which PR.
 
 Update the tracker body only once the owner has adopted the dispositions:
-add or extend the exit follow-up unit list (which findings it admits
-depends on the tracker kind; see the reference), amend the close condition
-to reference the comment, and refresh the Implementation order projections,
-as one edit. On a wave tracker a listed unit needs the phase milestone in
-the same edit (milestone and listing publish together, AGENTS.md Work
+add the exit-set findings to Units (which findings it admits depends on
+the tracker kind; see the reference), add an Exit bullet that references
+the comment unless the exit set is empty, and refresh the Status section,
+as one edit. On a wave
+tracker a listed unit needs the phase milestone in the same edit
+(milestone and listing publish together, AGENTS.md Work
 Units), so a finding the owner defers stays off that list with its
 `deferral` label. Read the body first and preserve
 everything else (AGENTS.md, Forge Edits). Verify both saved results. From

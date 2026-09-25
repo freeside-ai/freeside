@@ -29,10 +29,10 @@ const mergedPullRequestQuery = `query MergedPullRequest($owner: String!, $name: 
   }
 }`
 
-const pinnedIssuesQuery = `query PinnedIssues($owner: String!, $name: String!, $pageSize: Int!, $cursor: String) {
+const openTrackersQuery = `query OpenTrackers($owner: String!, $name: String!, $pageSize: Int!, $cursor: String) {
   repository(owner: $owner, name: $name) {
-    pinnedIssues(first: $pageSize, after: $cursor) {
-      nodes { issue { id databaseId number title state updatedAt body } }
+    issues(first: $pageSize, after: $cursor, states: OPEN, labels: ["tracker"], orderBy: {field: CREATED_AT, direction: ASC}) {
+      nodes { id databaseId number title state updatedAt body milestone { title } }
       pageInfo { hasNextPage endCursor }
     }
   }
@@ -109,7 +109,7 @@ const pullRequestReferenceQuery = `query PullRequestReference($owner: String!, $
 
 var allQueryDocuments = []string{
 	mergedPullRequestQuery,
-	pinnedIssuesQuery,
+	openTrackersQuery,
 	openIssuesQuery,
 	openPullRequestsQuery,
 	pullRequestClosingIssuesQuery,
