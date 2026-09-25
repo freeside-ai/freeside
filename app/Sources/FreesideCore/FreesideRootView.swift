@@ -297,7 +297,9 @@ public struct FreesideRootView: View {
                             cursors: coordinator.cursors,
                             onLoadTimeline: coordinator.refreshTaskTimeline,
                             selection: taskSelection,
-                            onRefresh: coordinator.refresh)
+                            onRefresh: coordinator.refresh,
+                            newTaskBlockedReason: TaskSubmissionModel.composeBlockedReason(
+                                freshness: coordinator.store.freshness))
                     }
                 }
                 .background(Color.sidebarGround)
@@ -329,7 +331,10 @@ public struct FreesideRootView: View {
                         } label: {
                             Label("New task", systemImage: "plus")
                         }
-                        .help("New task")
+                        .help(
+                            TaskSubmissionModel.composeBlockedReason(
+                                freshness: coordinator.store.freshness) ?? "New task"
+                        )
                         .disabled(
                             !TaskSubmissionModel.canCompose(freshness: coordinator.store.freshness))
                     }
@@ -456,7 +461,9 @@ public struct FreesideRootView: View {
                     onLoadTimeline: coordinator.refreshTaskTimeline,
                     selection: rawTaskSelectionBinding,
                     navigationPath: rawTasksPathBinding,
-                    onRefresh: coordinator.refresh
+                    onRefresh: coordinator.refresh,
+                    newTaskBlockedReason: TaskSubmissionModel.composeBlockedReason(
+                        freshness: coordinator.store.freshness)
                 )
                 // The toolbar and sheet ride the stack's root content, not the
                 // NavigationStack, so the trailing items render in the list's

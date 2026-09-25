@@ -150,7 +150,7 @@ public final class SyncCoordinator {
     }
     private var heartbeatTask: Task<Void, Never>?
     private var heartbeatToken: UUID?
-    private var refreshTask: Task<Void, Never>?
+    private var refreshTask: Task<Bool, Never>?
     private var refreshToken: UUID?
     private var reachabilityMonitor: NWPathMonitor?
     private var lastReachabilitySatisfied: Bool?
@@ -405,7 +405,7 @@ public final class SyncCoordinator {
     /// when none is in flight.
     public func refresh() async {
         if let refreshTask {
-            await refreshTask.value
+            _ = await refreshTask.value
             return
         }
         await startRefreshRound()
@@ -423,19 +423,24 @@ public final class SyncCoordinator {
     /// would bump `syncGeneration` under that round's caller and return it
     /// without a stamp, which the `heartbeatLoop` comment forbids. The cost is
     /// one extra round of latency when a refresh is mid-flight at commit time.
-    public func refreshAfterCommit() async {
+    ///
+    /// Returns whether that round ended `.fresh`. The result is captured
+    /// when the round finishes, so a partial read that lands after the round
+    /// and demotes the published freshness cannot fail it; one that lands
+    /// inside the round's final step still can, which fails closed.
+    @discardableResult
+    public func refreshAfterCommit() async -> Bool {
         // A round tagged with the token observed at entry began before this
         // call. Awaiting it drains that pre-commit round; only a round whose
         // token differs started after the call and may be joined.
         let entryToken = refreshToken
         if let refreshTask {
-            await refreshTask.value
+            _ = await refreshTask.value
         }
         if let refreshTask, refreshToken != entryToken {
-            await refreshTask.value
-            return
+            return await refreshTask.value
         }
-        await startRefreshRound()
+        return await startRefreshRound()
     }
 
     /// Starts and awaits one daemon round, publishing its task and token so
@@ -443,10 +448,11 @@ public final class SyncCoordinator {
     /// own `heartbeat()` before finishing, and nothing outside a round calls
     /// `heartbeat()`, so a later `refreshAfterCommit()` that awaits this round
     /// observes reads it issued, never a stale heartbeat from an earlier round.
-    private func startRefreshRound() async {
+    @discardableResult
+    private func startRefreshRound() async -> Bool {
         let token = UUID()
         let task = Task { @MainActor [weak self] in
-            guard let self else { return }
+            guard let self else { return false }
             await heartbeat()
             await refreshRuns()
             if store.freshness == .unvalidated,
@@ -458,14 +464,16 @@ public final class SyncCoordinator {
                 // before a user-visible refresh reports completion.
                 await heartbeat()
             }
+            return store.freshness == .fresh
         }
         refreshToken = token
         refreshTask = task
-        await task.value
+        let endedFresh = await task.value
         if refreshToken == token {
             refreshTask = nil
             refreshToken = nil
         }
+        return endedFresh
     }
 
     /// Foreground and restored-reachability events always enter the shared

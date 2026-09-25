@@ -17,6 +17,9 @@ struct TasksListView: View {
     @State private var filter: TaskListFilter
     private let navigationPath: Binding<[String]>?
     private let onRefresh: @MainActor () async -> Void
+    /// Why New Task is disabled, shown above the list so the disabled action
+    /// explains itself; nil while the composer is available.
+    let newTaskBlockedReason: String?
 
     init(
         tasks: [Components.Schemas.TaskSnapshot],
@@ -29,7 +32,8 @@ struct TasksListView: View {
         selection: Binding<String?>,
         initialScope: TaskListFilter.Scope = .active,
         navigationPath: Binding<[String]>? = nil,
-        onRefresh: @escaping @MainActor () async -> Void = {}
+        onRefresh: @escaping @MainActor () async -> Void = {},
+        newTaskBlockedReason: String? = nil
     ) {
         self.tasks = tasks
         self.runs = runs
@@ -42,6 +46,7 @@ struct TasksListView: View {
         _filter = State(initialValue: TaskListFilter(scope: initialScope))
         self.navigationPath = navigationPath
         self.onRefresh = onRefresh
+        self.newTaskBlockedReason = newTaskBlockedReason
     }
 
     private var projects: [String] {
@@ -55,6 +60,14 @@ struct TasksListView: View {
     var body: some View {
         let rows = visibleTasks
         VStack(spacing: 0) {
+            if let newTaskBlockedReason {
+                Text(newTaskBlockedReason)
+                    .font(FreesideFont.caption)
+                    .foregroundStyle(Color.inkDim)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+            }
             FreesideSegmentedControl(
                 accessibilityLabel: "Scope",
                 segments: TaskListFilter.Scope.allCases.map {
