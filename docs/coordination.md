@@ -2,8 +2,8 @@
 
 The mechanics behind AGENTS.md's coordination gates: the lane glossary, the
 work-unit issue shape and wave-state terms, the claim-lease protocol, the
-session-start queries, session end, deferral escalation, and the
-tracking-issue format. Read this file before claiming a
+session-start queries, session end, deferral escalation, and Freeside's
+additions to the tracker format in `docs/tracker-format.md`. Read this file before claiming a
 unit, filing a deferral, starting an issue-backed session, or creating or
 updating a tracking issue.
 
@@ -51,25 +51,24 @@ One issue per issue-backed work unit, created from the work-unit template:
   an unknown or materially ambiguous relationship as `starts-after` until the
   spine resolves it.
 
-Labels: `lane:*` for ownership area, `kind:*` for type. Milestones carry the
-phase (1A, 1B). Each wave has a pinned tracking issue listing its units,
-maintained by the spine role. Any issue that tracks other issues (a wave
-tracker or an ad hoc tracker over a set of units) records their
-implementation order per Tracking Issues below.
+Labels: `lane:*` for ownership area, `kind:*` for type, and `tracker` for an
+issue that tracks other issues. Milestones carry the phase (1A, 1B). Each
+wave has a tracking issue listing its units, maintained by the spine role.
+Every tracker, wave or ad hoc, follows Tracking Issues below.
 
-Wave state resolves per the §11 three-state resolver over every pinned issue
-whose title matches the canonical wave-tracker pattern: exactly one open match
-is active-wave state, exactly one closed match is inter-wave state, and zero
-or multiple matches are an invalid authority state for spine repair. The
-scheduling door exists only in active-wave state, because it needs an open
-current tracker to list the unit. Fiat (`Plan #N`, `Handle #N`) is
-independent of wave state and may proceed in either state after all ordinary
-gates pass.
+Wave state resolves per the §11 three-state resolver over open issues that
+carry the `tracker` label and a milestone: exactly one is active-wave state,
+none is inter-wave state, and more than one is an invalid authority state for
+spine repair. The scheduling door exists only in active-wave state, because
+it needs an open current tracker to list the unit. Fiat (`Plan #N`, `Handle
+#N`) is independent of wave state and may proceed in either state after all
+ordinary gates pass.
 
 **Scheduled** means both a milestone and a listing on the current tracking
 issue. The spine changes those fields as one planning operation; either field
 alone is a spine-repair error and does not open the scheduling door (fiat
-remains independent).
+remains independent). The wave tracker carries the milestone without being a
+unit, so it is neither scheduled nor a spine-repair error.
 
 ## Claiming
 
@@ -169,13 +168,13 @@ the outcome hits a Decision notes trigger or the mandatory-note list.
 ## Session Start
 
 1. Read docs/plan.md front matter (revision), resolve wave state through the
-   §11 three-state resolver over every pinned issue whose title matches the
-   canonical wave-tracker pattern, and read the plan sections your unit's
-   Affected interfaces/contracts field cites. In active-wave state (exactly one
-   open match) read that tracker for phase, wave, and active front; inter-wave
-   state (exactly one closed match) is a valid observed result with no active
-   front, recorded rather than treated as a blocker; zero or multiple matches
-   stop and escalate to the human as an invalid authority state.
+   §11 three-state resolver over open issues carrying the `tracker` label and
+   a milestone, and read the plan sections your unit's Affected
+   interfaces/contracts field cites. In active-wave state (exactly one match)
+   read that tracker for phase, wave, and active front; inter-wave state (no
+   match) is a valid observed result with no active front, recorded rather
+   than treated as a blocker; more than one match stops and escalates to the
+   human as an invalid authority state.
 2. When resuming an existing unit, read its issue or PR and any decision
    note it links (Decision notes section).
 3. Status queries:
@@ -337,8 +336,8 @@ not a takeover; no session takes over another holder's unexpired reservation,
 and it stops for the active planner or owner to release it.
 
 Before changing Dependencies, discover every open tracker that lists the unit
-and the inputs needed to refresh its projections: tracker membership and
-Implementation order, each listed unit's contract and Dependencies,
+and the inputs needed to refresh its Status section: tracker membership and
+diagram, each listed unit's contract and Dependencies,
 prerequisite merge state, relevant open PRs, and stacked base/child lifecycle
 and target state. An `exclusive-with` change still checks both proposed
 endpoints under Relationship Types. If a required input cannot be verified,
@@ -363,8 +362,8 @@ reservation's release edit, and do not claim planning complete.
 The expiry rules above govern recovery-only reporting after the deadline.
 
 After implementation, the human merge gate remains unchanged. A session that
-records a verified merge applies the tracker transition and projection refresh
-under [Session End](#session-end) and [Tracking Issues](#tracking-issues), then
+records a verified merge applies the tracker refresh under
+[Session End](#session-end) and [Tracking Issues](#tracking-issues), then
 reports the post-merge results required by AGENTS.md.
 
 ## Unit Sizing
@@ -421,14 +420,11 @@ unit's contract.
 Write or update the unit's decision note only when a Decision notes
 trigger or the mandatory-note list applies. Additionally: deferrals
 discovered mid-unit follow Deferral escalation below; when your PR
-merges, tick your unit on every open tracker that lists it, re-marking its
-diagram node with the merged double border when the tracker has a diagram
-and refreshing the **Startable now** and **Mergeable next** projections in
-each tracker's Implementation order in the same edit (Tracking Issues
-below), or note partial state on the issue. Resolve the wave tracker through the §11 resolver: tick it
-only in active-wave state when it lists the unit; in inter-wave state the sole
-title match is the closed prior-wave tracker, which is never reopened or
-mutated. No open containing tracker is a valid zero-work result, not an error.
+merges, apply the refresh in `docs/tracker-format.md` (§refresh) to every
+open tracker that lists the unit, as one edit per tracker (Tracking Issues
+below), or note partial state on the issue. A closed tracker, including a
+completed wave's, is never reopened or mutated. No open containing tracker is
+a valid zero-work result, not an error.
 
 For post-merge reconciliation, `scripts/trackercollect` may collect the merged
 unit's advisory forge evidence into a stamped `snapshot.json` and compact
@@ -437,8 +433,8 @@ using them to edit a tracker. Recheck containing-tracker membership, the target
 text, and the unit, dependency, and PR facts that determine the projection.
 Inventory or `updatedAt` changes are reasons to inspect the affected evidence,
 not automatic reasons to repeat the whole collection. Refresh that evidence
-and recompute when contributing facts changed; use a fresh collection when
-needed to recover a reliable baseline. The artifacts replace no required
+and recompute **Startable now** when contributing facts changed; use a fresh
+collection when needed to recover a reliable baseline. The artifacts replace no required
 claim, relationship, or integration check.
 
 Before final handoff and again immediately before integration, verify every
@@ -535,99 +531,84 @@ isolation alone never establishes independence.
 
 ## Tracking Issues
 
-An issue that tracks other issues (a wave tracker, or any ad hoc tracker
-over a set of units) carries an **Implementation order** section:
-implementation order is the question a tracker's readers bring to it, and
-per-unit Dependencies fields scattered across the tracked issues do not
-answer it at a glance. Wave 5's tracker (#651) is the reference example.
+Every tracker takes the shape in [`docs/tracker-format.md`](tracker-format.md):
+a wave tracker, and an ad hoc tracker over a set of units (a feature or
+backlog tracker) alike. That file is the owner's shared format, copied
+verbatim from the agent-setup skill; don't edit it here. Read it before
+creating, rewriting, or refreshing a tracker. It fixes the title, intro,
+Status diagram and legend, Units, Exit, Notes, the merge-time refresh, and
+style. A tracker carries start order only: it has no **Mergeable next**
+bullet and no Implementation order section. The rules below are Freeside's
+own additions to that format.
 
-- **Prose digest first.** State **Startable now**, **Mergeable next**, each
-  typed relationship chain, the cross-cutting gates, and the critical path as
-  scannable text. **Startable now** is a structural projection: it contains
-  unfinished units whose `starts-after` prerequisites are merged; a
-  `stacked-on` unit also needs its named base PR to be open with any existing
+- **Labels and milestone.** Every tracker carries the `tracker` label. A wave
+  tracker also carries the phase milestone its units get at scheduling, and
+  no other tracker carries a milestone, because the §11 resolver identifies
+  the wave tracker by the label plus a milestone. A wave tracker is titled
+  `Wave N: <Name>`; tooling never reads the title. An ad hoc tracker's intro
+  says that it isn't a wave tracker and that its units start by fiat.
+- **Lanes.** Units group under `### lane:<name>` by the unit's first lane
+  label (see Lane Glossary). A `needs-human` unit is owner-run: it goes under
+  `### Owner-run`, takes the `owner` class, and never appears in **Startable
+  now**. An Owner-run entry isn't a scheduling listing: the unit stays
+  unmilestoned and fiat-only, and the half-scheduled check skips it.
+- **Relationships in the diagram.** The diagram draws `starts-after` edges as
+  the format says. Freeside's other typed relationships appear this way:
+  - `merges-after` draws as the format's dotted `-.->` edge, because it never
+    blocks start.
+  - `stacked-on` draws as a labeled arrow, `A -- stacked-on --> B`.
+  - `exclusive-with` isn't drawn. The `contract` class already implies the
+    repo-wide regime among contract units. A non-contract pair gets an
+    **Exclusive:** bullet under Status while both units are open.
+  - When the diagram carries a dotted or `stacked-on` edge, an **Edges:**
+    bullet under Status says what each means, because the verbatim legend
+    covers only `starts-after`.
+- **Critical path.** When a tracker is planned or a Dependencies change
+  redraws its diagram, draw `==>` along the longest chain of unmerged units
+  linked by `starts-after`, counted in units, and along every chain that
+  ties it. A merge doesn't move it, because the format's refresh leaves
+  edges alone. This is a structural stand-in until #674 settles whether an
+  estimate source exists. With no unmerged chain left, draw no thick arrows.
+- **Startable now.** A structural projection: an open unit whose
+  `starts-after` prerequisites have all merged and that no fence holds. A
+  `stacked-on` unit also needs its named base PR open with any existing
   child still based there, or merged with no child yet or with its existing
-  child retargeted to the default branch. A base closed unmerged needs to
-  reopen or have its relationship repaired. The projection deliberately omits
-  volatile claim and active-`exclusive-with` occupancy, which every session
-  must query live before claiming or starting. **Mergeable next**
-  contains open PRs whose `merges-after` prerequisites are merged, in spine
-  integration order; a stacked child remains excluded until its base PR is
-  merged and the forge has retargeted the child to the default branch. State
-  `none` when either projection is empty. Neither projection authorizes work
-  or replaces the PR's verification and review gates. The digest is the
-  record; a reader who never renders the diagram still gets the order.
-- **Diagram when the graph is nontrivial.** When the relationship graph is
-  more than a single chain, follow the digest with a Mermaid
-  `flowchart LR` (the forge renders it inline). A strictly linear sequence
-  states its chain in prose and skips the diagram: a mandatory chart
-  everywhere trains readers to skip charts.
-- **Fixed edge semantics, stated in a legend line.** Nodes are issue numbers.
-  Each relationship has one Mermaid edge and no generic arrow is overloaded:
-  `A --> B` means B `starts-after` A; `A -.-> B` means B `merges-after` A;
-  `A ==> B` means B is `stacked-on` A; and the symmetric `A -.- B` means A is
-  `exclusive-with` B. The legend below every diagram states these exact
-  meanings, including unused styles so readers never infer semantics from
-  appearance. A `classDef` may highlight a category such as contract units,
-  but never encodes a relationship.
-- **Merged units carry a double border.** A tracked unit whose closing PR
-  has merged renders as a double-bordered node (Mermaid's subroutine
-  shape: `679[["#679"]]`); an unfinished unit stays a plain node. The
-  legend states the marking alongside the edge meanings. Like a
-  `classDef` highlight, the border encodes unit state, never a
-  relationship.
-- **Transitive reduction.** Draw only direct edges; an ordering already
-  implied through drawn paths is not repeated as its own arrow.
-- **Authority disclaimer.** The digest and diagram are a derived view;
-  each unit issue's Dependencies field is the authority. Say so on the
-  tracker: where they diverge, the unit issue wins and the tracker gets
-  repaired.
+  child retargeted to the default branch; a base closed unmerged has to
+  reopen or have its relationship repaired. The projection leaves out
+  volatile claim and active `exclusive-with` occupancy: as the format says,
+  a claim or an open PR doesn't remove a unit, only its merge does, so every
+  session queries those live before claiming or starting. Write each entry
+  as `#N (lane)`, the lane without its `lane:` prefix, adding `contract` for
+  a contract unit: `#N (lane, contract)`. The projection never authorizes
+  work or replaces a PR's verification and review gates.
+- **Exit.** A tracker's close sentence requires its lane units merged and
+  its Owner-run entries resolved, because an owner-run item may close
+  without a PR. A wave tracker's Exit carries the §11 adversarial review as
+  a bullet ending `Evidence: findings summary on this issue`: the review
+  runs after every unit merges, so no unit supplies its proof.
+- **Fences.** The `fenced` class and **Fenced:** bullet mark a unit held by
+  something outside its Dependencies field, such as an owner decision or an
+  external event. Name the fence in the bullet.
 - **Repair with the change, as one operation.** Whoever changes a tracked
-  unit's Dependencies field (a rescope, a spine repair, a new unit)
-  updates the digest and diagram of every open tracker listing the unit
+  unit's Dependencies field (a rescope, a spine repair, a new unit) updates
+  the diagram and **Startable now** of every open tracker listing the unit
   in the same operation, mirroring the milestone-plus-listing rule under
-  Work units in AGENTS.md. Apply Forge Edits to these updates: "one operation"
-  means completing the related repairs in this work unit, not an atomic forge
-  transaction. Coordinate with known writers to the same tracker, verify each
-  saved result, and report any repairs that remain incomplete.
-  A session that opens, reopens, closes unmerged, or manually retargets a
-  tracked unit's PR refreshes every affected projection in the same operation.
-  When a merge should retarget stacked children automatically, the session
-  recording that merge waits for and verifies each retarget before refreshing
-  the affected projections. If the retarget is not yet observable, it records
-  partial tracker state; the child session refreshes when it later verifies the
-  retarget.
-  Merges advance the order the same way: the session recording a merged
-  unit on a tracker, wave or ad hoc (the Session End tick), ticks the
-  unit in the tracker's unit list, re-marks its diagram node with the
-  merged double border when the tracker has a diagram, and refreshes
-  that tracker's **Startable now** and **Mergeable next** projections,
-  all in the same edit, so routine
-  progress never strands a digest or diagram at its publication state.
-  A stale diagram misleads where no diagram merely omits.
-- **Wave-boundary pinning keeps exactly one wave-title match pinned, executed
-  recovery-safely by the spine.** The §11 resolver counts only pinned issues
-  whose titles match the canonical wave-tracker pattern; unrelated trackers (for
-  example the standing ad hoc audit tracker, currently #578; #799 has closed)
-  stay pinned for their own purposes and never count toward wave state.
-  Among the wave-title matches the settled count is exactly one open in
-  active-wave state, or exactly one closed, the inter-wave marker, between a
-  wave's close and the next wave's planning; closing a wave leaves its closed
-  tracker pinned as that sole marker until the next wave is planned. Moving the
-  wave-title match from the closed marker to the new open tracker is the spine's
-  wave-tracker maintenance (the spine role maintains the pinned tracking issue
-  per Work Units in AGENTS.md), a wave-planning action distinct from the
-  per-issue `Plan #N` Planning stage, so it is authorized outside that stage's
-  allowed-mutation surface. GitHub caps pins at three per repository and those
-  standing non-wave trackers occupy slots, so the capacity left for wave
-  trackers varies with how many standing trackers are pinned at the time. The
-  transition stays a swap whatever that capacity is, because the settled count
-  above is one wave-title match, and with no atomic pin swap it is necessarily
-  non-atomic and multi-step. The spine's wave-planning operation therefore
-  performs it idempotently and recovery-safely, in particular discovering and
-  reusing any orphaned open-unpinned wave-title tracker left by an interrupted
-  prior transition rather than creating a second. An invalid wave-title
-  cardinality (zero or multiple wave-title matches) is what the resolver
-  escalates on, never guesses through. The detailed interruption-safe procedure
-  is owned and hardened by its executor, the spine's wave-planning operation;
-  see #828.
+  Work units in AGENTS.md. A session that opens, reopens, closes unmerged, or
+  manually retargets a tracked `stacked-on` unit's PR refreshes **Startable
+  now** the same way. When a merge should retarget stacked children
+  automatically, the session recording that merge waits for and verifies
+  each retarget before refreshing; if the retarget isn't observable yet, it
+  records partial tracker state, and the child session refreshes once it
+  verifies the retarget. A merge itself triggers only the format's refresh
+  (§refresh). Apply Forge Edits to all of these: "one operation" means
+  completing the related repairs in this work unit, not an atomic forge
+  transaction. Coordinate with known writers to the same tracker, verify
+  each saved result, and report any repair that remains incomplete.
+- **Pins carry no authority.** The §11 resolver reads the `tracker` label and
+  milestone, never pins, so an interrupted pin change can't misstate wave
+  state. Wave planning pins the new wave tracker and unpins the prior one for
+  visibility. Standing ad hoc trackers stay pinned for their own purposes;
+  GitHub caps pins at three per repository, so when no slot is free the
+  owner picks which tracker to unpin. The plan-wave skill's artifact check
+  catches an interrupted wave-planning run: it stops for resume-or-repair
+  direction rather than creating a second wave tracker.

@@ -146,18 +146,15 @@ gates in this file.
 ### Post-merge obligations
 
 - **Containing trackers:** For an issue-backed merged unit, find every open
-  tracker that lists its verified closing issue. Resolve the wave tracker with
-  the §11 three-state resolver: in active-wave state it is the single open
-  pinned title match, and it is a containing tracker when it lists the unit;
-  in inter-wave state the only title match is the closed prior-wave tracker,
-  which is never mutated, so no wave tracker is refreshed. Zero open
+  tracker (wave, feature, or backlog) that lists its verified closing issue.
+  A closed tracker, including a completed wave's, is never mutated. Zero open
   containing trackers is a valid zero-work result, not an
-  incomplete-reconciliation error. A direct,
-  session-contained unit has no containing tracker.
-- **Refresh:** In each containing tracker, as one edit: tick the unit in the
-  unit list, re-mark its diagram node with the merged double border when the
-  tracker has a diagram, and recompute **Startable now** and **Mergeable
-  next** as separate projections in the Implementation order.
+  incomplete-reconciliation error. A direct, session-contained unit has no
+  containing tracker.
+- **Refresh:** In each containing tracker, as one edit, apply the refresh in
+  `docs/tracker-format.md` (§refresh) with Freeside's **Startable now** rule
+  from `docs/coordination.md` (Tracking Issues). The tracker carries start
+  order only; there is no **Mergeable next** to recompute.
 - **Detailed mechanics:** `docs/coordination.md`.
 - **Report:** Name newly unblocked units without claiming or starting them,
   and name the integration evidence the base advance invalidated.
@@ -691,7 +688,7 @@ section governs building Freeside, not running it.
 The gates below bind every session and live here. The mechanics that
 implement them (the lane glossary, the work-unit issue shape, the claim-lease
 protocol, the session-start queries, session end, the escalation routing
-rules, and the tracking-issue format) live in
+rules, and Freeside's additions to the tracker format) live in
 [`docs/coordination.md`](docs/coordination.md). Read it before claiming a
 unit, creating a work-unit issue, filing a deferral, starting an issue-backed
 session, creating or updating a tracking issue, or starting any work that
@@ -715,11 +712,14 @@ its Dependencies field takes only the typed relationships `starts-after`,
 `merges-after`, `stacked-on`, and `exclusive-with`, and an unknown or
 materially ambiguous relationship is recorded as `starts-after` until the
 spine resolves it. The template's fields, the labels and milestones, the §11
-three-state wave resolver, and the definition of **scheduled** (a milestone
-plus a listing on the current tracking issue, set together by the spine) are
-in docs/coordination.md §Work-Unit Issues. Fiat (`Plan #N`, `Handle #N`) is
-independent of wave state; the scheduling door exists only in active-wave
-state.
+three-state wave resolver (open issues carrying the `tracker` label and a
+milestone), and the definition of **scheduled** (a milestone plus a listing
+on the current tracking issue, set together by the spine) are in
+docs/coordination.md §Work-Unit Issues. Every tracker's shape is in
+[`docs/tracker-format.md`](docs/tracker-format.md), with Freeside's
+additions under Tracking Issues in docs/coordination.md. Fiat (`Plan #N`,
+`Handle #N`) is independent of wave state; the scheduling door exists only
+in active-wave state.
 
 ### Lane Names
 
