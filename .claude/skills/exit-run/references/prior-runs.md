@@ -18,6 +18,7 @@ pattern; a routine run needs no row.
 | Wave 7 controlled challenge, 2026-09-12 | #1001 | freeside-review-challenge#1, left unmerged | CLI, dedicated challenge repository | The first full live chain with a genuine Codex finding: classification, adjudication, remediation, re-review, clean final round, publication, verifier (#1275). The host killed the harness and `real-work-session.sh recover` completed the session as designed. Relaunching the Mac client re-registered the normal daemon beside the campaign daemon. The remediator prompt package described a workspace state the driver does not produce. |
 | #1211 run-82, 2026-09-15 to 16 | #1211 | gh-imgup#82 to PR #110, merged | Client target | Preparation was blocked twice before launch: no production submission-policy configuration (#1360), then an expired Codex token at composition preflight (the recovery gap is #1363). The client-created run produced 19 findings mapped to 21 units, 13 required for exit. The PR merged without the `Closes #82` its template required, which started tracker #1445. |
 | #1211 run-70, 2026-09-21 | #1211 | gh-imgup#70 to PR #111, ready for review | Client target | Implementation aborted at ten minutes on the writer stop timeout (fixed in-run, PR #1456, validated on a resumed implementation of about 29 minutes). Publication blocked because a stale implementer prompt package was reused. Nine findings (#1457 to #1465); the recommendation held exit only on Stop working from a real client (#1457). The owner then narrowed the gate to a live Stop check and made the next run also the #1445 proof. |
+| #1445 run-113 after #1535, 2026-09-25 | #1445 | gh-imgup#113 to PR #120, merged | Client target | The first passing policy-approved closure proof: `verify-source` receipt, stored authoring, a `propose_site` proposal, a policy approval, and publisher-written `Closes #113`; the merge closed the issue. The first session died at preflight because Claude Code auto-update pruned the pinned judgment CLI. `return_to_agent` worked live for the first time: the feedback run republished onto the same PR. Two clean reviews still passed a PR missing the decision note its repository's AGENTS.md required, because the review rubric only admits defects with a failure path (#1542). The successor publication raised a self-clearing "repair external state" card (#1544). Restore stalled at `registered=false` again. |
 
 ## Recurring Pitfalls
 
@@ -63,6 +64,26 @@ Look for each of these before and during the run; most have bitten twice.
 - **Restore is not proved by asking.** Supervised restoration has timed out
   with `registered=false` more than once; verify registration and `/health`
   on the normal port before calling the session complete.
+- **Auto-update prunes a pinned CLI.** A judgment pin that points into
+  Claude Code's auto-updated `versions/` directory disappears between runs.
+  Copy the binary into the run root and pin that copy by path and SHA256.
+- **`open -b` can launch a stale build.** Several app bundles share the
+  bundle ID, and `open -b ai.freeside.app.macos` once launched an old wave7
+  build whose daemon refused the current store. Launch
+  `~/Applications/Freeside.app` by path.
+- **Restoring from `registered=false`.** Reinstalling the Mac app from the
+  run's commit into a fresh build directory, launching it by path, and
+  then running `real-work-session.sh recover` restored the normal daemon.
+- **Run the harness as a tracked background task.** Started that way (not
+  with `nohup` or `disown`), it kept its rig holder for the whole
+  multi-hour run.
+- **Clean review doesn't mean the repository's rules were followed.** The
+  reviewer is told the target's AGENTS.md but admits only defects with a
+  failure path, so a missing required note or doc passes. Check the
+  target's mandatory-note list yourself before handing over the merge.
+- **The operator's Mac is shared.** When the operator is working on the Mac,
+  windows move and a synthetic click can land in their terminal. Hand the
+  Mac actions to them instead.
 - **A killed harness is recoverable.** `real-work-session.sh recover`
   completes a session the host killed; a fresh session would be a different
   run.
