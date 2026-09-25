@@ -131,8 +131,9 @@ FROM export_rejections WHERE invocation_id = ?`
 // the gates above also re-check it against the trusted profile. Every task's
 // first admission is its specification stage, so the row exists before the
 // specification can be approved, whichever path submitted the task. A
-// project already bound to a different repository fails the admission with
-// ErrImmutableConflict.
+// project already bound to a different repository id fails the admission with
+// ErrImmutableConflict; a new admission under a renamed repository (same id)
+// moves the row to the new name (#1537).
 func (tx *WriteTx) RecordExecutionAdmission(ctx context.Context, admission domain.ExecutionAdmission) error {
 	if admission.BackupEncryptionWaiver != nil {
 		return fmt.Errorf("record execution admission %q: %w",
@@ -161,12 +162,6 @@ func (tx *WriteTx) RecordExecutionAdmission(ctx context.Context, admission domai
 	if err != nil {
 		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
 	}
-	// Register on the replay path too: RegisterProject converges on a matching
-	// row, so a replay heals a store that recorded the admission before this
-	// write existed, and a rebinding fails before any work is admitted.
-	if err := tx.registerAdmittedProject(ctx, run.ProjectID, admission.Base); err != nil {
-		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
-	}
 	existing, err := tx.existingBody(ctx, selectExecutionAdmissionBodySQL, admission.InvocationID)
 	if err != nil {
 		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
@@ -175,7 +170,20 @@ func (tx *WriteTx) RecordExecutionAdmission(ctx context.Context, admission domai
 		if string(existing) != body {
 			return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, ErrImmutableConflict)
 		}
+		// Register on the replay path too, so a replay heals a store that
+		// recorded the admission before this write existed. The replayed base
+		// may name the repository from before a rename (#1537), so it
+		// verifies the repository id without renaming the row back.
+		if err := tx.registerAdmittedProject(ctx, run.ProjectID, admission.Base, false); err != nil {
+			return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
+		}
 		return nil
+	}
+	// A new admission carries the daemon's current configured name, so it
+	// follows a rename; a rebinding to another repository id fails here,
+	// before any work is admitted.
+	if err := tx.registerAdmittedProject(ctx, run.ProjectID, admission.Base, true); err != nil {
+		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
 	}
 	if err := tx.RequireIdentityExecutionCapacity(ctx, admission); err != nil {
 		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)

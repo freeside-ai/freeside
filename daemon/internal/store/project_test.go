@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -88,6 +89,49 @@ func TestGetProjectNotFound(t *testing.T) {
 	err := st.Read(ctx, func(tx *store.ReadTx) error {
 		if _, err := tx.GetProject(ctx, "project-absent"); !errors.Is(err, store.ErrNotFound) {
 			return errors.New("absent project did not report ErrNotFound")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestRegisterProjectFollowsRename pins the rename rule (#1537): the numeric
+// repository id is the project's identity, so a same-id registration under a
+// new name rewrites the row's name, re-registering the current name converges,
+// and a different id is still an immutable conflict.
+func TestRegisterProjectFollowsRename(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openStore(t, store.Options{})
+
+	renamed := mustProject(t, "project-alpha", "owner/renamed", 84958515)
+	err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.RegisterProject(ctx, mustProject(t, "project-alpha", "owner/repo", 84958515)); err != nil {
+			return err
+		}
+		if err := tx.RegisterProject(ctx, renamed); err != nil {
+			return fmt.Errorf("same-id rename: %w", err)
+		}
+		if err := tx.RegisterProject(ctx, renamed); err != nil {
+			return fmt.Errorf("replay of the current name: %w", err)
+		}
+		if err := tx.RegisterProject(ctx, mustProject(t, "project-alpha", "owner/renamed", 111)); !errors.Is(err, store.ErrImmutableConflict) {
+			return fmt.Errorf("different id under the current name: err = %w, want ErrImmutableConflict", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = st.Read(ctx, func(tx *store.ReadTx) error {
+		got, err := tx.GetProject(ctx, "project-alpha")
+		if err != nil {
+			return err
+		}
+		if got != renamed {
+			return fmt.Errorf("project = %+v, want %+v", got, renamed)
 		}
 		return nil
 	})
