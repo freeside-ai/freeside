@@ -22,7 +22,7 @@ const (
 	VerificationMarkerName             = "freeside:verification"
 	MaxRenderedVerificationBytes       = 8 << 10
 	SourceReferenceMarkerName          = "freeside:source-reference"
-	SourceReferenceHeading             = "## Source issue"
+	SourceReferenceHeading             = "## Source Issue"
 	MaxRenderedSourceReferenceBytes    = 1 << 10
 	DispositionHistoryMarkerName       = "freeside:disposition-history"
 	MinRenderedDispositionHistoryBytes = 8 << 10

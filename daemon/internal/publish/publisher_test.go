@@ -1310,6 +1310,45 @@ func TestPublishConvergesDriftedPR(t *testing.T) {
 	}
 }
 
+// TestPublishConvergesOldLayoutSourceReference: an open PR published before
+// #1540, with the source-reference section after the prose, is rewritten to
+// the head-first layout by one PR update and carries the section once.
+func TestPublishConvergesOldLayoutSourceReference(t *testing.T) {
+	t.Parallel()
+	gh := newFakeGitHub(t)
+	p := newTestPublisher(t, gh, newMemoryLedger())
+
+	c := testCandidate(t)
+	c.SourceIssueURL = "https://github.com/other/repo/issues/5"
+	if _, err := p.Publish(context.Background(), c, testApprovedRecipes()); err != nil {
+		t.Fatal(err)
+	}
+	wantBody := gh.prs[0].Body
+	const closeMarker = "<!-- /freeside:source-reference -->"
+	end := strings.Index(wantBody, closeMarker) + len(closeMarker)
+	if !strings.HasPrefix(wantBody, "<!-- freeside:source-reference -->") || end < len(closeMarker) {
+		t.Fatalf("published body does not open with the source-reference section:\n%s", wantBody)
+	}
+	section := wantBody[:end]
+	rest := strings.TrimPrefix(wantBody[end:], "\n\n")
+	oldLayout := strings.Replace(rest, c.Body, c.Body+"\n\n"+strings.Replace(section, "## Source Issue", "## Source issue", 1), 1)
+	gh.prs[0].Body = oldLayout
+
+	writes := len(gh.writeRequests())
+	if _, err := p.Publish(context.Background(), c, testApprovedRecipes()); err != nil {
+		t.Fatalf("converging Publish: %v", err)
+	}
+	if got := gh.writeRequests()[writes:]; len(got) != 1 || !strings.HasPrefix(got[0], http.MethodPatch+" ") {
+		t.Errorf("convergence writes = %v, want one PR update", got)
+	}
+	if gh.prs[0].Body != wantBody {
+		t.Errorf("PR body not converged:\n%s", gh.prs[0].Body)
+	}
+	if n := strings.Count(gh.prs[0].Body, "<!-- freeside:source-reference -->"); n != 1 {
+		t.Errorf("source-reference open marker appears %d times, want 1", n)
+	}
+}
+
 // TestPublishRecordsIntentBeforeAnyDispatch: a failing ledger stops
 // the publication before a single external request (issue #81
 // acceptance 4).
