@@ -122,6 +122,26 @@ func TestPublicMetadataRejectsUntrustedClaims(t *testing.T) {
 	}
 }
 
+func TestPublicMetadataRefusesPlaceholderTitle(t *testing.T) {
+	for _, text := range []string{
+		"# Outcome title\nDescription",
+		"# outcome title\nDescription",
+		"# Outcome title\nReal intended title\n\nDescription",
+	} {
+		title, body, err := publicationMetadata(recipePublicationFixture(), "current", []domain.AgentClaim{publicMetadataFixture("current", text)})
+		if err == nil || title != "" || body != "" {
+			t.Fatalf("%q = %q, %q, %v; want placeholder refusal", text, title, body, err)
+		}
+		if strings.Contains(err.Error(), "Real intended title") || strings.Contains(err.Error(), "Description") {
+			t.Fatalf("refusal repeats claim content: %v", err)
+		}
+	}
+	title, _, err := publicationMetadata(recipePublicationFixture(), "current", []domain.AgentClaim{publicMetadataFixture("current", "# Keep the Outcome title field stable\nDescription")})
+	if err != nil || title != "Keep the Outcome title field stable" {
+		t.Fatalf("title containing the placeholder words = %q, %v", title, err)
+	}
+}
+
 func TestPublicMetadataScreensFullArtifact(t *testing.T) {
 	// The structurally-invalid v1 inputs exercise the title/description shape;
 	// the unsafe-content escapes are shared with the v2 authored-field screen
