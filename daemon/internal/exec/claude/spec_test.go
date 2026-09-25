@@ -257,6 +257,21 @@ func TestPhase1ASummaryPromptContracts(t *testing.T) {
 				t.Errorf("%s prompt omits summary guidance %q", name, required)
 			}
 		}
+		// A repository-required artifact is part of done (#1542), but the
+		// commit-plan hard limits still override project conventions.
+		for _, required := range []string{
+			"An artifact the target repository's own instructions require for this kind of change",
+			"is part of done, not scope widening.",
+			"When its path is outside the allowed paths, use Required Work Outside Scope below instead of skipping it.",
+			"The following are hard limits that override any project convention",
+		} {
+			if !bytes.Contains(prompt, []byte(required)) {
+				t.Errorf("%s prompt omits repository-required artifact guidance %q", name, required)
+			}
+		}
+	}
+	if want := "When a finding reports a missing repository-required artifact, add the artifact rather than arguing it out of scope"; !bytes.Contains(remediator, []byte(want)) {
+		t.Errorf("remediator prompt omits %q", want)
 	}
 	// The remediator plays the prior-artifact-rendering role opposite the
 	// implementer, so the composition the driver enforces at startup validates.

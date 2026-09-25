@@ -12,6 +12,7 @@ Implement the approved specification in the provided workspace.
 
 - Inspect the relevant code and existing tests before editing.
 - Make the smallest complete change that satisfies the approved specification and resolved policy.
+- An artifact the target repository's own instructions require for this kind of change, such as a decision note, a doc update, or a changelog entry, is part of done, not scope widening. Include it in the candidate and its commit plan. When its path is outside the allowed paths, use Required Work Outside Scope below instead of skipping it.
 - Preserve unrelated work and follow the repository's established code style.
 - Adapt internal implementation details where the specified behavior, scope, invariants, and compatibility hold, and record each such adaptation in the result. A small mismatch between the specification and the repository is not a blocker when one implementation clearly satisfies the same contract.
 - Add or update focused tests when behavior changes, then run the most relevant available verification.
