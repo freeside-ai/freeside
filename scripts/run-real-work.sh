@@ -87,6 +87,10 @@
 #   FREESIDE_REAL_RUN_ALLOWED_PATHS  comma-separated declared path scope the
 #                                    agent may rewrite (no match-everything
 #                                    default: it is a containment control)
+#   STATE_ROOT, SEED_ROOT, REVIEW_INPUT_ROOT, APP_STATE, APP_CREDS, the
+#   diagnostic directory, and a resumed session are refused (exit 2) before
+#   anything is created when one resolves under a supervised state root
+#   (scripts/supervised-paths.sh).
 # Optional environment:
 #   FREESIDE_REAL_RUN_MANUAL_SUBMISSION_CONFIG operator JSON project policy
 #                                    for new client tasks; privately retained.
@@ -268,6 +272,22 @@ if [[ ! "$FREESIDE_REAL_RUN_APPROVED_RECIPE" =~ ^sha256:[0-9a-f]{64}$ ]]; then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# An early, readable refusal before any path is created or used; freesided's
+# environment guard (#1501) stays the authority for its own flags.
+# shellcheck source=scripts/supervised-paths.sh
+source "$repo_root/scripts/supervised-paths.sh"
+for name in FREESIDE_REAL_RUN_STATE_ROOT FREESIDE_REAL_RUN_SEED_ROOT \
+  FREESIDE_REAL_RUN_REVIEW_INPUT_ROOT FREESIDE_REAL_RUN_APP_STATE FREESIDE_REAL_RUN_APP_CREDS; do
+  refuse_supervised_path "run-real-work: $name" "${!name}" || exit 2
+done
+diagnostic_dir=${FREESIDE_REAL_RUN_DIAGNOSTIC_DIR:-$HOME/Library/Logs/Freeside}
+# The session directory, with its binaries and private inputs, is created in
+# the diagnostic directory, or read and written on resume, so both get the
+# same refusal before the retained session is validated or anything is made.
+refuse_supervised_path "run-real-work: diagnostic directory" "$diagnostic_dir" || exit 2
+if [[ -n "$retained_session" ]]; then
+  refuse_supervised_path "run-real-work: retained session" "$retained_session" || exit 2
+fi
 # shellcheck source=scripts/run-real-work-supervision.sh
 source "$repo_root/scripts/run-real-work-supervision.sh"
 # shellcheck source=scripts/real-work-lifecycle.sh
@@ -277,7 +297,6 @@ source "$repo_root/scripts/real-work-client-target.sh"
 if [[ -n "$retained_session" ]]; then
   python3 "$repo_root/scripts/real-work-retained.py" validate "$retained_session"
 fi
-diagnostic_dir=${FREESIDE_REAL_RUN_DIAGNOSTIC_DIR:-$HOME/Library/Logs/Freeside}
 if [[ -z "${FREESIDE_REAL_RUN_DIAGNOSTIC_DIR:-}" ]]; then
 	mkdir -p "$diagnostic_dir"
 fi

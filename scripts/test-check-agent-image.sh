@@ -174,6 +174,7 @@ begin_case() {
   unset FREESIDE_REAL_RUN_TIMEOUT_SECONDS
   unset FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES
   unset FREESIDE_REAL_RUN_WRITER_STOP_TIMEOUT
+  unset CASE_HOME CASE_STATE_ROOT CASE_DIAGNOSTIC_DIR
   printf 'ok' >"$CASE_DIR/create_mode"
   echo "case: $CASE"
 }
@@ -727,8 +728,9 @@ RETRY_STUB
 		GIT_STUB_CHECKOUT_MODE="$checkout_mode" \
 		REAL_SLEEP="$real_sleep" \
 		FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS="${FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS:-30}" \
-		FREESIDE_REAL_RUN_DIAGNOSTIC_DIR="$CASE_DIR" \
-    FREESIDE_REAL_RUN_STATE_ROOT="$CASE_DIR/state" \
+		FREESIDE_REAL_RUN_DIAGNOSTIC_DIR="${CASE_DIAGNOSTIC_DIR:-$CASE_DIR}" \
+		HOME="${CASE_HOME:-$HOME}" \
+    FREESIDE_REAL_RUN_STATE_ROOT="${CASE_STATE_ROOT:-$CASE_DIR/state}" \
     FREESIDE_REAL_RUN_LISTEN=127.0.0.1:8677 \
     FREESIDE_REAL_RUN_AGENT_IMAGE="example.test/agent@$digest" \
     FREESIDE_WARD_EXPORTER_IMAGE="example.test/exporter@$digest" \
@@ -1617,6 +1619,52 @@ assert_contains "FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES must be a positive i
 assert_not_exists "$CASE_DIR/rig-hold.args"
 assert_not_exists "$CASE_DIR/submit.called"
 assert_not_exists "$CASE_DIR/daemon.args"
+
+begin_case "58c a state root under a supervised root refuses before any session directory"
+CASE_HOME=$CASE_DIR/home
+mkdir -p "$CASE_HOME/Library/Application Support/Freeside"
+CASE_STATE_ROOT="$CASE_HOME/Library/Application Support/Freeside/real-work"
+run_real_work lifecycle
+assert_rc 2
+assert_contains "refusing run-real-work: FREESIDE_REAL_RUN_STATE_ROOT"
+assert_contains "resolves under the prod state root"
+assert_not_exists "$CASE_DIR/go.log"
+sessions=$(find "$CASE_DIR" -maxdepth 1 -name 'real-work-session.*' | head -n 1)
+if [ -z "$sessions" ]; then
+	pass=$((pass + 1))
+else
+	report_failure "a session directory was created: $sessions"
+fi
+
+begin_case "58d a diagnostic directory under a supervised root refuses before any session directory"
+CASE_HOME=$CASE_DIR/home
+CASE_DIAGNOSTIC_DIR="$CASE_HOME/Library/Application Support/Freeside Dev/diagnostics"
+mkdir -p "$CASE_DIAGNOSTIC_DIR"
+run_real_work lifecycle
+assert_rc 2
+assert_contains "refusing run-real-work: diagnostic directory"
+assert_contains "resolves under the dev state root"
+assert_not_exists "$CASE_DIR/go.log"
+sessions=$(find "$CASE_DIAGNOSTIC_DIR" -maxdepth 1 -name 'real-work-session.*' | head -n 1)
+if [ -z "$sessions" ]; then
+	pass=$((pass + 1))
+else
+	report_failure "a session directory was created: $sessions"
+fi
+
+begin_case "58e a resumed session under a supervised root refuses before it is validated"
+CASE_HOME=$CASE_DIR/home
+mkdir -p "$CASE_HOME/Library/Application Support"
+# The prod root is a symlink to the retained session, so the session resolves
+# under it physically. The live fixture leaves the session incomplete, so
+# validating it first would exit 1 instead of refusing.
+ln -s "$CASE_DIR/old" "$CASE_HOME/Library/Application Support/Freeside"
+run_real_work lifecycle current ok ok success ok ok clean live
+assert_rc 2
+assert_contains "refusing run-real-work: retained session"
+assert_contains "resolves under the prod state root"
+assert_lacks "complete/recover the old session"
+assert_not_exists "$CASE_DIR/go.log"
 
 # --------------------- detector battery: adversarial input-space fixtures
 # Each document stands in for the whole inspect report. Duplicates of every

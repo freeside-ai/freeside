@@ -24,6 +24,11 @@ if [[ "$(uname)" != "Darwin" ]]; then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/supervised-paths.sh
+source "$repo_root/scripts/supervised-paths.sh"
+# mktemp puts the harness state under TMPDIR; refuse a supervised one before
+# anything is created there.
+refuse_supervised_path "run-convergence TMPDIR" "${TMPDIR:-/tmp}" || exit 2
 workdir="$(mktemp -d)"
 harness_pid=""
 
