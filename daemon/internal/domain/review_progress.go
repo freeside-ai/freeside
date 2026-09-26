@@ -100,3 +100,27 @@ func (k ReviewContentKind) valid() bool {
 		return false
 	}
 }
+
+// ReviewSubjectKind names the role of the invocation whose export produced a
+// reviewed head. It is derived from that invocation's dispatch intent kind,
+// never from its identifier.
+type ReviewSubjectKind string
+
+const (
+	ReviewSubjectImplementation   ReviewSubjectKind = "implementation"
+	ReviewSubjectRemediation      ReviewSubjectKind = "remediation"
+	ReviewSubjectOperatorFeedback ReviewSubjectKind = "operator_feedback"
+)
+
+var AllReviewSubjectKinds = []ReviewSubjectKind{
+	ReviewSubjectImplementation, ReviewSubjectRemediation, ReviewSubjectOperatorFeedback,
+}
+
+func (k ReviewSubjectKind) valid() bool {
+	switch k {
+	case ReviewSubjectImplementation, ReviewSubjectRemediation, ReviewSubjectOperatorFeedback:
+		return true
+	default:
+		return false
+	}
+}

@@ -2053,11 +2053,53 @@ components:
             - {"$ref":"#/components/schemas/Digest"}
         availability:
           $ref: "#/components/schemas/ReviewEvidenceAvailability"
+    ReviewSubjectKind:
+      type: "string"
+      description: "The role of the invocation whose export produced a reviewed head: the implementer, a remediator of an earlier round's findings, or an operator-feedback pass."
+      enum: ["implementation", "remediation", "operator_feedback"]
+    ReviewRoundSubject:
+      type: "object"
+      description: "What a review round reviewed: the invocation whose recorded export is the only one in the run that produced the round's head, classified by that invocation's authenticated dispatch intent."
+      additionalProperties: false
+      required: ["kind", "invocation_id", "remediates_round"]
+      properties:
+        kind:
+          $ref: "#/components/schemas/ReviewSubjectKind"
+        invocation_id:
+          type: "string"
+          minLength: 1
+        remediates_round:
+          type: "integer"
+          minimum: 1
+          nullable: true
+          description: "The round whose findings the remediator addressed. Set exactly when kind is remediation."
+    ReviewRoundRemediation:
+      type: "object"
+      description: "The remediation this round's findings adjudication started, bound to this round's review invocation, base and head."
+      additionalProperties: false
+      required: ["invocation_id", "finding_ids", "decided_at"]
+      properties:
+        invocation_id:
+          type: "string"
+          minLength: 1
+          description: The remediator invocation.
+        finding_ids:
+          type: "array"
+          minItems: 1
+          description: The findings the adjudication routed to remediation.
+          items:
+            type: "string"
+            minLength: 1
+        decided_at:
+          type: "string"
+          format: "date-time"
+          nullable: true
+          description: When the adjudication was decided. Null when the daemon holds no resolved adjudication item for it.
     RunReviewRound:
       type: "object"
-      description: "One primary review round joined by invocation, run, round, base and head. Null request time identifies historical records predating request facts. Missing identity, outcome or count is unknown, never clean."
+      description: "One primary review round joined by invocation, run, round, base and head. Null request time identifies historical records predating request facts. Missing identity, outcome or count is unknown, never clean. Null subject means the daemon cannot prove which invocation produced the reviewed head; it never means implementation."
       additionalProperties: false
-      required: ["round", "invocation_id", "state", "source", "base_sha", "head_sha", "requested_at", "completed_at", "provider", "model_configuration", "outcome", "findings_count", "dispositions", "failure", "retry_pending", "evidence"]
+      required: ["round", "invocation_id", "state", "source", "base_sha", "head_sha", "requested_at", "completed_at", "provider", "model_configuration", "outcome", "findings_count", "dispositions", "failure", "retry_pending", "evidence", "subject", "remediation"]
       properties:
         round:
           type: "integer"
@@ -2109,6 +2151,14 @@ components:
           type: "boolean"
         evidence:
           $ref: "#/components/schemas/ReviewRoundEvidence"
+        subject:
+          nullable: true
+          allOf:
+            - {"$ref":"#/components/schemas/ReviewRoundSubject"}
+        remediation:
+          nullable: true
+          allOf:
+            - {"$ref":"#/components/schemas/ReviewRoundRemediation"}
     ReviewEvidence:
       type: "object"
       description: "Private retained reviewer output, re-authenticated on read. Labeled agent claims, never publishable verifier evidence. Bytes obey the review collection limits."
