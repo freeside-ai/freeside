@@ -90,12 +90,12 @@ func deriveOfferedAlternatives(goal GoalRelationship, route AdjudicationRoute) [
 	if route == RouteDecline {
 		return []OfferedAlternative{{
 			Route:       RouteDispute,
-			Consequence: "Keep the run parked for human adjudication.",
+			Consequence: "Park the run: nothing is declined, fixed, or published.",
 		}}
 	}
 	return []OfferedAlternative{{
 		Route:       RouteDecline,
-		Consequence: "Record the finding as declined under the artifact-bound contradiction.",
+		Consequence: "Record the finding as declined: it isn't fixed in this PR.",
 	}}
 }
 

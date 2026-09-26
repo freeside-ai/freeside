@@ -940,7 +940,7 @@ func TestFindingAdjudicationEntryOffersAlternatives(t *testing.T) {
 		t.Fatalf("decline entry: %v", err)
 	}
 	wantDecline := []domain.OfferedAlternative{{
-		Route: domain.RouteDispute, Consequence: "Keep the run parked for human adjudication.",
+		Route: domain.RouteDispute, Consequence: "Park the run: nothing is declined, fixed, or published.",
 	}}
 	if !slices.Equal(decline.OfferedAlternatives, wantDecline) {
 		t.Fatalf("decline offered = %+v, want %+v", decline.OfferedAlternatives, wantDecline)
@@ -955,7 +955,7 @@ func TestFindingAdjudicationEntryOffersAlternatives(t *testing.T) {
 		t.Fatalf("dispute entry: %v", err)
 	}
 	wantDispute := []domain.OfferedAlternative{{
-		Route: domain.RouteDecline, Consequence: "Record the finding as declined under the artifact-bound contradiction.",
+		Route: domain.RouteDecline, Consequence: "Record the finding as declined: it isn't fixed in this PR.",
 	}}
 	if !slices.Equal(dispute.OfferedAlternatives, wantDispute) {
 		t.Fatalf("dispute offered = %+v, want %+v", dispute.OfferedAlternatives, wantDispute)

@@ -4,6 +4,6 @@
   "round": 1,
   "disposition": "deferred",
   "reason": "tracked in issue 700",
-  "adjudication_digest": "sha256:8e3d272b2bb85b65c6892d1f01f1b88c959f5094c0ed50370305a75e41c7b0b2",
+  "adjudication_digest": "sha256:8c35190e6360bf6b19bffe45555bb5023c7d06a671ea83f54c804d2693494993",
   "created_at": "2026-08-10T12:02:00Z"
 }
