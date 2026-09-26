@@ -1310,42 +1310,70 @@ func TestPublishConvergesDriftedPR(t *testing.T) {
 	}
 }
 
-// TestPublishConvergesOldLayoutSourceReference: an open PR published before
-// #1540, with the source-reference section after the prose, is rewritten to
-// the head-first layout by one PR update and carries the section once.
+// TestPublishConvergesOldLayoutSourceReference: an open PR published with an
+// earlier source-reference layout is rewritten to the unheaded head-first
+// section by one PR update and carries the section once. Two old layouts
+// exist: before #1540 a "## Source issue" section followed the prose, and
+// under #1540 a "## Source Issue" section headed the body (#1553).
 func TestPublishConvergesOldLayoutSourceReference(t *testing.T) {
 	t.Parallel()
-	gh := newFakeGitHub(t)
-	p := newTestPublisher(t, gh, newMemoryLedger())
-
-	c := testCandidate(t)
-	c.SourceIssueURL = "https://github.com/other/repo/issues/5"
-	if _, err := p.Publish(context.Background(), c, testApprovedRecipes()); err != nil {
-		t.Fatal(err)
-	}
-	wantBody := gh.prs[0].Body
+	const openMarker = "<!-- freeside:source-reference -->"
 	const closeMarker = "<!-- /freeside:source-reference -->"
-	end := strings.Index(wantBody, closeMarker) + len(closeMarker)
-	if !strings.HasPrefix(wantBody, "<!-- freeside:source-reference -->") || end < len(closeMarker) {
-		t.Fatalf("published body does not open with the source-reference section:\n%s", wantBody)
+	headed := func(section, heading string) string {
+		return strings.Replace(section, openMarker+"\n\n", openMarker+"\n\n"+heading+"\n\n", 1)
 	}
-	section := wantBody[:end]
-	rest := strings.TrimPrefix(wantBody[end:], "\n\n")
-	oldLayout := strings.Replace(rest, c.Body, c.Body+"\n\n"+strings.Replace(section, "## Source Issue", "## Source issue", 1), 1)
-	gh.prs[0].Body = oldLayout
+	layouts := []struct {
+		name string
+		old  func(c publish.Candidate, section, rest string) string
+	}{
+		{"pre-1540 section after the prose", func(c publish.Candidate, section, rest string) string {
+			return strings.Replace(rest, c.Body, c.Body+"\n\n"+headed(section, "## Source issue"), 1)
+		}},
+		{"1540 headed section at the head", func(_ publish.Candidate, section, rest string) string {
+			return headed(section, "## Source Issue") + "\n\n" + rest
+		}},
+	}
+	for _, layout := range layouts {
+		t.Run(layout.name, func(t *testing.T) {
+			t.Parallel()
+			gh := newFakeGitHub(t)
+			p := newTestPublisher(t, gh, newMemoryLedger())
 
-	writes := len(gh.writeRequests())
-	if _, err := p.Publish(context.Background(), c, testApprovedRecipes()); err != nil {
-		t.Fatalf("converging Publish: %v", err)
-	}
-	if got := gh.writeRequests()[writes:]; len(got) != 1 || !strings.HasPrefix(got[0], http.MethodPatch+" ") {
-		t.Errorf("convergence writes = %v, want one PR update", got)
-	}
-	if gh.prs[0].Body != wantBody {
-		t.Errorf("PR body not converged:\n%s", gh.prs[0].Body)
-	}
-	if n := strings.Count(gh.prs[0].Body, "<!-- freeside:source-reference -->"); n != 1 {
-		t.Errorf("source-reference open marker appears %d times, want 1", n)
+			c := testCandidate(t)
+			c.SourceIssueURL = "https://github.com/other/repo/issues/5"
+			if _, err := p.Publish(context.Background(), c, testApprovedRecipes()); err != nil {
+				t.Fatal(err)
+			}
+			wantBody := gh.prs[0].Body
+			end := strings.Index(wantBody, closeMarker) + len(closeMarker)
+			if !strings.HasPrefix(wantBody, openMarker) || end < len(closeMarker) {
+				t.Fatalf("published body does not open with the source-reference section:\n%s", wantBody)
+			}
+			section := wantBody[:end]
+			rest := strings.TrimPrefix(wantBody[end:], "\n\n")
+			oldLayout := layout.old(c, section, rest)
+			if oldLayout == wantBody || !strings.Contains(strings.ToLower(oldLayout), "## source issue") {
+				t.Fatalf("old layout fixture is not headed:\n%s", oldLayout)
+			}
+			gh.prs[0].Body = oldLayout
+
+			writes := len(gh.writeRequests())
+			if _, err := p.Publish(context.Background(), c, testApprovedRecipes()); err != nil {
+				t.Fatalf("converging Publish: %v", err)
+			}
+			if got := gh.writeRequests()[writes:]; len(got) != 1 || !strings.HasPrefix(got[0], http.MethodPatch+" ") {
+				t.Errorf("convergence writes = %v, want one PR update", got)
+			}
+			if gh.prs[0].Body != wantBody {
+				t.Errorf("PR body not converged:\n%s", gh.prs[0].Body)
+			}
+			if n := strings.Count(gh.prs[0].Body, openMarker); n != 1 {
+				t.Errorf("source-reference open marker appears %d times, want 1", n)
+			}
+			if strings.Contains(strings.ToLower(gh.prs[0].Body), "## source issue") {
+				t.Errorf("converged body keeps a source-reference heading:\n%s", gh.prs[0].Body)
+			}
+		})
 	}
 }
 

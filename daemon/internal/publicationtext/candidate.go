@@ -76,6 +76,10 @@ func containsVerificationMarker(body string) bool {
 }
 
 // ContainsSourceReferenceMarker recognizes the reserved marker or exact heading.
+// SourceReferenceHeading is reserved, not rendered: the publisher stopped
+// writing it in #1553, but the screen still refuses it in authored prose,
+// because an author section with that heading would sit directly under the
+// unheaded publisher lead and read as the publisher's close reference.
 func ContainsSourceReferenceMarker(body string) bool {
 	if strings.Contains(strings.ToLower(body), SourceReferenceMarkerName) {
 		return true

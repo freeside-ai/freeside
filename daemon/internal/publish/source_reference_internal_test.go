@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/golden"
 )
 
 func testDigest(b byte) domain.Digest {
@@ -116,15 +117,15 @@ func TestRenderSourceReference(t *testing.T) {
 		{
 			name:     "closes verified",
 			res:      closureResolution{outcome: domain.ClosureOutcome{Reference: domain.ClosureReferenceCloses}, target: 7},
-			contains: []string{sourceReferenceOpenMarker, "## Source Issue", "Closes #7", sourceReferenceCloseMarker},
+			contains: []string{sourceReferenceOpenMarker, "\n\nCloses #7\n\n", sourceReferenceCloseMarker},
 			absent:   []string{"recommended"},
 		},
 		{
-			name: "closes recommended carries the confirmation note",
+			name: "closes recommended joins the confirmation note to the reference line",
 			res: closureResolution{
 				outcome: domain.ClosureOutcome{Reference: domain.ClosureReferenceCloses, Recommended: true}, target: 9,
 			},
-			contains: []string{"Closes #9", "The client recommended this issue; the approver confirmed it."},
+			contains: []string{"\n\nCloses #9. The client recommended this issue; the approver confirmed it.\n\n"},
 		},
 		{
 			name:     "refs",
@@ -161,6 +162,10 @@ func TestRenderSourceReference(t *testing.T) {
 				}
 				return
 			}
+			// The section is an unheaded lead paragraph (#1553).
+			if strings.Contains(section, "## ") {
+				t.Errorf("section carries a heading:\n%s", section)
+			}
 			for _, want := range tc.contains {
 				if !strings.Contains(section, want) {
 					t.Errorf("section lacks %q:\n%s", want, section)
@@ -171,6 +176,40 @@ func TestRenderSourceReference(t *testing.T) {
 					t.Errorf("section unexpectedly contains %q:\n%s", absent, section)
 				}
 			}
+		})
+	}
+}
+
+// TestSourceReferenceGolden pins each rendered form byte for byte: the
+// reference keyword starts its own line, outside any heading or code fence,
+// where GitHub reads a Closes as closing the issue (#1553).
+func TestSourceReferenceGolden(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		res  closureResolution
+	}{
+		{"source-reference-closes", closureResolution{
+			outcome: domain.ClosureOutcome{Reference: domain.ClosureReferenceCloses}, target: 114,
+		}},
+		{"source-reference-closes-recommended", closureResolution{
+			outcome: domain.ClosureOutcome{Reference: domain.ClosureReferenceCloses, Recommended: true}, target: 114,
+		}},
+		{"source-reference-refs", closureResolution{
+			outcome: domain.ClosureOutcome{Reference: domain.ClosureReferenceRefs}, target: 114,
+		}},
+		{"source-reference-descriptive-link", closureResolution{
+			outcome:   domain.ClosureOutcome{Reference: domain.ClosureReferenceDescriptiveLink},
+			sourceURL: "https://github.com/other/repo/issues/114",
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			section, err := renderSourceReference(tc.res)
+			if err != nil {
+				t.Fatal(err)
+			}
+			golden.Assert(t, tc.name, append([]byte(section), '\n'))
 		})
 	}
 }
@@ -195,11 +234,16 @@ func TestDesiredPRContentPlacesSourceReferenceFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(body, sourceReferenceOpenMarker) {
-		t.Fatalf("body does not open with the source-reference section:\n%s", body)
+	// The section opens the body and its first paragraph is the close
+	// reference, with no heading between them (#1553).
+	if !strings.HasPrefix(body, sourceReferenceOpenMarker+"\n\nCloses #7\n\n") {
+		t.Fatalf("body does not open with the source-reference lead line:\n%s", body)
+	}
+	if strings.Contains(body, "## Source Issue") {
+		t.Fatalf("body carries the retired source-reference heading:\n%s", body)
 	}
 	order := []string{
-		sourceReferenceOpenMarker, "## Source Issue", "Closes #7", sourceReferenceCloseMarker,
+		sourceReferenceOpenMarker, "Closes #7", sourceReferenceCloseMarker,
 		"## Why", "## Verification", identity.Marker(),
 	}
 	last := -1
@@ -217,6 +261,47 @@ func TestDesiredPRContentPlacesSourceReferenceFirst(t *testing.T) {
 	}
 	if !strings.HasPrefix(plain, c.Body) || strings.Contains(plain, sourceReferenceMarkerName) {
 		t.Fatalf("reference-free body does not lead with the prose:\n%s", plain)
+	}
+}
+
+// TestDesiredPRContentReferenceChangesOnlyTheSection: switching a held Refs to
+// a Closes rewrites only the text between the section markers, so the rest of
+// the body the person merging has read stays put.
+func TestDesiredPRContentReferenceChangesOnlyTheSection(t *testing.T) {
+	t.Parallel()
+	c, _ := verificationFixture(t)
+	c.Title, c.Body = "Reference switch", "## Why\n\nAuthored prose."
+	identity, err := DeriveIdentity(IdentityInput{
+		Repo: "freeside-ai/repo", BaseRef: "main", SourceHeadSHA: c.HeadSHA,
+		ArtifactDigests: []domain.Digest{c.Artifacts[0].Digest},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	split := func(res closureResolution) (section, rest string) {
+		t.Helper()
+		_, body, err := desiredPRContent(identity, c, res)
+		if err != nil {
+			t.Fatal(err)
+		}
+		open := strings.Index(body, sourceReferenceOpenMarker) + len(sourceReferenceOpenMarker)
+		end := strings.Index(body, sourceReferenceCloseMarker)
+		if open < len(sourceReferenceOpenMarker) || end < open {
+			t.Fatalf("body lacks a source-reference section:\n%s", body)
+		}
+		return body[open:end], body[:open] + body[end:]
+	}
+	refsSection, refsRest := split(closureResolution{
+		outcome: domain.ClosureOutcome{Reference: domain.ClosureReferenceRefs}, target: 7,
+	})
+	closesSection, closesRest := split(closureResolution{
+		outcome: domain.ClosureOutcome{Reference: domain.ClosureReferenceCloses}, target: 7,
+	})
+	if refsRest != closesRest {
+		t.Errorf("bodies differ outside the section:\nrefs:\n%s\ncloses:\n%s", refsRest, closesRest)
+	}
+	if refsSection == closesSection {
+		t.Errorf("sections are equal, want Refs and Closes to differ: %q", refsSection)
 	}
 }
 
