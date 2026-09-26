@@ -89,11 +89,11 @@ type preparedRemediationIntent struct {
 }
 
 func remediationStageID(runID domain.RunID, round int) domain.StageID {
-	return domain.StageID(fmt.Sprintf("%s%d-%s", remediationStageIDPrefix, round, runID))
+	return domain.RemediationStageID(runID, round)
 }
 
 func remediationInvocationID(runID domain.RunID, round int) domain.InvocationID {
-	return domain.InvocationID(fmt.Sprintf("%s%d-%s", remediationInvocationIDPrefix, round, runID))
+	return domain.RemediationInvocationID(runID, round)
 }
 
 func remediationInputArtifactID(runID domain.RunID, round int) domain.ArtifactID {

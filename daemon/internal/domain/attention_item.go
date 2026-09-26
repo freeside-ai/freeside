@@ -30,6 +30,16 @@ func ProductionBlockedItemID(runID RunID) ItemID {
 	return ItemID("production-publish-blocked-" + string(runID))
 }
 
+// ProductionFindingAdjudicationItemID is the attention item that carries one
+// revision of a review round's findings adjudication. Revision 1 keeps the
+// original per-round review item identity.
+func ProductionFindingAdjudicationItemID(runID RunID, round, revision int) ItemID {
+	if revision == 1 {
+		return ItemID(fmt.Sprintf("production-review-%s-%d", runID, round))
+	}
+	return ItemID(fmt.Sprintf("production-review-%s-%d-revision-%d", runID, round, revision))
+}
+
 // Subject is what an AttentionItem is about (plan §4). RunID is set only when
 // the subject is a run (or a run-scoped proposal); it is nil otherwise.
 type Subject struct {
