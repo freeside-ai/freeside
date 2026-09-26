@@ -202,7 +202,7 @@ enum TaskDisplay {
                     "The configured agent account is busy. This work is queued; no action is needed for this wait."
             }
             if let handoff = finalReviewItem(task, run: run, attentionItems: attentionItems) {
-                position.status = finalReviewHeading(handoff, titleCase: true)
+                position.status = AttentionDisplay.title(handoff.item)
                 position.guidance = "Review the pull request from Inbox."
                 position.attentionItemID = handoff.item.id
             } else if run?.lifecycle != .finished,
@@ -397,21 +397,11 @@ enum TaskDisplay {
     /// under the existing freshness banner; this never certifies their age.
     static func finalReviewHeading(
         _ task: Components.Schemas.Task, run: Components.Schemas.Run?,
-        attentionItems: [Components.Schemas.AttentionItemSnapshot], titleCase: Bool = false
+        attentionItems: [Components.Schemas.AttentionItemSnapshot]
     ) -> String? {
         finalReviewItem(task, run: run, attentionItems: attentionItems).map {
-            finalReviewHeading($0, titleCase: titleCase)
+            AttentionDisplay.title($0.item)
         }
-    }
-
-    private static func finalReviewHeading(
-        _ handoff: Components.Schemas.AttentionItemSnapshot, titleCase: Bool
-    ) -> String {
-        if titleCase {
-            return handoff.item.readiness?.value1._class == .ready_degraded
-                ? "Ready for Final Review (Degraded)" : "Ready for Final Review"
-        }
-        return AttentionDisplay.title(handoff.item)
     }
 
     /// The current open final-review item bound to this task's position.
