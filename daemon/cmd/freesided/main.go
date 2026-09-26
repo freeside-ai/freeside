@@ -326,7 +326,6 @@ func main() {
 		BackupEncryptionWaiverRepositoryID: backupEncryptionWaiverRepositoryID.Value(),
 		SeedWalkingSkeleton:                *seedWalkingSkeleton,
 		SeedFixture:                        *seedFixture,
-		Environment:                        env,
 		Logger:                             logger,
 	}
 	mode, err := parseOperatingMode(*operatingMode)
@@ -436,6 +435,8 @@ type config struct {
 	// Environment is the tier this daemon runs as. It is stamped into the
 	// readiness handshake so an app of another tier refuses to follow it
 	// (#1504); the zero value is rejected so no start publishes an empty stamp.
+	// It also gates SeedFixture and the ephemeral driverless admission floor
+	// in storeOptions.
 	Environment                        environment
 	ManualSubmissionConfigPath         string
 	DBPath                             string
@@ -458,9 +459,6 @@ type config struct {
 	// runs no engine. The fixture's dispatch intents are recorded already
 	// dispatched, so a later driver start on the store has none to execute.
 	SeedFixture string
-	// Environment is the tier the daemon serves. It gates SeedFixture and the
-	// ephemeral driverless admission floor in storeOptions.
-	Environment environment
 	// IntakeInitiators are the configured label initiators the label-intake
 	// reconciler observes (#659). Empty leaves the loop supervised but idle; the
 	// rein resolver and workflow-definition parsing that populate it are a later

@@ -17,20 +17,22 @@ func TestSeedFixtureRefusedBeforeStoreOpens(t *testing.T) {
 		cfg  config
 		want string
 	}{
-		{"prod", config{SeedFixture: "representative", Environment: environmentProd}, "requires -environment ephemeral"},
-		{"dev", config{SeedFixture: "representative", Environment: environmentDev}, "requires -environment ephemeral"},
-		{"unset tier", config{SeedFixture: "representative"}, "requires -environment ephemeral"},
-		{"fake driver", config{SeedFixture: "representative", Environment: environmentEphemeral, FakeDriverEnabled: true}, "requires -driver disabled"},
-		{"claude driver", config{SeedFixture: "representative", Environment: environmentEphemeral, Claude: &claudeDriverConfig{}}, "requires -driver disabled"},
-		{"unknown name", config{SeedFixture: "nope", Environment: environmentEphemeral}, "unknown fixture"},
+		{"prod", config{SeedFixture: "representative", Environment: environmentProd}, "-seed-fixture requires -environment ephemeral"},
+		{"dev", config{SeedFixture: "representative", Environment: environmentDev}, "-seed-fixture requires -environment ephemeral"},
+		// run rejects the zero tier before parsing the fixture (#1562), so
+		// this refusal comes from the tier check, still before the store opens.
+		{"unset tier", config{SeedFixture: "representative"}, `environment "" is not prod, dev, or ephemeral`},
+		{"fake driver", config{SeedFixture: "representative", Environment: environmentEphemeral, FakeDriverEnabled: true}, "-seed-fixture requires -driver disabled"},
+		{"claude driver", config{SeedFixture: "representative", Environment: environmentEphemeral, Claude: &claudeDriverConfig{}}, "-seed-fixture requires -driver disabled"},
+		{"unknown name", config{SeedFixture: "nope", Environment: environmentEphemeral}, "-seed-fixture: unknown fixture"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dbPath := filepath.Join(t.TempDir(), "freeside.db")
 			tc.cfg.DBPath = dbPath
 			tc.cfg.ListenAddr = "127.0.0.1:0"
 			_, err := run(t.Context(), nil, tc.cfg)
-			if err == nil || !strings.Contains(err.Error(), "-seed-fixture") || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("run = %v, want a -seed-fixture error containing %q", err, tc.want)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("run = %v, want an error containing %q", err, tc.want)
 			}
 			if _, err := os.Stat(dbPath); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("refused start touched the store: %v", err)
