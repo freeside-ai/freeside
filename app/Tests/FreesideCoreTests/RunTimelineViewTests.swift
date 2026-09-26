@@ -388,6 +388,37 @@ import Testing
         #expect(entries.map(\.title) == milestones.reversed().map { RunDisplay.label($0.kind) })
     }
 
+    @Test(arguments: [Components.Schemas.ReviewProgressState.running, .completed])
+    func historyRailNamesTheRemediationAndItsAdjudication(state: Components.Schemas.ReviewProgressState) {
+        let rounds = [RemediationFixtures.findingsRound(), RemediationFixtures.reReview(state)]
+        let milestones = RemediationFixtures.milestones(remediatorStarted: true)
+        let entries = RunHistoryPresentation.entries(
+            milestones: milestones, detail: { _ in nil },
+            context: { RunHistoryPresentation.attemptContext(invocationID: $0, stages: [], reviewRounds: rounds) },
+            reviewRounds: rounds)
+
+        #expect(
+            entries.map(\.title) == [
+                "Invocation Started", "Invocation Admitted", "Findings Adjudicated",
+                "Execution Export Recorded", "Invocation Started", "Invocation Admitted",
+            ])
+        #expect(entries.map(\.context)[0...1] == ["Remediation for Review 1", "Remediation for Review 1"])
+        #expect(entries[2].detail == "Remediate 1 finding from Review 1")
+        #expect(entries[2].instant == RemediationFixtures.decidedAt)
+        #expect(entries.map(\.state) == [.current] + Array(repeating: .completed, count: 5))
+    }
+
+    @Test func adjudicationLeadsTheRailUntilTheRemediatorHasAMilestone() {
+        let rounds = [RemediationFixtures.findingsRound()]
+        let entries = RunHistoryPresentation.entries(
+            milestones: RemediationFixtures.milestones(remediatorStarted: false), detail: { _ in nil },
+            context: { _ in nil }, reviewRounds: rounds)
+
+        #expect(entries.map(\.title).first == "Findings Adjudicated")
+        // The daemon's last-recorded milestone stays current.
+        #expect(entries.map(\.state) == [.completed, .current, .completed, .completed])
+    }
+
     @Test func equalTimestampMilestonesKeepReverseDaemonOrder() {
         let stamp = Date(timeIntervalSinceReferenceDate: 5_000)
         let earlier = Components.Schemas.RunMilestone(

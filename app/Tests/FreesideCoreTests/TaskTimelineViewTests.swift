@@ -548,6 +548,26 @@ import Testing
         #expect(TaskTimelinePresentation.milestoneEntries(Self.timeline().sections[0].runs[1]).isEmpty)
     }
 
+    @Test(arguments: [Components.Schemas.ReviewProgressState.running, .completed])
+    func milestoneEntriesNameEachInvocationsRole(state: Components.Schemas.ReviewProgressState) {
+        var run = Self.timeline().sections[0].runs[0]
+        run.milestones = RemediationFixtures.milestones(remediatorStarted: true).reversed()
+        let rounds = [RemediationFixtures.findingsRound(), RemediationFixtures.reReview(state)]
+
+        let entries = TaskTimelinePresentation.milestoneEntries(run, reviewRounds: rounds)
+
+        #expect(
+            entries.map(\.context) == [
+                "Remediation for Review 1", "Remediation for Review 1", nil,
+                "Implementation", "Implementation", "Implementation",
+            ])
+        #expect(entries[2].title == "Findings Adjudicated")
+        #expect(entries[2].detail == "Remediate 1 finding from Review 1")
+        #expect(entries.map(\.state) == [.current] + Array(repeating: .completed, count: 5))
+        // Without the run timeline the rail reads as before.
+        #expect(TaskTimelinePresentation.milestoneEntries(run).map(\.context).allSatisfy { $0 == nil })
+    }
+
     @Test func retryTaskTimelineListsBothAttemptsNewestFirst() throws {
         let timeline = try #require(
             TaskFixtures.defaultTimelines().first { $0.task_id == TaskFixtures.retryTaskID })
