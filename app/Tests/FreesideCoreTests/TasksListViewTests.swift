@@ -19,11 +19,11 @@ import Testing
             func heading(_ item: Components.Schemas.AttentionItemSnapshot) -> TaskDisplay.Position.Heading? {
                 TaskDisplay.position(task, runs: snapshots, attentionItems: [item])?.heading
             }
-            #expect(heading(ready)?.text == "Ready for final review")
+            #expect(heading(ready)?.text == "Ready for Final Review")
             #expect(heading(ready)?.round == nil)
             #expect(
                 heading(AttentionFixtures.publishedTaskReady(degraded: true))?.text
-                    == "Ready for final review (degraded)")
+                    == "Ready for Final Review (Degraded)")
             let mutations: [(String, (inout Components.Schemas.AttentionItem) -> Void)] = [
                 ("wrong project", { $0.project_id = "another-project" }),
                 ("wrong type", { $0._type = .publish_blocked }),
@@ -90,7 +90,7 @@ import Testing
             for status in Components.Schemas.ItemStatus.allCases where status != .open {
                 var changed = ready
                 changed.item.status = status
-                #expect(heading(changed)?.label != "Ready for final review", "\(status)")
+                #expect(heading(changed)?.label != "Ready for Final Review", "\(status)")
             }
         }
         #expect(TaskDisplay.isActive(task))
@@ -128,12 +128,12 @@ import Testing
             held.current_position?.value1.hold_reason = .init(value1: .operation_stopped)
             #expect(
                 TaskDisplay.position(held, runs: runs, attentionItems: items)?.heading?.label
-                    != "Ready for final review")
+                    != "Ready for Final Review")
             var finished = task
             finished.lifecycle = .finished
             #expect(
                 TaskDisplay.position(finished, runs: runs, attentionItems: items)?.heading?.label
-                    != "Ready for final review")
+                    != "Ready for Final Review")
         }
         var fallback = task
         fallback.current_position?.value1.round = 3

@@ -25,7 +25,7 @@ import Testing
             let position = TaskDisplay.position(
                 fixture.task.task, runs: fixture.runs, attentionItems: [item], history: fixture.history)
             #expect(
-                position?.heading?.label == (degraded ? "Ready for final review (degraded)" : "Ready for final review"))
+                position?.heading?.label == (degraded ? "Ready for Final Review (Degraded)" : "Ready for Final Review"))
         }
     }
 
