@@ -5,7 +5,7 @@ import SwiftUI
 @main
 struct FreesideMacApp: App {
     @State private var session: AppSession
-    @State private var daemon: DaemonMenuModel
+    @State private var daemon: DaemonMenuModel?
     @State private var navigation: NavigationModel
     @State private var flowPreferences: DecisionFlowPreferences
     private let launchInputs: LaunchInputs
@@ -61,8 +61,8 @@ struct FreesideMacApp: App {
                         environment: environment)
                 #endif
             }
-            .task { daemon.startMonitoring() }
-            .onChange(of: daemon.readiness, initial: true) { _, readiness in
+            .task { daemon?.startMonitoring() }
+            .onChange(of: daemon?.readiness, initial: true) { _, readiness in
                 session.applyReadiness(readiness)
             }
         }
@@ -74,10 +74,10 @@ struct FreesideMacApp: App {
         MenuBarExtra {
             DaemonMenu(model: daemon, session: session, navigation: navigation)
         } label: {
-            Image(nsImage: FreesideMenuIcon.image(badgeColor: daemon.state.menuBadgeColor))
+            Image(nsImage: FreesideMenuIcon.image(badgeColor: daemonMenuState.menuBadgeColor))
                 .renderingMode(.original)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Freeside: \(daemon.state.accessibilityDescription)")
+                .accessibilityLabel("Freeside: \(daemonMenuState.accessibilityDescription)")
                 .task(id: menuSyncCoordinatorID) {
                     guard case .ready(let coordinator) = session.phase else { return }
                     coordinator.startReachabilityMonitoring()
@@ -90,6 +90,10 @@ struct FreesideMacApp: App {
         Settings {
             DecisionFlowSettingsView(preferences: flowPreferences)
         }
+    }
+
+    private var daemonMenuState: DaemonMenuState {
+        daemon?.state ?? .unsupervised
     }
 
     private var menuSyncCoordinatorID: ObjectIdentifier? {
@@ -108,7 +112,7 @@ struct FreesideMacApp: App {
     }
 
     @MainActor
-    private static func daemonModel(environment: FreesideEnvironment) -> DaemonMenuModel {
+    private static func daemonModel(environment: FreesideEnvironment) -> DaemonMenuModel? {
         #if DEBUG
             if let demo = UserDefaults.standard.string(forKey: "FreesideDaemonMenuDemo") {
                 return DaemonMenuDemo.model(named: demo)
@@ -116,8 +120,11 @@ struct FreesideMacApp: App {
         #endif
         guard environment.isSupervised else {
             // An ephemeral app has no LaunchAgent of its own, and every
-            // supervised one belongs to an installed app.
-            return DaemonMenuDemo.model(named: "stopped")
+            // supervised one belongs to an installed app, so it builds no
+            // model and the menu says so rather than claiming a stopped
+            // daemon. This runs before the mock check, so ephemeral mock
+            // and pairing-demo launches take it too.
+            return nil
         }
         let arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
         let hasExplicitServer =
@@ -140,15 +147,17 @@ struct FreesideMacApp: App {
 /// suite renders every daemon state; this wrapper supplies the counts and
 /// the handlers.
 private struct DaemonMenu: View {
-    let model: DaemonMenuModel
+    /// Nil for an app with no supervised daemon; the panel then shows no
+    /// lifecycle control, so the optional handlers below never fire.
+    let model: DaemonMenuModel?
     let session: AppSession
     let navigation: NavigationModel
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         DaemonMenuPanel(
-            state: model.state,
-            actionError: model.actionError,
+            state: model?.state ?? .unsupervised,
+            actionError: model?.actionError,
             inbox: coordinator.map {
                 DaemonMenuPanel.InboxCounts(
                     open: $0.store.openSnapshots.count,
@@ -160,9 +169,9 @@ private struct DaemonMenu: View {
                     navigation.selectTab(.inbox)
                     showApp()
                 },
-                start: { Task { await model.start() } },
-                stop: { Task { await model.stop() } },
-                openApprovalSettings: { model.openApprovalSettings() },
+                start: { Task { await model?.start() } },
+                stop: { Task { await model?.stop() } },
+                openApprovalSettings: { model?.openApprovalSettings() },
                 quit: { NSApplication.shared.terminate(nil) }))
     }
 
