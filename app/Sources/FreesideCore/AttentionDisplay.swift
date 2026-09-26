@@ -912,17 +912,21 @@ enum AttentionDisplay {
         ]
     }
 
+    /// A route named by the outcome accepting it produces (#1551). Every
+    /// route that parks the run starts with "Park". The daemon writes the
+    /// same labels into the card's reason (`domain.AdjudicationRouteLabel`
+    /// in daemon/internal/domain/finding_adjudication.go); change both.
     static func label(_ route: Components.Schemas.AdjudicationRoute) -> String {
         switch route {
-        case .remediate: return "Remediate"
-        case .park_revision: return "Revise this work unit"
-        case .park_separate_work: return "Create separate work"
-        case .attention_human_decision: return "Human decision"
-        case .park_unknown: return "Park as unknown"
-        case ._defer: return "Defer"
-        case .decline: return "Decline"
-        case .dispute: return "Dispute"
-        case .attention_unclear: return "Clarify"
+        case .remediate: return "Fix in this PR"
+        case .park_revision: return "Park: revise the work unit"
+        case .park_separate_work: return "Park: needs separate work"
+        case .attention_human_decision: return "Park: needs a human decision"
+        case .park_unknown: return "Park: can't tell where it belongs"
+        case ._defer: return "Defer to later work"
+        case .decline: return "Decline the finding"
+        case .dispute: return "Park: dispute the finding"
+        case .attention_unclear: return "Park: unclear if the goal needs it"
         }
     }
 

@@ -431,6 +431,14 @@ import Testing
                 == "readiness on a non-ready_for_final_review item")
     }
 
+    @Test func singleFindingAdjudicationFixturesAreValid() {
+        for route in [Components.Schemas.AdjudicationRoute.remediate, .park_revision, .park_separate_work] {
+            #expect(
+                MockContractValidation.itemValidityBreach(
+                    AttentionFixtures.findingAdjudicationFixture(route: route).item) == nil)
+        }
+    }
+
     @Test func readinessDetailIsBoundToReadinessAndTheHead() {
         let clean = AttentionFixtures.fixture(type: .ready_for_final_review).item
         #expect(MockContractValidation.itemValidityBreach(clean) == nil)
