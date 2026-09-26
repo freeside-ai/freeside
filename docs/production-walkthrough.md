@@ -22,14 +22,17 @@ pass `prompts/phase-1a/implementer.md` as `FREESIDE_REAL_RUN_PROMPT_PACKAGE`,
 default-branch commit. The daemon admits the content digest of these exact
 bytes; a workspace copy is never prompt authority.
 
-Before acquiring
-the rig, stop the supervised daemon through the installed Freeside menu. If
-using launchctl for an already registered service, the equivalent suspension is:
+Before acquiring the rig, the operator stops the production daemon: choose
+**Stop** in the installed Freeside menu and wait for **Stopped**. This step is
+the operator's alone. No script or agent stops, unloads, or re-registers
+`ai.freeside.daemon`
+([plan §10](plan.md#environments-prod-dev-and-ephemeral)).
 
-```sh
-launchctl disable "gui/$(id -u)/ai.freeside.daemon"
-launchctl bootout "gui/$(id -u)/ai.freeside.daemon"
-```
+The stop is still needed because `freesided rig hold` and preflight refuse
+while that label is loaded. Production and a real-work daemon share one GitHub
+App, and each daemon's installation janitor can remove installations the other
+relies on (#1511). Isolating the App (#1517) lets a run proceed with production
+running (#1568).
 
 Keep the harness shell open. It prints the retained session directory, then the
 implementation run, invocation, endpoint and exact completion command. Sessions
@@ -379,7 +382,8 @@ completion and interruption stop the daemon, release the rig, and restore the
 supervised service through the existing cleanup path. If cleanup fails, follow
 the printed recovery command before retrying.
 
-Stop the restored supervised daemon again before rerunning the exercise.
+Before rerunning the exercise, the operator stops the restored production
+daemon again with **Stop** in the Freeside menu.
 Recovery has left the task count unchanged; for an exercise requiring its
 first task from the client composer, keep the database at zero tasks and use
 the client-submission path below. The ordinary harness invocation with source
