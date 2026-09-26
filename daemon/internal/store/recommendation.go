@@ -143,7 +143,7 @@ func (a recommendationAuthority) ResolveAgentJudgment(
 		DecisionSurfaceDigest: artifact.DecisionSurfaceDigest,
 		Projection: domain.RecommendationProjection{
 			Action: domain.ActionAcceptRecommendedRoute,
-			Reason: domain.FindingAdjudicatorRecommendationReason,
+			Reason: domain.FindingAdjudicatorRecommendationReason(artifact.Entries),
 		},
 	}, nil
 }

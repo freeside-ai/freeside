@@ -1131,6 +1131,26 @@
                                 at: dynamicTypeSize,
                                 detailWidth: width))))
             }
+            // One finding per route, carrying the daemon's consequence-led
+            // reason and recommendation: the card says what accepting does
+            // before any route vocabulary (#1551).
+            for route in [
+                Components.Schemas.AdjudicationRoute.remediate, .park_revision, .park_separate_work,
+            ] {
+                let single = AttentionFixtures.findingAdjudicationFixture(route: route).item
+                surfaces.append(
+                    Surface(
+                        name: "decision-finding_adjudication-\(route.rawValue)",
+                        view: AnyView(
+                            recommendedDetail.screenshotCard(single, at: dynamicTypeSize))))
+                surfaces.append(
+                    Surface(
+                        name: "decision-finding_adjudication-\(route.rawValue)-phone",
+                        width: 390,
+                        view: AnyView(
+                            recommendedDetail.screenshotCard(
+                                single, at: dynamicTypeSize, compactLayout: true))))
+            }
             surfaces.append(
                 Surface(
                     name: "decision-finding_adjudication-inspector",

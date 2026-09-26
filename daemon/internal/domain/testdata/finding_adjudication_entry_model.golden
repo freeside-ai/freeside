@@ -24,7 +24,7 @@
   "offered_alternatives": [
     {
       "route": "dispute",
-      "consequence": "Keep the run parked for human adjudication."
+      "consequence": "Park the run: nothing is declined, fixed, or published."
     }
   ]
 }

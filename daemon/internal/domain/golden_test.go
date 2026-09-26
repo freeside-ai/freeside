@@ -567,7 +567,8 @@ func TestGolden(t *testing.T) {
 		ID: "item-finding-adjudication", ProjectID: "proj-1",
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &recoveryRunID},
 		Type:    domain.AttentionFindingAdjudication, Priority: domain.PriorityHigh,
-		Reason: "a review finding needs an adjudicated route",
+		Reason: "Accepting records each finding's outcome, and the run continues.\n" +
+			"finding-1 (reported at daemon/example.go:12): Decline the finding. It's recorded as declined and isn't fixed.",
 		RequestedDecision: []domain.Action{
 			domain.ActionAcceptRecommendedRoute, domain.ActionChooseAlternativeRoute,
 			domain.ActionDiscuss, domain.ActionStop,
@@ -589,7 +590,7 @@ func TestGolden(t *testing.T) {
 				Confidence:    &adjudicationConfidence,
 				OfferedAlternatives: []domain.OfferedAlternative{{
 					Route:       domain.RouteDispute,
-					Consequence: "ask a human to resolve the contract conflict",
+					Consequence: "Park the run: nothing is declined, fixed, or published.",
 				}},
 			}},
 		},
@@ -1431,8 +1432,9 @@ func TestGolden(t *testing.T) {
 			InvocationID:   "review-run-1-2",
 			ArtifactDigest: findingAdjudicationItem.FindingAdjudication.AdjudicationDigest,
 		}},
-		Action:                domain.ActionAcceptRecommendedRoute,
-		Reason:                domain.FindingAdjudicatorRecommendationReason,
+		Action: domain.ActionAcceptRecommendedRoute,
+		Reason: domain.FindingAdjudicatorRecommendationReason(
+			[]domain.FindingAdjudicationEntry{{FindingID: "finding-1", Route: domain.RouteDecline}}),
 		DecisionSurfaceDigest: findingSurface.Digest,
 	})
 	if err != nil {
@@ -1598,7 +1600,7 @@ func TestGolden(t *testing.T) {
 				if item.Type == domain.AttentionFindingAdjudication {
 					item.Recommendation = &domain.Recommendation{
 						Action:     domain.ActionAcceptRecommendedRoute,
-						Reason:     domain.FindingAdjudicatorRecommendationReason,
+						Reason:     recommendationSource.Reason,
 						Source:     domain.RecommendationAgentJudgment,
 						Provenance: recommendationSource.Provenance,
 					}

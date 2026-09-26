@@ -379,6 +379,27 @@ import Testing
         #expect(AttentionDisplay.label(Components.Schemas.HealthPosture.advisory) == "Advisory")
     }
 
+    /// Routes read as the outcome of accepting them, never as enum values,
+    /// and every route that parks the run says so first (#1551). The daemon's
+    /// `domain.AdjudicationRouteLabel` writes the same words into the reason.
+    @Test func adjudicationRouteLabelsNameTheOutcome() {
+        let labels: [Components.Schemas.AdjudicationRoute: String] = [
+            .remediate: "Fix in this PR",
+            .park_revision: "Park: revise the work unit",
+            .park_separate_work: "Park: needs separate work",
+            .attention_human_decision: "Park: needs a human decision",
+            .park_unknown: "Park: can't tell where it belongs",
+            ._defer: "Defer to later work",
+            .decline: "Decline the finding",
+            .dispute: "Park: dispute the finding",
+            .attention_unclear: "Park: unclear if the goal needs it",
+        ]
+        #expect(Set(labels.keys) == Set(Components.Schemas.AdjudicationRoute.allCases))
+        for (route, label) in labels {
+            #expect(AttentionDisplay.label(route) == label)
+        }
+    }
+
     @Test func adjudicationConfidenceLabelsAreExplicit() {
         #expect(AttentionDisplay.label(Components.Schemas.AdjudicationConfidence.low) == "Low")
         #expect(AttentionDisplay.label(Components.Schemas.AdjudicationConfidence.medium) == "Medium")

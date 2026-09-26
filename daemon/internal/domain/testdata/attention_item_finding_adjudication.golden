@@ -9,7 +9,7 @@
   },
   "type": "finding_adjudication",
   "priority": "high",
-  "reason": "a review finding needs an adjudicated route",
+  "reason": "Accepting records each finding's outcome, and the run continues.\nfinding-1 (reported at daemon/example.go:12): Decline the finding. It's recorded as declined and isn't fixed.",
   "requested_decision": [
     "accept_recommended_route",
     "choose_alternative_route",
@@ -18,7 +18,7 @@
   ],
   "recommendation": {
     "action": "accept_recommended_route",
-    "reason": "Accept the adjudicator's recommended route for each finding.",
+    "reason": "Decline finding-1.",
     "source": "agent_judgment",
     "provenance": {
       "daemon_policy": null,
@@ -86,7 +86,7 @@
         "offered_alternatives": [
           {
             "route": "dispute",
-            "consequence": "ask a human to resolve the contract conflict"
+            "consequence": "Park the run: nothing is declined, fixed, or published."
           }
         ]
       }

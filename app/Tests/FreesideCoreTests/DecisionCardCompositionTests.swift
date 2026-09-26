@@ -654,12 +654,12 @@ import Testing
 
         #expect(
             DecisionDetailView.findingSummary(proposal)
-                == "review-finding-17 · Decline · Contradictory · High")
+                == "review-finding-17 · Decline the finding · Contradictory · High")
 
         proposal.confidence = nil
         #expect(
             DecisionDetailView.findingSummary(proposal)
-                == "review-finding-17 · Decline · Contradictory")
+                == "review-finding-17 · Decline the finding · Contradictory")
     }
 
     /// The row's four values are separated by "·" on screen, which reads as
@@ -673,13 +673,13 @@ import Testing
 
         #expect(
             DecisionDetailView.findingSummaryAccessibilityLabel(proposal)
-                == "Finding review-finding-17, recommended route Decline, "
+                == "Finding review-finding-17, recommended route Decline the finding, "
                 + "goal relationship Contradictory, confidence High")
 
         proposal.confidence = nil
         #expect(
             DecisionDetailView.findingSummaryAccessibilityLabel(proposal)
-                == "Finding review-finding-17, recommended route Decline, "
+                == "Finding review-finding-17, recommended route Decline the finding, "
                 + "goal relationship Contradictory")
     }
 

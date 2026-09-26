@@ -471,11 +471,12 @@ func (w *productionPublicationWorkflow) reviseFindingAdjudication(
 		if err != nil {
 			return err
 		}
-		replacement, err := w.newFindingAdjudicationAttentionItem(task, binding.run.TaskID, successor, findings, names)
+		replacement, err := w.newFindingAdjudicationAttentionItem(task, binding.run.TaskID, successor, &prior,
+			findings, domain.CanonicalDeclaredPaths(binding.resolvedPolicy), names)
 		if err != nil {
 			return err
 		}
-		source, err := findingAdjudicationRecommendationSource(replacement, record)
+		source, err := findingAdjudicationRecommendationSource(replacement, successor, record)
 		if err != nil {
 			return err
 		}
@@ -897,13 +898,14 @@ func findingAdjudicationReplySummary(
 	prior domain.FindingAdjudication, entries []domain.FindingAdjudicationEntry,
 ) string {
 	lines := []string{"I reconsidered the adjudication using your feedback. Please review the updated routes:"}
-	priorRoutes := make(map[domain.FindingID]domain.AdjudicationRoute, len(prior.Entries))
-	for _, entry := range prior.Entries {
-		priorRoutes[entry.FindingID] = entry.Route
-	}
+	priorRoutes := findingAdjudicationRoutes(prior.Entries)
 	for _, entry := range entries {
-		lines = append(lines, fmt.Sprintf("- %s: %s → %s. %s",
-			entry.FindingID, priorRoutes[entry.FindingID], entry.Route, entry.Rationale))
+		change := fmt.Sprintf("%q, unchanged", domain.AdjudicationRouteLabel(entry.Route))
+		if previous, ok := priorRoutes[entry.FindingID]; ok && previous != entry.Route {
+			change = fmt.Sprintf("%q → %q", domain.AdjudicationRouteLabel(previous),
+				domain.AdjudicationRouteLabel(entry.Route))
+		}
+		lines = append(lines, fmt.Sprintf("- %s: %s. %s", entry.FindingID, change, entry.Rationale))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -1096,9 +1098,13 @@ func prospectiveFindingAdjudicationSurfaceDigest(
 	return surface.Digest, nil
 }
 
+// newFindingAdjudicationAttentionItem builds the card for artifact. predecessor
+// is the revision a Discuss superseded, nil on revision 1; allowedPaths are the
+// run's declared paths, the only paths a remediator may change.
 func (w *productionPublicationWorkflow) newFindingAdjudicationAttentionItem(
 	task productionPublicationTask, taskID domain.TaskID, artifact domain.FindingAdjudication,
-	findings map[domain.FindingID]domain.Finding, names *domain.DisplayNames,
+	predecessor *domain.FindingAdjudication, findings map[domain.FindingID]domain.Finding,
+	allowedPaths []string, names *domain.DisplayNames,
 ) (domain.AttentionItem, error) {
 	binding := findingAdjudicationBinding(artifact, findings)
 	surfaceItem := findingAdjudicationSurfaceItem(
@@ -1109,7 +1115,7 @@ func (w *productionPublicationWorkflow) newFindingAdjudicationAttentionItem(
 		ProjectID: task.ProjectID,
 		Subject:   surfaceItem.Subject,
 		Type:      domain.AttentionFindingAdjudication, Priority: domain.PriorityHigh,
-		Reason:            "Choose the artifact-bound route for the adjudicated review findings.",
+		Reason:            findingAdjudicationReason(artifact, predecessor, findings, allowedPaths),
 		RequestedDecision: surfaceItem.RequestedDecision, PRHeadSHA: surfaceItem.PRHeadSHA,
 		FindingAdjudication: &binding, ItemVersion: 1,
 		DisplayNames:      names,
@@ -1118,8 +1124,116 @@ func (w *productionPublicationWorkflow) newFindingAdjudicationAttentionItem(
 	}, w.approvedRecipes)
 }
 
+// maxReasonAllowedPaths caps the allowed paths the card lists; the rest are
+// counted, so a wide policy can't push the findings off the first screen.
+const maxReasonAllowedPaths = 5
+
+// findingAdjudicationReason is the card's Context: what accepting the
+// recommendation does, first for the run and then for each finding (#1551).
+// It renders as a daemon fact, so it carries no model text: route labels,
+// finding IDs, each stored finding's location (the reviewer's, which the card
+// already shows as a daemon fact, #892), and the run's allowed paths. The
+// model's rationale shows in its own proposal register and is never quoted
+// here. On a revision it opens with the routes the Discuss changed.
+func findingAdjudicationReason(
+	artifact domain.FindingAdjudication, predecessor *domain.FindingAdjudication,
+	findings map[domain.FindingID]domain.Finding, allowedPaths []string,
+) string {
+	var lines []string
+	if predecessor != nil {
+		lines = append(lines, findingAdjudicationRouteChanges(predecessor.Entries, artifact.Entries)...)
+	}
+	outcome := domain.AcceptFindingAdjudication(artifact.Entries)
+	switch {
+	case outcome.Halted:
+		lines = append(lines, "Accepting parks the run: a disputed finding stops every other route, so nothing is fixed, recorded, or published.")
+	case outcome.ParksRun:
+		lines = append(lines, "Accepting parks the run: nothing is fixed or published.")
+	case outcome.Remediates:
+		line := fmt.Sprintf(
+			"Accepting starts a remediator that edits this PR. It may change only the run's allowed paths (%s), not just where a finding was reported. The updated PR is then reviewed again.",
+			summarizeAllowedPaths(allowedPaths))
+		if slices.ContainsFunc(artifact.Entries, func(entry domain.FindingAdjudicationEntry) bool {
+			return entry.Route.ParksRun()
+		}) {
+			// The engine dispatches the remediator whenever any finding
+			// remediates, so a Park route on the same card doesn't park the run.
+			line += " Findings routed to Park get no disposition and aren't fixed by accepting."
+		}
+		lines = append(lines, line)
+	default:
+		lines = append(lines, "Accepting records each finding's outcome, and the run continues.")
+	}
+	for _, entry := range artifact.Entries {
+		line := fmt.Sprintf("%s (%s): %s.", entry.FindingID,
+			describeFindingLocation(findings[entry.FindingID].Location),
+			domain.AdjudicationRouteLabel(entry.Route))
+		switch {
+		case entry.Route.ParksRun() && outcome.Remediates:
+			line += " It gets no disposition and isn't fixed by accepting. Use Discuss to argue for fixing it in this PR."
+		case entry.Route.ParksRun():
+			line += " It isn't fixed in this run. Use Discuss to argue for fixing it in this PR."
+		case outcome.Halted:
+			line += " Nothing happens to it while the run is parked."
+		case entry.Route == domain.RouteDefer:
+			line += " It's recorded as deferred and isn't fixed in this PR."
+		case entry.Route == domain.RouteDecline:
+			line += " It's recorded as declined and isn't fixed."
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// findingAdjudicationRouteChanges names each finding whose route differs from
+// the predecessor revision's, or says that none did.
+func findingAdjudicationRouteChanges(prior, current []domain.FindingAdjudicationEntry) []string {
+	priorRoutes := findingAdjudicationRoutes(prior)
+	var changes []string
+	for _, entry := range current {
+		previous, ok := priorRoutes[entry.FindingID]
+		if !ok || previous == entry.Route {
+			continue
+		}
+		changes = append(changes, fmt.Sprintf("Changed after Discuss: %s moved from %q to %q.",
+			entry.FindingID, domain.AdjudicationRouteLabel(previous), domain.AdjudicationRouteLabel(entry.Route)))
+	}
+	if len(changes) == 0 {
+		return []string{"No route changed after Discuss."}
+	}
+	return changes
+}
+
+func findingAdjudicationRoutes(
+	entries []domain.FindingAdjudicationEntry,
+) map[domain.FindingID]domain.AdjudicationRoute {
+	routes := make(map[domain.FindingID]domain.AdjudicationRoute, len(entries))
+	for _, entry := range entries {
+		routes[entry.FindingID] = entry.Route
+	}
+	return routes
+}
+
+func describeFindingLocation(location *domain.FindingLocation) string {
+	if location == nil {
+		return "no location reported"
+	}
+	return "reported at " + location.String()
+}
+
+func summarizeAllowedPaths(paths []string) string {
+	if len(paths) == 0 {
+		return "none declared"
+	}
+	if len(paths) <= maxReasonAllowedPaths {
+		return strings.Join(paths, ", ")
+	}
+	return fmt.Sprintf("%s, and %d more", strings.Join(paths[:maxReasonAllowedPaths], ", "),
+		len(paths)-maxReasonAllowedPaths)
+}
+
 func findingAdjudicationRecommendationSource(
-	item domain.AttentionItem, record domain.ReviewRecord,
+	item domain.AttentionItem, artifact domain.FindingAdjudication, record domain.ReviewRecord,
 ) (domain.RecommendationSourceRecord, error) {
 	surface, err := domain.NewDecisionSurface(item)
 	if err != nil {
@@ -1136,7 +1250,7 @@ func findingAdjudicationRecommendationSource(
 			},
 		},
 		Action:                domain.ActionAcceptRecommendedRoute,
-		Reason:                domain.FindingAdjudicatorRecommendationReason,
+		Reason:                domain.FindingAdjudicatorRecommendationReason(artifact.Entries),
 		DecisionSurfaceDigest: surface.Digest,
 	})
 }
@@ -1177,9 +1291,13 @@ func (w *productionPublicationWorkflow) putFindingAdjudicationAttention(
 		return nil
 	}
 	var findings map[domain.FindingID]domain.Finding
+	var policy domain.ResolvedPolicy
 	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		findings, err = loadAdjudicationFindings(ctx, tx, artifact)
+		if findings, err = loadAdjudicationFindings(ctx, tx, artifact); err != nil {
+			return err
+		}
+		policy, err = tx.GetResolvedPolicy(ctx, task.RunID)
 		return err
 	}); err != nil {
 		return err
@@ -1189,14 +1307,15 @@ func (w *productionPublicationWorkflow) putFindingAdjudicationAttention(
 	if err != nil {
 		return err
 	}
-	item, err := w.newFindingAdjudicationAttentionItem(task, taskID, artifact, findings, names)
+	item, err := w.newFindingAdjudicationAttentionItem(task, taskID, artifact, nil,
+		findings, domain.CanonicalDeclaredPaths(policy), names)
 	if err != nil {
 		return err
 	}
 	if err := item.Validate(); err != nil {
 		return err
 	}
-	source, err := findingAdjudicationRecommendationSource(item, record)
+	source, err := findingAdjudicationRecommendationSource(item, artifact, record)
 	if err != nil {
 		return err
 	}

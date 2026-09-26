@@ -774,7 +774,7 @@ public enum AttentionFixtures {
                                 .init(
                                     route: .dispute,
                                     consequence:
-                                        "Escalate the contract conflict to a human before routing the finding.")
+                                        "Park the run: nothing is declined, fixed, or published.")
                             ]
                         ),
                         .init(
@@ -808,7 +808,7 @@ public enum AttentionFixtures {
                 .init(
                     value1: .init(
                         action: .accept_recommended_route,
-                        reason: "Accept the adjudicator's recommended route for each finding.",
+                        reason: "Decline review-finding-17. Fix review-finding-18 in this PR.",
                         source: .agent_judgment,
                         provenance: .init(
                             agent_judgment: .init(
@@ -964,6 +964,94 @@ public enum AttentionFixtures {
             status: .open
         )
         return .init(as_of_revision: 1, entity_version: 1, item: item)
+    }
+
+    /// A single-finding `finding_adjudication` card whose recommended route is
+    /// `route`, with the consequence-led `reason` and recommendation text the
+    /// daemon writes for it (#1551). Supported for the routes a single-finding
+    /// card shows in practice: `remediate` (a post-Discuss revision),
+    /// `park_revision`, and `park_separate_work`.
+    public static func findingAdjudicationFixture(
+        route: Components.Schemas.AdjudicationRoute
+    ) -> Components.Schemas.AttentionItemSnapshot {
+        let findingID = "review-finding-17"
+        let reason: String
+        let recommendation: String
+        let goal: Components.Schemas.GoalRelationship = .required
+        let compatibility: Components.Schemas.WorkUnitCompatibility
+        let producer: Components.Schemas.AdjudicationProducer
+        let rationale: String
+        let located = "\(findingID) (reported at daemon/internal/signet/service.go:214-227)"
+        switch route {
+        case .remediate:
+            compatibility = .allowed
+            producer = .engine_model
+            rationale =
+                "The retry must keep the command identity the contract requires, and the fix stays inside the declared paths."
+            reason =
+                "Changed after Discuss: \(findingID) moved from \"Park: needs separate work\" to \"Fix in this PR\".\n"
+                + "Accepting starts a remediator that edits this PR. It may change only the run's allowed paths "
+                + "(daemon/internal/signet/**, docs/signet.md), not just where a finding was reported. "
+                + "The updated PR is then reviewed again.\n"
+                + "\(located): Fix in this PR."
+            recommendation = "Fix \(findingID) in this PR."
+        case .park_revision:
+            compatibility = .work_unit_revision_required
+            producer = .model
+            rationale =
+                "Keeping the command identity stable changes the retry contract the work unit approved."
+            reason =
+                "Accepting parks the run: nothing is fixed or published.\n"
+                + "\(located): Park: revise the work unit. It isn't fixed in this run. "
+                + "Use Discuss to argue for fixing it in this PR."
+            recommendation = "Park the run: \(findingID) needs a revised work unit."
+        case .park_separate_work:
+            compatibility = .separate_work_required
+            producer = .model
+            rationale =
+                "The retry path belongs to the command service, which this work unit doesn't own."
+            reason =
+                "Accepting parks the run: nothing is fixed or published.\n"
+                + "\(located): Park: needs separate work. It isn't fixed in this run. "
+                + "Use Discuss to argue for fixing it in this PR."
+            recommendation = "Park the run: \(findingID) needs separate work."
+        case .attention_human_decision, .park_unknown, ._defer, .decline, .dispute,
+            .attention_unclear:
+            preconditionFailure("no single-finding fixture for route \(route.rawValue)")
+        }
+
+        var snapshot = fixture(type: .finding_adjudication)
+        let key = "finding_adjudication-\(route.rawValue)"
+        let digest = "sha256:adjudication-\(key)"
+        guard var binding = snapshot.item.finding_adjudication?.value1,
+            var proposal = binding.proposals.first
+        else {
+            preconditionFailure("finding_adjudication fixture has no proposal")
+        }
+        proposal.producer = producer
+        proposal.goal_relationship = goal
+        proposal.compatibility = .init(value1: compatibility)
+        proposal.route = route
+        proposal.rationale = rationale
+        proposal.confidence = .init(value1: .high)
+        proposal.offered_alternatives = []
+        binding.proposals = [proposal]
+        binding.adjudication_digest = digest
+
+        snapshot.item.id = "item-\(key)"
+        snapshot.item.reason = reason
+        snapshot.item.requested_decision = [.accept_recommended_route, .discuss, .stop]
+        snapshot.item.finding_adjudication = .init(value1: binding)
+        snapshot.item.recommendation?.value1.reason = recommendation
+        snapshot.item.recommendation?.value1.provenance.agent_judgment?.value1.artifact_digest = digest
+        snapshot.item.decision_surface = .init(
+            epoch: 1,
+            digest: MockContractValidation.sha256Digest(of: "decision-surface-\(key)-1"))
+        snapshot.item.artifact_digests =
+            (snapshot.item.artifact_digests.filter {
+                $0.hasPrefix("sha256:adjudication-") == false
+            } + [digest]).sorted()
+        return snapshot
     }
 
     private static func headIndependent(
