@@ -75,6 +75,11 @@
         case unavailable
         case unreachable
         case running(DaemonHealth, restartObserved: Bool)
+        /// The app has no LaunchAgent of its own (an ephemeral tier), so
+        /// the menu neither reports nor controls a daemon lifecycle.
+        /// `DaemonMenuModel` never produces it; the app shows it in place
+        /// of a model.
+        case unsupervised
 
     }
 

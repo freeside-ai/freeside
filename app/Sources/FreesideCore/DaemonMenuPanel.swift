@@ -291,6 +291,8 @@
                 Text("!")
             case .unavailable, .unreachable:
                 Text("✕")
+            case .unsupervised:
+                Text("–")
             }
         }
 
@@ -302,12 +304,13 @@
             case .needsApproval: "Approval needed"
             case .unavailable: "LaunchAgent unavailable"
             case .unreachable: "Unreachable"
+            case .unsupervised: "No supervised daemon"
             }
         }
 
         private var stateColor: Color {
             switch state {
-            case .checking: .inkDim
+            case .checking, .unsupervised: .inkDim
             case .running: .ink
             case .stopped, .needsApproval: .accentText
             case .unavailable, .unreachable: .waxText
@@ -335,6 +338,8 @@
                 callout("Allow Freeside in Login Items to start the daemon.")
             case .unreachable:
                 callout("launchd is keeping the service enabled, but health is not answering.")
+            case .unsupervised:
+                callout("This ephemeral app doesn't start or stop a daemon.")
             case .checking, .unavailable:
                 nil
             }
@@ -363,6 +368,8 @@
                 "LaunchAgent unavailable"
             case .unreachable:
                 "Daemon unreachable. launchd is keeping the service enabled, but health is not answering."
+            case .unsupervised:
+                "No supervised daemon. This ephemeral app doesn't start or stop a daemon."
             }
         }
 
@@ -401,7 +408,7 @@
             switch state {
             case .running, .unreachable, .needsApproval: .stop
             case .stopped, .unavailable: .start
-            case .checking: nil
+            case .checking, .unsupervised: nil
             }
         }
 
@@ -518,10 +525,11 @@
     extension DaemonMenuState {
         /// The status dot on the menu-bar mark. The bar draws on the
         /// system's own ground, so the day cut serves both appearances; a
-        /// healthy running daemon shows no dot.
+        /// healthy running daemon, a check in progress, and an app with no
+        /// supervised daemon show no dot.
         public var menuBadgeColor: NSColor? {
             switch self {
-            case .checking:
+            case .checking, .unsupervised:
                 nil
             case .running(let health, _):
                 health.contractMatchesClient ? nil : NSColor(hex: FreesidePalette.accentText.day)
@@ -544,6 +552,8 @@
                 "LaunchAgent unavailable"
             case .unreachable:
                 "daemon unreachable"
+            case .unsupervised:
+                "no supervised daemon"
             case .running(let health, _):
                 health.contractMatchesClient ? "daemon running" : "daemon running, contract mismatch"
             }
