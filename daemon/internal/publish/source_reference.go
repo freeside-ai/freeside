@@ -25,7 +25,6 @@ const (
 	sourceReferenceMarkerName       = publicationtext.SourceReferenceMarkerName
 	sourceReferenceOpenMarker       = "<!-- " + sourceReferenceMarkerName + " -->"
 	sourceReferenceCloseMarker      = "<!-- /" + sourceReferenceMarkerName + " -->"
-	sourceReferenceHeading          = publicationtext.SourceReferenceHeading
 	maxRenderedSourceReferenceBytes = publicationtext.MaxRenderedSourceReferenceBytes
 )
 
@@ -181,9 +180,11 @@ func reduceClosureApproval(
 
 // renderSourceReference renders the publisher-owned source-issue section from a
 // resolved closure, or "" when there is no reference to write (a descriptive
-// link with no source URL). The switch dispatches on the reference kind and
-// omits default; the trailing error guards the invalid zero value the matrix
-// never returns.
+// link with no source URL). The section has no heading (#1553): it heads the
+// body, so its single reference paragraph reads as the description's lead
+// line, and a recommended close joins its provenance sentence to that line.
+// The switch dispatches on the reference kind and omits default; the trailing
+// error guards the invalid zero value the matrix never returns.
 func renderSourceReference(res closureResolution) (string, error) {
 	// The zero value carries no reference: a candidate with no closure instance
 	// and no descriptive source (a v1 record) renders no section.
@@ -195,7 +196,7 @@ func renderSourceReference(res closureResolution) (string, error) {
 	case domain.ClosureReferenceCloses:
 		line = fmt.Sprintf("Closes #%d", res.target)
 		if res.outcome.Recommended {
-			line += "\n\nThe client recommended this issue; the approver confirmed it."
+			line += ". The client recommended this issue; the approver confirmed it."
 		}
 	case domain.ClosureReferenceRefs:
 		line = fmt.Sprintf("Refs #%d", res.target)
@@ -207,8 +208,8 @@ func renderSourceReference(res closureResolution) (string, error) {
 	default:
 		return "", fmt.Errorf("invalid closure reference %q", res.outcome.Reference)
 	}
-	section := fmt.Sprintf("%s\n\n%s\n\n%s\n\n%s",
-		sourceReferenceOpenMarker, sourceReferenceHeading, line, sourceReferenceCloseMarker)
+	section := fmt.Sprintf("%s\n\n%s\n\n%s",
+		sourceReferenceOpenMarker, line, sourceReferenceCloseMarker)
 	if len(section) > maxRenderedSourceReferenceBytes {
 		return "", fmt.Errorf("source reference section exceeds %d bytes", maxRenderedSourceReferenceBytes)
 	}
