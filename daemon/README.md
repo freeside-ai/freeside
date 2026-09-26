@@ -218,6 +218,16 @@ agents. Select `-driver fake` only for an intentional demo or test; add
 `-seed-walking-skeleton` if that demo should start with sample work. Seeding
 without an explicit fake driver is rejected.
 
+`-seed-fixture representative` fills an empty `ephemeral` store with
+development data, so the app has something to show: two projects, runs in
+each lifecycle the task list shows, and one open item for each attention type
+except `task_proposal` and `effect_proposal`. It requires `-driver disabled`
+and the `ephemeral` tier. It refuses a store that already holds runs or
+attention items, and it fails before opening the store for any other tier,
+driver, or unknown fixture name. An ephemeral driverless daemon configures the
+attended_dev admission floor so the seeded runs keep reading after a restart
+without the flag. The fixtures are Go code in `internal/seedfixture`.
+
 `freesided setup -operator <login> -operator-id <id>` creates the Phase 1A
 single-directory layout and the canonical empty installation-authority
 document. The default is `~/.freeside`; `-config-dir` selects another root.
