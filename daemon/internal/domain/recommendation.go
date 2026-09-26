@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
@@ -235,10 +236,36 @@ type AgentJudgmentRecommendation struct {
 	Projection            RecommendationProjection
 }
 
-// FindingAdjudicatorRecommendationReason is the item-level explanation for
-// accepting the adjudicator's per-finding routes. The detailed rationales and
-// confidences remain in the bound adjudication artifact.
-const FindingAdjudicatorRecommendationReason = "Accept the adjudicator's recommended route for each finding."
+// FindingAdjudicatorRecommendationReason names the concrete outcome of
+// accepting the adjudicator's per-finding routes (#1551), one sentence per
+// finding in artifact order. The engine writes it into the source record and
+// the store re-derives it from the same artifact entries, so it must stay a
+// pure function of them. The detailed rationales and confidences remain in the
+// bound adjudication artifact.
+func FindingAdjudicatorRecommendationReason(entries []FindingAdjudicationEntry) string {
+	outcome := AcceptFindingAdjudication(entries)
+	sentences := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		id := entry.FindingID
+		var sentence string
+		switch {
+		case entry.Route.ParksRun() && outcome.ParksRun:
+			sentence = fmt.Sprintf("Park the run: %s %s.", id, adjudicationRouteNeed(entry.Route))
+		case entry.Route.ParksRun():
+			sentence = fmt.Sprintf("Leave %s unfixed and unrecorded: it %s.", id, adjudicationRouteNeed(entry.Route))
+		case outcome.Halted:
+			sentence = fmt.Sprintf("Hold %s while the run is parked.", id)
+		case entry.Route == RouteRemediate:
+			sentence = fmt.Sprintf("Fix %s in this PR.", id)
+		case entry.Route == RouteDefer:
+			sentence = fmt.Sprintf("Defer %s to later work.", id)
+		case entry.Route == RouteDecline:
+			sentence = fmt.Sprintf("Decline %s.", id)
+		}
+		sentences = append(sentences, sentence)
+	}
+	return strings.Join(sentences, " ")
+}
 
 // DaemonPolicyRule re-evaluates one registered deterministic rule against the
 // current item and surface. The returned input digest authenticates exactly

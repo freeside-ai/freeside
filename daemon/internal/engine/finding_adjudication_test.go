@@ -258,11 +258,12 @@ func putFindingAdjudicationRecommendationCase(
 		t.Fatal(err)
 	}
 	item, err := f.workflow.newFindingAdjudicationAttentionItem(
-		f.task, f.binding.run.TaskID, artifact, map[domain.FindingID]domain.Finding{f.finding.ID: f.finding}, names)
+		f.task, f.binding.run.TaskID, artifact, nil, map[domain.FindingID]domain.Finding{f.finding.ID: f.finding},
+		domain.CanonicalDeclaredPaths(f.binding.resolvedPolicy), names)
 	if err != nil {
 		t.Fatal(err)
 	}
-	source, err := findingAdjudicationRecommendationSource(item, f.record)
+	source, err := findingAdjudicationRecommendationSource(item, artifact, f.record)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,7 +439,7 @@ func TestFindingAdjudicationProducesAuthenticatedRecommendation(t *testing.T) {
 		source := sources[0]
 		recommendation := item.Recommendation
 		if recommendation == nil || recommendation.Action != domain.ActionAcceptRecommendedRoute ||
-			recommendation.Reason != domain.FindingAdjudicatorRecommendationReason ||
+			recommendation.Reason != domain.FindingAdjudicatorRecommendationReason(artifact.Entries) ||
 			recommendation.Source != domain.RecommendationAgentJudgment || recommendation.Confidence != nil ||
 			recommendation.Provenance.AgentJudgment == nil ||
 			recommendation.Provenance.AgentJudgment.JudgmentSite != domain.JudgmentSiteFindingAdjudicator ||
@@ -499,7 +500,15 @@ func TestFindingAdjudicationRejectsInapplicableRecommendationSources(t *testing.
 		f := newFindingAdjudicationFixture(
 			t, domain.FindingSeverityP2, location, "low", "high")
 		item := putFindingAdjudicationRecommendationCase(t, f, nil, nil)
-		second, err := findingAdjudicationRecommendationSource(item, f.record)
+		var artifact domain.FindingAdjudication
+		if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+			var err error
+			artifact, err = tx.GetFindingAdjudication(f.ctx, item.FindingAdjudication.AdjudicationDigest)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		second, err := findingAdjudicationRecommendationSource(item, artifact, f.record)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -632,6 +641,14 @@ func TestFindingAdjudicationDiscussCreatesAuthenticatedSuccessor(t *testing.T) {
 			newItem.ConversationID != nil || newItem.FindingAdjudication == nil ||
 			newItem.FindingAdjudication.AdjudicationDigest != history[1].Digest {
 			t.Fatalf("successor items = old %#v new %#v", oldItem, newItem)
+		}
+		wantChange := `Changed after Discuss: finding-a moved from "Park: revise the work unit" to "Park: needs separate work".`
+		if !strings.HasPrefix(newItem.Reason, wantChange+"\n") || strings.Contains(oldItem.Reason, "Discuss:") {
+			t.Fatalf("revision reasons = old %q new %q", oldItem.Reason, newItem.Reason)
+		}
+		if newItem.Recommendation == nil ||
+			newItem.Recommendation.Reason != "Park the run: finding-a needs separate work." {
+			t.Fatalf("successor recommendation = %#v", newItem.Recommendation)
 		}
 		if newItem.Recommendation == nil ||
 			newItem.Recommendation.Action != domain.ActionAcceptRecommendedRoute ||
@@ -1665,18 +1682,10 @@ func TestFindingAdjudicationProjectsAuthenticatedFindingContext(t *testing.T) {
 	}
 }
 
-func TestFindingAdjudicationStageConsumesAuthenticatedCommand(t *testing.T) {
-	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
-	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
-	f.writePath(t, f.headRoot)
-	f.workflow.findingAdjudicator = newDeterministicFindingAdjudicator(
-		modelRouteEntry(t, f.finding.ID, domain.RouteParkRevision, domain.ConfidenceHigh))
-	if state, err := f.workflow.reconcileFindingAdjudication(
-		f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot,
-	); err != nil || state != productionReviewPending {
-		t.Fatalf("initial park = %d, %v", state, err)
-	}
-	itemID := productionReviewItemID(f.task.RunID, 1)
+// acceptFindingAdjudicationItem records the operator accepting itemID's
+// recommended routes, as the command path does.
+func acceptFindingAdjudicationItem(t *testing.T, f *findingAdjudicationFixture, itemID domain.ItemID) {
+	t.Helper()
 	var item domain.AttentionItem
 	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
 		var err error
@@ -1708,6 +1717,20 @@ func TestFindingAdjudicationStageConsumesAuthenticatedCommand(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestFindingAdjudicationStageConsumesAuthenticatedCommand(t *testing.T) {
+	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
+	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
+	f.writePath(t, f.headRoot)
+	f.workflow.findingAdjudicator = newDeterministicFindingAdjudicator(
+		modelRouteEntry(t, f.finding.ID, domain.RouteParkRevision, domain.ConfidenceHigh))
+	if state, err := f.workflow.reconcileFindingAdjudication(
+		f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot,
+	); err != nil || state != productionReviewPending {
+		t.Fatalf("initial park = %d, %v", state, err)
+	}
+	acceptFindingAdjudicationItem(t, f, productionReviewItemID(f.task.RunID, 1))
 	hooks := 0
 	f.workflow.transitionHook = func(
 		transition DurableTransition, _ DurableTransitionSide,
@@ -2139,4 +2162,260 @@ func TestRemediationOversizedInputParksRunWithoutStoppingLane(t *testing.T) {
 		t.Fatalf("attention items after replay = %d, want 1 (no duplicate)", got)
 	}
 	assertNoDispatchedMarker()
+}
+
+// TestAcceptingParkingRouteRecordsNothing pins the behavior the parking card
+// text claims (#1551): accepting a single parking finding records no
+// disposition and dispatches no remediation, so the round stays incomplete and
+// the run can't publish.
+func TestAcceptingParkingRouteRecordsNothing(t *testing.T) {
+	for _, route := range []domain.AdjudicationRoute{
+		domain.RouteParkRevision, domain.RouteParkSeparateWork,
+	} {
+		t.Run(string(route), func(t *testing.T) {
+			location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
+			f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
+			f.writePath(t, f.headRoot)
+			f.workflow.artifacts = f.blobs
+			f.workflow.findingAdjudicator = newDeterministicFindingAdjudicator(
+				modelRouteEntry(t, f.finding.ID, route, domain.ConfidenceHigh))
+			if state, err := f.workflow.reconcileFindingAdjudication(
+				f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot,
+			); err != nil || state != productionReviewPending {
+				t.Fatalf("initial park = %d, %v", state, err)
+			}
+			acceptFindingAdjudicationItem(t, f, productionReviewItemID(f.task.RunID, 1))
+			for pass := range 2 {
+				state, err := f.workflow.reconcileFindingAdjudication(
+					f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot)
+				if err != nil || state != productionReviewPending {
+					t.Fatalf("accepted pass %d = %d, %v", pass, state, err)
+				}
+			}
+			if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+				dispositions, err := tx.ListFindingDispositions(f.ctx, f.task.RunID)
+				if err != nil || len(dispositions) != 0 {
+					t.Fatalf("dispositions = %#v, %v", dispositions, err)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			dispatched, err := f.workflow.remediationDispatched(f.ctx, f.task, f.record)
+			if err != nil || dispatched {
+				t.Fatalf("remediation dispatched = %v, %v", dispatched, err)
+			}
+			complete, err := f.workflow.reviewRoundDispositionComplete(f.ctx, f.record)
+			if err != nil || complete {
+				t.Fatalf("round complete = %v, %v", complete, err)
+			}
+		})
+	}
+}
+
+// adjudicationRouteEntry builds a valid entry for any route: remediate is an
+// engine fact, every other route a model proposal.
+func adjudicationRouteEntry(
+	t *testing.T, findingID domain.FindingID, route domain.AdjudicationRoute,
+) domain.FindingAdjudicationEntry {
+	t.Helper()
+	if route != domain.RouteRemediate {
+		return modelRouteEntry(t, findingID, route, domain.ConfidenceHigh)
+	}
+	allowed := domain.CompatibilityAllowed
+	entry, err := domain.NewEngineAdjudicationEntry(findingID, domain.GoalRequired, &allowed,
+		route, "inside the declared paths", nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return entry
+}
+
+func TestFindingAdjudicationTextSaysWhatAcceptingDoes(t *testing.T) {
+	const id = domain.FindingID("review-finding-17")
+	findings := map[domain.FindingID]domain.Finding{id: {
+		ID: id, Location: &domain.FindingLocation{Path: "daemon/a.go", StartLine: 3, EndLine: 7},
+	}}
+	allowedPaths := []string{"daemon/**", "docs/**"}
+	for _, tc := range []struct {
+		route              domain.AdjudicationRoute
+		wantReason         string
+		wantRecommendation string
+	}{{
+		route: domain.RouteRemediate,
+		wantReason: "Accepting starts a remediator that edits this PR. It may change only the run's allowed paths (daemon/**, docs/**), not just where a finding was reported. The updated PR is then reviewed again.\n" +
+			"review-finding-17 (reported at daemon/a.go:3-7): Fix in this PR.",
+		wantRecommendation: "Fix review-finding-17 in this PR.",
+	}, {
+		route: domain.RouteParkRevision,
+		wantReason: "Accepting parks the run: nothing is fixed or published.\n" +
+			"review-finding-17 (reported at daemon/a.go:3-7): Park: revise the work unit. It isn't fixed in this run. Use Discuss to argue for fixing it in this PR.",
+		wantRecommendation: "Park the run: review-finding-17 needs a revised work unit.",
+	}, {
+		route: domain.RouteParkSeparateWork,
+		wantReason: "Accepting parks the run: nothing is fixed or published.\n" +
+			"review-finding-17 (reported at daemon/a.go:3-7): Park: needs separate work. It isn't fixed in this run. Use Discuss to argue for fixing it in this PR.",
+		wantRecommendation: "Park the run: review-finding-17 needs separate work.",
+	}} {
+		t.Run(string(tc.route), func(t *testing.T) {
+			artifact := domain.FindingAdjudication{Revision: 1, Entries: []domain.FindingAdjudicationEntry{
+				adjudicationRouteEntry(t, id, tc.route),
+			}}
+			if got := findingAdjudicationReason(artifact, nil, findings, allowedPaths); got != tc.wantReason {
+				t.Fatalf("reason =\n%s\nwant\n%s", got, tc.wantReason)
+			}
+			if got := domain.FindingAdjudicatorRecommendationReason(artifact.Entries); got != tc.wantRecommendation {
+				t.Fatalf("recommendation = %q, want %q", got, tc.wantRecommendation)
+			}
+		})
+	}
+}
+
+func TestFindingAdjudicationMixedCardTextFollowsTheEngine(t *testing.T) {
+	findings := map[domain.FindingID]domain.Finding{
+		"finding-a": {ID: "finding-a"}, "finding-b": {ID: "finding-b"},
+	}
+	for _, tc := range []struct {
+		name               string
+		routes             [2]domain.AdjudicationRoute
+		wantReason         string
+		wantRecommendation string
+	}{{
+		name:   "remediate and park",
+		routes: [2]domain.AdjudicationRoute{domain.RouteRemediate, domain.RouteParkSeparateWork},
+		wantReason: "Accepting starts a remediator that edits this PR. It may change only the run's allowed paths (daemon/**), not just where a finding was reported. The updated PR is then reviewed again. Findings routed to Park get no disposition and aren't fixed by accepting.\n" +
+			"finding-a (no location reported): Fix in this PR.\n" +
+			"finding-b (no location reported): Park: needs separate work. It gets no disposition and isn't fixed by accepting. Use Discuss to argue for fixing it in this PR.",
+		wantRecommendation: "Fix finding-a in this PR. Leave finding-b unfixed and unrecorded: it needs separate work.",
+	}, {
+		name:   "dispute halts",
+		routes: [2]domain.AdjudicationRoute{domain.RouteRemediate, domain.RouteDispute},
+		wantReason: "Accepting parks the run: a disputed finding stops every other route, so nothing is fixed, recorded, or published.\n" +
+			"finding-a (no location reported): Fix in this PR. Nothing happens to it while the run is parked.\n" +
+			"finding-b (no location reported): Park: dispute the finding. It isn't fixed in this run. Use Discuss to argue for fixing it in this PR.",
+		wantRecommendation: "Hold finding-a while the run is parked. Park the run: finding-b is disputed and needs your decision.",
+	}, {
+		name:   "defer and decline continue",
+		routes: [2]domain.AdjudicationRoute{domain.RouteDefer, domain.RouteDecline},
+		wantReason: "Accepting records each finding's outcome, and the run continues.\n" +
+			"finding-a (no location reported): Defer to later work. It's recorded as deferred and isn't fixed in this PR.\n" +
+			"finding-b (no location reported): Decline the finding. It's recorded as declined and isn't fixed.",
+		wantRecommendation: "Defer finding-a to later work. Decline finding-b.",
+	}, {
+		name:   "defer and park",
+		routes: [2]domain.AdjudicationRoute{domain.RouteDefer, domain.RouteParkRevision},
+		wantReason: "Accepting parks the run: nothing is fixed or published.\n" +
+			"finding-a (no location reported): Defer to later work. It's recorded as deferred and isn't fixed in this PR.\n" +
+			"finding-b (no location reported): Park: revise the work unit. It isn't fixed in this run. Use Discuss to argue for fixing it in this PR.",
+		wantRecommendation: "Defer finding-a to later work. Park the run: finding-b needs a revised work unit.",
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			artifact := domain.FindingAdjudication{Entries: []domain.FindingAdjudicationEntry{
+				adjudicationRouteEntry(t, "finding-a", tc.routes[0]),
+				adjudicationRouteEntry(t, "finding-b", tc.routes[1]),
+			}}
+			if got := findingAdjudicationReason(artifact, nil, findings, []string{"daemon/**"}); got != tc.wantReason {
+				t.Fatalf("reason =\n%s\nwant\n%s", got, tc.wantReason)
+			}
+			if got := domain.FindingAdjudicatorRecommendationReason(artifact.Entries); got != tc.wantRecommendation {
+				t.Fatalf("recommendation = %q, want %q", got, tc.wantRecommendation)
+			}
+		})
+	}
+}
+
+func TestFindingAdjudicationTextCapsAllowedPaths(t *testing.T) {
+	paths := []string{"a/**", "b/**", "c/**", "d/**", "e/**", "f/**", "g/**"}
+	if got, want := summarizeAllowedPaths(paths), "a/**, b/**, c/**, d/**, e/**, and 2 more"; got != want {
+		t.Fatalf("allowed paths = %q, want %q", got, want)
+	}
+}
+
+func TestFindingAdjudicationRevisionSaysWhichRoutesChanged(t *testing.T) {
+	const id = domain.FindingID("review-finding-17")
+	findings := map[domain.FindingID]domain.Finding{id: {ID: id}}
+	prior := domain.FindingAdjudication{Revision: 1, Entries: []domain.FindingAdjudicationEntry{
+		adjudicationRouteEntry(t, id, domain.RouteParkSeparateWork),
+	}}
+	changed := domain.FindingAdjudication{Revision: 2, Entries: []domain.FindingAdjudicationEntry{
+		adjudicationRouteEntry(t, id, domain.RouteRemediate),
+	}}
+	reason := findingAdjudicationReason(changed, &prior, findings, []string{"daemon/**"})
+	wantFirst := `Changed after Discuss: review-finding-17 moved from "Park: needs separate work" to "Fix in this PR".`
+	if first, _, _ := strings.Cut(reason, "\n"); first != wantFirst {
+		t.Fatalf("changed revision opens with %q, want %q", first, wantFirst)
+	}
+	unchanged := domain.FindingAdjudication{Revision: 2, Entries: prior.Entries}
+	reason = findingAdjudicationReason(unchanged, &prior, findings, nil)
+	if first, _, _ := strings.Cut(reason, "\n"); first != "No route changed after Discuss." {
+		t.Fatalf("unchanged revision opens with %q", first)
+	}
+	reason = findingAdjudicationReason(prior, nil, findings, nil)
+	if strings.Contains(reason, "Discuss:") || strings.Contains(reason, "after Discuss") {
+		t.Fatalf("revision 1 names a change: %q", reason)
+	}
+	reply := findingAdjudicationReplySummary(prior, changed.Entries)
+	wantLine := `- review-finding-17: "Park: needs separate work" → "Fix in this PR". inside the declared paths`
+	if !slices.Contains(strings.Split(reply, "\n"), wantLine) {
+		t.Fatalf("reply = %q, want line %q", reply, wantLine)
+	}
+	reply = findingAdjudicationReplySummary(prior, prior.Entries)
+	wantLine = `- review-finding-17: "Park: needs separate work", unchanged. deterministic fake route`
+	if !slices.Contains(strings.Split(reply, "\n"), wantLine) {
+		t.Fatalf("reply = %q, want line %q", reply, wantLine)
+	}
+}
+
+// TestFindingAdjudicationTextCarriesNoEnumValues keeps internal vocabulary off
+// the card (#1551). It checks the identifier-shaped values; single-word values
+// such as "defer" or "allowed" are ordinary English the text may use.
+func TestFindingAdjudicationTextCarriesNoEnumValues(t *testing.T) {
+	var raw []string
+	for _, route := range domain.AllAdjudicationRoutes {
+		raw = append(raw, string(route))
+	}
+	for _, goal := range domain.AllGoalRelationships {
+		raw = append(raw, string(goal))
+	}
+	for _, compatibility := range domain.AllWorkUnitCompatibilities {
+		raw = append(raw, string(compatibility))
+	}
+	raw = slices.DeleteFunc(raw, func(value string) bool { return !strings.Contains(value, "_") })
+	if len(raw) == 0 {
+		t.Fatal("no identifier-shaped enum values to check")
+	}
+	findings := map[domain.FindingID]domain.Finding{}
+	var every []domain.FindingAdjudicationEntry
+	var texts []string
+	for index, route := range domain.AllAdjudicationRoutes {
+		id := domain.FindingID(fmt.Sprintf("review-finding-%d", index))
+		findings[id] = domain.Finding{ID: id}
+		entry := adjudicationRouteEntry(t, id, route)
+		every = append(every, entry)
+		other := domain.RouteParkUnknown
+		if route == other {
+			other = domain.RouteAttentionUnclear
+		}
+		prior := domain.FindingAdjudication{Entries: []domain.FindingAdjudicationEntry{adjudicationRouteEntry(t, id, other)}}
+		current := domain.FindingAdjudication{Entries: []domain.FindingAdjudicationEntry{entry}}
+		texts = append(texts,
+			findingAdjudicationReason(current, nil, findings, []string{"daemon/**"}),
+			findingAdjudicationReason(current, &prior, findings, []string{"daemon/**"}),
+			domain.FindingAdjudicatorRecommendationReason(current.Entries),
+			findingAdjudicationReplySummary(prior, current.Entries))
+		for _, alternative := range entry.OfferedAlternatives {
+			texts = append(texts, alternative.Consequence)
+		}
+	}
+	mixed := domain.FindingAdjudication{Entries: every}
+	texts = append(texts,
+		findingAdjudicationReason(mixed, nil, findings, []string{"daemon/**"}),
+		domain.FindingAdjudicatorRecommendationReason(every))
+	for _, text := range texts {
+		for _, value := range raw {
+			if strings.Contains(text, value) {
+				t.Errorf("text carries %q: %q", value, text)
+			}
+		}
+	}
 }

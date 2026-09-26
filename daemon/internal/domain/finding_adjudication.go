@@ -99,6 +99,110 @@ func deriveOfferedAlternatives(goal GoalRelationship, route AdjudicationRoute) [
 	}}
 }
 
+// AdjudicationRouteLabel is the operator-facing name of a route: the outcome
+// accepting it produces, never the enum value (#1551). Every route whose
+// acceptance parks the run starts with "Park". The app mirrors these labels in
+// AttentionDisplay.label(_ route:), so a change here changes both. The switch
+// dispatches behaviour, so it omits default and the exhaustive linter forces a
+// new route to get a label; the trailing return covers the invalid zero value.
+func AdjudicationRouteLabel(route AdjudicationRoute) string {
+	switch route {
+	case RouteRemediate:
+		return "Fix in this PR"
+	case RouteParkRevision:
+		return "Park: revise the work unit"
+	case RouteParkSeparateWork:
+		return "Park: needs separate work"
+	case RouteAttentionHumanDecision:
+		return "Park: needs a human decision"
+	case RouteParkUnknown:
+		return "Park: can't tell where it belongs"
+	case RouteDefer:
+		return "Defer to later work"
+	case RouteDecline:
+		return "Decline the finding"
+	case RouteDispute:
+		return "Park: dispute the finding"
+	case RouteAttentionUnclear:
+		return "Park: unclear if the goal needs it"
+	}
+	return ""
+}
+
+// ParksRun reports whether accepting the route leaves its finding with
+// neither a disposition nor a remediation, so the review round stays
+// incomplete and the run can't publish. It describes the engine's
+// executeFindingAdjudication and persistFindingRouteDispositions; the engine
+// tests pin that behavior, and a change there has to change this too.
+func (r AdjudicationRoute) ParksRun() bool {
+	switch r {
+	case RouteRemediate, RouteDefer, RouteDecline:
+		return false
+	case RouteParkRevision, RouteParkSeparateWork, RouteAttentionHumanDecision,
+		RouteParkUnknown, RouteDispute, RouteAttentionUnclear:
+		return true
+	}
+	return true
+}
+
+// FindingAdjudicationAcceptance is what accepting every recommended route on
+// one card does to the run. It is the single statement of that outcome the
+// item reason and the recommendation reason share.
+type FindingAdjudicationAcceptance struct {
+	// ParksRun: the round can't complete, so nothing is published.
+	ParksRun bool
+	// Halted: a disputed finding stops the engine before it records any
+	// disposition or starts any remediation, so no finding is acted on.
+	Halted bool
+	// Remediates: a remediator is dispatched to edit the PR.
+	Remediates bool
+}
+
+// AcceptFindingAdjudication derives the card-level outcome of accepting
+// entries' recommended routes. The engine checks a dispute before anything
+// else, and dispatches remediation whenever any finding remediates and none
+// is disputed.
+func AcceptFindingAdjudication(entries []FindingAdjudicationEntry) FindingAdjudicationAcceptance {
+	var outcome FindingAdjudicationAcceptance
+	parks := false
+	for _, entry := range entries {
+		switch {
+		case entry.Route == RouteDispute:
+			outcome.Halted = true
+		case entry.Route == RouteRemediate:
+			outcome.Remediates = true
+		case entry.Route.ParksRun():
+			parks = true
+		}
+	}
+	if outcome.Halted {
+		return FindingAdjudicationAcceptance{ParksRun: true, Halted: true}
+	}
+	outcome.ParksRun = parks && !outcome.Remediates
+	return outcome
+}
+
+// adjudicationRouteNeed completes "the finding ..." for a parking route: what
+// the finding needs that this run can't give it. Non-parking routes return "".
+func adjudicationRouteNeed(route AdjudicationRoute) string {
+	switch route {
+	case RouteParkRevision:
+		return "needs a revised work unit"
+	case RouteParkSeparateWork:
+		return "needs separate work"
+	case RouteAttentionHumanDecision:
+		return "needs a human decision on where to fix it"
+	case RouteParkUnknown:
+		return "may not belong in this work unit"
+	case RouteDispute:
+		return "is disputed and needs your decision"
+	case RouteAttentionUnclear:
+		return "may not be needed by the work unit's goal"
+	case RouteRemediate, RouteDefer, RouteDecline:
+	}
+	return ""
+}
+
 // NewEngineAdjudicationEntry builds a pure-engine fast-path routing fact. It may
 // carry `allowed` but never proposal confidence; the separate engine-model
 // constructor represents the confidence-gated composed shape. compat is non-nil

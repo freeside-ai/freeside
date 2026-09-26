@@ -11,8 +11,8 @@
     "project_policy": null
   },
   "action": "accept_recommended_route",
-  "reason": "Accept the adjudicator's recommended route for each finding.",
+  "reason": "Decline finding-1.",
   "confidence": null,
   "decision_surface_digest": "sha256:789af6885f27c7178e6fc22e573365c5e98fbdbec524b1ef4f00b4b766a815fa",
-  "digest": "sha256:b2f9474c477211391588a63aa8dddf04a047b04c77f958d2646ddbbd8548fc50"
+  "digest": "sha256:fe9015081a3712059c53244a33370b89a2aaea30570d0c8e9c96c52657a04478"
 }

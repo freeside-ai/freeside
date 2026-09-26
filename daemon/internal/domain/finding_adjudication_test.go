@@ -994,3 +994,15 @@ func TestFindingAdjudicationEntryOffersAlternatives(t *testing.T) {
 		t.Fatalf("forged offered Validate = %v, want ErrDuplicate", err)
 	}
 }
+
+// TestAdjudicationRouteLabelsNameOutcomes holds the label rule the app mirrors
+// (#1551): every route has a label, and exactly the routes that park the run
+// start with "Park".
+func TestAdjudicationRouteLabelsNameOutcomes(t *testing.T) {
+	for _, route := range domain.AllAdjudicationRoutes {
+		label := domain.AdjudicationRouteLabel(route)
+		if label == "" || strings.HasPrefix(label, "Park") != route.ParksRun() {
+			t.Errorf("route %q label %q, parks run %v", route, label, route.ParksRun())
+		}
+	}
+}

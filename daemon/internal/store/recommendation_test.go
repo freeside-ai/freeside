@@ -24,8 +24,8 @@ func (r registeredRecommendationRule) EvaluateRecommendation(
 }
 
 func storedAgentRecommendationRecord(
-	t *testing.T, item domain.AttentionItem, surface domain.DecisionSurface,
-	invocationID domain.InvocationID,
+	t *testing.T, item domain.AttentionItem, artifact domain.FindingAdjudication,
+	surface domain.DecisionSurface, invocationID domain.InvocationID,
 ) domain.RecommendationSourceRecord {
 	t.Helper()
 	record, err := domain.NewRecommendationSourceRecord(domain.RecommendationSourceRecord{
@@ -36,7 +36,7 @@ func storedAgentRecommendationRecord(
 			ArtifactDigest: item.FindingAdjudication.AdjudicationDigest,
 		}},
 		Action:                domain.ActionAcceptRecommendedRoute,
-		Reason:                domain.FindingAdjudicatorRecommendationReason,
+		Reason:                domain.FindingAdjudicatorRecommendationReason(artifact.Entries),
 		DecisionSurfaceDigest: surface.Digest,
 	})
 	if err != nil {
@@ -72,7 +72,7 @@ func TestRecommendationSourceDerivesAtCreationAndSuppressesOnCollision(t *testin
 		t.Fatalf("committed surface = %q, prospective surface was %q", committedSurface.Digest, surface.Digest)
 	}
 	record := storedAgentRecommendationRecord(
-		t, item, surface, domain.InvocationID("review-"+string(runID)+"-1"))
+		t, item, artifact, surface, domain.InvocationID("review-"+string(runID)+"-1"))
 
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutFindingAdjudication(ctx, artifact); err != nil {
@@ -111,7 +111,7 @@ func TestRecommendationSourceDerivesAtCreationAndSuppressesOnCollision(t *testin
 	}
 
 	second := storedAgentRecommendationRecord(
-		t, item, surface, domain.InvocationID("review-"+string(runID)+"-1"))
+		t, item, artifact, surface, domain.InvocationID("review-"+string(runID)+"-1"))
 	second.Reason += " Duplicate record."
 	second, err = domain.NewRecommendationSourceRecord(second)
 	if err != nil {
@@ -176,7 +176,7 @@ func TestAgentRecommendationRequiresArtifactSurfaceCommitment(t *testing.T) {
 				t.Fatal(err)
 			}
 			record := storedAgentRecommendationRecord(
-				t, item, surface, domain.InvocationID("review-"+string(runID)+"-1"),
+				t, item, artifact, surface, domain.InvocationID("review-"+string(runID)+"-1"),
 			)
 			if err := st.Write(ctx, func(tx *store.WriteTx) error {
 				if err := tx.PutFindingAdjudication(ctx, artifact); err != nil {
@@ -242,7 +242,7 @@ func TestRecommendationSourceStalesOnStructuralTransition(t *testing.T) {
 		t.Fatalf("committed surface = %q, prospective surface was %q", committedSurface.Digest, surface.Digest)
 	}
 	record := storedAgentRecommendationRecord(
-		t, item, surface, domain.InvocationID("review-"+string(runID)+"-1"))
+		t, item, artifact, surface, domain.InvocationID("review-"+string(runID)+"-1"))
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutFindingAdjudication(ctx, artifact); err != nil {
 			return err

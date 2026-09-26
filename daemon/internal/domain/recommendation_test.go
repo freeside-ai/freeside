@@ -47,6 +47,11 @@ func recommendationItem(t *testing.T) (domain.AttentionItem, domain.DecisionSurf
 	return item, surface
 }
 
+// agentRecommendationReason stands in for the reason the store derives from the
+// bound artifact's entries; the fake authority returns it verbatim.
+var agentRecommendationReason = domain.FindingAdjudicatorRecommendationReason(
+	[]domain.FindingAdjudicationEntry{{FindingID: "finding-1", Route: domain.RouteParkRevision}})
+
 func agentRecommendationRecord(
 	t *testing.T, item domain.AttentionItem, surface domain.DecisionSurface,
 ) domain.RecommendationSourceRecord {
@@ -61,7 +66,7 @@ func agentRecommendationRecord(
 			},
 		},
 		Action:                domain.ActionAcceptRecommendedRoute,
-		Reason:                domain.FindingAdjudicatorRecommendationReason,
+		Reason:                agentRecommendationReason,
 		DecisionSurfaceDigest: surface.Digest,
 	})
 	if err != nil {
@@ -117,7 +122,7 @@ func TestRecommendationDerivationUniqueOrNone(t *testing.T) {
 		RunID: "run-1", Round: 2, DecisionSurfaceDigest: surface.Digest,
 		Projection: domain.RecommendationProjection{
 			Action: domain.ActionAcceptRecommendedRoute,
-			Reason: domain.FindingAdjudicatorRecommendationReason,
+			Reason: agentRecommendationReason,
 		},
 	}, rules: map[domain.Digest]domain.DaemonPolicyRule{}}
 
@@ -131,7 +136,7 @@ func TestRecommendationDerivationUniqueOrNone(t *testing.T) {
 	}
 	if got == nil || got.Action != domain.ActionAcceptRecommendedRoute ||
 		got.Source != domain.RecommendationAgentJudgment ||
-		got.Reason != domain.FindingAdjudicatorRecommendationReason {
+		got.Reason != agentRecommendationReason {
 		t.Fatalf("unique agent record = %#v", got)
 	}
 	second, err := domain.NewRecommendationSourceRecord(domain.RecommendationSourceRecord{
@@ -182,7 +187,7 @@ func TestRecommendationDerivationRejectsSubstitutionAndStaleCommitment(t *testin
 		RunID: "run-1", Round: 2, DecisionSurfaceDigest: surface.Digest,
 		Projection: domain.RecommendationProjection{
 			Action: domain.ActionAcceptRecommendedRoute,
-			Reason: domain.FindingAdjudicatorRecommendationReason,
+			Reason: agentRecommendationReason,
 		},
 	}}
 
@@ -286,7 +291,7 @@ func TestRecommendationDerivationRejectsAuthorityMismatches(t *testing.T) {
 		RunID: "run-1", Round: 2, DecisionSurfaceDigest: surface.Digest,
 		Projection: domain.RecommendationProjection{
 			Action: domain.ActionAcceptRecommendedRoute,
-			Reason: domain.FindingAdjudicatorRecommendationReason,
+			Reason: agentRecommendationReason,
 		},
 	}
 
