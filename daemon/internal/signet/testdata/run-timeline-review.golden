@@ -43,7 +43,9 @@
         "evidence": {
           "completion_evidence": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "availability": "unavailable"
-        }
+        },
+        "subject": null,
+        "remediation": null
       }
     ]
   },

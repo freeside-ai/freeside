@@ -1688,6 +1688,17 @@
                             .screenshotContent(RunFixtures.refreshedHistoryTimeline())
                     )))
 
+            // What each round reviewed (#1552): the implementation's findings
+            // sent to remediation, the adjudication on the rail just before
+            // the remediator's milestones, and the re-review of its head.
+            surfaces.append(
+                Surface(
+                    name: "run-timeline-remediation",
+                    view: AnyView(
+                        RunTimelineView(coordinator: coordinator, snapshot: historyRun)
+                            .screenshotContent(try remediationHistoryTimeline())
+                    )))
+
             for colorScheme in [ColorScheme.light, .dark] {
                 for width in [CGFloat(820), 390] {
                     for (name, round) in [
@@ -1768,6 +1779,20 @@
                                         coordinator: coordinator, runID: activeRun.run.id, facts: .init(rounds: rounds)
                                     ).padding(24))))
                     }
+                    surfaces.append(
+                        Surface(
+                            name: "run-review-remediation-open-\(Int(width))-"
+                                + (colorScheme == .dark ? "dark" : "light"),
+                            width: width, colorScheme: colorScheme, nativeAppearance: true,
+                            view: AnyView(
+                                RunReviewSection(
+                                    coordinator: coordinator, runID: activeRun.run.id,
+                                    facts: .init(rounds: [
+                                        RemediationFixtures.findingsRound(),
+                                        RemediationFixtures.reReview(.running),
+                                    ]),
+                                    startsExpanded: true
+                                ).padding(24))))
                     // Every fold open: the newest round's facts and the prior
                     // rounds as verdict rows with their own facts.
                     surfaces.append(
@@ -2386,6 +2411,35 @@
                 .padding(14)
                 .freesideCard()
                 .padding())
+        }
+
+        /// The refreshed history with review facts: round 1 reviewed the
+        /// implementation and sent its findings to the fixture's remediator,
+        /// and round 2 re-reviews the remediator's head.
+        private func remediationHistoryTimeline() throws -> Components.Schemas.RunTimeline {
+            var timeline = RunFixtures.refreshedHistoryTimeline()
+            let original = try #require(timeline.review?.value1.rounds.first)
+            let remediator = try #require(
+                timeline.milestones.first { $0.invocation_id?.contains("remediation") == true })
+            let remediatorID = try #require(remediator.invocation_id)
+            var findings = original
+            findings.outcome = .init(value1: .findings)
+            findings.findings_count = 2
+            findings.requested_at = remediator.recorded_at.addingTimeInterval(-600)
+            findings.completed_at = remediator.recorded_at.addingTimeInterval(-300)
+            findings.subject = .init(value1: .init(kind: .implementation, invocation_id: "inv-implementation"))
+            findings.remediation = .init(
+                value1: .init(
+                    invocation_id: remediatorID, finding_ids: ["finding-1", "finding-2"],
+                    decided_at: remediator.recorded_at.addingTimeInterval(-60)))
+            var reReview = original
+            reReview.round = 2
+            reReview.invocation_id = original.invocation_id + "-2"
+            reReview.head_sha = String(repeating: "c", count: 40)
+            reReview.subject = .init(
+                value1: .init(kind: .remediation, invocation_id: remediatorID, remediates_round: 1))
+            timeline.review = .init(value1: .init(rounds: [findings, reReview]))
+            return timeline
         }
 
         private func makeUnavailableAttachmentSurface(

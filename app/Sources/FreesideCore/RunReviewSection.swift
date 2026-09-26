@@ -84,7 +84,7 @@ struct RunReviewSection: View {
             }
             let rounds = RunHistoryPresentation.rounds(facts)
             if let current = rounds.first {
-                roundsBlock(current: current, prior: Array(rounds.dropFirst()))
+                roundsBlock(current: current, prior: Array(rounds.dropFirst()), all: rounds)
             } else if hasTimeline && state == .loaded && availability == nil {
                 Text("No review requested yet")
                     .font(FreesideFont.callout)
@@ -107,12 +107,13 @@ struct RunReviewSection: View {
     /// The rounds as one nested ground block: the newest round's verdict and
     /// facts, then every earlier round folded to a single hollow-marker line.
     private func roundsBlock(
-        current: Components.Schemas.RunReviewRound, prior: [Components.Schemas.RunReviewRound]
+        current: Components.Schemas.RunReviewRound, prior: [Components.Schemas.RunReviewRound],
+        all: [Components.Schemas.RunReviewRound]
     ) -> some View {
         let attention = ReviewRoundPresentation.hasOpenAdjudication(
             runID: runID, in: coordinator.store.orderedSnapshots)
         return VStack(alignment: .leading, spacing: 10) {
-            roundRows(current, isCurrent: true, attention: attention)
+            roundRows(current, isCurrent: true, attention: attention, in: all)
             if !prior.isEmpty {
                 let showsPriorRounds = folds?.priorRounds ?? $showsPriorRounds
                 Button {
@@ -131,7 +132,7 @@ struct RunReviewSection: View {
                 .accessibilityValue(showsPriorRounds.wrappedValue ? "Expanded" : "Collapsed")
                 if showsPriorRounds.wrappedValue {
                     ForEach(prior, id: \.invocation_id) { round in
-                        roundRows(round, isCurrent: false, attention: false)
+                        roundRows(round, isCurrent: false, attention: false, in: all)
                     }
                 }
             }
@@ -143,11 +144,12 @@ struct RunReviewSection: View {
 
     @ViewBuilder
     private func roundRows(
-        _ round: Components.Schemas.RunReviewRound, isCurrent: Bool, attention: Bool
+        _ round: Components.Schemas.RunReviewRound, isCurrent: Bool, attention: Bool,
+        in rounds: [Components.Schemas.RunReviewRound]
     ) -> some View {
         markedRow(isCurrent: isCurrent, time: ReviewRoundPresentation.time(round)) {
             WrappingHStack(horizontalSpacing: 8, verticalSpacing: 4) {
-                Text("Round \(round.round)")
+                Text(ReviewRoundPresentation.title(round, in: rounds))
                     .font(FreesideFont.sans(.callout, weight: isCurrent ? .semibold : .regular))
                     .foregroundStyle(isCurrent ? Color.ink : Color.inkDim)
                 StateChip(
@@ -173,11 +175,11 @@ struct RunReviewSection: View {
                 roundFacts(round, isExpanded: expanded)
                 // This row is chosen only when the link fits whole, so it
                 // keeps that width and the disclosure takes the rest.
-                evidence(round).layoutPriority(1)
+                links(round, in: rounds).layoutPriority(1)
             }
             VStack(alignment: .leading, spacing: 8) {
                 roundFacts(round, isExpanded: expanded)
-                evidence(round)
+                links(round, in: rounds)
             }
         }
         .padding(.leading, ChronologyMarker.diameter + 8)
@@ -242,6 +244,14 @@ struct RunReviewSection: View {
                 if round.retry_pending {
                     Text("Retry pending").font(FreesideFont.callout)
                 }
+                if let remediation = ReviewRoundPresentation.remediationLine(round) {
+                    Text(remediation).font(FreesideFont.callout)
+                    if let decided = round.remediation?.value1.decided_at {
+                        Text("Adjudication decided: \(formattedTime(decided))")
+                            .font(FreesideFont.caption)
+                            .exactInstant(decided)
+                    }
+                }
                 if let requested = round.requested_at {
                     Text("Requested: \(formattedTime(requested))")
                         .font(FreesideFont.caption)
@@ -271,26 +281,42 @@ struct RunReviewSection: View {
         }
     }
 
+    /// The round's own reviewer output and, for a re-review, the output of
+    /// the round whose findings it remediated, where those findings are listed.
+    private func links(
+        _ round: Components.Schemas.RunReviewRound, in rounds: [Components.Schemas.RunReviewRound]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            evidence(round)
+            if let source = ReviewRoundPresentation.sourceRound(of: round, in: rounds),
+                source.evidence.availability == .available
+            {
+                evidenceLink("Findings from Review \(source.round)", round: source)
+            }
+        }
+    }
+
     @ViewBuilder
     private func evidence(_ round: Components.Schemas.RunReviewRound) -> some View {
-        switch round.evidence.availability {
-        case .available:
-            // No fixed width: beside the disclosure it is only chosen when
-            // it fits, and beneath it the label must wrap at large text
-            // sizes rather than widen the block past its card.
-            Button {
-                selection = Selection(round: round)
-            } label: {
-                FreesideLink(title: "Inspect reviewer output")
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .buttonStyle(.plain)
-        case .unavailable:
-            evidenceNote("Evidence unavailable")
-        case .unknown:
-            evidenceNote("Evidence unknown")
+        if let note = ReviewRoundPresentation.evidenceNote(round) {
+            evidenceNote(note)
+        } else {
+            evidenceLink("Inspect reviewer output", round: round)
         }
+    }
+
+    private func evidenceLink(_ title: String, round: Components.Schemas.RunReviewRound) -> some View {
+        // No fixed width: beside the disclosure it is only chosen when it
+        // fits, and beneath it the label must wrap at large text sizes rather
+        // than widen the block past its card.
+        Button {
+            selection = Selection(round: round)
+        } label: {
+            FreesideLink(title: title)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .buttonStyle(.plain)
     }
 
     private func evidenceNote(_ text: String) -> some View {
@@ -362,6 +388,65 @@ enum ReviewRoundPresentation {
         }
     }
 
+    /// `Review N: <what it reviewed> (head <8>)`. A round whose producer the
+    /// daemon could not prove names only its head and makes no claim about
+    /// what produced it.
+    static func title(
+        _ round: Components.Schemas.RunReviewRound, in rounds: [Components.Schemas.RunReviewRound]
+    ) -> String {
+        let name = "Review \(round.round)"
+        let head = "(head \(round.head_sha.prefix(8)))"
+        guard let subject = round.subject?.value1 else { return "\(name) \(head)" }
+        switch subject.kind {
+        case .implementation:
+            return "\(name): implementation \(head)"
+        case .operator_feedback:
+            return "\(name): operator feedback \(head)"
+        case .remediation:
+            guard let source = subject.remediates_round else { return "\(name): remediation \(head)" }
+            let count = rounds.first { $0.round == source }?.remediation?.value1.finding_ids.count
+            let findings = count.map { " of \(findingsPhrase($0))" } ?? ""
+            return "\(name): re-review after remediation\(findings) from Review \(source) \(head)"
+        }
+    }
+
+    /// The earlier round whose findings a re-review's candidate remediated.
+    static func sourceRound(
+        of round: Components.Schemas.RunReviewRound, in rounds: [Components.Schemas.RunReviewRound]
+    ) -> Components.Schemas.RunReviewRound? {
+        guard let subject = round.subject?.value1, subject.kind == .remediation,
+            let source = subject.remediates_round
+        else { return nil }
+        return rounds.first { $0.round == source }
+    }
+
+    static func findingsPhrase(_ count: Int) -> String {
+        count == 1 ? "1 finding" : "\(count) findings"
+    }
+
+    /// `Sent K findings to remediation` for a round whose findings
+    /// adjudication started a remediation.
+    static func remediationLine(_ round: Components.Schemas.RunReviewRound) -> String? {
+        round.remediation.map { "Sent \(findingsPhrase($0.value1.finding_ids.count)) to remediation" }
+    }
+
+    /// Why a round shows no reviewer output link, or nil when it has one. A
+    /// round still pending or running has produced nothing yet, which is not
+    /// a failure to retain it.
+    static func evidenceNote(_ round: Components.Schemas.RunReviewRound) -> String? {
+        switch round.evidence.availability {
+        case .available:
+            return nil
+        case .unknown:
+            return "Evidence unknown"
+        case .unavailable:
+            switch round.state {
+            case .pending, .running: return "Reviewer output not produced yet"
+            case .completed, .failed: return "Evidence unavailable"
+            }
+        }
+    }
+
     static func factsSummary(_ round: Components.Schemas.RunReviewRound) -> String {
         "\(bindingLine(head: round.head_sha, base: round.base_sha)) · \(sourceSummary(round.source.kind))"
     }
@@ -373,13 +458,14 @@ enum ReviewRoundPresentation {
     }
 
     /// The folded line for every round after the newest, newest first:
-    /// `Rounds 2 and 1 · clean at their bound heads · historical`.
+    /// `Rounds 2 and 1 · clean at their bound heads · historical`. A single
+    /// folded round leads with its title, so it names what it reviewed.
     static func priorSummary(_ rounds: [Components.Schemas.RunReviewRound]) -> String {
         // The app's copy is English, so the list is too, whatever the device
         // locale: "Rounds 3, 2, and 1", never "Rounds 3, 2 und 1".
         let numbers = rounds.map { String($0.round) }
         let list = numbers.formatted(.list(type: .and).locale(Locale(identifier: "en_US")))
-        let name = (numbers.count == 1 ? "Round " : "Rounds ") + list
+        let name = rounds.count == 1 ? title(rounds[0], in: rounds) : "Rounds " + list
         let verdicts: String
         if rounds.allSatisfy({ $0.state == .completed && $0.outcome?.value1 == .clean }) {
             verdicts = rounds.count == 1 ? "clean at its bound head" : "clean at their bound heads"

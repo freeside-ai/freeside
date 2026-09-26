@@ -1,0 +1,75 @@
+{
+  "rounds": [
+    {
+      "round": 1,
+      "invocation_id": "review-subject-1",
+      "state": "completed",
+      "source": {
+        "kind": "freeside_invoked",
+        "status": null
+      },
+      "base_sha": "deadbeef",
+      "head_sha": "91b3bf9c",
+      "requested_at": null,
+      "completed_at": "2026-08-12T12:01:00Z",
+      "provider": "openai",
+      "model_configuration": "codex/high",
+      "outcome": "findings",
+      "findings_count": 1,
+      "dispositions": {
+        "fixed": 0,
+        "declined": 0,
+        "deferred": 0,
+        "open": 1
+      },
+      "failure": null,
+      "retry_pending": false,
+      "evidence": {
+        "completion_evidence": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "availability": "unavailable"
+      },
+      "subject": {
+        "kind": "implementation",
+        "invocation_id": "inv-impl-review-subject",
+        "remediates_round": null
+      },
+      "remediation": {
+        "invocation_id": "inv-remediate-1-review-subject",
+        "finding_ids": [
+          "finding-note"
+        ],
+        "decided_at": "2026-08-12T13:00:00Z"
+      }
+    },
+    {
+      "round": 2,
+      "invocation_id": "review-subject-2",
+      "state": "running",
+      "source": {
+        "kind": "freeside_invoked",
+        "status": null
+      },
+      "base_sha": "deadbeef",
+      "head_sha": "af66c692",
+      "requested_at": "2026-08-12T13:00:00Z",
+      "completed_at": null,
+      "provider": null,
+      "model_configuration": null,
+      "outcome": null,
+      "findings_count": null,
+      "dispositions": null,
+      "failure": null,
+      "retry_pending": false,
+      "evidence": {
+        "completion_evidence": null,
+        "availability": "unavailable"
+      },
+      "subject": {
+        "kind": "remediation",
+        "invocation_id": "inv-remediate-1-review-subject",
+        "remediates_round": 1
+      },
+      "remediation": null
+    }
+  ]
+}
