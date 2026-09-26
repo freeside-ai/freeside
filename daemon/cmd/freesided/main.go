@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -312,6 +313,7 @@ func main() {
 		return
 	}
 	daemonConfig := config{
+		Environment:                env,
 		ManualSubmissionConfigPath: *manualSubmissionConfigPath,
 		DBPath:                     *dbPath, FakeDriverDir: *driverDir, StateDir: *stateDir,
 		ListenAddr: *listenAddr, NtfyURL: *ntfyURL, ReconcileInterval: *interval,
@@ -426,6 +428,10 @@ func serve(ctx context.Context, stop func(), h *daemon) error {
 }
 
 type config struct {
+	// Environment is the tier this daemon runs as. It is stamped into the
+	// readiness handshake so an app of another tier refuses to follow it
+	// (#1504); the zero value is rejected so no start publishes an empty stamp.
+	Environment                        environment
 	ManualSubmissionConfigPath         string
 	DBPath                             string
 	FakeDriverEnabled                  bool
@@ -535,8 +541,12 @@ func runScheduledDoctorPass(
 }
 
 type readiness struct {
-	APIURL      string `json:"api_url"`
-	PairingCode string `json:"pairing_code"`
+	APIURL      string      `json:"api_url"`
+	PairingCode string      `json:"pairing_code"`
+	Environment environment `json:"environment"`
+	// RunID names one daemon process start, not a workflow run (domain.RunID).
+	// It lets a script tell a fresh start from a stale file.
+	RunID string `json:"run_id"`
 }
 
 type sessionCloser interface {
@@ -560,12 +570,17 @@ type daemon struct {
 	closeOnce     sync.Once
 	closeErr      error
 	pairingCode   string
+	environment   environment
+	runID         string
 	logger        *slog.Logger
 	now           func() time.Time
 }
 
 func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error) {
 	startedAt := time.Now().UTC()
+	if !cfg.Environment.valid() {
+		return nil, fmt.Errorf("environment %q is not prod, dev, or ephemeral", cfg.Environment)
+	}
 	if cfg.DBPath == "" {
 		return nil, errors.New("-db is required")
 	}
@@ -1252,6 +1267,12 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		return nil, fmt.Errorf("mint startup pairing code: %w", err)
 	}
 	d.pairingCode = pairingCode
+	runID, err := newDaemonRunID()
+	if err != nil {
+		return nil, err
+	}
+	d.environment = cfg.Environment
+	d.runID = runID
 	// The file's same-host app reader uses loopback; stdout and pairing keep the
 	// primary URL for remote devices (plan §5.2 Reachability).
 	if err := publishReadiness(cfg.StateDir, d.sameHostReadiness()); err != nil {
@@ -1346,7 +1367,22 @@ func (d autoScriptStageDriver) Inspect(ctx context.Context, id domain.Invocation
 }
 
 func (d *daemon) readiness() readiness {
-	return readiness{APIURL: "http://" + d.listener.Addr().String(), PairingCode: d.pairingCode}
+	return readiness{
+		APIURL:      "http://" + d.listener.Addr().String(),
+		PairingCode: d.pairingCode,
+		Environment: d.environment,
+		RunID:       d.runID,
+	}
+}
+
+// newDaemonRunID mints the per-start readiness run id: 16 random bytes,
+// hex-encoded.
+func newDaemonRunID() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("mint daemon run id: %w", err)
+	}
+	return hex.EncodeToString(raw[:]), nil
 }
 
 func (d *daemon) sameHostReadiness() readiness {

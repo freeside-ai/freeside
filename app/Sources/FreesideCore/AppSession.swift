@@ -18,6 +18,9 @@ public final class AppSession {
     }
 
     public private(set) var phase: PhaseState
+    /// Why launch refused the same-host readiness file (#1504), shown on the
+    /// connect screen. Connecting to a typed address clears it.
+    public private(set) var connectionRefusal: DaemonReadinessRefusal?
 
     private struct Connection {
         let client: any APIProtocol
@@ -162,9 +165,11 @@ public final class AppSession {
     private init(
         localDaemonURL: URL?, cacheRoot: URL?,
         credentialStore: @escaping (URL) -> any DeviceCredentialStore,
-        persistServerURL: @escaping (URL) -> Void
+        persistServerURL: @escaping (URL) -> Void,
+        connectionRefusal: DaemonReadinessRefusal? = nil
     ) {
         connection = nil
+        self.connectionRefusal = connectionRefusal
         self.persistServerURL = persistServerURL
         self.localDaemonURL = localDaemonURL
         self.cacheRoot = cacheRoot
@@ -178,6 +183,7 @@ public final class AppSession {
             credentialStore: credentialStore, persistServerURL: persistServerURL)
         connection = selected.connection
         phase = selected.phase
+        connectionRefusal = nil
     }
 
     /// Returns to address entry without changing saved deployments or credentials.
@@ -229,13 +235,14 @@ public final class AppSession {
         case live(URL, pairingCode: String)
         case pairingDemo
         case mock
+        case refused(DaemonReadinessRefusal)
     }
 
     static func launchMode(
         argumentServerURL: String?,
         pairingDemo: Bool,
         mockMode: Bool,
-        readiness: DaemonReadiness?,
+        readiness: DaemonReadinessOutcome,
         persistedServerURL: String?,
         localDaemonURL: URL?,
         hasCredential: (URL) -> Bool
@@ -250,8 +257,13 @@ public final class AppSession {
         if mockMode {
             return .mock
         }
+        // A refused file never falls through to a silent connect: the persisted
+        // URL or the tier's fixed port may be the very daemon it describes.
+        if case .refused(let refusal) = readiness {
+            return .refused(refusal)
+        }
         let persistedURL = persistedServerURL.flatMap { serverURL(from: $0) }
-        if let readiness {
+        if let readiness = readiness.readiness {
             let matchesLocalDaemon =
                 localDaemonURL.map {
                     Self.deploymentKey(for: readiness.apiURL) == Self.deploymentKey(for: $0)
@@ -313,7 +325,7 @@ public final class AppSession {
         mockMode: Bool,
         readinessDirectory: String?,
         persistedServerURL: String?,
-        readReadiness: (URL) -> DaemonReadiness?,
+        readReadiness: (URL) -> DaemonReadinessOutcome,
         hasCredential: (URL) -> Bool,
         fileManager: FileManager = .default
     ) throws(LaunchError) -> LaunchMode {
@@ -337,9 +349,9 @@ public final class AppSession {
             argumentServerURL: argumentServerURL,
             pairingDemo: pairingDemo,
             mockMode: mockMode,
-            readiness: readinessDirectoryURL.flatMap {
+            readiness: readinessDirectoryURL.map {
                 readReadiness(DaemonReadinessReader.fileURL(inStateDirectory: $0))
-            },
+            } ?? .absent,
             persistedServerURL: environment.isSupervised ? persistedServerURL : nil,
             localDaemonURL: environment.supervisedAPIURL,
             hasCredential: environment.isSupervised ? hasCredential : { _ in false })
@@ -388,7 +400,7 @@ public final class AppSession {
             mockMode: arguments["FreesideMock"] as? String == "YES",
             readinessDirectory: arguments["FreesideReadinessDir"] as? String,
             persistedServerURL: persistedServerURL(),
-            readReadiness: { DaemonReadinessReader().read(at: $0) },
+            readReadiness: { DaemonReadinessReader().read(at: $0, expecting: environment) },
             hasCredential: hasStoredCredential)
         // The ephemeral app shares the production bundle ID, and so its
         // preferences domain; recording a throwaway run there would send the
@@ -423,7 +435,7 @@ public final class AppSession {
             argumentServerURL: arguments["FreesideServerURL"] as? String,
             pairingDemo: arguments["FreesidePairingDemo"] as? String == "YES",
             mockMode: arguments["FreesideMock"] as? String == "YES",
-            readiness: nil,
+            readiness: .absent,
             persistedServerURL: persistedServerURL(),
             localDaemonURL: nil,
             hasCredential: hasStoredCredential)
@@ -453,7 +465,7 @@ public final class AppSession {
         KeychainCredentialStore(service: "ai.freeside.device-credential/\(deploymentKey(for: url))")
     }
 
-    private static func session(
+    static func session(
         for mode: LaunchMode, localDaemonURL: URL?, cacheRoot: URL?,
         credentialStore: @escaping (URL) -> any DeviceCredentialStore,
         persistServerURL: @escaping (URL) -> Void
@@ -471,6 +483,10 @@ public final class AppSession {
             pairingDemo()
         case .mock:
             mock()
+        case .refused(let refusal):
+            AppSession(
+                localDaemonURL: localDaemonURL, cacheRoot: cacheRoot, credentialStore: credentialStore,
+                persistServerURL: persistServerURL, connectionRefusal: refusal)
         }
     }
 

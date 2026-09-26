@@ -66,7 +66,7 @@ public struct FreesideRootView: View {
         Group {
             switch session.phase {
             case .needsConnection:
-                DaemonConnectionView(address: $connectionAddress) { url in
+                DaemonConnectionView(address: $connectionAddress, refusal: session.connectionRefusal) { url in
                     connectionAddress = url.absoluteString
                     session.connect(serverURL: url)
                 }

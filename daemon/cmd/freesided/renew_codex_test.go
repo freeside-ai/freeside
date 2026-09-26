@@ -29,7 +29,7 @@ func TestRenewCodexRecoveryWithExecutionDisabled(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
-	h, err := run(ctx, nil, config{DBPath: db, ListenAddr: "127.0.0.1:0"})
+	h, err := run(ctx, nil, config{Environment: environmentEphemeral, DBPath: db, ListenAddr: "127.0.0.1:0"})
 	if err != nil {
 		cancel()
 		t.Fatal(err)

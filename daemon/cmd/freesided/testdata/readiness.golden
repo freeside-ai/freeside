@@ -1,0 +1,6 @@
+{
+  "api_url": "http://127.0.0.1:8421",
+  "pairing_code": "ABCD-2345",
+  "environment": "dev",
+  "run_id": "0123456789abcdef0123456789abcdef"
+}

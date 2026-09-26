@@ -9,12 +9,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
@@ -119,6 +121,64 @@ func TestScheduledFailureClassificationFailsClosed(t *testing.T) {
 	}
 }
 
+var runIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+// The readiness shape is a daemon-local handshake the app parses with an
+// exact key set (#1504), so its keys are pinned here.
+func TestReadinessGolden(t *testing.T) {
+	t.Parallel()
+	got, err := json.MarshalIndent(readiness{
+		APIURL:      "http://127.0.0.1:8421",
+		PairingCode: "ABCD-2345",
+		Environment: environmentDev,
+		RunID:       "0123456789abcdef0123456789abcdef",
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden.Assert(t, "readiness", append(got, '\n'))
+}
+
+func TestRunMintsADistinctRunIDPerStart(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	start := func() string {
+		t.Helper()
+		h, err := run(t.Context(), nil, config{Environment: environmentProd, DBPath: dbPath, ListenAddr: "127.0.0.1:0"})
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		ready := h.readiness()
+		if err := h.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		if ready.Environment != environmentProd || !runIDPattern.MatchString(ready.RunID) {
+			t.Fatalf("readiness = %+v, want prod with a 32-hex run_id", ready)
+		}
+		return ready.RunID
+	}
+	if first, second := start(), start(); first == second {
+		t.Fatalf("two starts published the same run_id %q", first)
+	}
+}
+
+func TestRunRejectsAMissingEnvironment(t *testing.T) {
+	t.Parallel()
+	stateDir := t.TempDir()
+	h, err := run(t.Context(), nil, config{
+		DBPath: filepath.Join(t.TempDir(), "freeside.db"), StateDir: stateDir, ListenAddr: "127.0.0.1:0",
+	})
+	if err == nil {
+		_ = h.Close()
+		t.Fatal("run started without an environment")
+	}
+	if !strings.Contains(err.Error(), "environment") {
+		t.Fatalf("run error = %v, want an environment refusal", err)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, readinessFileName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("readiness file stat = %v, want no file published", err)
+	}
+}
+
 func TestReadinessFileIsPrivateMintedAfterStartupAndUsable(t *testing.T) {
 	root := t.TempDir()
 	stateDir := filepath.Join(root, "state")
@@ -129,6 +189,7 @@ func TestReadinessFileIsPrivateMintedAfterStartupAndUsable(t *testing.T) {
 	clockNow := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
 	ctx, cancel := context.WithCancel(context.Background())
 	h, err := run(ctx, nil, config{
+		Environment:       environmentDev,
 		DBPath:            filepath.Join(root, "freeside.db"),
 		FakeDriverDir:     filepath.Join(root, "driver"),
 		StateDir:          stateDir,
@@ -176,6 +237,12 @@ func TestReadinessFileIsPrivateMintedAfterStartupAndUsable(t *testing.T) {
 	if ready != h.readiness() || ready.APIURL == "" || ready.PairingCode == "" {
 		t.Fatalf("readiness = %+v, want %+v", ready, h.readiness())
 	}
+	if ready.Environment != environmentDev {
+		t.Fatalf("readiness environment = %q, want %q", ready.Environment, environmentDev)
+	}
+	if !runIDPattern.MatchString(ready.RunID) {
+		t.Fatalf("readiness run_id = %q, want 32 lowercase hex characters", ready.RunID)
+	}
 	response, err := http.Get(ready.APIURL + "/health")
 	if err != nil {
 		t.Fatalf("GET readiness api_url health: %v", err)
@@ -206,6 +273,7 @@ func TestDurableStopKeepsHTTPAndSurvivesReopen(t *testing.T) {
 	dbPath := filepath.Join(root, "freeside.db")
 	lifetime, cancelLifetime := context.WithCancel(context.Background())
 	h, err := run(lifetime, nil, config{
+		Environment:       environmentEphemeral,
 		DBPath:            dbPath,
 		FakeDriverDir:     filepath.Join(root, "driver"),
 		ListenAddr:        "127.0.0.1:0",

@@ -156,7 +156,7 @@ func TestManualSubmissionConfigRejectsInvalidInputBeforeStartup(t *testing.T) {
 				}
 			}
 			dbPath := filepath.Join(root, "daemon.db")
-			h, err := run(context.Background(), nil, config{DBPath: dbPath, ListenAddr: "127.0.0.1:0", ManualSubmissionConfigPath: path})
+			h, err := run(context.Background(), nil, config{Environment: environmentEphemeral, DBPath: dbPath, ListenAddr: "127.0.0.1:0", ManualSubmissionConfigPath: path})
 			if err == nil {
 				_ = h.Close()
 				t.Fatal("invalid configuration started command listener")
@@ -185,7 +185,7 @@ func TestManualSubmissionHTTPRestartAndReplay(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		runConfig := config{DBPath: dbPath, ListenAddr: "127.0.0.1:0", ManualSubmissionConfigPath: configPath, IntakeInitiators: labels}
+		runConfig := config{Environment: environmentEphemeral, DBPath: dbPath, ListenAddr: "127.0.0.1:0", ManualSubmissionConfigPath: configPath, IntakeInitiators: labels}
 		var err error
 		h, err = run(context.Background(), nil, runConfig)
 		if err != nil {

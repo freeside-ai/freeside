@@ -18,7 +18,8 @@ func TestDefaultExecutionDisabled(t *testing.T) {
 	root := t.TempDir()
 	ctx, cancel := context.WithCancel(t.Context())
 	h, err := run(ctx, nil, config{
-		DBPath: filepath.Join(root, "freeside.db"), ListenAddr: "127.0.0.1:0",
+		Environment: environmentEphemeral,
+		DBPath:      filepath.Join(root, "freeside.db"), ListenAddr: "127.0.0.1:0",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +67,8 @@ func TestDefaultExecutionDisabled(t *testing.T) {
 
 func TestSeedRequiresExplicitFakeDriver(t *testing.T) {
 	_, err := run(t.Context(), nil, config{
-		DBPath: filepath.Join(t.TempDir(), "freeside.db"), SeedWalkingSkeleton: true,
+		Environment: environmentEphemeral,
+		DBPath:      filepath.Join(t.TempDir(), "freeside.db"), SeedWalkingSkeleton: true,
 	})
 	if err == nil || !strings.Contains(err.Error(), "requires -driver fake") {
 		t.Fatalf("seed without fake driver = %v", err)

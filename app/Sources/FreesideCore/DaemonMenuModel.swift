@@ -117,9 +117,16 @@
                 service: SMAppDaemonService(plistName: plistName),
                 healthChecker: APIDaemonHealthChecker(),
                 daemonURL: daemonURL,
-                readReadiness: {
-                    readinessURL.flatMap { DaemonReadinessReader().read(at: $0) }
-                })
+                readReadiness: { Self.followedReadiness(at: readinessURL, environment: environment) })
+        }
+
+        /// The readiness the menu watch hands to pairing: only a file stamped
+        /// for this tier. A refused file reads as absent, which clears a
+        /// readiness prefill instead of offering another tier's code (#1504).
+        static func followedReadiness(
+            at url: URL?, environment: FreesideEnvironment, reader: DaemonReadinessReader = .init()
+        ) -> DaemonReadiness? {
+            url.flatMap { reader.read(at: $0, expecting: environment).readiness }
         }
 
         public init(
