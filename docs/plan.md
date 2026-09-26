@@ -820,11 +820,17 @@ implementation exists.
   tier, never the ephemeral default (Section [10](#10-operations-and-onboarding), Environments), on loopback or
   on the exact verified Tailscale-owned address with its loopback twin
   (Reachability above). Bare foreground runs keep `127.0.0.1:0`.
-- The daemon durably publishes readiness (`{api_url, pairing_code}`, today's
+- The daemon durably publishes readiness
+  (`{api_url, pairing_code, environment, run_id}`, the same fields as its
   one-shot stdout line) to a `0600` runtime file in the state directory on
-  every start. Under a supervisor there is no terminal to read stdout, and
-  same-user file readability is the same trust boundary as today's
-  terminal. The stdout line remains for foreground runs.
+  every start. `environment` stamps the daemon's tier (Section [10](#10-operations-and-onboarding),
+  Environments) and `run_id` is new on every start. Under a supervisor there
+  is no terminal to read stdout, and same-user file readability is the same
+  trust boundary as today's terminal. The stdout line remains for foreground
+  runs. The app refuses a readiness file stamped for another environment, or
+  an unstamped file with exactly the pre-stamp `{api_url, pairing_code}`
+  fields (a daemon too old to write the stamp), and stops at its connect
+  screen instead of falling back to another address.
 - An operator running as the daemon's OS user can request a fresh code with
   `freesided pairing-code -state-dir <existing-state-directory>`. A private
   Unix socket authenticates kernel peer credentials on macOS and Linux and
