@@ -15,6 +15,11 @@
 //   - Pragmas ride the DSN, never a db.Exec: with a database/sql pool every
 //     pragma except journal_mode is per-connection, so only the driver's
 //     _pragma= DSN parameters guarantee each new connection is configured.
+//     Options.ExclusiveLocking adds locking_mode=EXCLUSIVE, which a
+//     supervised daemon sets to hold its live file against every other
+//     process. The driver applies DSN pragmas in lexicographic order, not
+//     DSN order, so locking_mode may follow journal_mode; the lock holds
+//     from Open either way.
 //   - Domain entities persist as aggregate-root rows: identity and join keys
 //     as real columns (so foreign keys actually enforce), entity_version and
 //     as_of_revision for §5.14 sync, and the domain type's canonical JSON as
@@ -42,6 +47,12 @@
 //     DSN's _txlock=immediate makes every transaction, Read included, take
 //     the write lock at BEGIN, so a read pool must use a separate reader
 //     configuration (deferred _txlock) rather than reuse this DSN.
+//     The single connection is also what holds an exclusive lock for the
+//     whole process: a second handle on the same file, even in the daemon,
+//     fails busy under ExclusiveLocking but not in tests, which open in
+//     normal mode. If the pool ever replaces its connection after a driver
+//     error, the lock drops until the replacement opens, the same
+//     cross-process exposure normal mode always has.
 //   - Reads that must be consistent run inside Read; Puts validate before
 //     writing and Gets validate after reading, so a corrupt row fails loudly
 //     at the boundary instead of leaking an invalid value into the daemon.

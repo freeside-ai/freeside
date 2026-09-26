@@ -27,6 +27,14 @@ type Options struct {
 	// Zero means DefaultBusyTimeout.
 	BusyTimeout time.Duration
 
+	// ExclusiveLocking holds the database file for the life of the handle
+	// (SQLite locking_mode=EXCLUSIVE), so every other process, and every
+	// second handle in this one, fails busy on open. A supervised daemon sets
+	// it so an out-of-process writer (an older binary, a sqlite3 shell)
+	// cannot touch its live file. The zero value keeps normal locking. Open
+	// and OpenExisting honour it; OpenReadOnly ignores it.
+	ExclusiveLocking bool
+
 	// ApprovedRecipes is the set of verification-recipe digests trusted policy
 	// has approved. Every write and read of an evidence-bearing artifact
 	// re-derives publish_eligibility against it at the persistence boundary, so
@@ -359,6 +367,9 @@ func openWritableDB(path string, opts Options, requireExisting bool) (*sql.DB, e
 		return nil, fmt.Errorf("open %s: BusyTimeout %v is below the 1ms pragma resolution", path, busyTimeout)
 	}
 	q := url.Values{}
+	if opts.ExclusiveLocking {
+		q.Add("_pragma", "locking_mode(EXCLUSIVE)")
+	}
 	if requireExisting {
 		q.Add("mode", "rw")
 	} else {
@@ -428,6 +439,7 @@ type Pragmas struct {
 	Synchronous int           // 2 is FULL
 	ForeignKeys bool          // true when enforced
 	BusyTimeout time.Duration // the configured retry window
+	LockingMode string        // "exclusive" or "normal"
 }
 
 // Pragmas reads the effective pragma values from a single connection.
@@ -460,6 +472,9 @@ func connPragmas(ctx context.Context, conn *sql.Conn) (Pragmas, error) {
 	}
 	if err := singleValueRow(`PRAGMA busy_timeout`, &busyTimeoutMS); err != nil {
 		return Pragmas{}, fmt.Errorf("pragma busy_timeout: %w", err)
+	}
+	if err := singleValueRow(`PRAGMA locking_mode`, &p.LockingMode); err != nil {
+		return Pragmas{}, fmt.Errorf("pragma locking_mode: %w", err)
 	}
 	p.ForeignKeys = foreignKeys == 1
 	p.BusyTimeout = time.Duration(busyTimeoutMS) * time.Millisecond

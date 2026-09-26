@@ -34,6 +34,20 @@ func (env environment) valid() bool {
 	}
 }
 
+// locksDatabaseExclusively reports whether the tier's daemon holds its live
+// database against every other process. The supervised tiers do, so nothing
+// outside the daemon can open or write their file while it runs; ephemeral
+// keeps normal locking for tests and scratch runs.
+func (env environment) locksDatabaseExclusively() bool {
+	switch env {
+	case environmentProd, environmentDev:
+		return true
+	case environmentEphemeral:
+		return false
+	}
+	return false
+}
+
 func parseEnvironment(raw string) (environment, error) {
 	env := environment(raw)
 	if !env.valid() {

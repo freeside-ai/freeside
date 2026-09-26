@@ -272,6 +272,25 @@ Every state directory is owner-only, including the corrected
 The static binary and supervisor may be installed through a one-time narrow
 elevation step, but the stateful daemon always runs as the non-root operator.
 
+### Inspect A Live Database
+
+A `prod` or `dev` daemon holds its database in SQLite exclusive locking mode
+for as long as it runs, so `sqlite3` and every other process fail with
+`database is locked` on the live file. `ephemeral` keeps normal locking.
+To inspect a supervised database, copy it first:
+
+```sh
+freesided snapshot -db <live-db> <output-path>
+sqlite3 <output-path>
+```
+
+With a daemon running, the daemon writes the copy over the control socket;
+without one, the command takes the daemon lock and copies directly. The output
+path must not exist, and the file is created owner-only (`0600`). The copy
+holds every row, including device credentials and pairing codes, so delete it
+when you are done. While the copy is written, the daemon's other database work
+waits for it.
+
 ### Configure Client Task Submission
 
 Pass `-manual-submission-config /absolute/manual-submission.json` to the
