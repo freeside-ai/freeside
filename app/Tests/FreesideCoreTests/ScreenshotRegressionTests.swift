@@ -2087,8 +2087,9 @@
             // The menu-bar panel in the states the chrome handoff pins:
             // healthy by day with the inbox row under the pointer, a
             // contract mismatch after an observed restart by dusk, stopped
-            // with Start as the one primary, and unreachable with a failed
-            // stop. The start instant is the fixture's fixed creation time.
+            // with Start as the one primary, unreachable with a failed stop,
+            // and an ephemeral app's no-supervised-daemon state with no
+            // control. The start instant is the fixture's fixed creation time.
             let panelHealth = DaemonHealth(version: "1.0.0", startedAt: AttentionFixtures.createdInstant)
             let panelMismatch = DaemonHealth(
                 version: "1.0.0", startedAt: AttentionFixtures.createdInstant,
@@ -2125,6 +2126,16 @@
                     view: AnyView(
                         DaemonMenuPanel(
                             state: .stopped,
+                            actionError: nil,
+                            inbox: .init(open: 6, urgent: 0),
+                            actions: panelActions))))
+            surfaces.append(
+                Surface(
+                    name: "menu-panel-unsupervised",
+                    width: 320,
+                    view: AnyView(
+                        DaemonMenuPanel(
+                            state: .unsupervised,
                             actionError: nil,
                             inbox: .init(open: 6, urgent: 0),
                             actions: panelActions))))
