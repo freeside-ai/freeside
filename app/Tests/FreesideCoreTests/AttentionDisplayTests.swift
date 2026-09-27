@@ -14,6 +14,33 @@ import Testing
         }
     }
 
+    // Titles follow the project's title-case heading convention. Keying the
+    // table by every AttentionType makes a new type fail here until it has
+    // a title-case entry.
+    @Test func everyAttentionTypeHasATitleCaseTitle() {
+        let titles: [Components.Schemas.AttentionType: String] = [
+            .spec_approval: "Spec Approval",
+            .execution_failure: "Execution Failure",
+            .agent_question: "Agent Question",
+            .review_diminishing_returns: "Diminishing Returns",
+            .review_dispute: "Review Dispute",
+            .review_contradiction: "Review Contradiction",
+            .review_configuration: "Review Configuration",
+            .finding_adjudication: "Finding Adjudication",
+            .ready_for_final_review: "Ready for Final Review",
+            .publish_blocked: "Publish Blocked",
+            .task_proposal: "Task Proposal",
+            .effect_proposal: "Effect Proposal",
+            .system_health: "System Health",
+            .blocked: "Blocked",
+        ]
+
+        #expect(Set(titles.keys) == Set(Components.Schemas.AttentionType.allCases))
+        for type in Components.Schemas.AttentionType.allCases {
+            #expect(AttentionDisplay.title(type) == titles[type], "\(type)")
+        }
+    }
+
     @Test func askNeverUsesTheItemsFreeTextReason() {
         var item = AttentionFixtures.fixture(type: .execution_failure).item
         item.reason = "free text that must not become the ask"
@@ -351,7 +378,7 @@ import Testing
                 AttentionFixtures.fixture(type: .ready_for_final_review).item))
         let degraded = AttentionFixtures.degradedReady().item
         #expect(AttentionDisplay.showsDegradedBadge(degraded))
-        #expect(AttentionDisplay.title(degraded._type) == "Ready for final review")
+        #expect(AttentionDisplay.title(degraded._type) == "Ready for Final Review")
     }
 
     @Test func existingPullRequestActionUsesViewLanguage() {
@@ -665,8 +692,8 @@ import Testing
         let clean = AttentionFixtures.fixture(type: .ready_for_final_review).item
         let degraded = AttentionFixtures.degradedReady().item
 
-        #expect(AttentionDisplay.title(clean) == "Ready for final review")
-        #expect(AttentionDisplay.title(degraded) == "Ready for final review (degraded)")
+        #expect(AttentionDisplay.title(clean) == "Ready for Final Review")
+        #expect(AttentionDisplay.title(degraded) == "Ready for Final Review (Degraded)")
         #expect(
             AttentionDisplay.readinessSummaryRows(clean) == [
                 .init(label: "Readiness", value: "Clean"),

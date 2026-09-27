@@ -95,14 +95,14 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
             return TaskDisplay.position(
                 task, runs: coordinator.runs, attentionItems: coordinator.store.orderedSnapshots)?.heading?.label
         }
-        #expect(try heading(live) == "Ready for final review")
+        #expect(try heading(live) == "Ready for Final Review")
         let cached = makeCoordinator(server: server, cache: cache)
         #expect(cached.store.freshness == .unvalidated)
-        #expect(try heading(cached) == "Ready for final review")
+        #expect(try heading(cached) == "Ready for Final Review")
         await server.setBeforeRespond { _ in throw MockOutage() }
         await cached.heartbeat()
         #expect(cached.store.freshness == .unreachable)
-        #expect(try heading(cached) == "Ready for final review")
+        #expect(try heading(cached) == "Ready for Final Review")
         await server.setBeforeRespond(nil)
 
         let model = DecisionModel(store: live.store, itemID: ready.item.id)
@@ -116,7 +116,7 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         // A partial success retains the more specific outage warning until
         // a full sync validates the cached attention items too.
         #expect(cached.store.freshness == .unreachable)
-        #expect(try heading(cached) == "Ready for final review")
+        #expect(try heading(cached) == "Ready for Final Review")
         await cached.heartbeat()
         #expect(cached.store.freshness == .fresh)
         #expect(try heading(cached) == "Verification")
@@ -132,7 +132,7 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
             return response
         }
         await cached.bootstrap()
-        #expect(try heading(cached) == "Ready for final review (degraded)")
+        #expect(try heading(cached) == "Ready for Final Review (Degraded)")
         #expect(cached.store.snapshotsByID[ready.item.id] == nil)
         await server.setBootstrapTransform(nil)
         await server.restoreAttentionState(items: [], revision: 1)

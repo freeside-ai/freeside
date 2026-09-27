@@ -52,19 +52,19 @@ enum AttentionDisplay {
 
     static func title(_ type: Components.Schemas.AttentionType) -> String {
         switch type {
-        case .spec_approval: return "Spec approval"
-        case .execution_failure: return "Execution failure"
-        case .agent_question: return "Agent question"
-        case .review_diminishing_returns: return "Diminishing returns"
-        case .review_dispute: return "Review dispute"
-        case .review_contradiction: return "Review contradiction"
-        case .review_configuration: return "Review configuration"
-        case .finding_adjudication: return "Finding adjudication"
-        case .ready_for_final_review: return "Ready for final review"
-        case .publish_blocked: return "Publish blocked"
-        case .task_proposal: return "Task proposal"
-        case .effect_proposal: return "Effect proposal"
-        case .system_health: return "System health"
+        case .spec_approval: return "Spec Approval"
+        case .execution_failure: return "Execution Failure"
+        case .agent_question: return "Agent Question"
+        case .review_diminishing_returns: return "Diminishing Returns"
+        case .review_dispute: return "Review Dispute"
+        case .review_contradiction: return "Review Contradiction"
+        case .review_configuration: return "Review Configuration"
+        case .finding_adjudication: return "Finding Adjudication"
+        case .ready_for_final_review: return "Ready for Final Review"
+        case .publish_blocked: return "Publish Blocked"
+        case .task_proposal: return "Task Proposal"
+        case .effect_proposal: return "Effect Proposal"
+        case .system_health: return "System Health"
         case .blocked: return "Blocked"
         }
     }
@@ -73,7 +73,7 @@ enum AttentionDisplay {
         guard item._type == .ready_for_final_review,
             item.readiness?.value1._class == .ready_degraded
         else { return title(item._type) }
-        return "Ready for final review (degraded)"
+        return "Ready for Final Review (Degraded)"
     }
 
     static func ask(_ item: Components.Schemas.AttentionItem) -> String {
