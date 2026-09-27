@@ -39,6 +39,17 @@ Launch arguments also pin the presentation per launch (`LaunchInputs`), so scree
 - `-FreesideProject <project-id>`: select the inbox project filter for a screenshot or automation launch.
 - `-FreesideDetailsExpanded YES`: open the selected decision card's Details disclosure at launch.
 
+## Running a Dev Daemon
+
+Agents and scripts use the `ephemeral` tier only (see the [environment rules](../docs/plan.md#environments-prod-dev-and-ephemeral)).
+
+- **Screenshots: use `-FreesideMock YES`.** It needs no daemon and no pairing, and the `-FreesideSelect` ids come from the mock's own fixtures, so the same launch gives the same capture every time. See [Capturing screenshots](#capturing-screenshots).
+- **A live daemon: run `scripts/dev-instance.sh` from the repo root.** It starts a seeded `ephemeral` daemon in a throwaway root inside the worktree, launches the Debug app against it, and removes the root when you stop it. To attach a Debug app to an `ephemeral` daemon started some other way, pass `-FreesideReadinessDir` with that daemon's `-state-dir`.
+- **Never run `scripts/install-mac-app.sh` from an agent or script.** Omitting the tier installs `prod`, and its `--prod` flag is for the operator's explicit instruction only. The `dev` install is the operator's own too; its tiers are under [Installing the Operator Client](#installing-the-operator-client).
+- **Attaching to production is an operator act.** The `FreesideMacProd` scheme runs a Debug build with `FREESIDE_ENV=prod`, so it connects to the `prod` daemon on port `7331`. It is not a passive attachment: the build keeps prod's bundle ID and defaults, and its daemon menu is live. Launching it can re-register the `prod` LaunchAgent against the Debug bundle whenever prod's registration marker is unset, as after an install before the installed app relaunches, and Stop and Start there act on the `prod` LaunchAgent.
+
+The daemon README lists [the production identifiers and persistent stores](../daemon/README.md#running-a-dev-daemon).
+
 ## macOS Keyboard Commands
 
 - ⌘1 shows Inbox; ⌘2 shows Tasks; ⌘R refreshes; ⌥⌘I toggles the inspector; ⌘N opens the New Task composer on the Tasks screen (File > New Task), enabled only while the sync is fresh.
