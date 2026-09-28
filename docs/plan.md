@@ -4890,9 +4890,12 @@ stay with that run.
   the supervised `dev` label is unaffected. The rig lease refuses to be
   acquired while `ai.freeside.daemon` is loaded, but it checks only then. A
   real-work build must read and write the authority and janitor journal
-  formats that the installed `prod` build accepts. The code unit that adds
-  this exception (#1583) enforces both that and the stop for the rest of the
-  run, and until it lands the guards below still refuse these directories.
+  formats that the installed `prod` build accepts. The daemon enforces the
+  exception (#1583): its `-prod-app-authority` flag admits exactly those two
+  directories, only with a live production rig lease, and only when the
+  installed `prod` daemon reports that it accepts every format this build
+  writes. `prod` refuses to start while a production rig lease, live or
+  stale, exists, which keeps it stopped for the rest of the run.
   The path rules fix where credentials live, not whose they are, so outside
   those directories this rule is operator discipline, not a check.
 - **A non-prod instance never names a prod root.** Provider credentials are

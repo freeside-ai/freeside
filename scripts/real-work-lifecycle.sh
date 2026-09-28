@@ -288,7 +288,7 @@ real_work_recover_codex_credentials() {
 		echo 'Credential recovery requires a schema-compatible daemon; use the supported runtime upgrade before retrying. No recovery daemon was started.' >&2
 		return 1
 	fi
-	"$workdir/freesided" -listen "$listen_address" -db "$db_path" \
+	"$workdir/freesided" -environment ephemeral -listen "$listen_address" -db "$db_path" \
 		-state-dir "$FREESIDE_REAL_RUN_STATE_ROOT" -driver disabled \
 		-approved-recipe "$FREESIDE_REAL_RUN_APPROVED_RECIPE" "$@" >>"$workdir/daemon.log" 2>&1 &
 	daemon_pid=$!
@@ -326,10 +326,15 @@ real_work_walkthrough() {
 	done
 }
 
+# The installed prod app's daemon, the build the supervised service runs.
+real_work_installed_daemon() {
+	printf '%s\n' "${FREESIDE_REAL_RUN_RESTORE_DAEMON:-$HOME/Applications/Freeside.app/Contents/Resources/freesided}"
+}
+
 # A writable runtime upgrade cannot fall back to an unverified older service.
 # Installation remains the operator's job; recovery never rolls back durable data.
 real_work_restore_supervised() {
-	local session=$1 installed=${2:-${FREESIDE_REAL_RUN_RESTORE_DAEMON:-$HOME/Applications/Freeside.app/Contents/Resources/freesided}}
+	local session=$1 installed=${2:-$(real_work_installed_daemon)}
 	local expected actual daemon="$session/freesided" verifier="$session/verify-real-run" version="$session/build-version"
 	if [[ ! -f "$session/runtime-upgrade-started" && -f "$session/runtime-upgrade-inherited" ]]; then
 		daemon="$session/restore-freesided"

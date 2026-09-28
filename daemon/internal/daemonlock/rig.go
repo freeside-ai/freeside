@@ -439,6 +439,30 @@ func defaultRigLeaseRoot() (string, error) {
 	return filepath.Join(current.HomeDir, ".freeside", "rig-locks"), nil
 }
 
+// DefaultRigLeaseRoot is the lease root every production rig lease uses
+// unless a test injects another: .freeside/rig-locks under the account's
+// home, never $HOME.
+func DefaultRigLeaseRoot() (string, error) {
+	return defaultRigLeaseRoot()
+}
+
+// RigManifestPresent reports whether a production rig manifest, live or
+// stale, exists under leaseRoot. It takes and probes no lock, so it can't make
+// a concurrent AcquireRig fail. AcquireRig publishes this manifest before its
+// caller checks for a loaded supervised daemon, and only a clean Close or an
+// explicit stale recovery removes it. A missing lease root means no lease; any
+// other error is returned so the caller fails closed.
+func RigManifestPresent(leaseRoot string) (bool, error) {
+	_, err := os.Lstat(filepath.Join(leaseRoot, rigGlobalStateName))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect global rig manifest: %w", err)
+	}
+	return true, nil
+}
+
 func validateRigLeaseRoot(path string) error {
 	info, err := os.Lstat(path)
 	if err != nil {

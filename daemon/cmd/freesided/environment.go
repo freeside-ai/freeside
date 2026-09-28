@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -8,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 )
 
 type environment string
@@ -62,6 +65,11 @@ type environmentPaths struct {
 	PublicationStateDir       string
 	PublicationCredentialsDir string
 	ReviewInputRoot           string
+	// ProdAppAuthority exempts exactly prod's two App directories from the
+	// ephemeral tier's supervised-root refusal, so an attended real-work run
+	// shares prod's one App authority (#1583). main sets it only for
+	// -prod-app-authority, after checkProdAppAuthority passes.
+	ProdAppAuthority bool
 }
 
 type guardedPath struct {
@@ -303,6 +311,17 @@ func checkEnvironment(env environment, home string, paths environmentPaths, list
 		}
 		resolvedRoots[tier] = resolved
 	}
+	exempt := map[string]bool{}
+	if paths.ProdAppAuthority {
+		if env != environmentEphemeral {
+			return fmt.Errorf("-prod-app-authority requires -environment ephemeral, not %s", env)
+		}
+		if err := requireProdAppDirectories(roots[environmentProd], paths); err != nil {
+			return err
+		}
+		exempt["publication-state-dir"] = true
+		exempt["publication-credentials-dir"] = true
+	}
 	if env != environmentEphemeral {
 		for _, required := range []guardedPath{{"db", paths.DB}, {"state-dir", paths.StateDir}} {
 			if required.path == "" {
@@ -311,7 +330,7 @@ func checkEnvironment(env environment, home string, paths environmentPaths, list
 		}
 	}
 	for _, candidate := range paths.guarded() {
-		if candidate.path == "" {
+		if candidate.path == "" || exempt[candidate.flag] {
 			continue
 		}
 		resolved, err := resolveExisting(candidate.path)
@@ -348,6 +367,205 @@ func checkEnvironment(env environment, home string, paths environmentPaths, list
 				}
 			}
 		}
+	}
+	return nil
+}
+
+// requireProdAppDirectories accepts the two publication directories only when
+// they are prod's own App directories: the same directories, by identity, as
+// <prod root>/daemon and <prod root>/credentials. Nothing else under the root,
+// and no copy outside it, qualifies.
+func requireProdAppDirectories(prodRoot string, paths environmentPaths) error {
+	for _, dir := range []struct {
+		flag string
+		path string
+		want string
+	}{
+		{"publication-state-dir", paths.PublicationStateDir, filepath.Join(prodRoot, "daemon")},
+		{"publication-credentials-dir", paths.PublicationCredentialsDir, filepath.Join(prodRoot, "credentials")},
+	} {
+		if dir.path == "" {
+			return fmt.Errorf("-prod-app-authority requires -%s %q", dir.flag, dir.want)
+		}
+		got, err := os.Stat(dir.path)
+		if err != nil {
+			return fmt.Errorf("-%s %q: %w", dir.flag, dir.path, err)
+		}
+		want, err := os.Stat(dir.want)
+		if err != nil {
+			return fmt.Errorf("prod App directory %q: %w", dir.want, err)
+		}
+		if !got.IsDir() || !os.SameFile(got, want) {
+			return fmt.Errorf("-%s %q is not prod's App directory %q; -prod-app-authority accepts only that directory", dir.flag, dir.path, dir.want)
+		}
+	}
+	return nil
+}
+
+// checkProdAppAuthority gates -prod-app-authority before the path check
+// grants its exemption. The run must hold the live production rig lease,
+// which also keeps prod stopped (checkProdRigLease); $HOME and the account
+// home must name one prod root, so the run and a launchd-started prod can't
+// read different authorities; and the installed prod daemon must accept every
+// App authority state format this build writes.
+func checkProdAppAuthority(ctx context.Context, env environment, home, accountHome, rigTokenFile, leaseRoot, prodDaemon string) error {
+	if env != environmentEphemeral {
+		return fmt.Errorf("-prod-app-authority requires -environment ephemeral, not %s", env)
+	}
+	if prodDaemon == "" {
+		return errors.New("-prod-app-authority requires -prod-daemon naming the installed prod daemon")
+	}
+	if err := requireOtherDaemon(prodDaemon); err != nil {
+		return err
+	}
+	if err := authenticateProductionRigLease(rigTokenFile, leaseRoot); err != nil {
+		return err
+	}
+	if err := requireOneProdRoot(home, accountHome); err != nil {
+		return err
+	}
+	return checkProdPublicationFormats(ctx, prodDaemon)
+}
+
+// authenticateProductionRigLease proves the caller holds the live rig lease
+// published under leaseRoot, the root prod checks at startup.
+func authenticateProductionRigLease(rigTokenFile, leaseRoot string) error {
+	if rigTokenFile == "" {
+		return errors.New("-prod-app-authority requires -rig-token-file naming the live production rig lease")
+	}
+	acquisition, err := readRigAcquisition(rigTokenFile)
+	if err != nil {
+		return err
+	}
+	manifest, err := daemonlock.AuthenticateRig(acquisition.Manifest.Resources.StateRoot, acquisition.Token)
+	if err != nil {
+		return fmt.Errorf("-prod-app-authority requires a live production rig lease: %w", err)
+	}
+	resolvedLeaseRoot, err := filepath.EvalSymlinks(leaseRoot)
+	if err != nil {
+		return fmt.Errorf("resolve production rig lease root %q: %w", leaseRoot, err)
+	}
+	if manifest.Resources.LeaseRoot != resolvedLeaseRoot {
+		return fmt.Errorf("rig lease under %q is not the production rig lease under %q", manifest.Resources.LeaseRoot, resolvedLeaseRoot)
+	}
+	// prod checks the manifest, not the lock: a lease whose manifest is gone
+	// would not keep prod stopped.
+	present, err := daemonlock.RigManifestPresent(resolvedLeaseRoot)
+	if err != nil {
+		return fmt.Errorf("check the production rig manifest under %q: %w", resolvedLeaseRoot, err)
+	}
+	if !present {
+		return fmt.Errorf("the production rig lease under %q has no manifest, so prod would not see it", resolvedLeaseRoot)
+	}
+	return nil
+}
+
+// requireOtherDaemon refuses a -prod-daemon that is this binary: the run's own
+// build always accepts its own formats, so the check would prove nothing.
+func requireOtherDaemon(prodDaemon string) error {
+	self, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate this daemon: %w", err)
+	}
+	selfInfo, err := os.Stat(self)
+	if err != nil {
+		return fmt.Errorf("stat this daemon: %w", err)
+	}
+	prodInfo, err := os.Stat(prodDaemon)
+	if err != nil {
+		return fmt.Errorf("stat -prod-daemon %q: %w", prodDaemon, err)
+	}
+	if os.SameFile(selfInfo, prodInfo) {
+		return fmt.Errorf("-prod-daemon %q is this daemon, not the installed prod daemon", prodDaemon)
+	}
+	return nil
+}
+
+// requireOneProdRoot compares the two prod roots by directory identity: a
+// case-only or firmlinked spelling of one home names the same root.
+func requireOneProdRoot(home, accountHome string) error {
+	fromHome := supervisedRoots(home)[environmentProd]
+	fromAccount := supervisedRoots(accountHome)[environmentProd]
+	homeInfo, err := os.Stat(fromHome)
+	if err != nil {
+		return fmt.Errorf("-prod-app-authority requires prod's root: %w", err)
+	}
+	accountInfo, err := os.Stat(fromAccount)
+	if err != nil {
+		return fmt.Errorf("-prod-app-authority requires prod's root: %w", err)
+	}
+	if !os.SameFile(homeInfo, accountInfo) {
+		return fmt.Errorf("$HOME names prod root %q but the account home names %q; -prod-app-authority needs one prod root", fromHome, fromAccount)
+	}
+	return nil
+}
+
+// holdProdDatabaseLock takes prod's own database lock, the one a prod daemon
+// takes before it opens its database, and holds it for the run. The rig lease
+// check in rig hold sees only a launchd-loaded prod; the lock also refuses a
+// prod started by hand, and keeps one from starting while the run holds it.
+func holdProdDatabaseLock(home string) (*daemonlock.Lock, error) {
+	path := filepath.Join(supervisedRoots(home)[environmentProd], "daemon", "freeside.db")
+	lock, err := daemonlock.Acquire(path)
+	if err != nil {
+		return nil, fmt.Errorf("-prod-app-authority requires prod to be stopped: take prod's database lock %q: %w", path, err)
+	}
+	return lock, nil
+}
+
+// holdProdLockForProdAppDirectories takes prod's database lock when state or
+// credentials is one of prod's App directories under $HOME or the passwd home,
+// and returns a nil lock otherwise. A command that reads the shared authority
+// before the run's daemon starts, such as preflight, holds it so a prod
+// started outside launchd can't use the authority at the same time.
+func holdProdLockForProdAppDirectories(state, credentials string) (*daemonlock.Lock, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	accountHome, err := currentAccountHome()
+	if err != nil {
+		return nil, err
+	}
+	return holdProdLockForProdAppDirectoriesIn([]string{home, accountHome}, state, credentials)
+}
+
+func holdProdLockForProdAppDirectoriesIn(homes []string, state, credentials string) (*daemonlock.Lock, error) {
+	for _, home := range homes {
+		root := supervisedRoots(home)[environmentProd]
+		if sameDirectory(state, filepath.Join(root, "daemon")) || sameDirectory(credentials, filepath.Join(root, "credentials")) {
+			return holdProdDatabaseLock(home)
+		}
+	}
+	return nil, nil
+}
+
+// sameDirectory reports whether both paths name one existing directory.
+func sameDirectory(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	aInfo, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	bInfo, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(aInfo, bInfo)
+}
+
+// checkProdRigLease keeps prod stopped while a production rig lease, live or
+// stale, exists: the run shares prod's App authority, and rig hold checks for
+// a loaded prod only when it acquires the lease.
+func checkProdRigLease(leaseRoot string) error {
+	present, err := daemonlock.RigManifestPresent(leaseRoot)
+	if err != nil {
+		return fmt.Errorf("check for a production rig lease under %q: %w", leaseRoot, err)
+	}
+	if present {
+		return fmt.Errorf("a production rig lease (live or stale) exists under %q; prod may not start until the real-work run releases it, or until freesided rig recover clears a stale one", leaseRoot)
 	}
 	return nil
 }

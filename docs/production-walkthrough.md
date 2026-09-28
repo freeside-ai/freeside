@@ -31,17 +31,42 @@ the operator's alone. No script or agent stops, unloads, or re-registers
 The stop is still needed because `freesided rig hold` and preflight refuse
 while that label is loaded. It stays by owner decision (#1517): it keeps two
 daemons from publishing as the same GitHub App at once. Those checks run only
-when the run starts, so don't choose **Start** until the run ends (#1583
-will enforce it). Running both is deferred to #1568.
+when the run starts, so `freesided -environment prod` also refuses to start
+while a production rig lease exists, live or stale (#1583). If **Start** is
+chosen mid-run, launchd relaunches the refusing daemon about every 10 seconds
+and the app shows it unreachable until the run releases its lease; nothing
+else changes. Running both is deferred to #1568.
 
-Until #1583 lands, every real-work run must reuse one App state directory
-(`FREESIDE_REAL_RUN_APP_STATE`) and one App credentials directory
-(`FREESIDE_REAL_RUN_APP_CREDS`). Each run's installation janitor uninstalls
-every installation its own authority doesn't name (#1511), so a run with
-different directories can uninstall installations another run's directories
-trusted. #1583 moves that state into production's directories, where the
-App's single authority lives
-([plan §10](plan.md#environments-prod-dev-and-ephemeral)).
+The run uses `prod`'s own App authority, where the App's single authority
+lives ([plan §10](plan.md#environments-prod-dev-and-ephemeral)). Set
+`FREESIDE_REAL_RUN_APP_STATE` to `~/Library/Application Support/Freeside/daemon`
+and `FREESIDE_REAL_RUN_APP_CREDS` to
+`~/Library/Application Support/Freeside/credentials`; the harness and the
+daemon refuse any other directory, including a copy. The daemon also requires
+the live rig lease, and the installed app must include #1583: the run's daemon
+asks the installed `freesided` (`FREESIDE_REAL_RUN_RESTORE_DAEMON`, default
+`~/Applications/Freeside.app/Contents/Resources/freesided`) which App
+authority formats it reads, and refuses to start if that build predates #1583
+or can't read what this build writes. Install the current app before the
+first run.
+
+Once, before the first run after #1583, move the App authority that earlier
+runs kept in their own directories into `prod`'s, with **Stop** chosen and no
+run active. Pass the old directories, the values the two variables held before
+you pointed them at `prod`:
+
+```sh
+bash scripts/move-app-authority-to-prod.sh <old-app-state-dir> <old-app-credentials-dir>
+```
+
+The script moves both or neither, and stops without
+changing anything when `prod` already holds App state or credentials, when a
+rig lease exists, when `prod` is running, or when a source holds a file it
+doesn't recognize or no App registration. It never
+merges two authorities: resolve such a stop by hand. It keeps each source,
+renamed to `<dir>.moved-to-prod-<timestamp>`, so a stale variable fails loudly.
+It never deletes them; remove them yourself once a run has published through
+`prod`'s directories.
 
 Keep the harness shell open. It prints the retained session directory, then the
 implementation run, invocation, endpoint and exact completion command. Sessions
@@ -285,7 +310,10 @@ bash /absolute/session/real-work-session.sh recover /absolute/session
 
 The helper runs the retained binary's
 `rig recover -state-root <recorded-state-root> -confirm`, with bounded process
-group cancellation. That command rejects a live holder, locked database, live
+group cancellation. A stale lease also keeps `prod` from starting, and
+`rig recover` refuses while `ai.freeside.daemon` is loaded, so if **Start**
+was chosen after the crash, choose **Stop** and wait for **Stopped** before
+recovering; restoration then starts it again. That command rejects a live holder, locked database, live
 listener or resources that cannot be cleaned. Interruption of `rig hold` itself
 deliberately leaves `.freeside-rig.json`; checked recovery is the expected path,
 not permission to delete the manifest manually. A live holder still owned by

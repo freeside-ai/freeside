@@ -286,6 +286,49 @@ func TestRigLeaseRejectsEphemeralListener(t *testing.T) {
 	}
 }
 
+// TestRigManifestPresentTracksLeaseLifecycle: the global manifest is visible
+// while a lease is held and after a crash leaves it stale, and gone only after
+// a clean release.
+func TestRigManifestPresentTracksLeaseLifecycle(t *testing.T) {
+	root := t.TempDir()
+	cfg := rigTestConfig(t, filepath.Join(root, "state"), filepath.Join(root, "seed"))
+	requirePresent := func(want bool) {
+		t.Helper()
+		got, err := RigManifestPresent(cfg.LeaseRoot)
+		if err != nil || got != want {
+			t.Fatalf("RigManifestPresent() = %t, %v; want %t", got, err, want)
+		}
+	}
+	requirePresent(false)
+	held, err := AcquireRig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requirePresent(true)
+	if err := held.Close(); err != nil {
+		t.Fatal(err)
+	}
+	requirePresent(false)
+	crashed, err := AcquireRig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := crashed.Abandon(); err != nil {
+		t.Fatal(err)
+	}
+	requirePresent(true)
+}
+
+func TestRigManifestPresentFailsClosedOnUnreadableRoot(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if present, err := RigManifestPresent(blocker); err == nil {
+		t.Fatalf("RigManifestPresent(file root) = %t, nil; want error", present)
+	}
+}
+
 func TestDefaultRigLeaseRootIgnoresHomeEnvironment(t *testing.T) {
 	before, err := defaultRigLeaseRoot()
 	if err != nil {
