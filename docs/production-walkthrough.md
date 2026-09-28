@@ -29,10 +29,19 @@ the operator's alone. No script or agent stops, unloads, or re-registers
 ([plan §10](plan.md#environments-prod-dev-and-ephemeral)).
 
 The stop is still needed because `freesided rig hold` and preflight refuse
-while that label is loaded. Production and a real-work daemon share one GitHub
-App, and each daemon's installation janitor can remove installations the other
-relies on (#1511). Isolating the App (#1517) lets a run proceed with production
-running (#1568).
+while that label is loaded. It stays by owner decision (#1517): it keeps two
+daemons from publishing as the same GitHub App at once. Those checks run only
+when the run starts, so don't choose **Start** until the run ends (#1583
+will enforce it). Running both is deferred to #1568.
+
+Until #1583 lands, every real-work run must reuse one App state directory
+(`FREESIDE_REAL_RUN_APP_STATE`) and one App credentials directory
+(`FREESIDE_REAL_RUN_APP_CREDS`). Each run's installation janitor uninstalls
+every installation its own authority doesn't name (#1511), so a run with
+different directories can uninstall installations another run's directories
+trusted. #1583 moves that state into production's directories, where the
+App's single authority lives
+([plan §10](plan.md#environments-prod-dev-and-ephemeral)).
 
 Keep the harness shell open. It prints the retained session directory, then the
 implementation run, invocation, endpoint and exact completion command. Sessions
