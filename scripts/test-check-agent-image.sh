@@ -174,7 +174,7 @@ begin_case() {
   unset FREESIDE_REAL_RUN_TIMEOUT_SECONDS
   unset FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES
   unset FREESIDE_REAL_RUN_WRITER_STOP_TIMEOUT
-  unset CASE_HOME CASE_STATE_ROOT CASE_DIAGNOSTIC_DIR
+  unset CASE_HOME CASE_STATE_ROOT CASE_DIAGNOSTIC_DIR CASE_APP_STATE
   printf 'ok' >"$CASE_DIR/create_mode"
   echo "case: $CASE"
 }
@@ -274,6 +274,23 @@ run_real_work() {
 	input_dir=$CASE_DIR/inputs
   stub_bin=$CASE_DIR/bin
   mkdir -p "$input_dir" "$stub_bin"
+  # The harness accepts only prod's own App directories (#1583). Every case
+  # runs under a synthetic home, never the real prod root, and the id stub
+  # names no passwd account, so the synthetic home is the only one checked.
+  run_home=${CASE_HOME:-$CASE_DIR/home}
+  if [[ -z "${CASE_HOME:-}" ]]; then
+    mkdir -p "$run_home/Library/Application Support/Freeside/daemon" \
+      "$run_home/Library/Application Support/Freeside/credentials"
+  fi
+  cat >"$stub_bin/id" <<'ID_STUB'
+#!/usr/bin/env bash
+if [[ "$*" == -un ]]; then
+  echo freeside-test-no-such-account
+  exit 0
+fi
+exec /usr/bin/id "$@"
+ID_STUB
+  chmod +x "$stub_bin/id"
   : >"$input_dir/spec.md"
   : >"$input_dir/policy.json"
   : >"$input_dir/publication.json"
@@ -729,7 +746,7 @@ RETRY_STUB
 		REAL_SLEEP="$real_sleep" \
 		FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS="${FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS:-30}" \
 		FREESIDE_REAL_RUN_DIAGNOSTIC_DIR="${CASE_DIAGNOSTIC_DIR:-$CASE_DIR}" \
-		HOME="${CASE_HOME:-$HOME}" \
+		HOME="$run_home" \
     FREESIDE_REAL_RUN_STATE_ROOT="${CASE_STATE_ROOT:-$CASE_DIR/state}" \
     FREESIDE_REAL_RUN_LISTEN=127.0.0.1:8677 \
     FREESIDE_REAL_RUN_AGENT_IMAGE="example.test/agent@$digest" \
@@ -756,8 +773,8 @@ RETRY_STUB
     FREESIDE_REAL_RUN_REMEDIATION_PROMPT_PACKAGE="$input_dir/remediator.md" \
     FREESIDE_REAL_RUN_INSTRUCTIONS="$input_dir/CLAUDE.md" \
     FREESIDE_REAL_RUN_APPROVED_RECIPE="$digest" \
-    FREESIDE_REAL_RUN_APP_STATE="$CASE_DIR/app-state" \
-    FREESIDE_REAL_RUN_APP_CREDS="$CASE_DIR/app-creds" \
+    FREESIDE_REAL_RUN_APP_STATE="${CASE_APP_STATE:-$run_home/Library/Application Support/Freeside/daemon}" \
+    FREESIDE_REAL_RUN_APP_CREDS="$run_home/Library/Application Support/Freeside/credentials" \
     FREESIDE_REAL_RUN_PROJECT=freeside \
     FREESIDE_REAL_RUN_ALLOWED_PATHS=scripts/ \
 		FREESIDE_REAL_RUN_RUN_ID=stale-generic-run \
@@ -1421,6 +1438,13 @@ if grep -q -- '-rig-token-file' "$CASE_DIR/daemon.args" &&
 else
 	report_failure "daemon did not receive dynamic rig binding authority and clean up through the live lease"
 fi
+if grep -qx -- '-prod-app-authority' "$CASE_DIR/daemon.args" &&
+  grep -A1 -x -- '-environment' "$CASE_DIR/daemon.args" | grep -qx ephemeral &&
+  grep -A1 -x -- '-prod-daemon' "$CASE_DIR/daemon.args" | grep -qx "$CASE_DIR/old/freesided"; then
+	pass=$((pass + 1))
+else
+	report_failure "daemon did not run as ephemeral with prod's App authority and the installed daemon's format check"
+fi
 if grep -qx -- '--require-composition' "$CASE_DIR/submit.args" &&
 	grep -qx -- '--composition-manifest' "$CASE_DIR/submit.args"; then
 	pass=$((pass + 1))
@@ -1664,6 +1688,15 @@ assert_rc 2
 assert_contains "refusing run-real-work: retained session"
 assert_contains "resolves under the prod state root"
 assert_lacks "complete/recover the old session"
+assert_not_exists "$CASE_DIR/go.log"
+
+begin_case "58f App state outside prod's App directory refuses before any session directory"
+mkdir -p "$CASE_DIR/app-state"
+CASE_APP_STATE=$CASE_DIR/app-state
+run_real_work lifecycle
+assert_rc 2
+assert_contains "refusing run-real-work: FREESIDE_REAL_RUN_APP_STATE"
+assert_contains "move-app-authority-to-prod.sh"
 assert_not_exists "$CASE_DIR/go.log"
 
 # --------------------- detector battery: adversarial input-space fixtures

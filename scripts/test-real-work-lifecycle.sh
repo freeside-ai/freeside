@@ -659,7 +659,7 @@ for mode in complete interrupt schema-mismatch; do
 import pathlib, sys
 root = pathlib.Path(sys.argv[1])
 args = (root / 'daemon-args').read_text().splitlines()
-assert args == ['-listen', '127.0.0.1:7339', '-db', str(root / 'freeside.db'),
+assert args == ['-environment', 'ephemeral', '-listen', '127.0.0.1:7339', '-db', str(root / 'freeside.db'),
                 '-state-dir', str(root / 'state'), '-driver', 'disabled',
                 '-approved-recipe', 'sha256:fixture',
                 '-approved-recipe', 'sha256:second-approved'], args

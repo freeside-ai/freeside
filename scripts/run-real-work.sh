@@ -81,16 +81,25 @@
 #   FREESIDE_REAL_RUN_REMEDIATION_PROMPT_PACKAGE trusted remediator prompt-package file
 #   FREESIDE_REAL_RUN_INSTRUCTIONS   host vendor-instruction file (CLAUDE.md)
 #   FREESIDE_REAL_RUN_APPROVED_RECIPE exact recipe digest approved by onboarding
-#   FREESIDE_REAL_RUN_APP_STATE      GitHub App authority state directory
-#   FREESIDE_REAL_RUN_APP_CREDS      GitHub App credential directory
+#   FREESIDE_REAL_RUN_APP_STATE      GitHub App authority state directory:
+#                                    exactly prod's <root>/daemon, since a run
+#                                    shares prod's one App authority (#1583)
+#   FREESIDE_REAL_RUN_APP_CREDS      GitHub App credential directory: exactly
+#                                    prod's <root>/credentials. Move an older
+#                                    run's App authority there once with
+#                                    scripts/move-app-authority-to-prod.sh.
 #   FREESIDE_REAL_RUN_PROJECT        project id the run belongs to
 #   FREESIDE_REAL_RUN_ALLOWED_PATHS  comma-separated declared path scope the
 #                                    agent may rewrite (no match-everything
 #                                    default: it is a containment control)
-#   STATE_ROOT, SEED_ROOT, REVIEW_INPUT_ROOT, APP_STATE, APP_CREDS, the
-#   diagnostic directory, and a resumed session are refused (exit 2) before
-#   anything is created when one resolves under a supervised state root
-#   (scripts/supervised-paths.sh).
+#   STATE_ROOT, SEED_ROOT, REVIEW_INPUT_ROOT, the diagnostic directory, and a
+#   resumed session are refused (exit 2) before anything is created when one
+#   resolves under a supervised state root, and APP_STATE and APP_CREDS when
+#   either is anything but prod's own App directory
+#   (scripts/supervised-paths.sh). The daemon runs with -prod-app-authority,
+#   which also requires the live rig lease and an installed prod daemon
+#   (FREESIDE_REAL_RUN_RESTORE_DAEMON) that reads this build's App authority
+#   formats.
 # Optional environment:
 #   FREESIDE_REAL_RUN_MANUAL_SUBMISSION_CONFIG operator JSON project policy
 #                                    for new client tasks; privately retained.
@@ -137,10 +146,12 @@
 #                                    replaces the managed build proxy when
 #                                    building the already-pinned images;
 #                                    live reachability is recorded not_run
-#   FREESIDE_REAL_RUN_RESTORE_DAEMON installed app daemon for upgraded-session
-#                                    restoration (default ~/Applications/Freeside.app/
-#                                    Contents/Resources/freesided); must match
-#                                    the retained daemon's Go build ID
+#   FREESIDE_REAL_RUN_RESTORE_DAEMON installed app daemon (default ~/Applications/
+#                                    Freeside.app/Contents/Resources/freesided):
+#                                    the daemon's -prod-daemon format check
+#                                    runs it, and upgraded-session restoration
+#                                    requires it to match the retained daemon's
+#                                    Go build ID
 #
 # The harness supplies FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID,
 # FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION, and (when present)
@@ -277,7 +288,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/supervised-paths.sh
 source "$repo_root/scripts/supervised-paths.sh"
 for name in FREESIDE_REAL_RUN_STATE_ROOT FREESIDE_REAL_RUN_SEED_ROOT \
-  FREESIDE_REAL_RUN_REVIEW_INPUT_ROOT FREESIDE_REAL_RUN_APP_STATE FREESIDE_REAL_RUN_APP_CREDS; do
+  FREESIDE_REAL_RUN_REVIEW_INPUT_ROOT; do
   refuse_supervised_path "run-real-work: $name" "${!name}" || exit 2
 done
 diagnostic_dir=${FREESIDE_REAL_RUN_DIAGNOSTIC_DIR:-$HOME/Library/Logs/Freeside}
@@ -288,6 +299,12 @@ refuse_supervised_path "run-real-work: diagnostic directory" "$diagnostic_dir" |
 if [[ -n "$retained_session" ]]; then
   refuse_supervised_path "run-real-work: retained session" "$retained_session" || exit 2
 fi
+# The one exception (#1583): the run shares prod's App authority, so these
+# must be prod's own App directories and nothing else.
+require_prod_app_directory "run-real-work: FREESIDE_REAL_RUN_APP_STATE" \
+  "$FREESIDE_REAL_RUN_APP_STATE" daemon || exit 2
+require_prod_app_directory "run-real-work: FREESIDE_REAL_RUN_APP_CREDS" \
+  "$FREESIDE_REAL_RUN_APP_CREDS" credentials || exit 2
 # shellcheck source=scripts/run-real-work-supervision.sh
 source "$repo_root/scripts/run-real-work-supervision.sh"
 # shellcheck source=scripts/real-work-lifecycle.sh
@@ -920,6 +937,9 @@ fi
 "$workdir/freesided" \
   "${judgment_args[@]}" \
   "${manual_submission_args[@]}" \
+  -environment ephemeral \
+  -prod-app-authority \
+  -prod-daemon "$(real_work_installed_daemon)" \
   -listen "$listen_address" \
   -db "$db_path" \
   -driver claude \

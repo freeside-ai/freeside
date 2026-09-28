@@ -6,6 +6,12 @@
 #
 #   refuse_supervised_path <label> <path> || exit 2
 #
+# and require_prod_app_directory, the one exception: an attended real-work run
+# shares prod's App authority (#1583), so its App state and credentials must be
+# exactly prod's own directories:
+#
+#   require_prod_app_directory <label> <path> <daemon|credentials> || exit 2
+#
 # A supervised root is `Library/Application Support/Freeside` (prod) or
 # `Library/Application Support/Freeside Dev` (dev), under both $HOME and the
 # account's passwd home, as the daemon checks (#1501). The path and each root
@@ -101,4 +107,48 @@ refuse_supervised_path() {
       fi
     done
   done
+}
+
+# prod_app_directory_in <label> <path> <daemon|credentials> <home>...: returns
+# 0 when <path> is the same directory, by device and inode, as
+# `Library/Application Support/Freeside/<name>` under every given home, and
+# the homes' prod roots are one directory; otherwise prints why to stderr and
+# returns 1. A copy outside the root, a subdirectory, or the root itself is
+# refused, as is every path when no home is given.
+prod_app_directory_in() {
+  local label=$1 path=$2 name=$3 home root='' want
+  shift 3
+  if (($# == 0)); then
+    echo "refusing $label \"$path\": neither HOME nor the passwd home names a home to check" >&2
+    return 1
+  fi
+  for home in "$@"; do
+    want="$home/Library/Application Support/Freeside/$name"
+    if [[ -n "$root" && ! "$home/Library/Application Support/Freeside" -ef "$root" ]]; then
+      echo "refusing $label \"$path\": HOME and the passwd home name different prod roots" >&2
+      return 1
+    fi
+    root="$home/Library/Application Support/Freeside"
+    if [[ ! -d "$want" ]]; then
+      echo "refusing $label \"$path\": prod's App directory \"$want\" does not exist; move the existing App authority there once with scripts/move-app-authority-to-prod.sh" >&2
+      return 1
+    fi
+    if [[ ! -d "$path" || ! "$path" -ef "$want" ]]; then
+      echo "refusing $label \"$path\": it must be prod's App directory \"$want\"; move the existing App authority there once with scripts/move-app-authority-to-prod.sh" >&2
+      return 1
+    fi
+  done
+}
+
+# require_prod_app_directory <label> <path> <daemon|credentials>: runs
+# prod_app_directory_in against $HOME and the passwd home, the homes
+# refuse_supervised_path checks. freesided's -prod-app-authority guard stays
+# the authority.
+require_prod_app_directory() {
+  local label=$1 path=$2 name=$3 home homes=()
+  [[ -z "${HOME:-}" ]] || homes+=("$HOME")
+  if home=$(supervised_account_home); then
+    homes+=("$home")
+  fi
+  prod_app_directory_in "$label" "$path" "$name" ${homes[@]+"${homes[@]}"}
 }
