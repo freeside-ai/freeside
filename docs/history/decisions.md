@@ -2067,3 +2067,25 @@ recommendation, decided by the owner through this revision's review.
 Decisions 4, 5, and 6, and the lease decline's basis in item 8, are owner
 decisions of 2026-09-23 made in this revision's review;
 [decision note](../../devlog/2026-09-23-0939-environment-tiers.md).)
+
+## Revision 70 ("Shared Tracker Format")
+
+1. **Every tracker follows the shared tracker format.** `docs/tracker-format.md`,
+   copied verbatim from the owner's agent-setup skill, fixes the shape of wave,
+   feature, and backlog trackers; docs/coordination.md keeps only Freeside's
+   additions. A tracker carries start order only: the **Mergeable next**
+   projection and the Implementation order section leave the tracker. The
+   `merges-after` relation stays in the Dependencies vocabulary, checked at
+   handoff and before integration, because open units still use it.
+2. **The Section [11](../plan.md#11-roadmap-build-order-and-coordination) resolver identifies the wave tracker by the `tracker`
+   label and a milestone, not by title.** Revision 34 matched pinned issues
+   titled `Wave N (...) tracking`, which tied authority to a title pattern and
+   a non-atomic pin swap. Now exactly one open issue with the label and a
+   milestone is active-wave, none is inter-wave, and more than one is invalid.
+   Revision 34 rejected "no match means inter-wave" because an unpinned
+   tracker looked the same as a missing one; pins no longer carry authority,
+   and a lost label or milestone fails closed by shutting the scheduling door.
+   The title becomes `Wave N: <Name>`.
+
+(Owner decisions of 2026-09-25, owner-assigned #1548;
+[decision note](../../devlog/2026-09-25-1035-shared-tracker-format.md).)
