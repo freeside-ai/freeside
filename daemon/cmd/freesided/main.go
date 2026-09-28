@@ -151,6 +151,9 @@ func main() {
 		case "approve-shadow-review":
 			runApproveShadowReviewMain(os.Args[2:])
 			return
+		case "set-identity-limit":
+			runSetIdentityLimitMain(os.Args[2:])
+			return
 		case "rig":
 			runRigMain(os.Args[2:])
 			return
