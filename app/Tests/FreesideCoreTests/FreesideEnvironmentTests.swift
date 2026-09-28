@@ -69,7 +69,7 @@ import Testing
     @Test func ephemeralDerivesNothing() {
         let ephemeral = FreesideEnvironment.ephemeral
         #expect(!ephemeral.isSupervised)
-        #expect(ephemeral.bundleIdentifier == nil)
+        #expect(ephemeral.bundleIdentifier == "ai.freeside.app.macos.ephemeral")
         #expect(ephemeral.launchdLabel == nil)
         #expect(ephemeral.launchAgentPlistName == nil)
         #expect(ephemeral.displayName == nil)
