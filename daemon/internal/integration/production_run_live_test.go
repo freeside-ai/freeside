@@ -63,10 +63,22 @@ func realRunBackupFiles(dbPath string, final bool) (*store.LocalBackupFiles, err
 	return store.NewEncryptedLocalBackupFiles(filepath.Join(dbPath+".checkpoints", "latest.backup"), key)
 }
 
+// realRunIdentities records the run's identity bindings on the setup pass and
+// verifies them on the final pass. The parallel-execution limit is not a run
+// input: a new identity starts at the declared limit, and an existing one
+// keeps the limit the operator recorded with `freesided set-identity-limit`,
+// so relaunching the harness never resets a raised limit.
 func realRunIdentities(ctx context.Context, st *store.Store, final bool, identities ...domain.AuthIdentity) error {
 	if !final {
 		return st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 			for _, identity := range identities {
+				stored, err := tx.GetAuthIdentity(ctx, identity.ID)
+				switch {
+				case err == nil:
+					identity.MaxParallelExecutions = stored.MaxParallelExecutions
+				case !errors.Is(err, store.ErrNotFound):
+					return err
+				}
 				if err := tx.RecordAuthIdentity(ctx, identity, time.Now().UTC()); err != nil {
 					return err
 				}
@@ -80,6 +92,7 @@ func realRunIdentities(ctx context.Context, st *store.Store, final bool, identit
 			if err != nil {
 				return err
 			}
+			expected.MaxParallelExecutions = actual.MaxParallelExecutions
 			if !reflect.DeepEqual(actual, expected) {
 				return fmt.Errorf("recorded auth identity %s differs from the run inputs", expected.ID)
 			}

@@ -404,6 +404,37 @@ even if configuration changed or was removed. A new command always creates
 new work, including with identical project, source, and name. For private
 staging and retained-session recovery, use the [production walkthrough](../docs/production-walkthrough.md#submit-a-new-task-from-a-client).
 
+### Set A Claude Identity's Parallel Limit
+
+`freesided set-identity-limit` records a newer revision of a Claude writer
+identity that changes only `max_parallel_executions`, the number of
+executions that identity may run at once. Identities start at 1. The command
+works whether `freesided` is stopped or running; a running daemon applies the
+new limit at its next admission. It refuses a non-Claude identity and an
+identity the store has not recorded, and it prints the previous and new limits
+as JSON. Repeating the current limit writes nothing.
+
+```sh
+freesided set-identity-limit \
+  -db "$FREESIDE_REAL_RUN_STATE_ROOT/freeside.db" \
+  -identity "$FREESIDE_REAL_RUN_AUTH_IDENTITY" \
+  -max-parallel-executions 4
+```
+
+**A limit above 1 does not yet give parallel writer runs.** Every Claude
+writer handoff still holds the identity's exclusive auth-store lease for the
+whole invocation, so a second concurrent writer on the same identity fails
+its stage instead of waiting. Raise the limit only after #1585 lets writer
+executions share an identity.
+
+The real-run harness (`scripts/run-real-work.sh`) records the writer identity
+at 1 on first launch and keeps a recorded limit on later launches. After a
+raise, watch the daemon log and the paired clients for auth, rate-limit, or
+credential failures. On any such failure, set the limit back to the last value
+that ran cleanly, or to 1. The
+[decision note](../devlog/2026-09-28-1220-identity-limit-rollout.md) records
+why this rollout check replaced the provider-overlap experiment.
+
 ### Enroll A Codex Subscription Identity
 
 `freesided enroll-codex` bootstraps a Codex subscription identity and repairs
