@@ -247,6 +247,13 @@ func runPreflightCommandWithEnvironment(
 	if err != nil {
 		return err
 	}
+	// Before any authority access: a run's preflight reads prod's App
+	// authority before the run's daemon takes prod's lock (#1583).
+	prodLock, err := holdProdLockForProdAppDirectories(cfg.PublicationStateDir, cfg.PublicationCredentialsDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = prodLock.Close() }()
 	manifest := newCompositionManifest(cfg, daemonBuild, now)
 	rig, rigErr := readRigAcquisition(cfg.RigTokenFile)
 	if rigErr == nil {

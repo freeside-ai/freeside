@@ -163,6 +163,9 @@ func main() {
 		case "snapshot":
 			runSnapshotMain(os.Args[2:])
 			return
+		case "publication-formats":
+			runPublicationFormatsMain(os.Args[2:])
+			return
 		}
 	}
 	flags := flag.NewFlagSet("freesided", flag.ContinueOnError)
@@ -240,6 +243,10 @@ func main() {
 		"operating mode: attended_dev (default) or unattended")
 	environmentFlag := flags.String("environment", string(defaultEnvironment),
 		"environment tier: prod, dev, or ephemeral (default; refuses supervised roots and ports)")
+	prodAppAuthority := flags.Bool("prod-app-authority", false,
+		"ephemeral only: use prod's own App directories as -publication-state-dir and -publication-credentials-dir while holding the production rig lease (-rig-token-file)")
+	prodDaemon := flags.String("prod-daemon", "",
+		"with -prod-app-authority: the installed prod freesided whose publication formats this build must match")
 	doctorInterval := flags.Duration(
 		"doctor-interval", defaultDoctorInterval,
 		"scheduled operational-health cadence in production driver mode")
@@ -278,10 +285,40 @@ func main() {
 		PublicationStateDir:       *publicationStateDir,
 		PublicationCredentialsDir: *publicationCredentialsDir,
 		ReviewInputRoot:           *reviewInputRoot,
+		ProdAppAuthority:          *prodAppAuthority,
+	}
+	if *prodDaemon != "" && !*prodAppAuthority {
+		fmt.Fprintln(os.Stderr, "freesided: -prod-daemon requires -prod-app-authority")
+		os.Exit(2)
+	}
+	if *prodAppAuthority {
+		accountHome, err := currentAccountHome()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "freesided:", err)
+			os.Exit(2)
+		}
+		leaseRoot, err := daemonlock.DefaultRigLeaseRoot()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "freesided:", err)
+			os.Exit(2)
+		}
+		if err := checkProdAppAuthority(context.Background(), env, home, accountHome, *rigTokenFile, leaseRoot, *prodDaemon); err != nil {
+			fmt.Fprintln(os.Stderr, "freesided:", err)
+			os.Exit(2)
+		}
 	}
 	if err := checkEnvironment(env, home, paths, *listenAddr); err != nil {
 		fmt.Fprintln(os.Stderr, "freesided:", err)
 		os.Exit(2)
+	}
+	if *prodAppAuthority {
+		prodLock, err := holdProdDatabaseLock(home)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "freesided:", err)
+			os.Exit(2)
+		}
+		// Held until the process exits; the deferred Close keeps it reachable.
+		defer func() { _ = prodLock.Close() }()
 	}
 	if env == environmentEphemeral {
 		accountHome, err := currentAccountHome()
@@ -290,6 +327,19 @@ func main() {
 			os.Exit(2)
 		}
 		if err := checkEnvironment(env, accountHome, paths, *listenAddr); err != nil {
+			fmt.Fprintln(os.Stderr, "freesided:", err)
+			os.Exit(2)
+		}
+	}
+	if env == environmentProd {
+		// Before anything opens the database: a real-work run may be using
+		// prod's App authority (#1583).
+		leaseRoot, err := daemonlock.DefaultRigLeaseRoot()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "freesided:", err)
+			os.Exit(2)
+		}
+		if err := checkProdRigLease(leaseRoot); err != nil {
 			fmt.Fprintln(os.Stderr, "freesided:", err)
 			os.Exit(2)
 		}

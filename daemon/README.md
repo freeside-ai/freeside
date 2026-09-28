@@ -275,6 +275,32 @@ and ports `7331` and `7332`. The bundled LaunchAgent plist passes
 `__FREESIDE_ENVIRONMENT__` placeholder with the tier. See the
 [environment rules](../docs/plan.md#environments-prod-dev-and-ephemeral).
 
+`-environment prod` refuses to start, before it opens its database, while a
+production rig manifest exists under `~/.freeside/rig-locks` (the account's
+passwd home), live or stale: an attended real-work run may be using `prod`'s
+App authority. A stale manifest keeps `prod` down until `freesided rig
+recover` clears it.
+
+`-prod-app-authority` is that run's one exception to the ephemeral guard
+(#1583). It lets `-publication-state-dir` and `-publication-credentials-dir`
+name `prod`'s own `<root>/daemon` and `<root>/credentials`, compared by
+directory identity, and nothing else under a supervised root. It requires
+`-environment ephemeral`; a `-rig-token-file` whose lease is live and
+published under that same lease root; `$HOME` and the passwd home naming one
+`prod` root; and `-prod-daemon <path>`, the installed `prod` `freesided`
+and not this binary. The daemon runs `<path> publication-formats` and refuses
+to start unless that build accepts every App authority state format this
+build writes. It then holds `prod`'s database lock
+(`<root>/daemon/freeside.db`) until it exits, so a running `prod`, even one
+started outside launchd, refuses the run, and `prod` can't start during it.
+`freesided preflight` holds the same lock while it runs when its publication
+directories are `prod`'s, since the run's preflight reads that authority
+before the run's daemon starts.
+It also refuses when that build writes a version this build can't read.
+`freesided publication-formats` prints, per file, the version a build
+writes and every version it accepts:
+`{"installation_authority":{"writes":1,"accepts":[1]},"installation_janitor_journal":{"writes":1,"accepts":[1]}}`.
+
 The long-running daemon defaults to `-driver disabled`. It serves pairing,
 health, stored state, and backups without starting an execution engine or
 simulating work. Its inbox explains that agent execution is not configured.

@@ -17,6 +17,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
@@ -849,4 +850,51 @@ func checkStatus(manifest compositionManifest, name string) compositionStatus {
 		}
 	}
 	return ""
+}
+
+// TestPreflightRefusesProdAppDirectoriesWithoutAuthority: a run pointed at
+// prod's App directories (#1583) can't start when they hold no credentials,
+// or credentials with no authority entry for the registration.
+func TestPreflightRefusesProdAppDirectoriesWithoutAuthority(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T, state, credentials string)
+		want  string
+	}{
+		{"no credentials", func(*testing.T, string, string) {}, "no usable GitHub App credentials"},
+		{"credentials without matching authority", func(t *testing.T, state, credentials string) {
+			t.Helper()
+			keystore, err := publish.NewKeystore(credentials, state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := keystore.SaveApp(publish.AppCredentials{
+				Owner: "example", OwnerID: 42, Visibility: publish.AppVisibilityPublic,
+				AppID: 91, Name: "Freeside Example", Slug: "freeside-example",
+				ClientID: "Iv1.example", Key: setupTestKey(t),
+			}); err != nil {
+				t.Fatal(err)
+			}
+			authority, err := publish.NewInstallationAuthorityStore(state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := authority.InitializeDocument(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+		}, "registration 91 has no authority entry"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			state, credentials := prodAppDirs(t, t.TempDir())
+			tc.setup(t, state, credentials)
+			inspection := inspectRepositoryAuthority(t.Context(), preflightConfig{
+				PublicationStateDir: state, PublicationCredentialsDir: credentials, RepositoryID: 7,
+			}, time.Now())
+			if inspection.AuthorityError == nil || !strings.Contains(inspection.AuthorityError.Error(), tc.want) {
+				t.Fatalf("AuthorityError = %v, want %q", inspection.AuthorityError, tc.want)
+			}
+		})
+	}
 }
