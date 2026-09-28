@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 71
+revision: 72
 status: active
 updated: 2026-09-28
 ---
@@ -48,6 +48,7 @@ why.
   - [5.2 The Daemon and Its Supervisor](#52-the-daemon-and-its-supervisor)
   - [5.3 Execution: StageDriver and ReviewSource](#53-execution-stagedriver-and-reviewsource)
   - [5.4 Credential Modes, Egress Profiles, and Concurrency](#54-credential-modes-egress-profiles-and-concurrency)
+    - [Machine Capacity](#machine-capacity)
     - [Admitted Agents](#admitted-agents)
     - [The Stage Owns the Launch](#the-stage-owns-the-launch)
     - [Roles and Launch Shapes](#roles-and-launch-shapes)
@@ -414,7 +415,7 @@ Approval is not a universal action.
 | `finding_adjudication` | Accept the recommended route, choose an offered alternative, discuss, or stop (added with the Section [7](#7-review-policy) adjudication routing, 1B). Acceptance binds to the adjudication artifact digest and the item version; a Discuss response re-invokes adjudication against the same version bindings, and the new artifact supersedes the item. Stop leaves the run parked. |
 | `review_contradiction` | Recover only the exact persisted contradiction named by the card, or leave it parked. The card renders the bound run, invocation, round, base SHA, head SHA, and immutable failure-body digest; recovery preserves the original failure evidence. |
 | `review_configuration` | Adopt the review configuration (`adopt_review_configuration`), discuss, or stop. The run is parked, not terminal. Adopting authorizes one operator-approved profile supersession, limited to review configuration, for exactly the parked failure the card's binding names. The superseding profile is resolved at decision time as the repository's currently activated revision and re-gated on every read. Stop concludes the run as a configuration failure, as it always did. The card renders the same bound coordinates as `review_contradiction` plus the digest of the superseded profile. |
-| `execution_failure` | Retry; retry with a predefined policy-allowed capability manifest; discuss; or stop. When the failure is classified as provider quota, credential expiry, or capacity, the card also offers retry under a qualified alternate agent, or wait (see the explicit alternate-agent retry below). |
+| `execution_failure` | Retry; retry with a predefined policy-allowed capability manifest; discuss; or stop. When the failure is classified as provider quota, credential expiry, or capacity, the card also offers retry under a qualified alternate agent, or wait (see the explicit alternate-agent retry below). When a container was killed at its memory limit, the card also offers a retry at the next larger size policy allows (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity). |
 | `agent_question` | Answer and retry, answer without retry, or stop. |
 | `publish_blocked` | Rerun trust evaluation, inspect the trust failure, or stop. Which publication path a repository uses is repository configuration, never a per-item choice (revision 44). |
 | `ready_for_final_review` | Bound to the task. View the PR (navigation, not resolution), return work to the agent with feedback, `mark_seen`, dismiss, or stop. It stays active until Freeside observes merge or close, work is returned, or the item is dismissed. Returning published work starts a new feedback invocation in the same run and supersedes this item; any later final-review item has a new publication identity and exact head binding. Evidence and approvals retain their exact run, artifact-digest, and PR-head bindings. |
@@ -1001,7 +1002,9 @@ Invocations bind to artifact IDs, not live web state.
 Provider concurrency has two independent controls:
 
 `AuthIdentity {account_binding, usage_pool, budget,
-auth_store_mutation_lease, max_parallel_executions, enabled, cost_owner}`
+auth_store_mutation_lease, enabled, cost_owner}`
+
+`UsagePool {id, provider, max_parallel_executions}`
 
 `ClientEnrollment {auth_identity_id, harness_client, route, auth_method,
 credential_mode, refresh_strategy, supports_read_only_auth_snapshot,
@@ -1012,14 +1015,117 @@ account binding, and the token expiry where the auth method exposes one
 
 1. Auth-store mutation, including refresh, login state, configuration writes,
    and store replacement, is serialized per identity: the one lease fences
-   every enrollment's store.
-2. Inference execution has a separate parallelism limit. 1B establishes that
-   limit experimentally and exposes it to WIP scheduling.
+   every enrollment's store. An execution never holds this lease for its
+   whole run, because the parallelism limit below could then never admit a
+   second execution. A mutation still excludes or fences every running
+   execution (#1585).
+2. Inference execution has a separate parallelism limit, declared on the
+   usage pool and counted per pool (revision 72). The provider enforces
+   quota and rate limits on the pool, not on one credential, so two
+   credentials on one pool (two clients on one subscription, or
+   `api_key_isolated` keys under one organization) share one limit. Every
+   ward stage launch that draws on a pool holds one slot from its admission
+   until the daemon proves every container of the launch absent, the point
+   its memory reservation also ends (Machine Capacity): the specifier,
+   implementer, remediator, reviewer, and shadow reviewer alike. A recorded
+   outcome alone doesn't free the slot, because a cancelled launch records
+   its outcome before its containers stop. A call launch takes no
+   slot, because a one-turn call queued behind hour-long stage runs would
+   stall adjudication and naming. Each Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) site runs at most one
+   call at a time, so calls can exceed a pool's limit by at most one request
+   per site that draws on it. The operator records each pool's limit. Each
+   daemon instance counts only its own slots, so instances that draw on one
+   pool (`prod` and `dev` on one subscription) split its limit between the
+   limits they record, and the operator keeps their sum within what the
+   provider tolerates. There is no coordinator across instances, for the
+   reason Machine Capacity gives. Routine concurrent use of
+   the same subscription outside Freeside is enough evidence to raise it,
+   checked by a staged rollout under normal work; this replaces the
+   experimental proof 1B first required (#730).
 
 If only one execution is safe, scheduling shows that constraint instead of
 hiding it in a lock. The `api_key_isolated` escape arrives in Phase 2 as an
 explicit mode, never a silent fallback. Vendor tooling stays native and
 unmodified.
+
+#### Machine Capacity
+
+The host that runs the ward is a scheduled resource of its own, separate from
+every provider's (revision 72). Pool limits bound how much inference an account
+runs at once. They say nothing about whether the host has the memory
+those containers need, and with several accounts their limits can add up to
+far more than one machine holds.
+
+- **Every ward container has declared limits.** The ward launches each
+  container with an explicit CPU cap and memory limit, never the runtime's
+  default. A stage launch declares one size for its long-lived container (the
+  agent for a ward role, the review container for a review) and runs its
+  short helpers (seeders, observers, the exporter) inside that reservation,
+  because they run one after another within the launch. A verification job
+  declares one size for its command containers, which also run one at a time.
+  Sizes are control-plane policy per launch class, and project policy may
+  raise a project's writer and verification sizes for heavy builds.
+- **A memory budget bounds them; CPU is only capped.** Each daemon instance
+  has a budget in memory. Before a ward stage launch or a verification
+  job starts, the daemon reserves its declared memory against the budget, in
+  the same transaction that takes the launch's pool slot when it has one
+  (verification draws on no pool). CPU caps are not reserved and may add up
+  past the host's cores: an agent spends most of its run waiting on the model,
+  and CPU contention slows a run while running out of memory breaks the host.
+  The reservation ends once the daemon proves every container of the launch
+  or job absent. Cleanup that fails after that (clean roots and volumes,
+  Section [5.8](#58-control-plane-trust)) stays open for recovery on its own and holds no capacity. A
+  launch that doesn't fit leaves its intent pending under a visible
+  machine-capacity hold, the way an exhausted execution limit shows its own
+  hold; it is never a lock wait.
+- **Waiting launches go oldest task first.** When memory frees, the daemon
+  grants launches waiting only on memory in the order their tasks were
+  submitted, and a launch that doesn't fit yet holds back the ones behind it.
+  So a task's review or verification goes ahead of a newer task's first
+  writer run, work doesn't pile up half done, and no launch waits forever
+  behind a stream of smaller ones. The memory this leaves idle is at most one
+  launch's size. A launch still waiting on its pool slot joins the order only
+  once the slot is free, so one full pool never holds up another pool's work.
+- **A launch that can never fit fails at once.** Project policy that
+  declares a size larger than the instance's whole budget does not resolve,
+  and the error names both numbers. A launch larger than the whole budget
+  (after the operator lowers it, for example) raises an `execution_failure`
+  item that names its size and the budget, instead of waiting under a hold
+  that can never clear.
+- **A too-small container is a named failure.** A container killed at its
+  memory limit fails its attempt as that failure, recorded with its declared
+  size, and its card offers a retry at the next larger size policy allows
+  (Section [4](#4-the-attention-model)). So a size set too small costs a card and a retry, not an
+  unexplained failed stage.
+- **Sizes start safe and follow evidence.** Only `prod` has a default
+  budget, half the host's physical memory, which the operator may raise. A
+  `dev` or `ephemeral` instance declares its own, because it shares the host
+  with `prod` and two defaults of half would already fill it. Control-plane policy
+  holds a starting size per launch class. Each launch records its declared
+  size, how it ended, and its peak memory where the runtime reports it, so
+  sizes are tuned from recorded runs, not guessed.
+- **Waiting on the operator costs nothing.** Every container belongs to one
+  stage invocation and is deleted when that invocation ends; none stays alive
+  while a task waits on a human (revision 1 item 6). So open tasks are not
+  bounded by the machine, and neither Freeside nor the plan caps them
+  system-wide.
+- **Calls and onboarding stay outside.** A call launch runs on the host with
+  no container and reserves nothing. Operator-attended onboarding commands
+  (image builds, their probes, and the retained local registry) run outside
+  the budget, when the operator chooses to run them.
+
+The budget is a scheduling bound, not a measurement. The runtime enforces each
+container's limits, and the budget keeps their sum within what the operator
+declared. It can't see other load on the host, so an operator who also uses the
+machine interactively declares a budget that leaves room for that use.
+
+Instances that share a host split it between their budgets. An instance
+reserves only against its own budget, because it can't see another instance's
+containers, so the operator keeps the budgets of every instance on one host
+(`prod`, `dev`, and any `ephemeral` runs, Section [10](#10-operations-and-onboarding), Environments) within
+what the host holds. Freeside has no host-wide coordinator across instances:
+it would add state shared across the instances that the environment tiers keep
+apart on purpose.
 
 #### Admitted Agents
 
@@ -1111,10 +1217,11 @@ The lines:
   records the generation it mounted. The stage receives a daemon-owned,
   single-route store, never a harness's multi-provider home.
 
-  `AuthIdentity` keeps the account binding, the usage pool, the account budget
-  and concurrency limit, the one conservative mutation lease that fences every
-  store mutation with enrollment id, generation, exact locator, and manifest
-  digest, and two operator fields, `enabled` and `cost_owner`. The exact store
+  `AuthIdentity` keeps the account binding, the usage pool, the account budget,
+  the one conservative mutation lease that fences every store mutation with
+  enrollment id, generation, exact locator, and manifest digest, and two
+  operator fields, `enabled` and `cost_owner`. The concurrency limit lives on
+  the usage pool, not the identity (revision 72). The exact store
   locator, refresh strategy, and snapshot support that the identity carried
   before this revision are client facts; they move to the enrollment and its
   generations.
@@ -1286,7 +1393,8 @@ ward-only parts fall away or change hands, and nothing else does:
   (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)).
 - *Credentialed* holds unchanged. A judgment role's agent names an enrollment
   on its `who` line like any other agent, the generation rules apply, and the
-  call draws on that identity's budget and usage pool. The judgment calls'
+  call draws on that identity's budget and usage pool, though it holds no
+  execution slot on the pool (revision 72). The judgment calls'
   borrowed review credential is the interim flag path and ends at the cutover
   below.
 - *Snapshot* holds, with the call record in the place of `ExecutionAdmission`
@@ -1410,6 +1518,9 @@ per-attempt choice, never silent: no default is inferred from enrollment
 order, recency, or availability. Cost owner is read from the selected
 agent's identity on every selection and recorded with it, so one project can
 attribute a review to one subscription and an implementation to another.
+Parallelism limits count per usage pool, not per identity, so two identities
+on one pool share its limit, and two pools of one provider add their limits
+(revision 72).
 The operator owns compliance with each provider's terms for multi-account
 use; Freeside attributes usage to a named identity and neither endorses nor
 polices the arrangement (Section [14](#14-risks), subscription-terms drift).
@@ -1440,8 +1551,8 @@ markers keep their own postures.
 
 The gate is an exclusion list: no probe value is read by preflight, by
 scheduling, by the `max_parallel_executions` limit, or by any driver. Those
-consumers read only the operator's explicit identity and enrollment records, the
-tree, and the resolved policy. A probe that observes a newer model, a lapsed
+consumers read only the operator's explicit identity, usage pool, and
+enrollment records, the tree, and the resolved policy. A probe that observes a newer model, a lapsed
 plan, or spare capacity produces a card or a proposed offer diff in the tree,
 never a changed selection.
 
@@ -5256,8 +5367,8 @@ Phase 1B adds:
   #697);
 - convergence policy and the shadow arm;
 - provenance-gated EvidencePublisher;
-- experimental `max_parallel_executions` per auth identity, visible to
-  scheduling;
+- `max_parallel_executions` per usage pool, visible to scheduling
+  (revision 72);
 - the Codex execution driver, an execution capacity hedge against
   single-provider stalls (Section [14](#14-risks)). The `agent-codex` agent base, the project
   images the reusable builder derives from it (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)), ward's second
@@ -5525,38 +5636,91 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 71 ("Real-Work Runs Share the Prod App's Authority"):
+Revision 72 ("Schedule Work by Machine and Account Capacity"):
 
-1. **One App, one authority.** An attended real-work run uses the `prod`
-   App's publication authority state directory and credentials directory,
-   only while it holds the production rig lease, and never a copy of them
-   (Section [10](#10-operations-and-onboarding), Environments, Rules). Revision 69 item 5 let the run enroll
-   the App into its own `ephemeral` store; #1511 showed that each daemon's
-   janitor deletes every installation its own authority does not name, so a
-   second authority for one App uninstalls the first's installations whether
-   or not both run at once. Rejected: a separate App for real-work runs (they
-   do real work on real, often public, repositories and should publish as
-   the real App); a janitor that tolerates installations its authority does
-   not name (it weakens a guard on a destructive path); and running real work
-   through `prod`'s own store (the harness isolates runs from `prod` on
-   purpose). A real-work build must read and write the authority and journal
-   formats the installed `prod` build accepts; the follow-up code unit
-   (#1583) enforces that, adds the guard exception, and moves the existing
-   real-work App state into `prod`'s directories.
-2. **`prod` stays stopped during a real-work run.** Running both at once is
-   deferred (#1568). The rig lease refuses to be acquired while
-   `ai.freeside.daemon` is loaded, and #1583 enforces the stop for the rest
-   of the run. With one shared authority the janitors agree, so revision
-   69 item 8's GitHub-side lease stays declined; a lease alone never fixed
-   divergent bindings. Because publication identity names neither the
-   daemon nor the App (Section [5.15](#515-evidence-and-images)), the operator also never runs one work
-   unit in both. The `dev` tier and dev-work `ephemeral` instances keep
-   running in parallel.
-3. **Real-work task records stay in the run's own database.** Folding them
-   into `prod`'s history is deferred.
+1. **The machine is a scheduled resource.** Every ward container launches
+   with a declared CPU cap and memory limit, and each daemon instance's
+   declared memory budget bounds their memory (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity). Instances that share
+   a host split it between their budgets, because no instance sees another's
+   containers. The daemon reserves a launch's size in
+   the same transaction as its pool slot and releases it once the launch's
+   containers are proved absent, so work that doesn't fit waits under a
+   visible hold instead of exhausting host memory. Because no container
+   outlives its stage invocation, a task
+   waiting on the operator costs nothing, and open tasks need no system-wide
+   cap. Rejected: a system-wide cap on running tasks (it counts tasks, but
+   memory runs out by containers, and the containers per task vary by role);
+   account limits alone (with several accounts they add up past what the
+   machine holds, and verification takes no account slot); and
+   counting containers without sizes (a writer running a heavy build and a
+   seeder that copies files would count the same); and a host-wide
+   coordinator across instances (it adds state shared across the instances
+   that Section [10](#10-operations-and-onboarding) keeps apart).
+2. **Memory is reserved, CPU is capped, and the oldest task goes first.**
+   Waiting launches get memory in the order their tasks were submitted, with
+   no skipping. A size that can never fit fails at once, and a container
+   killed at its memory limit gets a card that offers a larger size.
+   `prod`'s budget defaults to half the host's memory, other tiers declare
+   theirs, and each launch records its
+   size, outcome, and peak memory so sizes follow evidence. Rejected:
+   reserving CPU (agents mostly wait on the model, so on a 10-core host a
+   4-CPU reservation would allow two writers while the cores sit idle); and
+   letting smaller launches jump the queue (it fills memory better but lets a
+   large launch wait forever).
+3. **Execution limits count per usage pool, and calls take no slot.** The
+   provider meters quota on the pool, so two credentials on one pool share
+   one limit (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), provider concurrency control 2).
+   Every ward role that draws on a pool holds a slot, reviews included.
+   Each instance counts only its own slots, so instances that draw on one
+   pool split its limit between them, the way they split the host (item 1).
+   Rejected: a limit per credential (two clients on one subscription would
+   get twice the provider's concurrency); and counting calls (a one-turn
+   adjudication or naming call would wait behind hour-long writer runs).
+   Each site runs one call at a time, so calls exceed a pool's limit by at
+   most one request per site (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)).
+4. **Owner evidence and a staged rollout raise a limit.** The owner's routine
+   concurrent use of the same subscriptions outside Freeside is enough
+   evidence to record a limit above 1, and a staged rollout under normal
+   work checks it. This replaces the experimental overlap proof that 1B
+   first required. #730 (#1588) adds `freesided set-identity-limit` to
+   record a limit. The rollout starts only after #1585, because today each
+   Claude writer run holds its identity's mutation lease for the whole run,
+   so a second writer fails its stage instead of waiting. Rejected: keeping
+   the proof as a precondition (it tests what the owner's daily use already
+   shows, and Freeside can't observe provider quota anyway, per
+   Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Observation, Never Authority).
+5. **Implementation units are filed after merge, with no wave assigned.**
+   Pool limits move `max_parallel_executions` and #1588's
+   `set-identity-limit` command to the usage pool, and replace the
+   `identity_parallelism` hold with a pool hold that names the pool, since
+   several identities fill one pool; stored holds stay readable
+   (`kind:contract`, `starts-after` #1585, because both change the admission
+   capacity path and contract units serialize; it absorbs #727 and #731,
+   which fix the same count). A pool takes the lowest limit among its
+   identities, so no pool gains concurrency from the move. An identity with
+   no pool yet keeps its current limit in a pool of its own that admission
+   counts it against, without setting its set-once `usage_pool`; when the
+   account is later characterized into a shared pool, that pool takes the
+   lowest limit by the same rule, so neither step gains concurrency.
+   Ward container sizing passes declared CPU caps and memory limits to every
+   launch, records each launch's size, outcome, and peak memory, and names a
+   memory-limit kill as its own failure. It first measures real peak memory
+   for a writer, a review, and a verification job, checks whether Apple
+   `container` returns freed memory before a container stops, and checks
+   whether review observer containers run beside the review container. The
+   host budget and machine-capacity hold add the memory budget, the
+   reservation, the oldest-task-first order, the refusal of sizes that can
+   never fit, the card's larger-size retry, and a new hold reason
+   (`kind:contract`, `starts-after` #898 and container sizing: reviews
+   reserve only once they pass through admission, and a reservation protects
+   the host only once the runtime enforces the declared size). The clients
+   then name
+   the new holds in plain words. A usage brake (pausing work when a
+   subscription runs low) stays deferred; #1587 records why and when to
+   revisit it.
 
-(Owner decisions of 2026-09-28, owner-run #1517;
-[decision note](../devlog/2026-09-28-1715-real-work-app-authority.md).)
+(Owner decisions of 2026-09-28, owner-assigned #1587;
+[decision note](../devlog/2026-09-28-1800-capacity-scheduling.md).)
 
 ## 14. Risks
 
@@ -5571,6 +5735,7 @@ Revision 71 ("Real-Work Runs Share the Prod App's Authority"):
 | **Wardless roles on the host** | A judgment role runs outside the ward, so nothing sandboxes it and no egress proxy sits in front of its harness. Its safety rests on the call launch, which an adapter proves per build against the real harness; Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admission, holds the launch's clauses, the interim hand-audit exception, and credential handling on the host. The answer is schema-validated and bounded by its site's authority contract, the model sees only the site's allowlisted, redacted fields, and a shadow's output reaches only the advisory store. Residual: a harness update can change what a launch flag means, which is why the proof is per pinned build and not per harness; a host administrator policy file that no launch flag switches off is outside that per-build proof (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); and a shadow whose agent shares its primary's usage pool draws on a vendor quota that Freeside does not meter (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)). |
 | **Workspace-handoff uncertainty** | Resolved by the workspace-handoff spike: the strong class is declared and conformance-gated (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)); the same-VM fallback is refuted by execution, never implemented or declared. |
 | **Codex cloud review as a load-bearing dependency** | Realized 2026-07-31: the live-run trigger falsification (#427) showed no App-visible trigger path. The dependency is removed. Review is Freeside-invoked (Section [7](#7-review-policy)), and native review is best-effort extra evidence. |
+| Host capacity | Several accounts' limits can add up to more containers than one machine holds. Give every ward container a CPU cap and a declared memory size, and bound their memory by each instance's declared budget, so a launch that doesn't fit waits under a visible hold instead of exhausting memory; waiting launches go oldest task first, and a size that can never fit fails at once (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity). Residual: the budget can't see load outside Freeside or another instance's containers, so the operator declares it with room for interactive use and keeps the budgets of every instance on one host within what the host holds. |
 | Single-provider execution capacity | Claude usage limits can stall real work. Schedule the 1B Codex execution driver as a hedge (Section [11](#11-roadmap-build-order-and-coordination)). Keep selection explicit as a lineup line, never silent (a lineup may name the switch per failure class, Section [4](#4-the-attention-model)). Usage remains observed telemetry (Section [8](#8-observability-and-optimization-telemetry)). |
 | Classifier mislabeling | Preserve immutable raw findings; require second adjudication for the safety case; enforce ceilings. |
 | Subscription-terms drift | Keep it as an explicit operating risk. |
