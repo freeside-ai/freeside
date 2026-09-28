@@ -70,15 +70,6 @@ public enum FreesideEnvironment: String, CaseIterable, Sendable {
         }
     }
 
-    /// The window badge; production shows none.
-    public var badgeTitle: String? {
-        switch self {
-        case .prod: nil
-        case .dev: "Dev"
-        case .ephemeral: "Ephemeral"
-        }
-    }
-
     /// The bundle ID each tier's app is built with. `ephemeral`'s is the
     /// `FreesideMac` scheme's Debug build, so a throwaway run shares no
     /// preferences, LaunchServices registration, or Keychain access group

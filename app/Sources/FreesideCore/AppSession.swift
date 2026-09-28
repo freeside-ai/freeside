@@ -31,6 +31,18 @@ public final class AppSession {
     }
 
     private var connection: Connection?
+    /// The selected deployment, from the pairing screen on; nil before a
+    /// connection and for mock and pairing-demo sessions.
+    public var serverURL: URL? { connection?.deploymentURL }
+    /// The `-FreesideReadinessDir` whose run the window shows: the launch
+    /// connected to the deployment its readiness file named, and the session
+    /// has not since selected another. Nil otherwise.
+    public var readinessDirectory: URL? {
+        guard let readinessRun, serverURL == readinessRun.deploymentURL else { return nil }
+        return readinessRun.directory
+    }
+    /// Set once by `fromEnvironment(environment:)`; see `followedReadinessRun`.
+    var readinessRun: ReadinessRun?
     private let persistServerURL: (URL) -> Void
     /// This tier's same-host supervised daemon, whose readiness file the Mac
     /// app watches; nil when the launch has none (`ephemeral`, iOS).
@@ -393,12 +405,14 @@ public final class AppSession {
         environment: FreesideEnvironment
     ) throws(LaunchError) -> AppSession {
         let arguments = argumentDomain()
+        let argumentServerURL = arguments["FreesideServerURL"] as? String
+        let readinessDirectory = arguments["FreesideReadinessDir"] as? String
         let mode = try launchMode(
             environment: environment,
-            argumentServerURL: arguments["FreesideServerURL"] as? String,
+            argumentServerURL: argumentServerURL,
             pairingDemo: arguments["FreesidePairingDemo"] as? String == "YES",
             mockMode: arguments["FreesideMock"] as? String == "YES",
-            readinessDirectory: arguments["FreesideReadinessDir"] as? String,
+            readinessDirectory: readinessDirectory,
             persistedServerURL: persistedServerURL(),
             readReadiness: { DaemonReadinessReader().read(at: $0, expecting: environment) },
             hasCredential: hasStoredCredential)
@@ -407,10 +421,35 @@ public final class AppSession {
         // installed app to a dead daemon on its next launch.
         let persist: (URL) -> Void =
             environment.isSupervised ? { persistServerURLToDefaults($0) } : { _ in }
-        return session(
+        let session = session(
             for: mode, localDaemonURL: environment.supervisedAPIURL,
             cacheRoot: environment.stateRoot(), credentialStore: credentialStore(for: environment),
             persistServerURL: persist)
+        // `launchMode` threw for any path it would not follow, so only a
+        // validated one names the window's instance.
+        session.readinessRun = followedReadinessRun(
+            readinessDirectory, argumentServerURL: argumentServerURL, mode: mode)
+        return session
+    }
+
+    struct ReadinessRun: Equatable {
+        let directory: URL
+        let deploymentURL: URL
+    }
+
+    /// The run a launch followed from its readiness file, so the window can
+    /// name it. Only a `.live` mode that no server argument chose came from
+    /// that file: the one tier that accepts `-FreesideReadinessDir`,
+    /// `ephemeral`, has no persisted URL or fixed port to fall back to. A
+    /// demo, mock, refused, or not-yet-written run follows nothing.
+    static func followedReadinessRun(
+        _ readinessDirectory: String?, argumentServerURL: String?, mode: LaunchMode
+    ) -> ReadinessRun? {
+        guard argumentServerURL == nil, let readinessDirectory, case .live(let url, _) = mode else {
+            return nil
+        }
+        return ReadinessRun(
+            directory: URL(fileURLWithPath: readinessDirectory, isDirectory: true), deploymentURL: url)
     }
 
     /// A supervised tier keeps its device credential in the Keychain, keyed

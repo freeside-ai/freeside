@@ -53,7 +53,6 @@ import Testing
         #expect(
             FreesideEnvironment.prod.daemonStateDirectory()
                 == home.appendingPathComponent("Freeside/daemon", isDirectory: true))
-        #expect(FreesideEnvironment.prod.badgeTitle == nil)
 
         #expect(FreesideEnvironment.dev.bundleIdentifier == "ai.freeside.app.macos.dev")
         #expect(FreesideEnvironment.dev.launchdLabel == "ai.freeside.daemon.dev")
@@ -63,7 +62,6 @@ import Testing
         #expect(
             FreesideEnvironment.dev.daemonStateDirectory()
                 == home.appendingPathComponent("Freeside Dev/daemon", isDirectory: true))
-        #expect(FreesideEnvironment.dev.badgeTitle == "Dev")
     }
 
     @Test func ephemeralDerivesNothing() {
@@ -76,6 +74,5 @@ import Testing
         #expect(ephemeral.supervisedAPIURL == nil)
         #expect(ephemeral.stateRoot() == nil)
         #expect(ephemeral.daemonStateDirectory() == nil)
-        #expect(ephemeral.badgeTitle == "Ephemeral")
     }
 }

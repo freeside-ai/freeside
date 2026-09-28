@@ -1046,6 +1046,68 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
         #expect(persisted == [deploymentURL])
     }
 
+    @Test func serverURLFollowsTheSelectedDeployment() {
+        // The window subtitle reads it, so it tracks connect and changeServer.
+        let launchURL = URL(string: "http://127.0.0.1:7331")!
+        let typedURL = URL(string: "http://127.0.0.1:49152")!
+        let session = AppSession(
+            client: APIClientFactory.mock(), credentials: InMemoryCredentialStore(),
+            cache: InMemoryCacheStore(), deploymentURL: launchURL, cacheRoot: nil,
+            credentialStore: { _ in InMemoryCredentialStore() }, persistServerURL: { _ in })
+        #expect(session.serverURL == launchURL)
+
+        session.changeServer()
+        #expect(session.serverURL == nil)
+
+        session.connect(serverURL: typedURL)
+        #expect(session.serverURL == typedURL)
+    }
+
+    @Test func readinessRunIsFollowedOnlyWhenTheReadinessFileChoseTheDeployment() {
+        // A server, demo, or mock argument outranks the readiness file, and
+        // an absent or refused file leaves the operator to pick a deployment,
+        // so none of those launches may name the readiness run.
+        let path = "/tmp/wt/.dev-instance.abc123/daemon"
+        let runURL = URL(string: "http://127.0.0.1:49152")!
+        #expect(
+            AppSession.followedReadinessRun(
+                path, argumentServerURL: nil, mode: .live(runURL, pairingCode: "123456"))
+                == AppSession.ReadinessRun(
+                    directory: URL(fileURLWithPath: path, isDirectory: true), deploymentURL: runURL))
+        #expect(
+            AppSession.followedReadinessRun(
+                nil, argumentServerURL: nil, mode: .live(runURL, pairingCode: "")) == nil)
+        #expect(
+            AppSession.followedReadinessRun(
+                path, argumentServerURL: runURL.absoluteString, mode: .live(runURL, pairingCode: ""))
+                == nil)
+        for mode: AppSession.LaunchMode in [.needsConnection, .pairingDemo, .mock] {
+            #expect(AppSession.followedReadinessRun(path, argumentServerURL: nil, mode: mode) == nil)
+        }
+    }
+
+    @Test func readinessDirectoryLastsOnlyWhileTheSessionShowsThatRun() {
+        // After changeServer or a typed address, the worktree label would
+        // name a daemon the window no longer shows.
+        let runURL = URL(string: "http://127.0.0.1:49152")!
+        let directory = URL(fileURLWithPath: "/tmp/wt/.dev-instance.abc123/daemon", isDirectory: true)
+        let session = AppSession(
+            client: APIClientFactory.mock(), credentials: InMemoryCredentialStore(),
+            cache: InMemoryCacheStore(), deploymentURL: runURL, cacheRoot: nil,
+            credentialStore: { _ in InMemoryCredentialStore() }, persistServerURL: { _ in })
+        session.readinessRun = AppSession.ReadinessRun(directory: directory, deploymentURL: runURL)
+        #expect(session.readinessDirectory == directory)
+
+        session.changeServer()
+        #expect(session.readinessDirectory == nil)
+
+        session.connect(serverURL: URL(string: "http://127.0.0.1:49153")!)
+        #expect(session.readinessDirectory == nil)
+
+        session.connect(serverURL: runURL)
+        #expect(session.readinessDirectory == directory)
+    }
+
     @Test func ephemeralKeepsDeviceCredentialsInMemory() {
         // An ephemeral run may reuse a fixed port with a fresh credential
         // database; a Keychain credential from an earlier run would skip
