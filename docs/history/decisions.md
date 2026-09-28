@@ -2122,3 +2122,89 @@ decisions of 2026-09-23 made in this revision's review;
 
 (Owner decisions of 2026-09-28, owner-run #1517;
 [decision note](../../devlog/2026-09-28-1715-real-work-app-authority.md).)
+
+## Revision 72 ("Schedule Work by Machine and Account Capacity")
+
+1. **The machine is a scheduled resource.** Every ward container launches
+   with a declared CPU cap and memory limit, and each daemon instance's
+   declared memory budget bounds their memory (Section [5.4](../plan.md#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity). Instances that share
+   a host split it between their budgets, because no instance sees another's
+   containers. The daemon reserves a launch's size in
+   the same transaction as its pool slot and releases it once the launch's
+   containers are proved absent, so work that doesn't fit waits under a
+   visible hold instead of exhausting host memory. Because no container
+   outlives its stage invocation, a task
+   waiting on the operator costs nothing, and open tasks need no system-wide
+   cap. Rejected: a system-wide cap on running tasks (it counts tasks, but
+   memory runs out by containers, and the containers per task vary by role);
+   account limits alone (with several accounts they add up past what the
+   machine holds, and verification takes no account slot); and
+   counting containers without sizes (a writer running a heavy build and a
+   seeder that copies files would count the same); and a host-wide
+   coordinator across instances (it adds state shared across the instances
+   that Section [10](../plan.md#10-operations-and-onboarding) keeps apart).
+2. **Memory is reserved, CPU is capped, and the oldest task goes first.**
+   Waiting launches get memory in the order their tasks were submitted, with
+   no skipping. A size that can never fit fails at once, and a container
+   killed at its memory limit gets a card that offers a larger size.
+   `prod`'s budget defaults to half the host's memory, other tiers declare
+   theirs, and each launch records its
+   size, outcome, and peak memory so sizes follow evidence. Rejected:
+   reserving CPU (agents mostly wait on the model, so on a 10-core host a
+   4-CPU reservation would allow two writers while the cores sit idle); and
+   letting smaller launches jump the queue (it fills memory better but lets a
+   large launch wait forever).
+3. **Execution limits count per usage pool, and calls take no slot.** The
+   provider meters quota on the pool, so two credentials on one pool share
+   one limit (Section [5.4](../plan.md#54-credential-modes-egress-profiles-and-concurrency), provider concurrency control 2).
+   Every ward role that draws on a pool holds a slot, reviews included.
+   Each instance counts only its own slots, so instances that draw on one
+   pool split its limit between them, the way they split the host (item 1).
+   Rejected: a limit per credential (two clients on one subscription would
+   get twice the provider's concurrency); and counting calls (a one-turn
+   adjudication or naming call would wait behind hour-long writer runs).
+   Each site runs one call at a time, so calls exceed a pool's limit by at
+   most one request per site (Section [5.13](../plan.md#513-deterministic-components-judgment-calls-and-the-effect-registry)).
+4. **Owner evidence and a staged rollout raise a limit.** The owner's routine
+   concurrent use of the same subscriptions outside Freeside is enough
+   evidence to record a limit above 1, and a staged rollout under normal
+   work checks it. This replaces the experimental overlap proof that 1B
+   first required. #730 (#1588) adds `freesided set-identity-limit` to
+   record a limit. The rollout starts only after #1585, because today each
+   Claude writer run holds its identity's mutation lease for the whole run,
+   so a second writer fails its stage instead of waiting. Rejected: keeping
+   the proof as a precondition (it tests what the owner's daily use already
+   shows, and Freeside can't observe provider quota anyway, per
+   Section [5.4](../plan.md#54-credential-modes-egress-profiles-and-concurrency), Observation, Never Authority).
+5. **Implementation units are filed after merge, with no wave assigned.**
+   Pool limits move `max_parallel_executions` and #1588's
+   `set-identity-limit` command to the usage pool, and replace the
+   `identity_parallelism` hold with a pool hold that names the pool, since
+   several identities fill one pool; stored holds stay readable
+   (`kind:contract`, `starts-after` #1585, because both change the admission
+   capacity path and contract units serialize; it absorbs #727 and #731,
+   which fix the same count). A pool takes the lowest limit among its
+   identities, so no pool gains concurrency from the move. An identity with
+   no pool yet keeps its current limit in a pool of its own that admission
+   counts it against, without setting its set-once `usage_pool`; when the
+   account is later characterized into a shared pool, that pool takes the
+   lowest limit by the same rule, so neither step gains concurrency.
+   Ward container sizing passes declared CPU caps and memory limits to every
+   launch, records each launch's size, outcome, and peak memory, and names a
+   memory-limit kill as its own failure. It first measures real peak memory
+   for a writer, a review, and a verification job, checks whether Apple
+   `container` returns freed memory before a container stops, and checks
+   whether review observer containers run beside the review container. The
+   host budget and machine-capacity hold add the memory budget, the
+   reservation, the oldest-task-first order, the refusal of sizes that can
+   never fit, the card's larger-size retry, and a new hold reason
+   (`kind:contract`, `starts-after` #898 and container sizing: reviews
+   reserve only once they pass through admission, and a reservation protects
+   the host only once the runtime enforces the declared size). The clients
+   then name
+   the new holds in plain words. A usage brake (pausing work when a
+   subscription runs low) stays deferred; #1587 records why and when to
+   revisit it.
+
+(Owner decisions of 2026-09-28, owner-assigned #1587;
+[decision note](../../devlog/2026-09-28-1800-capacity-scheduling.md).)
