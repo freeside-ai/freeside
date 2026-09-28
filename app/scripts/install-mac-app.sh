@@ -158,12 +158,16 @@ case "$target" in
 prod)
     bundle_id="ai.freeside.app.macos"
     display_name="Freeside"
+    bundle_name="FreesideMac"
+    app_icon_name="AppIcon"
     daemon_label="ai.freeside.daemon"
     listen_addr="127.0.0.1:7331"
     ;;
 dev)
     bundle_id="ai.freeside.app.macos.dev"
     display_name="Freeside Dev"
+    bundle_name="Freeside Dev"
+    app_icon_name="AppIconDev"
     daemon_label="ai.freeside.daemon.dev"
     listen_addr="127.0.0.1:7332"
     ;;
@@ -680,6 +684,7 @@ if ! xcodebuild \
     CODE_SIGN_IDENTITY="Apple Development" \
     DEVELOPMENT_TEAM="$team_id" \
     FREESIDE_MAC_BUNDLE_ID="$bundle_id" \
+    FREESIDE_MAC_APP_ICON_NAME="$app_icon_name" \
     build >"$build_log" 2>&1; then
     tail -40 "$build_log" >&2
     die "build failed; full log at $build_log"
@@ -689,14 +694,20 @@ built_app="$build_dir/Build/Products/Release/FreesideMac.app"
 [[ -d "$built_app" ]] || die "build produced no app at $built_app"
 preserved_entitlements="$build_dir/FreesideMac.xcode.entitlements"
 verify_provisioned_app "$built_app" "$preserved_entitlements"
-# The tier the app resolves at launch, and the name Finder and the Dock show.
-# The provisioning profile binds neither, and the re-sign below seals both.
+# The tier the app resolves at launch, and the names Finder, the Dock, and
+# the menu bar show. The provisioning profile binds none of them, and the
+# re-sign below seals them all. The icon is a build setting instead, checked
+# here, because the Debug build has no installer step to patch it.
 built_info="$built_app/Contents/Info.plist"
 plutil -replace CFBundleDisplayName -string "$display_name" "$built_info" ||
     die "could not set the app display name"
+plutil -replace CFBundleName -string "$bundle_name" "$built_info" ||
+    die "could not set the app bundle name"
 plutil -replace FreesideEnvironment -string "$target" "$built_info" ||
     die "could not set the app environment"
 require_plist_value "$built_info" CFBundleDisplayName "$display_name" "the app display name"
+require_plist_value "$built_info" CFBundleName "$bundle_name" "the app bundle name"
+require_plist_value "$built_info" CFBundleIconName "$app_icon_name" "the app icon name"
 require_plist_value "$built_info" FreesideEnvironment "$target" "the app environment"
 # The app registers the plist its FreesideEnvironment names, so a dev bundle
 # ships its own file and label rather than a second ai.freeside.daemon.
