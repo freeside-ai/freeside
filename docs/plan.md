@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 70
+revision: 71
 status: active
-updated: 2026-09-25
+updated: 2026-09-28
 ---
 
 # Freeside
@@ -3356,8 +3356,14 @@ Four machine-enforced rules govern evidence:
    check-before-create, and deterministic PR-section markers. The identity
    derives the default head branch; an operator may declare an exact branch
    to meet the repository convention. The durable intent binds that name
-   before dispatch, and retries cannot change it. It waits for 1B
-   because the first repository is deliberately non-UI (Section [11](#11-roadmap-build-order-and-coordination)). Phase 1A
+   before dispatch, and retries cannot change it. The identity derives from
+   content and names neither the daemon nor the App, so two daemons that
+   publish the same candidate for one repository to the same head branch
+   converge on one PR. Section
+   [10](#10-operations-and-onboarding) prevents that: `prod` is stopped during an attended real-work run, and
+   the operator never runs one work unit in both while either has it active.
+   The publisher waits for 1B because the first repository is deliberately
+   non-UI (Section [11](#11-roadmap-build-order-and-coordination)). Phase 1A
    ships the artifact schema, provenance enforcement, and client rendering; 1B
    adds external publication with the first evidence-bearing workflow.
 
@@ -4802,7 +4808,8 @@ per-database lock refuses a second daemon on the same `-db` and nothing else.
   worktree or `mktemp -d` root, listening on `127.0.0.1:0` by default, with no
   launchd registration and no installed app bundle. Agents run this tier and
   no other. The operator's real-run harness (`scripts/run-real-work.sh`) is
-  also `ephemeral`.
+  also `ephemeral`; it shares the `prod` App's publication authority under
+  Rules below.
   A debug app build is `ephemeral`.
 
 **Derived identifiers.** `prod` and `dev` derive the identifiers below from
@@ -4864,16 +4871,30 @@ stay with that run.
   `-credentials-dir` resolve under its own root, which starts empty. Test and
   agent instances never hold the `prod` GitHub App's credentials. The one
   exception is an attended real-work run (today the real-run harness,
-  `scripts/run-real-work.sh`, and phase-exit runs): it may deliberately
-  enroll the `prod` App's credentials into its `ephemeral` instance, because
-  it is real work and publishes as the real App. The path rules fix where
-  credentials live, not whose they are, so this rule is operator discipline,
-  not a check.
+  `scripts/run-real-work.sh`, and phase-exit runs), because it is real work
+  and publishes as the real App. It uses `prod`'s own publication authority
+  state directory and credentials directory (`<root>/daemon/` and
+  `<root>/credentials/` in the table), never a copy, and only while it holds
+  the production rig lease. The App's trusted installations, pending
+  envelope, and janitor journal live in those directories, so a copy would be
+  a second authority for one App (GitHub App Agent Identity below). This holds
+  even while `prod` itself does not publish: `prod`'s directories are where
+  the App's single authority lives. `prod` stays stopped for the whole run;
+  the supervised `dev` label is unaffected. The rig lease refuses to be
+  acquired while `ai.freeside.daemon` is loaded, but it checks only then. A
+  real-work build must read and write the authority and janitor journal
+  formats that the installed `prod` build accepts. The code unit that adds
+  this exception (#1583) enforces both that and the stop for the rest of the
+  run, and until it lands the guards below still refuse these directories.
+  The path rules fix where credentials live, not whose they are, so outside
+  those directories this rule is operator discipline, not a check.
 - **A non-prod instance never names a prod root.** Provider credentials are
   explicit paths, not derived: the Codex auth stores take `-auth-store-root`
   and `-input-root`, and `freesided setup` takes `-config-dir`. None of them,
   nor any other path flag, may resolve under the `prod` state root from a
-  `dev` or `ephemeral` instance.
+  `dev` or `ephemeral` instance. The one exception is the pair of App
+  directories above, named by an attended real-work run that holds the rig
+  lease; no other `prod` path.
 - **Host-side runners are `ephemeral` only.** A runner class that executes on
   the host rather than in a ward runs only under the `attended_dev` operating
   mode (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)) and only in an `ephemeral` instance.
@@ -4912,8 +4933,13 @@ guarantee these rules approximate: a separate account owns the `prod` state
 root, so no process running as the operator can reach it at all. Until it is
 scheduled, the Phase 1 stand-in is the ephemeral guard: an `ephemeral` daemon
 refuses to start when a database, state, or credentials path resolves under a
-supervised tier's state root, or when it is asked to listen on a supervised
-tier's port.
+supervised tier's state root, except the two App directories an attended
+real-work run names under Rules, or when it is asked to listen on a
+supervised tier's port. Because an attended real-work run publishes
+through those two directories, the dedicated-user mode must give it a path
+to the App's single authority that does not open them as the operator, such
+as publishing through the production account; the mode's own unit chooses
+the mechanism.
 Every such guard runs in the process it constrains. The guards stop
 accidental misuse, not a process that deliberately claims `prod`. Until
 exclusive locking lands, production holds no protection of its own beyond
@@ -5013,6 +5039,14 @@ requires a fresh native installation through the pending-intent flow. It never
 automatically unsuspends a drifted installation or mints a token against it.
 Unsolicited installations and repository grants never authorize Freeside minting
 and never reach the attention system.
+
+A registration therefore has exactly one authority: every daemon that
+publishes as it reads the same trusted bindings, pending envelope, and
+janitor journal. The janitor deletes every installation its authority does
+not name, so a daemon holding its own authority for a shared registration
+deletes the other daemon's installations. It does so at startup, whether or
+not the other daemon is running, so stopping one daemon does not help
+(Rules under [Environments](#environments-prod-dev-and-ephemeral) above).
 
 Every registration, in either posture, requests `issues: write` beside the
 publication permissions, for the approved-specification comment (Section
@@ -5491,27 +5525,38 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 70 ("Shared Tracker Format"):
+Revision 71 ("Real-Work Runs Share the Prod App's Authority"):
 
-1. **Every tracker follows the shared tracker format.** `docs/tracker-format.md`,
-   copied verbatim from the owner's agent-setup skill, fixes the shape of wave,
-   feature, and backlog trackers; docs/coordination.md keeps only Freeside's
-   additions. A tracker carries start order only: the **Mergeable next**
-   projection and the Implementation order section leave the tracker. The
-   `merges-after` relation stays in the Dependencies vocabulary, checked at
-   handoff and before integration, because open units still use it.
-2. **The Section [11](#11-roadmap-build-order-and-coordination) resolver identifies the wave tracker by the `tracker`
-   label and a milestone, not by title.** Revision 34 matched pinned issues
-   titled `Wave N (...) tracking`, which tied authority to a title pattern and
-   a non-atomic pin swap. Now exactly one open issue with the label and a
-   milestone is active-wave, none is inter-wave, and more than one is invalid.
-   Revision 34 rejected "no match means inter-wave" because an unpinned
-   tracker looked the same as a missing one; pins no longer carry authority,
-   and a lost label or milestone fails closed by shutting the scheduling door.
-   The title becomes `Wave N: <Name>`.
+1. **One App, one authority.** An attended real-work run uses the `prod`
+   App's publication authority state directory and credentials directory,
+   only while it holds the production rig lease, and never a copy of them
+   (Section [10](#10-operations-and-onboarding), Environments, Rules). Revision 69 item 5 let the run enroll
+   the App into its own `ephemeral` store; #1511 showed that each daemon's
+   janitor deletes every installation its own authority does not name, so a
+   second authority for one App uninstalls the first's installations whether
+   or not both run at once. Rejected: a separate App for real-work runs (they
+   do real work on real, often public, repositories and should publish as
+   the real App); a janitor that tolerates installations its authority does
+   not name (it weakens a guard on a destructive path); and running real work
+   through `prod`'s own store (the harness isolates runs from `prod` on
+   purpose). A real-work build must read and write the authority and journal
+   formats the installed `prod` build accepts; the follow-up code unit
+   (#1583) enforces that, adds the guard exception, and moves the existing
+   real-work App state into `prod`'s directories.
+2. **`prod` stays stopped during a real-work run.** Running both at once is
+   deferred (#1568). The rig lease refuses to be acquired while
+   `ai.freeside.daemon` is loaded, and #1583 enforces the stop for the rest
+   of the run. With one shared authority the janitors agree, so revision
+   69 item 8's GitHub-side lease stays declined; a lease alone never fixed
+   divergent bindings. Because publication identity names neither the
+   daemon nor the App (Section [5.15](#515-evidence-and-images)), the operator also never runs one work
+   unit in both. The `dev` tier and dev-work `ephemeral` instances keep
+   running in parallel.
+3. **Real-work task records stay in the run's own database.** Folding them
+   into `prod`'s history is deferred.
 
-(Owner decisions of 2026-09-25, owner-assigned #1548;
-[decision note](../devlog/2026-09-25-1035-shared-tracker-format.md).)
+(Owner decisions of 2026-09-28, owner-run #1517;
+[decision note](../devlog/2026-09-28-1715-real-work-app-authority.md).)
 
 ## 14. Risks
 
