@@ -131,7 +131,9 @@ design decision; record it in a decision note.
   popup list (its trigger is Freeside's).
 - Context menus (copy id, copy digest, reveal).
 - The macOS window title, toolbar, and inspector toggle, and the menu-bar
-  status item image (its badge dot follows the palette).
+  status item image (its badge dot follows the palette). The title's
+  subtitle names a non-production instance: the worktree or port of an
+  ephemeral run, or "Real-work run on :N" for prod off its own daemon.
 - The retry-capabilities picker and every non-destructive dialog.
 - Keyboard, text-selection, share, and paste affordances.
 

@@ -27,8 +27,8 @@ public struct FreesideRootView: View {
     private let launchDynamicTypeSize: DynamicTypeSize?
     private let environment: FreesideEnvironment
 
-    /// `environment` defaults to `.prod`, which draws no badge, so every
-    /// screenshot surface renders as it did before tiers existed.
+    /// `environment` defaults to `.prod`, which shows no window subtitle
+    /// until a session selects a port other than 7331.
     @MainActor
     public init(
         session: AppSession,
@@ -79,14 +79,6 @@ public struct FreesideRootView: View {
                 synced(coordinator)
             }
         }
-        // Above the phase switch, so the connect, pairing, and synced
-        // screens all say which daemon tier the operator is looking at.
-        .overlay(alignment: .topTrailing) {
-            if let badgeTitle = environment.badgeTitle {
-                EnvironmentBadge(title: badgeTitle)
-                    .padding(8)
-            }
-        }
         .dynamicTypeSize(launchDynamicTypeSize ?? systemDynamicTypeSize)
         .preferredColorScheme(launchColorScheme)
         .background(Color.ground)
@@ -99,7 +91,16 @@ public struct FreesideRootView: View {
         // covers the pairing screen, which renders without platformNavigation.
         #if os(macOS)
             .toolbarBackground(.hidden, for: .windowToolbar)
+            // Names the instance under each screen's own title; the icon and
+            // menu bar mark name the tier.
+            .navigationSubtitle(windowSubtitle ?? "")
         #endif
+    }
+
+    private var windowSubtitle: String? {
+        WindowSubtitle.text(
+            environment: environment, serverURL: session.serverURL,
+            readinessDirectory: session.readinessDirectory)
     }
 
     private func synced(_ coordinator: SyncCoordinator) -> some View {
@@ -731,20 +732,4 @@ public struct FreesideRootView: View {
         }
     }
 
-}
-
-/// The non-production tier marker; production draws nothing.
-struct EnvironmentBadge: View {
-    let title: String
-
-    var body: some View {
-        KeywordLabel(text: title, color: .accentText)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(Capsule().fill(Color.accentWash))
-            .overlay(Capsule().strokeBorder(Color.accentBorder))
-            .allowsHitTesting(false)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Environment: \(title)")
-    }
 }
