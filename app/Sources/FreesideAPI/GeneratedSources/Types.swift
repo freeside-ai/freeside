@@ -3901,7 +3901,125 @@ public enum Components {
                 ])
             }
         }
-        /// One primary review round joined by invocation, run, round, base and head. Null request time identifies historical records predating request facts. Missing identity, outcome or count is unknown, never clean.
+        /// The role of the invocation whose export produced a reviewed head: the implementer, a remediator of an earlier round's findings, or an operator-feedback pass.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReviewSubjectKind`.
+        @frozen public enum ReviewSubjectKind: String, Codable, Hashable, Sendable, CaseIterable {
+            case implementation = "implementation"
+            case remediation = "remediation"
+            case operator_feedback = "operator_feedback"
+        }
+        /// What a review round reviewed: the invocation whose recorded export is the only one in the run that produced the round's head, classified by that invocation's authenticated dispatch intent.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReviewRoundSubject`.
+        public struct ReviewRoundSubject: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ReviewRoundSubject/kind`.
+            public var kind: Components.Schemas.ReviewSubjectKind
+            /// - Remark: Generated from `#/components/schemas/ReviewRoundSubject/invocation_id`.
+            public var invocation_id: Swift.String
+            /// The round whose findings the remediator addressed. Set exactly when kind is remediation.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ReviewRoundSubject/remediates_round`.
+            public var remediates_round: Swift.Int?
+            /// Creates a new `ReviewRoundSubject`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - invocation_id:
+            ///   - remediates_round: The round whose findings the remediator addressed. Set exactly when kind is remediation.
+            public init(
+                kind: Components.Schemas.ReviewSubjectKind,
+                invocation_id: Swift.String,
+                remediates_round: Swift.Int? = nil
+            ) {
+                self.kind = kind
+                self.invocation_id = invocation_id
+                self.remediates_round = remediates_round
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case invocation_id
+                case remediates_round
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Components.Schemas.ReviewSubjectKind.self,
+                    forKey: .kind
+                )
+                self.invocation_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .invocation_id
+                )
+                self.remediates_round = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .remediates_round
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
+                    "invocation_id",
+                    "remediates_round"
+                ])
+            }
+        }
+        /// The remediation this round's findings adjudication started, bound to this round's review invocation, base and head.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReviewRoundRemediation`.
+        public struct ReviewRoundRemediation: Codable, Hashable, Sendable {
+            /// The remediator invocation.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ReviewRoundRemediation/invocation_id`.
+            public var invocation_id: Swift.String
+            /// The findings the adjudication routed to remediation.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ReviewRoundRemediation/finding_ids`.
+            public var finding_ids: [Swift.String]
+            /// When the adjudication was decided. Null when the daemon holds no resolved adjudication item for it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ReviewRoundRemediation/decided_at`.
+            public var decided_at: Foundation.Date?
+            /// Creates a new `ReviewRoundRemediation`.
+            ///
+            /// - Parameters:
+            ///   - invocation_id: The remediator invocation.
+            ///   - finding_ids: The findings the adjudication routed to remediation.
+            ///   - decided_at: When the adjudication was decided. Null when the daemon holds no resolved adjudication item for it.
+            public init(
+                invocation_id: Swift.String,
+                finding_ids: [Swift.String],
+                decided_at: Foundation.Date? = nil
+            ) {
+                self.invocation_id = invocation_id
+                self.finding_ids = finding_ids
+                self.decided_at = decided_at
+            }
+            public enum CodingKeys: String, CodingKey {
+                case invocation_id
+                case finding_ids
+                case decided_at
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.invocation_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .invocation_id
+                )
+                self.finding_ids = try container.decode(
+                    [Swift.String].self,
+                    forKey: .finding_ids
+                )
+                self.decided_at = try container.decodeIfPresent(
+                    Foundation.Date.self,
+                    forKey: .decided_at
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "invocation_id",
+                    "finding_ids",
+                    "decided_at"
+                ])
+            }
+        }
+        /// One primary review round joined by invocation, run, round, base and head. Null request time identifies historical records predating request facts. Missing identity, outcome or count is unknown, never clean. Null subject means the daemon cannot prove which invocation produced the reviewed head; it never means implementation.
         ///
         /// - Remark: Generated from `#/components/schemas/RunReviewRound`.
         public struct RunReviewRound: Codable, Hashable, Sendable {
@@ -3991,6 +4109,46 @@ public enum Components {
             public var retry_pending: Swift.Bool
             /// - Remark: Generated from `#/components/schemas/RunReviewRound/evidence`.
             public var evidence: Components.Schemas.ReviewRoundEvidence
+            /// - Remark: Generated from `#/components/schemas/RunReviewRound/subject`.
+            public struct subjectPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/RunReviewRound/subject/value1`.
+                public var value1: Components.Schemas.ReviewRoundSubject
+                /// Creates a new `subjectPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.ReviewRoundSubject) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/RunReviewRound/subject`.
+            public var subject: Components.Schemas.RunReviewRound.subjectPayload?
+            /// - Remark: Generated from `#/components/schemas/RunReviewRound/remediation`.
+            public struct remediationPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/RunReviewRound/remediation/value1`.
+                public var value1: Components.Schemas.ReviewRoundRemediation
+                /// Creates a new `remediationPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.ReviewRoundRemediation) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/RunReviewRound/remediation`.
+            public var remediation: Components.Schemas.RunReviewRound.remediationPayload?
             /// Creates a new `RunReviewRound`.
             ///
             /// - Parameters:
@@ -4010,6 +4168,8 @@ public enum Components {
             ///   - failure:
             ///   - retry_pending:
             ///   - evidence:
+            ///   - subject:
+            ///   - remediation:
             public init(
                 round: Swift.Int,
                 invocation_id: Swift.String,
@@ -4026,7 +4186,9 @@ public enum Components {
                 dispositions: Components.Schemas.RunReviewRound.dispositionsPayload? = nil,
                 failure: Components.Schemas.RunReviewRound.failurePayload? = nil,
                 retry_pending: Swift.Bool,
-                evidence: Components.Schemas.ReviewRoundEvidence
+                evidence: Components.Schemas.ReviewRoundEvidence,
+                subject: Components.Schemas.RunReviewRound.subjectPayload? = nil,
+                remediation: Components.Schemas.RunReviewRound.remediationPayload? = nil
             ) {
                 self.round = round
                 self.invocation_id = invocation_id
@@ -4044,6 +4206,8 @@ public enum Components {
                 self.failure = failure
                 self.retry_pending = retry_pending
                 self.evidence = evidence
+                self.subject = subject
+                self.remediation = remediation
             }
             public enum CodingKeys: String, CodingKey {
                 case round
@@ -4062,6 +4226,8 @@ public enum Components {
                 case failure
                 case retry_pending
                 case evidence
+                case subject
+                case remediation
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -4129,6 +4295,14 @@ public enum Components {
                     Components.Schemas.ReviewRoundEvidence.self,
                     forKey: .evidence
                 )
+                self.subject = try container.decodeIfPresent(
+                    Components.Schemas.RunReviewRound.subjectPayload.self,
+                    forKey: .subject
+                )
+                self.remediation = try container.decodeIfPresent(
+                    Components.Schemas.RunReviewRound.remediationPayload.self,
+                    forKey: .remediation
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "round",
                     "invocation_id",
@@ -4145,7 +4319,9 @@ public enum Components {
                     "dispositions",
                     "failure",
                     "retry_pending",
-                    "evidence"
+                    "evidence",
+                    "subject",
+                    "remediation"
                 ])
             }
         }

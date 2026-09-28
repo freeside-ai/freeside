@@ -434,6 +434,13 @@ struct TaskTimelineView: View {
         }
     }
 
+    /// A run's stages from its synced snapshot, which name the attempt each
+    /// review round reviewed. Empty until the run syncs; labels then fall
+    /// back to the attempt's kind.
+    private func stages(of runID: String) -> [Components.Schemas.Stage] {
+        coordinator.runs.first { $0.run.id == runID }?.run.stages ?? []
+    }
+
     /// Everything under a run's title: review, milestones, details, ids.
     @ViewBuilder
     private func runBody(
@@ -443,6 +450,7 @@ struct TaskTimelineView: View {
             RunReviewSection(
                 coordinator: coordinator, runID: run.run_id,
                 facts: coordinator.timelinesByRunID[run.run_id]?.review?.value1,
+                stages: stages(of: run.run_id),
                 hasTimeline: coordinator.timelinesByRunID[run.run_id] != nil,
                 folds: .init(
                     facts: { fold(.roundFacts($0)) }, priorRounds: fold(.priorRounds(run.run_id))))
@@ -458,7 +466,10 @@ struct TaskTimelineView: View {
                     title: nil,
                     presentation: .timeline(
                         entries: TaskTimelinePresentation.milestoneEntries(
-                            run, now: now, locale: locale, timeZone: timeZone)),
+                            run,
+                            reviewRounds: coordinator.timelinesByRunID[run.run_id]?.review?.value1.rounds ?? [],
+                            stages: stages(of: run.run_id),
+                            now: now, locale: locale, timeZone: timeZone)),
                     axis: .vertical,
                     showsSummaryText: false,
                     accessibilityStyle: .entries)
@@ -816,21 +827,31 @@ enum TaskTimelinePresentation {
     /// The daemon's milestones as rail entries in the order received (newest
     /// first), the first one current. Not reversed: the run rail reverses
     /// because its source is oldest first; this source already leads with
-    /// the newest.
+    /// the newest. With the run's review rounds loaded, each milestone names
+    /// its invocation's role and the findings adjudications that started a
+    /// remediation join the rail.
     static func milestoneEntries(
-        _ run: Components.Schemas.TaskTimelineRun, now: Date = Date(), locale: Locale = .current,
+        _ run: Components.Schemas.TaskTimelineRun, reviewRounds: [Components.Schemas.RunReviewRound] = [],
+        stages: [Components.Schemas.Stage] = [], now: Date = Date(), locale: Locale = .current,
         timeZone: TimeZone = .current
     ) -> [DecisionStageRailPresentation.Entry] {
-        run.milestones.enumerated().map { index, milestone in
+        let newestFirst = run.milestones.enumerated().map { index, milestone in
             DecisionStageRailPresentation.Entry(
                 id: "\(index)-\(milestone.kind.rawValue)-\(milestone.recorded_at.timeIntervalSince1970)",
                 title: RunDisplay.label(milestone.kind),
                 detail: RunHistoryPresentation.detail(milestone),
+                context: RunHistoryPresentation.roleContext(
+                    invocationID: milestone.invocation_id, reviewRounds: reviewRounds, stages: stages),
                 timestamp: FreesideFormat.shortTime(
                     milestone.recorded_at, now: now, locale: locale, timeZone: timeZone),
                 instant: milestone.recorded_at,
                 state: index == 0 ? .current : .completed)
         }
+        return Array(
+            RunHistoryPresentation.insertingAdjudications(
+                into: newestFirst.reversed(), invocationIDs: run.milestones.reversed().map(\.invocation_id),
+                reviewRounds: reviewRounds, now: now, locale: locale, timeZone: timeZone
+            ).reversed())
     }
 
     /// The header's one meta line: project, issue, lifecycle, source.

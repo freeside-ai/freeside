@@ -1059,10 +1059,7 @@ func findingAdjudicationBinding(
 func productionFindingAdjudicationItemID(
 	runID domain.RunID, round, revision int,
 ) domain.ItemID {
-	if revision == 1 {
-		return productionReviewItemID(runID, round)
-	}
-	return domain.ItemID(fmt.Sprintf("production-review-%s-%d-revision-%d", runID, round, revision))
+	return domain.ProductionFindingAdjudicationItemID(runID, round, revision)
 }
 
 func findingAdjudicationSurfaceItem(

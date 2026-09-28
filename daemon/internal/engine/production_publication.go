@@ -475,7 +475,7 @@ func productionBlockedItemID(runID domain.RunID) domain.ItemID {
 }
 
 func productionReviewItemID(runID domain.RunID, round int) domain.ItemID {
-	return domain.ItemID(fmt.Sprintf("production-review-%s-%d", runID, round))
+	return domain.ProductionFindingAdjudicationItemID(runID, round, 1)
 }
 
 func productionReviewHardLimitItemID(

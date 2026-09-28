@@ -53,6 +53,14 @@ func TestReviewRequestRecord(t *testing.T) {
 			t.Fatal(availability)
 		}
 	}
+	for _, kind := range AllReviewSubjectKinds {
+		if !kind.valid() {
+			t.Fatal(kind)
+		}
+	}
+	if ReviewSubjectKind("").valid() || ReviewSubjectKind("other").valid() {
+		t.Fatal("invalid subject kind")
+	}
 	for _, kind := range AllReviewContentKinds {
 		if !kind.valid() {
 			t.Fatal(kind)

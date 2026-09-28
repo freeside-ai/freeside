@@ -186,14 +186,14 @@ func AuthenticateInvocationDispatchIntent(
 		}
 		return nil
 	case RemediationInvocationRequestedKind:
-		var request RemediationInvocationIntent
-		if err := strictjson.Decode(entry.Payload, &request, strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {
+		request, err := DecodeRemediationInvocationIntent(entry.Payload)
+		if err != nil {
 			return err
 		}
 		if request.Version != "freeside.remediation-request/v1" || request.RunID != runID || request.InvocationID != invocation ||
 			request.StageID != stageID || request.Round < 1 ||
-			string(invocation) != fmt.Sprintf("inv-remediate-%d-%s", request.Round, runID) ||
-			string(stageID) != fmt.Sprintf("remediate-%d-%s", request.Round, runID) {
+			invocation != RemediationInvocationID(runID, request.Round) ||
+			stageID != RemediationStageID(runID, request.Round) {
 			return ErrParentKeyMismatch
 		}
 		return nil
