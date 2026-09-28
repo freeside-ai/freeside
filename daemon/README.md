@@ -202,12 +202,77 @@ active janitor coverage for every registration, and the former singleton
 layout. Reusing one key across multiple local registrations is also reported,
 the PEM-copy pattern that can be detected from one machine.
 
+## Running a Dev Daemon
+
+Agents and scripts run the `ephemeral` tier and nothing else. The
+[environment rules](../docs/plan.md#environments-prod-dev-and-ephemeral) are
+the authority; this section says which command to reach for.
+
+- **Screenshots: use `-FreesideMock YES`, not a daemon.** The mock needs no
+  daemon or pairing, and the `-FreesideSelect` ids name the mock's own
+  fixtures, so the same launch gives the same capture every time. See the
+  [screenshot recipe](../app/README.md#capturing-screenshots).
+- **A live daemon: run `scripts/dev-instance.sh` from the repo root.** It
+  builds `freesided` and the Debug app, starts an `ephemeral` daemon in a
+  fresh `<worktree>/.dev-instance.XXXXXX` root on `127.0.0.1:0`, seeds the
+  `representative` fixture (`--no-seed` starts empty), and launches the app
+  with `-FreesideReadinessDir <root>/daemon`. It prints `root=` and `api_url=`
+  lines on stdout for a calling script. `--daemon-only` skips the app, for
+  scripts and non-Mac hosts. Stopping it (Ctrl-C, or the app or daemon
+  exiting) removes the root. A SIGKILL to the script skips that cleanup and
+  can leave the daemon and app running; stop them before you delete the
+  root by hand.
+- **Never run `app/scripts/install-mac-app.sh` from an agent or script.**
+  Both of its tiers are the operator's: omitting the tier installs `prod`,
+  and the `dev` install is the operator's own too. Its `--prod` flag lets a
+  non-interactive caller confirm `prod` on the operator's explicit
+  instruction; an agent never passes it on its own.
+- **Attaching to production is an operator act.** The `FreesideMacProd` Xcode
+  scheme runs a Debug build with `FREESIDE_ENV=prod`, so it connects to the
+  `prod` daemon on port `7331`. It is not a passive attachment: the build
+  keeps prod's bundle ID and defaults, and its daemon menu is live, not the
+  inert demo menu. Launching it can re-register the `prod` LaunchAgent
+  against the Debug bundle whenever prod's registration marker is unset, as
+  after an install before the installed app relaunches, and its Stop and
+  Start act on the `prod` LaunchAgent. Leave it alone unless the operator
+  asks.
+
+**Production resources.** Only the operator touches these: through the
+`prod` install, or through the operator-only acts above, such as the
+`FreesideMacProd` scheme. Agent, script, and `ephemeral` work never does;
+this is a rule, not an enforced boundary. The values are the `prod` column
+of the plan's derived identifiers table, where `<root>` is the state root:
+
+| Identifier | `prod` |
+| --- | --- |
+| State root | `~/Library/Application Support/Freeside/` |
+| Daemon state directory (`-state-dir`) | `<root>/daemon/` |
+| Publication authority state directory (daemon `-publication-state-dir`, onboard `-state-dir`) | `<root>/daemon/` |
+| Database (`-db`) | `<root>/daemon/freeside.db` |
+| Readiness file | `<root>/daemon/readiness.json` |
+| Daemon log | `<root>/daemon/freesided.log` |
+| Credentials directory | `<root>/credentials/` |
+| launchd label | `ai.freeside.daemon` |
+| Bundled LaunchAgent plist | `ai.freeside.daemon.plist` |
+| App bundle ID | `ai.freeside.app.macos` |
+| Display name | Freeside |
+| Listen port | `7331` |
+
+Four more persistent stores sit beside the database, where `<db>` is its
+path: the attachment blobs (`<db>.blobs/`), the ntfy device-topic key
+(`<db>.ntfy-topic.key`), the local
+[encrypted checkpoints](../docs/plan.md#510-coherent-backup-encrypted-checkpoints)
+(`<db>.checkpoints/`), and their encryption key
+(`<db>.backup-encryption.key`). The daemon's runtime control files are
+under [Control Socket and Pairing Codes](#control-socket-and-pairing-codes).
+
 ## Operational Commands
 
 `-environment` selects `prod`, `dev`, or `ephemeral`. Without the flag, the
 daemon uses `ephemeral` and refuses paths under either supervised state root
-and ports `7331` and `7332`. Supervised LaunchAgent plists must pass their tier
-explicitly (the plist change is tracked in #1500). See the
+and ports `7331` and `7332`. The bundled LaunchAgent plist passes
+`-environment prod` or `-environment dev`: the installer fills its
+`__FREESIDE_ENVIRONMENT__` placeholder with the tier. See the
 [environment rules](../docs/plan.md#environments-prod-dev-and-ephemeral).
 
 The long-running daemon defaults to `-driver disabled`. It serves pairing,
