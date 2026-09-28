@@ -52,7 +52,7 @@ case "${1:-}" in
         built_id=$(sed -n 's/^CFBundleIdentifier=//p' "$target")
         printf '%s\n' "${STUB_BUNDLE_ID:-${built_id:-ai.freeside.app.macos}}"
         ;;
-    CFBundleDisplayName | FreesideEnvironment | \
+    CFBundleDisplayName | CFBundleName | CFBundleIconName | FreesideEnvironment | \
         'com\.apple\.application-identifier' | \
         'com\.apple\.developer\.team-identifier' | keychain-access-groups.* | \
         TeamIdentifier.0 | ApplicationIdentifierPrefix.0 | DeveloperCertificates.* | \
@@ -192,7 +192,7 @@ case "${1:-}" in
         ' "$target" >"$target.tmp" && mv "$target.tmp" "$target"
         exit 0
         ;;
-    CFBundleDisplayName | FreesideEnvironment)
+    CFBundleDisplayName | CFBundleName | FreesideEnvironment)
         # The synthetic Info.plist is key=value lines; -replace inserts or
         # overwrites, as real plutil does.
         [[ "$3" == -string ]] || exit 1
@@ -281,14 +281,18 @@ if [[ -n "${STUB_BUILD_SUCCEEDS:-}" ]]; then
         "$built_app/Contents/Library/LaunchAgents/ai.freeside.daemon.plist"
     team_id=''
     bundle_id=ai.freeside.app.macos
+    icon_name=AppIcon
     for argument in "$@"; do
         case "$argument" in
         DEVELOPMENT_TEAM=*) team_id=${argument#DEVELOPMENT_TEAM=} ;;
         FREESIDE_MAC_BUNDLE_ID=*) bundle_id=${argument#FREESIDE_MAC_BUNDLE_ID=} ;;
+        FREESIDE_MAC_APP_ICON_NAME=*) icon_name=${argument#FREESIDE_MAC_APP_ICON_NAME=} ;;
         esac
     done
-    # The project default, or the installer's override, as a real build binds it.
-    printf 'CFBundleIdentifier=%s\n' "$bundle_id" >"$built_app/Contents/Info.plist"
+    # The project defaults, or the installer's overrides, as a real build
+    # binds them; CFBundleName is the project's $(PRODUCT_NAME).
+    printf 'CFBundleIdentifier=%s\nCFBundleIconName=%s\nCFBundleName=FreesideMac\n' \
+        "$bundle_id" "$icon_name" >"$built_app/Contents/Info.plist"
     signed_team=${STUB_SIGNED_TEAM_ID:-$team_id}
     signed_application=${STUB_SIGNED_APPLICATION_ID:-$signed_team.$bundle_id}
     signed_group=${STUB_SIGNED_KEYCHAIN_GROUP:-$signed_application}
@@ -1476,7 +1480,11 @@ assert_file_contains "$agent" "<string>ai.freeside.daemon</string>"
 assert_file_contains "$destination/Contents/Info.plist" "CFBundleIdentifier=ai.freeside.app.macos"
 assert_file_contains "$destination/Contents/Info.plist" "FreesideEnvironment=prod"
 assert_file_contains "$destination/Contents/Info.plist" "CFBundleDisplayName=Freeside"
+assert_file_contains "$destination/Contents/Info.plist" "CFBundleName=FreesideMac"
+assert_file_contains "$destination/Contents/Info.plist" "CFBundleIconName=AppIcon"
+assert_file_omits "$destination/Contents/Info.plist" "CFBundleIconName=AppIconDev"
 assert_file_contains "$CASE_DIR/xcodebuild-args" "FREESIDE_MAC_BUNDLE_ID=ai.freeside.app.macos"
+assert_file_contains "$CASE_DIR/xcodebuild-args" "FREESIDE_MAC_APP_ICON_NAME=AppIcon"
 assert_file_contains "$destination/Contents/Resources/freesided" "#!/usr/bin/env bash"
 assert_exists "$CASE_DIR/codesign-sign-called"
 assert_file_contains "$CASE_DIR/xcodebuild-args" "-allowProvisioningUpdates"
@@ -1605,7 +1613,10 @@ assert_file_contains "$agent" "$dev_dir/freesided.log"
 assert_file_contains "$destination/Contents/Info.plist" "CFBundleIdentifier=ai.freeside.app.macos.dev"
 assert_file_contains "$destination/Contents/Info.plist" "FreesideEnvironment=dev"
 assert_file_contains "$destination/Contents/Info.plist" "CFBundleDisplayName=Freeside Dev"
+assert_file_contains "$destination/Contents/Info.plist" "CFBundleName=Freeside Dev"
+assert_file_contains "$destination/Contents/Info.plist" "CFBundleIconName=AppIconDev"
 assert_file_contains "$CASE_DIR/xcodebuild-args" "FREESIDE_MAC_BUNDLE_ID=ai.freeside.app.macos.dev"
+assert_file_contains "$CASE_DIR/xcodebuild-args" "FREESIDE_MAC_APP_ICON_NAME=AppIconDev"
 assert_file_contains \
     "$destination/Contents/entitlements.fixture" \
     "keychain-access-groups.0=ABCDE12345.ai.freeside.app.macos.dev"

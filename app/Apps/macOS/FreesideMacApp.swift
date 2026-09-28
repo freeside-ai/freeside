@@ -74,16 +74,21 @@ struct FreesideMacApp: App {
         MenuBarExtra {
             DaemonMenu(model: daemon, session: session, navigation: navigation)
         } label: {
-            Image(nsImage: FreesideMenuIcon.image(badgeColor: daemonMenuState.menuBadgeColor))
-                .renderingMode(.original)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Freeside: \(daemonMenuState.accessibilityDescription)")
-                .task(id: menuSyncCoordinatorID) {
-                    guard case .ready(let coordinator) = session.phase else { return }
-                    coordinator.startReachabilityMonitoring()
-                    defer { coordinator.stopReachabilityMonitoring() }
-                    await coordinator.heartbeatLoop(every: SyncCoordinator.heartbeatInterval)
-                }
+            Image(
+                nsImage: FreesideMenuIcon.image(
+                    look: environment.look, badgeColor: daemonMenuState.menuBadgeColor)
+            )
+            .renderingMode(.original)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(
+                "\(environment.statusItemName): \(daemonMenuState.accessibilityDescription)"
+            )
+            .task(id: menuSyncCoordinatorID) {
+                guard case .ready(let coordinator) = session.phase else { return }
+                coordinator.startReachabilityMonitoring()
+                defer { coordinator.stopReachabilityMonitoring() }
+                await coordinator.heartbeatLoop(every: SyncCoordinator.heartbeatInterval)
+            }
         }
         .menuBarExtraStyle(.window)
 
@@ -266,7 +271,13 @@ private struct FreesideAppCommands: Commands {
 
 @MainActor
 private enum FreesideMenuIcon {
-    static func image(badgeColor: NSColor?) -> NSImage {
+    private static let ink = NSColor(srgbRed: 0x17 / 255, green: 0x14 / 255, blue: 0x0F / 255, alpha: 1)
+    private static let lightTile = NSColor(
+        srgbRed: 0xFF / 255, green: 0xCB / 255, blue: 0x05 / 255, alpha: 1)
+    private static let darkTile = NSColor(
+        srgbRed: 0xF0 / 255, green: 0xBB / 255, blue: 0x00 / 255, alpha: 1)
+
+    static func image(look: FreesideLook, badgeColor: NSColor?) -> NSImage {
         guard
             let url = Bundle.main.url(forResource: "FreesideMenuMark", withExtension: "png"),
             let mark = NSImage(contentsOf: url)
@@ -274,24 +285,50 @@ private enum FreesideMenuIcon {
             preconditionFailure("FreesideMenuMark.png is missing from the app bundle")
         }
         let image = NSImage(size: NSSize(width: 20, height: 20), flipped: false) { rect in
-            mark.draw(in: rect)
-            guard let context = NSGraphicsContext.current else { return false }
-            context.saveGraphicsState()
-            context.compositingOperation = .sourceIn
-            NSColor.labelColor.setFill()
-            NSBezierPath(rect: rect).fill()
-            context.restoreGraphicsState()
+            let dot = NSRect(x: 13, y: 13, width: 7, height: 7)
+            switch look {
+            case .prod:
+                tinted(mark, NSColor.labelColor).draw(in: rect)
+            case .dev:
+                // Mark 2: the black key on a yellow tile. The tile follows the
+                // menu bar's appearance, read when the handler draws.
+                let isDark =
+                    NSAppearance.currentDrawing().bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                (isDark ? darkTile : lightTile).setFill()
+                NSBezierPath(roundedRect: rect.insetBy(dx: 1, dy: 1), xRadius: 4.5, yRadius: 4.5)
+                    .fill()
+                tinted(mark, ink).draw(in: rect.insetBy(dx: 2, dy: 2))
+                if badgeColor != nil {
+                    // A real cutout, not a painted ring: the menu bar behind
+                    // it is translucent, and the brass "stopped" dot would
+                    // vanish against the yellow without the gap.
+                    NSGraphicsContext.current?.compositingOperation = .clear
+                    NSBezierPath(ovalIn: dot.insetBy(dx: -1.5, dy: -1.5)).fill()
+                    NSGraphicsContext.current?.compositingOperation = .sourceOver
+                }
+            }
             if let badgeColor {
                 // Top-right, over the key's bar; the dot is the status
                 // channel at this size, where the key's own dot is retired.
                 badgeColor.setFill()
-                NSBezierPath(ovalIn: NSRect(x: 13, y: 13, width: 7, height: 7)).fill()
+                NSBezierPath(ovalIn: dot).fill()
             }
             return true
         }
         image.cacheMode = .never
         image.isTemplate = false
         return image
+    }
+
+    /// The mark in one color, drawn offscreen so the tint never paints over
+    /// anything already on the canvas.
+    private static func tinted(_ mark: NSImage, _ color: NSColor) -> NSImage {
+        NSImage(size: mark.size, flipped: false) { rect in
+            mark.draw(in: rect)
+            color.set()
+            rect.fill(using: .sourceIn)
+            return true
+        }
     }
 }
 

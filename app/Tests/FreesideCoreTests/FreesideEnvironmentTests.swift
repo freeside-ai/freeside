@@ -64,6 +64,17 @@ import Testing
                 == home.appendingPathComponent("Freeside Dev/daemon", isDirectory: true))
     }
 
+    /// Visual identity follows the work, not the tier: ephemeral is dev work.
+    @Test func eachTierMapsToItsLookAndStatusItemName() {
+        #expect(FreesideEnvironment.prod.look == .prod)
+        #expect(FreesideEnvironment.dev.look == .dev)
+        #expect(FreesideEnvironment.ephemeral.look == .dev)
+
+        #expect(FreesideEnvironment.prod.statusItemName == "Freeside")
+        #expect(FreesideEnvironment.dev.statusItemName == "Freeside Dev")
+        #expect(FreesideEnvironment.ephemeral.statusItemName == "Freeside Ephemeral")
+    }
+
     @Test func ephemeralDerivesNothing() {
         let ephemeral = FreesideEnvironment.ephemeral
         #expect(!ephemeral.isSupervised)

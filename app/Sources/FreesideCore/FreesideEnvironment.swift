@@ -7,6 +7,9 @@ import Foundation
 /// only other writers. `ephemeral` has a bundle ID but derives no daemon
 /// identifiers (label, port, or state root): its daemon is whatever run the
 /// launch names explicitly.
+///
+/// The tier drives behavior; `look` drives visual identity, which follows
+/// what the work affects rather than the tier.
 public enum FreesideEnvironment: String, CaseIterable, Sendable {
     case prod
     case dev
@@ -58,6 +61,25 @@ public enum FreesideEnvironment: String, CaseIterable, Sendable {
         switch self {
         case .prod, .dev: true
         case .ephemeral: false
+        }
+    }
+
+    /// Ephemeral apps are dev work, so they share the dev look. The
+    /// `FreesideMacProd` scheme resolves to `.prod` and keeps the prod look.
+    public var look: FreesideLook {
+        switch self {
+        case .prod: .prod
+        case .dev, .ephemeral: .dev
+        }
+    }
+
+    /// The name the menu bar status item speaks. Unlike `displayName`, it
+    /// names ephemeral too, which has no installed bundle or state root.
+    public var statusItemName: String {
+        switch self {
+        case .prod: "Freeside"
+        case .dev: "Freeside Dev"
+        case .ephemeral: "Freeside Ephemeral"
         }
     }
 
@@ -115,4 +137,11 @@ public enum FreesideEnvironment: String, CaseIterable, Sendable {
     public func daemonStateDirectory(fileManager: FileManager = .default) -> URL? {
         stateRoot(fileManager: fileManager)?.appendingPathComponent("daemon", isDirectory: true)
     }
+}
+
+/// An app's visual identity: its icon and menu bar mark. Prod keeps the brand
+/// look; dev is the construction-yellow look that can't pass for prod.
+public enum FreesideLook: Sendable {
+    case prod
+    case dev
 }
