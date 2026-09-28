@@ -168,6 +168,12 @@ The Icon Composer document lets the system select the appearance and own the pla
 
 The mask preserves the approved mark geometry and its cutouts; the appearance change is palette-only. Xcode compiles the one document into each installed bundle's platform and appearance renditions. On macOS, keep the document a normal resource with `CFBundleIconName` authoritative and leave `ASSETCATALOG_COMPILER_APPICON_NAME` unset: asking the asset compiler to emit a standalone primary icon adds `CFBundleIconFile`, and Finder then prefers that static fallback over the appearance-aware catalog. That caution is macOS-only; FreesideIOS sets the setting deliberately (above), because SpringBoard needs the `actool`-generated icon.
 
+Dev work gets its own icon, so it can't pass for prod in the Dock, Cmd-Tab, or Finder. `Apps/macOS/AppIconDev.icon` is built the same way as `AppIcon.icon`, with light and dark layers: the black key on a safety-yellow plate inside a hazard-stripe frame. Both documents compile into the Mac app as normal resources, and `Info.plist` names the one to use through the `FREESIDE_MAC_APP_ICON_NAME` build setting: the `FreesideMac` target's `Debug` configuration (the ephemeral app) sets `AppIconDev`, and `DebugProd` and `Release` set `AppIcon`. Re-render the dev layers from `Apps/macOS/FreesideKeyMono.svg` with
+
+```sh
+./scripts/generate-dev-icon.sh
+```
+
 `Sources/FreesideAPI/openapi.yaml` is a mechanical mirror of the repository contract at `../api/openapi.yaml`. Refreshing it and regenerating the tracked client through the pinned command plugin is one reproducible command:
 
 ```sh
