@@ -4837,6 +4837,13 @@ a root one level lower would leave the credentials outside it.
 | Display name | Freeside | Freeside Dev |
 | Listen port | `7331` | `7332` |
 
+**Debug app identity.** The `FreesideMac` scheme's Debug build, which serves
+dev-work `ephemeral` runs, uses bundle ID `ai.freeside.app.macos.ephemeral`,
+so it shares no preferences, LaunchServices registration, or Keychain access
+group with an installed app. The `FreesideMacProd` scheme's prod-attached
+Debug build keeps `ai.freeside.app.macos`, because it drives the `prod`
+LaunchAgent.
+
 The listen address follows the Section [5.2](#52-the-daemon-and-its-supervisor) reachability contract in both
 supervised tiers: loopback, or the exact verified Tailscale-owned address
 with its loopback twin on the same port. The same-host app always connects
