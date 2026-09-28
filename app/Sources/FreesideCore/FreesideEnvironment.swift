@@ -3,8 +3,10 @@ import Foundation
 /// The instance tier this app belongs to (plan "Environments: Prod, Dev, and
 /// Ephemeral"). The supervised tiers derive every local identifier from the
 /// tier, so this enum is the only Swift owner of those strings;
-/// `install-mac-app.sh` is the only other writer. `ephemeral` derives nothing:
-/// its daemon is whatever run the launch names explicitly.
+/// `install-mac-app.sh` and the Xcode project's build configurations are the
+/// only other writers. `ephemeral` has a bundle ID but derives no daemon
+/// identifiers (label, port, or state root): its daemon is whatever run the
+/// launch names explicitly.
 public enum FreesideEnvironment: String, CaseIterable, Sendable {
     case prod
     case dev
@@ -77,11 +79,15 @@ public enum FreesideEnvironment: String, CaseIterable, Sendable {
         }
     }
 
+    /// The bundle ID each tier's app is built with. `ephemeral`'s is the
+    /// `FreesideMac` scheme's Debug build, so a throwaway run shares no
+    /// preferences, LaunchServices registration, or Keychain access group
+    /// with an installed app.
     public var bundleIdentifier: String? {
         switch self {
         case .prod: "ai.freeside.app.macos"
         case .dev: "ai.freeside.app.macos.dev"
-        case .ephemeral: nil
+        case .ephemeral: "ai.freeside.app.macos.ephemeral"
         }
     }
 

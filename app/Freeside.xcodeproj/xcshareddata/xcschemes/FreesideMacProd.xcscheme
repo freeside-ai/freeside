@@ -7,8 +7,8 @@
       </BuildActionEntry>
     </BuildActionEntries>
   </BuildAction>
-  <TestAction buildConfiguration="Debug" shouldUseLaunchSchemeArgsEnv="YES"/>
-  <LaunchAction buildConfiguration="Debug" useCustomWorkingDirectory="NO" ignoresPersistentStateOnLaunch="NO" debugDocumentVersioning="YES" debugServiceExtension="internal" allowLocationSimulation="YES">
+  <TestAction buildConfiguration="DebugProd" shouldUseLaunchSchemeArgsEnv="YES"/>
+  <LaunchAction buildConfiguration="DebugProd" useCustomWorkingDirectory="NO" ignoresPersistentStateOnLaunch="NO" debugDocumentVersioning="YES" debugServiceExtension="internal" allowLocationSimulation="YES">
     <BuildableProductRunnable runnableDebuggingMode="0">
       <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="100000000000000000000041" BuildableName="FreesideMac.app" BlueprintName="FreesideMac" ReferencedContainer="container:Freeside.xcodeproj"/>
     </BuildableProductRunnable>
@@ -17,6 +17,6 @@
     </EnvironmentVariables>
   </LaunchAction>
   <ProfileAction buildConfiguration="Release" shouldUseLaunchSchemeArgsEnv="YES" useCustomWorkingDirectory="NO" debugDocumentVersioning="YES"/>
-  <AnalyzeAction buildConfiguration="Debug"/>
+  <AnalyzeAction buildConfiguration="DebugProd"/>
   <ArchiveAction buildConfiguration="Release" revealArchiveInOrganizer="YES"/>
 </Scheme>
