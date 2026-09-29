@@ -3,6 +3,7 @@ package stage
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -317,6 +318,17 @@ func (d *Driver) handoffSpec(ctx context.Context, in intent) (ward.HandoffSpec, 
 			ErrUnsupportedStart,
 		)
 	}
+	// The writer's size comes from the run's durable policy, never from the
+	// provider, so recovery rebuilds the same size from the same record.
+	var keys []domain.PolicyKey
+	if err := json.Unmarshal(in.Inputs.Policy, &keys); err != nil {
+		return ward.HandoffSpec{}, fmt.Errorf("%w: decode durable policy: %w", ErrUnsupportedStart, err)
+	}
+	sizes, err := ward.ResolveLaunchSizes(keys)
+	if err != nil {
+		return ward.HandoffSpec{}, fmt.Errorf("%w: %w", ErrUnsupportedStart, err)
+	}
+	hs.Class, hs.Size = ward.LaunchWriter, sizes.Writer
 	return hs, nil
 }
 

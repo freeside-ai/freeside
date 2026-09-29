@@ -62,6 +62,10 @@ func loadManualSubmissionConfig(path string) (func(domain.ProjectID) (engine.Man
 			if _, err := specify.ParsePolicy(policy); err != nil {
 				return nil, fmt.Errorf("manual submission config project %d: %w", index, err)
 			}
+			// A bad size would otherwise surface only when a writer starts.
+			if _, err := ward.ResolveLaunchSizes(policy.Keys); err != nil {
+				return nil, fmt.Errorf("manual submission config project %d: %w", index, err)
+			}
 			if err := project.CommitAuthor.Validate(); err != nil {
 				return nil, fmt.Errorf("manual submission config project %d author: %w", index, err)
 			}

@@ -156,6 +156,7 @@ func buildPromptSeederSpec(cfg Config, hs HandoffSpec, names handoffNames, owner
 		"cp " + shellQuote(promptStageDir+"/prompt.txt") + " " + root + "/prompt.txt; " +
 		"chown 0:0 " + root + " " + root + "/prompt.txt; chmod 0755 " + root + "; chmod 0400 " + root + "/prompt.txt; sync"
 	return ContainerSpec{
+		Size: hs.Size,
 		Name: names.PromptSeeder, Image: cfg.ExporterImage, Command: []string{"sh", "-c", script},
 		NetworkDisabled: true,
 		Mounts:          []Mount{{Type: MountVolume, Source: names.Prompt, Target: promptVolumeTarget}},
@@ -174,6 +175,7 @@ func buildPromptObserverSpec(cfg Config, hs HandoffSpec, names handoffNames, own
 		"digest=$(sha256sum " + file + "); digest=${digest%% *}; " +
 		"printf '%s %s\\n' " + shellQuote(ownership.Value) + " \"$digest\" > " + shellQuote(stateProofPath) + "; sync"
 	return ContainerSpec{
+		Size: hs.Size,
 		Name: names.PromptObserver, Image: cfg.ExporterImage, Command: []string{"sh", "-c", script},
 		NetworkDisabled: true,
 		Mounts:          []Mount{{Type: MountVolume, Source: names.Prompt, Target: promptVolumeTarget, ReadOnly: true}},

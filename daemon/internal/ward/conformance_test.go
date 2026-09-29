@@ -403,6 +403,9 @@ func agentReport(spec ContainerSpec) InspectReport {
 		Networks:                []string{spec.Network},
 		Mounts:                  append([]Mount(nil), spec.Mounts...),
 		Env:                     append([]string{fixedContainerPathEnv}, spec.Env...),
+		CPUs:                    spec.Size.CPUs,
+		MemoryBytes:             int64(spec.Size.MemoryMiB) << 20,
+		ResourcesObserved:       true,
 	}
 }
 
@@ -438,6 +441,10 @@ func TestVerifyAgentAllowlistViolations(t *testing.T) {
 		{"required field omitted", func(r *InspectReport) { r.AllowlistFieldsObserved = false }},
 		{"running before approval", func(r *InspectReport) { r.State = StateRunning }},
 		{"unknown state", func(r *InspectReport) { r.State = "unknown" }},
+		{"resources unobserved", func(r *InspectReport) { r.ResourcesObserved = false }},
+		{"runtime default cpus", func(r *InspectReport) { r.CPUs = 4; r.MemoryBytes = 1 << 30 }},
+		{"different cpus", func(r *InspectReport) { r.CPUs++ }},
+		{"different memory", func(r *InspectReport) { r.MemoryBytes += 1 << 20 }},
 		{"wrong image name", func(r *InspectReport) {
 			r.ImageReference = "example.test/other@" + agentImageDigest
 		}},

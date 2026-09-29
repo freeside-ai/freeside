@@ -59,6 +59,8 @@ func testHandoffSpec() HandoffSpec {
 				},
 			},
 		},
+		Class: LaunchWriter,
+		Size:  DefaultLaunchSize(LaunchWriter),
 	}
 }
 
@@ -80,6 +82,10 @@ func TestHandoffSpecValidate(t *testing.T) {
 		{"run id with slash", func(s *HandoffSpec) { s.RunID = "a/b" }},
 		{"run id too long", func(s *HandoffSpec) { s.RunID = strings.Repeat("a", 33) }},
 		{"zero workspace size", func(s *HandoffSpec) { s.WorkspaceSizeMB = 0 }},
+		{"missing launch class", func(s *HandoffSpec) { s.Class = "" }},
+		{"review launch class", func(s *HandoffSpec) { s.Class = LaunchReview }},
+		{"unsized launch", func(s *HandoffSpec) { s.Size = ContainerSize{} }},
+		{"launch without memory", func(s *HandoffSpec) { s.Size.MemoryMiB = 0 }},
 		{"missing agent image", func(s *HandoffSpec) { s.Agent.Image = "" }},
 		{"unpinned agent image", func(s *HandoffSpec) { s.Agent.Image = "example.test/agent:latest" }},
 		{"short agent digest", func(s *HandoffSpec) { s.Agent.Image = "example.test/agent@sha256:abc" }},

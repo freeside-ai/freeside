@@ -482,6 +482,7 @@ func BuildCodexReviewShadowObserverSpec(
 		return ContainerSpec{}, fmt.Errorf("%w: ownership label is invalid", ErrInvalidCodexReviewSpec)
 	}
 	return ContainerSpec{
+		Size:  DefaultLaunchSize(LaunchReview),
 		Name:  codexReviewShadowObserverName(runID),
 		Image: cfg.ObserverImage,
 		Command: []string{
@@ -584,6 +585,7 @@ func buildReviewSnapshotObserverSpec(
 		return ContainerSpec{}, fmt.Errorf("%w: ownership label is invalid", ErrInvalidCodexReviewSpec)
 	}
 	return ContainerSpec{
+		Size:  DefaultLaunchSize(LaunchReview),
 		Name:  codexReviewSnapshotObserverName(runID),
 		Image: cfg.ObserverImage,
 		Command: []string{
@@ -827,6 +829,7 @@ func buildReviewWorkspaceObserverSpec(
 	script := observerScript(observerCfg, ownershipLabel.Value) + "; " +
 		codexWorkspaceAgentsProbeScript(cfg.WorkspaceTarget, codexWorkspaceProofPath)
 	return ContainerSpec{
+		Size:            DefaultLaunchSize(LaunchReview),
 		Name:            codexReviewWorkspaceObserverName(runID),
 		Image:           cfg.ObserverImage,
 		Command:         []string{"sh", "-c", script},
@@ -1059,6 +1062,7 @@ func buildReviewAgentSpec(
 		})
 	}
 	spec := ContainerSpec{
+		Size:    DefaultLaunchSize(LaunchReview),
 		Name:    reviewContainerName(provider, req.RunID),
 		Image:   req.Image,
 		Command: command,

@@ -314,6 +314,7 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 		t.Error("volume inspect omitted labels")
 	}
 	if err := rt.CreateContainer(ctx, ContainerSpec{
+		Size:            testContainerSize,
 		Name:            seedName,
 		Image:           liveImage,
 		Command:         []string{"sh", "-c", "printf " + liveMarker + " > /credentials/token"},
@@ -777,6 +778,7 @@ func TestLiveWorkspaceSeeding(t *testing.T) {
 	probe := names.Seeder + "-createonly"
 	t.Cleanup(func() { _ = rt.DeleteContainer(ctx, probe) })
 	if err := rt.CreateContainer(ctx, ContainerSpec{
+		Size: testContainerSize,
 		Name: probe, Image: liveImage, Command: []string{"sh", "-c", "sleep 60"},
 		NetworkDisabled: true, Labels: append(runLabels(runID), label),
 	}); err != nil {
@@ -1007,6 +1009,7 @@ func plantSymlinkOnWorkspace(t *testing.T, rt Runtime, names handoffNames, runID
 	id := "freeside-ward-live-plant-" + runID
 	t.Cleanup(func() { _ = rt.DeleteContainer(ctx, id) })
 	if err := rt.CreateContainer(ctx, ContainerSpec{
+		Size:            testContainerSize,
 		Name:            id,
 		Image:           liveImage,
 		Command:         []string{"sh", "-c", "ln -s /etc/hostname /workspace/planted.link"},
@@ -1091,6 +1094,7 @@ func TestLiveLeasedMutationAndReadOnlyProbe(t *testing.T) {
 		}
 	}
 	if err := rt.CreateContainer(ctx, ContainerSpec{
+		Size:  testContainerSize,
 		Name:  seedName,
 		Image: liveImage,
 		Command: []string{

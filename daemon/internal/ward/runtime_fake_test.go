@@ -559,6 +559,11 @@ func (f *fakeRuntime) CreateContainer(ctx context.Context, spec ContainerSpec) e
 			return err
 		}
 	}
+	// The CLI refuses an unsized spec before the runtime sees it; the fake
+	// refuses it too, so no launch path can pass here without a size.
+	if err := spec.Size.validate(); err != nil {
+		return fmt.Errorf("refusing to create container %q: %w", spec.Name, err)
+	}
 	// Model Apple container 1.1.0's directory-only bind rule: a host bind mount
 	// is rejected at creation, so a bind-shaped spec can never pass conformance
 	// against the fake while failing only on the live runtime.
@@ -689,6 +694,9 @@ func (f *fakeRuntime) Inspect(ctx context.Context, id string) (InspectReport, er
 		Labels:                  append([]Label(nil), c.spec.Labels...),
 		LabelsObserved:          true,
 		NetworksObserved:        true,
+		CPUs:                    c.spec.Size.CPUs,
+		MemoryBytes:             int64(c.spec.Size.MemoryMiB) << 20,
+		ResourcesObserved:       true,
 	}
 	if c.spec.Network != "" {
 		rep.Networks = []string{c.spec.Network}

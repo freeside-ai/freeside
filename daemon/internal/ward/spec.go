@@ -580,6 +580,14 @@ type HandoffSpec struct {
 	// Writable: the mutation window the writable mount rides in. Nil means
 	// every credential mount is read-only.
 	AuthStoreLease *AuthStoreLeaseClaim
+	// Class is the launch class every container of this handoff belongs to:
+	// LaunchWriter, or LaunchConformance for the suite's own handoff.
+	Class LaunchClass `json:",omitzero"`
+	// Size is the declared CPU cap and memory limit of every container this
+	// handoff creates. Class and Size are omitted from the journaled digest
+	// when zero, so a spec journaled before sizes were declared keeps its
+	// digest and still recovers.
+	Size ContainerSize `json:",omitzero"`
 }
 
 // validate reports the first caller error in the spec. Mount-topology rules
@@ -607,6 +615,11 @@ func (s HandoffSpec) validate() error {
 		return fmt.Errorf("%w: Agent.Command is required", ErrInvalidHandoffSpec)
 	case s.Agent.EgressProfile != domain.EgressProviderOnly:
 		return fmt.Errorf("%w: Agent.EgressProfile %q is not enforceable by this backend", ErrInvalidHandoffSpec, s.Agent.EgressProfile)
+	case s.Class != LaunchWriter && s.Class != LaunchConformance:
+		return fmt.Errorf("%w: Class %q is not a handoff launch class", ErrInvalidHandoffSpec, s.Class)
+	}
+	if err := s.Size.validate(); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidHandoffSpec, err)
 	}
 	if s.Agent.OutcomeMarkerPath != "" {
 		if !strings.HasPrefix(s.Agent.OutcomeMarkerPath, "/") {
@@ -935,6 +948,7 @@ func buildAgentSpec(
 		)
 	}
 	return ContainerSpec{
+		Size:    hs.Size,
 		Name:    names.Agent,
 		Image:   hs.Agent.Image,
 		Command: replaceWriterNonce(hs.Agent.Command, writerNonce),
@@ -962,6 +976,7 @@ func buildWriterOutcomeObserverSpec(
 	cfg Config, hs HandoffSpec, names handoffNames, ownershipLabel Label,
 ) ContainerSpec {
 	return ContainerSpec{
+		Size:  hs.Size,
 		Name:  names.WriterObserver,
 		Image: cfg.ExporterImage,
 		Command: []string{
@@ -983,6 +998,7 @@ func buildInstructionSeederSpec(
 	cfg Config, hs HandoffSpec, names handoffNames, ownershipLabel Label,
 ) ContainerSpec {
 	return ContainerSpec{
+		Size:            hs.Size,
 		Name:            names.InstructionSeeder,
 		Image:           cfg.ExporterImage,
 		Command:         instructionSeederCommand(cfg),
@@ -1023,6 +1039,7 @@ func buildInstructionObserverSpec(
 	cfg Config, hs HandoffSpec, names handoffNames, ownershipLabel Label,
 ) ContainerSpec {
 	return ContainerSpec{
+		Size:  hs.Size,
 		Name:  names.InstructionObserver,
 		Image: cfg.ExporterImage,
 		Command: []string{"sh", "-c", instructionObserverScript(
@@ -1060,6 +1077,7 @@ func instructionObserverScript(nonce string) string {
 // at the configured target, no environment, and nothing else.
 func buildExporterSpec(cfg Config, hs HandoffSpec, names handoffNames, ownershipLabel Label) ContainerSpec {
 	return ContainerSpec{
+		Size:            hs.Size,
 		Name:            names.Exporter,
 		Image:           cfg.ExporterImage,
 		Command:         cfg.ExporterCommand,
@@ -1099,6 +1117,7 @@ const seedReadyFile = "ready"
 // proof.
 func buildSeederSpec(cfg Config, hs HandoffSpec, names handoffNames, ownershipLabel Label) ContainerSpec {
 	return ContainerSpec{
+		Size:            hs.Size,
 		Name:            names.Seeder,
 		Image:           cfg.ExporterImage,
 		Command:         seederCommand(cfg),
@@ -1191,6 +1210,7 @@ func seederScript(cfg Config) string {
 // so what it attests is the workspace as a reader sees it.
 func buildObserverSpec(cfg Config, hs HandoffSpec, names handoffNames, ownershipLabel Label) ContainerSpec {
 	return ContainerSpec{
+		Size:            hs.Size,
 		Name:            names.Observer,
 		Image:           cfg.ExporterImage,
 		Command:         observerCommand(cfg, ownershipLabel.Value),
@@ -1423,6 +1443,7 @@ func buildCredentialObserverSpec(cfg Config, hs HandoffSpec, name string, owners
 	volume := hs.leasedCredentialVolume()
 	target := hs.leasedCredentialTarget()
 	return ContainerSpec{
+		Size:  hs.Size,
 		Name:  name,
 		Image: cfg.ExporterImage,
 		Command: credObserverCommand(

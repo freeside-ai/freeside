@@ -422,6 +422,10 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 	if err := engine.SubmittedPathBoundary(resolvedPolicy); err != nil {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
 	}
+	// Refuse a bad launch size at submission, not when the writer starts.
+	if _, err := ward.ResolveLaunchSizes(resolvedPolicy.Keys); err != nil {
+		return submitResult{}, fmt.Errorf("submit: %w", err)
+	}
 	policyBody, err := json.Marshal(resolvedPolicy.Keys)
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: encode resolved policy keys: %w", err)

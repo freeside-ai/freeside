@@ -934,6 +934,7 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 		{Type: MountVolume, Source: credVolume, Target: s.fx.CredentialTarget, ReadOnly: true},
 	}
 	if err := s.proveNoEagerStart(ctx, run, ContainerSpec{
+		Size:            DefaultLaunchSize(LaunchConformance),
 		Name:            livenessName,
 		Image:           s.fx.AgentImage,
 		Mounts:          livenessMounts,
@@ -969,6 +970,8 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 			},
 			InstructionPolicy: ClaudeInvocationInstructionPolicy(),
 		},
+		Class: LaunchConformance,
+		Size:  DefaultLaunchSize(LaunchConformance),
 	})
 	if err != nil {
 		// A *ConformanceFailure already names its check; any other error is a
@@ -1166,6 +1169,7 @@ func (s *Suite) preJob(ctx context.Context) (err error) {
 	}()
 	defer run.reapContainer(ctx, name)
 	return s.proveNoEagerStart(ctx, run, ContainerSpec{
+		Size:            DefaultLaunchSize(LaunchConformance),
 		Name:            name,
 		Image:           s.fx.AgentImage,
 		NetworkDisabled: true,
@@ -1265,6 +1269,7 @@ func (s *Suite) probeNetworklessExport(ctx context.Context, run *suiteRun) error
 		return failf(CheckNetworklessExport, "create networkless liveness workspace volume: %v", err)
 	}
 	if err := s.proveNoEagerStart(ctx, run, ContainerSpec{
+		Size:            DefaultLaunchSize(LaunchConformance),
 		Name:            livenessName,
 		Image:           s.b.cfg.ExporterImage,
 		Mounts:          []Mount{{Type: MountVolume, Source: livenessVolume, Target: s.b.cfg.WorkspaceTarget, ReadOnly: true}},
@@ -1277,6 +1282,7 @@ func (s *Suite) probeNetworklessExport(ctx context.Context, run *suiteRun) error
 	owner := run.ownershipLabel.Value
 	defer run.reapContainer(ctx, name)
 	spec := ContainerSpec{
+		Size:            DefaultLaunchSize(LaunchConformance),
 		Name:            name,
 		Image:           s.b.cfg.ExporterImage,
 		Command:         networklessProbeCommand(owner),
@@ -1358,6 +1364,7 @@ func (s *Suite) probeInExporterVerification(ctx context.Context, run *suiteRun) 
 	livenessName := s.conformanceName(inExporterLivenessSuffix)
 	defer run.reapContainer(ctx, livenessName)
 	if err := s.proveNoEagerStart(ctx, run, ContainerSpec{
+		Size:            DefaultLaunchSize(LaunchConformance),
 		Name:            livenessName,
 		Image:           s.b.cfg.ExporterImage,
 		Mounts:          mounts,
@@ -1369,6 +1376,7 @@ func (s *Suite) probeInExporterVerification(ctx context.Context, run *suiteRun) 
 	name := s.conformanceName(inExporterProbeSuffix)
 	defer run.reapContainer(ctx, name)
 	spec := ContainerSpec{
+		Size:            DefaultLaunchSize(LaunchConformance),
 		Name:            name,
 		Image:           s.b.cfg.ExporterImage,
 		Command:         inExporterProbeCommand(s.b.cfg.WorkspaceTarget, s.fx.CredentialTarget, s.b.cfg.ProofPath),
@@ -1440,6 +1448,7 @@ func (s *Suite) seedCredential(ctx context.Context, run *suiteRun, credVolume st
 	name := s.conformanceName("seed")
 	token := shellQuote(path.Join(s.fx.CredentialTarget, credentialTokenFile))
 	spec := ContainerSpec{
+		Size:            DefaultLaunchSize(LaunchConformance),
 		Name:            name,
 		Image:           s.fx.AgentImage,
 		Command:         []string{"sh", "-c", "printf '%s\\n' " + s.fx.CredentialMarker + " > " + token + "; sync"},
@@ -1486,6 +1495,7 @@ func (s *Suite) probeCredentialContainment(ctx context.Context, run *suiteRun, c
 	token := shellQuote(path.Join(s.fx.CredentialTarget, credentialTokenFile))
 	markerFile := shellQuote(auditMarkerPath(s.fx.RunID))
 	spec := ContainerSpec{
+		Size:            DefaultLaunchSize(LaunchConformance),
 		Name:            name,
 		Image:           s.fx.AgentImage,
 		NetworkDisabled: true,
@@ -1709,6 +1719,7 @@ func (s *Suite) probeWriterVolumeExclusion(ctx context.Context, run *suiteRun) e
 	// A long-lived writer holds the volume read-write and stays live while the
 	// second attach is attempted.
 	writerSpec := ContainerSpec{
+		Size:            DefaultLaunchSize(LaunchConformance),
 		Name:            writer,
 		Image:           s.fx.AgentImage,
 		Command:         nonterminatingProbeCommand(),
@@ -1758,6 +1769,7 @@ func (s *Suite) probeWriterVolumeExclusion(ctx context.Context, run *suiteRun) e
 	// (unexpected, since the writer created fine with the same spec shape) and
 	// fails closed rather than counting as the exclusion.
 	secondSpec := ContainerSpec{
+		Size:            DefaultLaunchSize(LaunchConformance),
 		Name:            second,
 		Image:           s.b.cfg.ExporterImage,
 		NetworkDisabled: true,

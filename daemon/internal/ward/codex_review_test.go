@@ -3661,6 +3661,9 @@ func TestCodexReviewAllowlistShapeChecksRealizedSpec(t *testing.T) {
 		Networks:                []string{spec.Network},
 		NetworkAttachmentCount:  1,
 		NetworksObserved:        true,
+		CPUs:                    spec.Size.CPUs,
+		MemoryBytes:             int64(spec.Size.MemoryMiB) << 20,
+		ResourcesObserved:       true,
 	}
 	binding.ReviewContainer = spec.Name
 	binding.ReviewContainerFingerprint = "2026-08-03T12:00:05Z"

@@ -258,7 +258,11 @@ func createContainerArgs(spec ContainerSpec) ([]string, error) {
 	if err := validateRuntimeResourceName(spec.Name); err != nil {
 		return nil, err
 	}
+	if err := spec.Size.validate(); err != nil {
+		return nil, fmt.Errorf("refusing to create container %q: %w", spec.Name, err)
+	}
 	args := []string{"create", "--name", spec.Name}
+	args = append(args, sizeArgs(spec.Size)...)
 	for _, l := range spec.Labels {
 		args = append(args, "--label", l.Key+"="+l.Value)
 	}
@@ -317,6 +321,13 @@ func createContainerArgs(spec ContainerSpec) ([]string, error) {
 	args = append(args, "--", spec.Image)
 	args = append(args, spec.Command...)
 	return args, nil
+}
+
+// sizeArgs declares a container's CPU cap and memory limit. Apple container
+// 1.1.0 takes memory with a unit suffix at 1 MiB granularity; without these
+// flags it applies its own default of 4 CPUs and 1 GiB.
+func sizeArgs(s ContainerSize) []string {
+	return []string{"--cpus", fmt.Sprint(s.CPUs), "--memory", fmt.Sprintf("%dM", s.MemoryMiB)}
 }
 
 func validateRuntimeResourceName(name string) error {
@@ -417,6 +428,14 @@ type cliConfiguration struct {
 	PublishedPorts   *[]json.RawMessage      `json:"publishedPorts"`
 	PublishedSockets *[]json.RawMessage      `json:"publishedSockets"`
 	Networks         *[]cliNetworkAttachment `json:"networks"`
+	Resources        *cliResources           `json:"resources"`
+}
+
+// cliResources is the declared size as the runtime realized it. Pointers so
+// an omitted field proves nothing rather than reading as zero.
+type cliResources struct {
+	CPUs          *int   `json:"cpus"`
+	MemoryInBytes *int64 `json:"memoryInBytes"`
 }
 
 type cliStatus struct {
@@ -646,6 +665,11 @@ func (c cliContainer) toReport() InspectReport {
 			rep.Networks = append(rep.Networks, attachment.Network)
 		}
 		rep.NetworkAttachmentCount = len(rep.Networks)
+	}
+	if r := c.Configuration.Resources; r != nil && r.CPUs != nil && r.MemoryInBytes != nil {
+		rep.CPUs = *r.CPUs
+		rep.MemoryBytes = *r.MemoryInBytes
+		rep.ResourcesObserved = true
 	}
 	return rep
 }

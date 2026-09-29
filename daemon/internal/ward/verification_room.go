@@ -46,11 +46,19 @@ type ProjectImageRoom struct {
 	maxOutput     int64
 	ownership     *VerificationOwnership
 	ownerBinding  verificationOwner
+	// size is every room container's declared CPU cap and memory limit.
+	size ContainerSize
 }
 
-// NewProjectImageRoom constructs the production verification room.
-func NewProjectImageRoom(containerPath string, image domain.ProjectImage) (*ProjectImageRoom, error) {
+// NewProjectImageRoom constructs the production verification room. size is the
+// run's resolved verification size; every room container declares it.
+func NewProjectImageRoom(
+	containerPath string, image domain.ProjectImage, size ContainerSize,
+) (*ProjectImageRoom, error) {
 	if err := image.Validate(); err != nil {
+		return nil, fmt.Errorf("project-image verification room: %w", err)
+	}
+	if err := size.validate(); err != nil {
 		return nil, fmt.Errorf("project-image verification room: %w", err)
 	}
 	if containerPath == "" {
@@ -62,7 +70,7 @@ func NewProjectImageRoom(containerPath string, image domain.ProjectImage) (*Proj
 	}
 	return newProjectImageRoom(
 		resolved, image, NewCLIRuntime(resolved), runVerificationCommand, runRecipeReadCommand,
-		verify.DefaultMaxRoomOutputBytes,
+		verify.DefaultMaxRoomOutputBytes, size,
 	), nil
 }
 
@@ -73,10 +81,12 @@ func newProjectImageRoom(
 	runCommand verificationCommand,
 	readCommand verificationCommand,
 	maxOutput int64,
+	size ContainerSize,
 ) *ProjectImageRoom {
 	return &ProjectImageRoom{
 		containerPath: containerPath, image: image, runtime: runtime,
 		runCommand: runCommand, readCommand: readCommand, maxOutput: maxOutput,
+		size: size,
 	}
 }
 
@@ -171,6 +181,7 @@ func (r *ProjectImageRoom) runImageCommand(
 		"--label", owner.Key + "=" + owner.Value,
 		"--network", "none",
 	}
+	args = append(args, sizeArgs(r.size)...)
 	if workspace != "" {
 		args = append(args,
 			"--volume", workspace+":/workspace",

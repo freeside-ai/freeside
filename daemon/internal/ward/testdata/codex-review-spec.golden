@@ -64,7 +64,11 @@
       }
     ],
     "network": "freeside-review-review-1-egress",
-    "network_disabled": false
+    "network_disabled": false,
+    "size": {
+      "cpus": 4,
+      "memory_mib": 1024
+    }
   },
   "binding": {
     "topology_version": "codex_review_read_only_v3",

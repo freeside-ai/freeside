@@ -55,6 +55,11 @@ func TestDecodeInspectVolume(t *testing.T) {
 		Env:            []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
 		Labels:         []Label{{Key: "freeside.handoff", Value: "run-1"}},
 		LabelsObserved: true,
+		// The fixture was created unsized, so it reports the runtime's
+		// default of 4 CPUs and 1 GiB.
+		CPUs:              4,
+		MemoryBytes:       1 << 30,
+		ResourcesObserved: true,
 	}
 	if !reflect.DeepEqual(rep, want) {
 		t.Errorf("decoded report = %+v, want %+v", rep, want)
@@ -535,6 +540,7 @@ func TestCreateContainerArgs(t *testing.T) {
 	}
 	want := []string{
 		"create", "--name", "freeside-handoff-golden-run-exporter",
+		"--cpus", "4", "--memory", "2048M",
 		"--label", "freeside.handoff=golden-run",
 		"--label", "freeside.handoff-owner=00000000000000000000000000000000",
 		"--mount", "type=volume,source=freeside-handoff-golden-run-ws,target=/workspace,readonly",
@@ -580,11 +586,12 @@ func TestCreateContainerArgs(t *testing.T) {
 	} {
 		if _, err := createContainerArgs(ContainerSpec{
 			Name: "x", Image: "img", Mounts: []Mount{bind}, NetworkDisabled: true,
+			Size: testContainerSize,
 		}); err == nil {
 			t.Errorf("host bind mount phrased instead of refused: %+v", bind)
 		}
 	}
-	if _, err := createContainerArgs(ContainerSpec{Name: "x", Image: "img"}); err == nil {
+	if _, err := createContainerArgs(ContainerSpec{Name: "x", Image: "img", Size: testContainerSize}); err == nil {
 		t.Error("implicit runtime-default network phrased instead of refused")
 	}
 }
@@ -649,6 +656,7 @@ func TestCreateContainerArgsRefusesInjection(t *testing.T) {
 		Image:           "img",
 		Mounts:          []Mount{{Type: MountVolume, Source: "ws", Target: "/workspace"}},
 		NetworkDisabled: true,
+		Size:            testContainerSize,
 	}
 	cases := []struct {
 		name   string
@@ -697,6 +705,7 @@ func TestCreateContainerRedactsStderr(t *testing.T) {
 	}
 	const secret = "secret-fixture-value"
 	err := NewCLIRuntime(bin).CreateContainer(context.Background(), ContainerSpec{
+		Size:            testContainerSize,
 		Name:            "fixture",
 		Image:           "fixture-image",
 		Env:             []string{"PROVIDER_TOKEN=" + secret},
@@ -841,6 +850,7 @@ func TestCreateContainerArgsTerminatesOptions(t *testing.T) {
 		Command:         []string{"type=bind,source=/Users,target=/host"},
 		Mounts:          []Mount{{Type: MountVolume, Source: "ws", Target: "/workspace"}},
 		NetworkDisabled: true,
+		Size:            testContainerSize,
 	}
 	args, err := createContainerArgs(spec)
 	if err != nil {

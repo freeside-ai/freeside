@@ -333,6 +333,7 @@ func TestRecoverKillBoundaryForeignSurvivors(t *testing.T) {
 		{Key: ownershipLabelKey, Value: "ffffffffffffffffffffffffffffffff"},
 	}
 	if err := fx2.rt.CreateContainer(context.Background(), ContainerSpec{
+		Size: testContainerSize,
 		Name: names.Exporter, Image: "foreign.test/img@sha256:" + strings.Repeat("9", 64),
 		Command: []string{"sh"}, Labels: foreign,
 	}); err != nil {

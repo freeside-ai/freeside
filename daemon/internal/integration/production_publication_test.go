@@ -39,6 +39,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/topicstore"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
+	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 func openIntegrationObservation(ctx context.Context, path string, recipes ...domain.Digest) (observe.Source, error) {
@@ -51,6 +52,8 @@ type productionRoom struct {
 	reads  int
 	runs   int
 	fail   bool
+	// sizes records the verification size each room construction received.
+	sizes []ward.ContainerSize
 }
 
 func (r *productionRoom) ReadRecipe(ctx context.Context) ([]byte, error) {
@@ -854,10 +857,11 @@ func (p *productionPublicationHarness) newEngineForMode(
 			ReviewSource:                   p.reviewSource,
 			ReviewRecovery:                 reviewRecovery,
 			ReviewConfigurationDigest:      p.reviewConfigurationDigest,
-			NewRoom: func(image domain.ProjectImage) (engine.ProductionVerificationRoom, error) {
+			NewRoom: func(image domain.ProjectImage, size ward.ContainerSize) (engine.ProductionVerificationRoom, error) {
 				if image.ID != p.image.ID {
 					return nil, domain.ErrParentKeyMismatch
 				}
+				p.room.sizes = append(p.room.sizes, size)
 				return p.room, nil
 			},
 			AfterVerification: seams.afterVerification,
@@ -1045,6 +1049,32 @@ func (p *productionPublicationHarness) assertRecoveryIdentity(t *testing.T) {
 	}
 }
 
+// TestProductionVerificationRoomTakesThePolicySize: a project's raised
+// verification size reaches the room, and only the room.
+func TestProductionVerificationRoomTakesThePolicySize(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarnessWithPolicyKeys(t, "", []domain.PolicyKey{{
+		Key: ward.PolicyVerificationMemoryMiB, Value: "8192",
+		Provenance: domain.KeyProvenance{
+			Source: domain.ProvenanceOverride,
+			Digest: submissionDigest("run-production-publication", "verification-memory"),
+		},
+	}})
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatal(err)
+	}
+	want := ward.ContainerSize{CPUs: ward.DefaultLaunchSize(ward.LaunchVerification).CPUs, MemoryMiB: 8192}
+	if len(p.room.sizes) == 0 {
+		t.Fatal("no verification room was constructed")
+	}
+	for _, size := range p.room.sizes {
+		if size != want {
+			t.Fatalf("verification room size = %s, want %s", size, want)
+		}
+	}
+}
+
 func TestProductionExecutionPublishesOnlyAfterCleanVerification(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
@@ -1075,6 +1105,9 @@ func TestProductionExecutionPublishesOnlyAfterCleanVerification(t *testing.T) {
 	}
 	if p.room.reads != 1 {
 		t.Fatalf("project-image recipe reads = %d, want 1", p.room.reads)
+	}
+	if want := []ward.ContainerSize{ward.DefaultLaunchSize(ward.LaunchVerification)}; !slices.Equal(p.room.sizes, want) {
+		t.Fatalf("verification room sizes = %v, want %v", p.room.sizes, want)
 	}
 	message := p.transport.pushedCommitMessage()
 	wantSubject := "Publish run-production-publication"

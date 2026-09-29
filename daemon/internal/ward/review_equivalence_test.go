@@ -414,6 +414,7 @@ func oldBuildReviewAgentSpec(
 		Mounts:  mounts,
 		Labels:  runLabels(req.RunID),
 		Network: codexReviewNetworkName(req.RunID),
+		Size:    DefaultLaunchSize(LaunchReview),
 	}
 	binding := CodexReviewJournalBinding{
 		TopologyVersion:                 codexReviewTopologyVersion,

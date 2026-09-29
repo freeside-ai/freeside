@@ -69,6 +69,7 @@ func TestPinnedClaudePromptStdinLive(t *testing.T) {
 	labels := []ward.Label{{Key: "freeside.prompt-probe", Value: name}}
 	spec := ward.ContainerSpec{
 		Name: name, Image: image, NetworkDisabled: true, Labels: labels,
+		Size:    ward.DefaultLaunchSize(ward.LaunchConformance),
 		Command: []string{"sh", "-c", "n=0; while [ ! -f /probe-ready/ready ]; do n=$((n+1)); [ \"$n\" -lt 90 ] || exit 1; sleep 1; done; exec node /probe/probe.cjs"},
 	}
 	if err := rt.CreateContainer(ctx, spec); err != nil {

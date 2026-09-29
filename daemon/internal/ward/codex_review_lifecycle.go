@@ -1718,6 +1718,7 @@ func (b *CodexReviewLifecycle) initializeCodexReviewShadow(
 	mark func(CodexReviewIntentResource) error,
 ) (retErr error) {
 	spec := ContainerSpec{
+		Size:    DefaultLaunchSize(LaunchReview),
 		Name:    codexReviewShadowInitializerName(runID),
 		Image:   cfg.ObserverImage,
 		Command: []string{"sh", "-c", stateSeederScript(codexShadowObserverTarget, stateManifestEmpty)},
@@ -1902,6 +1903,7 @@ func (b *CodexReviewLifecycle) seedCodexReviewSnapshot(
 		return codexReviewOperationalCheckf(CheckCredentialSeparation, "write Codex review snapshot sentinel: %v", err)
 	}
 	spec := ContainerSpec{
+		Size:  DefaultLaunchSize(LaunchReview),
 		Name:  codexReviewSnapshotSeederName(launch.RunID),
 		Image: cfg.ObserverImage,
 		Command: []string{"sh", "-c", codexReviewSnapshotSeederScript(

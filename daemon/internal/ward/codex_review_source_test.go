@@ -3547,6 +3547,7 @@ func TestRuntimeCodexReviewVolumeLeaseTransfersAtomically(t *testing.T) {
 		t.Fatalf("foreign acquire = %v", err)
 	}
 	if err := runtime.CreateContainer(ctx, ContainerSpec{
+		Size: testContainerSize,
 		Name: "review", Image: "image", Command: []string{"true"},
 		Labels: []Label{{Key: ownershipLabelKey, Value: "owner"}},
 		Mounts: []Mount{
@@ -3622,6 +3623,7 @@ func TestRuntimeCodexReviewVolumeLeaseRecoversMultiTargetShadowContainer(t *test
 		mounts = append(mounts, Mount{Type: MountVolume, Source: "shadow", Target: target, ReadOnly: true})
 	}
 	if err := runtime.CreateContainer(ctx, ContainerSpec{
+		Size: testContainerSize,
 		Name: "review", Image: "image", Command: []string{"true"},
 		Labels: []Label{{Key: ownershipLabelKey, Value: "owner"}},
 		Mounts: mounts,
@@ -3643,6 +3645,7 @@ func TestRuntimeCodexReviewVolumeLeaseRecoversMultiTargetShadowContainer(t *test
 	// atomic transfer and must fail closed, even alongside the multi-mount
 	// shadow container that does attach the full set.
 	if err := runtime.CreateContainer(ctx, ContainerSpec{
+		Size: testContainerSize,
 		Name: "partial", Image: "image", Command: []string{"true"},
 		Labels: []Label{{Key: ownershipLabelKey, Value: "owner"}},
 		Mounts: []Mount{
