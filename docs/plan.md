@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 72
+revision: 73
 status: active
 updated: 2026-09-28
 ---
@@ -419,7 +419,7 @@ Approval is not a universal action.
 | `agent_question` | Answer and retry, answer without retry, or stop. |
 | `publish_blocked` | Rerun trust evaluation, inspect the trust failure, or stop. Which publication path a repository uses is repository configuration, never a per-item choice (revision 44). |
 | `ready_for_final_review` | Bound to the task. View the PR (navigation, not resolution), return work to the agent with feedback, `mark_seen`, dismiss, or stop. It stays active until Freeside observes merge or close, work is returned, or the item is dismissed. Returning published work starts a new feedback invocation in the same run and supersedes this item; any later final-review item has a new publication identity and exact head binding. Evidence and approvals retain their exact run, artifact-digest, and PR-head bindings. |
-| `task_proposal` | Start, **start with changes**, decline, or snooze. Start begins the task workflow from the exact accepted proposal artifact digest. “Start with changes” creates a revised proposal artifact, supersedes the original item, creates a new item version, and starts the task workflow from the exact revised digest. It never uses unversioned ad hoc parameters. Proposals are grouped under `proposal_batch_id` with per-candidate decisions. |
+| `task_proposal` | Start, **start with changes**, decline, or snooze. Start begins the task workflow from the exact accepted proposal artifact digest. “Start with changes” creates a revised proposal artifact, supersedes the original item, creates a new item version, and starts the task workflow from the exact revised digest. Either may carry operator-authored task lines, bound to the item version (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted Agents; revision 73). It never uses unversioned ad hoc parameters. Proposals are grouped under `proposal_batch_id` with per-candidate decisions. |
 | `effect_proposal` | Approve, **approve with changes**, decline, or snooze a proposed effect from the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) registry (added in 1B with the registry; first instance: the source-issue closure proposal in 1B.1 (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)), which reaches this card only when project policy keeps the human gate on or as a fallback item (non-blocking under the default policy; a gate-on project still holds the PR until the closure question resolves), the policy actor otherwise recording the approval at publication; follow-up issue filings reuse the same card, and proposed watches follow once their schedule kind lands, Section [5.16](#516-the-durable-scheduler)). Approval binds to the proposal artifact digest; “approve with changes” creates a revised proposal artifact and supersedes the item, exactly as `task_proposal`'s start-with-changes. `task_proposal` remains its own type. |
 | `system_health` | Acknowledge, run doctor, stop unattended operation, or, on the notice a stop raises, resume unattended operation; the rules follow the table. |
 | `blocked` | Consolidates external waits that exceed Section [5.12](#512-workflow-definition-initiators-and-artifacts) thresholds. It is read-only. |
@@ -1190,11 +1190,33 @@ different text under different agents, which breaks the prompt digest as a
 comparison key.
 
 The project lineup, or the deployment lineup beneath it, is the only standing
-selection and the only approval. The one per-attempt selection is the Section
-[4](#4-the-attention-model) alternate-agent card: a recorded choice among agents resolved from the
-same tree. It never approves an agent the tree does not carry and never changes
-the lineup. It selects an agent only: the role's prompt stays the one its
-lineup line names, for a stage attempt and for a call alike.
+selection and the only approval. Two narrower selections choose among agents
+resolved from the same tree. Neither approves an agent the tree does not carry
+or changes the lineup, and each selects an agent only: the role's prompt stays
+the one its lineup line names.
+
+- **A task line** picks the agent for one ward role in one task (revision
+  73), so the operator can run one task on Codex and the next on a second
+  Claude subscription without editing a lineup. It covers the specifier,
+  implementer, remediator, and reviewer. The shadow reviewer and every
+  wardless role stay on the lineup, because their comparisons key on the
+  lineup line (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) and a per-task agent would split them. A task
+  records one line per role, and one role never borrows another's line; a
+  client may still set several lines from one choice, such as one writer
+  agent for the specifier, implementer, and remediator. Only an
+  authenticated operator sets a task line: at submission (`freesided submit`
+  or `submit_task`), when starting a `task_proposal` card (Section [4](#4-the-attention-model)), or later by a recorded operator command while no attempt
+  of that role is running. A change records a new line that supersedes the
+  role's last one and never edits it, so the line an admission cites stays
+  the choice that authorized that attempt. Intake from an issue, a label, or repository
+  content never sets one, because choosing an agent chooses which credential
+  runs (Section [5.8](#58-control-plane-trust)). Each admission reads the task's current lines, so a
+  change applies from the role's next attempt. A task line whose agent no
+  longer resolves, or whose identity is disabled, fails that role's admission
+  and raises the ordinary card; it never falls back to the lineup.
+- **The Section [4](#4-the-attention-model) alternate-agent card** is the one per-attempt selection:
+  a recorded choice for one attempt, for a stage attempt and for a call
+  alike. It overrides a task line for that attempt only.
 
 The lines:
 
@@ -1319,9 +1341,9 @@ every other input:
    keeps its closure by digest. An offer whose authored `not_after` precedes the
    attempt deadline does not resolve. A proposal binds `(name, digest)` and goes
    stale if either moves.
-2. *Selected.* The lineup names that digest for the role, or the Section [4](#4-the-attention-model)
-   alternate-agent card records it as this attempt's choice. The admission
-   snapshot says which.
+2. *Selected.* The lineup names that digest for the role, a task line names
+   it for this task's role, or the Section [4](#4-the-attention-model) alternate-agent card records it as
+   this attempt's choice. The admission snapshot says which.
 3. *Proved.* Runner conformance holds (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), unchanged), and the adapter
    build's conformance record has proved capabilities covering the launch. That
    record is one per build, produced by the stage contract suite. It proves the
@@ -1341,8 +1363,11 @@ every other input:
    attempt closed and raises the existing revoked-identity marker. The Claude
    baseline cuts over under that admission.
 5. *Snapshot.* `ExecutionAdmission` records the agent digest, the launch digest,
-   the lineup revision, the enrollment id and generation, the store manifest
-   digest, the effective egress allowlist, and whether the attempt is attended.
+   the lineup revision, the selection source (the lineup, a task line, or the
+   alternate-agent card, with the id of the task line or card record that
+   chose the agent; revision 73), the enrollment id and generation, the store
+   manifest digest, the effective egress allowlist, and whether the attempt is
+   attended.
    It derives its existing fields (identity, image, credential mode, endpoints,
    instruction delivery) from them. Reconstruction reads by digest and rechecks
    the derivations.
@@ -1513,8 +1538,8 @@ Deliberately not built:
 
 Two identities of one provider (a work
 and a personal subscription), each with its own enrollments and agents, are
-a supported shape. Selection among them is a lineup line or a carded
-per-attempt choice, never silent: no default is inferred from enrollment
+a supported shape. Selection among them is a lineup line, a task line, or a
+carded per-attempt choice, never silent: no default is inferred from enrollment
 order, recency, or availability. Cost owner is read from the selected
 agent's identity on every selection and recorded with it, so one project can
 attribute a review to one subscription and an implementation to another.
@@ -2779,8 +2804,9 @@ Additional rules:
 - **A paired client may submit a task.** The clients are a decision surface
   and also the ordinary way to start work. A `submit_task` command on the
   Section [5.14](#514-client-synchronization-and-conversations) command surface, the second `ClientCommand` type,
-  names a project, a source text, and an optional operator name, one line of
-  at most 60 characters. It is the
+  names a project, a source text, an optional operator name (one line of
+  at most 60 characters), and optional task lines (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted
+  Agents; revision 73). It is the
   same intake path as `freesided submit`, not a parallel one. The daemon
   registers the source as a digest-addressed artifact and creates a new task,
   specification run, reserved implementation run, and campaign, in the
@@ -2792,7 +2818,8 @@ Additional rules:
   work. Their digests and the submission identity bind the reserved run.
   A manual Retry uses the exact saved command; replay returns its original
   result and revision before resolving current host configuration. New records
-  bind device, project, source, and the optional name as submitted. Changed
+  bind device, project, source, the optional name, and any task lines as
+  submitted. Changed
   fields under an occupied identity are rejected without a committed effect;
   equivalent JSON formatting is not a changed request. Historical records
   retain their existing device/project/source checks, including name-insensitive
@@ -2967,9 +2994,12 @@ Discuss response to a `finding_adjudication` item triggers; that is the finding
 adjudicator's site and runs on the adjudicator's line.
 
 Each of these is a **role**, and this list is the closed role list of Section
-[5.4](#54-credential-modes-egress-profiles-and-concurrency): every role picks its agent and its prompt through the lineup. The
-specifier, implementer, remediator, reviewer, and shadow reviewer are ward
-roles. The rest are wardless roles whose work is the judgment calls below.
+[5.4](#54-credential-modes-egress-profiles-and-concurrency): every role takes its prompt from the lineup, and its agent too unless a
+narrower selection picks one. A task line may pick the agent for the
+specifier, implementer, remediator, or reviewer of one task, and the
+alternate-agent card may pick it for one attempt (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted
+Agents; revision 73). The specifier, implementer, remediator, reviewer, and
+shadow reviewer are ward roles. The rest are wardless roles whose work is the judgment calls below.
 Verification is an engine job, above, and never a role.
 
 Evidence publication stays on the deterministic-jobs list. Writing the public
@@ -4120,8 +4150,8 @@ targets. It also makes a selectable Claude ReviewSource more valuable later.
 The sequencing above and the deferred #397 promotion keep that pairing from
 becoming the default; shadow findings stay recorded and never routed.
 
-Independence is a preference the operator expresses in the lineup and a fact
-Freeside records. It is never a gate (owner decision, revision 65). Any
+Independence is a preference the operator expresses in the lineup or a task
+line and a fact Freeside records. It is never a gate (owner decision, revision 65). Any
 combination of providers may serve any combination of roles, and the
 implementer and the reviewer may be the same agent, because Freeside has to
 keep working when one provider is out of usage or down. Once agents are
@@ -5385,7 +5415,8 @@ Phase 1B adds:
   vendor topology, and the Codex adapter registration land as separate follow-on
   units behind the admitted-agent contract (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)). They are sequenced
   after the 1A.2 exit and behind the #401 pre-adoption gates, closed
-  2026-08-02. Selection is a lineup line, never silent; and
+  2026-08-02. Selection is a lineup line or a task line (revision 73), never
+  silent; and
 - the task timeline screen, with each run's timeline beneath it.
 
 Precondition: the verified 1A exit. 1B proceeds in three internal exits.
@@ -5646,91 +5677,46 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 72 ("Schedule Work by Machine and Account Capacity"):
+Revision 73 ("Choose the Agent per Task"):
 
-1. **The machine is a scheduled resource.** Every ward container launches
-   with a declared CPU cap and memory limit, and each daemon instance's
-   declared memory budget bounds their memory (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity). Instances that share
-   a host split it between their budgets, because no instance sees another's
-   containers. The daemon reserves a launch's size in
-   the same transaction as its pool slot and releases it once the launch's
-   containers are proved absent, so work that doesn't fit waits under a
-   visible hold instead of exhausting host memory. Because no container
-   outlives its stage invocation, a task
-   waiting on the operator costs nothing, and open tasks need no system-wide
-   cap. Rejected: a system-wide cap on running tasks (it counts tasks, but
-   memory runs out by containers, and the containers per task vary by role);
-   account limits alone (with several accounts they add up past what the
-   machine holds, and verification takes no account slot); and
-   counting containers without sizes (a writer running a heavy build and a
-   seeder that copies files would count the same); and a host-wide
-   coordinator across instances (it adds state shared across the instances
-   that Section [10](#10-operations-and-onboarding) keeps apart).
-2. **Memory is reserved, CPU is capped, and the oldest task goes first.**
-   Waiting launches get memory in the order their tasks were submitted, with
-   no skipping. A size that can never fit fails at once, and a container
-   killed at its memory limit gets a card that offers a larger size.
-   `prod`'s budget defaults to half the host's memory, other tiers declare
-   theirs, and each launch records its
-   size, outcome, and peak memory so sizes follow evidence. Rejected:
-   reserving CPU (agents mostly wait on the model, so on a 10-core host a
-   4-CPU reservation would allow two writers while the cores sit idle); and
-   letting smaller launches jump the queue (it fills memory better but lets a
-   large launch wait forever).
-3. **Execution limits count per usage pool, and calls take no slot.** The
-   provider meters quota on the pool, so two credentials on one pool share
-   one limit (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), provider concurrency control 2).
-   Every ward role that draws on a pool holds a slot, reviews included.
-   Each instance counts only its own slots, so instances that draw on one
-   pool split its limit between them, the way they split the host (item 1).
-   Rejected: a limit per credential (two clients on one subscription would
-   get twice the provider's concurrency); and counting calls (a one-turn
-   adjudication or naming call would wait behind hour-long writer runs).
-   Each site runs one call at a time, so calls exceed a pool's limit by at
-   most one request per site (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)).
-4. **Owner evidence and a staged rollout raise a limit.** The owner's routine
-   concurrent use of the same subscriptions outside Freeside is enough
-   evidence to record a limit above 1, and a staged rollout under normal
-   work checks it. This replaces the experimental overlap proof that 1B
-   first required. #730 (#1588) adds `freesided set-identity-limit` to
-   record a limit. The rollout starts only after #1585, because today each
-   Claude writer run holds its identity's mutation lease for the whole run,
-   so a second writer fails its stage instead of waiting. Rejected: keeping
-   the proof as a precondition (it tests what the owner's daily use already
-   shows, and Freeside can't observe provider quota anyway, per
-   Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Observation, Never Authority).
-5. **Implementation units are filed after merge, with no wave assigned.**
-   Pool limits move `max_parallel_executions` and #1588's
-   `set-identity-limit` command to the usage pool, and replace the
-   `identity_parallelism` hold with a pool hold that names the pool, since
-   several identities fill one pool; stored holds stay readable
-   (`kind:contract`, `starts-after` #1585, because both change the admission
-   capacity path and contract units serialize; it absorbs #727 and #731,
-   which fix the same count). A pool takes the lowest limit among its
-   identities, so no pool gains concurrency from the move. An identity with
-   no pool yet keeps its current limit in a pool of its own that admission
-   counts it against, without setting its set-once `usage_pool`; when the
-   account is later characterized into a shared pool, that pool takes the
-   lowest limit by the same rule, so neither step gains concurrency.
-   Ward container sizing passes declared CPU caps and memory limits to every
-   launch, records each launch's size, outcome, and peak memory, and names a
-   memory-limit kill as its own failure. It first measures real peak memory
-   for a writer, a review, and a verification job, checks whether Apple
-   `container` returns freed memory before a container stops, and checks
-   whether review observer containers run beside the review container. The
-   host budget and machine-capacity hold add the memory budget, the
-   reservation, the oldest-task-first order, the refusal of sizes that can
-   never fit, the card's larger-size retry, and a new hold reason
-   (`kind:contract`, `starts-after` #898 and container sizing: reviews
-   reserve only once they pass through admission, and a reservation protects
-   the host only once the runtime enforces the declared size). The clients
-   then name
-   the new holds in plain words. A usage brake (pausing work when a
-   subscription runs low) stays deferred; #1587 records why and when to
-   revisit it.
+1. **A task may name the agent for each ward role.** A task line picks the
+   agent for the specifier, implementer, remediator, or reviewer of one task,
+   from agents the current tree carries (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted Agents). The
+   operator sets it at submission or while no attempt of that role runs, and
+   each admission reads the current line. The alternate-agent card still
+   overrides one attempt. Rejected: choosing only per project (a lineup edit
+   to run one task elsewhere changes every other task too); automatic
+   routing by remaining capacity (Freeside can't observe provider quota, and
+   the Section [8](#8-observability-and-optimization-telemetry) routing policy isn't built; until it is, balancing
+   providers stays the operator's choice); and a task-level prompt choice
+   (a prompt is control-plane text approved through the tree, and a task line
+   is operator input, not an approval).
+2. **Only the operator sets a task line, and it never falls back.** An
+   issue, a label, or repository content never sets one, because choosing an
+   agent chooses which credential runs. A line that no longer resolves fails
+   admission and raises the ordinary card instead of running the lineup's
+   agent, so a selection is never silent. Rejected: falling back to the
+   lineup line (the task would run on an agent and subscription the operator
+   didn't pick).
+3. **The shadow reviewer and the wardless roles stay on the lineup.** Their
+   comparisons key on the lineup line, and a per-task agent would split them.
+   Review independence stays a recorded fact (Section [7](#7-review-policy), revision 65): a
+   task that names one vendor for writing and reviewing shows a same-lineage
+   review. Rejected: requiring a different reviewer vendor when the writer is
+   chosen per task (revision 65 already declined that gate, so the operator
+   can keep working when one provider is out of usage).
+4. **Implementation units are filed after merge, with no wave assigned.**
+   Task lines on `submit_task`, `freesided submit`, the `task_proposal`
+   start actions, and the admission
+   snapshot's selection source (`kind:contract`, `starts-after` #1421,
+   because task lines key roles by the lineup's role names). The operator
+   command that changes a line and the clients' agent picker follow it, the
+   picker `starts-after` #979, which shows agent facts in the clients.
+   Choosing Codex needs #408; choosing between two Claude subscriptions does
+   not.
 
 (Owner decisions of 2026-09-28, owner-assigned #1587;
-[decision note](../devlog/2026-09-28-1800-capacity-scheduling.md).)
+[decision note](../devlog/2026-09-28-1830-per-task-agent-choice.md).)
 
 ## 14. Risks
 
@@ -5746,7 +5732,7 @@ Revision 72 ("Schedule Work by Machine and Account Capacity"):
 | **Workspace-handoff uncertainty** | Resolved by the workspace-handoff spike: the strong class is declared and conformance-gated (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)); the same-VM fallback is refuted by execution, never implemented or declared. |
 | **Codex cloud review as a load-bearing dependency** | Realized 2026-07-31: the live-run trigger falsification (#427) showed no App-visible trigger path. The dependency is removed. Review is Freeside-invoked (Section [7](#7-review-policy)), and native review is best-effort extra evidence. |
 | Host capacity | Several accounts' limits can add up to more containers than one machine holds. Give every ward container a CPU cap and a declared memory size, and bound their memory by each instance's declared budget, so a launch that doesn't fit waits under a visible hold instead of exhausting memory; waiting launches go oldest task first, and a size that can never fit fails at once (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity). Residual: the budget can't see load outside Freeside or another instance's containers, so the operator declares it with room for interactive use and keeps the budgets of every instance on one host within what the host holds. |
-| Single-provider execution capacity | Claude usage limits can stall real work. Schedule the 1B Codex execution driver as a hedge (Section [11](#11-roadmap-build-order-and-coordination)). Keep selection explicit as a lineup line, never silent (a lineup may name the switch per failure class, Section [4](#4-the-attention-model)). Usage remains observed telemetry (Section [8](#8-observability-and-optimization-telemetry)). |
+| Single-provider execution capacity | Claude usage limits can stall real work. Schedule the 1B Codex execution driver as a hedge (Section [11](#11-roadmap-build-order-and-coordination)). Keep selection explicit as a lineup line or a task line, never silent (a lineup may name the switch per failure class, Section [4](#4-the-attention-model); a task line may pick another agent for one task, Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted Agents). Usage remains observed telemetry (Section [8](#8-observability-and-optimization-telemetry)). |
 | Classifier mislabeling | Preserve immutable raw findings; require second adjudication for the safety case; enforce ceilings. |
 | Subscription-terms drift | Keep it as an explicit operating risk. |
 | Apple container immaturity | Prove actual runner capabilities and retain honest fallback classes. |
