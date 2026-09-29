@@ -5059,16 +5059,21 @@ stay with that run.
 - **Only `prod` carries a remote backup destination.** A Section [5.10](#510-coherent-backup-encrypted-checkpoints)
   `BackupPolicy.destination` is allowed in `prod` alone; every tier keeps its
   local checkpoints under its own root.
-- **Exclusive database locking waits for IPC.** Opening the `prod` and `dev`
-  databases with `locking_mode=EXCLUSIVE` is the intended end state, but
-  Freeside's own direct-store clients open the live file today: `freesided
-  follow` and `submit`, and `preflight`, `approve-shadow-review`,
-  `renew-codex`, `comprehension`, and `rig`. An exclusive lock would fail
-  each of them against a running supervised daemon. Exclusive locking is
-  gated on moving those clients to a daemon IPC transport, with the private
-  Unix socket `pairing-code` uses (Section [5.2](#52-the-daemon-and-its-supervisor)) as the natural base, plus a
-  snapshot command for offline `sqlite3` inspection. Until then every tier
-  keeps the default locking mode.
+- **Supervised tiers hold their database exclusively.** `prod` and `dev` open
+  their database with `locking_mode=EXCLUSIVE` for as long as the daemon
+  runs, so no other SQLite connection, `sqlite3` included, can use the
+  live database. The lock binds SQLite clients only; it does not stop a
+  process that copies or edits the file directly. It also lapses briefly if
+  the store replaces its connection after a driver error, until the new
+  connection opens.
+  `ephemeral` keeps normal locking for tests and scratch runs. Freeside's own
+  direct-store commands open the file only while they hold the daemon lock.
+  While a daemon runs, `freesided follow`, `submit`, `approve-shadow-review`,
+  `comprehension`, and the other store commands send their work over the
+  daemon's control socket instead, and commands that need the daemon
+  stopped, such as `renew-codex`, `rig`, and `preflight`'s database checks,
+  refuse. To inspect a live supervised database, `freesided snapshot` writes
+  an owner-only copy for offline `sqlite3` use.
 - **No script stops the production label.** No script, test, or agent stops,
   unloads, or re-registers `ai.freeside.daemon`. The one exception is the
   installer: `prod` adopts a merged daemon change when the operator re-runs
@@ -5092,9 +5097,12 @@ to the App's single authority that does not open them as the operator, such
 as publishing through the production account; the mode's own unit chooses
 the mechanism.
 Every such guard runs in the process it constrains. The guards stop
-accidental misuse, not a process that deliberately claims `prod`. Until
-exclusive locking lands, production holds no protection of its own beyond
-the per-database lock that refuses a second daemon on the same `-db`.
+accidental misuse, not a process that deliberately claims `prod`.
+Production's own protection is the per-database lock, which refuses a
+second daemon on the same `-db`, and exclusive locking, which refuses every
+other SQLite connection to the live database while the daemon runs, apart
+from a brief gap if the store reconnects; neither applies while `prod` is
+stopped.
 
 ### GitHub App Agent Identity
 
