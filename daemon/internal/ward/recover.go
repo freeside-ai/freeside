@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
@@ -186,8 +187,27 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 			)
 		}
 	}
-	if (hs.AuthStoreLease == nil) != (rec.Lease == nil) {
+	if (hs.AuthStoreLease == nil) != (rec.Lease == nil && rec.ReadHold == nil) {
 		return nil, fmt.Errorf("%w: record and spec disagree on the auth-store lease", ErrInvalidJournalRecord)
+	}
+	// A read hold is only ever taken for a read-only identity mount. The
+	// converse does not hold: a read-only Claude run journalled before
+	// #1585 carries the exclusive lease, and recovery must still finish it,
+	// so a lease reference on a read-only claim recovers on the lease path.
+	if rec.ReadHold != nil && hs.leasedCredentialWritable() {
+		return nil, fmt.Errorf("%w: record holds a shared read hold for a writable credential mount", ErrInvalidJournalRecord)
+	}
+	if rec.ReadHold != nil &&
+		(rec.ReadHold.AuthIdentityID != hs.AuthStoreLease.AuthIdentityID || rec.ReadHold.Holder != hs.AuthStoreLease.Holder) {
+		return nil, fmt.Errorf("%w: record's read hold does not name the spec's claimed identity and holder", ErrInvalidJournalRecord)
+	}
+	if rec.ReadHold != nil {
+		if _, err := b.readHolder(*hs.AuthStoreLease); err != nil {
+			return nil, failf(CheckRecovery, "record holds an auth-store read hold but no read holder is configured")
+		}
+	}
+	if rec.ReadHold != nil && rec.WriterComplete && rec.CredentialPreDigest == "" {
+		return nil, fmt.Errorf("%w: writer-complete read-held record carries no credential pre-digest", ErrInvalidJournalRecord)
 	}
 	// The persisted lease reference must name the digest-bound claim's
 	// identity and holder: a damaged or swapped row carrying some other
@@ -265,16 +285,17 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 		(hs.Seed.Mode != SeedBaseCheckout || rec.ObservedBaseSHA != hs.Seed.Base.BaseSHA) {
 		return nil, fmt.Errorf("%w: record's observed base does not match the spec's declared base", ErrInvalidJournalRecord)
 	}
-	if rec.Lease != nil {
-		boundVolume, verr := b.cfg.AuthStoreLeaser.AuthStoreVolume(ctx, rec.Lease.AuthIdentityID)
+	if rec.Lease != nil || rec.ReadHold != nil {
+		// Both references name the spec's claimed identity (checked above).
+		id := hs.AuthStoreLease.AuthIdentityID
+		boundVolume, verr := b.cfg.AuthStoreLeaser.AuthStoreVolume(ctx, id)
 		if verr != nil {
-			return nil, fmt.Errorf("re-gate auth-store volume for identity %q: %w",
-				rec.Lease.AuthIdentityID, verr)
+			return nil, fmt.Errorf("re-gate auth-store volume for identity %q: %w", id, verr)
 		}
 		if mounted := hs.leasedCredentialVolume(); boundVolume != mounted {
 			return nil, fmt.Errorf(
 				"%w: identity %q is bound to auth-store volume %q, not the record's credential mount %q",
-				ErrInvalidJournalRecord, rec.Lease.AuthIdentityID, boundVolume, mounted)
+				ErrInvalidJournalRecord, id, boundVolume, mounted)
 		}
 	}
 	// Base capabilities only: suite-earned flags were cleared by the restart
@@ -406,6 +427,36 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 			current.AcquiredAt.Equal(rec.Lease.AcquiredAt) && current.ExpiresAt.Equal(rec.Lease.ExpiresAt) &&
 			current.HeldAt(b.cfg.Now()) {
 			st.lease = current
+			st.leaseHeld = true
+		}
+	}
+	if rec.ReadHold != nil {
+		// The same exact-window re-gate as the lease above. A read hold has
+		// no fence, and a holder may open a later window after this one
+		// ended, so only the full recorded window, still live, is this
+		// run's to release.
+		st.sharedWindow = true
+		readHolder, _ := b.readHolder(*hs.AuthStoreLease)
+		current, gerr := readHolder.GetRead(ctx, rec.ReadHold.AuthIdentityID, rec.ReadHold.Holder)
+		// The atomic open wrote the row with the record, so a read failure
+		// is an incoherent or unavailable store, as for the lease.
+		if gerr != nil {
+			return nil, fmt.Errorf("re-gate recorded read hold for identity %q: %w", rec.ReadHold.AuthIdentityID, gerr)
+		}
+		if verr := current.Validate(); verr != nil {
+			return nil, fmt.Errorf("re-gate recorded read hold for identity %q: store row is malformed: %w",
+				rec.ReadHold.AuthIdentityID, verr)
+		}
+		if current.AuthIdentityID != rec.ReadHold.AuthIdentityID || current.Holder != rec.ReadHold.Holder {
+			return nil, fmt.Errorf("re-gate recorded read hold for identity %q: store row names identity %q holder %q",
+				rec.ReadHold.AuthIdentityID, current.AuthIdentityID, current.Holder)
+		}
+		recorded := domain.AuthStoreReadHold{
+			AuthIdentityID: rec.ReadHold.AuthIdentityID, Holder: rec.ReadHold.Holder,
+			AcquiredAt: rec.ReadHold.AcquiredAt, ExpiresAt: rec.ReadHold.ExpiresAt,
+		}
+		if sameReadWindow(current, recorded) && current.HeldAt(b.cfg.Now()) {
+			st.readHold = current
 			st.leaseHeld = true
 		}
 	}
@@ -715,7 +766,7 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 	}
 	var credPostDigest string
 	postAttested := false
-	if rec.Lease != nil {
+	if rec.Lease != nil || rec.ReadHold != nil {
 		// The post-write digest is attributable only when taken inside the
 		// run's own still-held window, and only when that window outlives
 		// the whole observation: with the window lapsed or taken over,
@@ -730,7 +781,7 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 		// from this instant — a conservative stand-in for recovery's own
 		// deadline (which is at most HandoffTimeout from an earlier
 		// instant) that stays in the injected clock's timeline.
-		covered := st.leaseHeld && st.lease.ExpiresAt.After(b.cfg.Now().Add(b.cfg.HandoffTimeout))
+		covered := st.leaseHeld && st.windowExpiresAt().After(b.cfg.Now().Add(b.cfg.HandoffTimeout))
 		if covered {
 			credPostDigest, err = b.observeCredentialStore(ctx, hs, names.CredObsPost, st, &st.credObsPost)
 			if err != nil {
@@ -769,12 +820,28 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 	}
 	st.succeeded = true
 	authStore := AuthStoreObservation{}
+	if rec.ReadHold != nil {
+		authStore = AuthStoreObservation{
+			Leased:         true,
+			Shared:         true,
+			AuthIdentityID: rec.ReadHold.AuthIdentityID,
+			Holder:         rec.ReadHold.Holder,
+			AcquiredAt:     rec.ReadHold.AcquiredAt,
+			ExpiresAt:      rec.ReadHold.ExpiresAt,
+			PreDigest:      rec.CredentialPreDigest,
+			PostDigest:     credPostDigest,
+			PostAttested:   postAttested,
+			Mutated:        postAttested && rec.CredentialPreDigest != credPostDigest,
+		}
+	}
 	if rec.Lease != nil {
 		authStore = AuthStoreObservation{
 			Leased:         true,
 			AuthIdentityID: rec.Lease.AuthIdentityID,
 			Holder:         rec.Lease.Holder,
 			Fence:          rec.Lease.Fence,
+			AcquiredAt:     rec.Lease.AcquiredAt,
+			ExpiresAt:      rec.Lease.ExpiresAt,
 			PreDigest:      rec.CredentialPreDigest,
 			PostDigest:     credPostDigest,
 			PostAttested:   postAttested,

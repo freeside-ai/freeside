@@ -3,9 +3,11 @@ package ward
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,6 +35,100 @@ type fakeLeaser struct {
 	onRenew   func(current domain.AuthStoreMutationLease, now, expiresAt time.Time) (domain.AuthStoreMutationLease, error)
 	onRelease func(id domain.AuthIdentityID, holder domain.InvocationID, fence int64, releasedAt time.Time) error
 	onVolume  func(id domain.AuthIdentityID) (string, error)
+
+	// Read-hold state (#1585). readMu guards it, since concurrent
+	// read-held handoffs share one leaser. Every hold ever granted stays in
+	// readHolds, keyed by holder; readReleased marks the ended ones.
+	readMu        sync.Mutex
+	readHolds     map[domain.InvocationID]domain.AuthStoreReadHold
+	readReleased  map[domain.InvocationID]bool
+	onAcquireRead func(id domain.AuthIdentityID, holder domain.InvocationID, now, expiresAt time.Time) (domain.AuthStoreReadHold, error)
+	onGetRead     func(current domain.AuthStoreReadHold) (domain.AuthStoreReadHold, error)
+	onReleaseRead func(id domain.AuthIdentityID, holder domain.InvocationID, acquiredAt, releasedAt time.Time) error
+}
+
+// grantRead models the store's read-hold rule: refused while the exclusive
+// lease is live or the holder already holds a live window; otherwise
+// exactly the requested window.
+func (l *fakeLeaser) grantRead(
+	id domain.AuthIdentityID, holder domain.InvocationID, now, expiresAt time.Time,
+) (domain.AuthStoreReadHold, error) {
+	l.readMu.Lock()
+	defer l.readMu.Unlock()
+	if !l.released && l.lease.AuthIdentityID == id && l.lease.HeldAt(now) {
+		return domain.AuthStoreReadHold{}, errors.New("fake leaser: mutation lease is live")
+	}
+	if current, ok := l.readHolds[holder]; ok && !l.readReleased[holder] && current.HeldAt(now) {
+		return domain.AuthStoreReadHold{}, errors.New("fake leaser: holder already holds a live read window")
+	}
+	hold := domain.AuthStoreReadHold{AuthIdentityID: id, Holder: holder, AcquiredAt: now, ExpiresAt: expiresAt}
+	if l.readHolds == nil {
+		l.readHolds = map[domain.InvocationID]domain.AuthStoreReadHold{}
+		l.readReleased = map[domain.InvocationID]bool{}
+	}
+	l.readHolds[holder] = hold
+	delete(l.readReleased, holder)
+	return hold, nil
+}
+
+// liveReadHolds counts the read windows granted and not released.
+func (l *fakeLeaser) liveReadHolds() int {
+	l.readMu.Lock()
+	defer l.readMu.Unlock()
+	n := 0
+	for holder := range l.readHolds {
+		if !l.readReleased[holder] {
+			n++
+		}
+	}
+	return n
+}
+
+func (l *fakeLeaser) AcquireRead(_ context.Context, id domain.AuthIdentityID, holder domain.InvocationID,
+	now, expiresAt time.Time,
+) (domain.AuthStoreReadHold, error) {
+	l.recordCall("read-acquire " + string(id))
+	if l.onAcquireRead != nil {
+		return l.onAcquireRead(id, holder, now, expiresAt)
+	}
+	return l.grantRead(id, holder, now, expiresAt)
+}
+
+func (l *fakeLeaser) GetRead(
+	_ context.Context, id domain.AuthIdentityID, holder domain.InvocationID,
+) (domain.AuthStoreReadHold, error) {
+	l.recordCall("read-get " + string(id))
+	l.readMu.Lock()
+	current, ok := l.readHolds[holder]
+	if ok && l.readReleased[holder] {
+		released := current.AcquiredAt
+		current.ReleasedAt = &released
+	}
+	l.readMu.Unlock()
+	if l.onGetRead != nil {
+		return l.onGetRead(current)
+	}
+	if !ok {
+		return domain.AuthStoreReadHold{}, errors.New("fake leaser: no read hold for holder")
+	}
+	return current, nil
+}
+
+func (l *fakeLeaser) ReleaseRead(_ context.Context, id domain.AuthIdentityID, holder domain.InvocationID,
+	acquiredAt, releasedAt time.Time,
+) error {
+	l.recordCall("read-release " + string(id))
+	if l.onReleaseRead != nil {
+		return l.onReleaseRead(id, holder, acquiredAt, releasedAt)
+	}
+	l.readMu.Lock()
+	defer l.readMu.Unlock()
+	current, ok := l.readHolds[holder]
+	if !ok || current.AuthIdentityID != id || !current.AcquiredAt.Equal(acquiredAt) {
+		return fmt.Errorf("%w: fake leaser: caller does not hold the read window", ErrLeaseWindowEnded)
+	}
+	l.readReleased[holder] = true
+	return nil
 }
 
 func (l *fakeLeaser) GetIdentity(
@@ -86,6 +182,9 @@ func (l *fakeLeaser) Acquire(_ context.Context, id domain.AuthIdentityID, holder
 	l.holders = append(l.holders, holder)
 	if l.onAcquire != nil {
 		return l.onAcquire(id, holder, now, expiresAt)
+	}
+	if l.liveReadHolds() > 0 {
+		return domain.AuthStoreMutationLease{}, errors.New("fake leaser: a read hold is live")
 	}
 	l.lease = domain.AuthStoreMutationLease{
 		AuthIdentityID: id, Holder: holder, Fence: 1,

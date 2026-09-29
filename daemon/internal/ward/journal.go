@@ -97,6 +97,18 @@ type HandoffJournalLease struct {
 	ExpiresAt      time.Time             `json:"expires_at"`
 }
 
+// HandoffJournalReadHold is the persisted reference to the shared read hold a
+// handoff with a read-only identity mount holds (#1585). Like the lease
+// reference it authorizes nothing: recovery binds it to the live store row by
+// exact equality of the window before releasing it. A record carries it or a
+// HandoffJournalLease, never both.
+type HandoffJournalReadHold struct {
+	AuthIdentityID domain.AuthIdentityID `json:"auth_identity_id"`
+	Holder         domain.InvocationID   `json:"holder"`
+	AcquiredAt     time.Time             `json:"acquired_at"`
+	ExpiresAt      time.Time             `json:"expires_at"`
+}
+
 // HandoffJournalState binds the three lifecycle-scoped Claude state volumes
 // to the exact objects and empty/clean manifests proved before launch.
 type HandoffJournalState struct {
@@ -223,6 +235,9 @@ type HandoffJournalRecord struct {
 	Instructions *HandoffJournalInstructions `json:"instructions"`
 	// Lease is the held §5.4 mutation lease, nil for non-leased runs.
 	Lease *HandoffJournalLease `json:"lease"`
+	// ReadHold is the held shared read window for a run whose identity mount
+	// is read-only; nil for every other run. Exclusive with Lease.
+	ReadHold *HandoffJournalReadHold `json:"read_hold,omitempty"`
 	// ExportDir is the host directory holding the verified export, recorded
 	// durably before the completed close: a crash between the two would
 	// otherwise leave a closed-completed record whose delivery nobody can
@@ -307,6 +322,17 @@ func (r HandoffJournalRecord) Validate() error {
 		if !r.Lease.ExpiresAt.After(r.Lease.AcquiredAt) {
 			return fmt.Errorf("%w: journal record lease window expires at %s, not after its acquisition %s",
 				ErrInvalidJournalRecord, r.Lease.ExpiresAt, r.Lease.AcquiredAt)
+		}
+	}
+	if r.ReadHold != nil {
+		if r.Lease != nil {
+			return fmt.Errorf("%w: journal record carries both a lease and a read hold", ErrInvalidJournalRecord)
+		}
+		if r.ReadHold.AuthIdentityID == "" || r.ReadHold.Holder == "" {
+			return fmt.Errorf("%w: journal record read hold does not name an identity and holder", ErrInvalidJournalRecord)
+		}
+		if r.ReadHold.AcquiredAt.IsZero() || !r.ReadHold.ExpiresAt.After(r.ReadHold.AcquiredAt) {
+			return fmt.Errorf("%w: journal record read hold window is invalid", ErrInvalidJournalRecord)
 		}
 	}
 	if r.ExportDir != "" && !filepath.IsAbs(r.ExportDir) {
@@ -486,6 +512,19 @@ type LeasedHandoffOpener interface {
 		claim AuthStoreLeaseClaim,
 		now, expiresAt time.Time,
 	) (domain.AuthStoreMutationLease, error)
+}
+
+// ReadHeldHandoffOpener is LeasedHandoffOpener's counterpart for a read-only
+// identity mount: it atomically takes a shared read hold and opens rec with
+// that exact read-hold reference, both durable or neither. Handoff requires
+// its configured Journal to implement it for a read-held run.
+type ReadHeldHandoffOpener interface {
+	BeginReadHeld(
+		ctx context.Context,
+		rec HandoffJournalRecord,
+		claim AuthStoreLeaseClaim,
+		now, expiresAt time.Time,
+	) (domain.AuthStoreReadHold, error)
 }
 
 // specDigest canonically digests the frozen HandoffSpec so a journal record

@@ -1144,3 +1144,82 @@ func TestCodexReviewIntentTransitionFromStates(t *testing.T) {
 		}
 	}
 }
+
+// TestReadHoldAdaptersShareIdentityAndExcludeTheLease drives #1585's read
+// holds through the ward seams: two holders share an identity, the lease is
+// refused while either is live, the journal carries the hold across a read
+// back, and a release after the window maps to the ward's ended sentinel.
+func TestReadHoldAdaptersShareIdentityAndExcludeTheLease(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	at := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	identity := domain.AuthIdentity{
+		ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
+		MaxParallelExecutions: 2,
+		Interim:               domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordAuthIdentity(ctx, identity, at)
+	}); err != nil {
+		t.Fatalf("RecordAuthIdentity: %v", err)
+	}
+	adapters, err := wardstore.New(st)
+	if err != nil {
+		t.Fatalf("wardstore.New: %v", err)
+	}
+	rec := ward.HandoffJournalRecord{
+		RunID:          "read-held-run",
+		OwnershipToken: "00112233445566778899aabbccddeeff",
+		SpecDigest:     strings.Repeat("ab", 32),
+		OpenedAt:       at,
+	}
+	first, err := adapters.Journal.BeginReadHeld(
+		ctx, rec, ward.AuthStoreLeaseClaim{AuthIdentityID: identity.ID, Holder: "inv-1"},
+		at, at.Add(time.Hour),
+	)
+	if err != nil {
+		t.Fatalf("BeginReadHeld: %v", err)
+	}
+	second, err := adapters.Leaser.AcquireRead(ctx, identity.ID, "inv-2", at.Add(time.Second), at.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("second AcquireRead = %v, want a shared hold", err)
+	}
+	if _, err := adapters.Leaser.Acquire(
+		ctx, identity.ID, "inv-3", at.Add(2*time.Second), at.Add(time.Hour),
+	); !errors.Is(err, store.ErrLeaseHeld) {
+		t.Fatalf("lease beside read holds = %v, want %v", err, store.ErrLeaseHeld)
+	}
+
+	got, err := adapters.Journal.Get(ctx, rec.RunID)
+	if err != nil {
+		t.Fatalf("Journal.Get: %v", err)
+	}
+	want := &ward.HandoffJournalReadHold{
+		AuthIdentityID: identity.ID, Holder: "inv-1",
+		AcquiredAt: first.AcquiredAt, ExpiresAt: first.ExpiresAt,
+	}
+	if got.Lease != nil || got.ReadHold == nil || *got.ReadHold != *want {
+		t.Fatalf("journal windows = lease %+v read hold %+v, want read hold %+v", got.Lease, got.ReadHold, want)
+	}
+	reread, err := adapters.Leaser.GetRead(ctx, identity.ID, "inv-1")
+	if err != nil || !reread.AcquiredAt.Equal(first.AcquiredAt) || !reread.ExpiresAt.Equal(first.ExpiresAt) {
+		t.Fatalf("GetRead = %+v, %v, want the journalled window", reread, err)
+	}
+
+	if err := adapters.Leaser.ReleaseRead(ctx, identity.ID, "inv-1", first.AcquiredAt, at.Add(3*time.Second)); err != nil {
+		t.Fatalf("ReleaseRead: %v", err)
+	}
+	err = adapters.Leaser.ReleaseRead(ctx, identity.ID, "inv-2", second.AcquiredAt, second.ExpiresAt.Add(time.Second))
+	if !errors.Is(err, ward.ErrLeaseWindowEnded) {
+		t.Fatalf("late read release = %v, want %v", err, ward.ErrLeaseWindowEnded)
+	}
+	if _, err := adapters.Leaser.Acquire(
+		ctx, identity.ID, "inv-3", second.ExpiresAt.Add(2*time.Second), second.ExpiresAt.Add(time.Hour),
+	); err != nil {
+		t.Fatalf("lease after the read holds ended = %v, want nil", err)
+	}
+}

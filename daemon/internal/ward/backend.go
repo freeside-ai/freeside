@@ -42,13 +42,15 @@ type Backend struct {
 	// atomic decision across overlapping Full passes.
 	proofMu         sync.Mutex
 	proofGeneration uint64
-	// leaseMu guards activeLeases: the identities whose §5.4 mutation
-	// window a handoff in this process currently holds. The store
+	// leaseMu guards activeLeases and activeReads: the identities whose
+	// §5.4 mutation window, and the identity-and-holder pairs whose shared
+	// read window, a handoff in this process currently holds. The store
 	// serializes distinct holders; this closes the residual same-holder
 	// hole, where a caller reusing one holder ID for two concurrent
 	// handoffs would converge on one window (see acquireAuthStoreLease).
 	leaseMu      sync.Mutex
 	activeLeases map[domain.AuthIdentityID]bool
+	activeReads  map[domain.AuthIdentityID]map[domain.InvocationID]bool
 }
 
 type conformanceConfiguration struct {
@@ -100,6 +102,7 @@ func New(rt Runtime, cfg Config) (*Backend, error) {
 		runtimeIdentity: runtimeIdentity,
 		initialized:     true,
 		activeLeases:    map[domain.AuthIdentityID]bool{},
+		activeReads:     map[domain.AuthIdentityID]map[domain.InvocationID]bool{},
 	}, nil
 }
 

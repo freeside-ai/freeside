@@ -69,6 +69,10 @@ func (j *fakeJournal) snapshot(runID string) *HandoffJournalRecord {
 		lease := *rec.Lease
 		cp.Lease = &lease
 	}
+	if rec.ReadHold != nil {
+		hold := *rec.ReadHold
+		cp.ReadHold = &hold
+	}
 	if rec.Outcome != nil {
 		outcome := *rec.Outcome
 		cp.Outcome = &outcome
@@ -171,6 +175,52 @@ func (j *fakeJournal) BeginLeased(
 	j.records[rec.RunID] = &cp
 	j.leaser.lease = lease
 	return lease, nil
+}
+
+// BeginReadHeld models the production read-held open: the read hold and the
+// journal row become visible together.
+func (j *fakeJournal) BeginReadHeld(
+	_ context.Context,
+	rec HandoffJournalRecord,
+	claim AuthStoreLeaseClaim,
+	now, expiresAt time.Time,
+) (domain.AuthStoreReadHold, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.recordCall("journal-begin-read-held " + rec.RunID)
+	if j.failBegin != nil {
+		return domain.AuthStoreReadHold{}, j.failBegin
+	}
+	if _, exists := j.records[rec.RunID]; exists {
+		return domain.AuthStoreReadHold{}, errors.New("fake journal: record already exists for run")
+	}
+	if j.leaser == nil {
+		return domain.AuthStoreReadHold{}, errors.New("fake journal: no leaser for atomic begin")
+	}
+	var (
+		hold domain.AuthStoreReadHold
+		err  error
+	)
+	if j.leaser.onAcquireRead != nil {
+		hold, err = j.leaser.onAcquireRead(claim.AuthIdentityID, claim.Holder, now, expiresAt)
+	} else {
+		hold, err = j.leaser.grantRead(claim.AuthIdentityID, claim.Holder, now, expiresAt)
+	}
+	if err != nil {
+		return domain.AuthStoreReadHold{}, err
+	}
+	rec.ReadHold = &HandoffJournalReadHold{
+		AuthIdentityID: hold.AuthIdentityID,
+		Holder:         hold.Holder,
+		AcquiredAt:     hold.AcquiredAt,
+		ExpiresAt:      hold.ExpiresAt,
+	}
+	if err := rec.Validate(); err != nil {
+		return domain.AuthStoreReadHold{}, err
+	}
+	cp := rec
+	j.records[rec.RunID] = &cp
+	return hold, nil
 }
 
 func (j *fakeJournal) open(runID string) (*HandoffJournalRecord, error) {

@@ -85,7 +85,12 @@ type HandoffResult struct {
 type AuthStoreObservation struct {
 	// Leased distinguishes a real zero-observation (no lease claim) from a
 	// leased run; every other field is meaningful only when it is true.
-	Leased         bool
+	Leased bool
+	// Shared reports that the window was a shared read hold rather than the
+	// exclusive mutation lease: the identity mount was read-only, so other
+	// executions could read the same store in the same window (#1585). Fence
+	// is zero for a shared window.
+	Shared         bool
 	AuthIdentityID domain.AuthIdentityID
 	Holder         domain.InvocationID
 	Fence          int64
@@ -239,10 +244,17 @@ type runState struct {
 	// gone. leaseSlot and leaseIdentity track the backend's in-process
 	// per-identity slot, freed when the run ends regardless of how the
 	// window itself ended.
+	//
+	// When the claim's identity mount is read-only the window is a shared
+	// read hold instead (#1585): sharedWindow is set, readHold carries it,
+	// lease stays zero, and leaseHeld and leaseSlot mean the same for it.
 	lease         domain.AuthStoreMutationLease
+	readHold      domain.AuthStoreReadHold
+	sharedWindow  bool
 	leaseHeld     bool
 	leaseSlot     bool
 	leaseIdentity domain.AuthIdentityID
+	leaseHolder   domain.InvocationID
 	// credPreDigest is the leased credential volume's content digest observed
 	// before the writer started; the post-writer observation compares against
 	// it to attest whether the store mutated.
@@ -498,7 +510,23 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 			OpenedAt:       b.cfg.Now(),
 		}
 	}
+	// A read-only identity mount can only read the store, so its window is
+	// a shared read hold; a writable one takes the exclusive lease (#1585).
+	st.sharedWindow = hs.AuthStoreLease != nil && !hs.leasedCredentialWritable()
 	switch {
+	case st.sharedWindow && b.cfg.Journal != nil:
+		opener, ok := b.cfg.Journal.(ReadHeldHandoffOpener)
+		if !ok {
+			return nil, failf(CheckAuthStoreMutationLease,
+				"journal does not support atomic read-held handoff open")
+		}
+		if err := b.beginReadHeldHandoff(ctx, opener, rec, *hs.AuthStoreLease, st); err != nil {
+			return nil, err
+		}
+	case st.sharedWindow:
+		if err := b.acquireAuthStoreReadHold(ctx, *hs.AuthStoreLease, st); err != nil {
+			return nil, err
+		}
 	case hs.AuthStoreLease != nil && b.cfg.Journal != nil:
 		opener, ok := b.cfg.Journal.(LeasedHandoffOpener)
 		if !ok {
@@ -685,7 +713,11 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	// a takeover (bumped fence) or lapse between acquisition and here means
 	// another holder may already be mutating the store, and starting the
 	// writer would break §5.4's serialization the moment it refreshes.
-	if hs.AuthStoreLease != nil {
+	if st.sharedWindow {
+		if err := b.verifyAuthStoreReadHoldLive(ctx, st); err != nil {
+			return nil, err
+		}
+	} else if hs.AuthStoreLease != nil {
 		if err := b.verifyAuthStoreLeaseLive(ctx, st); err != nil {
 			return nil, err
 		}
@@ -804,6 +836,20 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 func authStoreObservation(hs HandoffSpec, st *runState, postDigest string) AuthStoreObservation {
 	if hs.AuthStoreLease == nil {
 		return AuthStoreObservation{}
+	}
+	if st.sharedWindow {
+		return AuthStoreObservation{
+			Leased:         true,
+			Shared:         true,
+			AuthIdentityID: st.readHold.AuthIdentityID,
+			Holder:         st.readHold.Holder,
+			AcquiredAt:     st.readHold.AcquiredAt,
+			ExpiresAt:      st.readHold.ExpiresAt,
+			PreDigest:      st.credPreDigest,
+			PostDigest:     postDigest,
+			PostAttested:   true,
+			Mutated:        st.credPreDigest != postDigest,
+		}
 	}
 	return AuthStoreObservation{
 		Leased:         true,
@@ -1065,7 +1111,7 @@ func (b *Backend) beginLeasedHandoff(
 	claim AuthStoreLeaseClaim,
 	st *runState,
 ) error {
-	if err := b.reserveAuthStoreLeaseSlot(claim.AuthIdentityID, st); err != nil {
+	if err := b.reserveAuthStoreLeaseSlot(claim, st); err != nil {
 		return err
 	}
 	now, wantExpiry := b.authStoreLeaseWindow()
@@ -1097,7 +1143,7 @@ func (b *Backend) acquireAuthStoreLease(ctx context.Context, claim AuthStoreLeas
 		return failf(CheckAuthStoreMutationLease,
 			"spec claims the auth-store mutation lease for identity %q but no leaser is configured", claim.AuthIdentityID)
 	}
-	if err := b.reserveAuthStoreLeaseSlot(claim.AuthIdentityID, st); err != nil {
+	if err := b.reserveAuthStoreLeaseSlot(claim, st); err != nil {
 		return err
 	}
 	now, wantExpiry := b.authStoreLeaseWindow()
@@ -1108,23 +1154,42 @@ func (b *Backend) acquireAuthStoreLease(ctx context.Context, claim AuthStoreLeas
 	return b.acceptAuthStoreLease(ctx, claim, now, wantExpiry, lease, st)
 }
 
-func (b *Backend) reserveAuthStoreLeaseSlot(id domain.AuthIdentityID, st *runState) error {
+func (b *Backend) reserveAuthStoreLeaseSlot(claim AuthStoreLeaseClaim, st *runState) error {
 	// The store serializes distinct holders; two concurrent handoffs reusing
 	// one holder ID would instead converge on one window and both write the
 	// same store. The gate's stated posture is that a caller cannot break
 	// §5.4 serialization by what it asserts, so the backend holds one
 	// in-process slot per identity (freed when the run ends; the store's
-	// window remains the cross-restart authority).
+	// window remains the cross-restart authority). A shared read slot is
+	// keyed by identity and holder instead: read-held runs with distinct
+	// holders share the identity, while an exclusive slot still excludes
+	// every reader, mirroring the store's rule.
+	id := claim.AuthIdentityID
 	b.leaseMu.Lock()
+	defer b.leaseMu.Unlock()
 	if b.activeLeases[id] {
-		b.leaseMu.Unlock()
 		return failf(CheckAuthStoreMutationLease,
 			"identity %q already has a live leased handoff in this process", id)
 	}
-	b.activeLeases[id] = true
-	b.leaseMu.Unlock()
+	if st.sharedWindow {
+		if b.activeReads[id][claim.Holder] {
+			return failf(CheckAuthStoreMutationLease,
+				"identity %q already has a live read-held handoff for holder %q in this process", id, claim.Holder)
+		}
+		if b.activeReads[id] == nil {
+			b.activeReads[id] = map[domain.InvocationID]bool{}
+		}
+		b.activeReads[id][claim.Holder] = true
+	} else {
+		if len(b.activeReads[id]) > 0 {
+			return failf(CheckAuthStoreMutationLease,
+				"identity %q already has a live read-held handoff in this process", id)
+		}
+		b.activeLeases[id] = true
+	}
 	st.leaseSlot = true
 	st.leaseIdentity = id
+	st.leaseHolder = claim.Holder
 	return nil
 }
 
@@ -1232,6 +1297,9 @@ func (b *Backend) releaseAuthStoreLease(ctx context.Context, st *runState) []str
 	if !st.leaseHeld {
 		return nil
 	}
+	if st.sharedWindow {
+		return b.releaseAuthStoreReadHold(ctx, st)
+	}
 	// The release must reach the store even when the run's context is
 	// already cancelled or past its deadline: a window outliving the run
 	// blocks the identity until expiry, so the one call that ends it runs
@@ -1261,7 +1329,14 @@ func (b *Backend) freeLeaseSlot(st *runState) {
 		return
 	}
 	b.leaseMu.Lock()
-	delete(b.activeLeases, st.leaseIdentity)
+	if st.sharedWindow {
+		delete(b.activeReads[st.leaseIdentity], st.leaseHolder)
+		if len(b.activeReads[st.leaseIdentity]) == 0 {
+			delete(b.activeReads, st.leaseIdentity)
+		}
+	} else {
+		delete(b.activeLeases, st.leaseIdentity)
+	}
 	b.leaseMu.Unlock()
 	st.leaseSlot = false
 }
@@ -1667,7 +1742,7 @@ func (b runtimeOps) teardown(
 		problems = append(problems, hooks.release(ctx, st)...)
 	} else if st.leaseHeld {
 		problems = append(problems, fmt.Sprintf(
-			"auth store mutation lease for identity %q kept held: writer absence unproven", st.lease.AuthIdentityID))
+			"auth store %s for identity %q kept held: writer absence unproven", st.windowKind(), st.windowIdentity()))
 	}
 
 	if len(problems) > 0 {

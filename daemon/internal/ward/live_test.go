@@ -1202,3 +1202,178 @@ func TestLiveLeasedMutationAndReadOnlyProbe(t *testing.T) {
 		t.Errorf("ro-probe.txt = %q, want the refused write recorded as read-only", probe)
 	}
 }
+
+// TestLiveConcurrentReadHeldWriters proves #1585's premise on the reference
+// runtime: two read-held writers mount one setup-token volume read-only at
+// the same time, both read the token, and both hand off. Each writer records
+// its start and end second in the workspace, and the exported intervals must
+// overlap, so a runtime that serialized or refused the second attach fails
+// here rather than passing on timing.
+//
+//	FREESIDE_WARD_LIVE_TEST=1 go test ./internal/ward -run TestLiveConcurrentReadHeldWriters -v
+func TestLiveConcurrentReadHeldWriters(t *testing.T) {
+	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
+		t.Skip("live concurrent read-hold test skipped: set FREESIDE_WARD_LIVE_TEST=1 (requires macOS, Apple container 1.1.0, `container system start`, and the pinned alpine:3.22 image)")
+	}
+	bin, err := osexec.LookPath("container")
+	if err != nil {
+		t.Fatalf("container CLI not on PATH: %v", err)
+	}
+	if out, err := osexec.Command(bin, "image", "pull", liveImage).CombinedOutput(); err != nil { //nolint:gosec // fixed args, resolved CLI path
+		t.Logf("image pull (continuing; may be cached): %v: %s", err, out)
+	}
+
+	ctx := context.Background()
+	rt := NewCLIRuntime(bin)
+	stamp := time.Now().Unix()
+	runIDs := []string{fmt.Sprintf("live-read-a-%d", stamp), fmt.Sprintf("live-read-b-%d", stamp)}
+	credVolume := fmt.Sprintf("freeside-ward-live-token-%d", stamp)
+	seedName := fmt.Sprintf("freeside-ward-live-token-seed-%d", stamp)
+	t.Cleanup(func() {
+		for _, runID := range runIDs {
+			names := namesFor(runID)
+			for _, c := range []string{names.Agent, names.Exporter, names.CredObsPre, names.CredObsPost} {
+				_ = rt.StopContainer(ctx, c)
+				_ = rt.DeleteContainer(ctx, c)
+			}
+			_ = rt.DeleteNetwork(ctx, names.Network)
+			_ = rt.DeleteVolume(ctx, names.Workspace)
+		}
+		_ = rt.StopContainer(ctx, seedName)
+		_ = rt.DeleteContainer(ctx, seedName)
+		_ = rt.DeleteVolume(ctx, credVolume)
+	})
+
+	if err := rt.CreateVolume(ctx, credVolume, 8, []Label{{Key: "freeside.ward-live", Value: credVolume}}); err != nil {
+		t.Fatalf("create credential volume: %v", err)
+	}
+	if err := rt.CreateContainer(ctx, ContainerSpec{
+		Name:  seedName,
+		Image: liveImage,
+		// The setup-token manifest admits exactly one entry, so the
+		// filesystem's own lost+found goes first.
+		Command: []string{
+			"sh", "-c",
+			"rm -rf /cred/lost+found && printf " + liveMarker + " > /cred/token && chmod 0400 /cred/token",
+		},
+		Mounts:          []Mount{{Type: MountVolume, Source: credVolume, Target: "/cred"}},
+		NetworkDisabled: true,
+	}); err != nil {
+		t.Fatalf("create seed container: %v", err)
+	}
+	if err := rt.StartContainer(ctx, seedName); err != nil {
+		t.Fatalf("start seed container: %v", err)
+	}
+	waitLiveStopped(t, rt, seedName)
+	if err := rt.DeleteContainer(ctx, seedName); err != nil {
+		t.Fatalf("delete seed container: %v", err)
+	}
+
+	leaser := &fakeLeaser{volume: credVolume}
+	b, err := New(rt, Config{
+		ProviderEndpoints: []string{"api.anthropic.com:443"},
+		ExporterImage:     liveExporterImage(t),
+		ExporterCommand:   export.HelperCommand(),
+		WriterStopTimeout: 3 * time.Minute,
+		ExporterTimeout:   3 * time.Minute,
+		Scanner:           markerScanner{},
+		AuthStoreLeaser:   leaser,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type outcome struct {
+		res *HandoffResult
+		err error
+	}
+	outcomes := make([]outcome, len(runIDs))
+	done := make(chan int, len(runIDs))
+	for i, runID := range runIDs {
+		go func() {
+			res, err := b.Handoff(ctx, HandoffSpec{
+				RunID:           runID,
+				WorkspaceSizeMB: 64,
+				Seed:            WorkspaceSeed{Mode: SeedBlank},
+				AuthStoreLease: &AuthStoreLeaseClaim{
+					AuthIdentityID: "live-identity", Holder: domain.InvocationID("holder-" + runID),
+				},
+				Agent: AgentSpec{
+					Image:              liveImage,
+					EgressProfile:      domain.EgressProviderOnly,
+					LaunchState:        LaunchStateNone,
+					VendorInstructions: VendorInstructions{Vendor: domain.AgentVendorClaude},
+					InstructionPolicy:  ClaudeInvocationInstructionPolicy(),
+					// The sleep holds each writer's mount open long enough for
+					// the other run's writer to start beside it.
+					Command: []string{
+						"sh", "-c",
+						"set -eu; date +%s > /workspace/start.txt; " +
+							"test -s /cred/token; " +
+							"if printf probe > /cred/probe 2>/dev/null; then echo writable; else echo read-only; fi > /workspace/probe.txt; " +
+							"sleep 45; date +%s > /workspace/end.txt",
+					},
+					CredentialMounts: []CredentialMount{{
+						Volume: credVolume, Target: "/cred", Manifest: CredentialManifestSetupToken,
+					}},
+				},
+			})
+			outcomes[i] = outcome{res, err}
+			done <- i
+		}()
+	}
+	for range runIDs {
+		<-done
+	}
+
+	var starts, ends [2]int64
+	for i, o := range outcomes {
+		if o.err != nil {
+			t.Fatalf("Handoff %s = %v, want success beside the other read hold", runIDs[i], o.err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(o.res.ExportDir) })
+		if obs := o.res.AuthStore; !obs.Leased || !obs.Shared || obs.Mutated {
+			t.Errorf("%s AuthStore = %+v, want an unmutated shared read window", runIDs[i], obs)
+		}
+		if probe := readManifestBlob(t, o.res, "probe.txt"); string(probe) != "read-only\n" {
+			t.Errorf("%s probe.txt = %q, want the mount read-only", runIDs[i], probe)
+		}
+		starts[i] = liveEpoch(t, readManifestBlob(t, o.res, "start.txt"))
+		ends[i] = liveEpoch(t, readManifestBlob(t, o.res, "end.txt"))
+	}
+	if starts[0] >= ends[1] || starts[1] >= ends[0] {
+		t.Fatalf("writer intervals [%d,%d] and [%d,%d] do not overlap; the runtime did not run both read-only attaches at once",
+			starts[0], ends[0], starts[1], ends[1])
+	}
+	if n := leaser.liveReadHolds(); n != 0 {
+		t.Errorf("live read holds after both handoffs = %d, want 0", n)
+	}
+}
+
+// markerScanner refuses an export that carries the fake credential marker.
+type markerScanner struct{}
+
+func (markerScanner) Scan(_ context.Context, dir string) error {
+	return filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		data, err := os.ReadFile(p) //nolint:gosec // walking the gate-owned verified output
+		if err != nil {
+			return err
+		}
+		if bytes.Contains(data, []byte(liveMarker)) {
+			return fmt.Errorf("credential marker found in %s", p)
+		}
+		return nil
+	})
+}
+
+func liveEpoch(t *testing.T, b []byte) int64 {
+	t.Helper()
+	n, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+	if err != nil {
+		t.Fatalf("parse writer timestamp %q: %v", b, err)
+	}
+	return n
+}
