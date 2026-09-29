@@ -41,14 +41,23 @@ import Testing
         #expect(subtitle(.ephemeral, url: "http://127.0.0.1:49152") == ":49152")
     }
 
-    @Test func ephemeralFromDevInstanceNamesTheWorktree() {
+    @Test func ephemeralFromDevInstanceNamesTheTierAndTheWorktree() {
         #expect(
             subtitle(
                 .ephemeral, url: "http://127.0.0.1:49152",
-                readiness: "/Users/op/src/freeside-wt/.dev-instance.Ab12Cd/daemon") == "freeside-wt")
+                readiness: "/Users/op/src/freeside-wt/.dev-instance.Ab12Cd/daemon")
+                == "Ephemeral · freeside-wt")
         #expect(
             subtitle(.ephemeral, readiness: "/Users/op/src/freeside-wt/.dev-instance.Ab12Cd/daemon")
-                == "freeside-wt")
+                == "Ephemeral · freeside-wt")
+    }
+
+    // The primary checkout's directory shares the product's name, so the
+    // tier prefix is what keeps it from reading as the app's own title.
+    @Test func ephemeralFromThePrimaryCheckoutStillNamesTheTier() {
+        #expect(
+            subtitle(.ephemeral, readiness: "/Users/op/src/freeside/.dev-instance.Ab12Cd/daemon")
+                == "Ephemeral · freeside")
     }
 
     @Test func ephemeralWithAnotherReadinessShapeFallsThrough() {

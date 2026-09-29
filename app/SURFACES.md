@@ -132,8 +132,9 @@ design decision; record it in a decision note.
 - Context menus (copy id, copy digest, reveal).
 - The macOS window title, toolbar, and inspector toggle, and the menu-bar
   status item image (its badge dot follows the palette). The title's
-  subtitle names a non-production instance: the worktree or port of an
-  ephemeral run, or "Real-work run on :N" for prod off its own daemon.
+  subtitle names a non-production instance: "Ephemeral · <worktree>" for a
+  `dev-instance.sh` run, the port of any other ephemeral run, or
+  "Real-work run on :N" for prod off its own daemon.
 - The retry-capabilities picker and every non-destructive dialog.
 - Keyboard, text-selection, share, and paste affordances.
 

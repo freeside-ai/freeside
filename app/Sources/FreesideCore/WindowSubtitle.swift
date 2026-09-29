@@ -1,8 +1,10 @@
 import Foundation
 
 /// The Mac window's title-bar subtitle, which names the instance the window
-/// shows; the app icon and menu bar mark show the tier. Nil means no
-/// subtitle, so a prod window on its own daemon keeps a plain title bar.
+/// shows; the app icon and menu bar mark show the tier. A `dev-instance.sh`
+/// subtitle names the tier too, because a bare worktree name such as
+/// "freeside" reads as the product name. Nil means no subtitle, so a prod
+/// window on its own daemon keeps a plain title bar.
 enum WindowSubtitle {
     /// `serverURL` is the session's selected deployment, set from the
     /// pairing screen on; `readinessDirectory` is the validated
@@ -26,7 +28,7 @@ enum WindowSubtitle {
             return nil
         case .ephemeral:
             if let worktree = readinessDirectory.flatMap(devInstanceWorktreeName) {
-                return worktree
+                return "Ephemeral · \(worktree)"
             }
             if let port = serverURL?.port {
                 return ":\(port)"
