@@ -45,7 +45,7 @@ Agents and scripts use the `ephemeral` tier only (see the [environment rules](..
 
 - **Screenshots: use `-FreesideMock YES`.** It needs no daemon and no pairing, and the `-FreesideSelect` ids come from the mock's own fixtures, so the same launch gives the same capture every time. See [Capturing screenshots](#capturing-screenshots).
 - **A live daemon: run `scripts/dev-instance.sh` from the repo root.** It starts a seeded `ephemeral` daemon in a throwaway root inside the worktree, launches the Debug app against it, and removes the root when you stop it. To attach a Debug app to an `ephemeral` daemon started some other way, pass `-FreesideReadinessDir` with that daemon's `-state-dir`.
-- **The Debug app has its own bundle ID.** The `FreesideMac` scheme's Debug build, which `scripts/dev-instance.sh` and the screenshot recipe use, is `ai.freeside.app.macos.ephemeral`, so its preferences, LaunchServices registration, and Keychain access group are its own, not the installed app's. It also has the dev look, the yellow icon and menu bar tile described under [Structure](#structure), because it is dev work.
+- **The Debug app has its own bundle ID.** The `FreesideMac` scheme's Debug build, which `scripts/dev-instance.sh` and the screenshot recipe use, is `ai.freeside.app.macos.ephemeral`, so its preferences, LaunchServices registration, and Keychain access group are its own, not the installed app's. It also has the dev look, the yellow icon and menu bar tile described under [Structure](#structure), because it is dev work, and is named "Freeside Ephemeral" in the app menu, Dock, and Cmd-Tab.
 - **Never run `scripts/install-mac-app.sh` from an agent or script.** Omitting the tier installs `prod`, and its `--prod` flag is for the operator's explicit instruction only. The `dev` install is the operator's own too; its tiers are under [Installing the Operator Client](#installing-the-operator-client).
 - **Attaching to production is an operator act.** The `FreesideMacProd` scheme runs a Debug build with `FREESIDE_ENV=prod`, so it connects to the `prod` daemon on port `7331`, and it keeps the prod icon and menu bar mark. It is not a passive attachment: the build uses the `DebugProd` configuration, which keeps prod's bundle ID and defaults, and its daemon menu is live. Launching it can re-register the `prod` LaunchAgent against the Debug bundle whenever prod's registration marker is unset, as after an install before the installed app relaunches, and Stop and Start there act on the `prod` LaunchAgent.
 
@@ -131,7 +131,7 @@ xcodebuild -project Freeside.xcodeproj -scheme FreesideMac \
 APP=/tmp/freeside-dd/Build/Products/Debug/FreesideMac.app
 
 # One pass per appearance: launch pinned, find the window by owner
-# name (the app's display name is "Freeside"), capture it by id, quit.
+# name (the Debug app's name is "Freeside Ephemeral"), capture it by id, quit.
 open -n "$APP" --args -ApplePersistenceIgnoreState YES \
   -FreesideMock YES -FreesideColorScheme light -FreesideContrast standard \
   -FreesideSelect item-blocked
@@ -140,7 +140,7 @@ WID=$(swift -e 'import CoreGraphics
 let windows = CGWindowListCopyWindowInfo(
     [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
 ) as? [[String: Any]] ?? []
-for w in windows where w[kCGWindowOwnerName as String] as? String == "Freeside" {
+for w in windows where w[kCGWindowOwnerName as String] as? String == "Freeside Ephemeral" {
     if let id = w[kCGWindowNumber as String] as? Int { print(id) }
 }')
 screencapture -l "$WID" -o light.png
@@ -168,7 +168,7 @@ The Icon Composer document lets the system select the appearance and own the pla
 
 The mask preserves the approved mark geometry and its cutouts; the appearance change is palette-only. Xcode compiles the one document into each installed bundle's platform and appearance renditions. On macOS, keep the document a normal resource with `CFBundleIconName` authoritative and leave `ASSETCATALOG_COMPILER_APPICON_NAME` unset: asking the asset compiler to emit a standalone primary icon adds `CFBundleIconFile`, and Finder then prefers that static fallback over the appearance-aware catalog. That caution is macOS-only; FreesideIOS sets the setting deliberately (above), because SpringBoard needs the `actool`-generated icon.
 
-Dev work gets its own icon, so it can't pass for prod in the Dock, Cmd-Tab, or Finder. `Apps/macOS/AppIconDev.icon` is built the same way as `AppIcon.icon`, with light and dark layers: the black key on a safety-yellow plate inside a hazard-stripe frame. Both documents compile into the Mac app as normal resources, and `Info.plist` names the one to use through the `FREESIDE_MAC_APP_ICON_NAME` build setting: the `FreesideMac` target's `Debug` configuration (the ephemeral app) sets `AppIconDev`, and `DebugProd` and `Release` set `AppIcon`. `scripts/install-mac-app.sh dev` overrides it to `AppIconDev` and names the bundle "Freeside Dev"; the prod install keeps `AppIcon`. Re-render the dev layers from `Apps/macOS/FreesideKeyMono.svg` with
+Dev work gets its own icon, so it can't pass for prod in the Dock, Cmd-Tab, or Finder. `Apps/macOS/AppIconDev.icon` is built the same way as `AppIcon.icon`, with light and dark layers: the black key on a safety-yellow plate inside a hazard-stripe frame. Both documents compile into the Mac app as normal resources, and `Info.plist` names the one to use through the `FREESIDE_MAC_APP_ICON_NAME` build setting: the `FreesideMac` target's `Debug` configuration (the ephemeral app) sets `AppIconDev`, and `DebugProd` and `Release` set `AppIcon`. `scripts/install-mac-app.sh dev` overrides it to `AppIconDev` and names the bundle "Freeside Dev"; the prod install keeps `AppIcon`. The `FREESIDE_MAC_DISPLAY_NAME` build setting names the build the same way, binding both `CFBundleDisplayName` and `CFBundleName`: `Debug` sets "Freeside Ephemeral", and `DebugProd` and `Release` set "Freeside", the name the prod install keeps. Re-render the dev layers from `Apps/macOS/FreesideKeyMono.svg` with
 
 ```sh
 ./scripts/generate-dev-icon.sh

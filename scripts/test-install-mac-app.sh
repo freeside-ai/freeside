@@ -15,6 +15,8 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 INSTALLER=${FREESIDE_INSTALLER_UNDER_TEST:-$SCRIPT_DIR/../app/scripts/install-mac-app.sh}
+MAC_INFO_PLIST=$SCRIPT_DIR/../app/Apps/macOS/Info.plist
+XCODE_PROJECT=$SCRIPT_DIR/../app/Freeside.xcodeproj/project.pbxproj
 REAL_SWIFT=$(command -v swift || true)
 REAL_OPENSSL=$(command -v openssl || true)
 export STUB_REAL_SWIFT=$REAL_SWIFT
@@ -290,8 +292,9 @@ if [[ -n "${STUB_BUILD_SUCCEEDS:-}" ]]; then
         esac
     done
     # The project defaults, or the installer's overrides, as a real build
-    # binds them; CFBundleName is the project's $(PRODUCT_NAME).
-    printf 'CFBundleIdentifier=%s\nCFBundleIconName=%s\nCFBundleName=FreesideMac\n' \
+    # binds them; a Release build binds CFBundleName to
+    # $(FREESIDE_MAC_DISPLAY_NAME), "Freeside".
+    printf 'CFBundleIdentifier=%s\nCFBundleIconName=%s\nCFBundleName=Freeside\n' \
         "$bundle_id" "$icon_name" >"$built_app/Contents/Info.plist"
     signed_team=${STUB_SIGNED_TEAM_ID:-$team_id}
     signed_application=${STUB_SIGNED_APPLICATION_ID:-$signed_team.$bundle_id}
@@ -1480,7 +1483,8 @@ assert_file_contains "$agent" "<string>ai.freeside.daemon</string>"
 assert_file_contains "$destination/Contents/Info.plist" "CFBundleIdentifier=ai.freeside.app.macos"
 assert_file_contains "$destination/Contents/Info.plist" "FreesideEnvironment=prod"
 assert_file_contains "$destination/Contents/Info.plist" "CFBundleDisplayName=Freeside"
-assert_file_contains "$destination/Contents/Info.plist" "CFBundleName=FreesideMac"
+assert_file_contains "$destination/Contents/Info.plist" "CFBundleName=Freeside"
+assert_file_omits "$destination/Contents/Info.plist" "CFBundleName=FreesideMac"
 assert_file_contains "$destination/Contents/Info.plist" "CFBundleIconName=AppIcon"
 assert_file_omits "$destination/Contents/Info.plist" "CFBundleIconName=AppIconDev"
 assert_file_contains "$CASE_DIR/xcodebuild-args" "FREESIDE_MAC_BUNDLE_ID=ai.freeside.app.macos"
@@ -1630,6 +1634,37 @@ assert_inode "$prod_app" "$prod_inode" "a dev install replaced the production ap
 assert_file_contains "$prod_app/Contents/marker" "old client"
 assert_absent "$CASE_DIR/home/Library/Application Support/Freeside"
 assert_contains "installed $destination"
+
+# The Debug build has no installer step, so the project names each
+# configuration itself: the ephemeral Debug app must not look like prod.
+begin_case "the project names each Mac configuration's bundle" mac-bundle-names
+for key in CFBundleDisplayName CFBundleName; do
+    if grep -A1 -F "<key>$key</key>" "$MAC_INFO_PLIST" |
+        grep -Fq "<string>\$(FREESIDE_MAC_DISPLAY_NAME)</string>"; then
+        pass=$((pass + 1))
+    else
+        report_failure "expected $MAC_INFO_PLIST to bind $key to \$(FREESIDE_MAC_DISPLAY_NAME)"
+    fi
+done
+# Each configuration's build settings are one pbxproj line, keyed here by
+# the bundle ID: Debug is ephemeral; DebugProd and Release are prod.
+assert_configuration_name() {
+    local bundle_id_setting=$1
+    local configurations=$2
+    local name_setting=$3
+    local lines
+    lines=$(grep -F "$bundle_id_setting" "$XCODE_PROJECT" || true)
+    if [[ $(grep -c . <<<"$lines") -eq "$configurations" ]] &&
+        ! grep -Fvq "$name_setting" <<<"$lines"; then
+        pass=$((pass + 1))
+    else
+        report_failure "expected $configurations configurations with $bundle_id_setting to set $name_setting"
+    fi
+}
+assert_configuration_name "FREESIDE_MAC_BUNDLE_ID = ai.freeside.app.macos.ephemeral;" 1 \
+    'FREESIDE_MAC_DISPLAY_NAME = "Freeside Ephemeral";'
+assert_configuration_name "FREESIDE_MAC_BUNDLE_ID = ai.freeside.app.macos;" 2 \
+    "FREESIDE_MAC_DISPLAY_NAME = Freeside;"
 
 # A script or agent that omits the tier must not replace the operator's real
 # client. The refusal comes before anything touches the install paths: an

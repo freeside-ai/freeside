@@ -158,7 +158,7 @@ case "$target" in
 prod)
     bundle_id="ai.freeside.app.macos"
     display_name="Freeside"
-    bundle_name="FreesideMac"
+    bundle_name="Freeside"
     app_icon_name="AppIcon"
     daemon_label="ai.freeside.daemon"
     listen_addr="127.0.0.1:7331"
@@ -696,8 +696,11 @@ preserved_entitlements="$build_dir/FreesideMac.xcode.entitlements"
 verify_provisioned_app "$built_app" "$preserved_entitlements"
 # The tier the app resolves at launch, and the names Finder, the Dock, and
 # the menu bar show. The provisioning profile binds none of them, and the
-# re-sign below seals them all. The icon is a build setting instead, checked
-# here, because the Debug build has no installer step to patch it.
+# re-sign below seals them all. The Release build already reads "Freeside"
+# (FREESIDE_MAC_DISPLAY_NAME), but the tier table still fixes the installed
+# names, and dev overrides them. The icon and the Debug build's names are
+# build settings instead, the icon checked here, because the Debug build has
+# no installer step to patch them.
 built_info="$built_app/Contents/Info.plist"
 plutil -replace CFBundleDisplayName -string "$display_name" "$built_info" ||
     die "could not set the app display name"
