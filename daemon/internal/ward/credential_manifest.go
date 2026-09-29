@@ -44,6 +44,8 @@ func InspectCredentialVolumeManifest(
 			Volume: volume, Target: "/credentials", Manifest: manifest,
 		}}},
 		AuthStoreLease: &AuthStoreLeaseClaim{},
+		Class:          LaunchConformance,
+		Size:           DefaultLaunchSize(LaunchConformance),
 	}
 	backend := &Backend{
 		rt: runtime, cfg: cfg, runtimeOps: newRuntimeOps(runtime, cfg), initialized: true,

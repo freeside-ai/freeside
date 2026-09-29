@@ -61,28 +61,28 @@ func (b *Backend) prepareLaunchState(
 		{names.SessionScratch, ClaudeSessionScratchTarget, stateManifestEmpty},
 	} {
 		if err := b.seedLaunchStateVolume(
-			ctx, hs.RunID, names.ConfigRootSeeder,
+			ctx, hs.RunID, hs.Class, hs.Size, names.ConfigRootSeeder,
 			volume.name, volume.target, volume.kind, st,
 		); err != nil {
 			return err
 		}
 	}
 	configDigest, err := b.observeStateVolume(
-		ctx, hs.RunID, names.ConfigRootObserver, names.ConfigRoot,
+		ctx, hs.RunID, hs.Class, hs.Size, names.ConfigRootObserver, names.ConfigRoot,
 		stateManifestConfigRoot, &st.configRootObserver, st,
 	)
 	if err != nil {
 		return err
 	}
 	continuityDigest, err := b.observeStateVolume(
-		ctx, hs.RunID, names.ContinuityObserver, names.Continuity,
+		ctx, hs.RunID, hs.Class, hs.Size, names.ContinuityObserver, names.Continuity,
 		stateManifestEmpty, &st.continuityObserver, st,
 	)
 	if err != nil {
 		return err
 	}
 	scratchDigest, err := b.observeStateVolume(
-		ctx, hs.RunID, names.ScratchObserver, names.SessionScratch,
+		ctx, hs.RunID, hs.Class, hs.Size, names.ScratchObserver, names.SessionScratch,
 		stateManifestEmpty, &st.scratchObserver, st,
 	)
 	if err != nil {
@@ -145,6 +145,8 @@ func (b *Backend) createStateVolume(
 func (b *Backend) seedLaunchStateVolume(
 	ctx context.Context,
 	runID string,
+	class LaunchClass,
+	size ContainerSize,
 	seederName, volume, target string,
 	kind stateManifestKind,
 	st *runState,
@@ -158,6 +160,7 @@ func (b *Backend) seedLaunchStateVolume(
 			Type: MountVolume, Source: volume, Target: target,
 		}},
 		Labels: append(runLabels(runID), st.ownershipLabel),
+		Size:   size,
 	}
 	st.configRootSeeder.attempted = true
 	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
@@ -188,6 +191,9 @@ func (b *Backend) seedLaunchStateVolume(
 		st.ownershipLabel, b.cfg.SeedTimeout,
 	); err != nil {
 		return failf(CheckControlPlaneIsolation, "launch-state seeder: %v", err)
+	}
+	if err := b.helperStopped(ctx, class, size, seederName); err != nil {
+		return err
 	}
 	if err := b.rt.DeleteContainer(ctx, seederName); err != nil {
 		return failf(CheckControlPlaneIsolation, "delete launch-state seeder: %v", err)
@@ -221,7 +227,9 @@ func stateSeederScript(target string, kind stateManifestKind) string {
 
 func buildStateObserverSpec(
 	cfg Config,
-	runID, name, volume string,
+	runID string,
+	size ContainerSize,
+	name, volume string,
 	kind stateManifestKind,
 	ownership Label,
 ) ContainerSpec {
@@ -236,6 +244,7 @@ func buildStateObserverSpec(
 			Target: stateObserverVolumeTarget, ReadOnly: true,
 		}},
 		Labels: append(runLabels(runID), ownership),
+		Size:   size,
 	}
 }
 
@@ -270,13 +279,16 @@ func stateObserverScript(nonce string, kind stateManifestKind) string {
 
 func (b *Backend) observeStateVolume(
 	ctx context.Context,
-	runID, name, volume string,
+	runID string,
+	class LaunchClass,
+	size ContainerSize,
+	name, volume string,
 	kind stateManifestKind,
 	claim *objectClaim,
 	st *runState,
 ) (string, error) {
 	spec := buildStateObserverSpec(
-		b.cfg, runID, name, volume, kind, st.ownershipLabel,
+		b.cfg, runID, size, name, volume, kind, st.ownershipLabel,
 	)
 	claim.attempted = true
 	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
@@ -305,6 +317,9 @@ func (b *Backend) observeStateVolume(
 		ctx, name, *claim, st.ownershipLabel, b.cfg.SeedTimeout,
 	); err != nil {
 		return "", failf(CheckControlPlaneIsolation, "state observer: %v", err)
+	}
+	if err := b.helperStopped(ctx, class, size, name); err != nil {
+		return "", err
 	}
 	proof, err := b.readStateProof(ctx, runID, name, st)
 	if err != nil {

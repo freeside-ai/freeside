@@ -96,6 +96,9 @@ func (b *Backend) preparePrompt(ctx context.Context, hs HandoffSpec, names hando
 	if err := b.waitStopped(ctx, seeder.Name, st.promptSeeder, st.ownershipLabel, b.cfg.SeedTimeout); err != nil {
 		return err
 	}
+	if err := b.helperStopped(ctx, hs.Class, hs.Size, seeder.Name); err != nil {
+		return err
+	}
 	if err := b.removePromptRole(ctx, seeder.Name, &st.promptSeeder, st); err != nil {
 		return err
 	}
@@ -104,6 +107,9 @@ func (b *Backend) preparePrompt(ctx context.Context, hs HandoffSpec, names hando
 		return err
 	}
 	if err := b.waitStopped(ctx, observer.Name, st.promptObserver, st.ownershipLabel, b.cfg.SeedTimeout); err != nil {
+		return err
+	}
+	if err := b.helperStopped(ctx, hs.Class, hs.Size, observer.Name); err != nil {
 		return err
 	}
 	// Reuse the bounded rootfs proof reader. The observer exports only its
@@ -156,6 +162,7 @@ func buildPromptSeederSpec(cfg Config, hs HandoffSpec, names handoffNames, owner
 		"cp " + shellQuote(promptStageDir+"/prompt.txt") + " " + root + "/prompt.txt; " +
 		"chown 0:0 " + root + " " + root + "/prompt.txt; chmod 0755 " + root + "; chmod 0400 " + root + "/prompt.txt; sync"
 	return ContainerSpec{
+		Size: hs.Size,
 		Name: names.PromptSeeder, Image: cfg.ExporterImage, Command: []string{"sh", "-c", script},
 		NetworkDisabled: true,
 		Mounts:          []Mount{{Type: MountVolume, Source: names.Prompt, Target: promptVolumeTarget}},
@@ -174,6 +181,7 @@ func buildPromptObserverSpec(cfg Config, hs HandoffSpec, names handoffNames, own
 		"digest=$(sha256sum " + file + "); digest=${digest%% *}; " +
 		"printf '%s %s\\n' " + shellQuote(ownership.Value) + " \"$digest\" > " + shellQuote(stateProofPath) + "; sync"
 	return ContainerSpec{
+		Size: hs.Size,
 		Name: names.PromptObserver, Image: cfg.ExporterImage, Command: []string{"sh", "-c", script},
 		NetworkDisabled: true,
 		Mounts:          []Mount{{Type: MountVolume, Source: names.Prompt, Target: promptVolumeTarget, ReadOnly: true}},

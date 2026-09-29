@@ -1718,6 +1718,7 @@ func (b *CodexReviewLifecycle) initializeCodexReviewShadow(
 	mark func(CodexReviewIntentResource) error,
 ) (retErr error) {
 	spec := ContainerSpec{
+		Size:    DefaultLaunchSize(LaunchReview),
 		Name:    codexReviewShadowInitializerName(runID),
 		Image:   cfg.ObserverImage,
 		Command: []string{"sh", "-c", stateSeederScript(codexShadowObserverTarget, stateManifestEmpty)},
@@ -1777,6 +1778,9 @@ func (b *CodexReviewLifecycle) initializeCodexReviewShadow(
 		return codexReviewOperationalCheckf(
 			CheckControlPlaneIsolation, "wait for Codex review shadow initializer: %v", err,
 		)
+	}
+	if err := b.helperStopped(ctx, LaunchReview, DefaultLaunchSize(LaunchReview), spec.Name); err != nil {
+		return err
 	}
 	if err := b.rt.DeleteContainer(ctx, spec.Name); err != nil {
 		return codexReviewOperationalCheckf(
@@ -1902,6 +1906,7 @@ func (b *CodexReviewLifecycle) seedCodexReviewSnapshot(
 		return codexReviewOperationalCheckf(CheckCredentialSeparation, "write Codex review snapshot sentinel: %v", err)
 	}
 	spec := ContainerSpec{
+		Size:  DefaultLaunchSize(LaunchReview),
 		Name:  codexReviewSnapshotSeederName(launch.RunID),
 		Image: cfg.ObserverImage,
 		Command: []string{"sh", "-c", codexReviewSnapshotSeederScript(
@@ -1959,6 +1964,9 @@ func (b *CodexReviewLifecycle) seedCodexReviewSnapshot(
 	}
 	if err := b.waitStopped(ctx, spec.Name, claim, owner, b.cfg.SeedTimeout); err != nil {
 		return codexReviewOperationalCheckf(CheckCredentialSeparation, "wait for Codex review snapshot seeder: %v", err)
+	}
+	if err := b.helperStopped(ctx, LaunchReview, DefaultLaunchSize(LaunchReview), spec.Name); err != nil {
+		return err
 	}
 	if err := b.rt.DeleteContainer(ctx, spec.Name); err != nil {
 		return codexReviewOperationalCheckf(CheckCredentialSeparation, "delete Codex review snapshot seeder: %v", err)
@@ -2123,6 +2131,9 @@ func (b *CodexReviewLifecycle) runCodexReviewObserver(
 	}
 	if err := b.waitStopped(ctx, spec.Name, claim, owner, b.cfg.SeedTimeout); err != nil {
 		return InspectReport{}, nil, codexReviewOperationalCheckf(check, "wait for observer: %v", err)
+	}
+	if err := b.helperStopped(ctx, LaunchReview, DefaultLaunchSize(LaunchReview), spec.Name); err != nil {
+		return InspectReport{}, nil, err
 	}
 	report, err := b.rt.Inspect(ctx, spec.Name)
 	if err != nil {

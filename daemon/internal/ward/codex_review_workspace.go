@@ -75,7 +75,10 @@ func (b *CodexReviewLifecycle) PrepareCodexReviewWorkspace(
 		objectClaim{attempted: true, owned: true}, owner); err != nil {
 		return CodexReviewWorkspaceBinding{}, err
 	}
-	hs := HandoffSpec{RunID: runID, WorkspaceSizeMB: workspaceSizeMB, Seed: seed}
+	hs := HandoffSpec{
+		RunID: runID, WorkspaceSizeMB: workspaceSizeMB, Seed: seed,
+		Class: LaunchReview, Size: DefaultLaunchSize(LaunchReview),
+	}
 	st := &runState{ownershipLabel: owner}
 	cleanup := true
 	defer func() {

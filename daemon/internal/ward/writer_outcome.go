@@ -56,6 +56,9 @@ func (b *Backend) observeWriterOutcome(
 	); err != nil {
 		return 0, failf(CheckWriterTermination, "writer-outcome observer: %v", err)
 	}
+	if err := b.helperStopped(ctx, hs.Class, hs.Size, names.WriterObserver); err != nil {
+		return 0, err
+	}
 	status, err := b.readWriterOutcomeProof(
 		ctx, hs, names.WriterObserver, st.ownershipLabel.Value, st,
 	)

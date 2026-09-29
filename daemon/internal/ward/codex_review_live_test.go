@@ -268,6 +268,7 @@ func TestLiveCodexReviewSnapshotDeliversExactlyTwoFilesReadOnly(t *testing.T) {
 	// Seed: a networkless running seeder receives the two files by copy and moves
 	// them onto the read-write-mounted volume, then is deleted.
 	if err := rt.CreateContainer(ctx, ContainerSpec{
+		Size:  testContainerSize,
 		Name:  seeder,
 		Image: liveImage,
 		Command: []string{"sh", "-c", codexReviewSnapshotSeederScript(
@@ -296,6 +297,7 @@ func TestLiveCodexReviewSnapshotDeliversExactlyTwoFilesReadOnly(t *testing.T) {
 	// Observe: a separate read-only VM proves exactly the two files and their
 	// digests. This is the trust boundary; the writer never vouches for itself.
 	if err := rt.CreateContainer(ctx, ContainerSpec{
+		Size:  testContainerSize,
 		Name:  observer,
 		Image: liveImage,
 		Command: []string{"sh", "-c", codexReviewSnapshotObserverScript(
@@ -345,6 +347,7 @@ func TestLiveCodexReviewSnapshotDeliversExactlyTwoFilesReadOnly(t *testing.T) {
 		"[ \"$home\" = './AGENTS.md,./auth.json,' ] || ok=0; " +
 		"printf 'ok=%s\\n' \"$ok\" > /live-review-proof.txt"
 	if err := rt.CreateContainer(ctx, ContainerSpec{
+		Size:    testContainerSize,
 		Name:    review,
 		Image:   liveImage,
 		Command: []string{"sh", "-c", verify},
@@ -449,6 +452,7 @@ func TestLiveCodexReviewSnapshotPreambleFailsClosedWhenImageShadowsCredential(t 
 		"printf 'image-shadow' > " + shellQuote(CodexAuthFileTarget) + "; " + prod[2]
 
 	if err := rt.CreateContainer(ctx, ContainerSpec{
+		Size:            testContainerSize,
 		Name:            review,
 		Image:           liveImage,
 		Command:         []string{"sh", "-c", command, prod[3], prod[4]},

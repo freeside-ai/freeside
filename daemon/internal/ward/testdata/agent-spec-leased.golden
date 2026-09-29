@@ -46,5 +46,9 @@
     }
   ],
   "network": "freeside-handoff-golden-run-egress",
-  "network_disabled": false
+  "network_disabled": false,
+  "size": {
+    "cpus": 4,
+    "memory_mib": 2048
+  }
 }

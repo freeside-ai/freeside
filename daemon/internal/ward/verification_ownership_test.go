@@ -26,7 +26,7 @@ func TestTaskCancellationVerificationJoinsAndFencesEveryCommand(t *testing.T) {
 			<-ctx.Done()
 			return verify.StepResult{}, ctx.Err()
 		}
-		room := newProjectImageRoom("container", verificationProjectImage(t, []string{"prepare"}), runtime, command, command, 1024)
+		room := newProjectImageRoom("container", verificationProjectImage(t, []string{"prepare"}), runtime, command, command, 1024, DefaultLaunchSize(LaunchVerification))
 		if err := owned.Bind(room, "task", "run", "verify"); err != nil {
 			t.Fatal(err)
 		}

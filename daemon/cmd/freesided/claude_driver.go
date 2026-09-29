@@ -1475,6 +1475,7 @@ func composeClaudeDriver(
 		Scanner:           credentialScanner{},
 		AuthStoreLeaser:   adapters.Leaser,
 		Journal:           adapters.Journal,
+		Logger:            logger,
 	}
 	backend, backendErr := ward.New(runtime, wardConfig)
 	if backendErr != nil {

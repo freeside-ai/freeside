@@ -107,6 +107,9 @@ type ContainerSpec struct {
 	Labels          []Label  `json:"labels"`
 	Network         string   `json:"network,omitempty"`
 	NetworkDisabled bool     `json:"network_disabled"`
+	// Size is the declared CPU cap and memory limit; the runtime refuses a
+	// spec without one.
+	Size ContainerSize `json:"size"`
 }
 
 // InspectReport is the runtime's observed configuration and state for one
@@ -155,6 +158,11 @@ type InspectReport struct {
 	// LabelsObserved distinguishes an explicitly empty label set from an
 	// omitted runtime field when inspect is used as ownership evidence.
 	LabelsObserved bool
+	// CPUs and MemoryBytes are the realized CPU cap and memory limit.
+	// ResourcesObserved distinguishes reported values from omitted fields.
+	CPUs              int
+	MemoryBytes       int64
+	ResourcesObserved bool
 }
 
 // NetworkMode is the runtime-observed reachability class of a managed
@@ -265,6 +273,10 @@ type Runtime interface {
 	StopContainer(ctx context.Context, id string) error
 	// Inspect returns the observed configuration and state of a container.
 	Inspect(ctx context.Context, id string) (InspectReport, error)
+	// BootLog returns a container's boot log, which carries the guest kernel's
+	// messages (a memory-limit kill among them). Ward reads it only to name a
+	// failure, never to grant anything.
+	BootLog(ctx context.Context, id string) ([]byte, error)
 	// DeleteContainer deletes a stopped container.
 	DeleteContainer(ctx context.Context, id string) error
 	// ListContainers returns every container the runtime knows, including

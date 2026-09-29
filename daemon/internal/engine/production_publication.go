@@ -92,10 +92,10 @@ type ProductionPublicationConfig struct {
 	Publisher       *publish.Publisher
 	Artifacts       ArtifactStore
 	ApprovedRecipes map[domain.Digest]bool
-	NewRoom         func(domain.ProjectImage) (ProductionVerificationRoom, error)
+	NewRoom         func(domain.ProjectImage, ward.ContainerSize) (ProductionVerificationRoom, error)
 	// NewBoundRoom supplies concrete task-bound ownership for production.
 	// NewRoom remains the isolated test/attended factory.
-	NewBoundRoom func(domain.ProjectImage, domain.Run, domain.InvocationID) (ProductionVerificationRoom, error)
+	NewBoundRoom func(domain.ProjectImage, ward.ContainerSize, domain.Run, domain.InvocationID) (ProductionVerificationRoom, error)
 	ReviewSource exec.ReviewSource
 	// RemediationPromptPackageDigest selects the trusted prompt package for
 	// implementation-role follow-up invocations created by finding
@@ -208,8 +208,8 @@ type productionPublicationWorkflow struct {
 	publisher                       *publish.Publisher
 	artifacts                       ArtifactStore
 	approvedRecipes                 map[domain.Digest]bool
-	newRoom                         func(domain.ProjectImage) (ProductionVerificationRoom, error)
-	newBoundRoom                    func(domain.ProjectImage, domain.Run, domain.InvocationID) (ProductionVerificationRoom, error)
+	newRoom                         func(domain.ProjectImage, ward.ContainerSize) (ProductionVerificationRoom, error)
+	newBoundRoom                    func(domain.ProjectImage, ward.ContainerSize, domain.Run, domain.InvocationID) (ProductionVerificationRoom, error)
 	beginTaskWork                   func(context.Context, domain.RunID) (context.Context, func(), error)
 	reviewSource                    exec.ReviewSource
 	remediationPromptPackage        domain.Digest
@@ -5555,12 +5555,17 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 	imported importer.Result,
 	checkoutDir string,
 ) (productionVerificationCheckpoint, error) {
+	// The writer start already resolved this durable policy, so a failure
+	// here means the stored policy changed under the run.
+	sizes, err := ward.ResolveLaunchSizes(binding.resolvedPolicy.Keys)
+	if err != nil {
+		return productionVerificationCheckpoint{}, fmt.Errorf("resolve verification size: %w", err)
+	}
 	var room ProductionVerificationRoom
-	var err error
 	if w.newBoundRoom != nil {
-		room, err = w.newBoundRoom(binding.image, binding.run, task.verificationInvocationID())
+		room, err = w.newBoundRoom(binding.image, sizes.Verification, binding.run, task.verificationInvocationID())
 	} else {
-		room, err = w.newRoom(binding.image)
+		room, err = w.newRoom(binding.image, sizes.Verification)
 	}
 	if err != nil {
 		return productionVerificationCheckpoint{}, fmt.Errorf("construct networkless verification room: %w", err)

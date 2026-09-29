@@ -1,0 +1,75 @@
+[    0.077950] random: crng init done
+[    0.079149] brd: module loaded
+[    0.079770] loop: module loaded
+[    0.079889] virtio_blk virtio2: 1/0/0 default/read/poll queues
+[    0.080063] virtio_blk virtio2: [vda] 1048576 512-byte logical blocks (537 MB/512 MiB)
+[    0.080320] virtio_blk virtio3: 1/0/0 default/read/poll queues
+[    0.080515] virtio_blk virtio3: [vdb] 1073741824 512-byte logical blocks (550 GB/512 GiB)
+[    0.080746] tun: Universal TUN/TAP device driver, 1.6
+[    0.081365] VFIO - User Level meta-driver version: 0.3
+[    0.081526] rtc-pl031 20050000.pl031: registered as rtc0
+[    0.081564] rtc-pl031 20050000.pl031: setting system clock to 2026-09-29T18:16:56 UTC (1790705816)
+[    0.081774] xt_time: kernel timezone is -0000
+[    0.081831] IPVS: Registered protocols (TCP, UDP, SCTP, AH, ESP)
+[    0.081891] IPVS: Connection hash table configured (size=4096, memory=32Kbytes)
+[    0.082122] IPVS: ipvs loaded.
+[    0.082187] IPVS: [rr] scheduler registered.
+[    0.082253] IPVS: [wrr] scheduler registered.
+[    0.082330] IPVS: [lc] scheduler registered.
+[    0.082354] IPVS: [wlc] scheduler registered.
+[    0.082399] IPVS: [fo] scheduler registered.
+[    0.082424] IPVS: [ovf] scheduler registered.
+[    0.082467] IPVS: [lblc] scheduler registered.
+[    0.082527] IPVS: [lblcr] scheduler registered.
+[    0.082549] IPVS: [dh] scheduler registered.
+[    0.082621] IPVS: [sh] scheduler registered.
+[    0.082650] IPVS: [sed] scheduler registered.
+[    0.082713] IPVS: [nq] scheduler registered.
+[    0.082786] IPVS: [sip] pe registered.
+[    0.082846] Initializing XFRM netlink socket
+[    0.082928] NET: Registered PF_INET6 protocol family
+[    0.083382] Segment Routing with IPv6
+[    0.083430] In-situ OAM (IOAM) with IPv6
+[    0.083527] NET: Registered PF_PACKET protocol family
+[    0.083589] Bridge firewalling registered
+[    0.083644] 9pnet: Installing 9P2000 support
+[    0.083748] NET: Registered PF_VSOCK protocol family
+[    0.084793] registered taskstats version 1
+[    0.085915] Demotion targets for Node 0: null
+[    0.086502] alg: No test for fips(ansi_cprng) (fips_ansi_cprng)
+[    0.087597] clk: Disabling unused clocks
+[    0.087688] check access for rdinit=/init failed: -2, ignoring
+[    0.088899] EXT4-fs (vda): mounted filesystem a1dc7b88-f85a-4ee4-9702-463f4e9c0fd8 ro without journal. Quota mode: disabled.
+[    0.088970] VFS: Mounted root (ext4 filesystem) readonly on device 254:0.
+[    0.089248] devtmpfs: mounted
+[    0.089563] Freeing unused kernel memory: 1920K
+[    0.089683] Run /sbin/vminitd as init process
+2026-09-29T18:16:56.536Z info vminitd: built: 2026-06-26T21:58:16Z, commit: 44bec8b9933bc491d0cbf44abac90a1f6aaebf6b, tag: 0.35.0 vminitd booting
+2026-09-29T18:16:56.537Z info vminitd: mounting /run
+2026-09-29T18:16:56.537Z info vminitd: mounting /sys
+2026-09-29T18:16:56.537Z info vminitd: mounting /sys/fs/cgroup
+2026-09-29T18:16:56.550Z info vminitd: mountpoint: /sys/fs/cgroup, path: /sys/fs/cgroup/vminitd creating cgroup manager
+2026-09-29T18:16:56.551Z info vminitd: events_path: /sys/fs/cgroup/vminitd/memory.events, threshold_bytes: 83886080 Started memory monitoring
+2026-09-29T18:16:56.552Z info vminitd: serving vminitd API
+2026-09-29T18:16:56.553Z info vminitd: port: 1024 booting gRPC server on vsock
+2026-09-29T18:16:56.555Z info vminitd: port: 1024 gRPC API serving on vsock
+[    0.237166] EXT4-fs (vdb): mounted filesystem a5f179d0-2620-4288-8783-810b505c10bc r/w without journal. Quota mode: disabled.
+2026-09-29T18:16:56.783Z info vminitd: mountpoint: /sys/fs/cgroup, path: /sys/fs/cgroup/container/sigkill-fixture creating cgroup manager
+2026-09-29T18:16:56.783Z info vminitd: id: sigkill-fixture starting I/O
+2026-09-29T18:16:56.783Z info vminitd: id: sigkill-fixture setting up relay for StandardIO stdout
+2026-09-29T18:16:56.784Z info vminitd: id: sigkill-fixture setting up relay for StandardIO stderr
+2026-09-29T18:16:56.784Z info vminitd: created vmexec init process
+2026-09-29T18:16:56.784Z info vminitd: id: sigkill-fixture starting managed process
+2026-09-29T18:16:56.792Z warning vminitd: current_bytes: 84144128, high_events_total: 6, threshold_bytes: 83886080 vminitd memory threshold exceeded
+2026-09-29T18:16:56.806Z warning vminitd: current_bytes: 83591168, high_events_total: 34, threshold_bytes: 83886080 vminitd memory threshold exceeded
+2026-09-29T18:16:56.824Z warning vminitd: current_bytes: 83673088, high_events_total: 47, threshold_bytes: 83886080 vminitd memory threshold exceeded
+2026-09-29T18:16:56.831Z info vminitd: id: sigkill-fixture, pid: 96 got back pid data
+2026-09-29T18:16:56.832Z info vminitd: id: sigkill-fixture, pid: 96 sending pid acknowledgement
+2026-09-29T18:16:56.837Z info vminitd: id: sigkill-fixture, pid: 96 started managed process
+2026-09-29T18:16:56.838Z warning vminitd: current_bytes: 82882560, high_events_total: 48, threshold_bytes: 83886080 vminitd memory threshold exceeded
+2026-09-29T18:16:58.912Z info vminitd: id: sigkill-fixture sending signal 9 to process 96
+2026-09-29T18:16:58.924Z info vminitd: id: sigkill-fixture, status: 137 managed process exit
+2026-09-29T18:16:58.924Z info vminitd: id: sigkill-fixture closing relay for StandardIO stdout
+2026-09-29T18:16:58.924Z info vminitd: id: sigkill-fixture closing relay for StandardIO stderr
+[    2.520158] EXT4-fs (vdb): unmounting filesystem a5f179d0-2620-4288-8783-810b505c10bc.
+2026-09-29T18:16:58.943Z info vminitd: mountpoint: /sys/fs/cgroup, path: /sys/fs/cgroup/container/sigkill-fixture deleting cgroup manager

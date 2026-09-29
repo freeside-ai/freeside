@@ -1107,11 +1107,11 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			ShadowReviewFailure:    shadowReviewFailure,
 			ReviewHostInstructions: claudeWiring.reviewHostInstructions,
 			HoldOnly:               cfg.Claude.OperatingMode != domain.ModeUnattended,
-			NewRoom: func(image domain.ProjectImage) (engine.ProductionVerificationRoom, error) {
-				return ward.NewProjectImageRoom(claudeWiring.containerBin, image)
+			NewRoom: func(image domain.ProjectImage, size ward.ContainerSize) (engine.ProductionVerificationRoom, error) {
+				return ward.NewProjectImageRoom(claudeWiring.containerBin, image, size, cfg.Logger)
 			},
-			NewBoundRoom: func(image domain.ProjectImage, run domain.Run, invocation domain.InvocationID) (engine.ProductionVerificationRoom, error) {
-				room, err := ward.NewProjectImageRoom(claudeWiring.containerBin, image)
+			NewBoundRoom: func(image domain.ProjectImage, size ward.ContainerSize, run domain.Run, invocation domain.InvocationID) (engine.ProductionVerificationRoom, error) {
+				room, err := ward.NewProjectImageRoom(claudeWiring.containerBin, image, size, cfg.Logger)
 				if err != nil {
 					return nil, err
 				}

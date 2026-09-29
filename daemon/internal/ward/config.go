@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -270,6 +271,10 @@ type Config struct {
 	// from. Requiring a journal is the caller's operating-mode policy, not
 	// the gate's.
 	Journal HandoffJournal
+	// Logger receives one structured record per launch (class, declared
+	// size, how it ended, any memory-limit kill), the evidence sizes are
+	// tuned from. Nil discards the records.
+	Logger *slog.Logger
 	// Now supplies the current instant for lease windows and release stamps;
 	// tests inject a fixed clock. Nil defaults to time.Now.
 	Now func() time.Time

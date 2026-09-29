@@ -224,7 +224,15 @@ func (d *Driver) handoffAndImport(ctx context.Context, in intent) (exec.StageRes
 				return exec.StageResult{}, fmt.Errorf("%w: recover failed writer: %w", ErrRecoveryRetryable, recoveryErr)
 			}
 			if recovered.Outcome == ward.RecoveryFailed {
-				return d.failedWriterResult(ctx, in, recovered)
+				result, resultErr := d.failedWriterResult(ctx, in, recovered)
+				// The name lives only in this process's error: a crash before
+				// the result commits recovers the plain writer failure.
+				var limit *ward.MemoryLimitError
+				if resultErr == nil && errors.As(err, &limit) {
+					result.Summary = truncateSummary(fmt.Sprintf(
+						"Writer container was killed at its memory limit (%s). %s", limit.Size, result.Summary))
+				}
+				return result, resultErr
 			}
 			return exec.StageResult{}, fmt.Errorf("%w: failed writer recovery returned %s", ErrRecoveryRetryable, recovered.Outcome)
 		}

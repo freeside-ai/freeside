@@ -252,7 +252,18 @@ func verifyAgentAllowlist(rep InspectReport, spec ContainerSpec) error {
 	if !rep.NetworksObserved || !slices.Equal(rep.Networks, []string{spec.Network}) {
 		return failf(CheckControlPlaneIsolation, "agent inspection reported a different network attachment")
 	}
+	if !realizedSize(rep, spec.Size) {
+		return failf(CheckControlPlaneIsolation, "agent inspection reported a different CPU or memory size")
+	}
 	return nil
+}
+
+// realizedSize reports whether inspect observed exactly the declared size, so
+// an agent never runs under a runtime default the spec did not ask for.
+func realizedSize(rep InspectReport, size ContainerSize) bool {
+	return rep.ResourcesObserved &&
+		rep.CPUs == size.CPUs &&
+		rep.MemoryBytes == int64(size.MemoryMiB)<<20
 }
 
 func sameEnvironment(got, want []string) bool {

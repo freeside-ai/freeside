@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 func manualConfigFixture(t *testing.T) manualSubmissionConfig {
@@ -368,4 +370,23 @@ func TestManualSubmissionHTTPRestartAndReplay(t *testing.T) {
 	submit("disabled", "project-client", "# Never created", "Refused", http.StatusNotFound)
 	submit("label", "label-only", "# Label only", "Refused", http.StatusNotFound)
 	counts(4, 4, 4)
+}
+
+func TestManualSubmissionConfigRefusesAnUnresolvableLaunchSize(t *testing.T) {
+	t.Parallel()
+	for name, value := range map[string]string{"below default": "1024", "malformed": "2G"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			cfg := manualConfigFixture(t)
+			keys := cfg.Projects[0].PolicyKeys
+			sized := keys[0]
+			sized.Key, sized.Value = ward.PolicyWriterMemoryMiB, value
+			cfg.Projects[0].PolicyKeys = append(slices.Clone(keys), sized)
+			path := filepath.Join(t.TempDir(), "manual.json")
+			writeManualConfig(t, path, cfg)
+			if _, err := loadManualSubmissionConfig(path); !errors.Is(err, ward.ErrLaunchSizePolicy) {
+				t.Fatalf("load = %v, want ErrLaunchSizePolicy", err)
+			}
+		})
+	}
 }

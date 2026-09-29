@@ -84,6 +84,7 @@ func TestProjectImageRoomRunsPreparationAndRecipeNetworkless(t *testing.T) {
 		runtime, verificationRunner(t, runtime, []verify.StepResult{{}, {}}, &calls),
 		nil,
 		verify.DefaultMaxRoomOutputBytes,
+		DefaultLaunchSize(LaunchVerification),
 	)
 	workspace := t.TempDir()
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "must-not-enter-container")
@@ -140,6 +141,7 @@ func TestProjectImageRoomReadsBoundRecipeWithoutWorkspace(t *testing.T) {
 			maxOutput = max
 			return runner(ctx, path, args, max)
 		}, verify.DefaultMaxRoomOutputBytes,
+		DefaultLaunchSize(LaunchVerification),
 	)
 	got, err := room.ReadRecipe(t.Context())
 	if err != nil || !bytes.Equal(got, recipe) {
@@ -190,6 +192,7 @@ func TestProjectImageRoomRejectsUnauthenticatedRecipeOutput(t *testing.T) {
 				"container", verificationProjectImageWithRecipe(t, recipe), runtime, nil,
 				verificationRunner(t, runtime, []verify.StepResult{tc.result}, &calls),
 				verify.DefaultMaxRoomOutputBytes,
+				DefaultLaunchSize(LaunchVerification),
 			)
 			if _, err := room.ReadRecipe(t.Context()); err == nil {
 				t.Fatal("ReadRecipe accepted unauthenticated output")
@@ -211,6 +214,7 @@ func TestProjectImageRoomRecipeCancellationStillReapsOwnedContainer(t *testing.T
 			cancel()
 			return result, err
 		}, verify.DefaultMaxRoomOutputBytes,
+		DefaultLaunchSize(LaunchVerification),
 	)
 	if _, err := room.ReadRecipe(ctx); err == nil {
 		t.Fatal("canceled recipe extraction returned no error")
@@ -253,6 +257,7 @@ func TestProjectImageRoomStopsAfterPreparationFailure(t *testing.T) {
 		verificationRunner(t, runtime, []verify.StepResult{{ExitCode: 7, Output: []byte("failed")}}, &calls),
 		nil,
 		verify.DefaultMaxRoomOutputBytes,
+		DefaultLaunchSize(LaunchVerification),
 	)
 	result, err := room.Run(t.Context(), t.TempDir(), []string{"verify"})
 	if err != nil || result.ExitCode != 7 || string(result.Output) != "failed" {
@@ -275,6 +280,7 @@ func TestProjectImageRoomCancellationStillReapsOwnedContainer(t *testing.T) {
 			cancel()
 			return result, err
 		}, nil, verify.DefaultMaxRoomOutputBytes,
+		DefaultLaunchSize(LaunchVerification),
 	)
 	result, err := room.Run(ctx, t.TempDir(), []string{"verify"})
 	if err != nil || result.ExitCode != -1 {
@@ -309,6 +315,7 @@ func TestProjectImageRoomRefusesForeignRuntimeIdentity(t *testing.T) {
 	room := newProjectImageRoom(
 		"container", verificationProjectImage(t, []string{"prepare"}), runtime,
 		runner, nil, verify.DefaultMaxRoomOutputBytes,
+		DefaultLaunchSize(LaunchVerification),
 	)
 	if _, err := room.Run(t.Context(), t.TempDir(), []string{"verify"}); err == nil ||
 		!strings.Contains(err.Error(), "foreign") {

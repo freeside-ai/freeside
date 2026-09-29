@@ -387,6 +387,7 @@ func TestRecoverPreWriterCompleteTearsDownAndCommitsLoss(t *testing.T) {
 	labels := fx.runLabels(hs.RunID)
 	fx.worldVolume(t, names.Workspace, labels)
 	fx.worldContainer(t, ContainerSpec{
+		Size: testContainerSize,
 		Name: names.Agent, Image: hs.Agent.Image, Command: hs.Agent.Command, Labels: labels,
 	}, true)
 	if err := fx.rt.CreateNetwork(context.Background(), names.Network, labels); err != nil {
@@ -416,6 +417,7 @@ func TestRecoverUnamendedNonzeroMarkerCommitsFailure(t *testing.T) {
 	labels := fx.runLabels(hs.RunID)
 	fx.worldVolume(t, names.Workspace, labels)
 	fx.worldContainer(t, ContainerSpec{
+		Size: testContainerSize,
 		Name: names.Agent, Image: hs.Agent.Image, Command: hs.Agent.Command, Labels: labels,
 	}, false)
 	fx.rt.writerStatus = 9
@@ -447,6 +449,7 @@ func TestRecoverLegacyPreWriterCompleteCommitsLoss(t *testing.T) {
 	labels := fx.runLabels(hs.RunID)
 	fx.worldVolume(t, names.Workspace, labels)
 	fx.worldContainer(t, ContainerSpec{
+		Size: testContainerSize,
 		Name: names.Agent, Image: hs.Agent.Image, Command: hs.Agent.Command, Labels: labels,
 	}, true)
 
@@ -1026,6 +1029,7 @@ func TestRecoverTokenStrayContainerRefusesAdoption(t *testing.T) {
 				token = "ffffffffffffffffffffffffffffffff"
 			}
 			fx.worldContainer(t, ContainerSpec{
+				Size: testContainerSize,
 				Name: "unexpected-name", Image: "example.test/img@sha256:" + strings.Repeat("9", 64),
 				Command: []string{"sh"},
 				Labels:  []Label{{Key: labelKey, Value: hs.RunID}, {Key: ownershipLabelKey, Value: token}},
@@ -1242,6 +1246,7 @@ func TestRecoverWriterSurvivorContradictsCompletionClaim(t *testing.T) {
 	labels := fx.runLabels(hs.RunID)
 	fx.worldVolume(t, names.Workspace, labels)
 	fx.worldContainer(t, ContainerSpec{
+		Size: testContainerSize,
 		Name: names.Agent, Image: hs.Agent.Image, Command: hs.Agent.Command, Labels: labels,
 	}, false)
 

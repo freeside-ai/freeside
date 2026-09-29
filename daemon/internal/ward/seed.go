@@ -976,6 +976,9 @@ func (b runtimeOps) seedWorkspace(
 	if err := b.waitStopped(ctx, names.Seeder, st.seeder, st.ownershipLabel, b.cfg.SeedTimeout); err != nil {
 		return failf(CheckWorkspaceSeeding, "seeder: %v", err)
 	}
+	if err := b.helperStopped(ctx, hs.Class, hs.Size, names.Seeder); err != nil {
+		return err
+	}
 	if err := b.rt.DeleteContainer(ctx, names.Seeder); err != nil {
 		return failf(CheckWorkspaceSeeding, "delete stopped seeder: %v", err)
 	}
@@ -1029,6 +1032,9 @@ func (b runtimeOps) observeSeededBase(
 	}
 	if err := b.waitStopped(ctx, names.Observer, st.observer, st.ownershipLabel, b.cfg.SeedTimeout); err != nil {
 		return "", failf(CheckObservedBaseIdentity, "base observer: %v", err)
+	}
+	if err := b.helperStopped(ctx, hs.Class, hs.Size, names.Observer); err != nil {
+		return "", err
 	}
 
 	readBaseProof := b.readBaseProof
