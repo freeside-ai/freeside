@@ -2089,3 +2089,36 @@ decisions of 2026-09-23 made in this revision's review;
 
 (Owner decisions of 2026-09-25, owner-assigned #1548;
 [decision note](../../devlog/2026-09-25-1035-shared-tracker-format.md).)
+
+## Revision 71 ("Real-Work Runs Share the Prod App's Authority")
+
+1. **One App, one authority.** An attended real-work run uses the `prod`
+   App's publication authority state directory and credentials directory,
+   only while it holds the production rig lease, and never a copy of them
+   (Section [10](../plan.md#10-operations-and-onboarding), Environments, Rules). Revision 69 item 5 let the run enroll
+   the App into its own `ephemeral` store; #1511 showed that each daemon's
+   janitor deletes every installation its own authority does not name, so a
+   second authority for one App uninstalls the first's installations whether
+   or not both run at once. Rejected: a separate App for real-work runs (they
+   do real work on real, often public, repositories and should publish as
+   the real App); a janitor that tolerates installations its authority does
+   not name (it weakens a guard on a destructive path); and running real work
+   through `prod`'s own store (the harness isolates runs from `prod` on
+   purpose). A real-work build must read and write the authority and journal
+   formats the installed `prod` build accepts; the follow-up code unit
+   (#1583) enforces that, adds the guard exception, and moves the existing
+   real-work App state into `prod`'s directories.
+2. **`prod` stays stopped during a real-work run.** Running both at once is
+   deferred (#1568). The rig lease refuses to be acquired while
+   `ai.freeside.daemon` is loaded, and #1583 enforces the stop for the rest
+   of the run. With one shared authority the janitors agree, so revision
+   69 item 8's GitHub-side lease stays declined; a lease alone never fixed
+   divergent bindings. Because publication identity names neither the
+   daemon nor the App (Section [5.15](../plan.md#515-evidence-and-images)), the operator also never runs one work
+   unit in both. The `dev` tier and dev-work `ephemeral` instances keep
+   running in parallel.
+3. **Real-work task records stay in the run's own database.** Folding them
+   into `prod`'s history is deferred.
+
+(Owner decisions of 2026-09-28, owner-run #1517;
+[decision note](../../devlog/2026-09-28-1715-real-work-app-authority.md).)
