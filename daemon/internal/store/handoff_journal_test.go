@@ -288,3 +288,120 @@ func TestHandoffJournalProofAmendmentsAreImmutable(t *testing.T) {
 		t.Fatalf("rewritten proof = %v, want %v", err, store.ErrHandoffJournalProofConflict)
 	}
 }
+
+// TestReadHeldHandoffJournalLifecycle covers the #1585 atomic open: the
+// read hold and its journal reference land together, the credential proof is
+// accepted for the shared window, and a second run on the same identity opens
+// its own read-held record alongside.
+func TestReadHeldHandoffJournalLifecycle(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openWithIdentity(t, testAuthIdentity())
+	first, second := journalRecord("read-run-1"), journalRecord("read-run-2")
+	expires := leaseEpoch.Add(time.Hour)
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if _, err := tx.BeginReadHeldHandoffJournal(ctx, first, "auth-1", "inv-1", leaseEpoch, expires); err != nil {
+			return err
+		}
+		_, err := tx.BeginReadHeldHandoffJournal(ctx, second, "auth-1", "inv-2", leaseEpoch, expires)
+		return err
+	}); err != nil {
+		t.Fatalf("BeginReadHeldHandoffJournal: %v", err)
+	}
+	preDigest := strings.Repeat("cd", 32)
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := tx.MarkHandoffCredentialObserved(ctx, first.RunID, preDigest); err != nil {
+			return err
+		}
+		return tx.MarkHandoffWriterComplete(ctx, first.RunID)
+	}); err != nil {
+		t.Fatalf("amend: %v", err)
+	}
+	var got store.HandoffJournalRecord
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		got, err = tx.GetHandoffJournal(ctx, first.RunID)
+		return err
+	}); err != nil {
+		t.Fatalf("GetHandoffJournal: %v", err)
+	}
+	want := store.HandoffJournalReadHold{
+		AuthIdentityID: "auth-1", Holder: "inv-1", AcquiredAt: leaseEpoch, ExpiresAt: expires,
+	}
+	if got.Lease != nil || got.ReadHold == nil || *got.ReadHold != want ||
+		got.CredentialPreDigest != preDigest || !got.WriterComplete {
+		t.Fatalf("record = %+v, want the read-held amended record", got)
+	}
+	if err := acquireLease(t, s, "mutator", leaseEpoch.Add(time.Second), expires); !errors.Is(err, store.ErrLeaseHeld) {
+		t.Fatalf("lease during read-held handoffs = %v, want %v", err, store.ErrLeaseHeld)
+	}
+}
+
+func TestBeginReadHeldHandoffRollsBackTheHoldOnJournalConflict(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openWithIdentity(t, testAuthIdentity())
+	rec := journalRecord("conflicting-read-run")
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.BeginHandoffJournal(ctx, rec)
+	}); err != nil {
+		t.Fatalf("seed journal: %v", err)
+	}
+	err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		_, err := tx.BeginReadHeldHandoffJournal(ctx, rec, "auth-1", "inv-1", leaseEpoch, leaseEpoch.Add(time.Hour))
+		return err
+	})
+	if !errors.Is(err, store.ErrImmutableConflict) {
+		t.Fatalf("conflicting read-held begin = %v, want %v", err, store.ErrImmutableConflict)
+	}
+	err = s.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetAuthStoreReadHold(ctx, "auth-1", "inv-1")
+		return err
+	})
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("read hold after rolled-back journal conflict = %v, want not found", err)
+	}
+}
+
+func TestJournalBeginCannotForgeAReadHoldReference(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openWithIdentity(t, testAuthIdentity())
+	rec := journalRecord("forged-read-run")
+	rec.ReadHold = &store.HandoffJournalReadHold{
+		AuthIdentityID: "auth-1", Holder: "inv-1",
+		AcquiredAt: leaseEpoch, ExpiresAt: leaseEpoch.Add(time.Hour),
+	}
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.BeginHandoffJournal(ctx, rec)
+	}); err == nil {
+		t.Fatal("BeginHandoffJournal accepted a caller-supplied read hold reference")
+	}
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		_, err := tx.BeginLeasedHandoffJournal(ctx, rec, "auth-1", "inv-1", leaseEpoch, leaseEpoch.Add(time.Hour))
+		return err
+	}); err == nil {
+		t.Fatal("BeginLeasedHandoffJournal accepted a record carrying a read hold")
+	}
+}
+
+func TestHandoffJournalRecordRejectsBothWindows(t *testing.T) {
+	t.Parallel()
+	rec := journalRecord("both-run")
+	rec.Lease = &store.HandoffJournalLease{
+		AuthIdentityID: "auth-1", Holder: "inv-1", Fence: 1,
+		AcquiredAt: leaseEpoch, ExpiresAt: leaseEpoch.Add(time.Hour),
+	}
+	rec.ReadHold = &store.HandoffJournalReadHold{
+		AuthIdentityID: "auth-1", Holder: "inv-1",
+		AcquiredAt: leaseEpoch, ExpiresAt: leaseEpoch.Add(time.Hour),
+	}
+	if err := rec.Validate(); err == nil {
+		t.Fatal("Validate accepted a record carrying both a lease and a read hold")
+	}
+	rec.Lease = nil
+	rec.WriterComplete = true
+	if err := rec.Validate(); err == nil {
+		t.Fatal("Validate accepted a completed read-held writer with no credential pre-digest")
+	}
+}

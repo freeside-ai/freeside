@@ -71,6 +71,26 @@ func (l HandoffJournalLease) validate() error {
 	return nil
 }
 
+// HandoffJournalReadHold is the persisted reference to the exact shared read
+// window the journal and read-hold transaction opened. A record carries it
+// or a HandoffJournalLease, never both.
+type HandoffJournalReadHold struct {
+	AuthIdentityID domain.AuthIdentityID `json:"auth_identity_id"`
+	Holder         domain.InvocationID   `json:"holder"`
+	AcquiredAt     time.Time             `json:"acquired_at"`
+	ExpiresAt      time.Time             `json:"expires_at"`
+}
+
+func (h HandoffJournalReadHold) validate() error {
+	if h.AuthIdentityID == "" || h.Holder == "" {
+		return errors.New("handoff journal read hold identity and holder are required")
+	}
+	if h.AcquiredAt.IsZero() || h.ExpiresAt.IsZero() || !h.ExpiresAt.After(h.AcquiredAt) {
+		return errors.New("handoff journal read hold window is invalid")
+	}
+	return nil
+}
+
 // HandoffJournalState is the persistence projection of ward's prepared
 // lifecycle-scoped provider state.
 type HandoffJournalState struct {
@@ -147,6 +167,7 @@ type HandoffJournalRecord struct {
 	State                      *HandoffJournalState        `json:"state"`
 	Instructions               *HandoffJournalInstructions `json:"instructions"`
 	Lease                      *HandoffJournalLease        `json:"lease"`
+	ReadHold                   *HandoffJournalReadHold     `json:"read_hold,omitempty"`
 	ExportDir                  string                      `json:"export_dir"`
 	Outcome                    *HandoffJournalOutcome      `json:"outcome"`
 	OpenedAt                   time.Time                   `json:"opened_at"`
@@ -168,14 +189,22 @@ func (r HandoffJournalRecord) Validate() error {
 	if r.OpenedAt.IsZero() {
 		return errors.New("handoff journal opened_at is required")
 	}
-	if r.Lease != nil {
+	if r.Lease != nil && r.ReadHold != nil {
+		return errors.New("handoff journal record carries both a lease and a read hold")
+	}
+	switch {
+	case r.Lease != nil:
 		if err := r.Lease.validate(); err != nil {
 			return err
 		}
-	} else if r.CredentialPreDigest != "" {
+	case r.ReadHold != nil:
+		if err := r.ReadHold.validate(); err != nil {
+			return err
+		}
+	case r.CredentialPreDigest != "":
 		return errors.New("unleased handoff journal record carries a credential pre-digest")
 	}
-	if r.WriterComplete && r.Lease != nil && r.CredentialPreDigest == "" {
+	if r.WriterComplete && r.hasCredentialWindow() && r.CredentialPreDigest == "" {
 		return errors.New("completed leased writer has no credential pre-digest")
 	}
 	if r.WriterFailureStatus != nil {
@@ -219,6 +248,12 @@ func (r HandoffJournalRecord) Validate() error {
 	return nil
 }
 
+// hasCredentialWindow reports whether the record opened an auth-store window,
+// exclusive or shared, whose credential bytes ward must observe.
+func (r HandoffJournalRecord) hasCredentialWindow() bool {
+	return r.Lease != nil || r.ReadHold != nil
+}
+
 const (
 	insertHandoffJournalSQL = `
 INSERT INTO handoff_journal_records
@@ -227,14 +262,18 @@ INSERT INTO handoff_journal_records
 	     writer_failure_status, state_preparation, instruction_preparation,
      lease_auth_identity_id,
      lease_holder, lease_fence, lease_acquired_at, lease_expires_at,
+     read_hold_auth_identity_id, read_hold_holder,
+     read_hold_acquired_at, read_hold_expires_at,
      export_dir, outcome, opened_at, body)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	getHandoffJournalSQL = `
 SELECT ownership_token, spec_digest, observed_base_sha,
        credential_pre_digest, writer_complete, cancellation_requested,
 	       writer_failure_status, state_preparation, instruction_preparation,
        lease_auth_identity_id,
        lease_holder, lease_fence, lease_acquired_at, lease_expires_at,
+       read_hold_auth_identity_id, read_hold_holder,
+       read_hold_acquired_at, read_hold_expires_at,
        export_dir, outcome, opened_at, body
 FROM handoff_journal_records WHERE run_id = ?`
 	updateHandoffJournalSQL = `
@@ -243,7 +282,9 @@ SET ownership_token = ?, spec_digest = ?, observed_base_sha = ?,
     credential_pre_digest = ?, writer_complete = ?, cancellation_requested = ?,
 	    writer_failure_status = ?, state_preparation = ?, instruction_preparation = ?,
     lease_auth_identity_id = ?, lease_holder = ?, lease_fence = ?,
-    lease_acquired_at = ?, lease_expires_at = ?, export_dir = ?,
+    lease_acquired_at = ?, lease_expires_at = ?,
+    read_hold_auth_identity_id = ?, read_hold_holder = ?,
+    read_hold_acquired_at = ?, read_hold_expires_at = ?, export_dir = ?,
     outcome = ?, opened_at = ?, body = ?
 WHERE run_id = ? AND outcome IS NULL`
 )
@@ -251,8 +292,8 @@ WHERE run_id = ? AND outcome IS NULL`
 // BeginHandoffJournal durably opens one record. A run id is single-use:
 // reopening either an open or closed record fails.
 func (tx *InternalTx) BeginHandoffJournal(ctx context.Context, rec HandoffJournalRecord) error {
-	if rec.Lease != nil {
-		return errors.New("begin handoff journal: leased records require BeginLeasedHandoffJournal")
+	if rec.hasCredentialWindow() {
+		return errors.New("begin handoff journal: leased records require BeginLeasedHandoffJournal or BeginReadHeldHandoffJournal")
 	}
 	if err := validateNewHandoffJournal(rec); err != nil {
 		return err
@@ -294,6 +335,8 @@ func (tx *InternalTx) insertHandoffJournal(ctx context.Context, rec HandoffJourn
 		args.writerFailureStatus, args.state, args.instructions,
 		args.leaseID, args.leaseHolder, args.leaseFence,
 		args.leaseAcquiredAt, args.leaseExpiresAt,
+		args.readHoldID, args.readHoldHolder,
+		args.readHoldAcquiredAt, args.readHoldExpiresAt,
 		rec.ExportDir, args.outcome, formatTime(rec.OpenedAt), body); err != nil {
 		return fmt.Errorf("begin handoff journal %q: %w", rec.RunID, err)
 	}
@@ -310,7 +353,7 @@ func (tx *InternalTx) BeginLeasedHandoffJournal(
 	holder domain.InvocationID,
 	now, expiresAt time.Time,
 ) (domain.AuthStoreMutationLease, error) {
-	if rec.Lease != nil {
+	if rec.hasCredentialWindow() {
 		return domain.AuthStoreMutationLease{}, errors.New("begin leased handoff journal: record already carries a lease")
 	}
 	if err := validateNewHandoffJournal(rec); err != nil {
@@ -343,6 +386,40 @@ func (tx *InternalTx) BeginLeasedHandoffJournal(
 	return lease, nil
 }
 
+// BeginReadHeldHandoffJournal takes a shared read hold on the identity's auth
+// store and opens the journal record in this one SQLite transaction, as
+// BeginLeasedHandoffJournal does for the exclusive lease. A read hold never
+// converges on an existing window, so the recorded window is always the one
+// this call opened.
+func (tx *InternalTx) BeginReadHeldHandoffJournal(
+	ctx context.Context,
+	rec HandoffJournalRecord,
+	id domain.AuthIdentityID,
+	holder domain.InvocationID,
+	now, expiresAt time.Time,
+) (domain.AuthStoreReadHold, error) {
+	if rec.hasCredentialWindow() {
+		return domain.AuthStoreReadHold{}, errors.New("begin read-held handoff journal: record already carries a lease or read hold")
+	}
+	if err := validateNewHandoffJournal(rec); err != nil {
+		return domain.AuthStoreReadHold{}, err
+	}
+	hold, err := tx.AcquireAuthStoreReadHold(ctx, id, holder, now, expiresAt)
+	if err != nil {
+		return domain.AuthStoreReadHold{}, err
+	}
+	rec.ReadHold = &HandoffJournalReadHold{
+		AuthIdentityID: hold.AuthIdentityID,
+		Holder:         hold.Holder,
+		AcquiredAt:     hold.AcquiredAt,
+		ExpiresAt:      hold.ExpiresAt,
+	}
+	if err := tx.insertHandoffJournal(ctx, rec); err != nil {
+		return domain.AuthStoreReadHold{}, err
+	}
+	return hold, nil
+}
+
 // GetHandoffJournal reconstructs and cross-checks one journal record.
 func (tx *ReadTx) GetHandoffJournal(ctx context.Context, runID string) (HandoffJournalRecord, error) {
 	var (
@@ -354,6 +431,8 @@ func (tx *ReadTx) GetHandoffJournal(ctx context.Context, runID string) (HandoffJ
 		leaseID, leaseHolder                               sql.NullString
 		leaseFence                                         sql.NullInt64
 		leaseAcquiredAt, leaseExpiresAt                    sql.NullString
+		readHoldID, readHoldHolder                         sql.NullString
+		readHoldAcquiredAt, readHoldExpiresAt              sql.NullString
 		exportDir, openedAt                                string
 		outcome                                            sql.NullString
 		body                                               []byte
@@ -363,7 +442,9 @@ func (tx *ReadTx) GetHandoffJournal(ctx context.Context, runID string) (HandoffJ
 		&writerComplete, &cancellationRequested,
 		&writerFailureStatus, &statePreparation, &instructionPreparation,
 		&leaseID, &leaseHolder, &leaseFence,
-		&leaseAcquiredAt, &leaseExpiresAt, &exportDir, &outcome,
+		&leaseAcquiredAt, &leaseExpiresAt,
+		&readHoldID, &readHoldHolder, &readHoldAcquiredAt, &readHoldExpiresAt,
+		&exportDir, &outcome,
 		&openedAt, &body,
 	)
 	if err != nil {
@@ -382,7 +463,8 @@ func (tx *ReadTx) GetHandoffJournal(ctx context.Context, runID string) (HandoffJ
 		!journalInstructionsColumnEqual(instructionPreparation, rec.Instructions) ||
 		rec.ExportDir != exportDir || !timeColumnEqual(openedAt, rec.OpenedAt) ||
 		!journalOutcomeColumnEqual(outcome, rec.Outcome) ||
-		!journalLeaseColumnsEqual(rec.Lease, leaseID, leaseHolder, leaseFence, leaseAcquiredAt, leaseExpiresAt) {
+		!journalLeaseColumnsEqual(rec.Lease, leaseID, leaseHolder, leaseFence, leaseAcquiredAt, leaseExpiresAt) ||
+		!journalReadHoldColumnsEqual(rec.ReadHold, readHoldID, readHoldHolder, readHoldAcquiredAt, readHoldExpiresAt) {
 		return HandoffJournalRecord{}, fmt.Errorf("get handoff journal %q: %w", runID, errRowInconsistent)
 	}
 	return rec, nil
@@ -398,7 +480,7 @@ func (tx *InternalTx) MarkHandoffSeedObserved(ctx context.Context, runID, observ
 // MarkHandoffCredentialObserved commits the pre-writer credential digest.
 func (tx *InternalTx) MarkHandoffCredentialObserved(ctx context.Context, runID, preDigest string) error {
 	return tx.amendHandoffJournal(ctx, runID, func(rec *HandoffJournalRecord) error {
-		if rec.Lease == nil {
+		if !rec.hasCredentialWindow() {
 			return errors.New("mark handoff credential observed: record has no lease")
 		}
 		return setJournalString(&rec.CredentialPreDigest, preDigest)
@@ -583,6 +665,8 @@ func (tx *InternalTx) amendHandoffJournal(
 		args.writerFailureStatus, args.state, args.instructions,
 		args.leaseID, args.leaseHolder, args.leaseFence,
 		args.leaseAcquiredAt, args.leaseExpiresAt,
+		args.readHoldID, args.readHoldHolder,
+		args.readHoldAcquiredAt, args.readHoldExpiresAt,
 		rec.ExportDir, args.outcome, formatTime(rec.OpenedAt), body, runID)
 	if err != nil {
 		return fmt.Errorf("amend handoff journal %q: %w", runID, err)
@@ -601,6 +685,9 @@ type handoffJournalArgs struct {
 	leaseID, leaseHolder            any
 	leaseFence                      any
 	leaseAcquiredAt, leaseExpiresAt any
+	readHoldID, readHoldHolder      any
+	readHoldAcquiredAt              any
+	readHoldExpiresAt               any
 	writerFailureStatus             any
 	state                           string
 	instructions                    string
@@ -619,6 +706,12 @@ func encodeHandoffJournal(rec HandoffJournalRecord) (string, handoffJournalArgs,
 		args.leaseFence = rec.Lease.Fence
 		args.leaseAcquiredAt = formatTime(rec.Lease.AcquiredAt)
 		args.leaseExpiresAt = formatTime(rec.Lease.ExpiresAt)
+	}
+	if rec.ReadHold != nil {
+		args.readHoldID = rec.ReadHold.AuthIdentityID
+		args.readHoldHolder = rec.ReadHold.Holder
+		args.readHoldAcquiredAt = formatTime(rec.ReadHold.AcquiredAt)
+		args.readHoldExpiresAt = formatTime(rec.ReadHold.ExpiresAt)
 	}
 	if rec.Outcome != nil {
 		args.outcome = *rec.Outcome
@@ -690,4 +783,17 @@ func journalLeaseColumnsEqual(
 		fence.Valid && fence.Int64 == lease.Fence &&
 		acquiredAt.Valid && timeColumnEqual(acquiredAt.String, lease.AcquiredAt) &&
 		expiresAt.Valid && timeColumnEqual(expiresAt.String, lease.ExpiresAt)
+}
+
+func journalReadHoldColumnsEqual(
+	hold *HandoffJournalReadHold,
+	id, holder, acquiredAt, expiresAt sql.NullString,
+) bool {
+	if hold == nil {
+		return !id.Valid && !holder.Valid && !acquiredAt.Valid && !expiresAt.Valid
+	}
+	return id.Valid && id.String == string(hold.AuthIdentityID) &&
+		holder.Valid && holder.String == string(hold.Holder) &&
+		acquiredAt.Valid && timeColumnEqual(acquiredAt.String, hold.AcquiredAt) &&
+		expiresAt.Valid && timeColumnEqual(expiresAt.String, hold.ExpiresAt)
 }
