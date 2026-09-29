@@ -3,8 +3,10 @@ package store
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/migrations"
@@ -206,10 +208,55 @@ func TestExecutionAdmissionFollowsRepositoryRename(t *testing.T) {
 func rerunProjectAuthorityBackfill(t *testing.T, s *Store) error {
 	t.Helper()
 	ctx := context.Background()
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = 81`); err != nil {
+	// Later migrations stay applied: set their history rows aside so 0081
+	// reruns alone through a prefix that ends at it, then put them back.
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT version, name, digest, applied_at FROM schema_migrations WHERE version > 81 ORDER BY version`)
+	if err != nil {
 		t.Fatal(err)
 	}
-	return migrate(ctx, s.db, migrations.FS)
+	type historyRow struct {
+		version               int
+		name, digest, applied string
+	}
+	var later []historyRow
+	for rows.Next() {
+		var r historyRow
+		if err := rows.Scan(&r.version, &r.name, &r.digest, &r.applied); err != nil {
+			t.Fatal(err)
+		}
+		later = append(later, r)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version >= 81`); err != nil {
+		t.Fatal(err)
+	}
+	files, err := fs.Glob(migrations.FS, "*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := fstest.MapFS{}
+	for _, name := range files {
+		if name > "0081_project_authority_backfill.sql" {
+			continue
+		}
+		body, err := fs.ReadFile(migrations.FS, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prefix[name] = &fstest.MapFile{Data: body}
+	}
+	migrateErr := migrate(ctx, s.db, prefix)
+	for _, r := range later {
+		if _, err := s.db.ExecContext(ctx,
+			`INSERT INTO schema_migrations (version, name, digest, applied_at) VALUES (?, ?, ?, ?)`,
+			r.version, r.name, r.digest, r.applied); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return migrateErr
 }
 
 // TestProjectAuthorityBackfill covers migration 0081: a store with admissions

@@ -268,3 +268,68 @@ WHERE run_id = ?`, runID).Scan(&gotOutcome, &gotInstructions, &gotBody); err != 
 		t.Fatal("invalid outcome accepted under migrated constraint")
 	}
 }
+
+// TestReadHoldMigrationAppliesFromPriorHead covers 0082: a leased journal row
+// recorded before the rebuild survives unchanged, and the new constraints hold
+// a row to at most one window, each all-present or all-absent.
+func TestReadHoldMigrationAppliesFromPriorHead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openRaw(t)
+	migrateThrough(t, ctx, db, "0082_")
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO auth_identities (id, provider, auth_store_mutation_lease, auth_store_volume,
+    max_parallel_executions, refresh_strategy, supports_read_only_auth_snapshot,
+    enabled, cost_owner, recorded_at, body)
+VALUES ('auth-1', 'claude', 1, 'vol', 1, 'on_demand', 0, 1, '', '2026-07-29T12:00:00Z', '{}')`); err != nil {
+		t.Fatalf("seed identity: %v", err)
+	}
+	const (
+		runID = "journal-before-read-holds"
+		body  = `{"version":1}`
+	)
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO handoff_journal_records (
+    run_id, ownership_token, spec_digest, observed_base_sha,
+    credential_pre_digest, writer_complete, cancellation_requested,
+    state_preparation, instruction_preparation,
+    lease_auth_identity_id, lease_holder, lease_fence, lease_acquired_at, lease_expires_at,
+    export_dir, opened_at, body
+) VALUES (?, '00112233445566778899aabbccddeeff', ?, '', '', 0, 0, '', '',
+    'auth-1', 'inv-1', 3, '2026-07-29T12:00:00Z', '2026-07-29T13:00:00Z', '', ?, ?)`,
+		runID, strings.Repeat("ab", 32), "2026-07-29T12:00:00Z", body); err != nil {
+		t.Fatalf("seed prior-head leased journal: %v", err)
+	}
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate to head: %v", err)
+	}
+	var (
+		fence   int64
+		holdID  sql.NullString
+		gotBody string
+	)
+	if err := db.QueryRowContext(ctx, `
+SELECT lease_fence, read_hold_auth_identity_id, body FROM handoff_journal_records WHERE run_id = ?`,
+		runID).Scan(&fence, &holdID, &gotBody); err != nil {
+		t.Fatalf("read migrated journal: %v", err)
+	}
+	if fence != 3 || holdID.Valid || gotBody != body {
+		t.Fatalf("migrated row = fence %d read hold %v body %q, want 3, null, original", fence, holdID, gotBody)
+	}
+	assertTableExists(t, db, "auth_store_read_holds", true)
+	if _, err := db.ExecContext(ctx, `
+UPDATE handoff_journal_records
+SET read_hold_auth_identity_id = 'auth-1', read_hold_holder = 'inv-1',
+    read_hold_acquired_at = '2026-07-29T12:00:00Z', read_hold_expires_at = '2026-07-29T13:00:00Z'
+WHERE run_id = ?`, runID); err == nil {
+		t.Fatal("a row carrying both a lease and a read hold was accepted")
+	}
+	if _, err := db.ExecContext(ctx, `
+UPDATE handoff_journal_records
+SET lease_auth_identity_id = NULL, lease_holder = NULL, lease_fence = NULL,
+    lease_acquired_at = NULL, lease_expires_at = NULL,
+    read_hold_auth_identity_id = 'auth-1'
+WHERE run_id = ?`, runID); err == nil {
+		t.Fatal("a partial read hold reference was accepted")
+	}
+}

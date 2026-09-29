@@ -89,6 +89,27 @@ func (e *LeaseHeldError) Error() string {
 // Unwrap makes errors.Is(err, ErrLeaseHeld) match the refusal class.
 func (e *LeaseHeldError) Unwrap() error { return ErrLeaseHeld }
 
+// ErrReadHoldNotHeld is returned when a caller releases a read hold whose
+// window it no longer holds: the row is gone, replaced, or already over.
+var ErrReadHoldNotHeld = errors.New("caller does not hold the auth store read hold")
+
+// ReadHeldError names a live read hold that refused a mutation lease. It
+// unwraps to ErrLeaseHeld, so every existing caller that classifies a held
+// lease treats a store under read as held too.
+type ReadHeldError struct {
+	AuthIdentityID domain.AuthIdentityID
+	Holder         domain.InvocationID
+	ExpiresAt      time.Time
+}
+
+func (e *ReadHeldError) Error() string {
+	return fmt.Sprintf("auth store of %q is under a read hold by %q until %s",
+		e.AuthIdentityID, e.Holder, formatTime(e.ExpiresAt))
+}
+
+// Unwrap makes errors.Is(err, ErrLeaseHeld) match the refusal class.
+func (e *ReadHeldError) Unwrap() error { return ErrLeaseHeld }
+
 const (
 	recordAuthIdentitySQL = `
 INSERT INTO auth_identities
@@ -142,6 +163,32 @@ WHERE auth_identity_id = ? AND holder = ? AND fence = ? AND released_at IS NULL`
 UPDATE auth_store_mutation_leases
 SET released_at = ?, body = ?
 WHERE auth_identity_id = ? AND holder = ? AND fence = ? AND released_at IS NULL`
+
+	getReadHoldSQL = `
+SELECT acquired_at, expires_at, released_at, body
+FROM auth_store_read_holds WHERE auth_identity_id = ? AND holder = ?`
+	// The upsert replaces only an ended row, which the caller has already
+	// checked; the guard names the exact row read so a concurrent change
+	// fails closed.
+	insertReadHoldSQL = `
+INSERT INTO auth_store_read_holds
+    (auth_identity_id, holder, acquired_at, expires_at, expires_at_unix_nano, released_at, body)
+VALUES (?, ?, ?, ?, ?, NULL, ?)
+ON CONFLICT (auth_identity_id, holder) DO NOTHING`
+	replaceReadHoldSQL = `
+UPDATE auth_store_read_holds
+SET acquired_at = ?, expires_at = ?, expires_at_unix_nano = ?, released_at = NULL, body = ?
+WHERE auth_identity_id = ? AND holder = ? AND acquired_at = ?`
+	releaseReadHoldSQL = `
+UPDATE auth_store_read_holds
+SET released_at = ?, body = ?
+WHERE auth_identity_id = ? AND holder = ? AND acquired_at = ? AND released_at IS NULL`
+	// Candidates only: liveness is decided by HeldAt on each reconstructed
+	// row against the caller's clock, never by this filter alone.
+	unreleasedReadHoldersSQL = `
+SELECT holder FROM auth_store_read_holds
+WHERE auth_identity_id = ? AND released_at IS NULL AND expires_at_unix_nano > ?
+ORDER BY holder`
 )
 
 // RecordAuthIdentity persists an identity declaration, guarded by the domain
@@ -353,6 +400,11 @@ func (tx *InternalTx) AcquireAuthStoreMutationLeaseBound(
 			"acquire auth store mutation lease %q: window ends at %s, now is %s: %w",
 			id, formatTime(expiresAt), formatTime(now), ErrLeaseWindowRegresses)
 	}
+	// A mutation must not change the bytes a running execution reads, so
+	// any live read hold refuses the lease, whoever asks.
+	if err := tx.refuseLiveReadHold(ctx, id, now); err != nil {
+		return domain.AuthStoreMutationLease{}, fmt.Errorf("acquire auth store mutation lease %q: %w", id, err)
+	}
 	current, err := tx.GetAuthStoreMutationLease(ctx, id)
 	switch {
 	case errors.Is(err, ErrNotFound):
@@ -451,6 +503,11 @@ func (tx *InternalTx) takeoverLease(
 // cannot extend the new holder's window; an expired lease is not renewable
 // either, since someone else may already be entitled to it. Both refuse with
 // ErrLeaseNotHeld, and re-acquisition is the caller's path back.
+//
+// A live read hold refuses renewal as it refuses acquisition. A renewal
+// whose instant was sampled before the lease expired could otherwise
+// extend it after a reader opened a window on the expired lease, leaving
+// both live (#1585).
 func (tx *InternalTx) RenewAuthStoreMutationLease(
 	ctx context.Context, id domain.AuthIdentityID, holder domain.InvocationID,
 	fence int64, now, expiresAt time.Time,
@@ -461,6 +518,9 @@ func (tx *InternalTx) RenewAuthStoreMutationLease(
 	}
 	if current.Holder != holder || current.Fence != fence || !current.HeldAt(now) {
 		return domain.AuthStoreMutationLease{}, fmt.Errorf("renew auth store mutation lease %q: %w", id, ErrLeaseNotHeld)
+	}
+	if err := tx.refuseLiveReadHold(ctx, id, now); err != nil {
+		return domain.AuthStoreMutationLease{}, fmt.Errorf("renew auth store mutation lease %q: %w", id, err)
 	}
 	// A renewal only ever extends. A delayed or reordered call carrying an
 	// earlier instant would otherwise report success while shortening the
@@ -542,6 +602,223 @@ func (tx *InternalTx) ReleaseAuthStoreMutationLease(
 	}
 	if affected != 1 {
 		return fmt.Errorf("release auth store mutation lease %q: %w", id, ErrLeaseNotHeld)
+	}
+	return nil
+}
+
+// AcquireAuthStoreReadHold opens a shared read window on an identity's auth
+// store for holder, from now until expiresAt. Any number of holders may read
+// at once; a live mutation lease refuses with a LeaseHeldError, since a
+// reader must not start while the store may be changing.
+//
+// A holder opens one window per run. Unlike the lease it never converges on
+// a live window it already holds: a new run attaching an old window could
+// have that window released by the old run's recovery while it still reads.
+// A live same-holder row refuses with ErrLeaseHeld; an ended one is replaced.
+func (tx *InternalTx) AcquireAuthStoreReadHold(
+	ctx context.Context, id domain.AuthIdentityID, holder domain.InvocationID,
+	now, expiresAt time.Time,
+) (domain.AuthStoreReadHold, error) {
+	if err := tx.requireLeaseDeclared(ctx, id); err != nil {
+		return domain.AuthStoreReadHold{}, fmt.Errorf("acquire auth store read hold %q: %w", id, err)
+	}
+	if !expiresAt.After(now) {
+		return domain.AuthStoreReadHold{}, fmt.Errorf(
+			"acquire auth store read hold %q: window ends at %s, now is %s: %w",
+			id, formatTime(expiresAt), formatTime(now), ErrLeaseWindowRegresses)
+	}
+	lease, err := tx.GetAuthStoreMutationLease(ctx, id)
+	switch {
+	case errors.Is(err, ErrNotFound):
+	case err != nil:
+		return domain.AuthStoreReadHold{}, fmt.Errorf("acquire auth store read hold %q: %w", id, err)
+	default:
+		// The same stale-instant rule as the lease: an instant before the
+		// lease's own timeline says nothing about whether it is live now.
+		if now.Before(lease.AcquiredAt) || (lease.ReleasedAt != nil && now.Before(*lease.ReleasedAt)) {
+			return domain.AuthStoreReadHold{}, fmt.Errorf(
+				"acquire auth store read hold %q: instant %s predates the current lease generation: %w",
+				id, formatTime(now), ErrLeaseWindowRegresses)
+		}
+		if lease.HeldAt(now) {
+			return domain.AuthStoreReadHold{}, fmt.Errorf("acquire auth store read hold %q: %w", id,
+				&LeaseHeldError{
+					AuthIdentityID: id, Holder: lease.Holder,
+					Fence: lease.Fence, ExpiresAt: lease.ExpiresAt,
+				})
+		}
+	}
+	hold := domain.AuthStoreReadHold{
+		AuthIdentityID: id, Holder: holder,
+		AcquiredAt: now.UTC(), ExpiresAt: expiresAt.UTC(),
+	}
+	body, err := encode(hold)
+	if err != nil {
+		return domain.AuthStoreReadHold{}, fmt.Errorf("acquire auth store read hold %q: %w", id, err)
+	}
+	current, err := tx.GetAuthStoreReadHold(ctx, id, holder)
+	var res sql.Result
+	switch {
+	case errors.Is(err, ErrNotFound):
+		res, err = tx.tx.ExecContext(ctx, insertReadHoldSQL,
+			id, holder, formatTime(hold.AcquiredAt), formatTime(hold.ExpiresAt),
+			hold.ExpiresAt.UnixNano(), body)
+	case err != nil:
+		return domain.AuthStoreReadHold{}, fmt.Errorf("acquire auth store read hold %q: %w", id, err)
+	default:
+		if now.Before(current.AcquiredAt) || (current.ReleasedAt != nil && now.Before(*current.ReleasedAt)) {
+			return domain.AuthStoreReadHold{}, fmt.Errorf(
+				"acquire auth store read hold %q: instant %s predates the holder's current window: %w",
+				id, formatTime(now), ErrLeaseWindowRegresses)
+		}
+		if current.HeldAt(now) {
+			return domain.AuthStoreReadHold{}, fmt.Errorf(
+				"acquire auth store read hold %q: holder %q already holds a live window: %w",
+				id, holder, ErrLeaseHeld)
+		}
+		res, err = tx.tx.ExecContext(ctx, replaceReadHoldSQL,
+			formatTime(hold.AcquiredAt), formatTime(hold.ExpiresAt),
+			hold.ExpiresAt.UnixNano(), body, id, holder, formatTime(current.AcquiredAt))
+	}
+	if err != nil {
+		return domain.AuthStoreReadHold{}, fmt.Errorf("acquire auth store read hold %q: %w", id, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return domain.AuthStoreReadHold{}, fmt.Errorf("acquire auth store read hold %q: %w", id, err)
+	}
+	if affected != 1 {
+		// The row changed between the read and the write. Fail closed.
+		return domain.AuthStoreReadHold{}, fmt.Errorf("acquire auth store read hold %q: %w", id, ErrLeaseHeld)
+	}
+	return hold, nil
+}
+
+// ReleaseAuthStoreReadHold ends the read window holder opened at acquiredAt.
+// The acquisition instant names the exact window, so a stale release cannot
+// end a later window the same holder opened. Releasing an already-released
+// window converges; a missing, replaced, or expired one is refused with
+// ErrReadHoldNotHeld, and a release instant outside the window with
+// ErrLeaseWindowRegresses.
+func (tx *InternalTx) ReleaseAuthStoreReadHold(
+	ctx context.Context, id domain.AuthIdentityID, holder domain.InvocationID,
+	acquiredAt, releasedAt time.Time,
+) error {
+	current, err := tx.GetAuthStoreReadHold(ctx, id, holder)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return fmt.Errorf("release auth store read hold %q: %w", id, ErrReadHoldNotHeld)
+	case err != nil:
+		return fmt.Errorf("release auth store read hold %q: %w", id, err)
+	}
+	if !current.AcquiredAt.Equal(acquiredAt) {
+		return fmt.Errorf("release auth store read hold %q: %w", id, ErrReadHoldNotHeld)
+	}
+	if current.ReleasedAt != nil {
+		return nil
+	}
+	// As with the lease, a release stamp outside the window is not a
+	// release, and a far-future one would hold off mutation until it passed.
+	if !current.HeldAt(releasedAt) {
+		return fmt.Errorf(
+			"release auth store read hold %q: instant %s is outside the window %s..%s: %w",
+			id, formatTime(releasedAt), formatTime(current.AcquiredAt),
+			formatTime(current.ExpiresAt), ErrLeaseWindowRegresses)
+	}
+	released := current
+	at := releasedAt.UTC()
+	released.ReleasedAt = &at
+	body, err := encode(released)
+	if err != nil {
+		return fmt.Errorf("release auth store read hold %q: %w", id, err)
+	}
+	res, err := tx.tx.ExecContext(ctx, releaseReadHoldSQL,
+		formatTime(at), body, id, holder, formatTime(current.AcquiredAt))
+	if err != nil {
+		return fmt.Errorf("release auth store read hold %q: %w", id, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("release auth store read hold %q: %w", id, err)
+	}
+	if affected != 1 {
+		return fmt.Errorf("release auth store read hold %q: %w", id, ErrReadHoldNotHeld)
+	}
+	return nil
+}
+
+// GetAuthStoreReadHold reconstructs one holder's read hold row, re-gated
+// against the identity's current lease declaration and cross-checked against
+// its columns like the lease. Liveness is HeldAt's answer.
+func (tx *ReadTx) GetAuthStoreReadHold(
+	ctx context.Context, id domain.AuthIdentityID, holder domain.InvocationID,
+) (domain.AuthStoreReadHold, error) {
+	if err := tx.requireLeaseDeclared(ctx, id); err != nil {
+		return domain.AuthStoreReadHold{}, fmt.Errorf("get auth store read hold %q: %w", id, err)
+	}
+	var (
+		acquiredAt string
+		expiresAt  string
+		releasedAt sql.NullString
+		body       []byte
+	)
+	err := tx.tx.QueryRowContext(ctx, getReadHoldSQL, id, holder).
+		Scan(&acquiredAt, &expiresAt, &releasedAt, &body)
+	if err != nil {
+		return domain.AuthStoreReadHold{}, fmt.Errorf("get auth store read hold %q: %w", id, notFoundOr(err))
+	}
+	hold, err := decode[domain.AuthStoreReadHold](body)
+	if err != nil {
+		return domain.AuthStoreReadHold{}, fmt.Errorf("get auth store read hold %q: %w", id, err)
+	}
+	if hold.AuthIdentityID != id || hold.Holder != holder ||
+		!timeColumnEqual(acquiredAt, hold.AcquiredAt) ||
+		!timeColumnEqual(expiresAt, hold.ExpiresAt) ||
+		!optionalTimeColumnEqual(releasedAt, hold.ReleasedAt) {
+		return domain.AuthStoreReadHold{}, fmt.Errorf("get auth store read hold %q: %w", id, errRowInconsistent)
+	}
+	return hold, nil
+}
+
+// refuseLiveReadHold returns a ReadHeldError naming the first read hold on
+// the identity that is live at now. Candidates are selected by the released
+// and expiry columns the store writes beside each body; every candidate is
+// then reconstructed and cross-checked, so a malformed candidate fails the
+// mutation closed rather than being skipped.
+func (tx *ReadTx) refuseLiveReadHold(ctx context.Context, id domain.AuthIdentityID, now time.Time) error {
+	rows, err := tx.tx.QueryContext(ctx, unreleasedReadHoldersSQL, id, now.UnixNano())
+	if err != nil {
+		return err
+	}
+	var holders []domain.InvocationID
+	for rows.Next() {
+		var holder string
+		if err := rows.Scan(&holder); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		holders = append(holders, domain.InvocationID(holder))
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, holder := range holders {
+		hold, err := tx.GetAuthStoreReadHold(ctx, id, holder)
+		if err != nil {
+			return err
+		}
+		// An instant before the hold opened is a stale or regressed clock,
+		// not evidence the hold is over.
+		if now.Before(hold.AcquiredAt) {
+			return fmt.Errorf("instant %s predates read hold %q: %w",
+				formatTime(now), hold.Holder, ErrLeaseWindowRegresses)
+		}
+		if hold.HeldAt(now) {
+			return &ReadHeldError{AuthIdentityID: id, Holder: hold.Holder, ExpiresAt: hold.ExpiresAt}
+		}
 	}
 	return nil
 }

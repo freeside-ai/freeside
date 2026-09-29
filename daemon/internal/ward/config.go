@@ -58,6 +58,30 @@ type AuthStoreLeaser interface {
 		fence int64, releasedAt time.Time) error
 }
 
+// AuthStoreReadHolder is the shared read-hold seam beside AuthStoreLeaser
+// (#1585). A handoff whose one identity-bound credential mount is read-only
+// reads the auth store without writing it, so it takes a read hold instead of
+// the exclusive mutation lease: read holds share with each other and exclude
+// the lease in both directions. Ward type-asserts the configured
+// AuthStoreLeaser to this interface and fails closed when it is missing, so
+// leasers that only serve writable mounts need not implement it. The
+// signatures mirror the store's read-hold methods one-for-one.
+type AuthStoreReadHolder interface {
+	// AcquireRead opens holder's shared read window, from now until
+	// expiresAt. A live mutation lease refuses, and so does a live window
+	// the same holder already holds: a read hold never converges.
+	AcquireRead(ctx context.Context, id domain.AuthIdentityID, holder domain.InvocationID,
+		now, expiresAt time.Time) (domain.AuthStoreReadHold, error)
+	// GetRead reconstructs holder's current read hold row; liveness is the
+	// caller's HeldAt question.
+	GetRead(ctx context.Context, id domain.AuthIdentityID, holder domain.InvocationID) (domain.AuthStoreReadHold, error)
+	// ReleaseRead ends the window holder opened at acquiredAt. A window that
+	// is already over (missing, replaced, expired) maps to
+	// ErrLeaseWindowEnded, as the lease release does.
+	ReleaseRead(ctx context.Context, id domain.AuthIdentityID, holder domain.InvocationID,
+		acquiredAt, releasedAt time.Time) error
+}
+
 // AuthStoreLeaseMutationGuard is the stronger store-backed boundary used for
 // host filesystem mutations. The implementation holds the store's write
 // transaction from exact holder/fence authentication through mutation, so an

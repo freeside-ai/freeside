@@ -1156,6 +1156,59 @@ func (a *Leaser) Release(
 	return err
 }
 
+// AcquireRead opens holder's shared read window on the identity's store.
+func (a *Leaser) AcquireRead(
+	ctx context.Context,
+	id domain.AuthIdentityID,
+	holder domain.InvocationID,
+	now, expiresAt time.Time,
+) (domain.AuthStoreReadHold, error) {
+	var hold domain.AuthStoreReadHold
+	err := a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		var err error
+		hold, err = tx.AcquireAuthStoreReadHold(ctx, id, holder, now, expiresAt)
+		return err
+	})
+	if err != nil {
+		return domain.AuthStoreReadHold{}, err
+	}
+	return hold, nil
+}
+
+// GetRead reconstructs holder's current read hold row.
+func (a *Leaser) GetRead(
+	ctx context.Context, id domain.AuthIdentityID, holder domain.InvocationID,
+) (domain.AuthStoreReadHold, error) {
+	var hold domain.AuthStoreReadHold
+	err := a.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		hold, err = tx.GetAuthStoreReadHold(ctx, id, holder)
+		return err
+	})
+	if err != nil {
+		return domain.AuthStoreReadHold{}, err
+	}
+	return hold, nil
+}
+
+// ReleaseRead ends the exact read window holder opened at acquiredAt. Store
+// refusals that mean the window already ended map to ward's convergence
+// sentinel, as Release does.
+func (a *Leaser) ReleaseRead(
+	ctx context.Context,
+	id domain.AuthIdentityID,
+	holder domain.InvocationID,
+	acquiredAt, releasedAt time.Time,
+) error {
+	err := a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.ReleaseAuthStoreReadHold(ctx, id, holder, acquiredAt, releasedAt)
+	})
+	if errors.Is(err, store.ErrReadHoldNotHeld) || errors.Is(err, store.ErrLeaseWindowRegresses) {
+		return fmt.Errorf("%w: %w", ward.ErrLeaseWindowEnded, err)
+	}
+	return err
+}
+
 // Begin opens an unleased journal record.
 func (a *Journal) Begin(ctx context.Context, rec ward.HandoffJournalRecord) error {
 	if err := rec.Validate(); err != nil {
@@ -1189,6 +1242,31 @@ func (a *Journal) BeginLeased(
 		return domain.AuthStoreMutationLease{}, err
 	}
 	return lease, nil
+}
+
+// BeginReadHeld atomically takes a shared read hold and opens the journal
+// record carrying its exact reference.
+func (a *Journal) BeginReadHeld(
+	ctx context.Context,
+	rec ward.HandoffJournalRecord,
+	claim ward.AuthStoreLeaseClaim,
+	now, expiresAt time.Time,
+) (domain.AuthStoreReadHold, error) {
+	if err := rec.Validate(); err != nil {
+		return domain.AuthStoreReadHold{}, err
+	}
+	var hold domain.AuthStoreReadHold
+	err := a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		var err error
+		hold, err = tx.BeginReadHeldHandoffJournal(
+			ctx, toStoreRecord(rec), claim.AuthIdentityID, claim.Holder, now, expiresAt,
+		)
+		return err
+	})
+	if err != nil {
+		return domain.AuthStoreReadHold{}, err
+	}
+	return hold, nil
 }
 
 // Get reconstructs one journal record and re-runs both store and ward gates.
@@ -1343,6 +1421,14 @@ func toStoreRecord(rec ward.HandoffJournalRecord) store.HandoffJournalRecord {
 			ExpiresAt:      rec.Lease.ExpiresAt.UTC(),
 		}
 	}
+	if rec.ReadHold != nil {
+		converted.ReadHold = &store.HandoffJournalReadHold{
+			AuthIdentityID: rec.ReadHold.AuthIdentityID,
+			Holder:         rec.ReadHold.Holder,
+			AcquiredAt:     rec.ReadHold.AcquiredAt.UTC(),
+			ExpiresAt:      rec.ReadHold.ExpiresAt.UTC(),
+		}
+	}
 	if rec.State != nil {
 		converted.State = &store.HandoffJournalState{
 			ConfigRootFingerprint:     rec.State.ConfigRootFingerprint,
@@ -1400,6 +1486,14 @@ func fromStoreRecord(rec store.HandoffJournalRecord) ward.HandoffJournalRecord {
 			ExpiresAt:      rec.Lease.ExpiresAt,
 		}
 	}
+	if rec.ReadHold != nil {
+		converted.ReadHold = &ward.HandoffJournalReadHold{
+			AuthIdentityID: rec.ReadHold.AuthIdentityID,
+			Holder:         rec.ReadHold.Holder,
+			AcquiredAt:     rec.ReadHold.AcquiredAt,
+			ExpiresAt:      rec.ReadHold.ExpiresAt,
+		}
+	}
 	if rec.State != nil {
 		converted.State = &ward.HandoffJournalState{
 			ConfigRootFingerprint:     rec.State.ConfigRootFingerprint,
@@ -1434,8 +1528,10 @@ func fromStoreRecord(rec store.HandoffJournalRecord) ward.HandoffJournalRecord {
 }
 
 var (
-	_ ward.AuthStoreLeaser     = (*Leaser)(nil)
-	_ ward.CodexAuthState      = (*AuthState)(nil)
-	_ ward.HandoffJournal      = (*Journal)(nil)
-	_ ward.LeasedHandoffOpener = (*Journal)(nil)
+	_ ward.AuthStoreLeaser       = (*Leaser)(nil)
+	_ ward.AuthStoreReadHolder   = (*Leaser)(nil)
+	_ ward.CodexAuthState        = (*AuthState)(nil)
+	_ ward.HandoffJournal        = (*Journal)(nil)
+	_ ward.LeasedHandoffOpener   = (*Journal)(nil)
+	_ ward.ReadHeldHandoffOpener = (*Journal)(nil)
 )

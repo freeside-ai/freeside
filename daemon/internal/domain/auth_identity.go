@@ -250,6 +250,67 @@ func (l AuthStoreMutationLease) HeldAt(now time.Time) bool {
 	return !now.Before(l.AcquiredAt) && now.Before(l.ExpiresAt)
 }
 
+// AuthStoreReadHold is the durable record of one execution reading an
+// identity's auth store through a read-only mount. Read holds share: any
+// number may be live for one identity at once, one per holder. They exclude
+// the identity's AuthStoreMutationLease in both directions, so no store
+// mutation runs while an execution reads the store, and no execution starts
+// reading while a mutation holds the lease.
+//
+// A read hold carries no fence and no generation binding. Both exist so a
+// stale mutator cannot write over a newer owner's store; a reader writes
+// nothing, and the lease exclusion alone keeps the bytes it reads fixed for
+// the window. Liveness is never read from the record, as with the lease:
+// HeldAt takes the caller's instant.
+type AuthStoreReadHold struct {
+	AuthIdentityID AuthIdentityID `json:"auth_identity_id"`
+	// Holder identifies the execution reading the store. It keys the hold
+	// together with the identity, so it must be unique per run: two runs
+	// sharing a holder would share one hold, and the first release would end
+	// the second run's window.
+	Holder     InvocationID `json:"holder"`
+	AcquiredAt time.Time    `json:"acquired_at"`
+	ExpiresAt  time.Time    `json:"expires_at"`
+	ReleasedAt *time.Time   `json:"released_at"`
+}
+
+// Validate reports whether the read hold record is well-formed, with the
+// same window rules as the mutation lease.
+func (h AuthStoreReadHold) Validate() error {
+	if h.AuthIdentityID == "" {
+		return fmt.Errorf("auth store read hold identity: %w", ErrEmptyID)
+	}
+	if h.Holder == "" {
+		return fmt.Errorf("auth store read hold %s holder: %w", h.AuthIdentityID, ErrEmptyID)
+	}
+	if h.AcquiredAt.IsZero() {
+		return fmt.Errorf("auth store read hold %s acquired_at: %w", h.AuthIdentityID, ErrMissingTimestamp)
+	}
+	if h.ExpiresAt.IsZero() {
+		return fmt.Errorf("auth store read hold %s expires_at: %w", h.AuthIdentityID, ErrMissingTimestamp)
+	}
+	if !h.ExpiresAt.After(h.AcquiredAt) {
+		return fmt.Errorf("auth store read hold %s expires_at %s, acquired_at %s: %w",
+			h.AuthIdentityID, h.ExpiresAt, h.AcquiredAt, ErrTimestampOutOfOrder)
+	}
+	// A release outside its window is incoherent, and a future one would
+	// hold off every mutation of the identity until it passed.
+	if h.ReleasedAt != nil && (h.ReleasedAt.Before(h.AcquiredAt) || h.ReleasedAt.After(h.ExpiresAt)) {
+		return fmt.Errorf("auth store read hold %s released_at %s, window %s..%s: %w",
+			h.AuthIdentityID, h.ReleasedAt, h.AcquiredAt, h.ExpiresAt, ErrTimestampOutOfOrder)
+	}
+	return nil
+}
+
+// HeldAt reports whether the read hold is live at the caller's instant: not
+// released, and inside [AcquiredAt, ExpiresAt).
+func (h AuthStoreReadHold) HeldAt(now time.Time) bool {
+	if h.ReleasedAt != nil {
+		return false
+	}
+	return !now.Before(h.AcquiredAt) && now.Before(h.ExpiresAt)
+}
+
 // ValidateAuthIdentityTransition reports whether updated is a legal successor
 // to the stored identity old. The identity's key, provider, lease
 // declaration, and interim client facts are fixed: changing any mutation rule

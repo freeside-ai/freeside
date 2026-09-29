@@ -188,6 +188,82 @@ func TestAuthStoreMutationLeaseHeldAt(t *testing.T) {
 	}
 }
 
+func readHold() domain.AuthStoreReadHold {
+	acquired := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	return domain.AuthStoreReadHold{
+		AuthIdentityID: "auth-1", Holder: "inv-1",
+		AcquiredAt: acquired, ExpiresAt: acquired.Add(time.Minute),
+	}
+}
+
+func TestAuthStoreReadHoldValidate(t *testing.T) {
+	acquired := readHold().AcquiredAt
+	earlier := acquired.Add(-time.Second)
+	cases := []struct {
+		name    string
+		mutate  func(*domain.AuthStoreReadHold)
+		wantErr error
+	}{
+		{"valid", func(*domain.AuthStoreReadHold) {}, nil},
+		{"released", func(h *domain.AuthStoreReadHold) {
+			released := acquired.Add(time.Second)
+			h.ReleasedAt = &released
+		}, nil},
+		{"no identity", func(h *domain.AuthStoreReadHold) { h.AuthIdentityID = "" }, domain.ErrEmptyID},
+		{"no holder", func(h *domain.AuthStoreReadHold) { h.Holder = "" }, domain.ErrEmptyID},
+		{"no acquired_at", func(h *domain.AuthStoreReadHold) { h.AcquiredAt = time.Time{} }, domain.ErrMissingTimestamp},
+		{"no expires_at", func(h *domain.AuthStoreReadHold) { h.ExpiresAt = time.Time{} }, domain.ErrMissingTimestamp},
+		{"expires at acquisition", func(h *domain.AuthStoreReadHold) {
+			h.ExpiresAt = h.AcquiredAt
+		}, domain.ErrTimestampOutOfOrder},
+		{"released before acquisition", func(h *domain.AuthStoreReadHold) {
+			h.ReleasedAt = &earlier
+		}, domain.ErrTimestampOutOfOrder},
+		{"released after expiry", func(h *domain.AuthStoreReadHold) {
+			after := h.ExpiresAt.Add(24 * time.Hour)
+			h.ReleasedAt = &after
+		}, domain.ErrTimestampOutOfOrder},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := readHold()
+			tc.mutate(&h)
+			if err := h.Validate(); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Validate() = %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestAuthStoreReadHoldHeldAt(t *testing.T) {
+	h := readHold()
+	released := h.AcquiredAt.Add(time.Second)
+	cases := []struct {
+		name string
+		now  time.Time
+		h    domain.AuthStoreReadHold
+		want bool
+	}{
+		{"inside the window", h.AcquiredAt.Add(30 * time.Second), h, true},
+		{"at acquisition", h.AcquiredAt, h, true},
+		{"before acquisition", h.AcquiredAt.Add(-time.Second), h, false},
+		{"at expiry", h.ExpiresAt, h, false},
+		{
+			"released early",
+			h.AcquiredAt.Add(30 * time.Second),
+			func() domain.AuthStoreReadHold { r := h; r.ReleasedAt = &released; return r }(),
+			false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.h.HeldAt(tc.now); got != tc.want {
+				t.Fatalf("HeldAt(%s) = %v, want %v", tc.now, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestAuthIdentitySetOnceBindings(t *testing.T) {
 	bound := authIdentity()
 	bound.AccountBinding = "acct-1"

@@ -861,6 +861,10 @@ func TestRecoverLeasedObserverFailureRetryable(t *testing.T) {
 	if res.Outcome != RecoveryExported || !res.AuthStore.Leased {
 		t.Fatalf("retried result = %+v, want a leased export", res)
 	}
+	if !res.AuthStore.AcquiredAt.Equal(rec.Lease.AcquiredAt) || !res.AuthStore.ExpiresAt.Equal(rec.Lease.ExpiresAt) {
+		t.Errorf("recovered window = [%v, %v], want the recorded [%v, %v]",
+			res.AuthStore.AcquiredAt, res.AuthStore.ExpiresAt, rec.Lease.AcquiredAt, rec.Lease.ExpiresAt)
+	}
 	fx.wantClosed(t, hs.RunID, HandoffCompleted)
 }
 

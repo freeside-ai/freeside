@@ -546,15 +546,18 @@ func (s WorkspaceSeed) validate() error {
 	return nil
 }
 
-// AuthStoreLeaseClaim names the identity whose auth-store mutation window
-// this handoff runs inside, and the holder the gate acquires the lease as.
-// The claim is a request, not evidence: the gate acquires and verifies the
-// per-identity domain.AuthStoreMutationLease itself before the writer can
-// start, so a caller cannot satisfy §5.4's serialization by asserting it.
+// AuthStoreLeaseClaim names the identity whose auth-store window this
+// handoff runs inside, and the holder the gate acquires the window as. The
+// mount decides the window's kind: a writable mount takes the exclusive
+// domain.AuthStoreMutationLease, and a read-only mount takes a shared
+// domain.AuthStoreReadHold (#1585), which excludes the lease but not other
+// readers. The claim is a request, not evidence: the gate acquires and
+// verifies the window itself before the writer can start, so a caller cannot
+// satisfy §5.4's serialization by asserting it.
 type AuthStoreLeaseClaim struct {
-	// AuthIdentityID is the identity whose auth store the writable mount
+	// AuthIdentityID is the identity whose auth store the claimed mount
 	// carries. The identity must declare auth_store_mutation_lease; the
-	// store refuses acquisition for one that does not.
+	// store refuses either window for one that does not.
 	AuthIdentityID domain.AuthIdentityID
 	// Holder is the lease holder recorded for this run, so an abandoned
 	// window can be traced back to what abandoned it (§5.4 does not bind it
@@ -576,9 +579,10 @@ type HandoffSpec struct {
 	Seed WorkspaceSeed
 	// Agent is the writer container.
 	Agent AgentSpec
-	// AuthStoreLease is required exactly when one credential mount is
-	// Writable: the mutation window the writable mount rides in. Nil means
-	// every credential mount is read-only.
+	// AuthStoreLease is required when one credential mount is Writable: the
+	// exclusive mutation window the writable mount rides in. It may instead
+	// cover exactly one read-only identity mount, which then rides a shared
+	// read hold. Nil means no mount is held under an identity window.
 	AuthStoreLease *AuthStoreLeaseClaim
 }
 
@@ -654,9 +658,11 @@ func (s HandoffSpec) validate() error {
 		)
 	}
 	// A writable credential mount still requires a lease. A lease claim is
-	// also valid for exactly one read-only identity token mount: #383 keeps
-	// the identity unavailable for the whole invocation while forbidding the
-	// CLI from persisting state beside the token.
+	// also valid for exactly one read-only identity token mount, which the
+	// gate holds under a shared read hold (#1585): the store cannot be
+	// mutated for the whole invocation, other read-only invocations of the
+	// identity may run beside it, and the CLI is forbidden from persisting
+	// state beside the token (#383).
 	writable := 0
 	for _, cm := range s.Agent.CredentialMounts {
 		if !cm.Manifest.valid() {

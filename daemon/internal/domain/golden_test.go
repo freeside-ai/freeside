@@ -805,6 +805,10 @@ func TestGolden(t *testing.T) {
 		AuthIdentityID: identity.ID, Holder: "inv-1", Fence: 1,
 		AcquiredAt: ts, ExpiresAt: ts.Add(5 * time.Minute),
 	}
+	readHold := domain.AuthStoreReadHold{
+		AuthIdentityID: identity.ID, Holder: "inv-2",
+		AcquiredAt: ts, ExpiresAt: ts.Add(5 * time.Minute),
+	}
 
 	// One enrolled harness client on that identity, with the newest entry of
 	// its append-only store history. The Claude setup token observes no
@@ -1550,6 +1554,7 @@ func TestGolden(t *testing.T) {
 		{"auth_identity", identity},
 		{"auth_store_mutation_lease", mutationLease},
 		{"auth_store_mutation_lease_bound", boundLease},
+		{"auth_store_read_hold", readHold},
 		{"client_enrollment", enrollment},
 		{"enrollment_generation", enrollmentGeneration},
 		{"route_fragment", goldenRoute},
