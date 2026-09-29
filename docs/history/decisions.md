@@ -2208,3 +2208,44 @@ decisions of 2026-09-23 made in this revision's review;
 
 (Owner decisions of 2026-09-28, owner-assigned #1587;
 [decision note](../../devlog/2026-09-28-1800-capacity-scheduling.md).)
+
+## Revision 73 ("Choose the Agent per Task")
+
+1. **A task may name the agent for each ward role.** A task line picks the
+   agent for the specifier, implementer, remediator, or reviewer of one task,
+   from agents the current tree carries (Section [5.4](../plan.md#54-credential-modes-egress-profiles-and-concurrency), Admitted Agents). The
+   operator sets it at submission or while no attempt of that role runs, and
+   each admission reads the current line. The alternate-agent card still
+   overrides one attempt. Rejected: choosing only per project (a lineup edit
+   to run one task elsewhere changes every other task too); automatic
+   routing by remaining capacity (Freeside can't observe provider quota, and
+   the Section [8](../plan.md#8-observability-and-optimization-telemetry) routing policy isn't built; until it is, balancing
+   providers stays the operator's choice); and a task-level prompt choice
+   (a prompt is control-plane text approved through the tree, and a task line
+   is operator input, not an approval).
+2. **Only the operator sets a task line, and it never falls back.** An
+   issue, a label, or repository content never sets one, because choosing an
+   agent chooses which credential runs. A line that no longer resolves fails
+   admission and raises the ordinary card instead of running the lineup's
+   agent, so a selection is never silent. Rejected: falling back to the
+   lineup line (the task would run on an agent and subscription the operator
+   didn't pick).
+3. **The shadow reviewer and the wardless roles stay on the lineup.** Their
+   comparisons key on the lineup line, and a per-task agent would split them.
+   Review independence stays a recorded fact (Section [7](../plan.md#7-review-policy), revision 65): a
+   task that names one vendor for writing and reviewing shows a same-lineage
+   review. Rejected: requiring a different reviewer vendor when the writer is
+   chosen per task (revision 65 already declined that gate, so the operator
+   can keep working when one provider is out of usage).
+4. **Implementation units are filed after merge, with no wave assigned.**
+   Task lines on `submit_task`, `freesided submit`, the `task_proposal`
+   start actions, and the admission
+   snapshot's selection source (`kind:contract`, `starts-after` #1421,
+   because task lines key roles by the lineup's role names). The operator
+   command that changes a line and the clients' agent picker follow it, the
+   picker `starts-after` #979, which shows agent facts in the clients.
+   Choosing Codex needs #408; choosing between two Claude subscriptions does
+   not.
+
+(Owner decisions of 2026-09-28, owner-assigned #1587;
+[decision note](../../devlog/2026-09-28-1830-per-task-agent-choice.md).)
