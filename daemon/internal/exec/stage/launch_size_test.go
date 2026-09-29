@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -91,5 +93,28 @@ func TestHandoffSpecIgnoresAProviderChosenSize(t *testing.T) {
 	}
 	if hs.Class != ward.LaunchWriter || hs.Size != ward.DefaultLaunchSize(ward.LaunchWriter) {
 		t.Fatalf("handoff = %s at %s, want the policy's writer size", hs.Class, hs.Size)
+	}
+}
+
+func TestWriterMemoryLimitKillNamesTheFailedResult(t *testing.T) {
+	size := ward.DefaultLaunchSize(ward.LaunchWriter)
+	gate := &stubGate{
+		handoffFn: func(ward.HandoffSpec) (*ward.HandoffResult, error) {
+			return nil, &ward.MemoryLimitError{Class: ward.LaunchWriter, Size: size, Cause: ward.ErrWriterFailed}
+		},
+		recoverFn: func(string, ward.HandoffSpec) (*ward.RecoveryResult, error) {
+			return &ward.RecoveryResult{Outcome: ward.RecoveryFailed, FailureStatus: 137}, nil
+		},
+	}
+	d := newTestDriver(t, gate, newStubExports())
+	d.seeder = &recordingSeeder{}
+	d.runPipeline(context.Background(), orphan(t, d, phaseSeeding, nil))
+	got, err := d.Collect(context.Background(), testInvoke)
+	if err != nil || got.Status != exec.StatusFailed {
+		t.Fatalf("result = %+v, %v; want failed", got, err)
+	}
+	if !strings.Contains(got.Summary, "memory limit") || !strings.Contains(got.Summary, size.String()) ||
+		!strings.Contains(got.Summary, "status 137") {
+		t.Fatalf("summary %q does not name the memory limit, size, and status", got.Summary)
 	}
 }

@@ -354,6 +354,13 @@ func (c *CLIRuntime) Inspect(ctx context.Context, id string) (InspectReport, err
 	return decodeInspect(out, id)
 }
 
+// BootLog returns the container's boot log, which carries the guest kernel's
+// messages. Stderr is withheld like every read: the error can reach a
+// conformance reason.
+func (c *CLIRuntime) BootLog(ctx context.Context, id string) ([]byte, error) {
+	return c.run(ctx, "logs", "--boot", id)
+}
+
 func (c *CLIRuntime) DeleteContainer(ctx context.Context, id string) error {
 	return c.runDiscard(ctx, true, "delete", id)
 }

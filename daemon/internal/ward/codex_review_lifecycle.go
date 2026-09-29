@@ -1779,6 +1779,9 @@ func (b *CodexReviewLifecycle) initializeCodexReviewShadow(
 			CheckControlPlaneIsolation, "wait for Codex review shadow initializer: %v", err,
 		)
 	}
+	if err := b.helperStopped(ctx, LaunchReview, DefaultLaunchSize(LaunchReview), spec.Name); err != nil {
+		return err
+	}
 	if err := b.rt.DeleteContainer(ctx, spec.Name); err != nil {
 		return codexReviewOperationalCheckf(
 			CheckControlPlaneIsolation, "delete Codex review shadow initializer: %v", err,
@@ -1962,6 +1965,9 @@ func (b *CodexReviewLifecycle) seedCodexReviewSnapshot(
 	if err := b.waitStopped(ctx, spec.Name, claim, owner, b.cfg.SeedTimeout); err != nil {
 		return codexReviewOperationalCheckf(CheckCredentialSeparation, "wait for Codex review snapshot seeder: %v", err)
 	}
+	if err := b.helperStopped(ctx, LaunchReview, DefaultLaunchSize(LaunchReview), spec.Name); err != nil {
+		return err
+	}
 	if err := b.rt.DeleteContainer(ctx, spec.Name); err != nil {
 		return codexReviewOperationalCheckf(CheckCredentialSeparation, "delete Codex review snapshot seeder: %v", err)
 	}
@@ -2125,6 +2131,9 @@ func (b *CodexReviewLifecycle) runCodexReviewObserver(
 	}
 	if err := b.waitStopped(ctx, spec.Name, claim, owner, b.cfg.SeedTimeout); err != nil {
 		return InspectReport{}, nil, codexReviewOperationalCheckf(check, "wait for observer: %v", err)
+	}
+	if err := b.helperStopped(ctx, LaunchReview, DefaultLaunchSize(LaunchReview), spec.Name); err != nil {
+		return InspectReport{}, nil, err
 	}
 	report, err := b.rt.Inspect(ctx, spec.Name)
 	if err != nil {

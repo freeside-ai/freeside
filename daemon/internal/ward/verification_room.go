@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,14 +47,16 @@ type ProjectImageRoom struct {
 	maxOutput     int64
 	ownership     *VerificationOwnership
 	ownerBinding  verificationOwner
-	// size is every room container's declared CPU cap and memory limit.
-	size ContainerSize
+	// size is every room container's declared CPU cap and memory limit;
+	// logger receives one launch record per container (nil discards).
+	size   ContainerSize
+	logger *slog.Logger
 }
 
 // NewProjectImageRoom constructs the production verification room. size is the
 // run's resolved verification size; every room container declares it.
 func NewProjectImageRoom(
-	containerPath string, image domain.ProjectImage, size ContainerSize,
+	containerPath string, image domain.ProjectImage, size ContainerSize, logger *slog.Logger,
 ) (*ProjectImageRoom, error) {
 	if err := image.Validate(); err != nil {
 		return nil, fmt.Errorf("project-image verification room: %w", err)
@@ -68,10 +71,12 @@ func NewProjectImageRoom(
 	if err != nil {
 		return nil, fmt.Errorf("resolve container executable %q: %w", containerPath, err)
 	}
-	return newProjectImageRoom(
+	room := newProjectImageRoom(
 		resolved, image, NewCLIRuntime(resolved), runVerificationCommand, runRecipeReadCommand,
 		verify.DefaultMaxRoomOutputBytes, size,
-	), nil
+	)
+	room.logger = logger
+	return room, nil
 }
 
 func newProjectImageRoom(
@@ -198,6 +203,26 @@ func (r *ProjectImageRoom) runImageCommand(
 		err = finish(!errors.Is(runErr, errVerificationProcessUnproven))
 	}
 	id, identityErr := readVerificationContainerID(cidPath)
+	// The boot log goes with the container, so read it before cleanup, for
+	// every container the runtime identified, a runner error included. A
+	// failure at the memory limit is the room failing, not the recipe: it
+	// returns an error instead of a failed step. A bound room's finish has
+	// already canceled ctx, so the read runs detached and bounded, like
+	// cleanup.
+	if id != "" && identityErr == nil {
+		readCtx, cancelRead := context.WithTimeout(context.WithoutCancel(ctx), bootLogReadTimeout)
+		observed := runtimeOps{rt: r.runtime}.memoryLimitKilled(readCtx, id)
+		cancelRead()
+		failure := runErr
+		if failure == nil && result.ExitCode != 0 {
+			failure = fmt.Errorf("verification container exited %d", result.ExitCode)
+		}
+		failure = observed.nameFailure(LaunchVerification, r.size, failure)
+		recordLaunch(r.logger, string(r.ownerBinding.RunID), LaunchVerification, r.size, failure, observed)
+		if errors.Is(failure, ErrMemoryLimit) {
+			result, runErr = verify.StepResult{}, failure
+		}
+	}
 	cleanupCtx, cancelCleanup := context.WithTimeout(
 		context.WithoutCancel(ctx), verificationCleanupTimeout,
 	)

@@ -286,7 +286,15 @@ func (s *CodexReviewSource) RequestReview(
 
 func (s *CodexReviewSource) startRequestedReview(
 	ctx context.Context, id domain.InvocationID, req exec.ReviewRequest,
-) error {
+) (err error) {
+	// Collection records every review launch that ran; this records an
+	// attempt that failed first, a helper killed at its limit among them.
+	defer func() {
+		if err != nil {
+			recordLaunch(s.cfg.Lifecycle.cfg.Logger, string(id), LaunchReview, DefaultLaunchSize(LaunchReview), err,
+				launchObservation{memoryLimitKill: errors.Is(err, ErrMemoryLimit)})
+		}
+	}()
 	if s.beginTaskWork != nil {
 		workCtx, finish, err := s.beginTaskWork(ctx, req.RunID)
 		if err != nil {
@@ -787,17 +795,32 @@ func (s *CodexReviewSource) Inspect(
 	}
 	collection, err := s.cfg.Lifecycle.CollectCodexReview(ctx, s.cfg.Review, string(id))
 	if err != nil {
-		if !errors.Is(err, ErrCodexReviewOutputInvalid) {
+		if !errors.Is(err, ErrMemoryLimit) && !errors.Is(err, ErrCodexReviewOutputInvalid) {
 			return "", &exec.ReviewSourceFailure{Class: classifyCodexObservationFailure(err), Err: err}
 		}
-		outcome = CodexReviewSourceOutcome{
-			InvocationID: id, FailureClass: domain.ReviewFailureContradiction,
-			Failure: fmt.Sprintf("Codex review returned invalid raw output: %v", err),
-			Usage:   s.reviewUsageMeasurements(collection.Events),
+		class, failure := domain.ReviewFailureContradiction, fmt.Sprintf("Codex review returned invalid raw output: %v", err)
+		if errors.Is(err, ErrMemoryLimit) {
+			// Rerunning at the same size meets the same limit, so the kill is
+			// a configuration failure that needs attention, not a transient
+			// one. The retry at a larger size is #1598's. A quota or
+			// configuration failure the provider itself reported (a credential
+			// refresh attempt among them) still decides the class and leads
+			// the message, since a killed child need not be why the review
+			// failed.
+			class, failure = domain.ReviewFailureConfiguration,
+				fmt.Sprintf("review failed at its container memory limit: %v", err)
+			if reported, message := classifyReviewTerminalFailure(s.reviewProvider(), collection.Events); reported != domain.ReviewFailureTransient {
+				class, failure = reported, fmt.Sprintf("%s (the review container was also killed at its memory limit: %v)", message, err)
+			}
 		}
-		// An output-shape failure can follow authenticated collection of the
-		// status and bounded event bytes. Keep those available bytes; failures
-		// before that boundary return no collection and get no invented evidence.
+		outcome = CodexReviewSourceOutcome{
+			InvocationID: id, FailureClass: class, Failure: failure,
+			Usage: s.reviewUsageMeasurements(collection.Events),
+		}
+		// An output-shape or memory-limit failure can follow authenticated
+		// collection of the status and bounded event bytes. Keep those available
+		// bytes; failures before that boundary return no collection and get no
+		// invented evidence.
 		if collection.Events != nil {
 			retained := CodexReviewRetainedCollection(collection)
 			if retained.validate() == nil {
@@ -1507,6 +1530,11 @@ func (s *CodexReviewSource) finishRejectedRequestCleanup(
 // non-goal (no change to observation-path classification); the spec branch
 // stays launch-only.
 func classifyCodexLaunchFailure(err error) domain.ReviewFailureClass {
+	// A helper killed at its memory limit is classified as on the
+	// observation path; see classifyCodexObservationFailure.
+	if errors.Is(err, ErrMemoryLimit) && !errors.Is(err, ErrConformance) {
+		return domain.ReviewFailureConfiguration
+	}
 	if errors.Is(err, ErrCodexReviewOperational) {
 		return domain.ReviewFailureTransient
 	}
@@ -1531,6 +1559,12 @@ func classifyCodexInstructionMaterializationFailure(err error) domain.ReviewFail
 }
 
 func classifyCodexObservationFailure(err error) domain.ReviewFailureClass {
+	// A helper killed at its memory limit meets the same limit on a rerun, so
+	// it needs attention. A conformance failure joined to it still wins: the
+	// kill never softens a contradiction.
+	if errors.Is(err, ErrMemoryLimit) && !errors.Is(err, ErrConformance) {
+		return domain.ReviewFailureConfiguration
+	}
 	if errors.Is(err, ErrCodexReviewOperational) {
 		return domain.ReviewFailureTransient
 	}

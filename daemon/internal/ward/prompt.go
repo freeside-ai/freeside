@@ -96,6 +96,9 @@ func (b *Backend) preparePrompt(ctx context.Context, hs HandoffSpec, names hando
 	if err := b.waitStopped(ctx, seeder.Name, st.promptSeeder, st.ownershipLabel, b.cfg.SeedTimeout); err != nil {
 		return err
 	}
+	if err := b.helperStopped(ctx, hs.Class, hs.Size, seeder.Name); err != nil {
+		return err
+	}
 	if err := b.removePromptRole(ctx, seeder.Name, &st.promptSeeder, st); err != nil {
 		return err
 	}
@@ -104,6 +107,9 @@ func (b *Backend) preparePrompt(ctx context.Context, hs HandoffSpec, names hando
 		return err
 	}
 	if err := b.waitStopped(ctx, observer.Name, st.promptObserver, st.ownershipLabel, b.cfg.SeedTimeout); err != nil {
+		return err
+	}
+	if err := b.helperStopped(ctx, hs.Class, hs.Size, observer.Name); err != nil {
 		return err
 	}
 	// Reuse the bounded rootfs proof reader. The observer exports only its

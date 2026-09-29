@@ -3,6 +3,7 @@ package ward
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ type codexReviewLifecycleConfig struct {
 	SeedStageDir       string
 	SeedTimeout        time.Duration
 	TeardownTimeout    time.Duration
+	Logger             *slog.Logger
 }
 
 func newCodexReviewLifecycleConfig(cfg Config) codexReviewLifecycleConfig {
@@ -29,6 +31,7 @@ func newCodexReviewLifecycleConfig(cfg Config) codexReviewLifecycleConfig {
 		SeedStageDir:       cfg.SeedStageDir,
 		SeedTimeout:        cfg.SeedTimeout,
 		TeardownTimeout:    cfg.TeardownTimeout,
+		Logger:             cfg.Logger,
 	}
 }
 

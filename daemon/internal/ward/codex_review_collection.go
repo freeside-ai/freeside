@@ -55,6 +55,10 @@ func (b *CodexReviewLifecycle) InspectCodexReview(
 	return report.State, nil
 }
 
+// CollectCodexReview reads a stopped review's output. When the review failed
+// (a nonzero exit, or a missing or invalid status) and its boot log reports a
+// memory-limit kill, it returns the collection with a *MemoryLimitError, so
+// the failure is named rather than read as an ordinary review failure.
 func (b *CodexReviewLifecycle) CollectCodexReview(
 	ctx context.Context, cfg CodexReviewConfig, runID string,
 ) (CodexReviewCollection, error) {
@@ -65,6 +69,29 @@ func (b *CodexReviewLifecycle) CollectCodexReview(
 	if report.State != StateStopped {
 		return CodexReviewCollection{}, fmt.Errorf("codex review %q is not stopped", runID)
 	}
+	collection, err := b.readCodexReviewOutput(ctx, report, runID)
+	if err != nil && !errors.Is(err, ErrCodexReviewOutputInvalid) {
+		// An operational failure says nothing about how the review ended;
+		// the collection is retried rather than recorded.
+		return collection, err
+	}
+	failure := err
+	if err == nil && collection.ExitStatus != 0 {
+		failure = fmt.Errorf("review exited with status %d", collection.ExitStatus)
+	}
+	size := DefaultLaunchSize(LaunchReview)
+	observed := b.memoryLimitKilled(ctx, report.ID)
+	named := observed.nameFailure(LaunchReview, size, failure)
+	recordLaunch(b.cfg.Logger, runID, LaunchReview, size, named, observed)
+	if errors.Is(named, ErrMemoryLimit) {
+		return collection, named
+	}
+	return collection, err
+}
+
+func (b *CodexReviewLifecycle) readCodexReviewOutput(
+	ctx context.Context, report InspectReport, runID string,
+) (CodexReviewCollection, error) {
 	dir, err := os.MkdirTemp("", "freeside-codex-review-"+runID+"-")
 	if err != nil {
 		return CodexReviewCollection{}, fmt.Errorf("%w: create collection directory: %w",

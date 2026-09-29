@@ -44,6 +44,7 @@ func (stubRuntime) StopContainer(context.Context, string) error          { retur
 func (stubRuntime) Inspect(context.Context, string) (InspectReport, error) {
 	return InspectReport{}, nil
 }
+func (stubRuntime) BootLog(context.Context, string) ([]byte, error)            { return nil, nil }
 func (stubRuntime) DeleteContainer(context.Context, string) error              { return nil }
 func (stubRuntime) ListContainers(context.Context) ([]ContainerSummary, error) { return nil, nil }
 func (stubRuntime) ExportRootFS(context.Context, string, io.Writer, int64) error {
@@ -194,6 +195,13 @@ type fakeRuntime struct {
 	// behaviour: a copy into a mounted volume writes nothing and still reports
 	// success.
 	onCopyIntoContainer func(id, hostDir, targetDir string) error
+	// bootLogs is each container's scripted boot log; a container absent
+	// from it has an empty log. bootLogErr fails every boot-log read.
+	// bootLogReads records the reads apart from calls, so call-sequence
+	// assertions are not coupled to the failure-naming read.
+	bootLogs     map[string][]byte
+	bootLogErr   error
+	bootLogReads []string
 }
 
 // fakeCopy is one host-to-container copy the fake observed.
@@ -712,6 +720,22 @@ func (f *fakeRuntime) Inspect(ctx context.Context, id string) (InspectReport, er
 		return f.onInspect(id, rep)
 	}
 	return rep, nil
+}
+
+func (f *fakeRuntime) BootLog(ctx context.Context, id string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.bootLogReads = append(f.bootLogReads, id)
+	if err := f.checkCtx(ctx); err != nil {
+		return nil, err
+	}
+	if f.bootLogErr != nil {
+		return nil, f.bootLogErr
+	}
+	if _, ok := f.ctrs[id]; !ok {
+		return nil, fmt.Errorf("container %q not found", id)
+	}
+	return f.bootLogs[id], nil
 }
 
 func (f *fakeRuntime) DeleteContainer(ctx context.Context, id string) error {

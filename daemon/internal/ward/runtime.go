@@ -273,6 +273,10 @@ type Runtime interface {
 	StopContainer(ctx context.Context, id string) error
 	// Inspect returns the observed configuration and state of a container.
 	Inspect(ctx context.Context, id string) (InspectReport, error)
+	// BootLog returns a container's boot log, which carries the guest kernel's
+	// messages (a memory-limit kill among them). Ward reads it only to name a
+	// failure, never to grant anything.
+	BootLog(ctx context.Context, id string) ([]byte, error)
 	// DeleteContainer deletes a stopped container.
 	DeleteContainer(ctx context.Context, id string) error
 	// ListContainers returns every container the runtime knows, including

@@ -124,6 +124,12 @@ func (b *Backend) waitStopped(
 	return b.runtimeOps.waitStopped(ctx, id, claim, ownershipLabel, timeout)
 }
 
+func (b *Backend) helperStopped(
+	ctx context.Context, class LaunchClass, size ContainerSize, id string,
+) error {
+	return b.runtimeOps.helperStopped(ctx, class, size, id)
+}
+
 func (b *Backend) verifyContainerAbsent(
 	ctx context.Context, id string, claim objectClaim, ownershipLabel Label, c Check,
 ) error {

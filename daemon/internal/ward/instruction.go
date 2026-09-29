@@ -434,6 +434,9 @@ func (b *Backend) seedVendorInstructions(
 		return failf(CheckControlPlaneIsolation,
 			"vendor-instruction seeder: %v", err)
 	}
+	if err := b.helperStopped(ctx, hs.Class, hs.Size, names.InstructionSeeder); err != nil {
+		return err
+	}
 	if err := b.rt.DeleteContainer(ctx, names.InstructionSeeder); err != nil {
 		return failf(CheckControlPlaneIsolation,
 			"delete stopped vendor-instruction seeder: %v", err)
@@ -511,6 +514,9 @@ func (b *Backend) observeVendorInstructions(
 	); err != nil {
 		return failf(CheckControlPlaneIsolation,
 			"vendor-instruction observer: %v", err)
+	}
+	if err := b.helperStopped(ctx, hs.Class, hs.Size, names.InstructionObserver); err != nil {
+		return err
 	}
 	proof, err := b.readInstructionProof(ctx, hs.RunID, names.InstructionObserver, st)
 	if err != nil {

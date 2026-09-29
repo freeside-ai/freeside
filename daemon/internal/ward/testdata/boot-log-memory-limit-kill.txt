@@ -1,0 +1,161 @@
+[    0.077711] random: crng init done
+[    0.078648] brd: module loaded
+[    0.079167] loop: module loaded
+[    0.079281] virtio_blk virtio2: 1/0/0 default/read/poll queues
+[    0.079481] virtio_blk virtio2: [vda] 1048576 512-byte logical blocks (537 MB/512 MiB)
+[    0.079950] virtio_blk virtio3: 1/0/0 default/read/poll queues
+[    0.080144] virtio_blk virtio3: [vdb] 1073741824 512-byte logical blocks (550 GB/512 GiB)
+[    0.080400] tun: Universal TUN/TAP device driver, 1.6
+[    0.080997] VFIO - User Level meta-driver version: 0.3
+[    0.081172] rtc-pl031 20050000.pl031: registered as rtc0
+[    0.081228] rtc-pl031 20050000.pl031: setting system clock to 2026-09-29T18:16:54 UTC (1790705814)
+[    0.081446] xt_time: kernel timezone is -0000
+[    0.081507] IPVS: Registered protocols (TCP, UDP, SCTP, AH, ESP)
+[    0.081532] IPVS: Connection hash table configured (size=4096, memory=32Kbytes)
+[    0.081615] IPVS: ipvs loaded.
+[    0.081671] IPVS: [rr] scheduler registered.
+[    0.081709] IPVS: [wrr] scheduler registered.
+[    0.081750] IPVS: [lc] scheduler registered.
+[    0.081779] IPVS: [wlc] scheduler registered.
+[    0.081809] IPVS: [fo] scheduler registered.
+[    0.081824] IPVS: [ovf] scheduler registered.
+[    0.081857] IPVS: [lblc] scheduler registered.
+[    0.081889] IPVS: [lblcr] scheduler registered.
+[    0.081920] IPVS: [dh] scheduler registered.
+[    0.081934] IPVS: [sh] scheduler registered.
+[    0.081966] IPVS: [sed] scheduler registered.
+[    0.082000] IPVS: [nq] scheduler registered.
+[    0.082033] IPVS: [sip] pe registered.
+[    0.082076] Initializing XFRM netlink socket
+[    0.082150] NET: Registered PF_INET6 protocol family
+[    0.082464] Segment Routing with IPv6
+[    0.082501] In-situ OAM (IOAM) with IPv6
+[    0.082585] NET: Registered PF_PACKET protocol family
+[    0.082649] Bridge firewalling registered
+[    0.082681] 9pnet: Installing 9P2000 support
+[    0.082808] NET: Registered PF_VSOCK protocol family
+[    0.083788] registered taskstats version 1
+[    0.084869] Demotion targets for Node 0: null
+[    0.085477] alg: No test for fips(ansi_cprng) (fips_ansi_cprng)
+[    0.086428] clk: Disabling unused clocks
+[    0.086513] check access for rdinit=/init failed: -2, ignoring
+[    0.087637] EXT4-fs (vda): mounted filesystem a1dc7b88-f85a-4ee4-9702-463f4e9c0fd8 ro without journal. Quota mode: disabled.
+[    0.087753] VFS: Mounted root (ext4 filesystem) readonly on device 254:0.
+[    0.088045] devtmpfs: mounted
+[    0.088215] Freeing unused kernel memory: 1920K
+[    0.088333] Run /sbin/vminitd as init process
+2026-09-29T18:16:54.536Z info vminitd: built: 2026-06-26T21:58:16Z, commit: 44bec8b9933bc491d0cbf44abac90a1f6aaebf6b, tag: 0.35.0 vminitd booting
+2026-09-29T18:16:54.537Z info vminitd: mounting /run
+2026-09-29T18:16:54.537Z info vminitd: mounting /sys
+2026-09-29T18:16:54.537Z info vminitd: mounting /sys/fs/cgroup
+2026-09-29T18:16:54.555Z info vminitd: mountpoint: /sys/fs/cgroup, path: /sys/fs/cgroup/vminitd creating cgroup manager
+2026-09-29T18:16:54.556Z info vminitd: events_path: /sys/fs/cgroup/vminitd/memory.events, threshold_bytes: 83886080 Started memory monitoring
+2026-09-29T18:16:54.557Z info vminitd: serving vminitd API
+2026-09-29T18:16:54.557Z info vminitd: port: 1024 booting gRPC server on vsock
+2026-09-29T18:16:54.560Z info vminitd: port: 1024 gRPC API serving on vsock
+[    0.264211] EXT4-fs (vdb): mounted filesystem a5f179d0-2620-4288-8783-810b505c10bc r/w without journal. Quota mode: disabled.
+2026-09-29T18:16:54.811Z info vminitd: mountpoint: /sys/fs/cgroup, path: /sys/fs/cgroup/container/memory-limit-fixture creating cgroup manager
+2026-09-29T18:16:54.811Z info vminitd: id: memory-limit-fixture starting I/O
+2026-09-29T18:16:54.811Z info vminitd: id: memory-limit-fixture setting up relay for StandardIO stdout
+2026-09-29T18:16:54.812Z info vminitd: id: memory-limit-fixture setting up relay for StandardIO stderr
+2026-09-29T18:16:54.812Z info vminitd: created vmexec init process
+2026-09-29T18:16:54.812Z info vminitd: id: memory-limit-fixture starting managed process
+2026-09-29T18:16:54.820Z warning vminitd: current_bytes: 83836928, high_events_total: 2, threshold_bytes: 83886080 vminitd memory threshold exceeded
+2026-09-29T18:16:54.835Z warning vminitd: current_bytes: 84336640, high_events_total: 37, threshold_bytes: 83886080 vminitd memory threshold exceeded
+2026-09-29T18:16:54.852Z warning vminitd: current_bytes: 83877888, high_events_total: 52, threshold_bytes: 83886080 vminitd memory threshold exceeded
+2026-09-29T18:16:54.852Z info vminitd: id: memory-limit-fixture, pid: 97 got back pid data
+2026-09-29T18:16:54.852Z info vminitd: id: memory-limit-fixture, pid: 97 sending pid acknowledgement
+2026-09-29T18:16:54.858Z info vminitd: id: memory-limit-fixture, pid: 97 started managed process
+2026-09-29T18:16:54.867Z warning vminitd: current_bytes: 82788352, high_events_total: 53, threshold_bytes: 83886080 vminitd memory threshold exceeded
+[    0.584582] tail invoked oom-killer: gfp_mask=0x100cca(GFP_HIGHUSER_MOVABLE), order=0, oom_score_adj=0
+[    0.584709] CPU: 1 UID: 0 PID: 97 Comm: tail Not tainted 6.18.15 #1 NONE 
+[    0.584712] Call trace:
+[    0.584713]  show_stack+0x14/0x1c (C)
+[    0.584725]  dump_stack_lvl+0x80/0xe8
+[    0.584737]  dump_stack+0x14/0x1c
+[    0.584738]  dump_header+0x3c/0x198
+[    0.584744]  oom_kill_process+0x154/0x2d4
+[    0.584746]  out_of_memory+0xe0/0x55c
+[    0.584747]  mem_cgroup_out_of_memory+0xc8/0xd4
+[    0.584751]  try_charge_memcg+0x45c/0x5ac
+[    0.584752]  charge_memcg+0x44/0xac
+[    0.584754]  __mem_cgroup_charge+0x30/0xbc
+[    0.584755]  filemap_add_folio+0x64/0x1e8
+[    0.584757]  __filemap_get_folio+0x1b4/0x330
+[    0.584758]  filemap_fault+0x5b4/0x984
+[    0.584759]  __do_fault+0x38/0x12c
+[    0.584761]  __handle_mm_fault+0x558/0xd2c
+[    0.584763]  handle_mm_fault+0xe0/0x22c
+[    0.584765]  do_page_fault+0xf0/0x4dc
+[    0.584765]  do_translation_fault+0x30/0x38
+[    0.584766]  do_mem_abort+0x40/0x8c
+[    0.584767]  el0_ia+0x4c/0x170
+[    0.584769]  el0t_64_sync_handler+0xd8/0xdc
+[    0.584770]  el0t_64_sync+0x168/0x16c
+[    0.584771] memory: usage 262144kB, limit 262144kB, failcnt 1582
+[    0.585287] swap: usage 0kB, limit 9007199254740988kB, failcnt 0
+[    0.585303] Memory cgroup stats for /container/memory-limit-fixture:
+[    0.585315] anon 267714560
+[    0.585412] file 98304
+[    0.585419] kernel 622592
+[    0.585426] kernel_stack 0
+[    0.585432] pagetables 0
+[    0.585455] sec_pagetables 0
+[    0.585464] percpu 80
+[    0.585470] sock 0
+[    0.585492] vmalloc 0
+[    0.585498] shmem 0
+[    0.585504] file_mapped 0
+[    0.585527] file_dirty 0
+[    0.585534] file_writeback 0
+[    0.585550] swapcached 0
+[    0.585556] inactive_anon 267710464
+[    0.585584] active_anon 4096
+[    0.585593] inactive_file 49152
+[    0.585618] active_file 49152
+[    0.585628] unevictable 0
+[    0.585635] slab_reclaimable 32760
+[    0.585663] slab_unreclaimable 18568
+[    0.585673] slab 51328
+[    0.585696] workingset_refault_anon 0
+[    0.585705] workingset_refault_file 8277
+[    0.585731] workingset_activate_anon 0
+[    0.585742] workingset_activate_file 1745
+[    0.585767] workingset_restore_anon 0
+[    0.585778] workingset_restore_file 1022
+[    0.585804] workingset_nodereclaim 0
+[    0.585815] pgdemote_kswapd 0
+[    0.585837] pgdemote_direct 0
+[    0.585845] pgdemote_khugepaged 0
+[    0.585854] pgdemote_proactive 0
+[    0.585862] pgscan 161574
+[    0.585890] pgsteal 8922
+[    0.585898] pswpin 0
+[    0.585905] pswpout 0
+[    0.585910] pgscan_kswapd 558
+[    0.585934] pgscan_direct 161016
+[    0.585945] pgscan_khugepaged 0
+[    0.585954] pgscan_proactive 0
+[    0.585979] pgsteal_kswapd 286
+[    0.585987] pgsteal_direct 8636
+[    0.586013] pgsteal_khugepaged 0
+[    0.586044] pgsteal_proactive 0
+[    0.586052] pgfault 66692
+[    0.586076] pgmajfault 342
+[    0.586083] pgrefill 35634
+[    0.586088] pgactivate 33694
+[    0.586109] pgdeactivate 35522
+[    0.586119] pglazyfree 0
+[    0.586127] pglazyfreed 0
+[    0.586133] swpin_zero 0
+[    0.586139] swpout_zero 0
+[    0.586156] Tasks state (memory values in pages):
+[    0.586182] [  pid  ]   uid  tgid total_vm      rss rss_anon rss_file rss_shmem pgtables_bytes swapents oom_score_adj name
+[    0.586259] [     97]     0    97    65928    65349    65344        5         0   565248        0             0 tail
+[    0.586337] oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=memory-limit-fixture,mems_allowed=0,oom_memcg=/container/memory-limit-fixture,task_memcg=/container/memory-limit-fixture,task=tail,pid=97,uid=0
+[    0.586401] Memory cgroup out of memory: Killed process 97 (tail) total-vm:263712kB, anon-rss:261376kB, file-rss:20kB, shmem-rss:0kB, UID:0 pgtables:552kB oom_score_adj:0
+2026-09-29T18:16:55.011Z info vminitd: id: memory-limit-fixture, status: 137 managed process exit
+2026-09-29T18:16:55.013Z info vminitd: id: memory-limit-fixture closing relay for StandardIO stdout
+2026-09-29T18:16:55.013Z info vminitd: id: memory-limit-fixture closing relay for StandardIO stderr
+[    0.608020] EXT4-fs (vdb): unmounting filesystem a5f179d0-2620-4288-8783-810b505c10bc.
+2026-09-29T18:16:55.031Z info vminitd: mountpoint: /sys/fs/cgroup, path: /sys/fs/cgroup/container/memory-limit-fixture deleting cgroup manager

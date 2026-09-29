@@ -169,6 +169,10 @@ type objectClaim struct {
 // workspace carrying this invocation's unpredictable ownershipLabel; an
 // ordinary already-exists collision does not carry it and is left untouched.
 type runState struct {
+	// agentLaunch is what the agent container's boot log showed once it
+	// stopped; from StartContainer until that read it says the boot log went
+	// unread.
+	agentLaunch         launchObservation
 	prompt              objectClaim
 	promptSeeder        objectClaim
 	promptObserver      objectClaim
@@ -328,6 +332,15 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	ctx, cancel := context.WithTimeout(ctx, b.cfg.HandoffTimeout)
 	defer cancel()
 	st := &runState{ownershipLabel: ownershipLabel}
+	// Registered before the teardown defer so it runs after it and records
+	// every entered handoff with its final error, including one that failed
+	// before the agent started. A helper killed at the limit fails the launch
+	// with a MemoryLimitError, which the record reports as a kill.
+	defer func() {
+		observed := st.agentLaunch
+		observed.memoryLimitKill = observed.memoryLimitKill || errors.Is(err, ErrMemoryLimit)
+		recordLaunch(b.cfg.Logger, hs.RunID, hs.Class, hs.Size, err, observed)
+	}()
 	defer func() {
 		var terr error
 		if st.journalOpen && callerCtx.Err() != nil {
@@ -690,6 +703,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 			return nil, err
 		}
 	}
+	st.agentLaunch = launchObservation{bootLogErr: errBootLogNotRead}
 	if err := b.rt.StartContainer(ctx, names.Agent); err != nil {
 		return nil, fmt.Errorf("start agent container: %w", err)
 	}
@@ -700,6 +714,8 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	if err := b.waitStopped(ctx, names.Agent, st.agent, st.ownershipLabel, b.cfg.WriterStopTimeout); err != nil {
 		return nil, failf(CheckWriterTermination, "agent: %v", err)
 	}
+	// The boot log goes with the container, so read it before the delete.
+	st.agentLaunch = b.runtimeOps.memoryLimitKilled(ctx, names.Agent)
 	if err := b.rt.DeleteContainer(ctx, names.Agent); err != nil {
 		return nil, failf(CheckWriterTermination, "delete stopped agent: %v", err)
 	}
@@ -719,7 +735,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	if hs.Agent.OutcomeMarkerPath != "" {
 		status, oerr := b.observeWriterOutcome(ctx, hs, names, st)
 		if oerr != nil {
-			return nil, oerr
+			return nil, st.agentLaunch.nameFailure(hs.Class, hs.Size, oerr)
 		}
 		if status != 0 {
 			if st.journalOpen {
@@ -733,7 +749,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 				st.preserveForRecovery = false
 			}
 			st.writerFailureStatus = &status
-			return nil, writerFailureError(status)
+			return nil, st.agentLaunch.nameFailure(hs.Class, hs.Size, writerFailureError(status))
 		}
 	}
 	// Writer-complete is the second unreconstructible proof: check 3's
@@ -849,6 +865,9 @@ func (b *Backend) observeCredentialStore(ctx context.Context, hs HandoffSpec, na
 	if err := b.waitStopped(ctx, name, *claim, st.ownershipLabel, b.cfg.SeedTimeout); err != nil {
 		return "", failf(CheckAuthStoreMutationLease, "credential observer: %v", err)
 	}
+	if err := b.helperStopped(ctx, hs.Class, hs.Size, name); err != nil {
+		return "", err
+	}
 
 	digest, err := b.readCredProof(
 		ctx,
@@ -962,6 +981,9 @@ func (b *Backend) materializeExport(ctx context.Context, hs HandoffSpec, names h
 	}
 	if err := b.waitStopped(ctx, names.Exporter, st.exporter, st.ownershipLabel, b.cfg.ExporterTimeout); err != nil {
 		return "", failf(CheckExportVerification, "exporter: %v", err)
+	}
+	if err := b.helperStopped(ctx, hs.Class, hs.Size, names.Exporter); err != nil {
+		return "", err
 	}
 
 	st.archiveDir, err = os.MkdirTemp("", "freeside-handoff-"+hs.RunID+"-tar-")
