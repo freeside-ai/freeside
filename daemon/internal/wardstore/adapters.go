@@ -95,6 +95,7 @@ type Adapters struct {
 	Leaser     *Leaser
 	AuthState  *AuthState
 	Enrollment *Enrollment
+	Claude     *ClaudeEnrollment
 }
 
 // Journal backs ward's journal and atomic leased-open interfaces.
@@ -132,6 +133,7 @@ func New(st *store.Store) (*Adapters, error) {
 		Leaser:     &Leaser{store: st},
 		AuthState:  authState,
 		Enrollment: &Enrollment{store: st, authState: authState},
+		Claude:     &ClaudeEnrollment{store: st},
 	}, nil
 }
 

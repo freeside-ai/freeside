@@ -98,3 +98,55 @@ func recordEnrollmentBootstrap(
 	}
 	return fmt.Errorf("client enrollment %s: %w", enrollment.ID, ward.ErrEnrollmentExists)
 }
+
+// ClaudeEnrollment backs ward's Claude setup-token enrollment port. Its
+// records are daemon-internal (identity, enrollment, lease, generation), so
+// every write runs on an internal transaction with no revision bump.
+type ClaudeEnrollment struct {
+	store *store.Store
+}
+
+// Begin binds or records the identity, records the enrollment, and takes the
+// lease bound to its first generation, all in one transaction, so no fence
+// ever authors a store for an enrollment that was not recorded.
+func (a *ClaudeEnrollment) Begin(
+	ctx context.Context,
+	identity domain.AuthIdentity,
+	bootstrap ward.EnrollmentBootstrap,
+	holder domain.InvocationID,
+	now, expiresAt time.Time,
+) (domain.AuthStoreMutationLease, error) {
+	var lease domain.AuthStoreMutationLease
+	err := a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := recordEnrollingIdentity(ctx, tx, identity, now); err != nil {
+			return err
+		}
+		if err := recordEnrollmentBootstrap(ctx, tx, bootstrap, now); err != nil {
+			return err
+		}
+		binding := bootstrap.Binding
+		var err error
+		lease, err = tx.AcquireAuthStoreMutationLeaseBound(ctx, identity.ID, holder, &binding, now, expiresAt)
+		if err != nil {
+			return err
+		}
+		if !lease.AcquiredAt.Equal(now) || !lease.ExpiresAt.Equal(expiresAt) {
+			return errors.New("begin Claude enrollment: acquisition converged on an existing lease window")
+		}
+		return nil
+	})
+	return lease, err
+}
+
+// AppendGeneration records the authored store under the live bound lease.
+func (a *ClaudeEnrollment) AppendGeneration(
+	ctx context.Context, generation domain.EnrollmentGeneration, now time.Time,
+) (domain.EnrollmentGeneration, error) {
+	var stamped domain.EnrollmentGeneration
+	err := a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		var err error
+		stamped, err = tx.AppendEnrollmentGeneration(ctx, generation, now)
+		return err
+	})
+	return stamped, err
+}

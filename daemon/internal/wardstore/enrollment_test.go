@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
@@ -247,6 +248,218 @@ func TestCodexAuthAddRefusesASecondIdentityForOneAccount(t *testing.T) {
 		t.Fatalf("second identity for one account = %v, want ErrAccountBindingTaken", err)
 	}
 	assertNoIdentity(t, rig.st, "codex-primary")
+}
+
+func TestClaudeEnrollmentBeginBindsIdentityEnrollmentAndLease(t *testing.T) {
+	ctx := context.Background()
+	st, adapters := openEnrollmentStore(t)
+	identity, bootstrap := claudeEnrollmentFixture("claude-main", "acct-fixture-0002")
+	lease, err := adapters.Claude.Begin(ctx, identity, bootstrap, "holder-1", enrollmentTestAt, enrollmentTestAt.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease.GenerationBinding == nil || *lease.GenerationBinding != bootstrap.Binding {
+		t.Fatalf("lease binding = %+v, want the bootstrap binding", lease.GenerationBinding)
+	}
+	generation, err := adapters.Claude.AppendGeneration(ctx, domain.EnrollmentGeneration{
+		EnrollmentID: bootstrap.Enrollment.ID, AuthStoreVolume: "claude-main-auth",
+		StoreManifestDigest: bootstrap.Binding.StoreManifestDigest, LeaseFence: lease.Fence,
+		AccountBinding: "acct-fixture-0002", RecordedAt: enrollmentTestAt,
+	}, enrollmentTestAt)
+	if err != nil || generation.Ordinal != 1 {
+		t.Fatalf("append generation = %+v, %v", generation, err)
+	}
+	if err := adapters.Leaser.Release(ctx, identity.ID, "holder-1", lease.Fence, enrollmentTestAt); err != nil {
+		t.Fatal(err)
+	}
+	later := enrollmentTestAt.Add(2 * time.Minute)
+	if _, err := adapters.Claude.Begin(ctx, identity, bootstrap, "holder-2", later, later.Add(time.Minute)); !errors.Is(err, ward.ErrEnrollmentExists) {
+		t.Fatalf("second bootstrap of an enrolled client = %v, want ErrEnrollmentExists", err)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		stored, err := tx.GetAuthIdentity(ctx, identity.ID)
+		if err == nil && stored != identity {
+			t.Fatalf("stored identity = %+v, want %+v", stored, identity)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestClaudeEnrollmentBeginRetriesAFailedBootstrap proves a bootstrap that
+// never appended a generation leaves an enrollment a retry can reuse, rather
+// than one that strands the client.
+func TestClaudeEnrollmentBeginRetriesAFailedBootstrap(t *testing.T) {
+	ctx := context.Background()
+	_, adapters := openEnrollmentStore(t)
+	identity, bootstrap := claudeEnrollmentFixture("claude-main", "acct-fixture-0002")
+	lease, err := adapters.Claude.Begin(ctx, identity, bootstrap, "holder-1", enrollmentTestAt, enrollmentTestAt.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := adapters.Leaser.Release(ctx, identity.ID, "holder-1", lease.Fence, enrollmentTestAt); err != nil {
+		t.Fatal(err)
+	}
+	retry := bootstrap
+	retry.Binding.StoreManifestDigest = domain.Digest(contentaddr.Sum([]byte("retry-token")))
+	later := enrollmentTestAt.Add(time.Minute)
+	if _, err := adapters.Claude.Begin(ctx, identity, retry, "holder-2", later, later.Add(time.Minute)); err != nil {
+		t.Fatalf("retry after failed bootstrap: %v", err)
+	}
+}
+
+func TestClaudeEnrollmentBeginEnforcesIdentityBindings(t *testing.T) {
+	ctx := context.Background()
+	for name, tc := range map[string]struct {
+		seed   *domain.AuthIdentity
+		mutate func(*domain.AuthIdentity, *ward.EnrollmentBootstrap)
+		want   error
+	}{
+		"new identity without cost owner": {
+			mutate: func(identity *domain.AuthIdentity, _ *ward.EnrollmentBootstrap) { identity.CostOwner = "" },
+		},
+		"account taken by another identity": {
+			seed: &domain.AuthIdentity{
+				ID: "claude-other", Provider: "claude", AccountBinding: "acct-fixture-0002",
+				AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true, CostOwner: "operator",
+			},
+			want: domain.ErrAccountBindingTaken,
+		},
+		"identity bound to another account": {
+			seed: func() *domain.AuthIdentity {
+				identity, _ := claudeEnrollmentFixture("claude-main", "acct-fixture-9999")
+				return &identity
+			}(),
+			want: domain.ErrAccountBindingMismatch,
+		},
+		"enrollment binding differs from its identity": {
+			mutate: func(_ *domain.AuthIdentity, bootstrap *ward.EnrollmentBootstrap) {
+				bootstrap.Enrollment.AccountBinding = "acct-fixture-7777"
+			},
+			want: domain.ErrAccountBindingMismatch,
+		},
+		"existing identity with another cost owner": {
+			seed: func() *domain.AuthIdentity {
+				identity, _ := claudeEnrollmentFixture("claude-main", "acct-fixture-0002")
+				identity.CostOwner = "someone-else"
+				return &identity
+			}(),
+		},
+		"existing ownerless identity without cost owner": {
+			seed: func() *domain.AuthIdentity {
+				identity, _ := claudeEnrollmentFixture("claude-main", "acct-fixture-0002")
+				identity.CostOwner = ""
+				return &identity
+			}(),
+			mutate: func(identity *domain.AuthIdentity, _ *ward.EnrollmentBootstrap) { identity.CostOwner = "" },
+		},
+		"existing identity with other fixed bindings": {
+			seed: func() *domain.AuthIdentity {
+				identity, _ := claudeEnrollmentFixture("claude-main", "")
+				identity.Interim.AuthStoreVolume = "other-volume"
+				return &identity
+			}(),
+			want: domain.ErrImmutableTransition,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			st, adapters := openEnrollmentStore(t)
+			if tc.seed != nil {
+				if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+					return tx.RecordAuthIdentity(ctx, *tc.seed, enrollmentTestAt)
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			identity, bootstrap := claudeEnrollmentFixture("claude-main", "acct-fixture-0002")
+			if tc.mutate != nil {
+				tc.mutate(&identity, &bootstrap)
+			}
+			_, err := adapters.Claude.Begin(ctx, identity, bootstrap, "holder-1", enrollmentTestAt, enrollmentTestAt.Add(time.Minute))
+			if err == nil || (tc.want != nil && !errors.Is(err, tc.want)) {
+				t.Fatalf("Begin = %v, want refusal %v", err, tc.want)
+			}
+			if err := st.Read(ctx, func(tx *store.ReadTx) error {
+				enrollments, err := tx.ListClientEnrollments(ctx, "claude-main")
+				if err == nil && len(enrollments) != 0 {
+					t.Fatalf("refused bootstrap recorded %+v", enrollments)
+				}
+				if errors.Is(err, store.ErrNotFound) {
+					return nil
+				}
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// TestClaudeEnrollmentBeginBindsAnUnboundInterimIdentity proves a flag-era
+// identity (no account, no cost owner) takes both on its first enrollment
+// and keeps every other stored fact.
+func TestClaudeEnrollmentBeginBindsAnUnboundInterimIdentity(t *testing.T) {
+	ctx := context.Background()
+	st, adapters := openEnrollmentStore(t)
+	stored, _ := claudeEnrollmentFixture("claude-main", "")
+	stored.CostOwner, stored.Enabled, stored.MaxParallelExecutions = "", false, 3
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordAuthIdentity(ctx, stored, enrollmentTestAt)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	identity, bootstrap := claudeEnrollmentFixture("claude-main", "acct-fixture-0002")
+	later := enrollmentTestAt.Add(time.Minute)
+	if _, err := adapters.Claude.Begin(ctx, identity, bootstrap, "holder-1", later, later.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	want := stored
+	want.AccountBinding, want.CostOwner = "acct-fixture-0002", "operator"
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		got, err := tx.GetAuthIdentity(ctx, "claude-main")
+		if err == nil && got != want {
+			t.Fatalf("bound identity = %+v, want %+v", got, want)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func openEnrollmentStore(t *testing.T) (*store.Store, *wardstore.Adapters) {
+	t.Helper()
+	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	adapters, err := wardstore.New(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st, adapters
+}
+
+func claudeEnrollmentFixture(id domain.AuthIdentityID, account string) (domain.AuthIdentity, ward.EnrollmentBootstrap) {
+	enrollmentID := domain.ClientEnrollmentID(string(id) + "/claude_code")
+	return domain.AuthIdentity{
+			ID: id, Provider: "claude", AccountBinding: account, AuthStoreMutationLease: true,
+			MaxParallelExecutions: 1, Enabled: true, CostOwner: "operator",
+			Interim: domain.InterimClientFacts{AuthStoreVolume: "claude-main-auth", RefreshStrategy: domain.RefreshOnDemand},
+		}, ward.EnrollmentBootstrap{
+			Enrollment: domain.ClientEnrollment{
+				ID: enrollmentID, AuthIdentityID: id, HarnessClient: domain.HarnessClientClaudeCode,
+				Route: "anthropic-subscription", AuthMethod: domain.AuthMethodSetupToken,
+				CredentialMode:  domain.CredentialSubscriptionContained,
+				RefreshStrategy: domain.RefreshExternal, SupportsReadOnlyAuthSnapshot: true,
+				AccountBinding: account,
+			},
+			Binding: domain.LeaseGenerationBinding{
+				EnrollmentID: enrollmentID, AuthStoreVolume: "claude-main-auth",
+				StoreManifestDigest: domain.Digest(contentaddr.Sum([]byte("token"))),
+			},
+		}
 }
 
 func assertNoIdentity(t *testing.T, st *store.Store, id domain.AuthIdentityID) {
