@@ -173,6 +173,7 @@ func (p *pairingControl) registerControlRoutes(mux *http.ServeMux, st *store.Sto
 	command("/comprehension/defects", runComprehensionCommand)
 	command("/shadow-review/configuration-approvals", runApproveShadowReviewCommand)
 	command("/auth-identities/limit", runSetIdentityLimitCommand)
+	command("/auth/list", runAuthListCommand)
 	command("/doctor", runDoctorCommand)
 	p.handle(mux, "/snapshot", func(ctx context.Context, body json.RawMessage) (any, error) {
 		return runSnapshotControl(ctx, st, body)
