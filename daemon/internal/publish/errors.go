@@ -210,6 +210,24 @@ var ErrTransportAuthorityClaimed = errors.New("publication authority is already 
 // rather than adopting or overwriting it.
 var ErrForeignResource = errors.New("pull request on the publication branch does not carry the identity marker")
 
+// ErrSuccessorObservationPending is the class of successor-publication
+// reads GitHub has not caught up on yet: its pull-request view can lag the
+// successor branch for a moment after a push (#1544). It is not a conflict
+// and deliberately does not wrap ErrPublicationConflict. The attempt made no
+// push or PR edit past the lagging read, and the caller's own retry pacing
+// decides when the lag stops being plausible. Match the class with
+// errors.Is; the two causes below say what was observed.
+var ErrSuccessorObservationPending = errors.New("github has not yet caught up with the successor pull request")
+
+// ErrSuccessorPRNotListed is the pending cause for a head-branch listing
+// that returns no pull request at all.
+var ErrSuccessorPRNotListed = fmt.Errorf("%w: no pull request is listed on the successor branch", ErrSuccessorObservationPending)
+
+// ErrSuccessorPRHeadLagging is the pending cause for a listing, read after
+// the branch ref was confirmed at the candidate head, that still shows the
+// predecessor pull request at the predecessor head.
+var ErrSuccessorPRHeadLagging = fmt.Errorf("%w: the successor pull request does not yet show the pushed head", ErrSuccessorObservationPending)
+
 // ErrGitHubAPI is the class sentinel for any non-success GitHub API
 // response; it is carried by *APIError. Match the class with errors.Is
 // and recover the status with errors.As.

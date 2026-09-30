@@ -31,7 +31,7 @@ import (
 )
 
 func TestPublishedFeedbackRetryPreservesFailedAttemptAndInput(t *testing.T) {
-	for _, name := range []string{"clean", "questions", "completed-before-failure", "completed-after-retry", "completed-before-retry-commit", "completed-after-sealing", "completed-after-successor-block", "attended-successor", "remediation", "reevaluation", "reevaluation-escalation", "reevaluation-continuation", "reevaluation-continuation-upgrade", "reevaluation-continuation-repeated", "reevaluation-continuation-completed-before-approve", "reevaluation-continuation-completed-after-approve", "reevaluation-continuation-completed-after-queue", "reevaluation-continuation-corrupt", "reevaluation-continuation-cyclic", "reevaluation-continuation-moved", "reevaluation-continuation-missing", "reevaluation-continuation-foreign", "reevaluation-continuation-closed", "reevaluation-continuation-stop", "reevaluation-continuation-discuss"} {
+	for _, name := range []string{"clean", "questions", "completed-before-failure", "completed-after-retry", "completed-before-retry-commit", "completed-after-sealing", "completed-after-successor-block", "attended-successor", "remediation", "reevaluation", "reevaluation-escalation", "reevaluation-continuation", "reevaluation-continuation-upgrade", "reevaluation-continuation-repeated", "reevaluation-continuation-completed-before-approve", "reevaluation-continuation-completed-after-approve", "reevaluation-continuation-completed-after-queue", "reevaluation-continuation-corrupt", "reevaluation-continuation-cyclic", "reevaluation-continuation-moved", "reevaluation-continuation-missing", "reevaluation-continuation-foreign", "reevaluation-continuation-closed", "reevaluation-continuation-stop", "reevaluation-continuation-discuss", "lagging-empty-listing", "lagging-head-listing", "lagging-persistent"} {
 		t.Run(name, func(t *testing.T) { testPublishedFeedbackRetry(t, name) })
 	}
 }
@@ -625,6 +625,9 @@ func completeFeedbackSuccessor(t *testing.T, p *productionPublicationHarness, in
 		p.restartDurableState(t)
 		p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	}
+	if strings.HasPrefix(scenario, "lagging-") {
+		absorbLaggingSuccessorListings(t, p, oldHead, scenario)
+	}
 	var completed engine.ReconcileResult
 	for range 4 {
 		result, err := p.reconcileLanes()
@@ -996,6 +999,106 @@ func assertSuccessorCannotOmitReviewHistory(t *testing.T, p *productionPublicati
 	})
 	if called || err == nil || !strings.Contains(err.Error(), "execution candidate carries no disposition history") {
 		t.Fatalf("successor without review history reached publication: callback=%t, err=%v", called, err)
+	}
+}
+
+// absorbLaggingSuccessorListings serves the successor's post-push PR listings
+// as GitHub lagging its branch (#1544). A lag that heals within the tolerance
+// never creates a publish_blocked item; one that persists raises the card on
+// the fourth paced attempt with what the daemon saw. Either way it leaves the
+// listing healed and the next attempt due.
+func absorbLaggingSuccessorListings(t *testing.T, p *productionPublicationHarness, oldHead, scenario string) {
+	t.Helper()
+	// The retry after the post-push interruption lists twice: before the
+	// idempotent re-push, and after it, where only the second can lag.
+	switch scenario {
+	case "lagging-empty-listing":
+		p.forge.lagPRListings(1, "")
+	case "lagging-head-listing":
+		p.forge.lagPRListings(2, oldHead)
+	case "lagging-persistent":
+		p.forge.lagPRListings(1<<20, oldHead)
+	}
+	attempts := 1
+	if scenario == "lagging-persistent" {
+		attempts = 3
+	}
+	for attempt := range attempts {
+		result, err := p.reconcileLanes()
+		if err != nil {
+			t.Fatalf("lagging attempt %d: %v", attempt+1, err)
+		}
+		if result.BlockedItemsCreated != 0 || result.PublicationTasksCompleted != 0 {
+			t.Fatalf("lagging attempt %d: %#v", attempt+1, result)
+		}
+		assertNoPublishBlockedItem(t, p)
+		assertRunHoldReason(t, p, domain.HoldPublicationEnvironment)
+		p.now = p.now.Add(time.Minute + time.Second)
+		if scenario == "lagging-persistent" && attempt == 1 {
+			// A transient failure between lagging reads must not restart
+			// the tolerance window, or a flaky GitHub postpones the card.
+			p.transport.successorUpdateFailure = &net.OpError{Op: "write", Net: "tcp", Err: syscall.ECONNRESET}
+			if result, err := p.reconcileLanes(); (err != nil && !errors.Is(err, syscall.ECONNRESET)) || result.BlockedItemsCreated != 0 {
+				t.Fatalf("transient failure during lag: %#v, %v", result, err)
+			}
+			if p.transport.successorUpdateFailure != nil {
+				t.Fatal("transient failure was not reached")
+			}
+			p.now = p.now.Add(time.Minute + time.Second)
+		}
+	}
+	if scenario == "lagging-persistent" {
+		result, err := p.reconcileLanes()
+		if err != nil || result.BlockedItemsCreated != 1 {
+			t.Fatalf("persistent lag did not raise its card: %#v, %v", result, err)
+		}
+		assertRunHoldReason(t, p, domain.HoldExternalConflict)
+		var blocked []domain.AttentionItem
+		if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+			items, err := tx.ListAttentionItems(p.ctx)
+			for _, item := range items {
+				if item.Value.Type == domain.AttentionPublishBlocked && item.Value.Status == domain.StatusOpen {
+					blocked = append(blocked, item.Value)
+				}
+			}
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if len(blocked) != 1 || !strings.Contains(blocked[0].Reason, "previous head after repeated checks") ||
+			strings.Contains(blocked[0].Reason, "conflicts with the committed identity") {
+			t.Fatalf("persistent lag card = %#v", blocked)
+		}
+		p.now = p.now.Add(time.Minute + time.Second)
+	}
+	p.forge.lagPRListings(0, "")
+}
+
+func assertNoPublishBlockedItem(t *testing.T, p *productionPublicationHarness) {
+	t.Helper()
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		items, err := tx.ListAttentionItems(p.ctx)
+		for _, item := range items {
+			if item.Value.Type == domain.AttentionPublishBlocked {
+				t.Fatalf("lagging listing created %s: %s", item.Value.ID, item.Value.Reason)
+			}
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertRunHoldReason(t *testing.T, p *productionPublicationHarness, want domain.RunHoldReason) {
+	t.Helper()
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		hold, found, err := tx.GetRunHold(p.ctx, p.runID)
+		if err != nil || !found || hold.Reason != want {
+			t.Fatalf("run hold = %#v, %t, %v; want %s", hold, found, err, want)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
