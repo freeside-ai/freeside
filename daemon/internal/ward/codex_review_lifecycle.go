@@ -567,7 +567,7 @@ func (b *CodexReviewLifecycle) codexReview(
 	}
 	proxy, err = startConnectProxy(
 		context.WithoutCancel(ctx), networkReport.IPv4Gateway, networkReport.IPv4Subnet,
-		cfg.ProviderEndpoints, b.cfg.EgressProxyTimeout, b.cfg.EgressDialContext,
+		cfg.ProviderEndpoints, b.cfg.EgressProxyTimeout, b.cfg.EgressDialContext, time.Now,
 	)
 	if err != nil {
 		return nil, codexReviewOperationalCheckf(CheckAgentEgress, "start Codex review proxy: %v", err)

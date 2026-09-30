@@ -592,6 +592,16 @@ type HandoffSpec struct {
 	// when zero, so a spec journaled before sizes were declared keeps its
 	// digest and still recovers.
 	Size ContainerSize `json:",omitzero"`
+	// Stall, when set, hears the writer's stall heartbeat: true once the
+	// writer has gone Config.StallInterval without a provider response
+	// byte, false once one arrives or the writer wait ends while a stall is
+	// reported. Calls run off the wait's path, so a slow or failing hook
+	// never changes the handoff's result or the writer's budget; a failed
+	// call is retried on a later poll. The handoff returns only after the
+	// last call, each bounded by Config.TeardownTimeout. It is a runtime
+	// observer, not part of the frozen spec, so the journal digest never
+	// sees it.
+	Stall func(ctx context.Context, stalled bool) error `json:"-"`
 }
 
 // validate reports the first caller error in the spec. Mount-topology rules

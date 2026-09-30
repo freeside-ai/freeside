@@ -122,6 +122,10 @@ var ErrInvalidConfig = errors.New("invalid ward backend config")
 // resolve a zero override to the same effective budget the daemon will use.
 const DefaultWriterStopTimeout = 10 * time.Minute
 
+// DefaultStallInterval is the StallInterval withDefaults applies when a
+// caller leaves it unset.
+const DefaultStallInterval = 5 * time.Minute
+
 // Config parameterizes the backend. The exporter image is the unit's seam
 // with the gauntlet lane: the pinned image carries the trusted export helper
 // (check 6), while everything the gate enforces about the exporter (checks 4,
@@ -216,6 +220,11 @@ type Config struct {
 	// WriterStopTimeout bounds the wait for the agent container to reach
 	// observed state stopped. Defaults to 10 minutes.
 	WriterStopTimeout time.Duration
+	// StallInterval is how long a running writer may go without a provider
+	// response byte before its handoff's Stall hook reports it stalled. The
+	// report is advisory and never moves WriterStopTimeout; an interval at
+	// or above WriterStopTimeout never fires. Defaults to 5 minutes.
+	StallInterval time.Duration
 	// ExporterTimeout bounds the wait for the exporter container to reach
 	// observed state stopped. Defaults to 5 minutes.
 	ExporterTimeout time.Duration
@@ -325,6 +334,9 @@ func (cfg Config) withDefaults() Config {
 	if cfg.WriterStopTimeout == 0 {
 		cfg.WriterStopTimeout = DefaultWriterStopTimeout
 	}
+	if cfg.StallInterval == 0 {
+		cfg.StallInterval = DefaultStallInterval
+	}
 	if cfg.ExporterTimeout == 0 {
 		cfg.ExporterTimeout = 5 * time.Minute
 	}
@@ -420,6 +432,8 @@ func (cfg Config) validate() error {
 		return fmt.Errorf("%w: MaxManifestBytes %d is negative", ErrInvalidConfig, cfg.MaxManifestBytes)
 	case cfg.WriterStopTimeout < 0:
 		return fmt.Errorf("%w: WriterStopTimeout %s is negative", ErrInvalidConfig, cfg.WriterStopTimeout)
+	case cfg.StallInterval < 0:
+		return fmt.Errorf("%w: StallInterval %s is negative", ErrInvalidConfig, cfg.StallInterval)
 	case cfg.ExporterTimeout < 0:
 		return fmt.Errorf("%w: ExporterTimeout %s is negative", ErrInvalidConfig, cfg.ExporterTimeout)
 	case cfg.PollInterval < 0:

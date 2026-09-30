@@ -57,7 +57,7 @@ func TestConnectProxyExactAllowlist(t *testing.T) {
 		var d net.Dialer
 		return d.DialContext(ctx, "tcp4", upstream.Listener.Addr().String())
 	}
-	proxy, err := startConnectProxy(context.Background(), "127.0.0.1", "127.0.0.0/24", []string{allowed}, time.Second, dial)
+	proxy, err := startConnectProxy(context.Background(), "127.0.0.1", "127.0.0.0/24", []string{allowed}, time.Second, dial, time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,6 +201,7 @@ func TestConnectProxyCloseInterruptsPartialClientHello(t *testing.T) {
 		[]string{"provider.example:443"},
 		time.Hour,
 		dial,
+		time.Now,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -262,6 +263,7 @@ func TestConnectProxyRejectsInvalidNetworkMetadata(t *testing.T) {
 				[]string{"provider.example:443"},
 				time.Second,
 				nil,
+				time.Now,
 			)
 			if err == nil {
 				_ = proxy.Close()
@@ -290,5 +292,75 @@ func TestSameEnvironmentExactByKey(t *testing.T) {
 		if sameEnvironment(got, want) {
 			t.Errorf("non-exact environment %q matched", got)
 		}
+	}
+}
+
+// The stall heartbeat is the provider's response bytes, observed in the
+// daemon: a writer that uploads while the provider stays silent never
+// refreshes it, and one provider byte does.
+func TestConnectProxyHeartbeatCountsOnlyProviderBytes(t *testing.T) {
+	proxySide, upstreamSide := net.Pipe()
+	defer func() { _ = upstreamSide.Close() }()
+	dial := func(context.Context, string, string) (net.Conn, error) {
+		return proxySide, nil
+	}
+	stamp := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	proxy, err := startConnectProxy(
+		context.Background(), "127.0.0.1", "127.0.0.0/24",
+		[]string{"provider.example:443"}, time.Second, dial,
+		func() time.Time { return stamp },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = proxy.Close() }()
+	address, err := proxyAddress(proxy.URL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := net.DialTimeout("tcp4", address, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := fmt.Fprint(conn, "CONNECT provider.example:443 HTTP/1.1\r\nHost: provider.example:443\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(conn)
+	if line, err := reader.ReadString('\n'); err != nil || strings.TrimSpace(line) != "HTTP/1.1 200 OK" {
+		t.Fatalf("CONNECT status = %q, %v", line, err)
+	}
+	if _, err := reader.ReadString('\n'); err != nil {
+		t.Fatal(err)
+	}
+
+	// The writer's ClientHello is an upload: the provider receives it and
+	// the heartbeat does not move.
+	handshake := make(chan error, 1)
+	go func() {
+		handshake <- tls.Client(conn, &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			ServerName: "provider.example",
+		}).Handshake()
+	}()
+	uploaded := make([]byte, 5)
+	if _, err := io.ReadFull(upstreamSide, uploaded); err != nil {
+		t.Fatalf("provider read the upload: %v", err)
+	}
+	if got := proxy.LastProviderByte(); !got.IsZero() {
+		t.Fatalf("heartbeat after writer upload = %v, want zero", got)
+	}
+
+	// One provider byte, then the provider hangs up, which ends the writer's
+	// handshake; the heartbeat was stamped before the byte was forwarded.
+	if _, err := upstreamSide.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	_ = upstreamSide.Close()
+	if err := <-handshake; err == nil {
+		t.Fatal("handshake against a one-byte provider reply succeeded")
+	}
+	if got := proxy.LastProviderByte(); !got.Equal(stamp) {
+		t.Fatalf("heartbeat after provider byte = %v, want %v", got, stamp)
 	}
 }

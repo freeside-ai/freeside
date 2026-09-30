@@ -40,6 +40,7 @@ type connectProxy struct {
 	clientNet *net.IPNet
 	dial      dialContextFunc
 	timeout   time.Duration
+	now       func() time.Time
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -50,9 +51,13 @@ type connectProxy struct {
 	mu     sync.Mutex
 	err    error
 	active map[net.Conn]struct{}
+	// lastProviderByte is when a provider last sent the writer a byte: the
+	// stall heartbeat. Only the provider-to-writer leg stamps it, so bytes
+	// the writer uploads can neither refresh nor suppress it.
+	lastProviderByte time.Time
 }
 
-func startConnectProxy(parent context.Context, gateway, subnet string, allowed []string, timeout time.Duration, dial dialContextFunc) (*connectProxy, error) {
+func startConnectProxy(parent context.Context, gateway, subnet string, allowed []string, timeout time.Duration, dial dialContextFunc, now func() time.Time) (*connectProxy, error) {
 	ip := net.ParseIP(gateway)
 	if ip == nil || ip.To4() == nil {
 		return nil, errors.New("egress network reported an invalid IPv4 gateway")
@@ -94,6 +99,7 @@ func startConnectProxy(parent context.Context, gateway, subnet string, allowed [
 		clientNet: clientNet,
 		dial:      dial,
 		timeout:   timeout,
+		now:       now,
 		ctx:       ctx,
 		cancel:    cancel,
 		done:      make(chan struct{}),
@@ -116,6 +122,14 @@ func clientNetIP(network *net.IPNet) net.IP {
 
 func (p *connectProxy) URL() string {
 	return p.url
+}
+
+// LastProviderByte reports when a provider last sent the writer a byte, or
+// the zero time before the first one.
+func (p *connectProxy) LastProviderByte() time.Time {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.lastProviderByte
 }
 
 func (p *connectProxy) serve() {
@@ -216,7 +230,7 @@ func (p *connectProxy) handle(client net.Conn) {
 		copyDone <- struct{}{}
 	}()
 	go func() {
-		_, _ = io.Copy(client, upstream)
+		_, _ = io.Copy(client, providerBytes{r: upstream, p: p})
 		if tcp, ok := client.(*net.TCPConn); ok {
 			_ = tcp.CloseWrite()
 		}
@@ -229,6 +243,24 @@ func (p *connectProxy) handle(client net.Conn) {
 			return
 		}
 	}
+}
+
+// providerBytes stamps the proxy's heartbeat on every read from the
+// provider that returns data.
+type providerBytes struct {
+	r io.Reader
+	p *connectProxy
+}
+
+func (b providerBytes) Read(buf []byte) (int, error) {
+	n, err := b.r.Read(buf)
+	if n > 0 {
+		now := b.p.now()
+		b.p.mu.Lock()
+		b.p.lastProviderByte = now
+		b.p.mu.Unlock()
+	}
+	return n, err
 }
 
 // requireTLSServerName asks the standard library TLS parser to read exactly
@@ -419,6 +451,7 @@ func (b *Backend) prepareProviderEgress(ctx context.Context, hs HandoffSpec, nam
 		b.cfg.ProviderEndpoints,
 		b.cfg.EgressProxyTimeout,
 		b.cfg.EgressDialContext,
+		b.cfg.Now,
 	)
 	if err != nil {
 		return NetworkReport{}, "", failf(CheckAgentEgress, "start provider proxy: %v", err)
