@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 74
+revision: 75
 status: active
-updated: 2026-09-29
+updated: 2026-09-30
 ---
 
 # Freeside
@@ -3774,14 +3774,55 @@ daemon ledger. Discovered candidates are validated (repository, App authorship,
 expected ledger bindings; markers in issue text are rendering hints, never
 matching keys) before adoption.
 
-A durable creation intent fences recovery and precedes the API call. Unledgered
-creations serialize per repository, because a repository is the candidate
-collision domain: filing identities in one repository share App authorship and
-candidate-visible fields. So recovery has at most one outstanding intent per
-repository to bind. It adopts the single validating App-authored candidate
-created in the intent window, or proves absence before retrying. Residual
-ambiguity fails closed to a durable attention item, never a blind retry. Rate,
-depth, and cost caps come from resolved policy.
+A durable creation intent fences recovery and precedes the API call. Each
+attempt durably records a dispatch-started marker before it sends the create
+request. Unledgered creations serialize per repository, because a repository
+is the candidate collision domain: filing identities in one repository share
+App authorship and candidate-visible fields. So recovery has at most one outstanding intent per
+repository to bind. Only an intent with a dispatched attempt may adopt a
+candidate: before its first dispatch it has created nothing, so any candidate
+is foreign. The intent durably records the IDs of the validating App-authored
+candidates it sees before its first dispatch, its pre-dispatch ID set (as in
+Section [5.11](#511-github-integration-reconciliation-plus-intake)). A
+candidate is a validating App-authored issue created in the intent window and
+outside that set. A dispatched intent adopts a single candidate. With no
+candidate, it follows the approved-specification comment's rule (Section
+[5.11](#511-github-integration-reconciliation-plus-intake), Idempotency and
+crash recovery), because GitHub offers no idempotency key for issue creation
+either, so an empty listing cannot show that a create failed. A create needs
+evidence that no earlier create for this proposal instance committed. Two
+things are such evidence. No attempt has a dispatch-started marker. Or the last
+attempt ended in a recorded response in which GitHub definitively rejected the
+request before creating anything. As in Section
+[5.11](#511-github-integration-reconciliation-plus-intake), the status class
+alone is not the test: the implementing unit lists the responses that show
+rejection before creation, and a response outside that list is unproven. A
+rejection before creation is transient or definite. A transient one, such as a
+rate limit, retries within the Section [5.9](#59-durability-effectively-once)
+bounds and the caps below, and so does an attempt that never dispatched. A
+definite one, or a transient one whose retry bound is spent, records a
+terminal `refused` outcome with its reason class. Every other dispatched
+attempt is unproven: a 5xx response, an unclassifiable or truncated response,
+a timeout, or a lost response. Recovery waits a policy-set settle interval,
+lists again, and adopts a single validating candidate that appears. Residual
+ambiguity is any of three cases: two or more validating candidates, a listing
+that cannot complete, or an unproven attempt with no candidate after the
+settle interval. It is never a retry. Recording it records a terminal
+`ambiguous` outcome for the creation intent in the same step and raises a
+`system_health` item that names the repository and the proposal instance.
+Acknowledge keeps its Section [4](#4-the-attention-model) meaning, seen and
+never resolved.
+
+A terminal outcome (ledgered, `refused`, or `ambiguous`) ends the repository's
+outstanding intent, so later filings there go ahead. An ambiguous create may
+still commit afterwards, and its issue would pass a later intent's candidate
+validation, since both share App authorship and candidate-visible fields. So
+once a repository holds an `ambiguous` filing outcome, no later intent there
+adopts a candidate at any step: an unproven attempt is residual ambiguity at
+once, and only a recorded success response ledgers an issue. The outcome is
+permanent. A stray issue from a late commit carries no ledgered lineage, so
+intake forces it to propose like any event without proof. Rate, depth, and
+cost caps come from resolved policy.
 
 Freeside-origin issues enter intake as propose, never `auto_start`, and this is
 enforced at every intake observation, including after relabeling. All label
@@ -5685,35 +5726,41 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 74 ("Place the Capacity Work in Waves 8 and 9"):
+Revision 75 ("Filing Recovery Never Retries an Unproven Create"):
 
-1. **Wave 9 drains a capacity cluster.** Revisions 72 and 73 filed their
-   units with no wave, and the bounded drain (Section [11](#11-roadmap-build-order-and-coordination)) leaves a
-   deferral outside a named cluster in the queue, where it doesn't drain in
-   1B. So the wave 9 row now names them: the shared-identity writer lease
-   (#1585), per-pool limits (#1596), the host budget and machine-capacity
-   hold (#1598), the budget command (#1595), the hold wording (#1599), task
-   lines (#1600), the task-line change command (#1601), and the New Task
-   agent picker (#1602). Wave 9 fits because the cluster waits on its chain
-   (#898, #1421, #979) and serves its exit: provider switching the operator
-   controls, and capacity failures that recover through the card. The spine
-   still assigns chain positions and may still split the wave; the contract
-   units go in the contracts half. Rejected: wave 10 (the initiative view
-   shares nothing with this work, and the picker and hold wording would wait
-   a wave past their prerequisites); and a new wave (it renumbers the table
-   for one cluster).
-2. **Wave 8 carries the ward container limits (#1597).** The unit has no
-   open prerequisite, and its measurements set the launch sizes #1598
-   reserves against, so the budget starts from recorded peaks instead of
-   guesses. Rejected: leaving it in wave 9 (the budget would either ship
-   with unmeasured sizes or wait on measurements inside the same wave).
-3. **#1585 may start before wave 9 by fiat.** Its prerequisite (#730) has
-   merged, so once the spine gives it a contract chain position, a `Handle`
-   can start it early, as the Codex probe spike can. Recording an execution
-   limit above 1 stays the owner's decision.
+1. **Follow-up filing recovery adopts the comment rule.** Section
+   [5.17](#517-follow-up-issue-filing) no longer lets recovery prove absence
+   before retrying. GitHub offers no idempotency key for issue creation, and
+   a listing can lag, so an empty listing cannot show that a create failed. A
+   create now needs the evidence Section
+   [5.11](#511-github-integration-reconciliation-plus-intake) requires for the
+   approved-specification comment: no dispatch-started marker, or a recorded
+   definite rejection. A definite rejection, or a transient one whose retry
+   bound is spent, ends in a terminal `refused` outcome. An unproven attempt
+   with no candidate after the settle interval, two or more candidates, or an
+   incomplete listing is residual ambiguity: a terminal `ambiguous` outcome
+   for the creation intent and a `system_health` item. An intent adopts a
+   candidate only after its own first dispatch, since before it any candidate
+   is foreign. It records the IDs of candidates it saw before that dispatch,
+   the Section [5.11](#511-github-integration-reconciliation-plus-intake)
+   pre-dispatch ID set, and never adopts one of them, so a foreign issue
+   cannot be adopted after a rejected or unproven dispatch. The intent window
+   still bounds a candidate. Rejected: keeping "proves absence" (it names no mechanism, and
+   none exists).
+2. **An ambiguous filing releases the repository but ends adoption there.**
+   Any terminal outcome ends the repository's outstanding intent, so later
+   filings go ahead. Because the ambiguous create may still commit and its
+   issue would pass a later intent's candidate validation, no later intent in
+   that repository adopts a candidate at any step; an unproven attempt there
+   is residual ambiguity at once. Rejected: blocking the repository
+   until a human settles the intent (it needs a new human action on the item,
+   an API and client change outside this revision); and adopting as before
+   (a late stray could be ledgered to the wrong proposal, and intake trusts
+   the ledger).
 
-(Owner decision of 2026-09-29;
-[decision note](../devlog/2026-09-29-0913-capacity-wave-placement.md).)
+(Owner-assigned #1441. The rule is the issue plan's recommendation, decided
+by the owner through this revision's review;
+[decision note](../devlog/2026-09-30-1530-filing-recovery-rule.md).)
 
 ## 14. Risks
 

@@ -2249,3 +2249,33 @@ decisions of 2026-09-23 made in this revision's review;
 
 (Owner decisions of 2026-09-28, owner-assigned #1587;
 [decision note](../../devlog/2026-09-28-1830-per-task-agent-choice.md).)
+
+## Revision 74 ("Place the Capacity Work in Waves 8 and 9")
+
+1. **Wave 9 drains a capacity cluster.** Revisions 72 and 73 filed their
+   units with no wave, and the bounded drain (Section [11](../plan.md#11-roadmap-build-order-and-coordination)) leaves a
+   deferral outside a named cluster in the queue, where it doesn't drain in
+   1B. So the wave 9 row now names them: the shared-identity writer lease
+   (#1585), per-pool limits (#1596), the host budget and machine-capacity
+   hold (#1598), the budget command (#1595), the hold wording (#1599), task
+   lines (#1600), the task-line change command (#1601), and the New Task
+   agent picker (#1602). Wave 9 fits because the cluster waits on its chain
+   (#898, #1421, #979) and serves its exit: provider switching the operator
+   controls, and capacity failures that recover through the card. The spine
+   still assigns chain positions and may still split the wave; the contract
+   units go in the contracts half. Rejected: wave 10 (the initiative view
+   shares nothing with this work, and the picker and hold wording would wait
+   a wave past their prerequisites); and a new wave (it renumbers the table
+   for one cluster).
+2. **Wave 8 carries the ward container limits (#1597).** The unit has no
+   open prerequisite, and its measurements set the launch sizes #1598
+   reserves against, so the budget starts from recorded peaks instead of
+   guesses. Rejected: leaving it in wave 9 (the budget would either ship
+   with unmeasured sizes or wait on measurements inside the same wave).
+3. **#1585 may start before wave 9 by fiat.** Its prerequisite (#730) has
+   merged, so once the spine gives it a contract chain position, a `Handle`
+   can start it early, as the Codex probe spike can. Recording an execution
+   limit above 1 stays the owner's decision.
+
+(Owner decision of 2026-09-29;
+[decision note](../../devlog/2026-09-29-0913-capacity-wave-placement.md).)
