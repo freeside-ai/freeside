@@ -964,6 +964,51 @@ func TestForgedMilestonesDriveNoWorkflowDecision(t *testing.T) {
 	}
 }
 
+// TestRunObservationShowsAdmissionPolicyRefusal is issue #435's scenario
+// regression: an invocation whose admission policy drifts while it runs
+// shows admission_policy_refused through ObserveRun, not an unexplained open
+// run. The drift is a trust-profile revision; the completed result then
+// fails the productionAdmission re-gate before any terminal write.
+func TestRunObservationShowsAdmissionPolicyRefusal(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := openUnattendedFixture(t)
+	spec, policy, resolved := registerSubmissionArtifacts(t, f.store, "run-prod-observe-refusal")
+	submitted, err := engine.SubmitProductionRun(ctx, f.store, engine.ProductionRunSpec{
+		RunID: "run-prod-observe-refusal", ProjectID: "proj-prod",
+		SpecArtifactID: spec.ID, PolicyArtifactID: policy.ID,
+		ResolvedPolicy: resolved, Publication: productionPublicationMetadata(),
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	f.driver.Script(submitted.InvocationID, fake.StageScript{
+		Outcome: fake.OutcomeComplete, RunningInspects: 1,
+		Result: exec.StageResult{Summary: "completed after the profile was revised"},
+	})
+	if _, err := f.engine.Reconcile(ctx); err != nil {
+		t.Fatalf("dispatch reconcile: %v", err)
+	}
+	if running := observeProductionRun(t, f.store, submitted.Run.ID); running.Hold != nil {
+		t.Fatalf("running run under its admitted profile holds: %+v", running.Hold)
+	}
+	reviseWaivedTrustProfile(t, f.store)
+
+	if _, err := f.engine.Reconcile(ctx); err != nil {
+		t.Fatalf("policy drift stopped the reconcile loop: %v", err)
+	}
+	observation := observeProductionRun(t, f.store, submitted.Run.ID)
+	if observation.Hold == nil {
+		t.Fatal("run refused by drifted policy shows no hold")
+	}
+	if observation.Hold.Reason != domain.HoldAdmissionPolicyRefused {
+		t.Errorf("hold reason = %s, want %s", observation.Hold.Reason, domain.HoldAdmissionPolicyRefused)
+	}
+	if observation.Hold.InvocationID == nil || *observation.Hold.InvocationID != submitted.InvocationID {
+		t.Errorf("hold invocation = %v, want %s", observation.Hold.InvocationID, submitted.InvocationID)
+	}
+}
+
 // stoppingBackend commits an operator-visible blocking system_health item the
 // first time the engine probes its capabilities after the test arms it. The
 // probe runs inside dispatch, after the pass's operating-state pre-check and

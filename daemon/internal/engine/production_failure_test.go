@@ -476,6 +476,31 @@ func TestPolicyRefusalRecordsRunHold(t *testing.T) {
 	}
 }
 
+// TestTerminalWriteRefusalClassifiesAsRunHold covers the second production
+// refusal exit: the admission re-read inside the terminal write transaction.
+// In production it refuses only when policy drifts between the
+// productionAdmission re-gate and that transaction, a window no harness hook
+// reaches, so this drives the write directly under a raised floor. It pins
+// that the write returns the refusal unwrapped and classified, which is what
+// lets acceptProductionAttempt's one refusal branch record the hold for it;
+// TestPolicyRefusalRecordsRunHold covers that branch.
+func TestTerminalWriteRefusalClassifiesAsRunHold(t *testing.T) {
+	f := newFailedImplementationFixture(t, execfake.OutcomeComplete, "completed before the floor rose")
+	raised := f.withRaisedFloor(t)
+	engine := raised.newEngine(t, f.driver)
+
+	accepted, err := engine.recordProductionTerminal(t.Context(), f.run, productionTerminalRecord{
+		InvocationID: f.attempt.InvocationID, RunID: f.run.ID, StageID: f.attempt.StageID,
+		Status: exec.StatusCompleted, Summary: "completed before the floor rose",
+	})
+	if accepted || !MutableAdmissionPolicyRefusal(err) {
+		t.Fatalf("terminal write under a raised floor = accepted %t, %v; want a mutable policy refusal", accepted, err)
+	}
+	if reason, ok := dispatchHoldReason(err); !ok || reason != domain.HoldAdmissionPolicyRefused {
+		t.Fatalf("terminal write refusal classifies as (%s, %t), want %s", reason, ok, domain.HoldAdmissionPolicyRefused)
+	}
+}
+
 // switchableInspectDriver is an inspectErrorDriver whose Inspect error can be
 // switched off between passes on one engine: with an error set it refuses the
 // way a mutable-policy refusal surfaces from collectTerminal; once cleared it
