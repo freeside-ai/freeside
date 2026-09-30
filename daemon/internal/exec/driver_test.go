@@ -14,7 +14,30 @@ func execStageDigest(fill string) domain.Digest {
 	return domain.Digest("sha256:" + strings.Repeat(fill, 64))
 }
 
-func fullAdmission(t *testing.T, identity *domain.AuthIdentityID, egress domain.EgressProfile) domain.ExecutionAdmission {
+// agentBinding is a well-formed attended binding; the caller sets the model
+// and effort fields it exercises.
+func agentBinding() *domain.AdmissionAgentBinding {
+	return &domain.AdmissionAgentBinding{
+		AgentDigest: execStageDigest("a"), LaunchDigest: execStageDigest("b"),
+		TreatmentDigest: execStageDigest("d"), PricingRevision: "pricing-2026-01",
+		LineupRevision: execStageDigest("c"), EnrollmentID: "enroll-1",
+		EnrollmentGeneration: 1, StoreManifestDigest: execStageDigest("9"),
+		EffectiveEgress: []string{"api.anthropic.com"}, Attended: true,
+	}
+}
+
+func explicitAgentBinding() *domain.AdmissionAgentBinding {
+	b := agentBinding()
+	b.RouteModelID = "claude-opus-5-5"
+	b.RequestedEffort = domain.EffortMax
+	b.NativeEffort = "max"
+	return b
+}
+
+func fullAdmission(
+	t *testing.T, identity *domain.AuthIdentityID, egress domain.EgressProfile,
+	binding *domain.AdmissionAgentBinding,
+) domain.ExecutionAdmission {
 	t.Helper()
 	conversationDigest := execStageDigest("7")
 	vendorDigest := execStageDigest("8")
@@ -48,6 +71,7 @@ func fullAdmission(t *testing.T, identity *domain.AuthIdentityID, egress domain.
 		Base:           domain.BaseRevision{Repo: "owner/repo", RepositoryID: 424242, BaseRef: "refs/heads/main", BaseSHA: "deadbeef"},
 		Workspace:      "ws-1",
 		AuthIdentityID: identity,
+		AgentBinding:   binding,
 		AdmittedAt:     time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
 	})
 	if err != nil {
@@ -61,7 +85,7 @@ func fullAdmission(t *testing.T, identity *domain.AuthIdentityID, egress domain.
 // unmapped stays zero here and fails, rather than reaching a driver empty.
 func TestStartSpecFromAdmissionCarriesEveryField(t *testing.T) {
 	identity := domain.AuthIdentityID("auth-1")
-	admission := fullAdmission(t, &identity, domain.EgressProviderOnly)
+	admission := fullAdmission(t, &identity, domain.EgressProviderOnly, explicitAgentBinding())
 	spec := exec.StartSpecFromAdmission(admission)
 
 	v := reflect.ValueOf(spec)
@@ -83,12 +107,35 @@ func TestStartSpecFromAdmissionCarriesEveryField(t *testing.T) {
 	if spec.AuthIdentityID != identity {
 		t.Errorf("spec auth_identity_id = %q, want %q", spec.AuthIdentityID, identity)
 	}
+	if spec.RouteModelID != "claude-opus-5-5" || spec.NativeEffort != "max" {
+		t.Errorf("spec model/effort = %q/%q, want the binding's claude-opus-5-5/max",
+			spec.RouteModelID, spec.NativeEffort)
+	}
+}
+
+// TestStartSpecFromAdmissionPassesNoModelOrEffort covers the two admissions
+// whose launch passes neither: a binding for the native-default offer at
+// harness_default records no model or effort, and a legacy admission has no
+// binding at all.
+func TestStartSpecFromAdmissionPassesNoModelOrEffort(t *testing.T) {
+	identity := domain.AuthIdentityID("auth-1")
+	for name, binding := range map[string]*domain.AdmissionAgentBinding{
+		"native default": agentBinding(),
+		"no binding":     nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			spec := exec.StartSpecFromAdmission(fullAdmission(t, &identity, domain.EgressProviderOnly, binding))
+			if spec.RouteModelID != "" || spec.NativeEffort != "" {
+				t.Fatalf("spec model/effort = %q/%q, want both empty", spec.RouteModelID, spec.NativeEffort)
+			}
+		})
+	}
 }
 
 // TestStartSpecFromAdmissionWithoutIdentity covers the clean-verification
 // branch: no provider identity is recorded, so none is passed to the driver.
 func TestStartSpecFromAdmissionWithoutIdentity(t *testing.T) {
-	spec := exec.StartSpecFromAdmission(fullAdmission(t, nil, domain.EgressCleanVerification))
+	spec := exec.StartSpecFromAdmission(fullAdmission(t, nil, domain.EgressCleanVerification, nil))
 	if spec.AuthIdentityID != "" {
 		t.Fatalf("spec auth_identity_id = %q, want empty", spec.AuthIdentityID)
 	}
@@ -99,7 +146,7 @@ func TestStartSpecFromAdmissionWithoutIdentity(t *testing.T) {
 
 func TestStartSpecFromAdmissionDetachesStageInputs(t *testing.T) {
 	identity := domain.AuthIdentityID("auth-1")
-	admission := fullAdmission(t, &identity, domain.EgressProviderOnly)
+	admission := fullAdmission(t, &identity, domain.EgressProviderOnly, nil)
 	spec := exec.StartSpecFromAdmission(admission)
 	*admission.StageInputs.VendorInstructions.Digest = execStageDigest("e")
 	*admission.StageInputs.ConversationDigest = execStageDigest("f")

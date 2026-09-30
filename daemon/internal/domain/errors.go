@@ -312,6 +312,8 @@ var (
 	// disabled identity. The wrapping message names the exact leg.
 	ErrAgentJoinInvalid = errors.New(
 		"agent resolution join is invalid")
+	ErrEffortUntranslatable = errors.New(
+		"requested effort has no native value for the harness client")
 	ErrAgentBodyUnresolved = errors.New(
 		"agent canonical body carries a name where a resolved reference belongs")
 	ErrInvalidAgentName = errors.New(

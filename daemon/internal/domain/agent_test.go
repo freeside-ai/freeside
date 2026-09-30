@@ -204,6 +204,24 @@ func TestResolveAgentDefinition(t *testing.T) {
 			t.Fatalf("ResolveAgentDefinition = %v, want %v", err, domain.ErrAccountBindingMismatch)
 		}
 	})
+
+	t.Run("claude agent resolves", func(t *testing.T) {
+		if _, err := domain.ResolveAgentDefinition(claudeAgentResolution(t)); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	// The pinned Claude build's table sends every valid level, so an authored
+	// list is the only way a valid Claude effort can be unsendable today;
+	// TestTranslateEffortRefusals covers the table's own refusal.
+	t.Run("claude effort missing from the authored list", func(t *testing.T) {
+		in := claudeAgentResolution(t)
+		in.Adapter.SendableEfforts = []domain.EffortLevel{domain.EffortHigh}
+		in.Adapter.Digest = mustComputeDigest(t, in.Adapter.ComputeDigest)
+		if _, err := domain.ResolveAgentDefinition(in); !errors.Is(err, domain.ErrAgentJoinInvalid) {
+			t.Fatalf("ResolveAgentDefinition = %v, want %v", err, domain.ErrAgentJoinInvalid)
+		}
+	})
 }
 
 func TestAgentNameValidation(t *testing.T) {

@@ -203,6 +203,15 @@ type AdmissionAgentBinding struct {
 	// agree with the admission's operating mode; carrying both keeps the
 	// snapshot self-contained while the cross-check refuses drift.
 	Attended bool `json:"attended"`
+	// RouteModelID, RequestedEffort, and NativeEffort are the model and
+	// effort the launch passes (DeriveAgentLaunchSelection), recorded so
+	// exec.StartSpecFromAdmission can carry them without a closure lookup.
+	// Each is omitted when empty, so a binding that passes neither keeps the
+	// bytes and id it had before these fields existed. The two effort fields
+	// are present together or not at all.
+	RouteModelID    string      `json:"route_model_id,omitempty"`
+	RequestedEffort EffortLevel `json:"requested_effort,omitempty"`
+	NativeEffort    string      `json:"native_effort,omitempty"`
 }
 
 // Validate reports whether the binding is well-formed.
@@ -237,6 +246,16 @@ func (b AdmissionAgentBinding) Validate() error {
 			return fmt.Errorf("admission agent binding effective_egress at %q: %w",
 				authority, ErrKeysNotCanonical)
 		}
+	}
+	if (b.RequestedEffort == "") != (b.NativeEffort == "") {
+		return fmt.Errorf("admission agent binding requested_effort %q with native_effort %q: %w",
+			b.RequestedEffort, b.NativeEffort, ErrEmptyField)
+	}
+	// harness_default sends nothing, so it is recorded as the absence of
+	// both fields, never as a requested value.
+	if b.RequestedEffort != "" && (!b.RequestedEffort.valid() || b.RequestedEffort == EffortHarnessDefault) {
+		return fmt.Errorf("admission agent binding requested_effort %q: %w",
+			b.RequestedEffort, ErrInvalidEffortLevel)
 	}
 	return nil
 }
@@ -976,8 +995,10 @@ func ValidateOutcomeBinding(a ExecutionAdmission, x ExecutionOutcome) error {
 // admission's stage resolves to, and the enrollment and generation records —
 // and every derived field must agree: the identity and credential mode with
 // the enrollment, the store manifest with the generation, the egress with
-// the route, the instruction-delivery vendor with the adapter, the binding's
-// launch digest with an authenticated launch for exactly that role, and the
+// the route, the instruction-delivery vendor with the adapter, the model and
+// effort the launch passes with DeriveAgentLaunchSelection over the agent,
+// adapter, and offer (a stored model or effort is never trusted on its
+// own), the binding's launch digest with an authenticated launch for exactly that role, and the
 // agent's offer digest with an authenticated offer, so attended eligibility,
 // launch-capability provenance, and the admitted model can never be
 // attributed to a fragment the admission did not run. The joins the closure
@@ -1066,6 +1087,17 @@ func ValidateAdmissionAgentDerivations(
 	if enrollment.HarnessClient != adapter.ClientKind {
 		return fail("enrollment binds client %q, adapter drives %q",
 			enrollment.HarnessClient, adapter.ClientKind)
+	}
+	selection, err := DeriveAgentLaunchSelection(agent, adapter, offer)
+	if err != nil {
+		return fail("launch selection: %v", err)
+	}
+	if binding.RouteModelID != selection.RouteModelID ||
+		binding.RequestedEffort != selection.RequestedEffort ||
+		binding.NativeEffort != selection.NativeEffort {
+		return fail("binding passes model %q effort %q/%q, closure derives %q %q/%q",
+			binding.RouteModelID, binding.RequestedEffort, binding.NativeEffort,
+			selection.RouteModelID, selection.RequestedEffort, selection.NativeEffort)
 	}
 	if missing := MissingLaunchCapabilities(adapter.LaunchCapabilities, launch.RequiredCapabilities()); len(missing) > 0 {
 		return fail("launch requires %v beyond the adapter's declared capabilities", missing)

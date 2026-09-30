@@ -124,10 +124,15 @@ func agentBinding() domain.AdmissionAgentBinding {
 // agent-bound (v4) admission must record.
 func codexInstructionInput(t *testing.T) domain.ExecutionAdmissionInput {
 	t.Helper()
+	return vendorInstructionInput(t, domain.AgentVendorCodex)
+}
+
+func vendorInstructionInput(t *testing.T, vendor domain.AgentVendor) domain.ExecutionAdmissionInput {
+	t.Helper()
 	in := admissionInput()
 	snapshot := *in.StageInputs
 	snapshot.VendorInstructions = &domain.VendorInstructionSnapshot{
-		Vendor:   domain.AgentVendorCodex,
+		Vendor:   vendor,
 		Delivery: domain.VendorInstructionDeliveryAppendFile,
 	}
 	id, err := snapshot.ComputeID()
@@ -159,6 +164,21 @@ func TestAdmissionAgentBindingValidate(t *testing.T) {
 		{"unsorted egress", func(b *domain.AdmissionAgentBinding) {
 			b.EffectiveEgress = []string{"chatgpt.com", "auth.openai.com"}
 		}, domain.ErrKeysNotCanonical},
+		{"explicit model and effort", func(b *domain.AdmissionAgentBinding) {
+			b.RouteModelID, b.RequestedEffort, b.NativeEffort = "claude-opus-5-5", domain.EffortMax, "max"
+		}, nil},
+		{"requested effort without native", func(b *domain.AdmissionAgentBinding) {
+			b.RequestedEffort = domain.EffortMax
+		}, domain.ErrEmptyField},
+		{"native effort without requested", func(b *domain.AdmissionAgentBinding) {
+			b.NativeEffort = "max"
+		}, domain.ErrEmptyField},
+		{"unknown requested effort", func(b *domain.AdmissionAgentBinding) {
+			b.RequestedEffort, b.NativeEffort = "xhigh", "xhigh"
+		}, domain.ErrInvalidEffortLevel},
+		{"harness_default recorded as a sent effort", func(b *domain.AdmissionAgentBinding) {
+			b.RequestedEffort, b.NativeEffort = domain.EffortHarnessDefault, "high"
+		}, domain.ErrInvalidEffortLevel},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -299,7 +319,17 @@ func derivationClosure(t *testing.T) (
 	domain.ClientEnrollment, domain.EnrollmentGeneration,
 ) {
 	t.Helper()
-	resolution := agentResolution(t)
+	return derivationClosureFor(t, agentResolution(t), domain.AgentVendorCodex)
+}
+
+// derivationClosureFor builds a coherent closure around one resolution, the
+// binding recording the launch selection the closure derives.
+func derivationClosureFor(t *testing.T, resolution domain.AgentResolutionInput, vendor domain.AgentVendor) (
+	domain.ExecutionAdmission, domain.AgentDefinition, domain.AdapterFragment,
+	domain.RouteFragment, domain.OfferFragment, domain.LaunchSpec,
+	domain.ClientEnrollment, domain.EnrollmentGeneration,
+) {
+	t.Helper()
 	agent, err := domain.ResolveAgentDefinition(resolution)
 	if err != nil {
 		t.Fatal(err)
@@ -315,7 +345,11 @@ func derivationClosure(t *testing.T) (
 		t.Fatal(err)
 	}
 	launch.Digest = launchDigest
-	in := codexInstructionInput(t)
+	selection, err := domain.DeriveAgentLaunchSelection(agent, resolution.Adapter, resolution.Offer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := vendorInstructionInput(t, vendor)
 	identity := domain.AuthIdentityID(resolution.Enrollment.AuthIdentityID)
 	in.AuthIdentityID = &identity
 	in.CredentialMode = resolution.Enrollment.CredentialMode
@@ -330,6 +364,9 @@ func derivationClosure(t *testing.T) (
 		StoreManifestDigest:  generationEntry.StoreManifestDigest,
 		EffectiveEgress:      resolution.Route.InferenceAuthorities,
 		Attended:             true,
+		RouteModelID:         selection.RouteModelID,
+		RequestedEffort:      selection.RequestedEffort,
+		NativeEffort:         selection.NativeEffort,
 	}
 	offer := resolution.Offer
 	digest, err := offer.ComputeDigest()
@@ -594,4 +631,89 @@ func TestValidateAdmissionAgentDerivations(t *testing.T) {
 				err, domain.ErrAdmissionDerivationMismatch)
 		}
 	})
+}
+
+// TestValidateAdmissionAgentLaunchSelection pins the recheck of the model and
+// effort a binding records: they must be exactly what the closure derives,
+// so a stored model or effort is never trusted on its own.
+func TestValidateAdmissionAgentLaunchSelection(t *testing.T) {
+	validate := func(t *testing.T, resolution domain.AgentResolutionInput, vendor domain.AgentVendor,
+		mutate func(*domain.AdmissionAgentBinding),
+	) error {
+		t.Helper()
+		admission, agent, adapter, route, offer, launch, enrollment, generationEntry := derivationClosureFor(t, resolution, vendor)
+		mutate(admission.AgentBinding)
+		id, err := admission.ComputeID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		admission.ID = id
+		return domain.ValidateAdmissionAgentDerivations(
+			admission, agent, adapter, route, offer, launch, domain.StageNameReview,
+			enrollment, generationEntry)
+	}
+
+	t.Run("coherent claude closures", func(t *testing.T) {
+		if err := validate(t, claudeAgentResolution(t), domain.AgentVendorClaude,
+			func(*domain.AdmissionAgentBinding) {}); err != nil {
+			t.Fatalf("explicit model and effort = %v", err)
+		}
+		nativeDefault := claudeAgentResolution(t)
+		nativeDefault.Offer.RouteModelID = domain.ClaudeCodeNativeDefaultRouteModelID
+		nativeDefault.Offer.Digest = mustComputeDigest(t, nativeDefault.Offer.ComputeDigest)
+		nativeDefault.Source.Effort = domain.EffortHarnessDefault
+		if err := validate(t, nativeDefault, domain.AgentVendorClaude,
+			func(b *domain.AdmissionAgentBinding) {
+				if b.RouteModelID != "" || b.RequestedEffort != "" || b.NativeEffort != "" {
+					t.Fatalf("native default binding records %+v", b)
+				}
+			}); err != nil {
+			t.Fatalf("native default = %v", err)
+		}
+	})
+
+	cases := []struct {
+		name       string
+		resolution func(*testing.T) domain.AgentResolutionInput
+		vendor     domain.AgentVendor
+		mutate     func(*domain.AdmissionAgentBinding)
+	}{
+		{
+			"claude wrong model", claudeAgentResolution, domain.AgentVendorClaude,
+			func(b *domain.AdmissionAgentBinding) { b.RouteModelID = "claude-fable-5-1" },
+		},
+		{
+			"claude reserved id recorded as a model", claudeAgentResolution, domain.AgentVendorClaude,
+			func(b *domain.AdmissionAgentBinding) { b.RouteModelID = domain.ClaudeCodeNativeDefaultRouteModelID },
+		},
+		{
+			"claude wrong requested effort", claudeAgentResolution, domain.AgentVendorClaude,
+			func(b *domain.AdmissionAgentBinding) { b.RequestedEffort = domain.EffortHigh },
+		},
+		{
+			"claude wrong native effort", claudeAgentResolution, domain.AgentVendorClaude,
+			func(b *domain.AdmissionAgentBinding) { b.NativeEffort = "high" },
+		},
+		{
+			"claude binding omits the selection", claudeAgentResolution, domain.AgentVendorClaude,
+			func(b *domain.AdmissionAgentBinding) { b.RouteModelID, b.RequestedEffort, b.NativeEffort = "", "", "" },
+		},
+		{
+			"codex binding carries a model", agentResolution, domain.AgentVendorCodex,
+			func(b *domain.AdmissionAgentBinding) { b.RouteModelID = "gpt-5.6-sol" },
+		},
+		{
+			"codex binding carries an effort", agentResolution, domain.AgentVendorCodex,
+			func(b *domain.AdmissionAgentBinding) { b.RequestedEffort, b.NativeEffort = domain.EffortMax, "max" },
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validate(t, tc.resolution(t), tc.vendor, tc.mutate)
+			if !errors.Is(err, domain.ErrAdmissionDerivationMismatch) {
+				t.Fatalf("ValidateAdmissionAgentDerivations = %v, want %v",
+					err, domain.ErrAdmissionDerivationMismatch)
+			}
+		})
+	}
 }
