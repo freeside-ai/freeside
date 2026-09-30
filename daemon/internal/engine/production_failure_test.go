@@ -652,12 +652,12 @@ func TestPolicyRefusalRecoveryClearsRunHoldOnTerminal(t *testing.T) {
 	}
 }
 
-// TestProductionRefusalHoldReasonsPinned pins productionRefusalHoldReasons to
+// TestRefusalHoldReasonsPinned pins refusalHoldReasons to
 // the two functions it summarizes: for every sentinel MutableAdmissionPolicyRefusal
 // accepts, dispatchHoldReason maps it to a reason in the set, and every reason
 // in the set is reached by at least one sentinel. It fails when either function
 // gains a member the other, or this list, does not know.
-func TestProductionRefusalHoldReasonsPinned(t *testing.T) {
+func TestRefusalHoldReasonsPinned(t *testing.T) {
 	// Every sentinel MutableAdmissionPolicyRefusal accepts (invocation.go).
 	sentinels := []error{
 		store.ErrBackendNotConformant,
@@ -692,14 +692,14 @@ func TestProductionRefusalHoldReasonsPinned(t *testing.T) {
 			t.Errorf("sentinel %v classifies onto no hold reason", sentinel)
 			continue
 		}
-		if !slices.Contains(productionRefusalHoldReasons, reason) {
-			t.Errorf("sentinel %v maps to %s, outside productionRefusalHoldReasons", sentinel, reason)
+		if !slices.Contains(refusalHoldReasons, reason) {
+			t.Errorf("sentinel %v maps to %s, outside refusalHoldReasons", sentinel, reason)
 		}
 		reached[reason] = true
 	}
-	for _, reason := range productionRefusalHoldReasons {
+	for _, reason := range refusalHoldReasons {
 		if !reached[reason] {
-			t.Errorf("productionRefusalHoldReasons has %s, which no listed sentinel reaches", reason)
+			t.Errorf("refusalHoldReasons has %s, which no listed sentinel reaches", reason)
 		}
 	}
 }

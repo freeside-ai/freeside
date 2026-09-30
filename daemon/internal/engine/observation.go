@@ -251,20 +251,38 @@ func recordRunHold(
 	return tx.RecordRunHold(ctx, hold)
 }
 
-// productionRefusalHoldReasons is the closed set of hold reasons the production
-// acceptance path (acceptProductionAttempt) can record: exactly the image of
+// refusalHoldReasons is the closed set of hold reasons the production and
+// specification acceptance paths (acceptProductionAttempt,
+// acceptSpecificationAttempt) can record: exactly the image of
 // MutableAdmissionPolicyRefusal (invocation.go) under dispatchHoldReason. A
 // healthy acceptance pass clears every one, so a transient refusal that has
 // recovered (for example backend conformance that briefly lapsed) stops being
-// displayed as the run's hold. TestProductionRefusalHoldReasonsPinned keeps
+// displayed as the run's hold. TestRefusalHoldReasonsPinned keeps
 // this set in lockstep with those two functions; a member added to one without
 // the other fails that test.
-var productionRefusalHoldReasons = []domain.RunHoldReason{
+var refusalHoldReasons = []domain.RunHoldReason{
 	domain.HoldBackendNotConformant,
 	domain.HoldAdmissionPolicyRefused,
 	domain.HoldBackupProtectionUnready,
 	domain.HoldRepositoryUntrusted,
 	domain.HoldProviderAuthorityUnavailable,
+}
+
+// observeRefusalHold records a paced hold observation for an attempt that an
+// acceptance pass skips on a mutable admission-policy refusal, so the operator
+// sees why work stopped instead of a silent skip (issues #1181, #435). A
+// refusal that classifies onto no hold reason records nothing and keeps its
+// ordinary skip. The other half of the lifecycle is clearRefusalHold, which
+// removes the hold on the next acceptance pass that ends without a refusal
+// (issue #1194).
+func (e *Engine) observeRefusalHold(
+	ctx context.Context, runID domain.RunID, invocationID domain.InvocationID, err error,
+) error {
+	reason, ok := dispatchHoldReason(err)
+	if !ok {
+		return nil
+	}
+	return e.observeRunHold(ctx, runID, invocationID, reason)
 }
 
 // refusalRecoveredPaceState paces clearRefusalHold on the run's hold key
@@ -288,7 +306,7 @@ func (e *Engine) clearRefusalHold(ctx context.Context, runID domain.RunID) error
 		return nil
 	}
 	if err := e.store.Write(ctx, func(tx *store.WriteTx) error {
-		for _, reason := range productionRefusalHoldReasons {
+		for _, reason := range refusalHoldReasons {
 			if err := tx.ClearRunHoldCause(ctx, runID, reason); err != nil {
 				return err
 			}
