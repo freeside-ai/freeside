@@ -115,6 +115,13 @@ type StartSpec struct {
 	// Historical walking-skeleton admissions leave it nil and cannot pass the
 	// production materializer.
 	StageInputs *domain.StageInputSnapshot `json:"stage_inputs,omitempty"`
+	// RouteModelID and NativeEffort are the model and harness-native effort
+	// the admitted agent's launch passes (§5.4). Empty means pass none, so the
+	// harness runs its own default: the native-default offer at
+	// harness_default, or an admission with no agent binding. A driver passes
+	// them; it does not choose them.
+	RouteModelID string `json:"route_model_id,omitempty"`
+	NativeEffort string `json:"native_effort,omitempty"`
 }
 
 // StartSpecFromAdmission renders the durable admission record as the spec its
@@ -140,6 +147,10 @@ func StartSpecFromAdmission(a domain.ExecutionAdmission) StartSpec {
 	}
 	if a.AuthIdentityID != nil {
 		spec.AuthIdentityID = *a.AuthIdentityID
+	}
+	if a.AgentBinding != nil {
+		spec.RouteModelID = a.AgentBinding.RouteModelID
+		spec.NativeEffort = a.AgentBinding.NativeEffort
 	}
 	return spec
 }
