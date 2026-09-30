@@ -97,6 +97,9 @@ SELECT auth_identity_id, harness_client, route, auth_method, credential_mode,
        recorded_at, body
 FROM client_enrollments WHERE id = ?`
 
+	listClientEnrollmentIDsSQL = `
+SELECT id FROM client_enrollments WHERE auth_identity_id = ? ORDER BY id`
+
 	maxEnrollmentGenerationOrdinalSQL = `
 SELECT COALESCE(MAX(ordinal), 0) FROM client_enrollment_generations WHERE enrollment_id = ?`
 	insertEnrollmentGenerationSQL = `
@@ -202,6 +205,27 @@ func (tx *ReadTx) GetClientEnrollment(
 		return domain.ClientEnrollment{}, fmt.Errorf("get client enrollment %q: %w", id, err)
 	}
 	return enrollment, nil
+}
+
+// ListClientEnrollments reconstructs every enrollment under one identity in id
+// order, each through GetClientEnrollment, so the account-binding re-gate runs
+// on every listed row and one that fails it fails the whole listing.
+func (tx *ReadTx) ListClientEnrollments(
+	ctx context.Context, identity domain.AuthIdentityID,
+) ([]domain.ClientEnrollment, error) {
+	ids, err := queryIDs[domain.ClientEnrollmentID](ctx, tx, listClientEnrollmentIDsSQL, identity)
+	if err != nil {
+		return nil, fmt.Errorf("list client enrollments for %q: %w", identity, err)
+	}
+	enrollments := make([]domain.ClientEnrollment, 0, len(ids))
+	for _, id := range ids {
+		enrollment, err := tx.GetClientEnrollment(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("list client enrollments for %q: %w", identity, err)
+		}
+		enrollments = append(enrollments, enrollment)
+	}
+	return enrollments, nil
 }
 
 // AppendEnrollmentGeneration appends one immutable store-history entry and
