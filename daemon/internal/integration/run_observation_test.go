@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -960,5 +961,100 @@ func TestForgedMilestonesDriveNoWorkflowDecision(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatalf("read real outcome: %v", err)
+	}
+}
+
+// stoppingBackend commits an operator-visible blocking system_health item the
+// first time the engine probes its capabilities after the test arms it. The
+// probe runs inside dispatch, after the pass's operating-state pre-check and
+// before the admitting transaction, so the block lands exactly in the window
+// the admitting transaction's own gate exists to close.
+type stoppingBackend struct {
+	fake.RunnerBackend
+	armed *atomic.Bool
+	block func()
+}
+
+func (b stoppingBackend) Capabilities() exec.CapabilitySet {
+	if b.armed.CompareAndSwap(true, false) {
+		b.block()
+	}
+	return b.RunnerBackend.Capabilities()
+}
+
+// TestRunObservationShowsInTransactionBlockOnEveryLane: when a blocking
+// system_health item commits between the dispatch pre-check and the admitting
+// transaction, the run records the blocking_system_health hold whatever its
+// lane. Only production intents recorded it before issue #435; this drives a
+// feedback discussion intent through the same window.
+func TestRunObservationShowsInTransactionBlockOnEveryLane(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	var (
+		env   engine.AdmissionEnvironment
+		armed atomic.Bool
+		f     *workflowFixture
+	)
+	f = openUnattendedFixtureWith(t, t.TempDir(), true, testIdentity,
+		func(e *engine.AdmissionEnvironment) { env = *e },
+		func(*store.Store, *signet.BlobStore) []engine.Option {
+			backend := stoppingBackend{
+				RunnerBackend: fake.RunnerBackend{
+					BackendName: string(domain.BackendFreshVMReadOnlyVolumeHandoff),
+					Caps:        exec.NewCapabilitySet(conformantCeiling(t)...),
+				},
+				armed: &armed,
+				block: func() { blockUnattendedOperation(t, f, "block-mid-dispatch") },
+			}
+			return []engine.Option{engine.WithAdmission(backend,
+				[]exec.Capability{exec.CapPostExitExport}, env, func() time.Time { return admittedAt })}
+		})
+	f.seed(t)
+	f.approve(t)
+	feedback := f.openFeedback(t)
+	invocationID := f.discuss(t, feedback)
+	f.scriptCompletion(invocationID, fake.OutcomeComplete)
+
+	armed.Store(true)
+	if _, err := f.engine.Reconcile(ctx); err != nil {
+		t.Fatalf("blocked dispatch stopped the reconcile loop: %v", err)
+	}
+	if armed.Load() {
+		t.Fatal("dispatch never probed the backend: the block did not land mid-dispatch")
+	}
+	observation := observeProductionRun(t, f.store, testRunID)
+	if observation.Hold == nil {
+		t.Fatal("run blocked inside the admitting transaction shows no hold")
+	}
+	if observation.Hold.Reason != domain.HoldBlockingSystemHealth {
+		t.Errorf("hold reason = %s, want %s", observation.Hold.Reason, domain.HoldBlockingSystemHealth)
+	}
+	if observation.Hold.InvocationID == nil || *observation.Hold.InvocationID != invocationID {
+		t.Errorf("hold invocation = %v, want %s", observation.Hold.InvocationID, invocationID)
+	}
+}
+
+// blockUnattendedOperation opens a blocking system_health item, the typed
+// operating-state rule that holds unattended dispatch.
+func blockUnattendedOperation(t *testing.T, f *workflowFixture, id string) {
+	t.Helper()
+	posture := domain.HealthPostureBlocking
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: domain.ItemID("health-" + id), ProjectID: "proj-235",
+		Subject:           domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
+		Type:              domain.AttentionSystemHealth,
+		Priority:          domain.PriorityNormal,
+		Reason:            "blocking health committed mid-dispatch",
+		RequestedDecision: []domain.Action{domain.ActionAcknowledge},
+		ItemVersion:       1,
+		InterruptionClass: domain.InterruptionExceptional,
+		Posture:           &posture,
+		Status:            domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewAttentionItem: %v", err)
+	}
+	if err := f.signet.PutItem(context.Background(), item); err != nil {
+		t.Fatalf("open blocking item: %v", err)
 	}
 }
