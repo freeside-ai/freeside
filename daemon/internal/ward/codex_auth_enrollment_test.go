@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,6 +25,8 @@ type fakeCodexAuthEnrollmentJournal struct {
 	recoverable   bool
 	item          domain.AttentionItem
 	projectMutate func(*domain.AttentionItem)
+	bootstrap     *EnrollmentBootstrap
+	generation    *domain.EnrollmentGeneration
 }
 
 func (j *fakeCodexAuthEnrollmentJournal) Begin(
@@ -31,13 +34,19 @@ func (j *fakeCodexAuthEnrollmentJournal) Begin(
 	identity domain.AuthIdentity,
 	_ domain.ProjectID,
 	holder domain.InvocationID,
+	bootstrap *EnrollmentBootstrap,
 	now, expiresAt time.Time,
 ) (domain.AuthStoreMutationLease, error) {
 	j.beginCalls++
+	j.bootstrap = bootstrap
 	j.leaser.identity = identity
 	j.leaser.lease = domain.AuthStoreMutationLease{
 		AuthIdentityID: identity.ID, Holder: holder, Fence: 1,
 		AcquiredAt: now, ExpiresAt: expiresAt,
+	}
+	if bootstrap != nil {
+		binding := bootstrap.Binding
+		j.leaser.lease.GenerationBinding = &binding
 	}
 	return j.leaser.lease, nil
 }
@@ -62,8 +71,10 @@ func (j *fakeCodexAuthEnrollmentJournal) Verify(
 	fence int64,
 	digest domain.Digest,
 	expiresAt, _ time.Time,
+	generation *domain.EnrollmentGeneration,
 ) error {
 	j.verifyCalls++
+	j.generation = generation
 	j.verified = domain.CodexReenrollmentRecoveryBinding{
 		AuthIdentityID: id, LeaseFence: fence,
 		AuthStoreDigest: digest, AccessTokenExpiresAt: expiresAt,
@@ -228,6 +239,26 @@ func TestEnrollCodexAuthRecoversVerifiedProjectionWithoutInput(t *testing.T) {
 	}
 	if _, err := os.Lstat(codexAuthRefreshIntentPath(storePath, cfg.AuthIdentityID)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("verified retry left refresh intent: %v", err)
+	}
+}
+
+// TestCodexAuthAddLeavesPendingRecoveryToEnrollCodex proves auth add never
+// finishes an earlier verified replacement, and points the operator at auth
+// list, since an earlier auth add may already have committed the enrollment.
+func TestCodexAuthAddLeavesPendingRecoveryToEnrollCodex(t *testing.T) {
+	cfg, journal, _, refresher, _, _ := codexAuthEnrollmentFixture(t)
+	cfg.Enrollment = &CodexClientEnrollmentRequest{
+		EnrollmentID: "codex-primary/codex_cli", Route: "openai-subscription", CostOwner: "operator",
+	}
+	journal.recoverable = true
+
+	_, err := EnrollCodexAuth(context.Background(), cfg)
+	if err == nil || !strings.Contains(err.Error(), "auth list") {
+		t.Fatalf("err = %v, want a refusal that points at auth list", err)
+	}
+	if journal.beginCalls != 0 || journal.projectCalls != 0 || refresher.calls != 0 {
+		t.Fatalf("refused recovery calls = begin %d project %d refresh %d",
+			journal.beginCalls, journal.projectCalls, refresher.calls)
 	}
 }
 
