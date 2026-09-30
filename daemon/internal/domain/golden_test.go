@@ -961,6 +961,45 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A Claude agent-bound variant whose launch passes an explicit model and
+	// effort: pins the optional route_model_id, requested_effort, and
+	// native_effort fields, which every binding above omits.
+	claudeIdentityID := domain.AuthIdentityID("auth-anthropic-A")
+	claudeAdmission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
+		InvocationID: "inv-4", RunID: "run-1", StageID: "stage-1", AttemptID: "attempt-4",
+		Backend: "fresh_vm_read_only_volume_handoff",
+		Capabilities: domain.CapabilitySnapshot{
+			domain.CapPostExitExport, domain.CapDetachableWorkspace,
+		},
+		OperatingMode:  domain.ModeAttendedDev,
+		CredentialMode: domain.CredentialSubscriptionContained,
+		EgressProfile:  domain.EgressProviderOnly,
+		ImageRef:       domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32)),
+		SpecDigest:     stageDigest("2"), PolicyDigest: resolvedPolicy.Digest, InputDigest: stageDigest("1"),
+		Base:           domain.BaseRevision{Repo: "owner/repo", RepositoryID: 424242, BaseRef: "refs/heads/main", BaseSHA: "deadbeef"},
+		Workspace:      "freeside-handoff-run-1-ws",
+		StageInputs:    &stageInputs,
+		AuthIdentityID: &claudeIdentityID,
+		AgentBinding: &domain.AdmissionAgentBinding{
+			AgentDigest:          stageDigest("a"),
+			LaunchDigest:         goldenLaunch.Digest,
+			TreatmentDigest:      stageDigest("d"),
+			PricingRevision:      "2026-09",
+			LineupRevision:       stageDigest("c"),
+			EnrollmentID:         "anthropic-A/claude",
+			EnrollmentGeneration: 1,
+			StoreManifestDigest:  stageDigest("9"),
+			EffectiveEgress:      []string{"api.anthropic.com"},
+			Attended:             true,
+			RouteModelID:         "claude-opus-5-5",
+			RequestedEffort:      domain.EffortMax,
+			NativeEffort:         "max",
+		},
+		AdmittedAt: ts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	adapterConformance := adapterConformanceRecord(t)
 
 	waivedProfileDigest := domain.Digest("sha256:trust-profile-v1")
@@ -1567,6 +1606,7 @@ func TestGolden(t *testing.T) {
 		{"execution_admission", admission},
 		{"execution_admission_waived", waivedAdmission},
 		{"execution_admission_agent", agentAdmission},
+		{"execution_admission_agent_explicit_model", claudeAdmission},
 		{"adapter_conformance", adapterConformance},
 		{"execution_export", export},
 		{"current_import_start", currentImportStart},
