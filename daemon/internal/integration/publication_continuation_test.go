@@ -449,6 +449,17 @@ func completePublicationContinuationCycle(t *testing.T, p *productionPublication
 			p.forge.prs[0].State = "closed"
 		}
 		p.forge.mu.Unlock()
+		if strings.HasSuffix(scenario, "-missing") {
+			// An empty listing may be GitHub lagging the branch (#1544), so
+			// the missing PR is tolerated for three paced attempts before the
+			// fourth raises the card.
+			for attempt := range 3 {
+				if result, err := p.reconcileLanes(); err != nil || result.BlockedItemsCreated != 0 {
+					t.Fatalf("missing target attempt %d: %#v, %v", attempt+1, result, err)
+				}
+				p.now = p.now.Add(time.Minute + time.Second)
+			}
+		}
 		if result, err := p.reconcileLanes(); err != nil || result.BlockedItemsCreated != 1 {
 			t.Fatalf("unavailable continuation target: %#v, %v", result, err)
 		}

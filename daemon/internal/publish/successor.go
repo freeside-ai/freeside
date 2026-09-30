@@ -83,6 +83,10 @@ func (p *Publisher) PublishSuccessorAfterGateAndFinalize(
 // observeSuccessorPR permits only the two durable recovery states: the prior
 // identity, before or after the leased push, or the exact successor identity
 // at the new head. A missing/closed/foreign PR is never a create request.
+// An empty listing is ErrSuccessorPRNotListed rather than a conflict: GitHub's
+// listing can lag the branch for a moment, and the caller's retry pacing, not
+// this read, decides when a missing PR is real. More than one PR stays an
+// immediate conflict.
 func (p *Publisher) observeSuccessorPR(ctx context.Context, repo repoRef, identity Identity, candidate Candidate) (prState, error) {
 	target := candidate.Successor
 	if target == nil {
@@ -91,6 +95,9 @@ func (p *Publisher) observeSuccessorPR(ctx context.Context, repo repoRef, identi
 	prs, err := p.forge.listPRsByHead(ctx, repo, target.Branch)
 	if err != nil {
 		return prState{}, err
+	}
+	if len(prs) == 0 {
+		return prState{}, ErrSuccessorPRNotListed
 	}
 	if len(prs) != 1 {
 		return prState{}, ErrPublicationConflict
@@ -138,6 +145,13 @@ func (p *Publisher) convergeSuccessorPR(ctx context.Context, repo repoRef, ident
 	expected := pr
 	expected.Body = body
 	if !prMatchesCandidate(expected, repo, identity, candidate, candidate.Successor.Branch) {
+		// The caller confirmed the branch ref at the candidate head before
+		// this read, and validateSuccessorPR admits only the predecessor or
+		// candidate head, so a predecessor head here is GitHub's PR view
+		// lagging its branch. Anything else stays a conflict.
+		if pr.HeadSHA == candidate.Successor.HeadSHA {
+			return 0, ErrSuccessorPRHeadLagging
+		}
 		return 0, ErrPublicationConflict
 	}
 	if pr.Title != title || pr.Body != body {

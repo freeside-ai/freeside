@@ -97,6 +97,11 @@ type integrationForge struct {
 	failIssueRead        bool
 	issueReads           int
 	issueTitle           *string
+	// lagListings serves the next lagListings head-branch pull listings as
+	// GitHub's view lagging a successor push (#1544): an empty list when
+	// lagHeadSHA is empty, otherwise every listed PR at lagHeadSHA.
+	lagListings int
+	lagHeadSHA  string
 }
 
 func newIntegrationForge(t *testing.T) (*integrationForge, *httptest.Server) {
@@ -177,7 +182,17 @@ func (f *integrationForge) handle(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && r.URL.Path == root+"/pulls":
 		head := strings.TrimPrefix(r.URL.Query().Get("head"), "freeside-ai:")
 		out := make([]map[string]any, 0, len(f.prs))
+		lagging := f.lagListings > 0 && head != ""
+		if lagging {
+			f.lagListings--
+		}
 		for _, pr := range f.prs {
+			if lagging && f.lagHeadSHA == "" {
+				break
+			}
+			if lagging {
+				pr.HeadSHA = f.lagHeadSHA
+			}
 			if head == "" || head == pr.HeadRef {
 				out = append(out, integrationPRJSON(pr))
 			}
@@ -298,6 +313,14 @@ func (f *integrationForge) handleDraftMutation(w http.ResponseWriter, r *http.Re
 
 func integrationPRNodeID(number int) string {
 	return "PR_node_" + strconv.Itoa(number)
+}
+
+// lagPRListings makes the next n head-branch pull listings lag the branch:
+// empty when head is "", otherwise showing every PR at head.
+func (f *integrationForge) lagPRListings(n int, head string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lagListings, f.lagHeadSHA = n, head
 }
 
 func (f *integrationForge) interceptRequest(hook func(method, path string) bool) {

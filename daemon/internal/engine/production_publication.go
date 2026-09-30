@@ -57,6 +57,15 @@ const (
 	productionBlockTrust                 = domain.PublicationBlockTrust
 	productionBlockBaseAdvanced          = domain.PublicationBlockBaseAdvanced
 	productionBlockExternal              = "Publication is durably held because the external service permanently refused the committed operation. Repair that external state to resume recovery."
+	productionBlockSuccessorPRNotListed  = "Publication is held because GitHub still lists no pull request on the successor branch after repeated checks. Confirm the pull request exists and is open on that branch; publication resumes once GitHub shows it."
+	productionBlockSuccessorHeadLagging  = "Publication is held because GitHub still shows the pull request at its previous head after repeated checks, although the branch is at the pushed head. Confirm the pull request tracks that branch; publication resumes once GitHub shows the pushed head."
+	// successorObservationPendingTolerance is how many consecutive attempts
+	// of one successor may see GitHub's PR view lagging its branch before
+	// the operator is asked to look (#1544). At the default 30-second
+	// holdRetryInterval the fourth attempt, about 90 seconds in, raises the
+	// card: long past the moment GitHub normally needs, short enough that a
+	// PR that is really missing is not hidden for long.
+	successorObservationPendingTolerance = 3
 )
 
 var (
@@ -232,7 +241,11 @@ type productionPublicationWorkflow struct {
 	holdRetryInterval               time.Duration
 	now                             func() time.Time
 	holdRetryAfter                  map[string]time.Time
-	reviewRetryAfter                map[domain.RunID]time.Time
+	// successorObservationPending counts consecutive successor attempts, by
+	// task intent key, that saw GitHub's PR view lagging the branch (#1544).
+	// Process state only: a restart starts the tolerance window again.
+	successorObservationPending map[string]int
+	reviewRetryAfter            map[domain.RunID]time.Time
 	// holdPace bounds this workflow's per-pass hold projection writes: the
 	// hold-only composition's observations, and the active composition's
 	// clear when it accepts a queued task (issue #394). Process state only,
@@ -341,10 +354,11 @@ func newProductionPublicationWorkflow(
 		holdOnly:          cfg.HoldOnly,
 		recipeReadTimeout: cfg.RecipeReadTimeout,
 		holdRetryInterval: cfg.HoldRetryInterval, now: cfg.Now,
-		holdRetryAfter:    make(map[string]time.Time),
-		reviewRetryAfter:  make(map[domain.RunID]time.Time),
-		afterVerification: cfg.AfterVerification,
-		afterPublication:  cfg.AfterPublication, afterReady: cfg.AfterReady,
+		holdRetryAfter:              make(map[string]time.Time),
+		successorObservationPending: make(map[string]int),
+		reviewRetryAfter:            make(map[domain.RunID]time.Time),
+		afterVerification:           cfg.AfterVerification,
+		afterPublication:            cfg.AfterPublication, afterReady: cfg.AfterReady,
 		afterBlocked: cfg.AfterBlocked, afterTerminal: cfg.AfterTerminal,
 		afterTaskLockRelease: cfg.AfterTaskLockRelease,
 		transitionHook:       cfg.TransitionHook,
@@ -1928,6 +1942,7 @@ func productionPublicationRetryableFailure(err error) bool {
 		errors.Is(err, sql.ErrConnDone) ||
 		errors.Is(err, sql.ErrTxDone) ||
 		errors.Is(err, publish.ErrGitHubAPI) ||
+		errors.Is(err, publish.ErrSuccessorObservationPending) ||
 		errors.Is(err, publish.ErrJanitorInactive) ||
 		errors.Is(err, publish.ErrInstallationGrantUntrusted) ||
 		errors.As(err, &gitError) ||
@@ -1968,6 +1983,11 @@ func (w *productionPublicationWorkflow) pruneHeldTaskRetries(pending []store.Que
 	for key := range w.holdRetryAfter {
 		if _, found := pendingKeys[key]; !found {
 			delete(w.holdRetryAfter, key)
+		}
+	}
+	for key := range w.successorObservationPending {
+		if _, found := pendingKeys[key]; !found {
+			delete(w.successorObservationPending, key)
 		}
 	}
 }
@@ -2688,7 +2708,17 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		return productionTaskOutcome{}, err
 	}
 	published, err := w.publishCandidate(ctx, task, candidate, checkout)
+	// Only a success or a non-retryable failure ends a lagging window. A
+	// transient failure between lagging reads (a 5xx, a dropped push) says
+	// nothing about the lag, and clearing on it would let a flaky GitHub
+	// postpone the card for a PR that is really missing.
+	if err == nil || !productionPublicationRetryableFailure(err) {
+		delete(w.successorObservationPending, task.intentKey())
+	}
 	if err != nil {
+		if errors.Is(err, publish.ErrSuccessorObservationPending) {
+			return w.holdLaggingSuccessorObservation(ctx, task, checkpoint.Imported, err)
+		}
 		if isDurablePublicationConflict(err) {
 			return w.holdBlockedTask(
 				ctx, task, checkpoint.Imported,
@@ -5086,6 +5116,34 @@ func (w *productionPublicationWorkflow) recordReadyItemPRBinding(
 			return err
 		}
 	})
+}
+
+// holdLaggingSuccessorObservation absorbs a successor attempt whose read of
+// GitHub's PR view lagged the branch (#1544). Within the tolerance it returns
+// the error unchanged, so the retryable path records the
+// publication_environment hold and paces the next attempt; no operator card
+// is written for a window that heals itself. Past the tolerance it raises the
+// external_conflict card, stating what the daemon saw, and keeps raising it on
+// each paced attempt until one succeeds or fails another way.
+func (w *productionPublicationWorkflow) holdLaggingSuccessorObservation(
+	ctx context.Context,
+	task productionPublicationTask,
+	imported importer.Result,
+	err error,
+) (productionTaskOutcome, error) {
+	if w.successorObservationPending == nil {
+		w.successorObservationPending = make(map[string]int)
+	}
+	key := task.intentKey()
+	w.successorObservationPending[key]++
+	if w.successorObservationPending[key] <= successorObservationPendingTolerance {
+		return productionTaskOutcome{}, err
+	}
+	reason := productionBlockSuccessorPRNotListed
+	if errors.Is(err, publish.ErrSuccessorPRHeadLagging) {
+		reason = productionBlockSuccessorHeadLagging
+	}
+	return w.holdBlockedTask(ctx, task, imported, reason, domain.HoldExternalConflict)
 }
 
 func (w *productionPublicationWorkflow) deferHeldTask(task productionPublicationTask) {
