@@ -65,6 +65,10 @@ type Config struct {
 	// persistence, so a refused probe starts no work and a duplicate replay
 	// does not depend on current runtime health.
 	PreJob func(context.Context, domain.InvocationID) error
+	// Stall, when set, hears the running writer's stall heartbeat for the
+	// invocation (ward.HandoffSpec.Stall). It is advisory: it never changes
+	// the handoff's result, the writer's budget, or the journaled spec.
+	Stall func(ctx context.Context, id domain.InvocationID, stalled bool) error
 	// Import carries the gauntlet policy the candidate is imported under:
 	// the declared path allowlist. Authority widens it with the exact
 	// admitted trust profile before every import.
@@ -127,6 +131,7 @@ type Driver struct {
 	provider          Provider
 	credentialMount   CredentialMountPolicy
 	preJob            func(context.Context, domain.InvocationID) error
+	stall             func(context.Context, domain.InvocationID, bool) error
 	imports           importer.Options
 	prepare           []string
 	now               func() time.Time
@@ -429,6 +434,7 @@ func New(cfg Config) (*Driver, error) {
 		artifacts: cfg.Artifacts, provider: cfg.Provider,
 		credentialMount: cfg.CredentialMount,
 		preJob:          cfg.PreJob,
+		stall:           cfg.Stall,
 		imports:         cfg.Import, prepare: slices.Clone(cfg.Preparation),
 		now: cfg.Now, lifetime: cfg.Lifetime,
 		logger: pipelineLogger(

@@ -1911,6 +1911,52 @@ func TestStartRefusesDuplicateAndLeavesNoIntentOnRefusal(t *testing.T) {
 	}
 }
 
+// The gate's stall hook reports for the invocation the driver is running;
+// without a configured Stall the spec carries no hook at all.
+func TestHandoffStallHookNamesRunningInvocation(t *testing.T) {
+	t.Parallel()
+	for _, configured := range []bool{true, false} {
+		ctx := context.Background()
+		hooked := make(chan bool, 1)
+		gate := &stubGate{
+			handoffFn: func(hs ward.HandoffSpec) (*ward.HandoffResult, error) {
+				hooked <- hs.Stall != nil
+				if hs.Stall != nil {
+					if err := hs.Stall(ctx, true); err != nil {
+						return nil, err
+					}
+				}
+				return nil, errors.New("scripted handoff failure")
+			},
+		}
+		d := newTestDriver(t, gate, newStubExports())
+		var reported []domain.InvocationID
+		if configured {
+			d.stall = func(_ context.Context, id domain.InvocationID, stalled bool) error {
+				if !stalled {
+					return errors.New("unexpected conclusion")
+				}
+				reported = append(reported, id)
+				return nil
+			}
+		}
+		spec := testStartSpec()
+		inputs := stageInputs(t, &spec)
+		if err := d.StartWithInputs(ctx, testInvoke, spec, func(context.Context) (exec.StageInputs, error) {
+			return inputs, nil
+		}); err != nil {
+			t.Fatalf("start: %v", err)
+		}
+		if got := <-hooked; got != configured {
+			t.Fatalf("configured=%v: spec carried a hook = %v", configured, got)
+		}
+		waitSessionDone(t, d, testInvoke)
+		if configured && (len(reported) != 1 || reported[0] != testInvoke) {
+			t.Fatalf("stall reports = %v, want one for %q", reported, testInvoke)
+		}
+	}
+}
+
 func TestStartRunsPreJobAfterDuplicateArbitration(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

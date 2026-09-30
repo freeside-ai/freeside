@@ -216,6 +216,14 @@ func (d *Driver) handoffAndImport(ctx context.Context, in intent) (exec.StageRes
 	if err := d.advance(&in, phaseRunning, nil); err != nil {
 		return exec.StageResult{}, err
 	}
+	// Bound here rather than in handoffSpec, which Start and recovery also
+	// call, so only the live handoff carries the invocation's stall hook.
+	if d.stall != nil {
+		id := in.InvocationID
+		hs.Stall = func(ctx context.Context, stalled bool) error {
+			return d.stall(ctx, id, stalled)
+		}
+	}
 	handoff, err := d.gate.Handoff(ctx, hs)
 	if err != nil {
 		if errors.Is(err, ward.ErrWriterFailed) {
