@@ -504,14 +504,14 @@ func (e *Engine) acceptSpecificationDiscussionAttempt(
 	}
 	if err := e.cancelExpiredSpecification(ctx, attempt, settings.StageActiveTime); err != nil {
 		if MutableAdmissionPolicyRefusal(err) {
-			return false, nil
+			return false, e.observeRefusalHold(ctx, run.ID, attempt.InvocationID, err)
 		}
 		return false, err
 	}
 	result, ready, err := e.collectTerminal(ctx, run.ID, attempt)
 	if err != nil {
 		if MutableAdmissionPolicyRefusal(err) {
-			return false, nil
+			return false, e.observeRefusalHold(ctx, run.ID, attempt.InvocationID, err)
 		}
 		if !errors.Is(err, ErrInvocationLost) {
 			return false, err
@@ -519,13 +519,15 @@ func (e *Engine) acceptSpecificationDiscussionAttempt(
 		ready = true
 	}
 	if !ready {
-		return false, nil
+		// Still running with every policy gate passed: an earlier refusal
+		// has recovered (issue #435).
+		return false, e.clearRefusalHold(ctx, run.ID)
 	}
 	reply := unavailableSpecDiscussionReply
 	if err == nil && result.Status == exec.StatusCompleted {
 		if _, admissibleErr := e.requireSpecificationAdmissible(ctx, request.InvocationID); admissibleErr != nil {
 			if MutableAdmissionPolicyRefusal(admissibleErr) {
-				return false, nil
+				return false, e.observeRefusalHold(ctx, run.ID, attempt.InvocationID, admissibleErr)
 			}
 			return false, admissibleErr
 		}
@@ -535,6 +537,11 @@ func (e *Engine) acceptSpecificationDiscussionAttempt(
 		if outputErr == nil && output.Reply != nil && !importer.ContainsSecret([]byte(*output.Reply)) {
 			reply = *output.Reply
 		}
+	}
+	// No policy gate follows, so clear before the reply commits, for the
+	// reason acceptSpecificationAttempt gives.
+	if err := e.clearRefusalHold(ctx, run.ID); err != nil {
+		return false, err
 	}
 	if err := e.acceptSpecDiscussionReply(ctx, request, reply); err != nil {
 		return false, err

@@ -2942,6 +2942,7 @@ func TestSpecificationCollectHoldsOnConformanceRefusal(t *testing.T) {
 	}); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("held conformance refusal recorded a terminal failure (item lookup = %v)", err)
 	}
+	f.requireHold(t, domain.HoldBackendNotConformant)
 }
 
 // TestSpecificationExpiryHoldsOnConformanceRefusal covers the expiry path, which
@@ -2980,6 +2981,7 @@ func TestSpecificationExpiryHoldsOnConformanceRefusal(t *testing.T) {
 	}); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("held expired conformance refusal recorded a terminal failure (item lookup = %v)", err)
 	}
+	f.requireHold(t, domain.HoldBackendNotConformant)
 }
 
 func TestSpecificationDecisionCommandsIgnoreDiscussion(t *testing.T) {

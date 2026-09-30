@@ -756,14 +756,13 @@ func (e *Engine) dispatchIntent(
 		// the pre-check's race-free backstop: hold the remaining intents
 		// for a later pass instead of failing the loop. The operator
 		// already sees why — the stop notice or the blocking item is open
-		// in signet.
+		// in signet — and the run records the same typed hold the
+		// pre-check records, whatever its lane (issue #435).
 		if errors.Is(err, domain.ErrUnattendedOperationStopped) ||
 			errors.Is(err, domain.ErrBlockingSystemHealth) {
-			if entry.Kind == KindProductionInvocationRequested {
-				if reason, ok := dispatchHoldReason(err); ok {
-					if obsErr := e.observeRunHold(ctx, binding.run.ID, invocationID, reason); obsErr != nil {
-						return false, false, obsErr
-					}
+			if reason, ok := dispatchHoldReason(err); ok {
+				if obsErr := e.observeRunHold(ctx, binding.run.ID, invocationID, reason); obsErr != nil {
+					return false, false, obsErr
 				}
 			}
 			return false, true, nil
