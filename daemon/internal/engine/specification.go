@@ -2475,7 +2475,7 @@ func (e *Engine) acceptSpecificationAttempt(ctx context.Context, run domain.Run,
 		// only there would still durable-stop an expired attempt. The
 		// cancellation defers to a later pass once the refusal clears.
 		if MutableAdmissionPolicyRefusal(err) {
-			return false, nil
+			return false, e.observeRefusalHold(ctx, run.ID, attempt.InvocationID, err)
 		}
 		return false, err
 	}
@@ -2494,12 +2494,16 @@ func (e *Engine) acceptSpecificationAttempt(ctx context.Context, run domain.Run,
 		// AuthenticateBackendConformant, so what reaches here is a genuine
 		// refusal the next pass re-evaluates against fresh state.
 		if MutableAdmissionPolicyRefusal(err) {
-			return false, nil
+			return false, e.observeRefusalHold(ctx, run.ID, attempt.InvocationID, err)
 		}
 		return false, err
 	}
 	if !ready {
-		return false, nil
+		// Still running with every policy gate passed: an earlier refusal has
+		// recovered, so its hold goes (issue #435). A failed or lost attempt
+		// needs no clear here; its execution-failure milestone clears every
+		// hold on the run.
+		return false, e.clearRefusalHold(ctx, run.ID)
 	}
 	if result.Status != exec.StatusCompleted {
 		return false, e.recordSpecificationFailure(ctx, run, request, result.Status, result.Summary)
@@ -2507,8 +2511,18 @@ func (e *Engine) acceptSpecificationAttempt(ctx context.Context, run domain.Run,
 	admission, err := e.requireSpecificationAdmissible(ctx, request.InvocationID)
 	if err != nil {
 		if MutableAdmissionPolicyRefusal(err) {
-			return false, nil
+			return false, e.observeRefusalHold(ctx, run.ID, attempt.InvocationID, err)
 		}
+		return false, err
+	}
+	// The admission re-check is the last gate before the acceptance write,
+	// which re-reads the same admission and refuses only on a race, so an
+	// earlier refusal has recovered here. An accepted specification records
+	// no terminal milestone to clear the hold, so the clear runs before the
+	// write rather than after it: a clear that failed after the write would
+	// strand an accepted attempt behind a reconcile error. A racing refusal
+	// in the write re-records.
+	if err := e.clearRefusalHold(ctx, run.ID); err != nil {
 		return false, err
 	}
 	decodeTranscript, err := e.specificationTranscriptDecoder(ctx, request, admission)
@@ -2816,7 +2830,7 @@ func (e *Engine) acceptResearchRequests(ctx context.Context, run domain.Run, req
 		return false, nil
 	}
 	if MutableAdmissionPolicyRefusal(err) {
-		return false, nil
+		return false, e.observeRefusalHold(ctx, run.ID, request.InvocationID, err)
 	}
 	return err == nil, err
 }
@@ -3037,7 +3051,7 @@ func (e *Engine) acceptSpecification(ctx context.Context, run domain.Run, reques
 		return false, nil
 	}
 	if MutableAdmissionPolicyRefusal(err) {
-		return false, nil
+		return false, e.observeRefusalHold(ctx, run.ID, request.InvocationID, err)
 	}
 	if err != nil {
 		return false, err
@@ -3203,7 +3217,7 @@ func (e *Engine) acceptSpecificationDecisions(
 		return false, nil
 	}
 	if MutableAdmissionPolicyRefusal(err) {
-		return false, nil
+		return false, e.observeRefusalHold(ctx, run.ID, request.InvocationID, err)
 	}
 	if err != nil {
 		return false, err
