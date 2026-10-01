@@ -65,6 +65,13 @@ type ReviewConvergencePolicy struct {
 	// length. Zero means the key is unset and the growth rule is off, so a
 	// policy that predates the key resolves exactly as it did before.
 	DriftGrowthStreakBeforeAttention int
+	// DriftAuditAfter is the first round that runs a drift audit. Zero means
+	// the key is unset and the audit is off.
+	DriftAuditAfter int
+	// DriftAuditRoute is how an over_hardened verdict routes. It resolves to
+	// the recorded default when the key is unset, and means nothing while the
+	// audit is off.
+	DriftAuditRoute domain.DriftAuditRoute
 }
 
 // ReviewConvergenceState is the trusted decision-time input to the pure
@@ -90,6 +97,7 @@ func (tx *ReadTx) ReviewConvergencePolicy(
 		Digest: resolved.Digest, ContinueWhile: ReviewContinueWhileNewMaterialFindings,
 		LowValueStreakBeforeAttention: defaultReviewLowValueStreak,
 		HardRoundLimit:                defaultReviewHardRoundLimit,
+		DriftAuditRoute:               domain.DefaultDriftAuditRoute,
 	}
 	for _, key := range resolved.Keys {
 		switch key.Key {
@@ -122,6 +130,20 @@ func (tx *ReadTx) ReviewConvergencePolicy(
 					key.Value, domain.ErrNonPositive)
 			}
 			policy.DriftGrowthStreakBeforeAttention = streak
+		case "review.drift_audit_after":
+			round, err := strconv.Atoi(key.Value)
+			if err != nil || round < 1 {
+				return ReviewConvergencePolicy{}, fmt.Errorf(
+					"resolved review.drift_audit_after %q: %w", key.Value, domain.ErrNonPositive)
+			}
+			policy.DriftAuditAfter = round
+		case "review.drift_audit_route":
+			route, err := domain.ParseDriftAuditRoute(key.Value)
+			if err != nil {
+				return ReviewConvergencePolicy{}, fmt.Errorf(
+					"resolved review.drift_audit_route: %w: %w", err, domain.ErrParentKeyMismatch)
+			}
+			policy.DriftAuditRoute = route
 		}
 	}
 	return policy, nil

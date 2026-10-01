@@ -55,6 +55,7 @@ func TestOpenAPIEnumsMatchDomain(t *testing.T) {
 		"RunOutcome":                enumStrings(domain.AllRunOutcomes),
 		"RunLifecycle":              enumStrings(domain.AllRunLifecycles),
 		"AdjudicationProducer":      enumStrings(domain.AllAdjudicationProducers),
+		"DriftVerdict":              enumStrings(domain.AllDriftVerdicts),
 		"EvidenceMediaType":         enumStrings(domain.AllEvidenceMediaTypes),
 		"EvidenceSource":            enumStrings(domain.AllEvidenceSources),
 		"EvidenceAvailability":      enumStrings(domain.AllEvidenceAvailabilities),

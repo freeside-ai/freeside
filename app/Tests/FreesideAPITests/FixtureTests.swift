@@ -182,6 +182,31 @@ import Testing
         #expect(decoded.yield_history == item.yield_history)
     }
 
+    @Test func yieldFixturesCoverEveryDriftVerdictOnANonLastRound() throws {
+        let ready = AttentionFixtures.fixture(type: .ready_for_final_review).item
+        let diminishing = AttentionFixtures.fixture(type: .review_diminishing_returns).item
+        let readyRounds = try #require(ready.yield_history?.value1.rounds)
+        let diminishingRounds = try #require(diminishing.yield_history?.value1.rounds)
+
+        #expect(readyRounds.map(\.drift_verdict) == [nil, .converged, nil])
+        #expect(diminishingRounds.map(\.drift_verdict) == [.over_hardened, .stuck, nil])
+        let covered = Set((readyRounds + diminishingRounds).compactMap(\.drift_verdict))
+        #expect(covered == Set(Components.Schemas.DriftVerdict.allCases))
+    }
+
+    @Test func driftVerdictIsOmittedNotNullOnTheWire() throws {
+        let item = AttentionFixtures.fixture(type: .review_diminishing_returns).item
+        let data = try JSONEncoder().encode(item)
+        let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let history = try #require(object["yield_history"] as? [String: Any])
+        let rounds = try #require(history["rounds"] as? [[String: Any]])
+
+        #expect(rounds.map { $0["drift_verdict"] as? String } == ["over_hardened", "stuck", nil])
+        #expect(rounds.map { $0.keys.contains("drift_verdict") } == [true, true, false])
+        let decoded = try JSONDecoder().decode(Components.Schemas.AttentionItem.self, from: data)
+        #expect(decoded.yield_history == item.yield_history)
+    }
+
     @Test func reviewDisputeFixtureCarriesRenderableFindingEvidence() {
         let item = AttentionFixtures.fixture(type: .review_dispute).item
         let claim = item.agent_claims.first { $0.label.hasPrefix("Shadow finding") }

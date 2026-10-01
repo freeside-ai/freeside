@@ -55,7 +55,8 @@ func resolveReviewConvergencePolicy(
 
 // TestReviewConvergencePolicyWithoutDriftKeysIsUnchanged pins the landed
 // defaults: a policy that predates the drift keys resolves to the same values
-// as before, with the growth rule off.
+// as before, with the growth rule and the audit off. The audit route resolves
+// to its recorded default, which nothing reads while the audit is off.
 func TestReviewConvergencePolicyWithoutDriftKeysIsUnchanged(t *testing.T) {
 	t.Parallel()
 	got, digest, err := resolveReviewConvergencePolicy(t, nil)
@@ -67,6 +68,7 @@ func TestReviewConvergencePolicyWithoutDriftKeysIsUnchanged(t *testing.T) {
 		ContinueWhile:                 store.ReviewContinueWhileNewMaterialFindings,
 		LowValueStreakBeforeAttention: 2,
 		HardRoundLimit:                25,
+		DriftAuditRoute:               domain.DriftAuditRouteAuto,
 	}
 	if got != want {
 		t.Fatalf("policy without drift keys = %+v, want %+v", got, want)
@@ -102,6 +104,90 @@ func TestReviewConvergencePolicyRejectsInvalidDriftGrowthStreak(t *testing.T) {
 			})
 			if !errors.Is(err, domain.ErrNonPositive) {
 				t.Fatalf("growth streak %q: got %v, want ErrNonPositive", value, err)
+			}
+		})
+	}
+}
+
+func TestReviewConvergencePolicyDecodesDriftAuditKeys(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name      string
+		keys      map[string]string
+		wantAfter int
+		wantRoute domain.DriftAuditRoute
+	}{
+		{
+			"after only defaults the route to auto",
+			map[string]string{"review.drift_audit_after": "6"},
+			6, domain.DriftAuditRouteAuto,
+		},
+		{
+			"after at its minimum",
+			map[string]string{"review.drift_audit_after": "1"},
+			1, domain.DriftAuditRouteAuto,
+		},
+		{
+			"route auto",
+			map[string]string{"review.drift_audit_after": "6", "review.drift_audit_route": "auto"},
+			6, domain.DriftAuditRouteAuto,
+		},
+		{
+			"route park",
+			map[string]string{"review.drift_audit_after": "6", "review.drift_audit_route": "park"},
+			6, domain.DriftAuditRoutePark,
+		},
+		{
+			"route without after leaves the audit off",
+			map[string]string{"review.drift_audit_route": "park"},
+			0, domain.DriftAuditRoutePark,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, digest, err := resolveReviewConvergencePolicy(t, tc.keys)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := store.ReviewConvergencePolicy{
+				Digest:                        digest,
+				ContinueWhile:                 store.ReviewContinueWhileNewMaterialFindings,
+				LowValueStreakBeforeAttention: 2,
+				HardRoundLimit:                25,
+				DriftAuditAfter:               tc.wantAfter,
+				DriftAuditRoute:               tc.wantRoute,
+			}
+			if got != want {
+				t.Fatalf("policy = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+// TestReviewConvergencePolicyRejectsInvalidDriftAuditKeys proves both audit
+// keys fail closed like the landed keys: a set key never degrades to "off" or
+// to the default route.
+func TestReviewConvergencePolicyRejectsInvalidDriftAuditKeys(t *testing.T) {
+	t.Parallel()
+	for _, value := range []string{"0", "-1", "six", "1.5", " 6", ""} {
+		t.Run("after "+value, func(t *testing.T) {
+			t.Parallel()
+			_, _, err := resolveReviewConvergencePolicy(t, map[string]string{
+				"review.drift_audit_after": value,
+			})
+			if !errors.Is(err, domain.ErrNonPositive) {
+				t.Fatalf("audit after %q: got %v, want ErrNonPositive", value, err)
+			}
+		})
+	}
+	for _, value := range []string{"", "Auto", "automatic", "off", " park"} {
+		t.Run("route "+value, func(t *testing.T) {
+			t.Parallel()
+			_, _, err := resolveReviewConvergencePolicy(t, map[string]string{
+				"review.drift_audit_route": value,
+			})
+			if !errors.Is(err, domain.ErrParentKeyMismatch) {
+				t.Fatalf("audit route %q: got %v, want ErrParentKeyMismatch", value, err)
 			}
 		})
 	}

@@ -195,6 +195,26 @@ func TestGolden(t *testing.T) {
 		},
 		TerminalOutcome: domain.ReviewClean,
 	}
+	// The verdict fixture is separate for the same reason. Round 2 was not
+	// audited and the last round never shows a verdict: both are omitted.
+	yieldHistoryDriftVerdict := domain.ReviewYieldHistory{
+		Rounds: []domain.ReviewYieldRound{
+			{
+				Round: 1, FindingsIngested: 2, NewFindings: 2, Fixed: 1, Deferred: 1,
+				Outcome: domain.ReviewFindings, DriftVerdict: new(domain.DriftVerdictOverHardened),
+			},
+			{
+				Round: 2, FindingsIngested: 2, NewFindings: 1, RecurringFindings: 1,
+				Fixed: 1, Declined: 1, Outcome: domain.ReviewFindings,
+			},
+			{
+				Round: 3, FindingsIngested: 1, NewFindings: 1, Fixed: 1,
+				Outcome: domain.ReviewFindings, DriftVerdict: new(domain.DriftVerdictStuck),
+			},
+			{Round: 4, Outcome: domain.ReviewClean},
+		},
+		TerminalOutcome: domain.ReviewClean,
+	}
 	displayNames := domain.DisplayNames{
 		Project: domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
 		Task:    domain.DisplayName{Text: "#724", Source: domain.DisplayNameSourceName},
@@ -1579,6 +1599,7 @@ func TestGolden(t *testing.T) {
 		{"attention_item_codex_reenrollment", reenrollmentItem},
 		{"review_yield_history", yieldHistory},
 		{"review_yield_history_diff_metrics", yieldHistoryDiffMetrics},
+		{"review_yield_history_drift_verdict", yieldHistoryDriftVerdict},
 		{"codex_reenrollment_recovery_transition", reenrollmentTransition},
 		{"classification", classification},
 		{"command_discuss", discussCommand},

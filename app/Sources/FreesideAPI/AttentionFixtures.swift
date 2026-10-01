@@ -662,10 +662,12 @@ public enum AttentionFixtures {
                             round: 1, findings_ingested: 2, new_findings: 2,
                             recurring_findings: 0, fixed: 1, declined: 0, deferred: 1,
                             outcome: .findings),
+                        // Round 1 was not audited. The last round never
+                        // carries a verdict.
                         .init(
                             round: 2, findings_ingested: 2, new_findings: 1,
                             recurring_findings: 1, fixed: 1, declined: 1, deferred: 0,
-                            outcome: .findings),
+                            outcome: .findings, drift_verdict: .converged),
                         .init(
                             round: 3, findings_ingested: 0, new_findings: 0,
                             recurring_findings: 0, fixed: 0, declined: 0, deferred: 0,
@@ -679,7 +681,9 @@ public enum AttentionFixtures {
                     rounds: [
                         // Round 1 has no predecessor, so its two pairs are
                         // the same comparison. Round 2 carries no metrics:
-                        // an omitted diff_metrics is how a gap shows.
+                        // an omitted diff_metrics is how a gap shows. Rounds
+                        // 1 and 2 were audited; round 3 is the last round, so
+                        // it carries no drift_verdict.
                         .init(
                             round: 1, findings_ingested: 4, new_findings: 4,
                             recurring_findings: 0, fixed: 2, declined: 1, deferred: 1,
@@ -690,11 +694,12 @@ public enum AttentionFixtures {
                                     base_sha: "deadbeef", head_sha: "0a1b2c3d"),
                                 round: .init(
                                     files_changed: 4, additions: 120, deletions: 8,
-                                    base_sha: "deadbeef", head_sha: "0a1b2c3d"))),
+                                    base_sha: "deadbeef", head_sha: "0a1b2c3d")),
+                            drift_verdict: .over_hardened),
                         .init(
                             round: 2, findings_ingested: 3, new_findings: 1,
                             recurring_findings: 2, fixed: 1, declined: 1, deferred: 1,
-                            outcome: .findings),
+                            outcome: .findings, drift_verdict: .stuck),
                         .init(
                             round: 3, findings_ingested: 3, new_findings: 0,
                             recurring_findings: 3, fixed: 0, declined: 2, deferred: 1,

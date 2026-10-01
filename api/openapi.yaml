@@ -3682,7 +3682,10 @@ components:
         segment; dispositions remain attributed to the round that produced
         the finding. diff_metrics is omitted, never null, when nothing was
         recorded for the round: that is how a gap shows, and every round
-        recorded before the field existed is one.
+        recorded before the field existed is one. drift_verdict is likewise
+        omitted, never null. A round carries it only when a drift audit was
+        recorded for the round and the history also holds a later round, so
+        the last round of a history never carries one.
       required:
         - round
         - findings_ingested
@@ -3719,6 +3722,8 @@ components:
           $ref: "#/components/schemas/ReviewOutcome"
         diff_metrics:
           $ref: "#/components/schemas/ReviewRoundDiffMetrics"
+        drift_verdict:
+          $ref: "#/components/schemas/DriftVerdict"
 
     ReviewRoundDiffMetrics:
       type: object
@@ -5983,6 +5988,19 @@ components:
       enum:
         - clean
         - findings
+
+    DriftVerdict:
+      type: string
+      description: >
+        A drift audit's verdict on one review round (plan §7 Review Drift).
+        converged means the change still implements the approved specification
+        without excess hardening; over_hardened means review fixes added
+        defenses the specification does not need, and the audit names what to
+        undo; stuck means the rounds are not approaching the specification.
+      enum:
+        - converged
+        - over_hardened
+        - stuck
 
     InterruptionClass:
       type: string

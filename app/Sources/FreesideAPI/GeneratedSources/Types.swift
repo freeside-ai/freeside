@@ -7565,7 +7565,7 @@ public enum Components {
                 ])
             }
         }
-        /// The daemon-derived yield totals for one persisted routed-review round. New and recurring findings are classified by stable finding fingerprint against earlier rounds in the same reviewer-configuration segment; dispositions remain attributed to the round that produced the finding. diff_metrics is omitted, never null, when nothing was recorded for the round: that is how a gap shows, and every round recorded before the field existed is one.
+        /// The daemon-derived yield totals for one persisted routed-review round. New and recurring findings are classified by stable finding fingerprint against earlier rounds in the same reviewer-configuration segment; dispositions remain attributed to the round that produced the finding. diff_metrics is omitted, never null, when nothing was recorded for the round: that is how a gap shows, and every round recorded before the field existed is one. drift_verdict is likewise omitted, never null. A round carries it only when a drift audit was recorded for the round and the history also holds a later round, so the last round of a history never carries one.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/ReviewYieldRound`.
@@ -7588,6 +7588,8 @@ public enum Components {
             public var outcome: Components.Schemas.ReviewOutcome
             /// - Remark: Generated from `#/components/schemas/ReviewYieldRound/diff_metrics`.
             public var diff_metrics: Components.Schemas.ReviewRoundDiffMetrics?
+            /// - Remark: Generated from `#/components/schemas/ReviewYieldRound/drift_verdict`.
+            public var drift_verdict: Components.Schemas.DriftVerdict?
             /// Creates a new `ReviewYieldRound`.
             ///
             /// - Parameters:
@@ -7600,6 +7602,7 @@ public enum Components {
             ///   - deferred:
             ///   - outcome:
             ///   - diff_metrics:
+            ///   - drift_verdict:
             public init(
                 round: Swift.Int,
                 findings_ingested: Swift.Int,
@@ -7609,7 +7612,8 @@ public enum Components {
                 declined: Swift.Int,
                 deferred: Swift.Int,
                 outcome: Components.Schemas.ReviewOutcome,
-                diff_metrics: Components.Schemas.ReviewRoundDiffMetrics? = nil
+                diff_metrics: Components.Schemas.ReviewRoundDiffMetrics? = nil,
+                drift_verdict: Components.Schemas.DriftVerdict? = nil
             ) {
                 self.round = round
                 self.findings_ingested = findings_ingested
@@ -7620,6 +7624,7 @@ public enum Components {
                 self.deferred = deferred
                 self.outcome = outcome
                 self.diff_metrics = diff_metrics
+                self.drift_verdict = drift_verdict
             }
             public enum CodingKeys: String, CodingKey {
                 case round
@@ -7631,6 +7636,7 @@ public enum Components {
                 case deferred
                 case outcome
                 case diff_metrics
+                case drift_verdict
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -7670,6 +7676,10 @@ public enum Components {
                     Components.Schemas.ReviewRoundDiffMetrics.self,
                     forKey: .diff_metrics
                 )
+                self.drift_verdict = try container.decodeIfPresent(
+                    Components.Schemas.DriftVerdict.self,
+                    forKey: .drift_verdict
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "round",
                     "findings_ingested",
@@ -7679,7 +7689,8 @@ public enum Components {
                     "declined",
                     "deferred",
                     "outcome",
-                    "diff_metrics"
+                    "diff_metrics",
+                    "drift_verdict"
                 ])
             }
         }
@@ -12417,6 +12428,15 @@ public enum Components {
         @frozen public enum ReviewOutcome: String, Codable, Hashable, Sendable, CaseIterable {
             case clean = "clean"
             case findings = "findings"
+        }
+        /// A drift audit's verdict on one review round (plan §7 Review Drift). converged means the change still implements the approved specification without excess hardening; over_hardened means review fixes added defenses the specification does not need, and the audit names what to undo; stuck means the rounds are not approaching the specification.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/DriftVerdict`.
+        @frozen public enum DriftVerdict: String, Codable, Hashable, Sendable, CaseIterable {
+            case converged = "converged"
+            case over_hardened = "over_hardened"
+            case stuck = "stuck"
         }
         /// Whether the interruption was a planned gate or exceptional (plan §3.2).
         ///

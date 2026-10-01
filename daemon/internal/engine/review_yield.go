@@ -27,6 +27,7 @@ func deriveReviewYieldHistory(
 	dispositions []domain.ReviewDispositionRecord,
 	findings map[domain.FindingID]domain.Finding,
 	diffMetrics map[int]domain.ReviewRoundDiffMetrics,
+	driftVerdicts map[int]domain.DriftVerdict,
 ) (domain.ReviewYieldHistory, error) {
-	return store.DeriveReviewYieldHistory(records, dispositions, findings, diffMetrics)
+	return store.DeriveReviewYieldHistory(records, dispositions, findings, diffMetrics, driftVerdicts)
 }
