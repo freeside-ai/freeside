@@ -59,6 +59,11 @@ type CodexReviewSourceConfig struct {
 	ConfigurationDigest  domain.Digest
 	CostOwner            string
 	Now                  func() time.Time
+	// Admit, when set, runs before a new review request is recorded. The
+	// daemon uses it to recheck that the review role's lineup line still
+	// resolves to this source's identity (plan §5.4); a refusal fails the
+	// request as a configuration failure and nothing is recorded or started.
+	Admit func(context.Context) error
 
 	// provider supplies the vendor-varying labels, version tags, and review
 	// command. It is unexported so external callers cannot set it; the
@@ -283,6 +288,11 @@ func (s *CodexReviewSource) RequestReview(
 			return s.rejectPersistedRequest(ctx, id, err)
 		}
 		return &exec.ReviewSourceFailure{Class: domain.ReviewFailureTransient, Err: err}
+	}
+	if s.cfg.Admit != nil {
+		if err := s.cfg.Admit(ctx); err != nil {
+			return &exec.ReviewSourceFailure{Class: domain.ReviewFailureConfiguration, Err: err}
+		}
 	}
 	if err := s.cfg.Journal.PutCodexReviewRequest(ctx, string(id), req); err != nil {
 		return &exec.ReviewSourceFailure{Class: classifyCodexObservationFailure(err), Err: err}
@@ -767,6 +777,15 @@ func (s *CodexReviewSource) Inspect(
 	}
 	if errors.Is(intentErr, ErrCodexReviewIntentNotFound) ||
 		(intentErr == nil && intent.State != CodexReviewIntentStarted) {
+		// A recorded request whose launch never started launches here, so
+		// the line is rechecked: it may have stopped resolving since the
+		// request was admitted. The request stays recorded for a later
+		// inspection.
+		if s.cfg.Admit != nil {
+			if err := s.cfg.Admit(ctx); err != nil {
+				return "", &exec.ReviewSourceFailure{Class: domain.ReviewFailureConfiguration, Err: err}
+			}
+		}
 		if err := s.startRequestedReview(ctx, id, request); err != nil {
 			return "", err
 		}
