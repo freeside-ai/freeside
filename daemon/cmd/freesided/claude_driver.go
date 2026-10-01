@@ -62,7 +62,11 @@ type claudeDriverConfig struct {
 	// bound aborts the run at the writer-termination handoff with a context
 	// deadline instead of publishing.
 	WriterStopTimeout time.Duration
-	ProviderEndpoints []string
+	// WriterStallInterval is how long a running writer may go without a
+	// provider response before the advisory invocation_stalled notice is
+	// raised. It never changes WriterStopTimeout. Zero keeps ward's default.
+	WriterStallInterval time.Duration
+	ProviderEndpoints   []string
 	// The prompt-package files are trusted implementation, specification, and
 	// remediation inputs. The daemon derives every digest from ingested bytes.
 	PromptPackageFile              string
@@ -1472,6 +1476,7 @@ func composeClaudeDriver(
 		ProviderEndpoints: cfg.ProviderEndpoints,
 		// Zero leaves ward's own default in place (config.withDefaults).
 		WriterStopTimeout: cfg.WriterStopTimeout,
+		StallInterval:     cfg.WriterStallInterval,
 		Scanner:           credentialScanner{},
 		AuthStoreLeaser:   adapters.Leaser,
 		Journal:           adapters.Journal,
@@ -1622,6 +1627,7 @@ func composeClaudeDriver(
 			}
 			return backend.PreJob(ctx, ward.PreJobRunIDForInvocation(id))
 		},
+		Stall: invocationStallNotice(st, stallInterval(cfg.WriterStallInterval), time.Now),
 		Import: importer.Options{
 			Policy: importer.Policy{Allowlist: cfg.AllowedPaths},
 		},

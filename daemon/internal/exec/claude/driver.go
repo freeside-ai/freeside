@@ -49,6 +49,7 @@ type Config struct {
 	Artifacts    stage.Artifacts
 	Volumes      AuthStoreVolumes
 	PreJob       func(context.Context, domain.InvocationID) error
+	Stall        func(context.Context, domain.InvocationID, bool) error
 	Import       importer.Options
 	Preparation  []string
 	Now          func() time.Time
@@ -81,6 +82,7 @@ func New(cfg Config) (*Driver, error) {
 		Authority:           cfg.Authority,
 		Artifacts:           cfg.Artifacts,
 		PreJob:              cfg.PreJob,
+		Stall:               cfg.Stall,
 		Import:              cfg.Import,
 		Preparation:         cfg.Preparation,
 		Now:                 cfg.Now,

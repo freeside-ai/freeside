@@ -210,6 +210,9 @@ func main() {
 	seedRoot := flags.String("seed-root", "", "daemon-owned exact-base checkout root")
 	writerStopTimeout := flags.Duration("writer-stop-timeout", 0,
 		"max time the implementation writer container may run before it must reach stopped; 0 uses the ward default (10m)")
+	writerStallInterval := flags.Duration("writer-stall-interval", 0,
+		"time a running writer may go without a provider response before an advisory invocation_stalled notice is raised; "+
+			"never changes -writer-stop-timeout; 0 uses the ward default (5m)")
 	stateDir := flags.String("state-dir", "", "production driver state directory")
 	rigTokenFile := flags.String("rig-token-file", "", "production rig acquisition file (optional)")
 	providerEndpoints := flags.String("provider-endpoints", "api.anthropic.com:443", "comma-separated provider host:port allowlist")
@@ -416,8 +419,8 @@ func main() {
 		daemonConfig.Claude = &claudeDriverConfig{
 			AgentImage: domain.ImageRef(*agentImage), ExporterImage: *exporterImage,
 			ContainerBin: *containerBin, SeedRoot: *seedRoot,
-			WriterStopTimeout: *writerStopTimeout,
-			StateDir:          *stateDir, RigTokenFile: *rigTokenFile, Judgments: judgmentsConfig,
+			WriterStopTimeout: *writerStopTimeout, WriterStallInterval: *writerStallInterval,
+			StateDir: *stateDir, RigTokenFile: *rigTokenFile, Judgments: judgmentsConfig,
 			ProviderEndpoints:              strings.Split(*providerEndpoints, ","),
 			PromptPackageFile:              *promptPackage,
 			SpecificationPromptPackageFile: *specificationPromptPackage,
@@ -1189,6 +1192,9 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	}
 	if err := convergeExecutionConfiguration(parent, st, workflow != nil, cfg.now); err != nil {
 		return nil, fmt.Errorf("report execution configuration: %w", err)
+	}
+	if err := concludeInvocationStallNotices(parent, st); err != nil {
+		return nil, fmt.Errorf("conclude stale invocation stall notices: %w", err)
 	}
 
 	logger := cfg.Logger

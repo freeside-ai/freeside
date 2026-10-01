@@ -742,8 +742,14 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 
 	// Check 3: writer termination is observed state, never scheduling
 	// intent (a second VM cannot attach a volume a live VM holds rw; only
-	// observed "stopped" proves the attachment is gone).
-	if err := b.waitStopped(ctx, names.Agent, st.agent, st.ownershipLabel, b.cfg.WriterStopTimeout); err != nil {
+	// observed "stopped" proves the attachment is gone). The stall watch
+	// rides the same polls and can only report; it never moves the budget.
+	stall := newStallWatch(ctx, b.cfg, hs, st.proxy.LastProviderByte)
+	err = b.runtimeOps.waitStoppedObserving(
+		ctx, names.Agent, st.agent, st.ownershipLabel, b.cfg.WriterStopTimeout, stall.poll,
+	)
+	stall.finish()
+	if err != nil {
 		return nil, failf(CheckWriterTermination, "agent: %v", err)
 	}
 	// The boot log goes with the container, so read it before the delete.
@@ -1402,6 +1408,16 @@ func ownedFingerprint(creationDate string, labels []Label, labelsObserved bool, 
 // is the whole evidence), and the delete that follows a satisfied wait
 // always targets a just-verified observation.
 func (b runtimeOps) waitStopped(ctx context.Context, id string, claim objectClaim, ownershipLabel Label, timeout time.Duration) error {
+	return b.waitStoppedObserving(ctx, id, claim, ownershipLabel, timeout, nil)
+}
+
+// waitStoppedObserving is waitStopped with an observer called after each
+// poll that finds the claimed container still running. The observer must
+// not block: the poll count and deadline are the same with or without it.
+func (b runtimeOps) waitStoppedObserving(
+	ctx context.Context, id string, claim objectClaim, ownershipLabel Label, timeout time.Duration,
+	running func(),
+) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	attempts := int((timeout + b.cfg.PollInterval - 1) / b.cfg.PollInterval)
@@ -1429,6 +1445,9 @@ func (b runtimeOps) waitStopped(ctx context.Context, id string, claim objectClai
 			return nil
 		}
 		last = rep.State
+		if running != nil {
+			running()
+		}
 		if i+1 < attempts {
 			if err := b.cfg.Sleep(ctx, b.cfg.PollInterval); err != nil {
 				return fmt.Errorf("wait interrupted: %w", err)
