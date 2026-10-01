@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	osexec "os/exec"
 	"path"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -121,6 +123,25 @@ func TestHandoffSpecRefusesUnsupportedContainment(t *testing.T) {
 		{"no auth identity", func(s *exec.StartSpec) { s.AuthIdentityID = "" }},
 		{"foreign workspace", func(s *exec.StartSpec) { s.Workspace = "foreign-workspace" }},
 	}
+	// The CLI-safety rule refuses a comma and every control character; the
+	// range ends are 0x00, 0x1f, and 0x7f.
+	for _, delimiter := range []string{",", "\x00", "\t", "\n", "\r", "\x1f", "\x7f"} {
+		tests = append(tests,
+			struct {
+				name string
+				edit func(*exec.StartSpec)
+			}{
+				fmt.Sprintf("model with %q", delimiter),
+				func(s *exec.StartSpec) { s.RouteModelID = "claude-opus-5-5" + delimiter + "x" },
+			},
+			struct {
+				name string
+				edit func(*exec.StartSpec)
+			}{
+				fmt.Sprintf("effort with %q", delimiter),
+				func(s *exec.StartSpec) { s.NativeEffort = "high" + delimiter + "x" },
+			})
+	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			in := testProviderHandoffInput()
@@ -170,6 +191,78 @@ func TestHandoffSpecCommandGolden(t *testing.T) {
 	}
 }
 
+// TestHandoffSpecPassesModelAndEffort covers the one launch path the
+// specifier, implementer, and remediator share: each flag appears exactly
+// when its StartSpec field is set, as an argument of the claude -p
+// invocation, and changes nothing else in the command.
+func TestHandoffSpecPassesModelAndEffort(t *testing.T) {
+	t.Parallel()
+	provider := claudeProvider{volumes: testAuthStoreVolumes{volume: "provider-volume"}}
+	const model, effort = "claude-opus-5-5", "xhigh"
+	redirect := "> " + shellQuote(transcriptPath)
+	selections := []struct {
+		name, model, effort, flags string
+	}{
+		{"both", model, effort, "--model '" + model + "' --effort '" + effort + "' "},
+		{"model only", model, "", "--model '" + model + "' "},
+		{"effort only", "", effort, "--effort '" + effort + "' "},
+	}
+	for _, tc := range handoffCommandCases {
+		for _, sel := range selections {
+			t.Run(tc.name+"/"+sel.name, func(t *testing.T) {
+				t.Parallel()
+				in := testProviderHandoffInput()
+				in.PromptDelivery, in.Preparation = tc.delivery, tc.prepare
+				bare, err := provider.HandoffSpec(context.Background(), in)
+				if err != nil {
+					t.Fatalf("HandoffSpec without a selection: %v", err)
+				}
+				in.Spec.RouteModelID, in.Spec.NativeEffort = sel.model, sel.effort
+				hs, err := provider.HandoffSpec(context.Background(), in)
+				if err != nil {
+					t.Fatalf("HandoffSpec: %v", err)
+				}
+				if len(hs.Agent.Command) != 3 || !slices.Equal(hs.Agent.Command[:2], bare.Agent.Command[:2]) {
+					t.Fatalf("command = %q, want the sh -c shape", hs.Agent.Command)
+				}
+				// The flags are the only difference from the bare command, and
+				// they sit directly before the transcript redirect, so they are
+				// arguments of the same claude -p invocation.
+				script, bareScript := hs.Agent.Command[2], bare.Agent.Command[2]
+				if n := strings.Count(bareScript, redirect); n != 1 {
+					t.Fatalf("bare command has %d transcript redirects, want 1", n)
+				}
+				want := strings.Replace(bareScript, redirect, sel.flags+redirect, 1)
+				if script != want {
+					t.Errorf("command with %s:\n got %s\nwant %s", sel.name, script, want)
+				}
+				invocation, _, _ := strings.Cut(script, redirect)
+				if _, args, ok := strings.Cut(invocation, " claude -p "); !ok || !strings.HasSuffix(args, sel.flags) {
+					t.Errorf("flags %q are not arguments of the claude -p invocation", sel.flags)
+				}
+			})
+		}
+	}
+}
+
+// TestHandoffSpecShellQuotesModelAndEffort proves neither value can end its
+// quoted word: an apostrophe is the only byte single quotes do not protect.
+func TestHandoffSpecShellQuotesModelAndEffort(t *testing.T) {
+	t.Parallel()
+	in := testProviderHandoffInput()
+	in.Spec.RouteModelID = `opus'; touch /pwned; '`
+	in.Spec.NativeEffort = `$(id) high'`
+	hs, err := (claudeProvider{volumes: testAuthStoreVolumes{volume: "provider-volume"}}).
+		HandoffSpec(context.Background(), in)
+	if err != nil {
+		t.Fatalf("HandoffSpec: %v", err)
+	}
+	want := `--model 'opus'\''; touch /pwned; '\''' --effort '$(id) high'\''' > `
+	if !strings.Contains(hs.Agent.Command[2], want) {
+		t.Errorf("command omits the quoted selection %q:\n%s", want, hs.Agent.Command[2])
+	}
+}
+
 func TestPromptLimitLeavesLinuxArgumentHeadroom(t *testing.T) {
 	t.Parallel()
 	// Apostrophes are shellQuote's worst case: each input byte expands to the
@@ -178,7 +271,7 @@ func TestPromptLimitLeavesLinuxArgumentHeadroom(t *testing.T) {
 		strings.Repeat("'", maxPromptBytes),
 		"00000000-0000-4000-8000-000000000000",
 		"inv-headroom",
-		nil,
+		nil, "", "",
 	)[2]
 	if len(command) >= linuxMaxArgumentBytes {
 		t.Fatalf("max prompt produces %d-byte sh argument, Linux limit is %d",
@@ -510,7 +603,7 @@ func TestOversizedPromptIsRejected(t *testing.T) {
 // matching the whole script, so ordinary edits stay cheap.
 func TestAgentCommandKeepsTheOutcomeMarkerOutOfWriterReach(t *testing.T) {
 	t.Parallel()
-	script := strings.Join(agentCommand("do the work", "session-1", "inv-1", nil), " ")
+	script := strings.Join(agentCommand("do the work", "session-1", "inv-1", nil, "", ""), " ")
 	evidenceDir := path.Dir(transcriptPath)
 	controlDir := path.Dir(writerOutcomePath)
 
@@ -679,7 +772,7 @@ func TestFixedSourceDescriptorComposes(t *testing.T) {
 }
 
 func TestPublicMetadataLauncherAndPromptContract(t *testing.T) {
-	script := strings.Join(agentCommand("work", "session-1", "inv-1", nil), " ")
+	script := strings.Join(agentCommand("work", "session-1", "inv-1", nil, "", ""), " ")
 	guard := "if [ -f '" + export.PublicationEvidencePath + "' ] && [ ! -L '" + export.PublicationEvidencePath + "' ]"
 	fragment := evidenceSourceFragment("publication", export.EvidenceSource{
 		Label: export.PublicationEvidenceLabel, MediaType: "text/markdown", Path: export.PublicationEvidencePath,
@@ -718,7 +811,7 @@ func TestPublicMetadataLauncherAndPromptContract(t *testing.T) {
 func TestAgentCommandHydratesBeforeTheOwnershipDrop(t *testing.T) {
 	t.Parallel()
 	prepare := []string{"/usr/local/bin/freeside-project-prepare"}
-	script := strings.Join(agentCommand("do the work", "session-1", "inv-1", prepare), " ")
+	script := strings.Join(agentCommand("do the work", "session-1", "inv-1", prepare, "", ""), " ")
 
 	at := func(needle string) int {
 		t.Helper()
@@ -765,8 +858,8 @@ func TestAgentCommandHydratesBeforeTheOwnershipDrop(t *testing.T) {
 // configured, so the 1A.0 conversation-turn path is byte-for-byte unchanged.
 func TestAgentCommandWithoutPreparationIsUnchanged(t *testing.T) {
 	t.Parallel()
-	base := strings.Join(agentCommand("do the work", "session-1", "inv-1", nil), " ")
-	empty := strings.Join(agentCommand("do the work", "session-1", "inv-1", []string{}), " ")
+	base := strings.Join(agentCommand("do the work", "session-1", "inv-1", nil, "", ""), " ")
+	empty := strings.Join(agentCommand("do the work", "session-1", "inv-1", []string{}, "", ""), " ")
 	if base != empty {
 		t.Fatal("nil and empty preparation produce different launch commands")
 	}
