@@ -317,8 +317,11 @@ func TestAgentNameValidation(t *testing.T) {
 			_, err = domain.DecodeAgentDefinition(body)
 			assertAgentNameError(t, "DecodeAgentDefinition", err, tc.wantErr)
 
-			_, err = domain.ParseLineupSelection(tc.name + "@sha256:" + strings.Repeat("a", 64))
-			assertAgentNameError(t, "ParseLineupSelection", err, tc.wantErr)
+			// The prompt half follows the same name rule as the agent half.
+			_, err = domain.ParseLineupSelection(tc.name + "@" + lineupAgentDigest + "/role-prompt@" + lineupPromptDigest)
+			assertAgentNameError(t, "ParseLineupSelection agent", err, tc.wantErr)
+			_, err = domain.ParseLineupSelection("sol@" + lineupAgentDigest + "/" + tc.name + "@" + lineupPromptDigest)
+			assertAgentNameError(t, "ParseLineupSelection prompt", err, tc.wantErr)
 		})
 	}
 }
@@ -366,59 +369,226 @@ func TestValidateOfferCoversDeadline(t *testing.T) {
 	}
 }
 
-func TestLineupPolicyKeys(t *testing.T) {
-	key, err := domain.LineupRoleKey(domain.StageNameReview)
-	if err != nil || key != "lineup.role.review" {
-		t.Fatalf("LineupRoleKey = %q, %v", key, err)
+const (
+	lineupAgentDigest  = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	lineupPromptDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	lineupValue        = "sol-via-codex@" + lineupAgentDigest + "/role-prompt@" + lineupPromptDigest
+)
+
+func lineupKey(key string) domain.PolicyKey {
+	return domain.PolicyKey{
+		Key: key, Value: lineupValue,
+		Provenance: domain.KeyProvenance{Source: domain.ProvenancePreset, Digest: "sha256:policy"},
 	}
-	if _, err := domain.LineupRoleKey("implement"); !errors.Is(err, domain.ErrInvalidStageName) {
-		t.Fatalf("legacy role minted a key: %v", err)
+}
+
+func TestParseLineupSelection(t *testing.T) {
+	selection, err := domain.ParseLineupSelection(lineupValue)
+	want := domain.LineupSelection{
+		AgentName: "sol-via-codex", AgentDigest: lineupAgentDigest,
+		PromptName: "role-prompt", PromptDigest: lineupPromptDigest,
 	}
-	agentDigest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	selection, err := domain.ParseLineupSelection("sol-via-codex@" + agentDigest)
-	if err != nil || selection.AgentName != "sol-via-codex" || string(selection.AgentDigest) != agentDigest {
+	if err != nil || selection != want {
 		t.Fatalf("ParseLineupSelection = %+v, %v", selection, err)
 	}
-	if _, err := domain.ParseLineupSelection("Sol@" + agentDigest); !errors.Is(err, domain.ErrInvalidAgentName) {
-		t.Fatalf("ParseLineupSelection(invalid agent name) = %v, want %v", err, domain.ErrInvalidAgentName)
+	agent, prompt := "sol@"+lineupAgentDigest, "role-prompt@"+lineupPromptDigest
+	for _, bad := range []string{"Sol@" + lineupAgentDigest + "/" + prompt, agent + "/Role@" + lineupPromptDigest} {
+		if _, err := domain.ParseLineupSelection(bad); !errors.Is(err, domain.ErrInvalidAgentName) {
+			t.Fatalf("ParseLineupSelection(%q) = %v, want %v", bad, err, domain.ErrInvalidAgentName)
+		}
 	}
-	for _, bad := range []string{"", "sol-via-codex", "@" + agentDigest, "sol@not-a-digest"} {
+	for _, bad := range []string{
+		"", "sol", agent, agent + "/", "/" + prompt, agent + "/role-prompt",
+		"sol/" + prompt, "@" + lineupAgentDigest + "/" + prompt, agent + "/@" + lineupPromptDigest,
+		"sol@not-a-digest/" + prompt, agent + "/role-prompt@not-a-digest",
+		agent + "/" + prompt + "/" + prompt,
+	} {
 		if _, err := domain.ParseLineupSelection(bad); !errors.Is(err, domain.ErrInvalidLineupKey) {
 			t.Fatalf("ParseLineupSelection(%q) = %v, want %v", bad, err, domain.ErrInvalidLineupKey)
 		}
 	}
-	provenance := domain.KeyProvenance{Source: domain.ProvenancePreset, Digest: "sha256:policy"}
-	valid := []domain.PolicyKey{
-		{Key: "driver", Value: "claude", Provenance: provenance},
-		{Key: "lineup.role.implementation", Value: "sol-via-codex@" + agentDigest, Provenance: provenance},
-		{Key: "lineup.role.review", Value: "claude-reviewer@" + agentDigest, Provenance: provenance},
+}
+
+// TestLineupPolicyKeys is the lineup key contract's acceptance fixture: every
+// role in the closed list is a key, and nothing else under the namespace is.
+func TestLineupPolicyKeys(t *testing.T) {
+	keys := []domain.PolicyKey{{Key: "driver", Value: "claude"}, {Key: "lineup.roles", Value: "not a lineup key"}}
+	for _, role := range domain.AllRoleNames {
+		key, err := domain.LineupRoleKey(role)
+		if err != nil || key != "lineup.role."+string(role) {
+			t.Fatalf("LineupRoleKey(%s) = %q, %v", role, key, err)
+		}
+		keys = append(keys, lineupKey(key))
 	}
-	if err := domain.ValidateLineupPolicyKeys(valid); err != nil {
-		t.Fatalf("ValidateLineupPolicyKeys = %v", err)
+	lineup, err := domain.ResolveLineup(keys)
+	if err != nil {
+		t.Fatalf("ResolveLineup(every role) = %v", err)
 	}
+	if err := domain.ValidateLineupPolicyKeys(keys); err != nil {
+		t.Fatalf("ValidateLineupPolicyKeys(every role) = %v", err)
+	}
+	for _, role := range domain.AllRoleNames {
+		if line, bound := lineup.Line(role); !bound || line.AgentDigest != lineupAgentDigest || line.PromptDigest != lineupPromptDigest {
+			t.Fatalf("Line(%s) = %+v, %t", role, line, bound)
+		}
+	}
+	if unbound := lineup.UnboundRoles(domain.AllRoleNames); len(unbound) != 0 {
+		t.Fatalf("full lineup reports unbound roles %v", unbound)
+	}
+	for _, notRole := range []domain.RoleName{"", "implementation", "verification", "researcher"} {
+		if _, err := domain.LineupRoleKey(notRole); !errors.Is(err, domain.ErrInvalidRoleName) {
+			t.Fatalf("LineupRoleKey(%q) = %v, want %v", notRole, err, domain.ErrInvalidRoleName)
+		}
+	}
+	missingPrompt := lineupKey("lineup.role.reviewer")
+	missingPrompt.Value = "claude-reviewer@" + lineupAgentDigest
+	missingAgent := lineupKey("lineup.role.reviewer")
+	missingAgent.Value = "/role-prompt@" + lineupPromptDigest
 	cases := []struct {
 		name    string
 		keys    []domain.PolicyKey
 		wantErr error
 	}{
+		{"unknown role", []domain.PolicyKey{lineupKey("lineup.role.deployer")}, domain.ErrInvalidRoleName},
+		{"empty role", []domain.PolicyKey{lineupKey("lineup.role.")}, domain.ErrInvalidRoleName},
+		// Stage names are not role names: the specification, implementation,
+		// and review stages each hold roles under other names.
+		{"stage specification", []domain.PolicyKey{lineupKey("lineup.role.specification")}, domain.ErrInvalidRoleName},
+		{"stage implementation", []domain.PolicyKey{lineupKey("lineup.role.implementation")}, domain.ErrInvalidRoleName},
+		{"stage review", []domain.PolicyKey{lineupKey("lineup.role.review")}, domain.ErrInvalidRoleName},
+		{"legacy stage spelling", []domain.PolicyKey{lineupKey("lineup.role.implement")}, domain.ErrInvalidRoleName},
+		// Verification is an engine job and never a role (plan §5.13).
+		{"verification", []domain.PolicyKey{lineupKey("lineup.role.verification")}, domain.ErrInvalidRoleName},
+		// Plan revision 76's role joins through #1656.
+		{"researcher before #1656", []domain.PolicyKey{lineupKey("lineup.role.researcher")}, domain.ErrInvalidRoleName},
+		{"line missing its prompt", []domain.PolicyKey{missingPrompt}, domain.ErrInvalidLineupKey},
+		{"line missing its agent", []domain.PolicyKey{missingAgent}, domain.ErrInvalidLineupKey},
 		{
-			// Canonical names are required for newly authored stages; the
-			// legacy engine spelling reads through the resolver, never
-			// authors a key.
-			"legacy role authored",
-			[]domain.PolicyKey{{Key: "lineup.role.implement", Value: "a@" + agentDigest, Provenance: provenance}},
-			domain.ErrInvalidStageName,
-		},
-		{
-			"unparseable selection",
-			[]domain.PolicyKey{{Key: "lineup.role.review", Value: "claude-reviewer", Provenance: provenance}},
-			domain.ErrInvalidLineupKey,
+			"duplicate line",
+			[]domain.PolicyKey{lineupKey("lineup.role.reviewer"), lineupKey("lineup.role.reviewer")},
+			domain.ErrDuplicate,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := domain.ValidateLineupPolicyKeys(tc.keys); !errors.Is(err, tc.wantErr) {
 				t.Fatalf("ValidateLineupPolicyKeys = %v, want %v", err, tc.wantErr)
+			}
+			if _, err := domain.ResolveLineup(tc.keys); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("ResolveLineup = %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestLineupHasNoFallback proves a role is bound only by its own primary
+// line, and that a role policy does not ask work from is never missing.
+func TestLineupHasNoFallback(t *testing.T) {
+	lineup, err := domain.ResolveLineup([]domain.PolicyKey{
+		lineupKey("lineup.role.implementer"),
+		lineupKey("lineup.role.reviewer"),
+		lineupKey("lineup.role.task_namer.shadow.candidate"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, bound := lineup.Line(domain.RoleRemediator); bound {
+		t.Fatal("remediator borrowed a line it does not have")
+	}
+	if _, bound := lineup.Line(domain.RoleTaskNamer); bound {
+		t.Fatal("a shadow line bound its role with no primary line")
+	}
+	if shadow, present := lineup.ShadowLine(domain.RoleTaskNamer); !present || shadow.Name != "candidate" {
+		t.Fatalf("ShadowLine(task_namer) = %+v, %t", shadow, present)
+	}
+	asked := []domain.RoleName{domain.RoleImplementer, domain.RoleRemediator, domain.RoleReviewer, domain.RoleTaskNamer}
+	want := []domain.RoleName{domain.RoleRemediator, domain.RoleTaskNamer}
+	if unbound := lineup.UnboundRoles(asked); !slices.Equal(unbound, want) {
+		t.Fatalf("UnboundRoles = %v, want %v", unbound, want)
+	}
+	// The shadow reviewer at a zero rate and the drift auditor with its key
+	// unset are off: no line, and nothing reported missing.
+	if unbound := lineup.UnboundRoles([]domain.RoleName{domain.RoleImplementer, domain.RoleReviewer}); len(unbound) != 0 {
+		t.Fatalf("roles outside the asked set reported missing: %v", unbound)
+	}
+	var empty domain.Lineup
+	if unbound := empty.UnboundRoles([]domain.RoleName{domain.RoleReviewer}); !slices.Equal(unbound, []domain.RoleName{domain.RoleReviewer}) {
+		t.Fatalf("zero lineup UnboundRoles = %v", unbound)
+	}
+}
+
+func TestLineupShadowLines(t *testing.T) {
+	key, err := domain.LineupShadowKey(domain.RoleTaskNamer, "candidate")
+	if err != nil || key != "lineup.role.task_namer.shadow.candidate" {
+		t.Fatalf("LineupShadowKey = %q, %v", key, err)
+	}
+	if _, err := domain.LineupShadowKey(domain.RoleReviewer, "candidate"); !errors.Is(err, domain.ErrLineupShadowOnWardRole) {
+		t.Fatalf("shadow key on a ward role = %v", err)
+	}
+	if _, err := domain.LineupShadowKey("deployer", "candidate"); !errors.Is(err, domain.ErrInvalidRoleName) {
+		t.Fatalf("shadow key on an unknown role = %v", err)
+	}
+	if _, err := domain.LineupShadowKey(domain.RoleTaskNamer, "a.b"); !errors.Is(err, domain.ErrInvalidAgentName) {
+		t.Fatalf("shadow key with a dotted name = %v", err)
+	}
+	for _, role := range domain.AllRoleNames {
+		if role.LaunchShape() != domain.LaunchShapeWardless {
+			continue
+		}
+		primary, _ := domain.LineupRoleKey(role)
+		shadowKey, err := domain.LineupShadowKey(role, "candidate")
+		if err != nil {
+			t.Fatalf("LineupShadowKey(%s) = %v", role, err)
+		}
+		lineup, err := domain.ResolveLineup([]domain.PolicyKey{lineupKey(primary), lineupKey(shadowKey)})
+		if err != nil {
+			t.Fatalf("%s with one shadow line = %v", role, err)
+		}
+		if _, bound := lineup.Line(role); !bound {
+			t.Fatalf("%s unbound beside its shadow line", role)
+		}
+		if shadow, present := lineup.ShadowLine(role); !present || shadow.Name != "candidate" || shadow.Selection.PromptDigest != lineupPromptDigest {
+			t.Fatalf("ShadowLine(%s) = %+v, %t", role, shadow, present)
+		}
+	}
+	badValue := lineupKey("lineup.role.task_namer.shadow.candidate")
+	badValue.Value = "sol-via-codex@" + lineupAgentDigest
+	cases := []struct {
+		name    string
+		keys    []domain.PolicyKey
+		wantErr error
+	}{
+		{
+			"second shadow line",
+			[]domain.PolicyKey{
+				lineupKey("lineup.role.task_namer"),
+				lineupKey("lineup.role.task_namer.shadow.candidate"),
+				lineupKey("lineup.role.task_namer.shadow.other"),
+			},
+			domain.ErrLineupShadowLimit,
+		},
+		{
+			"same shadow line twice",
+			[]domain.PolicyKey{
+				lineupKey("lineup.role.task_namer.shadow.candidate"),
+				lineupKey("lineup.role.task_namer.shadow.candidate"),
+			},
+			domain.ErrLineupShadowLimit,
+		},
+		{"shadow on a ward role", []domain.PolicyKey{lineupKey("lineup.role.reviewer.shadow.candidate")}, domain.ErrLineupShadowOnWardRole},
+		{"shadow under an unknown role", []domain.PolicyKey{lineupKey("lineup.role.deployer.shadow.candidate")}, domain.ErrInvalidRoleName},
+		{"shadow under a stage name", []domain.PolicyKey{lineupKey("lineup.role.review.shadow.candidate")}, domain.ErrInvalidRoleName},
+		{"shadow with no name", []domain.PolicyKey{lineupKey("lineup.role.task_namer.shadow")}, domain.ErrInvalidLineupKey},
+		{"shadow with an empty name", []domain.PolicyKey{lineupKey("lineup.role.task_namer.shadow.")}, domain.ErrInvalidLineupKey},
+		{"shadow with a dotted name", []domain.PolicyKey{lineupKey("lineup.role.task_namer.shadow.a.b")}, domain.ErrInvalidLineupKey},
+		{"unknown key segment", []domain.PolicyKey{lineupKey("lineup.role.task_namer.fallback.candidate")}, domain.ErrInvalidLineupKey},
+		{"trailing dot", []domain.PolicyKey{lineupKey("lineup.role.task_namer.")}, domain.ErrInvalidLineupKey},
+		{"shadow missing its prompt", []domain.PolicyKey{badValue}, domain.ErrInvalidLineupKey},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := domain.ResolveLineup(tc.keys); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("ResolveLineup = %v, want %v", err, tc.wantErr)
 			}
 		})
 	}

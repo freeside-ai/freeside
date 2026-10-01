@@ -1,0 +1,13 @@
+{
+  "role": "task_namer",
+  "agent_digest": "sha256:32e635d8a2accab77dbd56eec55e495f967d4a9136b02475b748c4653de3bf04",
+  "prompt_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "lineup_revision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "enrollment_id": "enroll-1",
+  "enrollment_generation": 1,
+  "interim_launch_audit": {
+    "adapter_digest": "sha256:037d4ef75199f803baa39d122d5a119dc7ee754ec12d414e7a7d3047c0f621ea",
+    "harness_build": "claude-code 2.1.267",
+    "audited_on": "2026-09-09"
+  }
+}

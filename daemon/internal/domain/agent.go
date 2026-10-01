@@ -302,46 +302,105 @@ func ValidateOfferCoversDeadline(offer OfferFragment, deadline time.Time) error 
 	return nil
 }
 
-// LineupRoleKeyPrefix namespaces the lineup's ResolvedPolicy keys: one key
-// per role naming an agent, one provenance entry per role riding the
-// PolicyKey it lands on (§5.4: a lineup is a policy's map of roles to
-// agents, and the only standing selection).
+// LineupRoleKeyPrefix namespaces the lineup's ResolvedPolicy keys (§5.4: a
+// lineup is a policy's map of roles to agents and prompts, and the only
+// standing selection). A role's line is one key, lineup.role.<role>, so a
+// project lineup overrides a whole line and never half of one. A wardless
+// role's optional shadow line is a second key under the same role,
+// lineup.role.<role>.shadow.<shadow-name>. One provenance entry per line
+// rides the PolicyKey it lands on.
 const LineupRoleKeyPrefix = "lineup.role."
 
-// LineupSelection is one parsed lineup value: the agent's tree name and the
-// exact digest the lineup binds for the role. The digest is what admission
-// step 2 matches; the name is how a human reads the diff.
+// lineupShadowSegment separates the role from the shadow name in a shadow
+// line's key. Role names carry no '.', so the key parses one way only.
+const lineupShadowSegment = "shadow"
+
+// LineupSelection is one parsed lineup value: the agent and the prompt the
+// line binds for its role, each as a tree name and the exact digest. The
+// digests are what admission step 2 matches; the names are how a human reads
+// the diff.
 type LineupSelection struct {
-	AgentName   string
-	AgentDigest Digest
+	AgentName    string
+	AgentDigest  Digest
+	PromptName   string
+	PromptDigest Digest
 }
 
-// LineupRoleKey returns the policy key for a role. Only canonical stage
-// names mint keys: newly authored lineups never use a legacy engine spelling.
-func LineupRoleKey(role StageName) (string, error) {
+// LineupShadowLine is a wardless role's optional shadow line: a second agent
+// and prompt that answer the same call beside the primary line (§5.13). The
+// name keys the line, so a later plan revision can allow several shadows
+// without changing a key that already exists.
+type LineupShadowLine struct {
+	Name      string
+	Selection LineupSelection
+}
+
+// LineupRoleKey returns the policy key for a role's line. Only a member of
+// the closed role list mints a key: a stage name is not a role name.
+func LineupRoleKey(role RoleName) (string, error) {
 	if !role.valid() {
-		return "", fmt.Errorf("lineup role %q: %w", role, ErrInvalidStageName)
+		return "", fmt.Errorf("lineup role %q: %w", role, ErrInvalidRoleName)
 	}
 	return LineupRoleKeyPrefix + string(role), nil
 }
 
-// ParseLineupSelection parses a lineup key's value, "<agent-name>@<digest>".
-// The digest half must be a real content address — a value naming only an
-// agent, or carrying a name where the digest belongs, is refused, because a
-// lineup that does not pin the digest could follow a tree edit nobody
+// LineupShadowKey returns the policy key for a wardless role's shadow line.
+// A ward role takes no shadow line, and the shadow name follows the agent
+// name rule.
+func LineupShadowKey(role RoleName, shadowName string) (string, error) {
+	key, err := LineupRoleKey(role)
+	if err != nil {
+		return "", err
+	}
+	if role.LaunchShape() != LaunchShapeWardless {
+		return "", fmt.Errorf("lineup shadow line for role %q: %w", role, ErrLineupShadowOnWardRole)
+	}
+	if !validAgentName(shadowName) {
+		return "", fmt.Errorf("lineup shadow name %q: %w", shadowName, ErrInvalidAgentName)
+	}
+	return key + "." + lineupShadowSegment + "." + shadowName, nil
+}
+
+// ParseLineupSelection parses a lineup line's value,
+// "<agent-name>@<agent-digest>/<prompt-name>@<prompt-digest>". Names and
+// digests carry no '/', so the split is unambiguous. Each digest half must be
+// a real content address: a value naming only an agent or a prompt, lacking
+// either half, or carrying a name where a digest belongs is refused, because
+// a line that does not pin both digests could follow a tree edit nobody
 // approved for the role.
 func ParseLineupSelection(value string) (LineupSelection, error) {
-	name, digest, found := strings.Cut(value, "@")
+	agent, prompt, found := strings.Cut(value, "/")
+	if !found {
+		return LineupSelection{}, fmt.Errorf("lineup selection %q names no prompt: %w", value, ErrInvalidLineupKey)
+	}
+	agentName, agentDigest, err := parseLineupReference(value, "agent", agent)
+	if err != nil {
+		return LineupSelection{}, err
+	}
+	promptName, promptDigest, err := parseLineupReference(value, "prompt", prompt)
+	if err != nil {
+		return LineupSelection{}, err
+	}
+	return LineupSelection{
+		AgentName: agentName, AgentDigest: agentDigest,
+		PromptName: promptName, PromptDigest: promptDigest,
+	}, nil
+}
+
+// parseLineupReference parses one "<name>@<digest>" half of a lineup value.
+// Prompt names follow the agent name rule.
+func parseLineupReference(value, half, reference string) (string, Digest, error) {
+	name, digest, found := strings.Cut(reference, "@")
 	if !found || name == "" {
-		return LineupSelection{}, fmt.Errorf("lineup selection %q: %w", value, ErrInvalidLineupKey)
+		return "", "", fmt.Errorf("lineup selection %q %s: %w", value, half, ErrInvalidLineupKey)
 	}
 	if !validAgentName(name) {
-		return LineupSelection{}, fmt.Errorf("lineup selection %q name %q: %w", value, name, ErrInvalidAgentName)
+		return "", "", fmt.Errorf("lineup selection %q %s name %q: %w", value, half, name, ErrInvalidAgentName)
 	}
 	if !contentaddr.Valid(digest) {
-		return LineupSelection{}, fmt.Errorf("lineup selection %q digest: %w", value, ErrInvalidLineupKey)
+		return "", "", fmt.Errorf("lineup selection %q %s digest: %w", value, half, ErrInvalidLineupKey)
 	}
-	return LineupSelection{AgentName: name, AgentDigest: Digest(digest)}, nil
+	return name, Digest(digest), nil
 }
 
 func validAgentName(name string) bool {
@@ -361,41 +420,105 @@ func validAgentName(name string) bool {
 	return true
 }
 
-// ValidateLineupPolicyKeys is the namespaced key validator applied at policy
-// resolution and approval, scoped to the keys this contract adds (no global
-// policy-key registry): every key under lineup.role. must name a canonical
-// stage role — legacy engine spellings are read through the stage-role
-// resolver, never authored anew — and carry a parseable "<name>@<digest>"
-// selection. Keys outside the namespace pass through untouched, so submit's
-// free-form policy keys keep working.
-func ValidateLineupPolicyKeys(keys []PolicyKey) error {
-	seen := map[StageName]string{}
+// Lineup is the resolved map of roles to lines. It holds only what the keys
+// name: nothing here fills a missing line from another role's line or from a
+// shadow line.
+type Lineup struct {
+	lines   map[RoleName]LineupSelection
+	shadows map[RoleName]LineupShadowLine
+}
+
+// ResolveLineup is the namespaced key validator applied at policy resolution
+// and approval, scoped to the keys this contract adds (no global policy-key
+// registry). Every key under lineup.role. must name a role from the closed
+// list and carry a parseable agent-and-prompt selection. A stage name that is
+// not a role name, "verification", and an unknown role each fail closed; so
+// do a shadow line on a ward role and a second shadow line on one role (one
+// shadow per role is a cost limit, owner decision 2026-09-19). Nothing here
+// compares lineage groups: review independence is a recorded fact, never a
+// gate (plan revision 65). Keys outside the namespace pass through untouched,
+// so submit's free-form policy keys keep working.
+func ResolveLineup(keys []PolicyKey) (Lineup, error) {
+	lineup := Lineup{lines: map[RoleName]LineupSelection{}, shadows: map[RoleName]LineupShadowLine{}}
 	for _, key := range keys {
-		if !strings.HasPrefix(key.Key, LineupRoleKeyPrefix) {
+		rest, ok := strings.CutPrefix(key.Key, LineupRoleKeyPrefix)
+		if !ok {
 			continue
 		}
-		role := canonicalStageName(strings.TrimPrefix(key.Key, LineupRoleKeyPrefix))
+		roleName, tail, isShadow := strings.Cut(rest, ".")
+		role := RoleName(roleName)
 		if !role.valid() {
-			return fmt.Errorf("lineup key %q role: %w", key.Key, ErrInvalidStageName)
+			return Lineup{}, fmt.Errorf("lineup key %q role: %w", key.Key, ErrInvalidRoleName)
 		}
-		if prior, dup := seen[role]; dup {
-			return fmt.Errorf("lineup key %q duplicates %q: %w", key.Key, prior, ErrDuplicate)
+		selection, err := ParseLineupSelection(key.Value)
+		if err != nil {
+			return Lineup{}, fmt.Errorf("lineup key %q: %w", key.Key, err)
 		}
-		seen[role] = key.Key
-		if _, err := ParseLineupSelection(key.Value); err != nil {
-			return fmt.Errorf("lineup key %q: %w", key.Key, err)
+		if !isShadow {
+			if _, dup := lineup.lines[role]; dup {
+				return Lineup{}, fmt.Errorf("lineup key %q: %w", key.Key, ErrDuplicate)
+			}
+			lineup.lines[role] = selection
+			continue
+		}
+		segment, shadowName, _ := strings.Cut(tail, ".")
+		if segment != lineupShadowSegment || !validAgentName(shadowName) {
+			return Lineup{}, fmt.Errorf("lineup key %q: %w", key.Key, ErrInvalidLineupKey)
+		}
+		if role.LaunchShape() != LaunchShapeWardless {
+			return Lineup{}, fmt.Errorf("lineup key %q: %w", key.Key, ErrLineupShadowOnWardRole)
+		}
+		if prior, taken := lineup.shadows[role]; taken {
+			return Lineup{}, fmt.Errorf("lineup key %q beside shadow %q: %w", key.Key, prior.Name, ErrLineupShadowLimit)
+		}
+		lineup.shadows[role] = LineupShadowLine{Name: shadowName, Selection: selection}
+	}
+	return lineup, nil
+}
+
+// ValidateLineupPolicyKeys reports whether the lineup keys resolve; see
+// ResolveLineup for the rules.
+func ValidateLineupPolicyKeys(keys []PolicyKey) error {
+	_, err := ResolveLineup(keys)
+	return err
+}
+
+// Line returns the role's own line and whether the role is bound. One role
+// never falls back to another's line, and a shadow line is never a fallback:
+// a role with no primary line is unbound whatever else the lineup holds.
+func (l Lineup) Line(role RoleName) (LineupSelection, bool) {
+	selection, bound := l.lines[role]
+	return selection, bound
+}
+
+// ShadowLine returns the role's optional shadow line. It says nothing about
+// whether the role is bound.
+func (l Lineup) ShadowLine(role RoleName) (LineupShadowLine, bool) {
+	shadow, present := l.shadows[role]
+	return shadow, present
+}
+
+// UnboundRoles returns, in the order asked, the roles policy asks work from
+// that have no primary line. A role outside asked is off, not unbound, and is
+// never reported: the shadow reviewer at a zero rate, the drift auditor with
+// its key unset, and a role whose work is not built need no line (§5.4).
+func (l Lineup) UnboundRoles(asked []RoleName) []RoleName {
+	var unbound []RoleName
+	for _, role := range asked {
+		if _, bound := l.lines[role]; !bound {
+			unbound = append(unbound, role)
 		}
 	}
-	return nil
+	return unbound
 }
 
 // CanonicalStageRole maps a persisted stage name onto the canonical
 // StageName vocabulary: canonical names map to themselves, and the exhaustive
-// set of legacy engine spellings — exactly "implement", the single Phase 1A.2
-// production stage — maps to its canonical member. Persisted rows are
-// preserved byte-for-byte; this resolver changes how a row is read where the
-// lineup keys resolve per role, never what is stored. An unknown name
-// resolves to nothing and the caller fails closed.
+// set of legacy engine spellings maps to its canonical member. Persisted rows
+// are preserved byte-for-byte; this resolver changes how a row's stage is
+// read, never what is stored. It has nothing to do with lineup keys, which
+// name roles. An unknown name resolves to nothing and the caller fails
+// closed.
 func CanonicalStageRole(name string) (StageName, error) {
 	if canonical := StageName(name); canonical.valid() {
 		return canonical, nil

@@ -989,6 +989,26 @@ existing ledger reserves each call's full allowance before dispatch.
 Account-lineup attribution remains the separate
 #900 design decision; this binding does not represent it as implemented.
 
+That no-tools launch is the safety argument for running a judgment call on the
+host, and its proof is interim. Plan §5.4 (Admission) makes the call launch a
+capability the adapter build's conformance record proves in the stage contract
+suite (#1424). Until that lands, the proof is a hand audit of one Claude CLI
+build: the executable `-judgment-claude-bin` names, pinned by
+`-judgment-claude-sha256`. The recorded basis is the localhost
+synthetic-provider probe of Claude CLI 2.1.267 on 2026-09-09
+(`devlog/2026-09-09-2145-subscription-judgments.md`), which observed one model
+request with an empty tool list. The audit covers that build and no other, so
+a different pin runs unaudited until it is audited again. The deterministic
+fake driver and the site budgets do not stand in for it: they cover output
+handling, not what the harness can do. No second call driver joins on a hand
+audit. The wardless admission class carries this as `InterimCallLaunchAudit`
+(`daemon/internal/domain/wardless_admission.go`): it admits a `claude_code`
+adapter only under an audit record naming that adapter's digest and harness
+build. The record compares the adapter's authored harness build, not the
+executable's SHA-256, and which build was audited is deployment configuration
+the caller supplies. No judgment site reads the lineup or that admission yet;
+#1425 wires both.
+
 Preflight reports `judgment_configuration` and a secret-free
 `judgment_configuration_digest`. The real-run harness accepts the corresponding
 `FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN`,
