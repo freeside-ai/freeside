@@ -162,6 +162,39 @@ func TestGolden(t *testing.T) {
 		},
 		TerminalOutcome: domain.ReviewClean,
 	}
+	// The metrics fixture is separate so review_yield_history keeps pinning the
+	// bytes of a history stored before the field existed. Round 2 carries no
+	// metrics: an unrecorded round is omitted, never rendered as null.
+	firstRoundDiff := domain.DiffStats{
+		FilesChanged: 4, Additions: 120, Deletions: 8, BaseSHA: "deadbeef", HeadSHA: "0a1b2c3d",
+	}
+	yieldHistoryDiffMetrics := domain.ReviewYieldHistory{
+		Rounds: []domain.ReviewYieldRound{
+			{
+				Round: 1, FindingsIngested: 2, NewFindings: 2, Fixed: 1, Deferred: 1,
+				Outcome:     domain.ReviewFindings,
+				DiffMetrics: &domain.ReviewRoundDiffMetrics{Cumulative: firstRoundDiff, Round: firstRoundDiff},
+			},
+			{
+				Round: 2, FindingsIngested: 2, NewFindings: 1, RecurringFindings: 1,
+				Fixed: 1, Declined: 1, Outcome: domain.ReviewFindings,
+			},
+			{
+				Round: 3, Outcome: domain.ReviewClean,
+				DiffMetrics: &domain.ReviewRoundDiffMetrics{
+					Cumulative: domain.DiffStats{
+						FilesChanged: 6, Additions: 210, Deletions: 14,
+						BaseSHA: "deadbeef", HeadSHA: "cafebabe",
+					},
+					Round: domain.DiffStats{
+						FilesChanged: 2, Additions: 35, Deletions: 3,
+						BaseSHA: "4e5f6a7b", HeadSHA: "cafebabe",
+					},
+				},
+			},
+		},
+		TerminalOutcome: domain.ReviewClean,
+	}
 	displayNames := domain.DisplayNames{
 		Project: domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
 		Task:    domain.DisplayName{Text: "#724", Source: domain.DisplayNameSourceName},
@@ -1545,6 +1578,7 @@ func TestGolden(t *testing.T) {
 		{"attention_item_finding_adjudication", findingAdjudicationItem},
 		{"attention_item_codex_reenrollment", reenrollmentItem},
 		{"review_yield_history", yieldHistory},
+		{"review_yield_history_diff_metrics", yieldHistoryDiffMetrics},
 		{"codex_reenrollment_recovery_transition", reenrollmentTransition},
 		{"classification", classification},
 		{"command_discuss", discussCommand},

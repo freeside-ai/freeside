@@ -64,13 +64,53 @@ func TestReviewYieldHistoryValidation(t *testing.T) {
 }
 
 func TestNewReviewYieldHistoryDetachesRounds(t *testing.T) {
-	history := validReviewYieldHistory()
+	history := validReviewYieldHistoryWithDiffMetrics()
 	got, err := domain.NewReviewYieldHistory(history)
 	if err != nil {
 		t.Fatal(err)
 	}
 	history.Rounds[0].NewFindings = 0
-	if got.Rounds[0].NewFindings != 2 {
+	history.Rounds[0].DiffMetrics.Cumulative.Additions = 0
+	if got.Rounds[0].NewFindings != 2 || got.Rounds[0].DiffMetrics.Cumulative.Additions != 120 {
 		t.Fatal("constructed history aliases caller-owned rounds")
+	}
+}
+
+// validReviewYieldHistoryWithDiffMetrics records metrics for rounds 1 and 3
+// and leaves round 2 without them, the shape a gap takes.
+func validReviewYieldHistoryWithDiffMetrics() domain.ReviewYieldHistory {
+	history := validReviewYieldHistory()
+	first := domain.DiffStats{
+		FilesChanged: 4, Additions: 120, Deletions: 8, BaseSHA: "base", HeadSHA: "head-1",
+	}
+	history.Rounds[0].DiffMetrics = &domain.ReviewRoundDiffMetrics{Cumulative: first, Round: first}
+	history.Rounds[2].DiffMetrics = &domain.ReviewRoundDiffMetrics{
+		Cumulative: domain.DiffStats{
+			FilesChanged: 6, Additions: 210, Deletions: 14, BaseSHA: "base", HeadSHA: "head-3",
+		},
+		Round: domain.DiffStats{
+			FilesChanged: 2, Additions: 35, Deletions: 3, BaseSHA: "head-2", HeadSHA: "head-3",
+		},
+	}
+	return history
+}
+
+func TestReviewYieldHistoryDiffMetricsValidation(t *testing.T) {
+	if err := validReviewYieldHistoryWithDiffMetrics().Validate(); err != nil {
+		t.Fatalf("valid history with diff metrics: %v", err)
+	}
+	for name, mutate := range map[string]func(*domain.ReviewRoundDiffMetrics){
+		"negative count":       func(metrics *domain.ReviewRoundDiffMetrics) { metrics.Round.Deletions = -1 },
+		"missing commit":       func(metrics *domain.ReviewRoundDiffMetrics) { metrics.Cumulative.BaseSHA = "" },
+		"different heads":      func(metrics *domain.ReviewRoundDiffMetrics) { metrics.Round.HeadSHA = "head-other" },
+		"same pair, different": func(metrics *domain.ReviewRoundDiffMetrics) { metrics.Round.BaseSHA = "base" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			history := validReviewYieldHistoryWithDiffMetrics()
+			mutate(history.Rounds[2].DiffMetrics)
+			if err := history.Validate(); !errors.Is(err, domain.ErrReviewYieldHistoryInconsistent) {
+				t.Fatalf("Validate = %v, want ErrReviewYieldHistoryInconsistent", err)
+			}
+		})
 	}
 }

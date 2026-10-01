@@ -769,7 +769,7 @@ func cloneReviewYieldHistory(history *ReviewYieldHistory) *ReviewYieldHistory {
 		return nil
 	}
 	cloned := *history
-	cloned.Rounds = slices.Clone(history.Rounds)
+	cloned.Rounds = cloneReviewYieldRounds(history.Rounds)
 	return &cloned
 }
 
