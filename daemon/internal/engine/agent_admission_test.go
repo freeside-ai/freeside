@@ -146,6 +146,10 @@ func newAgentAdmissionFixture(t *testing.T) *agentAdmissionFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Admission reads the tree as the daemon loads it: parsed from its files.
+	if tree, err = agenttree.Parse(files); err != nil {
+		t.Fatal(err)
+	}
 	f.selection = AgentSelection{
 		Tree: tree, LineupRevision: revision, Launch: agentbaseline.RoleLaunch,
 		EffectiveEgress: slices.Clone(agentTestEgress), AttemptBudget: time.Hour, ExpiryMargin: 5 * time.Minute,
@@ -485,7 +489,7 @@ func TestLineupAdmissionRefusals(t *testing.T) {
 			if tc.mutate != nil {
 				tc.mutate(t, f, &selection)
 			}
-			_, err := f.engine.resolveAgentAdmission(ctx, selection, domain.RoleImplementer, prompt, mode, at)
+			_, err := resolveAgentAdmission(ctx, f.store, selection, domain.RoleImplementer, prompt, mode, at)
 			if !errors.Is(err, ErrAgentNotAdmissible) || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("resolve = %v, want a refusal naming %q", err, tc.want)
 			}
@@ -520,8 +524,7 @@ func TestLineupAdmissionRequiresAdapterConformance(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	_, err = f.engine.resolveAgentAdmission(
-		ctx, f.selection, domain.RoleImplementer, agentTestPrompts[domain.RoleImplementer].Digest,
+	_, err = resolveAgentAdmission(ctx, f.store, f.selection, domain.RoleImplementer, agentTestPrompts[domain.RoleImplementer].Digest,
 		domain.ModeAttendedDev, agentTestAt,
 	)
 	if !errors.Is(err, ErrAgentNotAdmissible) {
@@ -531,8 +534,8 @@ func TestLineupAdmissionRequiresAdapterConformance(t *testing.T) {
 
 func TestUnattendedLineupAdmissionRecordsTheMark(t *testing.T) {
 	f := newAgentAdmissionFixture(t)
-	resolved, err := f.engine.resolveAgentAdmission(
-		context.Background(), f.selection, domain.RoleImplementer,
+	resolved, err := resolveAgentAdmission(
+		context.Background(), f.store, f.selection, domain.RoleImplementer,
 		agentTestPrompts[domain.RoleImplementer].Digest, domain.ModeUnattended, agentTestAt,
 	)
 	if err != nil || resolved.binding.Attended {
@@ -548,5 +551,118 @@ func TestWithAdmissionRefusesAgentSelectionBesideAnIdentity(t *testing.T) {
 	err := WithAdmission(stageInputBackend{}, []exec.Capability{exec.CapPostExitExport}, env, time.Now)(&Engine{})
 	if err == nil || !strings.Contains(err.Error(), "exclusive") {
 		t.Fatalf("WithAdmission = %v, want the exclusivity refusal", err)
+	}
+}
+
+// TestLineupAdmissionGateHoldsEveryAttempt closes the gate: no attempt is
+// admitted, and the refusal carries the gate's reason.
+func TestLineupAdmissionGateHoldsEveryAttempt(t *testing.T) {
+	f := newAgentAdmissionFixture(t)
+	held := errors.New("selection is not active")
+	f.engine.admission.environment.Agents.Gate = func(context.Context) error { return held }
+	_, admitted, err := f.engine.admitAttempt(context.Background(), f.binding, f.stage, f.binding.invocation.ID)
+	if admitted || !errors.Is(err, ErrAgentNotAdmissible) || !errors.Is(err, held) {
+		t.Fatalf("admitAttempt behind a closed gate = %t, %v", admitted, err)
+	}
+	// The refusal holds the invocation in either mode. Left unclassified it
+	// would return from dispatch as an error and stop the workflow loop.
+	if !invocationDispatchHold(err) {
+		t.Fatal("a closed gate was not classified as an invocation hold")
+	}
+	if reason, ok := dispatchHoldReason(err); !ok || reason != domain.HoldAdmissionPolicyRefused {
+		t.Fatalf("closed gate hold reason = %q, %t", reason, ok)
+	}
+	// The startup check decides whether to open the gate, so it ignores it.
+	if _, err := f.engine.admission.environment.Agents.CheckRole(
+		context.Background(), f.store, domain.RoleImplementer,
+		agentTestPrompts[domain.RoleImplementer].Digest, domain.ModeAttendedDev, agentTestAt,
+	); err != nil {
+		t.Fatalf("CheckRole behind a closed gate = %v", err)
+	}
+}
+
+// TestCutoverLeavesLegacyAdmissionsAndBindsQueuedRuns is the cutover seen
+// from two runs. The first was admitted by the flag-selected daemon: after the
+// cutover its admission still names only its identity, and its attempt keeps
+// mounting the interim volume. The second was queued before the cutover with
+// no admission: the lineup daemon admits it with an agent binding.
+func TestCutoverLeavesLegacyAdmissionsAndBindsQueuedRuns(t *testing.T) {
+	ctx := context.Background()
+	f := newAgentAdmissionFixture(t)
+	identity := f.identity.ID
+	agents := f.engine.admission.environment.Agents
+
+	queued := domain.Run{
+		ID: "run-queued", ProjectID: f.run.ProjectID,
+		SpecDigest: f.run.SpecDigest, PolicyDigest: f.run.PolicyDigest,
+	}
+	queuedStage := domain.Stage{ID: productionStageID(queued.ID), RunID: queued.ID, Name: productionStageName}
+	queued.Stages = []domain.Stage{queuedStage}
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error { return tx.PutRun(ctx, queued) }); err != nil {
+		t.Fatal(err)
+	}
+
+	// Before the cutover: the daemon runs on -auth-identity.
+	f.engine.admission.environment.Agents = nil
+	f.engine.admission.environment.AuthIdentityID = &identity
+	legacy, admitted, err := f.engine.admitAttempt(ctx, f.binding, f.stage, f.binding.invocation.ID)
+	if err != nil || !admitted || legacy.AgentBinding != nil {
+		t.Fatalf("flag-selected admitAttempt = %t, %v, binding %v", admitted, err, legacy.AgentBinding)
+	}
+	f.record(t, legacy)
+
+	// The cutover: the same store, a daemon that selects through the lineup.
+	f.engine.admission.environment.AuthIdentityID = nil
+	f.engine.admission.environment.Agents = agents
+
+	var stored domain.ExecutionAdmission
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		var found bool
+		var err error
+		stored, found, err = tx.LookupExecutionAdmission(ctx, legacy.InvocationID)
+		if err == nil && !found {
+			err = errors.New("the legacy admission is gone")
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if stored.AgentBinding != nil || stored.AuthIdentityID == nil || *stored.AuthIdentityID != identity {
+		t.Fatalf("legacy admission after the cutover = binding %v identity %v", stored.AgentBinding, stored.AuthIdentityID)
+	}
+	volume, err := f.adapters.Leaser.AuthStoreVolume(ctx, identity, legacy.InvocationID)
+	if err != nil || volume != agentTestInterimVolume {
+		t.Fatalf("legacy volume after the cutover = %q, %v; want %q", volume, err, agentTestInterimVolume)
+	}
+
+	invocation, err := domain.NewAgentInvocation(
+		productionInvocationID(queued.ID), []domain.ArtifactID{agentTestInputArtifact}, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission, admitted, err := f.engine.admitAttempt(
+		ctx, invocationBinding{run: queued, invocation: invocation}, queuedStage, invocation.ID)
+	if err != nil || !admitted || admission.AgentBinding == nil {
+		t.Fatalf("queued run admitAttempt = %t, %v", admitted, err)
+	}
+	if admission.AgentBinding.EnrollmentID != f.enrollment.ID ||
+		admission.AgentBinding.LineupRevision != f.selection.LineupRevision {
+		t.Fatalf("queued run binding = %+v", *admission.AgentBinding)
+	}
+	queuedStage.Attempts = []domain.Attempt{{
+		ID: admission.AttemptID, StageID: queuedStage.ID, Number: 1, InvocationID: admission.InvocationID,
+	}}
+	queued.Stages = []domain.Stage{queuedStage}
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, queued); err != nil {
+			return err
+		}
+		return tx.RecordExecutionAdmission(ctx, admission)
+	}); err != nil {
+		t.Fatalf("record the queued run's admission: %v", err)
+	}
+	volume, err = f.adapters.Leaser.AuthStoreVolume(ctx, identity, admission.InvocationID)
+	if err != nil || volume != agentTestGenerationVolume {
+		t.Fatalf("queued run volume = %q, %v; want %q", volume, err, agentTestGenerationVolume)
 	}
 }

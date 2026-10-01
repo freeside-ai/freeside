@@ -37,6 +37,79 @@ type AgentSelection struct {
 	// ExpiryMargin is how far past the deadline an expiring credential must
 	// last.
 	ExpiryMargin time.Duration
+	// Gate, when set, is consulted before every lineup admission; an error
+	// refuses the attempt. The daemon holds admission through it until
+	// selection has activated (no retired identity still owns open work).
+	Gate func(context.Context) error
+}
+
+// RoleAgent is a role's lineup line resolved against the tree and the store:
+// the agent the line selects, the enrollment and identity it runs under, and
+// the store generation it would mount now.
+type RoleAgent struct {
+	Line       domain.LineupSelection
+	Resolved   agenttree.ResolvedAgent
+	Identity   domain.AuthIdentity
+	Enrollment domain.ClientEnrollment
+	Generation domain.EnrollmentGeneration
+}
+
+// ResolveRole runs the admission steps that need no launch (plan §5.4): the
+// role's line resolves to an agent whose fragments, enrollment, and enabled
+// identity join; the line selects that agent's current digest; and the
+// enrollment holds a store generation. Stage admission adds the launch,
+// conformance, and deadline checks; the review roles, whose launch coverage
+// arrives with the review record (#898), stop here.
+func ResolveRole(
+	ctx context.Context, st *store.Store, tree agenttree.Tree, role domain.RoleName,
+) (RoleAgent, error) {
+	var agent RoleAgent
+	err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		agent, err = resolveRole(ctx, tx, tree, role)
+		return err
+	})
+	if err != nil {
+		return RoleAgent{}, fmt.Errorf("role %s: %w", role, errors.Join(ErrAgentNotAdmissible, err))
+	}
+	return agent, nil
+}
+
+func resolveRole(
+	ctx context.Context, tx *store.ReadTx, tree agenttree.Tree, role domain.RoleName,
+) (RoleAgent, error) {
+	lineup, err := tree.ResolveLineup()
+	if err != nil {
+		return RoleAgent{}, err
+	}
+	line, ok := lineup.Line(role)
+	if !ok {
+		return RoleAgent{}, errors.New("the lineup has no line for it")
+	}
+	source, ok := tree.Agent(line.AgentName)
+	if !ok {
+		return RoleAgent{}, fmt.Errorf("the lineup names agent %q, which the tree lacks", line.AgentName)
+	}
+	agent := RoleAgent{Line: line}
+	if agent.Enrollment, err = tx.GetClientEnrollment(ctx, domain.ClientEnrollmentID(source.Enrollment)); err != nil {
+		return RoleAgent{}, fmt.Errorf("enrollment %s: %w", source.Enrollment, err)
+	}
+	if agent.Identity, err = tx.GetAuthIdentity(ctx, agent.Enrollment.AuthIdentityID); err != nil {
+		return RoleAgent{}, fmt.Errorf("auth identity %s: %w", agent.Enrollment.AuthIdentityID, err)
+	}
+	// Resolve: the agent and its fragments; this refuses a disabled identity.
+	if agent.Resolved, err = tree.ResolveAgent(line.AgentName, agent.Enrollment, agent.Identity); err != nil {
+		return RoleAgent{}, err
+	}
+	// Selected: the line names this agent's digest.
+	if line.AgentDigest != agent.Resolved.Definition.Digest {
+		return RoleAgent{}, fmt.Errorf("the lineup selects agent digest %s, the tree resolves %s",
+			line.AgentDigest, agent.Resolved.Definition.Digest)
+	}
+	if agent.Generation, err = tx.CurrentEnrollmentGeneration(ctx, agent.Enrollment.ID); err != nil {
+		return RoleAgent{}, fmt.Errorf("enrollment %s holds no store generation: %w", agent.Enrollment.ID, err)
+	}
+	return agent, nil
 }
 
 func (s AgentSelection) validate() error {
@@ -53,6 +126,22 @@ func (s AgentSelection) validate() error {
 		return errors.New("agent selection expiry margin is negative")
 	}
 	return nil
+}
+
+// CheckRole runs the five admission steps for a ward role outside an attempt
+// and returns the binding an admission at that instant would snapshot. The
+// daemon runs it at startup, so a role that cannot be admitted is named
+// before any work is offered. Gate is not consulted: it holds attempts, not
+// the check that decides whether to open it.
+func (s AgentSelection) CheckRole(
+	ctx context.Context, st *store.Store, role domain.RoleName,
+	promptDigest domain.Digest, mode domain.OperatingMode, at time.Time,
+) (domain.AdmissionAgentBinding, error) {
+	if err := s.validate(); err != nil {
+		return domain.AdmissionAgentBinding{}, err
+	}
+	resolved, err := resolveAgentAdmission(ctx, st, s, role, promptDigest, mode, at)
+	return resolved.binding, err
 }
 
 // agentAdmission is one role's resolution: what the admission records, and
@@ -89,8 +178,8 @@ func wardRole(
 // resolveAgentAdmission runs the five §5.4 admission steps for one role and
 // returns the binding the admission snapshots. promptDigest is the prompt the
 // attempt is about to run; the lineup line must name it.
-func (e *Engine) resolveAgentAdmission(
-	ctx context.Context, selection AgentSelection, role domain.RoleName,
+func resolveAgentAdmission(
+	ctx context.Context, st *store.Store, selection AgentSelection, role domain.RoleName,
 	promptDigest domain.Digest, mode domain.OperatingMode, admittedAt time.Time,
 ) (agentAdmission, error) {
 	refuse := func(format string, args ...any) (agentAdmission, error) {
@@ -100,65 +189,39 @@ func (e *Engine) resolveAgentAdmission(
 	if !ok {
 		return refuse("it is not a ward role")
 	}
-	lineup, err := selection.Tree.ResolveLineup()
-	if err != nil {
-		return refuse("%v", err)
-	}
-	line, ok := lineup.Line(role)
-	if !ok {
-		return refuse("the lineup has no line for it")
-	}
-	source, ok := selection.Tree.Agent(line.AgentName)
-	if !ok {
-		return refuse("the lineup names agent %q, which the tree lacks", line.AgentName)
-	}
 	launch, err := selection.Launch(role)
 	if err != nil {
 		return refuse("launch: %v", err)
 	}
 
 	var (
-		enrollment  domain.ClientEnrollment
-		identity    domain.AuthIdentity
-		generation  domain.EnrollmentGeneration
+		agent       RoleAgent
 		conformance domain.AdapterConformance
-		resolved    agenttree.ResolvedAgent
 	)
 	// One read transaction, so the enrollment, its identity, its current
 	// generation, and the conformance record are one consistent view.
-	err = e.store.Read(ctx, func(tx *store.ReadTx) error {
+	err = st.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		if enrollment, err = tx.GetClientEnrollment(ctx, domain.ClientEnrollmentID(source.Enrollment)); err != nil {
-			return fmt.Errorf("enrollment %s: %w", source.Enrollment, err)
-		}
-		if identity, err = tx.GetAuthIdentity(ctx, enrollment.AuthIdentityID); err != nil {
-			return fmt.Errorf("auth identity %s: %w", enrollment.AuthIdentityID, err)
-		}
-		// Step 1, resolve: the agent and its fragments.
-		if resolved, err = selection.Tree.ResolveAgent(line.AgentName, enrollment, identity); err != nil {
+		// Steps 1 and 2, resolve and selected, and the credential's store.
+		if agent, err = resolveRole(ctx, tx, selection.Tree, role); err != nil {
 			return err
 		}
 		var found bool
-		if conformance, found, err = tx.LatestAdapterConformance(ctx, resolved.Adapter.Digest); err != nil {
+		if conformance, found, err = tx.LatestAdapterConformance(ctx, agent.Resolved.Adapter.Digest); err != nil {
 			return err
 		} else if !found {
-			return fmt.Errorf("adapter %s has no conformance record", resolved.Adapter.Digest)
-		}
-		if generation, err = tx.CurrentEnrollmentGeneration(ctx, enrollment.ID); err != nil {
-			return fmt.Errorf("enrollment %s holds no store generation: %w", enrollment.ID, err)
+			return fmt.Errorf("adapter %s has no conformance record", agent.Resolved.Adapter.Digest)
 		}
 		return nil
 	})
 	if err != nil {
 		return refuse("%v", err)
 	}
-	agent := resolved.Definition
-	// Step 2, selected: the line names this agent's digest and this prompt.
-	if line.AgentDigest != agent.Digest {
-		return refuse("the lineup selects agent digest %s, the tree resolves %s", line.AgentDigest, agent.Digest)
-	}
-	if line.PromptDigest != promptDigest {
-		return refuse("the lineup selects prompt %s, the attempt runs %s", line.PromptDigest, promptDigest)
+	resolved, enrollment, generation := agent.Resolved, agent.Enrollment, agent.Generation
+	definition := resolved.Definition
+	// The line also names the prompt the attempt is about to run.
+	if agent.Line.PromptDigest != promptDigest {
+		return refuse("the lineup selects prompt %s, the attempt runs %s", agent.Line.PromptDigest, promptDigest)
 	}
 	// Step 3, proved: the adapter's latest conformance covers the launch.
 	if err := domain.ValidateAdapterLaunchCoverage(conformance, resolved.Adapter.Digest, launch); err != nil {
@@ -175,9 +238,9 @@ func (e *Engine) resolveAgentAdmission(
 		return refuse("%v", err)
 	}
 	// An agent and launch pair with no attended mark runs attended only.
-	if mode == domain.ModeUnattended && selection.Tree.Attended(line.AgentName, agent.Digest, launch.Digest) {
+	if mode == domain.ModeUnattended && selection.Tree.Attended(agent.Line.AgentName, definition.Digest, launch.Digest) {
 		return refuse("agent %s has no attended mark for launch %s, so it cannot run unattended",
-			line.AgentName, launch.Digest)
+			agent.Line.AgentName, launch.Digest)
 	}
 	for _, authority := range selection.EffectiveEgress {
 		if !slices.Contains(resolved.Route.InferenceAuthorities, authority) {
@@ -185,23 +248,23 @@ func (e *Engine) resolveAgentAdmission(
 		}
 	}
 	// Step 5, snapshot.
-	passes, err := domain.DeriveAgentLaunchSelection(agent, resolved.Adapter, resolved.Offer)
+	passes, err := domain.DeriveAgentLaunchSelection(definition, resolved.Adapter, resolved.Offer)
 	if err != nil {
 		return refuse("%v", err)
 	}
-	effort, err := domain.TranslateEffort(resolved.Adapter.ClientKind, agent.Effort)
+	effort, err := domain.TranslateEffort(resolved.Adapter.ClientKind, definition.Effort)
 	if err != nil {
 		return refuse("%v", err)
 	}
 	treatment, err := domain.ComputeTreatmentDigest(
-		resolved.Route, resolved.Adapter.Digest, launch.Digest, resolved.Offer, agent.Effort, effort.Effective(),
+		resolved.Route, resolved.Adapter.Digest, launch.Digest, resolved.Offer, definition.Effort, effort.Effective(),
 	)
 	if err != nil {
 		return refuse("%v", err)
 	}
 	return agentAdmission{
 		binding: domain.AdmissionAgentBinding{
-			AgentDigest: agent.Digest, LaunchDigest: launch.Digest, TreatmentDigest: treatment,
+			AgentDigest: definition.Digest, LaunchDigest: launch.Digest, TreatmentDigest: treatment,
 			PricingRevision: resolved.Offer.PricingRevision, LineupRevision: selection.LineupRevision,
 			EnrollmentID: enrollment.ID, EnrollmentGeneration: generation.Ordinal,
 			StoreManifestDigest: generation.StoreManifestDigest,

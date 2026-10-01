@@ -18,6 +18,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/wardstore"
 )
@@ -639,4 +640,80 @@ func TestDaemonLoadsTheAdoptedTreeAtItsCommit(t *testing.T) {
 	if _, err := loadAgentSelection(context.Background(), cfg, time.Hour); !errors.Is(err, agenttree.ErrCommit) {
 		t.Fatalf("a symbolic commit = %v, want %v", err, agenttree.ErrCommit)
 	}
+}
+
+// TestAdoptedPatchResolvesAndAdmitsEveryRole is the cutover's admission
+// proof: against the store adoption wrote, the committed patch resolves all
+// five roles, and each writer role passes the five admission steps for the
+// prompt the daemon runs it with, attended and unattended.
+func TestAdoptedPatchResolvesAndAdmitsEveryRole(t *testing.T) {
+	ctx := context.Background()
+	f := newAuthAdoptFixture(t)
+	_, patch, err := f.run(t, f.args("-shadow-review-cost-owner", "operator"))
+	if err != nil {
+		t.Fatalf("auth adopt: %v", err)
+	}
+	checkout, commit := commitAdoptedPatch(t, patch)
+	selection, err := loadAgentSelection(ctx, claudeDriverConfig{
+		AgentTreeCheckout: checkout, AgentTreeCommit: commit,
+		ProviderEndpoints: []string{"api.anthropic.com:443"},
+	}, time.Hour)
+	if err != nil {
+		t.Fatalf("load agent selection: %v", err)
+	}
+	prompts, err := readAdoptPrompts(authAdoptConfig{
+		PromptPackage:              filepath.Join(f.promptDir, "implementer"),
+		SpecificationPromptPackage: filepath.Join(f.promptDir, "specifier"),
+		RemediationPromptPackage:   filepath.Join(f.promptDir, "remediator"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantIdentity := map[domain.RoleName]domain.AuthIdentityID{
+		domain.RoleSpecifier: "claude-main", domain.RoleImplementer: "claude-main",
+		domain.RoleRemediator: "claude-main", domain.RoleReviewer: "codex-review",
+		domain.RoleShadowReviewer: "claude-main",
+	}
+	f.withStore(t, func(st *store.Store) {
+		now := time.Now().UTC()
+		if err := recordBaselineAdapterConformance(ctx, st, now); err != nil {
+			t.Fatal(err)
+		}
+		for role, identity := range wantIdentity {
+			agent, err := engine.ResolveRole(ctx, st, selection.Tree, role)
+			if err != nil {
+				t.Fatalf("resolve %s: %v", role, err)
+			}
+			if agent.Identity.ID != identity || agent.Generation.Ordinal != 1 {
+				t.Fatalf("role %s resolved identity %s generation %d", role, agent.Identity.ID, agent.Generation.Ordinal)
+			}
+			prompt, writer := prompts[role]
+			if !writer {
+				// The review roles' launch coverage arrives with the review
+				// record (#898); they have no ward stage to admit.
+				if _, err := selection.CheckRole(
+					ctx, st, role, agent.Line.PromptDigest, domain.ModeAttendedDev, now,
+				); !errors.Is(err, engine.ErrAgentNotAdmissible) {
+					t.Fatalf("stage admission of review role %s = %v", role, err)
+				}
+				continue
+			}
+			for _, mode := range []domain.OperatingMode{domain.ModeAttendedDev, domain.ModeUnattended} {
+				binding, err := selection.CheckRole(ctx, st, role, prompt.Digest, mode, now)
+				if err != nil {
+					t.Fatalf("admit %s in %s: %v", role, mode, err)
+				}
+				if binding.EnrollmentID != agent.Enrollment.ID || binding.EnrollmentGeneration != 1 ||
+					binding.LineupRevision != selection.LineupRevision ||
+					binding.Attended != (mode != domain.ModeUnattended) {
+					t.Fatalf("role %s binding in %s = %+v", role, mode, binding)
+				}
+			}
+		}
+		// A lineup without the role refuses, naming it.
+		_, err := engine.ResolveRole(ctx, st, agenttree.Tree{}, domain.RoleReviewer)
+		if !errors.Is(err, engine.ErrAgentNotAdmissible) || !strings.Contains(err.Error(), "role reviewer") {
+			t.Fatalf("resolve against an empty tree = %v", err)
+		}
+	})
 }

@@ -411,8 +411,14 @@ func (e *Engine) admitAttempt(
 			return domain.ExecutionAdmission{}, false, fmt.Errorf(
 				"admit invocation %q: stage %q has no ward role: %w", invocationID, stage.Name, ErrAgentNotAdmissible)
 		}
-		resolved, err := e.resolveAgentAdmission(
-			ctx, *env.Agents, role, promptPackageDigest, env.OperatingMode, admittedAt,
+		if env.Agents.Gate != nil {
+			if err := env.Agents.Gate(ctx); err != nil {
+				return domain.ExecutionAdmission{}, false, fmt.Errorf(
+					"admit invocation %q: role %s: %w", invocationID, role, errors.Join(ErrAgentNotAdmissible, err))
+			}
+		}
+		resolved, err := resolveAgentAdmission(
+			ctx, e.store, *env.Agents, role, promptPackageDigest, env.OperatingMode, admittedAt,
 		)
 		if err != nil {
 			return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID, err)
