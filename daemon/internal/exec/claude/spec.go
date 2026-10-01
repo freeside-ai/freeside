@@ -147,11 +147,28 @@ const (
 // and never launches the agent. The tree is removed again in the epilogue
 // before the outcome marker, so the git-blind export walk never sees it. An
 // empty prepare keeps the attended launch command byte-identical.
-func agentCommand(prompt, sessionID string, invocationID domain.InvocationID, prepare []string) []string {
-	return agentCommandWithInput(shellQuote(prompt), sessionID, invocationID, prepare)
+//
+// A non-empty model adds --model and a non-empty effort adds --effort, each
+// independently, so the CLI runs what the admitted agent names. Empty passes
+// no flag and leaves the command byte-identical: recovery rebuilds a running
+// launch's command, and every start admitted before these flags carries
+// neither value, so none of them drifts.
+func agentCommand(
+	prompt, sessionID string, invocationID domain.InvocationID, prepare []string, model, effort string,
+) []string {
+	return agentCommandWithInput(shellQuote(prompt), sessionID, invocationID, prepare, model, effort)
 }
 
-func agentCommandWithInput(promptInput, sessionID string, invocationID domain.InvocationID, prepare []string) []string {
+func agentCommandWithInput(
+	promptInput, sessionID string, invocationID domain.InvocationID, prepare []string, model, effort string,
+) []string {
+	selection := ""
+	if model != "" {
+		selection += "--model " + shellQuote(model) + " "
+	}
+	if effort != "" {
+		selection += "--effort " + shellQuote(effort) + " "
+	}
 	transcriptSource := export.EvidenceSource{
 		Label: "agent-transcript", MediaType: "application/jsonl",
 		Path: transcriptEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
@@ -244,7 +261,7 @@ func agentCommandWithInput(promptInput, sessionID string, invocationID domain.In
 			"--inh-caps=-all --ambient-caps=-all --bounding-set=-all "+
 			"--no-new-privs claude -p %s "+
 			"--output-format stream-json --verbose --dangerously-skip-permissions "+
-			"--safe-mode --session-id %s --append-system-prompt-file %s "+
+			"--safe-mode --session-id %s --append-system-prompt-file %s %s"+
 			"> %s 2>&1; status=$?; set -e; unset token; fi; "+
 			"%s"+
 			"rm -rf -- %s; "+
@@ -266,7 +283,7 @@ func agentCommandWithInput(promptInput, sessionID string, invocationID domain.In
 		guardPrefix,
 		shellQuote(credentialTokenPath), shellQuote(credentialTokenPath),
 		shellQuote(ward.ClaudeConfigRootTarget), agentUID, agentGID, promptInput,
-		shellQuote(sessionID), shellQuote(instructionBundlePath),
+		shellQuote(sessionID), shellQuote(instructionBundlePath), selection,
 		shellQuote(transcriptPath),
 		declareFixedSources,
 		shellQuote(workspaceDir+"/node_modules"),
@@ -392,6 +409,20 @@ func promptByteLimit(delivery stage.PromptDelivery) (int, error) {
 	return 0, fmt.Errorf("%w: unknown prompt delivery %q", ErrUnsupportedStart, delivery)
 }
 
+// launchFlagValueSafe reports whether a non-empty model or effort may become
+// a CLI flag value. It is ward's cliSafe rule (no comma, no control
+// character), copied because that function is unexported; the stage driver
+// keeps its own copy as cliSafeMountField, and the three must change together.
+// Such a value is refused rather than escaped.
+func launchFlagValueSafe(s string) bool {
+	for _, r := range s {
+		if r == ',' || r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
 // shellQuote renders one argument as a single-quoted shell word.
 func shellQuote(s string) string {
 	out := make([]byte, 0, len(s)+2)
@@ -436,6 +467,17 @@ func (p claudeProvider) HandoffSpec(
 			"%w: admitted workspace %q, driver derives %q",
 			ErrUnsupportedStart, spec.Workspace, want)
 	}
+	// The model and effort are decoded from the stored admission and become
+	// argv of a shell that starts as root. Empty is not refused: it means the
+	// flag is not passed.
+	if !launchFlagValueSafe(spec.RouteModelID) {
+		return ward.HandoffSpec{}, fmt.Errorf(
+			"%w: route model id %q carries a CLI delimiter", ErrUnsupportedStart, spec.RouteModelID)
+	}
+	if !launchFlagValueSafe(spec.NativeEffort) {
+		return ward.HandoffSpec{}, fmt.Errorf(
+			"%w: native effort %q carries a CLI delimiter", ErrUnsupportedStart, spec.NativeEffort)
+	}
 	volume, err := p.volumes.AuthStoreVolume(ctx, spec.AuthIdentityID)
 	if err != nil {
 		return ward.HandoffSpec{}, fmt.Errorf("resolve auth store volume: %w", err)
@@ -455,7 +497,7 @@ func (p claudeProvider) HandoffSpec(
 				ProducerInvocationID: string(id),
 			},
 			Image:             string(spec.ImageRef),
-			Command:           agentCommand(in.Prompt, sessionIDFor(id), id, in.Preparation),
+			Command:           agentCommand(in.Prompt, sessionIDFor(id), id, in.Preparation, spec.RouteModelID, spec.NativeEffort),
 			Env:               agentEnv(),
 			EgressProfile:     spec.EgressProfile,
 			OutcomeMarkerPath: writerOutcomePath,
@@ -492,7 +534,9 @@ func (p claudeProvider) HandoffSpec(
 		}
 		// The root shell opens stdin before setpriv drops privileges. Prompt
 		// bytes never enter argv, and remain user input rather than instructions.
-		hs.Agent.Command = agentCommandWithInput("< "+shellQuote(ward.PromptFilePath), sessionIDFor(id), id, in.Preparation)
+		hs.Agent.Command = agentCommandWithInput(
+			"< "+shellQuote(ward.PromptFilePath), sessionIDFor(id), id, in.Preparation,
+			spec.RouteModelID, spec.NativeEffort)
 		return hs, nil
 	}
 	return ward.HandoffSpec{}, fmt.Errorf("%w: unknown prompt delivery", ErrUnsupportedStart)
