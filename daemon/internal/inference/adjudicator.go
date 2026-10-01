@@ -73,9 +73,8 @@ type FindingAdjudicationInput struct {
 	Dissent                   *AdjudicationDissent
 	Feedback                  *AdjudicationFeedback
 	// DiffMetrics is the round's diff shape (plan §7 Review Drift), nil when
-	// nothing was recorded for the round. Call does not send it yet: the site's
-	// field allowlist, the request map, and the Claude driver's field-count
-	// check have to change together, and that is the metrics floor unit (#1049).
+	// nothing was recorded for the round. It is an engine fact read from the
+	// store, never model output, and is sent as diff_metrics (null for a gap).
 	DiffMetrics *domain.ReviewRoundDiffMetrics
 }
 
@@ -233,6 +232,8 @@ func AdjudicatorSite(budget Budget) Site {
 			{Name: "prior_adjudication", Sensitivity: SensitivityRepository},
 			{Name: "dissent", Sensitivity: SensitivityRepository},
 			{Name: "conversation_feedback", Sensitivity: SensitivityRepository},
+			// Counts and commit ids only; no repository text.
+			{Name: "diff_metrics", Sensitivity: SensitivityOperational},
 		},
 		FailSafe: `{"entries":[]}`, Retention: 30 * 24 * time.Hour, Timeout: 120 * time.Second,
 		MaxInputBytes: 2 << 20, MaxOutputBytes: domain.MaxFindingAdjudicationBytes,
@@ -338,6 +339,10 @@ func (c *Client) AdjudicateFindings(
 	if err != nil {
 		return nil, err
 	}
+	diffMetrics, err := adjudicationJSON(input.DiffMetrics)
+	if err != nil {
+		return nil, err
+	}
 	result, err := c.Call(ctx, AdjudicatorSiteID, project, root, map[string]InputField{
 		"run_id":                      {Value: string(input.RunID), Sensitivity: SensitivityOperational},
 		"round":                       {Value: fmt.Sprint(input.Round), Sensitivity: SensitivityOperational},
@@ -352,6 +357,7 @@ func (c *Client) AdjudicateFindings(
 		"prior_adjudication":          {Value: priorEntries, Sensitivity: SensitivityRepository},
 		"dissent":                     {Value: dissent, Sensitivity: SensitivityRepository},
 		"conversation_feedback":       {Value: feedback, Sensitivity: SensitivityRepository},
+		"diff_metrics":                {Value: diffMetrics, Sensitivity: SensitivityOperational},
 	})
 	if err != nil {
 		return nil, err

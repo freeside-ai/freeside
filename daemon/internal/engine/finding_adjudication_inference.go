@@ -40,6 +40,7 @@ func (a *productionFindingAdjudicator) Adjudicate(
 		run          domain.Run
 		policy       domain.ResolvedPolicy
 		dispositions []domain.ReviewDispositionRecord
+		diffMetrics  *domain.ReviewRoundDiffMetrics
 	)
 	if err := a.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
@@ -52,7 +53,19 @@ func (a *productionFindingAdjudicator) Adjudicate(
 			return err
 		}
 		dispositions, err = tx.ListFindingDispositions(ctx, request.RunID)
-		return err
+		if err != nil {
+			return err
+		}
+		// A round recorded without metrics is a gap, not a failure.
+		metrics, err := tx.GetReviewRoundDiffMetrics(ctx, request.RunID, request.Round)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		diffMetrics = &metrics
+		return nil
 	}); err != nil {
 		return nil, fmt.Errorf("load finding-adjudicator bindings: %w", err)
 	}
@@ -108,5 +121,6 @@ func (a *productionFindingAdjudicator) Adjudicate(
 			PriorDispositions: dispositions,
 			PriorEntries:      slices.Clone(request.PriorEntries),
 			Dissent:           dissent, Feedback: feedback,
+			DiffMetrics: diffMetrics,
 		})
 }

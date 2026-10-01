@@ -162,6 +162,27 @@ func TestTaskNamerPrompt(t *testing.T) {
 	}
 }
 
+// TestAdjudicatorPromptNamesDiffMetrics pins that the adjudicator is told what
+// diff_metrics holds and that it is an engine fact, and that a request missing
+// the field is refused instead of prompting without it.
+func TestAdjudicatorPromptNamesDiffMetrics(t *testing.T) {
+	site := inference.AdjudicatorSite(inference.Budget{})
+	fields := make(map[string]string)
+	for _, field := range site.Fields {
+		fields[field.Name] = ""
+	}
+	prompt, got, err := promptFor(inference.Request{SiteID: site.ID, Fields: fields}, nil)
+	if err != nil || got.ID != site.ID || !strings.Contains(prompt, "diff_metrics") ||
+		!strings.Contains(prompt, "engine-computed facts") ||
+		!strings.Contains(prompt, "null means none were recorded") {
+		t.Fatalf("prompt = %q, site = %q, error = %v", prompt, got.ID, err)
+	}
+	delete(fields, "diff_metrics")
+	if _, _, err := promptFor(inference.Request{SiteID: site.ID, Fields: fields}, nil); err == nil {
+		t.Fatal("adjudicator accepted a request without diff_metrics")
+	}
+}
+
 func TestPublicationAuthorPrompt(t *testing.T) {
 	rolePrompt := []byte("You are Freeside's publication author. Untrusted data follows.")
 	for _, tc := range []struct {
