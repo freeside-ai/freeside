@@ -190,3 +190,164 @@ func convergenceFixture(t *testing.T, configurations []domain.Digest) store.Revi
 		},
 	}
 }
+
+// growthFixture is convergenceFixture with one reviewer configuration, medium
+// findings, and a cumulative net that grows by 100 lines each round. The
+// low-value streak is set out of reach so only the growth rule can stop.
+func growthFixture(t *testing.T, configurations []domain.Digest, growthStreak int) store.ReviewConvergenceState {
+	t.Helper()
+	state := convergenceFixture(t, configurations)
+	state.Policy.LowValueStreakBeforeAttention = 9
+	state.Policy.DriftGrowthStreakBeforeAttention = growthStreak
+	for index, record := range state.Records {
+		finding := state.Findings[record.FindingIDs[0]]
+		finding.Severity = domain.FindingSeverityP2
+		state.Findings[finding.ID] = finding
+		head := fmt.Sprintf("head-%d", record.Round)
+		cumulative := domain.DiffStats{
+			FilesChanged: 1, Additions: 100 * record.Round, Deletions: 10, BaseSHA: "base", HeadSHA: head,
+		}
+		state.History.Rounds[index].DiffMetrics = &domain.ReviewRoundDiffMetrics{
+			Cumulative: cumulative, Round: cumulative,
+		}
+	}
+	return state
+}
+
+func TestEvaluateReviewConvergenceGrowthWithoutBlockers(t *testing.T) {
+	t.Parallel()
+	first := domain.Digest("sha256:" + strings.Repeat("a", 64))
+	second := domain.Digest("sha256:" + strings.Repeat("b", 64))
+	same := func(rounds int) []domain.Digest {
+		configurations := make([]domain.Digest, rounds)
+		for index := range configurations {
+			configurations[index] = first
+		}
+		return configurations
+	}
+	setSeverity := func(state store.ReviewConvergenceState, index int, severity domain.FindingSeverity) {
+		finding := state.Findings[state.Records[index].FindingIDs[0]]
+		finding.Severity = severity
+		state.Findings[finding.ID] = finding
+	}
+	setNet := func(state store.ReviewConvergenceState, index, additions int) {
+		state.History.Rounds[index].DiffMetrics.Cumulative.Additions = additions
+	}
+	continueAt := func(state *store.ReviewConvergenceState, round int) {
+		state.Decisions = []store.ReviewDiminishingDecision{{
+			Binding: store.ReviewDiminishingBinding{Round: round},
+			Command: &domain.Command{Action: domain.ActionContinueUnderPolicy},
+		}}
+	}
+	cases := []struct {
+		name           string
+		configurations []domain.Digest
+		growthStreak   int
+		mutate         func(*store.ReviewConvergenceState)
+		want           store.ReviewDiminishingCause
+	}{
+		{name: "streak below the policy value", configurations: same(3), growthStreak: 3},
+		{
+			name: "streak at the policy value", configurations: same(3), growthStreak: 2,
+			want: store.ReviewDiminishingGrowthWithoutBlockers,
+		},
+		{
+			name: "first recorded round never counts", configurations: same(1), growthStreak: 1,
+		},
+		{
+			name: "critical finding resets", configurations: same(3), growthStreak: 2,
+			mutate: func(s *store.ReviewConvergenceState) { setSeverity(*s, 1, domain.FindingSeverityP0) },
+		},
+		{
+			name: "high finding resets", configurations: same(3), growthStreak: 2,
+			mutate: func(s *store.ReviewConvergenceState) { setSeverity(*s, 2, domain.FindingSeverityP1) },
+		},
+		{
+			name: "unset severity resets", configurations: same(3), growthStreak: 2,
+			mutate: func(s *store.ReviewConvergenceState) { setSeverity(*s, 2, "") },
+		},
+		{
+			name: "low findings still count", configurations: same(3), growthStreak: 2,
+			mutate: func(s *store.ReviewConvergenceState) { setSeverity(*s, 2, domain.FindingSeverityP3) },
+			want:   store.ReviewDiminishingGrowthWithoutBlockers,
+		},
+		{
+			name: "equal net resets", configurations: same(3), growthStreak: 1,
+			mutate: func(s *store.ReviewConvergenceState) { setNet(*s, 2, 200) },
+		},
+		{
+			name: "lower net resets", configurations: same(3), growthStreak: 1,
+			mutate: func(s *store.ReviewConvergenceState) { setNet(*s, 2, 150) },
+		},
+		{
+			name: "removed lines offset added lines", configurations: same(3), growthStreak: 1,
+			mutate: func(s *store.ReviewConvergenceState) {
+				s.History.Rounds[2].DiffMetrics.Cumulative.Deletions = 110
+			},
+		},
+		{
+			name: "clean round inside the run resets", configurations: same(4), growthStreak: 2,
+			mutate: func(s *store.ReviewConvergenceState) {
+				s.Records[2].Outcome = domain.ReviewClean
+				s.Records[2].FindingIDs = nil
+				s.History.Rounds[2].FindingsIngested = 0
+				s.History.Rounds[2].RecurringFindings = 0
+				s.History.Rounds[2].Outcome = domain.ReviewClean
+			},
+		},
+		{
+			name: "continue opens a fresh window", configurations: same(4), growthStreak: 2,
+			mutate: func(s *store.ReviewConvergenceState) { continueAt(s, 3) },
+		},
+		{
+			name: "fresh window fills again", configurations: same(5), growthStreak: 2,
+			mutate: func(s *store.ReviewConvergenceState) { continueAt(s, 3) },
+			want:   store.ReviewDiminishingGrowthWithoutBlockers,
+		},
+		{
+			name:           "reviewer configuration change opens a fresh window",
+			configurations: []domain.Digest{first, first, second}, growthStreak: 2,
+		},
+		{
+			// The round being counted must sit inside the window; the round
+			// it is compared with may sit before the segment start.
+			name:           "segment's first round compares with the round before it",
+			configurations: []domain.Digest{first, second, second}, growthStreak: 2,
+			want: store.ReviewDiminishingGrowthWithoutBlockers,
+		},
+		{
+			name: "missing metrics on the current round", configurations: same(3), growthStreak: 1,
+			mutate: func(s *store.ReviewConvergenceState) { s.History.Rounds[2].DiffMetrics = nil },
+		},
+		{
+			name: "missing metrics on the previous round", configurations: same(3), growthStreak: 1,
+			mutate: func(s *store.ReviewConvergenceState) { s.History.Rounds[1].DiffMetrics = nil },
+		},
+		{
+			name: "changed base", configurations: same(3), growthStreak: 1,
+			mutate: func(s *store.ReviewConvergenceState) {
+				s.History.Rounds[2].DiffMetrics.Cumulative.BaseSHA = "other-base"
+			},
+		},
+		{
+			name: "landed cause wins on the same round", configurations: same(3), growthStreak: 2,
+			mutate: func(s *store.ReviewConvergenceState) { s.Policy.LowValueStreakBeforeAttention = 2 },
+			want:   store.ReviewDiminishingLowValue,
+		},
+		{name: "policy key unset", configurations: same(3), growthStreak: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			state := growthFixture(t, tc.configurations, tc.growthStreak)
+			if tc.mutate != nil {
+				tc.mutate(&state)
+			}
+			current := state.Records[len(state.Records)-1]
+			cause, stop, err := store.EvaluateReviewConvergence(state, current)
+			if err != nil || cause != tc.want || stop != (tc.want != "") {
+				t.Fatalf("evaluate = %q, %v, %v; want %q", cause, stop, err, tc.want)
+			}
+		})
+	}
+}

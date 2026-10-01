@@ -562,7 +562,9 @@ func (tx *ReadTx) reviewConvergenceStateAtDecision(
 }
 
 // EvaluateReviewConvergence applies the resolved diminishing-yield policy to a
-// trusted decision-time state.
+// trusted decision-time state. Growth without blockers is checked last, so a
+// round one of the earlier causes also stops keeps that cause, and every
+// decision stored under one re-evaluates to the same cause.
 func EvaluateReviewConvergence(
 	state ReviewConvergenceState, current domain.ReviewRecord,
 ) (ReviewDiminishingCause, bool, error) {
@@ -706,7 +708,60 @@ func EvaluateReviewConvergence(
 	if streak >= state.Policy.LowValueStreakBeforeAttention {
 		return ReviewDiminishingLowValue, true, nil
 	}
+	if state.Policy.DriftGrowthStreakBeforeAttention > 0 {
+		growth := 0
+		for index := currentIndex; index >= segmentStart; index-- {
+			if state.History.Rounds[index].Round <= continuedAfter {
+				break
+			}
+			grew, err := reviewRoundGrewWithoutBlockers(state, index)
+			if err != nil {
+				return "", false, err
+			}
+			if !grew {
+				break
+			}
+			growth++
+		}
+		if growth >= state.Policy.DriftGrowthStreakBeforeAttention {
+			return ReviewDiminishingGrowthWithoutBlockers, true, nil
+		}
+	}
 	return "", false, nil
+}
+
+// reviewRoundGrewWithoutBlockers reports whether the recorded round at index
+// is a growth round (plan §7 Growth without blockers): it has findings, none
+// critical or high, and its cumulative net size is strictly greater than the
+// previous recorded round's. The run's first recorded round has no predecessor
+// and never counts. A round is unverifiable, and so not a growth round, when
+// either round has no metrics or the two cumulative pairs start from different
+// bases; their nets then measure different comparisons.
+func reviewRoundGrewWithoutBlockers(state ReviewConvergenceState, index int) (bool, error) {
+	if index == 0 {
+		return false, nil
+	}
+	round, previous := state.History.Rounds[index], state.History.Rounds[index-1]
+	if round.FindingsIngested == 0 || round.DiffMetrics == nil || previous.DiffMetrics == nil ||
+		round.DiffMetrics.Cumulative.BaseSHA != previous.DiffMetrics.Cumulative.BaseSHA {
+		return false, nil
+	}
+	for _, findingID := range state.Records[index].FindingIDs {
+		finding, ok := state.Findings[findingID]
+		if !ok {
+			return false, domain.ErrReviewYieldHistoryInconsistent
+		}
+		switch finding.Severity {
+		case domain.FindingSeverityP2, domain.FindingSeverityP3:
+			continue
+		case domain.FindingSeverityP0, domain.FindingSeverityP1:
+		}
+		// Critical, high, or unset: plan §7 treats a missing severity as high,
+		// and credibility filters nothing today, so every such finding counts.
+		return false, nil
+	}
+	net := func(stats domain.DiffStats) int { return stats.Additions - stats.Deletions }
+	return net(round.DiffMetrics.Cumulative) > net(previous.DiffMetrics.Cumulative), nil
 }
 
 type reviewDiminishingFinishAuthority struct {
