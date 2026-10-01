@@ -71,19 +71,23 @@ func TestNewReviewYieldHistoryDetachesRounds(t *testing.T) {
 	}
 	history.Rounds[0].NewFindings = 0
 	history.Rounds[0].DiffMetrics.Cumulative.Additions = 0
-	if got.Rounds[0].NewFindings != 2 || got.Rounds[0].DiffMetrics.Cumulative.Additions != 120 {
+	*history.Rounds[0].DriftVerdict = domain.DriftVerdictStuck
+	if got.Rounds[0].NewFindings != 2 || got.Rounds[0].DiffMetrics.Cumulative.Additions != 120 ||
+		*got.Rounds[0].DriftVerdict != domain.DriftVerdictOverHardened {
 		t.Fatal("constructed history aliases caller-owned rounds")
 	}
 }
 
 // validReviewYieldHistoryWithDiffMetrics records metrics for rounds 1 and 3
-// and leaves round 2 without them, the shape a gap takes.
+// and leaves round 2 without them, the shape a gap takes. Round 1 also carries
+// a drift verdict.
 func validReviewYieldHistoryWithDiffMetrics() domain.ReviewYieldHistory {
 	history := validReviewYieldHistory()
 	first := domain.DiffStats{
 		FilesChanged: 4, Additions: 120, Deletions: 8, BaseSHA: "base", HeadSHA: "head-1",
 	}
 	history.Rounds[0].DiffMetrics = &domain.ReviewRoundDiffMetrics{Cumulative: first, Round: first}
+	history.Rounds[0].DriftVerdict = new(domain.DriftVerdictOverHardened)
 	history.Rounds[2].DiffMetrics = &domain.ReviewRoundDiffMetrics{
 		Cumulative: domain.DiffStats{
 			FilesChanged: 6, Additions: 210, Deletions: 14, BaseSHA: "base", HeadSHA: "head-3",
@@ -108,6 +112,40 @@ func TestReviewYieldHistoryDiffMetricsValidation(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			history := validReviewYieldHistoryWithDiffMetrics()
 			mutate(history.Rounds[2].DiffMetrics)
+			if err := history.Validate(); !errors.Is(err, domain.ErrReviewYieldHistoryInconsistent) {
+				t.Fatalf("Validate = %v, want ErrReviewYieldHistoryInconsistent", err)
+			}
+		})
+	}
+}
+
+func TestReviewYieldHistoryDriftVerdictValidation(t *testing.T) {
+	for _, verdict := range domain.AllDriftVerdicts {
+		history := validReviewYieldHistory()
+		history.Rounds[1].DriftVerdict = &verdict
+		if err := history.Validate(); err != nil {
+			t.Fatalf("verdict %q on a non-last round: %v", verdict, err)
+		}
+	}
+	for name, mutate := range map[string]func(*domain.ReviewYieldHistory){
+		"unknown verdict": func(history *domain.ReviewYieldHistory) {
+			history.Rounds[0].DriftVerdict = new(domain.DriftVerdict("drifting"))
+		},
+		"empty verdict": func(history *domain.ReviewYieldHistory) {
+			history.Rounds[0].DriftVerdict = new(domain.DriftVerdict(""))
+		},
+		"last round": func(history *domain.ReviewYieldHistory) {
+			history.Rounds[2].DriftVerdict = new(domain.DriftVerdictConverged)
+		},
+		"only round": func(history *domain.ReviewYieldHistory) {
+			history.Rounds = history.Rounds[:1]
+			history.TerminalOutcome = domain.ReviewFindings
+			history.Rounds[0].DriftVerdict = new(domain.DriftVerdictStuck)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			history := validReviewYieldHistory()
+			mutate(&history)
 			if err := history.Validate(); !errors.Is(err, domain.ErrReviewYieldHistoryInconsistent) {
 				t.Fatalf("Validate = %v, want ErrReviewYieldHistoryInconsistent", err)
 			}

@@ -835,6 +835,48 @@ FROM attention_items WHERE id = ?`, decision.Item.ID).Scan(&stored, &inBody); er
 	}
 }
 
+// TestReviewDiminishingItemLoadsAfterItsRoundIsAudited proves a drift audit
+// written for the round an item already snapshotted does not change that
+// item's history: the stored bytes stay the legacy bytes and the item still
+// equals its re-derived history after a restart.
+func TestReviewDiminishingItemLoadsAfterItsRoundIsAudited(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	at := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	runID := domain.RunID("run-audited-yield")
+	path := filepath.Join(t.TempDir(), "store.db")
+	st, decision := seedReviewDiminishingDecision(t, path, runID, at, domain.ActionFinishNow)
+	input := driftAuditInputFor(
+		runID, decision.Binding.Round, domain.DriftVerdictOverHardened, decision.Binding.FindingIDs[0])
+	input.ResolvedPolicyDigest = decision.Binding.PolicyDigest
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutDriftAudit(ctx, newDriftAudit(t, input))
+	}); err != nil {
+		t.Fatalf("audit the snapshotted round: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened := storetest.Open(t, path, store.Options{})
+	defer func() { _ = reopened.Close() }()
+	if err := reopened.Read(ctx, func(tx *store.ReadTx) error {
+		got, err := tx.ReviewDiminishingDecision(ctx, decision.Item.ID)
+		if err != nil {
+			return err
+		}
+		body, err := json.Marshal(got.Item.YieldHistory)
+		if err != nil {
+			return err
+		}
+		if string(body) != legacyDiminishingYieldHistory {
+			t.Fatalf("audited item's yield history changed: %s", body)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("item no longer loads after its round was audited: %v", err)
+	}
+}
+
 // TestReviewDiminishingItemWithDiffMetricsReconstructs proves an item that
 // snapshotted metrics re-proves them against the stored rows after a restart.
 func TestReviewDiminishingItemWithDiffMetricsReconstructs(t *testing.T) {

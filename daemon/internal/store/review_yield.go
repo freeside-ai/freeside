@@ -14,12 +14,16 @@ import (
 // definition instead of trusting a caller-supplied history.
 //
 // records is the run's review history in round order. diffMetrics is keyed by
-// round; a round without an entry carries no metrics.
+// round; a round without an entry carries no metrics. driftVerdicts is keyed by
+// round too. A round shows its verdict only when records also holds a later
+// round, so the last record's verdict is dropped, not refused: a history
+// through round N is the same whether or not round N's audit has been written.
 func DeriveReviewYieldHistory(
 	records []domain.ReviewRecord,
 	dispositions []domain.ReviewDispositionRecord,
 	findings map[domain.FindingID]domain.Finding,
 	diffMetrics map[int]domain.ReviewRoundDiffMetrics,
+	driftVerdicts map[int]domain.DriftVerdict,
 ) (domain.ReviewYieldHistory, error) {
 	dispositionsByRound := make(map[int][]domain.ReviewDispositionRecord)
 	recordedRounds := make(map[int]struct{}, len(records))
@@ -44,6 +48,14 @@ func DeriveReviewYieldHistory(
 		}
 	}
 
+	for round := range driftVerdicts {
+		if _, ok := recordedRounds[round]; !ok {
+			return domain.ReviewYieldHistory{}, fmt.Errorf(
+				"drift verdict for absent round %d: %w",
+				round, domain.ErrReviewYieldHistoryInconsistent)
+		}
+	}
+
 	seen := map[domain.FindingFingerprint]struct{}{}
 	rounds := make([]domain.ReviewYieldRound, 0, len(records))
 	var segmentConfiguration domain.Digest
@@ -64,6 +76,9 @@ func DeriveReviewYieldHistory(
 				return domain.ReviewYieldHistory{}, err
 			}
 			round.DiffMetrics = &metrics
+		}
+		if verdict, ok := driftVerdicts[record.Round]; ok && index < len(records)-1 {
+			round.DriftVerdict = &verdict
 		}
 		current := make([]domain.FindingFingerprint, 0, len(record.FindingIDs))
 		for _, id := range record.FindingIDs {
@@ -192,5 +207,16 @@ func (tx *ReadTx) reviewYieldHistory(
 			}
 		}
 	}
-	return DeriveReviewYieldHistory(records, dispositions, findings, diffMetrics)
+	audits, err := tx.ListDriftAudits(ctx, runID)
+	if err != nil {
+		return domain.ReviewYieldHistory{}, err
+	}
+	driftVerdicts := make(map[int]domain.DriftVerdict, len(audits))
+	for _, audit := range audits {
+		if throughRound > 0 && audit.Round > throughRound {
+			continue
+		}
+		driftVerdicts[audit.Round] = audit.Verdict
+	}
+	return DeriveReviewYieldHistory(records, dispositions, findings, diffMetrics, driftVerdicts)
 }

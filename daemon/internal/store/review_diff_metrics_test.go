@@ -273,7 +273,7 @@ func TestDeriveReviewYieldHistoryRechecksDiffMetrics(t *testing.T) {
 	}
 
 	history, err := store.DeriveReviewYieldHistory(records, nil, findings,
-		map[int]domain.ReviewRoundDiffMetrics{2: roundDiffMetrics(2)})
+		map[int]domain.ReviewRoundDiffMetrics{2: roundDiffMetrics(2)}, nil)
 	if err != nil {
 		t.Fatalf("valid metrics: %v", err)
 	}
@@ -283,13 +283,13 @@ func TestDeriveReviewYieldHistoryRechecksDiffMetrics(t *testing.T) {
 	}
 
 	_, err = store.DeriveReviewYieldHistory(records, nil, findings,
-		map[int]domain.ReviewRoundDiffMetrics{3: roundDiffMetrics(3)})
+		map[int]domain.ReviewRoundDiffMetrics{3: roundDiffMetrics(3)}, nil)
 	if !errors.Is(err, domain.ErrReviewYieldHistoryInconsistent) {
 		t.Fatalf("metrics for an absent round = %v, want ErrReviewYieldHistoryInconsistent", err)
 	}
 	// Round 1's metrics presented as round 2's name the wrong commits.
 	_, err = store.DeriveReviewYieldHistory(records, nil, findings,
-		map[int]domain.ReviewRoundDiffMetrics{2: roundDiffMetrics(1)})
+		map[int]domain.ReviewRoundDiffMetrics{2: roundDiffMetrics(1)}, nil)
 	if !errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("metrics naming other commits = %v, want ErrParentKeyMismatch", err)
 	}

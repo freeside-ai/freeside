@@ -49,6 +49,13 @@ func (m ReviewRoundDiffMetrics) Validate() error {
 // gap shows. It is omitted rather than rendered as an explicit null because the
 // store compares each stored history with its re-encoding byte for byte, so a
 // null would stop every item stored before the field existed from loading.
+//
+// DriftVerdict is the round's drift-audit verdict (plan §7 Review Drift),
+// omitted for the same reason. A round shows it only when an audit was
+// recorded for the round and the history also holds a later round, so the last
+// round of a history never carries one. A history through round N therefore
+// never depends on round N's audit, which is written after round N's review
+// record and after an item may have snapshotted the history.
 type ReviewYieldRound struct {
 	Round             int                     `json:"round"`
 	FindingsIngested  int                     `json:"findings_ingested"`
@@ -59,6 +66,7 @@ type ReviewYieldRound struct {
 	Deferred          int                     `json:"deferred"`
 	Outcome           ReviewOutcome           `json:"outcome"`
 	DiffMetrics       *ReviewRoundDiffMetrics `json:"diff_metrics,omitempty"`
+	DriftVerdict      *DriftVerdict           `json:"drift_verdict,omitempty"`
 }
 
 // ReviewYieldHistory is the immutable review-yield digest carried by
@@ -70,14 +78,18 @@ type ReviewYieldHistory struct {
 	TerminalOutcome ReviewOutcome      `json:"terminal_outcome"`
 }
 
-// cloneReviewYieldRounds detaches the rounds and each round's metrics from the
-// caller's backing storage.
+// cloneReviewYieldRounds detaches the rounds and each round's metrics and
+// verdict from the caller's backing storage.
 func cloneReviewYieldRounds(rounds []ReviewYieldRound) []ReviewYieldRound {
 	cloned := slices.Clone(rounds)
 	for index := range cloned {
 		if metrics := cloned[index].DiffMetrics; metrics != nil {
 			detached := *metrics
 			cloned[index].DiffMetrics = &detached
+		}
+		if verdict := cloned[index].DriftVerdict; verdict != nil {
+			detached := *verdict
+			cloned[index].DriftVerdict = &detached
 		}
 	}
 	return cloned
@@ -124,6 +136,16 @@ func (h ReviewYieldHistory) Validate() error {
 		if round.DiffMetrics != nil {
 			if err := round.DiffMetrics.Validate(); err != nil {
 				return fmt.Errorf("review yield round %d: %w", round.Round, err)
+			}
+		}
+		if round.DriftVerdict != nil {
+			if !round.DriftVerdict.valid() {
+				return fmt.Errorf("review yield round %d drift verdict %q: %w",
+					round.Round, *round.DriftVerdict, ErrReviewYieldHistoryInconsistent)
+			}
+			if idx == len(h.Rounds)-1 {
+				return fmt.Errorf("review yield last round %d carries a drift verdict: %w",
+					round.Round, ErrReviewYieldHistoryInconsistent)
 			}
 		}
 		previousRound = round.Round
