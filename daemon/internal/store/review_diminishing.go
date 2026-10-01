@@ -48,6 +48,10 @@ type ReviewConvergencePolicy struct {
 	ContinueWhile                 string
 	LowValueStreakBeforeAttention int
 	HardRoundLimit                int
+	// DriftGrowthStreakBeforeAttention is the growth_without_blockers streak
+	// length. Zero means the key is unset and the growth rule is off, so a
+	// policy that predates the key resolves exactly as it did before.
+	DriftGrowthStreakBeforeAttention int
 }
 
 // ReviewConvergenceState is the trusted decision-time input to the pure
@@ -97,6 +101,14 @@ func (tx *ReadTx) ReviewConvergencePolicy(
 					"resolved review.hard_round_limit %q: %w", key.Value, domain.ErrNonPositive)
 			}
 			policy.HardRoundLimit = limit
+		case "review.drift_growth_streak_before_attention":
+			streak, err := strconv.Atoi(key.Value)
+			if err != nil || streak < 1 {
+				return ReviewConvergencePolicy{}, fmt.Errorf(
+					"resolved review.drift_growth_streak_before_attention %q: %w",
+					key.Value, domain.ErrNonPositive)
+			}
+			policy.DriftGrowthStreakBeforeAttention = streak
 		}
 	}
 	return policy, nil
