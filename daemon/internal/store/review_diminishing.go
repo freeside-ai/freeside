@@ -28,13 +28,26 @@ const (
 	ReviewDiminishingLowValue        ReviewDiminishingCause = "low_value_streak"
 	ReviewDiminishingFixedRecurrence ReviewDiminishingCause = "fixed_recurrence"
 	ReviewDiminishingFinalFindings   ReviewDiminishingCause = "final_review_findings"
+	// ReviewDiminishingGrowthWithoutBlockers is the deterministic drift floor
+	// (plan §7 Review Drift): the cumulative diff kept growing while no round
+	// ingested a credible critical or high finding.
+	ReviewDiminishingGrowthWithoutBlockers ReviewDiminishingCause = "growth_without_blockers"
 )
+
+// AllReviewDiminishingCauses lists every valid ReviewDiminishingCause.
+var AllReviewDiminishingCauses = []ReviewDiminishingCause{
+	ReviewDiminishingLowValue,
+	ReviewDiminishingFixedRecurrence,
+	ReviewDiminishingFinalFindings,
+	ReviewDiminishingGrowthWithoutBlockers,
+}
 
 func (c ReviewDiminishingCause) valid() bool {
 	switch c {
 	case ReviewDiminishingLowValue,
 		ReviewDiminishingFixedRecurrence,
-		ReviewDiminishingFinalFindings:
+		ReviewDiminishingFinalFindings,
+		ReviewDiminishingGrowthWithoutBlockers:
 		return true
 	default:
 		return false
@@ -167,6 +180,8 @@ func ReviewDiminishingReason(binding ReviewDiminishingBinding) (string, error) {
 		summary = "A finding recurred after a fixed disposition."
 	case ReviewDiminishingFinalFindings:
 		summary = "The one final candidate-bound review found material issues."
+	case ReviewDiminishingGrowthWithoutBlockers:
+		summary = "The change kept growing while review found no critical or high issue."
 	}
 	body, err := json.Marshal(binding)
 	if err != nil {

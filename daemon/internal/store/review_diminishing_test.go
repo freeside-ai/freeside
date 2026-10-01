@@ -263,6 +263,9 @@ WHERE id = ?`, decision.Item.ID); err != nil {
 		{name: "fabricated cause", tamper: tamperDiminishingBinding(func(binding *store.ReviewDiminishingBinding) {
 			binding.Cause = store.ReviewDiminishingLowValue
 		})},
+		{name: "fabricated growth cause", tamper: tamperDiminishingBinding(func(binding *store.ReviewDiminishingBinding) {
+			binding.Cause = store.ReviewDiminishingGrowthWithoutBlockers
+		})},
 		{name: "wrong version", tamper: func(t *testing.T, db *sql.DB, decision store.ReviewDiminishingDecision) {
 			t.Helper()
 			if _, err := db.Exec(`UPDATE commands
@@ -728,5 +731,28 @@ func forgeDecisionSurface(t *testing.T, db *sql.DB, item domain.AttentionItem) {
 '$.decision_surface.epoch', ?, '$.decision_surface.digest', ?, '$.subject.task_id', ?), subject_task_id = ? WHERE id = ?`,
 		surface.Epoch, surface.Digest, taskID, taskID, surface.ItemID); err != nil {
 		t.Fatalf("forge item decision-surface projection: %v", err)
+	}
+}
+
+// TestReviewDiminishingReasonSummarizesGrowthWithoutBlockers pins that the new
+// stop cause is a valid binding cause with its own summary sentence, so a
+// growth item never renders an empty lead line.
+func TestReviewDiminishingReasonSummarizesGrowthWithoutBlockers(t *testing.T) {
+	t.Parallel()
+	runID := domain.RunID("run-growth-reason")
+	reason, err := store.ReviewDiminishingReason(store.ReviewDiminishingBinding{
+		ItemID: store.ReviewDiminishingItemID(runID, 3), RunID: runID, Round: 3, HeadSHA: "head-3",
+		FindingIDs:         []domain.FindingID{"finding-a"},
+		AdjudicationDigest: "sha256:adjudication", FindingBatchDigest: "sha256:batch",
+		PolicyDigest: "sha256:policy", ContinueWhile: store.ReviewContinueWhileNewMaterialFindings,
+		LowValueStreakBeforeAttention: 2, HardRoundLimit: 25,
+		Cause: store.ReviewDiminishingGrowthWithoutBlockers,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary, binding, ok := strings.Cut(reason, "\nBinding: ")
+	if !ok || summary == "" || !strings.Contains(binding, `"cause":"growth_without_blockers"`) {
+		t.Fatalf("growth reason = %q", reason)
 	}
 }
