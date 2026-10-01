@@ -3535,6 +3535,10 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	if err != nil {
 		return productionReviewPending, err
 	}
+	diffMetrics, err := w.reviewRoundDiffMetrics(ctx, task, binding, reviewWorkspace, record)
+	if err != nil {
+		return productionReviewPending, err
+	}
 	// The completed record supersedes any pending same-invocation retry for
 	// this run: clear the durable row atomically with the record it writes.
 	if err := runDurableTransitionHook(w.transitionHook,
@@ -3545,8 +3549,22 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		if _, err := tx.AppendUsageObservations(ctx, id, result.Usage); err != nil {
 			return err
 		}
+		// Metrics are written only with the record they describe, never
+		// backfilled: an item may already have snapshotted a replayed round's
+		// history without them.
+		_, err := tx.GetReviewRecord(ctx, id)
+		created := errors.Is(err, store.ErrNotFound)
+		if err != nil && !created {
+			return err
+		}
 		if err := tx.PutReviewRecord(ctx, record, result.Findings); err != nil {
 			return err
+		}
+		if created && diffMetrics != nil {
+			if err := tx.PutReviewRoundDiffMetrics(
+				ctx, task.RunID, record.Round, *diffMetrics); err != nil {
+				return err
+			}
 		}
 		for _, disposition := range remediationOutcome.dispositions {
 			if err := tx.PutFindingDisposition(ctx, disposition); err != nil {

@@ -1247,18 +1247,9 @@ func authenticateRemediationInput(
 		return errors.New("remediation artifact store is unavailable")
 	}
 	request := verified.request
-	body, err := loadFakePublicationBlob(
-		artifacts, request.InputArtifactDigest)
+	input, body, err := loadRemediationInput(artifacts, request.InputArtifactDigest)
 	if err != nil {
-		return classifyRemediationMarkerError(err)
-	}
-	var input remediationInput
-	if err := strictjson.Decode(
-		body, &input, strictjson.RejectInvalidUTF8,
-		strictjson.Limit(exec.ProductionMaxInputBytes),
-	); err != nil {
-		return fmt.Errorf(
-			"%w: decode remediation input: %w", errRemediationMarkerUnreadable, err)
+		return err
 	}
 	canonical, err := json.Marshal(input)
 	if err != nil || !bytes.Equal(body, canonical) ||
@@ -1271,6 +1262,26 @@ func authenticateRemediationInput(
 			errRemediationMarkerUnreadable, err, domain.ErrParentKeyMismatch)
 	}
 	return nil
+}
+
+// loadRemediationInput opens, digest-verifies, and strictly decodes one stored
+// remediation input. The caller compares it with the request that names it.
+func loadRemediationInput(
+	artifacts ArtifactStore, digest domain.Digest,
+) (remediationInput, []byte, error) {
+	body, err := loadFakePublicationBlob(artifacts, digest)
+	if err != nil {
+		return remediationInput{}, nil, classifyRemediationMarkerError(err)
+	}
+	var input remediationInput
+	if err := strictjson.Decode(
+		body, &input, strictjson.RejectInvalidUTF8,
+		strictjson.Limit(exec.ProductionMaxInputBytes),
+	); err != nil {
+		return remediationInput{}, nil, fmt.Errorf(
+			"%w: decode remediation input: %w", errRemediationMarkerUnreadable, err)
+	}
+	return input, body, nil
 }
 
 func classifyRemediationMarkerError(err error) error {
