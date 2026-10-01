@@ -69,7 +69,7 @@ func TestEverySiteBelongsToExactlyOneRole(t *testing.T) {
 	t.Parallel()
 	registered := []string{
 		inference.AdjudicatorSiteID, inference.AttentionDiscussionSiteID,
-		inference.ClassifierSiteID, inference.DiagnosticSiteID,
+		inference.ClassifierSiteID, inference.DiagnosticSiteID, inference.DriftAuditorSiteID,
 		inference.PublicationAuthorExplainSiteID, inference.PublicationAuthorProposeSiteID,
 		inference.TaskNamerSiteID,
 	}

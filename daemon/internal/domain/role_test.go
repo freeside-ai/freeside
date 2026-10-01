@@ -52,10 +52,11 @@ func TestRoleShapeAndPlace(t *testing.T) {
 		[]string{"publication_author_explain", "publication_author_propose"}) {
 		t.Fatalf("publication author sites = %v", got)
 	}
-	for _, unbuilt := range []domain.RoleName{domain.RoleDriftAuditor, domain.RoleBriefer} {
-		if len(unbuilt.Sites()) != 0 {
-			t.Fatalf("%s names sites %v before its site exists", unbuilt, unbuilt.Sites())
-		}
+	if got := domain.RoleDriftAuditor.Sites(); !slices.Equal(got, []string{"drift_auditor"}) {
+		t.Fatalf("drift auditor sites = %v", got)
+	}
+	if got := domain.RoleBriefer.Sites(); len(got) != 0 {
+		t.Fatalf("briefer names sites %v before its site exists", got)
 	}
 	for _, notRole := range []domain.RoleName{"", "verification", "researcher", "implementation"} {
 		_, inStage := notRole.Stage()
