@@ -123,7 +123,7 @@ func TestAdjudicatorAllowlistConvertsValidatedProposal(t *testing.T) {
 		t.Fatalf("entries = %#v", entries)
 	}
 	requests := driver.Requests()
-	if len(requests) != 1 || len(requests[0].Fields) != 13 {
+	if len(requests) != 1 || len(requests[0].Fields) != 14 {
 		t.Fatalf("requests = %#v", requests)
 	}
 	fields := requests[0].Fields
@@ -131,7 +131,7 @@ func TestAdjudicatorAllowlistConvertsValidatedProposal(t *testing.T) {
 		fields["instruction_snapshot"] != "repository [REDACTED] instructions" ||
 		!strings.Contains(fields["findings"], "[REDACTED] should never leave") ||
 		!strings.Contains(fields["dissent"], "[REDACTED] evidence") ||
-		fields["prior_adjudication"] != "null" {
+		fields["prior_adjudication"] != "null" || fields["diff_metrics"] != "null" {
 		t.Fatalf("redacted fields = %#v", fields)
 	}
 	if _, present := fields["implementer_reasoning"]; present {
@@ -139,6 +139,32 @@ func TestAdjudicatorAllowlistConvertsValidatedProposal(t *testing.T) {
 	}
 	if requests[0].InputDigest != contentaddr.Sum(mustJSON(t, fields)) {
 		t.Fatal("input digest does not bind adjudicator fields")
+	}
+}
+
+// TestAdjudicatorAllowlistCarriesDiffMetrics pins that the round's recorded
+// diff metrics cross the allowlist as supplied; the nil case above is the gap.
+func TestAdjudicatorAllowlistCarriesDiffMetrics(t *testing.T) {
+	driver := fake.New()
+	driver.Script(inference.AdjudicatorSiteID, fake.Script{Response: inference.Response{
+		Output: []byte(acceptedAdjudicatorOutput), ComputeUnits: 4,
+	}})
+	client, _, _ := testClient(t, driver, 10)
+	input := adjudicatorInput()
+	input.DiffMetrics = &domain.ReviewRoundDiffMetrics{
+		Cumulative: domain.DiffStats{
+			FilesChanged: 4, Additions: 120, Deletions: 7, BaseSHA: "base", HeadSHA: "head-2",
+		},
+		Round: domain.DiffStats{
+			FilesChanged: 1, Additions: 20, Deletions: 2, BaseSHA: "head-1", HeadSHA: "head-2",
+		},
+	}
+	if _, err := client.AdjudicateFindings(context.Background(), "project-1", "run-1", input); err != nil {
+		t.Fatal(err)
+	}
+	requests := driver.Requests()
+	if len(requests) != 1 || requests[0].Fields["diff_metrics"] != string(mustJSON(t, input.DiffMetrics)) {
+		t.Fatalf("requests = %#v", requests)
 	}
 }
 

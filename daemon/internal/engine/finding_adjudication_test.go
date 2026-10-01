@@ -354,7 +354,7 @@ func TestProductionFindingAdjudicatorUsesBoundBodiesAndEngineFacts(t *testing.T)
 		!strings.Contains(fields["findings"], `"compatibility":"allowed"`) ||
 		!strings.Contains(fields["findings"], `"version":1`) ||
 		fields["prior_disposition_history"] != "[]" || fields["prior_adjudication"] != "null" ||
-		fields["dissent"] != "null" {
+		fields["dissent"] != "null" || fields["diff_metrics"] != "null" {
 		t.Fatalf("engine-derived fields = %#v", fields)
 	}
 	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
@@ -369,6 +369,44 @@ func TestProductionFindingAdjudicatorUsesBoundBodiesAndEngineFacts(t *testing.T)
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestProductionFindingAdjudicatorSendsStoredDiffMetrics pins that the
+// adjudicator input carries the round's stored metrics row, read from the
+// store and not from the request; the test above covers the gap.
+func TestProductionFindingAdjudicatorSendsStoredDiffMetrics(t *testing.T) {
+	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
+	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
+	f.writePath(t, f.headRoot)
+	cumulative := domain.DiffStats{
+		FilesChanged: 3, Additions: 40, Deletions: 6, BaseSHA: f.record.BaseSHA, HeadSHA: f.record.HeadSHA,
+	}
+	metrics := domain.ReviewRoundDiffMetrics{Cumulative: cumulative, Round: cumulative}
+	if err := f.store.Write(f.ctx, func(tx *store.WriteTx) error {
+		return tx.PutReviewRoundDiffMetrics(f.ctx, f.record.RunID, f.record.Round, metrics)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.driver.Script(inference.AdjudicatorSiteID, fake.Script{Response: inference.Response{
+		Output:       []byte(`{"entries":[{"finding_id":"finding-a","goal_relationship":"adjacent","compatibility":null,"route":"defer","confidence":"high","rationale":"outside the accepted outcome","evidence":["daemon/a.go:1"],"cited_rules":["declared work-unit scope"],"assumptions":[],"alternatives":["revise the work unit"],"open_questions":[]}]}`),
+		ComputeUnits: 5,
+	}})
+	f.workflow.findingAdjudicator = &productionFindingAdjudicator{
+		client: f.workflow.inference, store: f.store, artifacts: f.artifacts,
+	}
+	if state, err := f.workflow.reconcileFindingAdjudication(
+		f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot,
+	); err != nil || state != productionReviewPassed {
+		t.Fatalf("production inference adjudication = %d, %v", state, err)
+	}
+	want, err := json.Marshal(metrics)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := f.driver.Requests()
+	if len(requests) != 1 || requests[0].Fields["diff_metrics"] != string(want) {
+		t.Fatalf("requests = %#v, want diff_metrics %s", requests, want)
 	}
 }
 

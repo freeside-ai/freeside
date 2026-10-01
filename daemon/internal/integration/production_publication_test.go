@@ -2293,6 +2293,25 @@ func testProductionAdjudicatedRemediation(t *testing.T, p *productionPublication
 			records[0].BaseSHA != records[1].BaseSHA {
 			t.Fatalf("review history = %#v", records)
 		}
+		// The second round's workspace never held the first head, so its
+		// round pair proves the engine rebuilt that tree from the stored
+		// remediation patch.
+		firstMetrics, err := tx.GetReviewRoundDiffMetrics(p.ctx, p.runID, 1)
+		if err != nil {
+			return err
+		}
+		secondMetrics, err := tx.GetReviewRoundDiffMetrics(p.ctx, p.runID, 2)
+		if err != nil {
+			return err
+		}
+		wantRound := domain.DiffStats{
+			FilesChanged: 1, Additions: 1,
+			BaseSHA: records[0].HeadSHA, HeadSHA: records[1].HeadSHA,
+		}
+		if firstMetrics.Round != firstMetrics.Cumulative || secondMetrics.Round != wantRound ||
+			secondMetrics.Cumulative.Additions != firstMetrics.Cumulative.Additions+1 {
+			t.Fatalf("round diff metrics = %#v then %#v", firstMetrics, secondMetrics)
+		}
 		storedRun, err := tx.GetRun(p.ctx, p.runID)
 		if err != nil {
 			return err
