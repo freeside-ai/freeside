@@ -661,6 +661,15 @@ func seedReviewDiminishingDecisionWith(
 	if err != nil {
 		t.Fatal(err)
 	}
+	// An empty action leaves the item open, with no command.
+	if action == "" {
+		if err := st.Write(ctx, func(tx *store.WriteTx) error {
+			return tx.PutAttentionItem(ctx, item)
+		}); err != nil {
+			t.Fatalf("seed open diminishing item: %v", err)
+		}
+		return st, store.ReviewDiminishingDecision{Item: item, Binding: binding}
+	}
 	command, err := domain.NewCommand(domain.CommandInput{
 		CommandID: "command-" + string(action), DeviceID: "device-1",
 		ItemID: item.ID, ItemVersion: item.ItemVersion, PRHeadSHA: item.PRHeadSHA,
