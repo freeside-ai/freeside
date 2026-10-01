@@ -27,11 +27,16 @@ import (
 
 type testAuthStoreVolumes struct {
 	volume string
+	// holder, when set, receives the invocation the lookup named.
+	holder *domain.InvocationID
 }
 
 func (v testAuthStoreVolumes) AuthStoreVolume(
-	context.Context, domain.AuthIdentityID,
+	_ context.Context, _ domain.AuthIdentityID, holder domain.InvocationID,
 ) (string, error) {
+	if v.holder != nil {
+		*v.holder = holder
+	}
 	return v.volume, nil
 }
 
@@ -65,10 +70,16 @@ func TestHandoffSpecBindsContainmentAndInstructions(t *testing.T) {
 	t.Parallel()
 	const volume = "provider-owner-credentials"
 	in := testProviderHandoffInput()
-	hs, err := (claudeProvider{volumes: testAuthStoreVolumes{volume: volume}}).
+	var holder domain.InvocationID
+	hs, err := (claudeProvider{volumes: testAuthStoreVolumes{volume: volume, holder: &holder}}).
 		HandoffSpec(context.Background(), in)
 	if err != nil {
 		t.Fatalf("HandoffSpec: %v", err)
+	}
+	// The store resolves an agent-bound attempt's generation from this id.
+	if holder != in.InvocationID || hs.AuthStoreLease.Holder != in.InvocationID {
+		t.Errorf("volume looked up for %q, lease held by %q, want the invocation %q",
+			holder, hs.AuthStoreLease.Holder, in.InvocationID)
 	}
 	if len(hs.Agent.CredentialMounts) != 1 {
 		t.Fatalf("credential mounts = %#v, want exactly the leased one", hs.Agent.CredentialMounts)

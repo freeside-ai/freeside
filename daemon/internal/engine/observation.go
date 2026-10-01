@@ -144,7 +144,8 @@ func dispatchHoldReason(err error) (domain.RunHoldReason, bool) {
 		return domain.HoldRepositoryUntrusted, true
 	case errors.Is(err, publish.ErrJanitorInactive):
 		return domain.HoldProviderAuthorityUnavailable, true
-	case errors.Is(err, exec.ErrCapabilityRefused),
+	case errors.Is(err, ErrAgentNotAdmissible),
+		errors.Is(err, exec.ErrCapabilityRefused),
 		errors.Is(err, exec.ErrPreJobRefused),
 		errors.Is(err, domain.ErrUnknownAdmissionFloor),
 		errors.Is(err, domain.ErrCapabilityBelowFloor),

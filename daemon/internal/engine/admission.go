@@ -57,6 +57,11 @@ type AdmissionEnvironment struct {
 	// AuthIdentityID is the provider identity the stage runs under; nil only
 	// for a clean-verification stage, which reaches no provider.
 	AuthIdentityID *domain.AuthIdentityID
+	// Agents, when set, admits every ward stage through the lineup (§5.4):
+	// the identity, credential mode, and agent binding come from the role's
+	// resolved agent, and AuthIdentityID must be nil. Without it the
+	// environment's one identity admits every stage, as before the cutover.
+	Agents *AgentSelection
 	// BackupEncryptionWaiver records the §5.7 Phase 1A.2 exception when the
 	// operator has one; the store re-gates it against their configuration.
 	BackupEncryptionWaiver *domain.BackupEncryptionWaiver
@@ -68,6 +73,11 @@ func (e AdmissionEnvironment) clone() AdmissionEnvironment {
 	if e.AuthIdentityID != nil {
 		identity := *e.AuthIdentityID
 		e.AuthIdentityID = &identity
+	}
+	if e.Agents != nil {
+		agents := *e.Agents
+		agents.EffectiveEgress = slices.Clone(agents.EffectiveEgress)
+		e.Agents = &agents
 	}
 	if e.BackupEncryptionWaiver != nil {
 		waiver := *e.BackupEncryptionWaiver
@@ -187,6 +197,16 @@ func WithAdmission(backend exec.RunnerBackend, floor []exec.Capability, env Admi
 		if err := env.VendorInstructions.validate(); err != nil {
 			return fmt.Errorf("with admission: %w", err)
 		}
+		if env.Agents != nil {
+			if err := env.Agents.validate(); err != nil {
+				return fmt.Errorf("with admission: %w", err)
+			}
+			// One source of identity: a lineup admission derives it from the
+			// agent's enrollment, so a configured one could only disagree.
+			if env.AuthIdentityID != nil {
+				return errors.New("with admission: agent selection and a configured auth identity are exclusive")
+			}
+		}
 		if len(env.EnforceableEgressProfiles) == 0 &&
 			slices.Contains(domain.AllEgressProfiles, env.EgressProfile) {
 			env.EnforceableEgressProfiles = []domain.EgressProfile{env.EgressProfile}
@@ -206,7 +226,7 @@ func WithAdmission(backend exec.RunnerBackend, floor []exec.Capability, env Admi
 			// have none. A single admitter cannot truthfully promise both shapes.
 			switch profile {
 			case domain.EgressProviderOnly, domain.EgressProviderWebRead:
-				if env.AuthIdentityID == nil || *env.AuthIdentityID == "" {
+				if env.Agents == nil && (env.AuthIdentityID == nil || *env.AuthIdentityID == "") {
 					return fmt.Errorf(
 						"with admission: enforceable egress profile %q has no auth identity", profile)
 				}
@@ -381,6 +401,30 @@ func (e *Engine) admitAttempt(
 			)
 		}
 	}
+	admittedAt := e.admission.now()
+	var agent *agentAdmission
+	if env.Agents != nil {
+		role, ok := wardRole(binding.run, stage, invocationID)
+		if !ok {
+			// A lineup admitter runs ward stages only; a stage no role runs
+			// has no agent to bind and no identity to run under.
+			return domain.ExecutionAdmission{}, false, fmt.Errorf(
+				"admit invocation %q: stage %q has no ward role: %w", invocationID, stage.Name, ErrAgentNotAdmissible)
+		}
+		resolved, err := e.resolveAgentAdmission(
+			ctx, *env.Agents, role, promptPackageDigest, env.OperatingMode, admittedAt,
+		)
+		if err != nil {
+			return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID, err)
+		}
+		agent = &resolved
+		identity := resolved.enrollment.AuthIdentityID
+		env.AuthIdentityID, env.CredentialMode = &identity, resolved.enrollment.CredentialMode
+	}
+	var agentBinding *domain.AdmissionAgentBinding
+	if agent != nil {
+		agentBinding = &agent.binding
+	}
 	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
 		InvocationID:               invocationID,
 		RunID:                      binding.run.ID,
@@ -403,10 +447,22 @@ func (e *Engine) admitAttempt(
 		AuthIdentityID:             env.AuthIdentityID,
 		TrustProfileDigest:         profileDigest,
 		BackupEncryptionWaiver:     env.BackupEncryptionWaiver,
-		AdmittedAt:                 e.admission.now(),
+		AgentBinding:               agentBinding,
+		AdmittedAt:                 admittedAt,
 	})
 	if err != nil {
 		return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID, err)
+	}
+	if agent != nil {
+		// The record is rechecked against the closure it names before it is
+		// stored, so a resolver bug cannot persist a binding reconstruction
+		// would refuse.
+		if err := domain.ValidateAdmissionAgentDerivations(
+			admission, agent.resolved.Definition, agent.resolved.Adapter, agent.resolved.Route,
+			agent.resolved.Offer, agent.launch, agent.stage, agent.enrollment, agent.generation,
+		); err != nil {
+			return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID, err)
+		}
 	}
 	if isProduction {
 		if err := e.validateProductionDelivery(ctx, invocationID, admission); err != nil {

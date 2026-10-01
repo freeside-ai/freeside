@@ -81,7 +81,7 @@ func TestAdaptersRoundTripAcrossStoreReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("wardstore.New(reopened): %v", err)
 	}
-	if volume, err := adapters.Leaser.AuthStoreVolume(ctx, identity.ID); err != nil || volume != identity.Interim.AuthStoreVolume {
+	if volume, err := adapters.Leaser.AuthStoreVolume(ctx, identity.ID, ""); err != nil || volume != identity.Interim.AuthStoreVolume {
 		t.Fatalf("AuthStoreVolume = %q, %v; want %q", volume, err, identity.Interim.AuthStoreVolume)
 	}
 	got, err := adapters.Journal.Get(ctx, rec.RunID)

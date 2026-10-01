@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -158,6 +159,11 @@ func (b *Backend) RestoreConformance(record domain.BackendConformance) error {
 	b.providerEgress.Store(record.Capabilities.Has(domain.CapEnforcedProviderEgress))
 	return nil
 }
+
+// HandoffTimeout is the wall-clock budget of one Handoff after defaults: the
+// longest a writer attempt can hold its credential, which admission uses as
+// the attempt's deadline.
+func (b *Backend) HandoffTimeout() time.Duration { return b.cfg.HandoffTimeout }
 
 // ConfigurationDigest is the stable identity of the runtime configuration a
 // Full conformance pass proves. It deliberately excludes collaborators and

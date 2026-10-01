@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -288,6 +289,10 @@ func TestRecoverRefusesMismatchedBoundAuthStoreVolume(t *testing.T) {
 			continue
 		}
 		t.Errorf("runtime call %q happened after the binding refusal", call)
+	}
+	if !slices.Equal(fx.l.volumeHolders, []domain.InvocationID{hs.AuthStoreLease.Holder}) {
+		t.Errorf("volume looked up for holders %v, want the lease claim's holder %q",
+			fx.l.volumeHolders, hs.AuthStoreLease.Holder)
 	}
 }
 

@@ -565,12 +565,35 @@ func (a *Leaser) GetIdentity(
 	return identity, nil
 }
 
-// AuthStoreVolume returns the trusted identity-to-volume binding.
+// AuthStoreVolume returns the trusted volume binding for the store holder
+// mounts under the identity. A holder whose admission carries an agent
+// binding mounts the enrollment generation that admission recorded, read by
+// its exact ordinal, so a later generation never retargets an admitted
+// attempt. Every other holder reads the identity's interim binding: a legacy
+// admission is never resolved against current configuration (§5.4), and a
+// mutation outside any admission (enrollment, refresh, review) has none.
 func (a *Leaser) AuthStoreVolume(
-	ctx context.Context, id domain.AuthIdentityID,
+	ctx context.Context, id domain.AuthIdentityID, holder domain.InvocationID,
 ) (string, error) {
 	var volume string
 	err := a.store.Read(ctx, func(tx *store.ReadTx) error {
+		admission, found, err := tx.LookupExecutionAdmission(ctx, holder)
+		if err != nil {
+			return err
+		}
+		if found && admission.AgentBinding != nil {
+			if admission.AuthIdentityID == nil || *admission.AuthIdentityID != id {
+				return fmt.Errorf("holder %q was admitted under another identity: %w",
+					holder, domain.ErrAdmissionDerivationMismatch)
+			}
+			binding := admission.AgentBinding
+			generation, err := tx.GetEnrollmentGeneration(ctx, binding.EnrollmentID, binding.EnrollmentGeneration)
+			if err != nil {
+				return err
+			}
+			volume = generation.AuthStoreVolume
+			return nil
+		}
 		identity, err := tx.GetAuthIdentity(ctx, id)
 		if err != nil {
 			return err

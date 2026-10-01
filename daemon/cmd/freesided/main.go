@@ -228,6 +228,10 @@ func main() {
 	reviewImage := flags.String("review-image", "", "digest-pinned Codex review image")
 	reviewInputRoot := flags.String("review-input-root", "", "private root containing Codex review auth and instruction snapshots")
 	reviewAuthMode := flags.String("review-auth-mode", "", "Codex review auth mode: subscription or api_key")
+	agentTree := flags.String("agent-tree", "",
+		"local checkout holding the admitted-agent tree under policy/; with it, ward stages are admitted through the lineup")
+	agentTreeCommit := flags.String("agent-tree-commit", "",
+		"exact commit of -agent-tree whose tree is read; the working tree is never read")
 	reviewAuthIdentity := flags.String("review-auth-identity", "", "Codex review auth identity")
 	reviewAuthSnapshot := flags.String("review-auth-snapshot", "", "Codex auth.json snapshot under review-input-root")
 	reviewInstructions := flags.String("review-instructions", "", "operator-host Codex instruction source snapshotted with explicit absence")
@@ -428,7 +432,8 @@ func main() {
 			VendorInstructions:             *vendorInstructions,
 			Repo:                           *repo, RepositoryID: id,
 			BaseRef: *baseRef, BaseSHA: *baseSHA,
-			AuthIdentityID: domain.AuthIdentityID(*authIdentity),
+			AuthIdentityID:    domain.AuthIdentityID(*authIdentity),
+			AgentTreeCheckout: *agentTree, AgentTreeCommit: *agentTreeCommit,
 			AllowedPaths:   engine.SplitNonEmpty(*allowedPaths),
 			RunConformance: *runConformance,
 			StateRoot:      *publicationStateDir, CredentialsDir: *publicationCredentialsDir,

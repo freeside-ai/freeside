@@ -28,10 +28,11 @@ type Driver = stage.Driver
 // ExecutionReplay is the authenticated replay returned by the stage driver.
 type ExecutionReplay = stage.ExecutionReplay
 
-// AuthStoreVolumes resolves the trusted identity-to-credential-volume
-// binding used by the Claude provider's handoff specification.
+// AuthStoreVolumes resolves the trusted credential-volume binding used by
+// the Claude provider's handoff specification: the store the invocation
+// mounts under the identity it was admitted with.
 type AuthStoreVolumes interface {
-	AuthStoreVolume(context.Context, domain.AuthIdentityID) (string, error)
+	AuthStoreVolume(context.Context, domain.AuthIdentityID, domain.InvocationID) (string, error)
 }
 
 // Config preserves the Claude driver's existing construction surface.

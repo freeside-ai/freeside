@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -228,15 +229,23 @@ func gitForAdoptTest(t *testing.T, dir string, stdin []byte, args ...string) str
 	return strings.TrimSpace(string(out))
 }
 
+// commitAdoptedPatch commits the emitted patch in a fresh checkout and
+// returns the checkout and the commit, as the operator hands them to the
+// daemon.
+func commitAdoptedPatch(t *testing.T, patch []byte) (checkout, commit string) {
+	t.Helper()
+	checkout = t.TempDir()
+	gitForAdoptTest(t, checkout, nil, "init", "-q")
+	gitForAdoptTest(t, checkout, patch, "apply", "--index", "-")
+	gitForAdoptTest(t, checkout, nil, "commit", "-q", "-m", "adopt")
+	return checkout, gitForAdoptTest(t, checkout, nil, "rev-parse", "HEAD")
+}
+
 // loadAdoptedPatch commits the emitted patch in a fresh checkout and reads
 // it back through the loader the daemon uses.
 func loadAdoptedPatch(t *testing.T, patch []byte) agenttree.Tree {
 	t.Helper()
-	checkout := t.TempDir()
-	gitForAdoptTest(t, checkout, nil, "init", "-q")
-	gitForAdoptTest(t, checkout, patch, "apply", "--index", "-")
-	gitForAdoptTest(t, checkout, nil, "commit", "-q", "-m", "adopt")
-	commit := gitForAdoptTest(t, checkout, nil, "rev-parse", "HEAD")
+	checkout, commit := commitAdoptedPatch(t, patch)
 	files, err := agenttree.ReadCommit(context.Background(), checkout, t.TempDir(), commit)
 	if err != nil {
 		t.Fatalf("read committed patch: %v", err)
@@ -302,7 +311,7 @@ func TestAuthAdoptEnrollsBothIdentitiesAndEmitsAResolvingTree(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		volume, err := adapters.Leaser.AuthStoreVolume(context.Background(), "claude-main")
+		volume, err := adapters.Leaser.AuthStoreVolume(context.Background(), "claude-main", "legacy-holder")
 		if err != nil || volume != adoptClaudeVolume {
 			t.Fatalf("flag-path volume = %q, %v", volume, err)
 		}
@@ -589,5 +598,45 @@ func TestAuthAdoptReportsTheFirstAdoptionWhenTheSecondFails(t *testing.T) {
 	report, _, err = f.run(t, f.args())
 	if err != nil || report.Identities[0].Status != authAdoptReused || report.Identities[1].Status != authAdoptAdopted {
 		t.Fatalf("rerun = %+v, %v", report, err)
+	}
+}
+
+// TestDaemonLoadsTheAdoptedTreeAtItsCommit covers the daemon's side of the
+// hand-off: the tree flags read the committed patch, cite the revision adopt
+// reported, and ignore the checkout's working tree.
+func TestDaemonLoadsTheAdoptedTreeAtItsCommit(t *testing.T) {
+	f := newAuthAdoptFixture(t)
+	report, patch, err := f.run(t, f.args())
+	if err != nil {
+		t.Fatalf("auth adopt: %v", err)
+	}
+	checkout, commit := commitAdoptedPatch(t, patch)
+	// An uncommitted edit must not reach admission.
+	if err := os.WriteFile(filepath.Join(checkout, "policy", "lineup"), []byte("edited\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := claudeDriverConfig{
+		AgentTreeCheckout: checkout, AgentTreeCommit: commit,
+		ProviderEndpoints: []string{"b.example:443", "a.example:443"},
+	}
+	selection, err := loadAgentSelection(context.Background(), cfg, time.Hour)
+	if err != nil {
+		t.Fatalf("load agent selection: %v", err)
+	}
+	if selection == nil || selection.LineupRevision != report.LineupRevision ||
+		selection.AttemptBudget != time.Hour ||
+		!slices.Equal(selection.EffectiveEgress, []string{"a.example:443", "b.example:443"}) {
+		t.Fatalf("selection = %+v, want revision %s", selection, report.LineupRevision)
+	}
+	if _, err := selection.Tree.ResolveLineup(); err != nil {
+		t.Fatalf("loaded lineup: %v", err)
+	}
+
+	if none, err := loadAgentSelection(context.Background(), claudeDriverConfig{}, time.Hour); err != nil || none != nil {
+		t.Fatalf("no tree flags = %v, %v; want no selection", none, err)
+	}
+	cfg.AgentTreeCommit = "HEAD"
+	if _, err := loadAgentSelection(context.Background(), cfg, time.Hour); !errors.Is(err, agenttree.ErrCommit) {
+		t.Fatalf("a symbolic commit = %v, want %v", err, agenttree.ErrCommit)
 	}
 }

@@ -21,6 +21,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
+	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -78,7 +80,10 @@ type claudeDriverConfig struct {
 	BaseRef                        string
 	BaseSHA                        string
 	AuthIdentityID                 domain.AuthIdentityID
-	AllowedPaths                   []string
+	// AgentTreeCheckout and AgentTreeCommit name the admitted-agent tree: a
+	// local checkout and the exact commit whose policy/ tree admission reads.
+	AgentTreeCheckout, AgentTreeCommit string
+	AllowedPaths                       []string
 	// RunConformance executes the store-backed full ward suite against this
 	// exact runtime/image/configuration before the engine can admit work.
 	RunConformance bool
@@ -136,6 +141,11 @@ func (c claudeDriverConfig) validate() error {
 		return fmt.Errorf("-base-sha must be a full lowercase commit SHA")
 	case c.AuthIdentityID == "":
 		return fmt.Errorf("-auth-identity is required in claude driver mode")
+	case (c.AgentTreeCheckout == "") != (c.AgentTreeCommit == ""):
+		return fmt.Errorf("-agent-tree and -agent-tree-commit are set together")
+	case c.AgentTreeCheckout != "" &&
+		(!filepath.IsAbs(c.AgentTreeCheckout) || filepath.Clean(c.AgentTreeCheckout) != c.AgentTreeCheckout):
+		return fmt.Errorf("-agent-tree must be a clean absolute path")
 	case !engine.ExplicitAllowedPaths(c.AllowedPaths):
 		// The importer's declared-path scope is a containment control (§5.6,
 		// §5.8), so unattended work states it explicitly; inheriting a
@@ -201,6 +211,47 @@ func admissionFloor(mode domain.OperatingMode) []exec.Capability {
 		return unattendedAdmissionFloor
 	}
 	return nil
+}
+
+// agentExpiryMargin is how far past an attempt's deadline an expiring
+// credential must last (§5.4 step 4): slack for the teardown that still holds
+// the store after the handoff budget ends.
+const agentExpiryMargin = 5 * time.Minute
+
+// loadAgentSelection reads the admitted-agent tree at the operator's exact
+// commit and returns the selection that admits ward stages through its
+// lineup. Without the tree flags it returns nil and admission keeps the one
+// configured identity. The tree is read once: a later commit takes effect at
+// the next start, so every admission of one daemon run cites one revision.
+func loadAgentSelection(
+	ctx context.Context, cfg claudeDriverConfig, attemptBudget time.Duration,
+) (*engine.AgentSelection, error) {
+	if cfg.AgentTreeCheckout == "" {
+		return nil, nil
+	}
+	scratch, err := os.MkdirTemp("", "freesided-agent-tree-")
+	if err != nil {
+		return nil, fmt.Errorf("agent tree scratch: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(scratch) }()
+	files, err := agenttree.ReadCommit(ctx, cfg.AgentTreeCheckout, scratch, cfg.AgentTreeCommit)
+	if err != nil {
+		return nil, fmt.Errorf("read agent tree: %w", err)
+	}
+	tree, err := agenttree.Parse(files)
+	if err != nil {
+		return nil, fmt.Errorf("parse agent tree at %s: %w", cfg.AgentTreeCommit, err)
+	}
+	revision, err := agenttree.Revision(files)
+	if err != nil {
+		return nil, fmt.Errorf("agent tree revision at %s: %w", cfg.AgentTreeCommit, err)
+	}
+	egress := slices.Clone(cfg.ProviderEndpoints)
+	slices.Sort(egress)
+	return &engine.AgentSelection{
+		Tree: tree, LineupRevision: revision, Launch: agentbaseline.RoleLaunch,
+		EffectiveEgress: egress, AttemptBudget: attemptBudget, ExpiryMargin: agentExpiryMargin,
+	}, nil
 }
 
 // ingestPromptPackage stores the prompt package's bytes and returns their
@@ -1639,7 +1690,10 @@ func composeClaudeDriver(
 		return nil, fmt.Errorf("compose claude driver: %w", driverErr)
 	}
 
-	identity := cfg.AuthIdentityID
+	agents, err := loadAgentSelection(ctx, cfg, backend.HandoffTimeout())
+	if err != nil {
+		return nil, err
+	}
 	env := engine.AdmissionEnvironment{
 		OperatingMode:             cfg.OperatingMode,
 		CredentialMode:            domain.CredentialSubscriptionContained,
@@ -1656,7 +1710,12 @@ func composeClaudeDriver(
 		// Base and Workspace are per-attempt and supplied by derive below;
 		// the static values here would be wrong the moment a second task
 		// is submitted.
-		AuthIdentityID: &identity,
+		Agents: agents,
+	}
+	if agents == nil {
+		// No tree: the one configured identity admits every stage.
+		identity := cfg.AuthIdentityID
+		env.AuthIdentityID = &identity
 	}
 	composition := &claudeComposition{
 		driver: driver, backend: backend, authority: authority,
