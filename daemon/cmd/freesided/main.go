@@ -973,8 +973,9 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			},
 			// The ledger reserves each site's full bound per call, so the
 			// per-root allowance is the call ceiling at the largest bound
-			// (20 calls at the adjudicator's 120 seconds) and never parks a
-			// root the ceiling still admits, whatever the mix of sites.
+			// (20 calls at the adjudicator's and drift auditor's 120 seconds)
+			// and never parks a root the ceiling still admits, whatever the
+			// mix of sites.
 			MaxCallsPerRoot: 20, MaxStarvationPerRoot: 40 * time.Minute,
 		}
 		judgmentBinding, err := composeRuntimeJudgments(cfg.Claude.Judgments, cfg.Claude.ReviewInputRoot)
@@ -992,6 +993,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			Binding:    judgmentBinding,
 			Sites: []inference.Site{
 				inference.ClassifierSite(judgmentBudget), inference.AdjudicatorSite(judgmentBudget),
+				inference.DriftAuditorSite(judgmentBudget),
 				inference.DiagnosticSite(judgmentBudget), inference.DiscussionSite(judgmentBudget),
 				inference.TaskNamerSite(judgmentBudget),
 				inference.PublicationAuthorExplainSite(judgmentBudget),

@@ -939,8 +939,11 @@ Security limitations, stated for the operator surface:
 
 ### Subscription-Backed Daemon Judgments
 
-The production classifier, finding adjudicator, and task namer can use the
-existing Claude subscription setup-token mechanism. Configure all four flags together:
+The production classifier, finding adjudicator, drift auditor, and task namer
+can use the existing Claude subscription setup-token mechanism. The drift
+auditor (`drift_auditor`, plan §7 Review Drift) is registered with the other
+judgment sites, but nothing calls it until the unit that adds the audit
+trigger and routes its verdict (#1051). Configure all four flags together:
 
 ```text
 -judgment-claude-bin /absolute/path/to/claude
@@ -981,8 +984,8 @@ the model a repository workspace. It rejects incomplete responses, missing or
 contradictory usage, model substitution, and invalid judgment JSON. Calls have
 one turn, the site's deadline and output-token limit, and one shared in-flight
 slot across judgment sites. Compute units mean generated tokens; input bytes
-have their own site limit. Classifier and adjudicator calls can cancel an
-active task namer, then wait within their own deadline for its process and
+have their own site limit. Classifier, adjudicator, and drift auditor calls
+can cancel an active task namer, then wait within their own deadline for its process and
 private-directory cleanup before taking the slot. Naming never preempts
 another call; overlapping workflow judgments still fail immediately. The
 existing ledger reserves each call's full allowance before dispatch.
