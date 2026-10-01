@@ -160,11 +160,14 @@ def compare_composition(old, new):
     # approved inputs do not gain new authority through a runtime restart.
     for field in ("repository", "repository_id", "base_ref", "base_sha",
                   "profile_digest", "review_configuration_digest", "allowed_paths",
-                  "claude_auth_identity", "claude_auth_volume", "codex_auth_identity",
+                  "claude_auth_volume",
                   "images", "identity", "build_egress_configuration_digest"):
         if old[field] != new[field]:
             raise ValueError(f"retained composition changed: {field}")
-    for field in ("shadow_review_configuration_digest", "review_instructions_present",
+    # agent_lineup_revision is absent from a composition retained before agent
+    # selection; a later composition always carries it, so that run refuses.
+    for field in ("agent_lineup_revision", "shadow_review_configuration_digest",
+                  "review_instructions_present",
                   "review_instructions_digest", "judgment_configuration_digest"):
         if old.get(field) != new.get(field):
             raise ValueError(f"retained composition changed: {field}")

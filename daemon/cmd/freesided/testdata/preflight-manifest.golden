@@ -36,9 +36,8 @@
   "allowed_paths": [
     "daemon/**"
   ],
-  "claude_auth_identity": "claude-1",
+  "agent_lineup_revision": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
   "claude_auth_volume": "claude-auth-volume",
-  "codex_auth_identity": "codex-1",
   "identity": {
     "source_digest": "sha256:0ac82fec44c225e7fc5d01b8a9cb91c61b4e86b3676e342c1747fa65a6bfcf8c",
     "policy_digest": "sha256:34e4283fd67b0809b8807b6e2e1af628e0f204ff0d7485f3b71c8a8d8578f745",
@@ -103,6 +102,11 @@
       "name": "trust_profile",
       "status": "passed",
       "evidence": "active profile sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb binds repository owner/repo (42)"
+    },
+    {
+      "name": "agent_selection",
+      "status": "passed",
+      "evidence": "lineup revision sha256:9999999999999999999999999999999999999999999999999999999999999999 resolves every role this composition uses"
     },
     {
       "name": "review_configuration",

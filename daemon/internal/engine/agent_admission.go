@@ -59,7 +59,8 @@ type RoleAgent struct {
 // identity join; the line selects that agent's current digest; and the
 // enrollment holds a store generation. Stage admission adds the launch,
 // conformance, and deadline checks; the review roles, whose launch coverage
-// arrives with the review record (#898), stop here.
+// arrives with the review record (#898), add only the offer's not_after and
+// the attended mark, in the daemon's review check.
 func ResolveRole(
 	ctx context.Context, st *store.Store, tree agenttree.Tree, role domain.RoleName,
 ) (RoleAgent, error) {

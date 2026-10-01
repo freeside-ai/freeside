@@ -662,12 +662,11 @@ func TestDaemonLoadsTheAdoptedTreeAtItsCommit(t *testing.T) {
 		AgentTreeCheckout: checkout, AgentTreeCommit: commit,
 		ProviderEndpoints: []string{"b.example:443", "a.example:443"},
 	}
-	selection, err := loadAgentSelection(context.Background(), cfg, time.Hour)
+	selection, err := loadAgentSelection(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("load agent selection: %v", err)
 	}
-	if selection == nil || selection.LineupRevision != report.LineupRevision ||
-		selection.AttemptBudget != time.Hour ||
+	if selection.LineupRevision != report.LineupRevision ||
 		!slices.Equal(selection.EffectiveEgress, []string{"a.example:443", "b.example:443"}) {
 		t.Fatalf("selection = %+v, want revision %s", selection, report.LineupRevision)
 	}
@@ -675,11 +674,8 @@ func TestDaemonLoadsTheAdoptedTreeAtItsCommit(t *testing.T) {
 		t.Fatalf("loaded lineup: %v", err)
 	}
 
-	if none, err := loadAgentSelection(context.Background(), claudeDriverConfig{}, time.Hour); err != nil || none != nil {
-		t.Fatalf("no tree flags = %v, %v; want no selection", none, err)
-	}
 	cfg.AgentTreeCommit = "HEAD"
-	if _, err := loadAgentSelection(context.Background(), cfg, time.Hour); !errors.Is(err, agenttree.ErrCommit) {
+	if _, err := loadAgentSelection(context.Background(), cfg); !errors.Is(err, agenttree.ErrCommit) {
 		t.Fatalf("a symbolic commit = %v, want %v", err, agenttree.ErrCommit)
 	}
 }
@@ -699,10 +695,11 @@ func TestAdoptedPatchResolvesAndAdmitsEveryRole(t *testing.T) {
 	selection, err := loadAgentSelection(ctx, claudeDriverConfig{
 		AgentTreeCheckout: checkout, AgentTreeCommit: commit,
 		ProviderEndpoints: []string{"api.anthropic.com:443"},
-	}, time.Hour)
+	})
 	if err != nil {
 		t.Fatalf("load agent selection: %v", err)
 	}
+	selection.AttemptBudget = time.Hour
 	prompts, err := readAdoptPrompts(authAdoptConfig{
 		PromptPackage:              filepath.Join(f.promptDir, "implementer"),
 		SpecificationPromptPackage: filepath.Join(f.promptDir, "specifier"),

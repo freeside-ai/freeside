@@ -666,7 +666,7 @@ SLEEP_STUB
 import json, pathlib, sys
 p = pathlib.Path(sys.argv[1])
 (p / 'old/rig-acquisition.json').write_text(json.dumps({'manifest': {'resources': {'seed_root': str(p / 'seed')}}}))
-fields = 'repository repository_id base_ref base_sha profile_digest review_configuration_digest allowed_paths claude_auth_identity claude_auth_volume codex_auth_identity images identity build_egress_configuration_digest'.split()
+fields = 'repository repository_id base_ref base_sha profile_digest review_configuration_digest allowed_paths claude_auth_volume images identity build_egress_configuration_digest'.split()
 composition = dict.fromkeys(fields)
 composition['identity'] = {'implementation_run_id': 'impl-run', 'implementation_invocation_id': 'impl-inv'}
 (p / 'old/composition-manifest.json').write_text(json.dumps(composition))
@@ -754,14 +754,15 @@ RETRY_STUB
     FREESIDE_REAL_RUN_REVIEW_IMAGE="example.test/reviewer@$digest" \
     FREESIDE_REAL_RUN_REVIEW_INPUT_ROOT="$CASE_DIR/review-input" \
     FREESIDE_REAL_RUN_REVIEW_AUTH_MODE=subscription \
-    FREESIDE_REAL_RUN_REVIEW_AUTH_IDENTITY=reviewer \
     FREESIDE_REAL_RUN_REVIEW_AUTH_SNAPSHOT=auth.json \
     FREESIDE_REAL_RUN_REVIEW_INSTRUCTIONS=AGENTS.md \
     FREESIDE_REAL_RUN_REVIEW_MODEL=review-model \
     FREESIDE_REAL_RUN_REVIEW_REASONING=high \
-    FREESIDE_REAL_RUN_REVIEW_COST_OWNER=operator \
     FREESIDE_REAL_RUN_SEED_ROOT="$CASE_DIR/seed" \
+    FREESIDE_REAL_RUN_REVIEW_AUTH_IDENTITY=reviewer \
     FREESIDE_REAL_RUN_AUTH_IDENTITY=implementer \
+    FREESIDE_REAL_RUN_AGENT_TREE="$CASE_DIR/policy-checkout" \
+    FREESIDE_REAL_RUN_AGENT_TREE_COMMIT=0123456789012345678901234567890123456789 \
     FREESIDE_REAL_RUN_AUTH_VOLUME=auth-volume \
     FREESIDE_REAL_RUN_REPO=freeside-ai/freeside \
     FREESIDE_REAL_RUN_REPOSITORY_ID=1 \

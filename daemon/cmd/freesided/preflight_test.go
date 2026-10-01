@@ -45,6 +45,29 @@ type fakePreflightEnvironment struct {
 	codexExpiresAt       *time.Time
 	codexCalls           int
 	publicationAuthor    engine.ProductionCommitAuthor
+	agentsError          error
+}
+
+// preflightFixtureAgents is what the fixture's lineup resolves to: the
+// identities and cost owners the removed flags used to carry.
+var preflightFixtureAgents = preflightAgentSelection{
+	LineupRevision: domain.Digest("sha256:" + strings.Repeat("9", 64)),
+	AuthIdentityID: "claude-1", AuthVolume: "claude-auth-volume",
+	ReviewAuthIdentityID: "codex-1", ReviewCostOwner: "subscription:operator",
+	ShadowReviewAuthIdentityID: "claude-1", ShadowReviewCostOwner: "subscription:shadow",
+}
+
+func (e *fakePreflightEnvironment) ResolveAgentSelection(
+	_ context.Context, cfg preflightConfig, _ time.Time,
+) (preflightAgentSelection, error) {
+	if e.agentsError != nil {
+		return preflightAgentSelection{}, e.agentsError
+	}
+	agents := preflightFixtureAgents
+	if cfg.ShadowReviewImage == "" {
+		agents.ShadowReviewAuthIdentityID, agents.ShadowReviewCostOwner = "", ""
+	}
+	return agents, nil
 }
 
 func (e *fakePreflightEnvironment) AuthenticateRig(string, string) (daemonlock.RigManifest, error) {
@@ -295,14 +318,17 @@ func TestProductionPreflightDatabaseStopsAtShadowApproval(t *testing.T) {
 	cfg := preflightConfig{
 		DBPath: dbPath, Repo: profile.Repo, RepositoryID: profile.RepositoryID,
 		ApprovedRecipe: domain.Digest("sha256:" + strings.Repeat("7", 64)),
-		AuthIdentityID: "missing-claude", ReviewAuthMode: ward.CodexAuthSubscription,
-		ReviewAuthIdentityID: "missing-codex",
-		ShadowReviewImage:    "ghcr.io/x/claude@sha256:" + strings.Repeat("6", 64),
-		ExporterImage:        "ghcr.io/x/exporter@sha256:" + strings.Repeat("5", 64),
-		ReviewInputRoot:      "/var/freeside/review-inputs",
-		ShadowReviewModel:    "claude-opus", ShadowReviewReasoningEffort: "high",
-		ShadowReviewCostOwner: "subscription:shadow", ShadowReviewWorkspaceSizeMB: 4096,
-		ShadowReviewRate: 0.2,
+		ReviewAuthMode: ward.CodexAuthSubscription,
+		Agents: preflightAgentSelection{
+			AuthIdentityID: "missing-claude", ReviewAuthIdentityID: "missing-codex",
+			ShadowReviewAuthIdentityID: "missing-claude", ShadowReviewCostOwner: "subscription:shadow",
+		},
+		ShadowReviewImage: "ghcr.io/x/claude@sha256:" + strings.Repeat("6", 64),
+		ExporterImage:     "ghcr.io/x/exporter@sha256:" + strings.Repeat("5", 64),
+		ReviewInputRoot:   "/var/freeside/review-inputs",
+		ShadowReviewModel: "claude-opus", ShadowReviewReasoningEffort: "high",
+		ShadowReviewWorkspaceSizeMB: 4096,
+		ShadowReviewRate:            0.2,
 	}
 	inspection := (productionPreflightEnvironment{}).InspectDatabase(
 		ctx, cfg, profile.Review.ConfigDigest,
@@ -453,7 +479,6 @@ func enableShadowReviewFixture(t *testing.T, args *[]string) string {
 		"-shadow-review-auth-snapshot", setupToken,
 		"-shadow-review-model", "claude-opus",
 		"-shadow-review-reasoning-effort", "high",
-		"-shadow-review-cost-owner", "subscription:shadow",
 		"-shadow-review-workspace-size-mb", "4096",
 		"-shadow-review-rate", "0.4",
 	)
@@ -509,6 +534,12 @@ func TestPreflightFailureFixtures(t *testing.T) {
 		{"daemon conflict", func(_ *[]string, env *fakePreflightEnvironment) {
 			env.idleError = errors.New("held")
 		}, "daemon_conflict"},
+		{"role with no resolving line", func(_ *[]string, env *fakePreflightEnvironment) {
+			env.agentsError = &roleAdmissionError{Role: domain.RoleReviewer, Err: engine.ErrAgentNotAdmissible}
+		}, "agent_selection"},
+		{"unreadable agent tree", func(_ *[]string, env *fakePreflightEnvironment) {
+			env.agentsError = errors.New("commit not found")
+		}, "agent_selection"},
 		{"invalid work-unit declaration", func(args *[]string, _ *fakePreflightEnvironment) {
 			path := filepath.Join(t.TempDir(), "work-unit.json")
 			if err := os.WriteFile(path, []byte(`{}`), 0o600); err != nil {
@@ -829,14 +860,15 @@ func preflightFixture(t *testing.T) ([]string, *fakePreflightEnvironment) {
 		"-repo", "owner/repo", "-repository-checkout", root,
 		"-repository-id", "42", "-base-ref", "main",
 		"-base-sha", strings.Repeat("c", 40), "-approved-recipe", string(reviewDigest),
-		"-auth-identity", "claude-1", "-auth-volume", "claude-auth-volume",
+		"-agent-tree", root, "-agent-tree-commit", strings.Repeat("e", 40),
+		"-auth-volume", "claude-auth-volume",
 		"-review-input-root", reviewInputRoot,
-		"-review-auth-mode", "subscription", "-review-auth-identity", "codex-1",
+		"-review-auth-mode", "subscription",
 		"-review-auth-snapshot", reviewSnapshot, "-review-model", "gpt-5.6-codex",
 		"-review-instructions", reviewInstructions,
 		"-publication-state-dir", filepath.Join(root, "app-state"),
 		"-publication-credentials-dir", filepath.Join(root, "app-creds"),
-		"-review-reasoning-effort", "high", "-review-cost-owner", "subscription:operator",
+		"-review-reasoning-effort", "high",
 		"-task", taskPath, "-policy", policyPath, "-publication", publicationPath,
 		"-project", "project-test", "-allowed-paths", "daemon/**",
 	}
