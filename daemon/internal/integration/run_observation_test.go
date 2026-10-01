@@ -1009,6 +1009,126 @@ func TestRunObservationShowsAdmissionPolicyRefusal(t *testing.T) {
 	}
 }
 
+// TestHeldWorkNoticeReachesTheOperatorThroughSignet is issue #766 end to end
+// under unattended operation: a refusal hold that outlasts the threshold
+// surfaces through signet as a work_held notice on the run's task, signet
+// accepts the operator's acknowledgement, and the one notice stands unchanged
+// while the same hold lasts.
+func TestHeldWorkNoticeReachesTheOperatorThroughSignet(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := openUnattendedFixture(t)
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutDevice(ctx, domain.Device{
+			ID: deviceA, DisplayName: string(deviceA), Status: domain.DeviceActive,
+			PairedAt: time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC),
+		})
+	}); err != nil {
+		t.Fatalf("seed device: %v", err)
+	}
+	spec, policy, resolved := registerSubmissionArtifacts(t, f.store, "run-prod-held-notice")
+	submitted, err := engine.SubmitProductionRun(ctx, f.store, engine.ProductionRunSpec{
+		RunID: "run-prod-held-notice", ProjectID: "proj-prod",
+		SpecArtifactID: spec.ID, PolicyArtifactID: policy.ID,
+		ResolvedPolicy: resolved, Publication: productionPublicationMetadata(),
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	f.driver.Script(submitted.InvocationID, fake.StageScript{
+		Outcome: fake.OutcomeComplete, RunningInspects: 1,
+		Result: exec.StageResult{Summary: "completed after the profile was revised"},
+	})
+	if _, err := f.engine.Reconcile(ctx); err != nil {
+		t.Fatalf("dispatch reconcile: %v", err)
+	}
+	reviseWaivedTrustProfile(t, f.store)
+	if _, err := f.engine.Reconcile(ctx); err != nil {
+		t.Fatalf("refused reconcile: %v", err)
+	}
+	heldWorkNotices := func() []signet.AttentionItemSnapshot {
+		t.Helper()
+		items, err := f.signet.ListAttentionItems(ctx)
+		if err != nil {
+			t.Fatalf("list attention items: %v", err)
+		}
+		var notices []signet.AttentionItemSnapshot
+		for _, item := range items {
+			if item.Item.HealthDiagnostic != nil && item.Item.HealthDiagnostic.Code == "work_held" {
+				notices = append(notices, item)
+			}
+		}
+		return notices
+	}
+	if notices := heldWorkNotices(); len(notices) != 0 {
+		t.Fatalf("a fresh refusal hold raised %d notice(s)", len(notices))
+	}
+
+	// Age the hold well past the engine's 15-minute threshold without
+	// changing its cause, so the next refusing pass extends the same span.
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+		hold, found, err := tx.GetRunHold(ctx, submitted.Run.ID)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return errors.New("refused run has no hold")
+		}
+		first := hold.FirstObservedAt.Add(-time.Hour)
+		hold.FirstObservedAt, hold.LastObservedAt = first, first
+		if err := tx.ClearRunHold(ctx, submitted.Run.ID); err != nil {
+			return err
+		}
+		return tx.RecordRunHold(ctx, hold)
+	}); err != nil {
+		t.Fatalf("age the hold: %v", err)
+	}
+	// A fresh engine, as after a daemon restart, has no hold-pacing state.
+	reconcileFresh := func() {
+		t.Helper()
+		restarted, err := engine.New(f.store, f.signet, f.driver, unattendedProductionOptions(t)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := restarted.Reconcile(ctx); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+	reconcileFresh()
+	notices := heldWorkNotices()
+	if len(notices) != 1 {
+		t.Fatalf("held-work notices through signet = %d, want 1", len(notices))
+	}
+	notice := notices[0]
+	if notice.Item.Status != domain.StatusOpen || notice.Item.Subject.Type != domain.SubjectTask ||
+		notice.Item.Subject.ID != domain.SubjectID(submitted.Run.TaskID) ||
+		!strings.Contains(notice.Item.Reason, string(submitted.Run.ID)) ||
+		!strings.Contains(notice.Item.Reason, string(domain.HoldAdmissionPolicyRefused)) {
+		t.Fatalf("held-work notice = %+v", notice.Item)
+	}
+
+	if _, err := f.signet.Submit(ctx, signet.ClientCommand{
+		CommandID: "ack-held-work", DeviceID: deviceA, ExpectedEntityVersion: notice.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: notice.Item.ID, ItemVersion: notice.Item.ItemVersion,
+			PRHeadSHA: notice.Item.PRHeadSHA, ArtifactDigests: notice.Item.ArtifactDigests,
+			Action: domain.ActionAcknowledge,
+		},
+	}); err != nil {
+		t.Fatalf("acknowledge: %v", err)
+	}
+	reconcileFresh()
+	if observation := observeProductionRun(t, f.store, submitted.Run.ID); observation.Hold == nil {
+		t.Fatal("the run stopped holding; the standing-hold case was not exercised")
+	}
+	after := heldWorkNotices()
+	if len(after) != 1 || after[0].Item.ID != notice.Item.ID || after[0].Item.ItemVersion != 1 ||
+		after[0].Item.Status != domain.StatusOpen {
+		t.Fatalf("notices after acknowledgement and another pass = %+v, want only %s open at version 1",
+			after, notice.Item.ID)
+	}
+}
+
 // stoppingBackend commits an operator-visible blocking system_health item the
 // first time the engine probes its capabilities after the test arms it. The
 // probe runs inside dispatch, after the pass's operating-state pre-check and

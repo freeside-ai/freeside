@@ -64,6 +64,10 @@ var holdlessPauseExits = map[string]string{
 	// is no run to hold; the stop notice or the blocking item is already open.
 	"attention_discussion.go:Engine.attentionDiscussionHeld": "gates a conversation reply, which has no run to hold",
 
+	// Reads the cancellation fence to decide whether a held-work notice still
+	// applies. It pauses nothing: the hold it reports on is already recorded.
+	"held_work_notice.go:heldWorkTaskStopped": "reads the fence for the held-work notice; pauses no run",
+
 	// Listed for their errShadowReviewBlocksReady branch alone; the other
 	// branches record through holdBlockedTask. A shadow review waiting on its
 	// open item already shows that item, and no reason code fits the wait.

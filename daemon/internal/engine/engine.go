@@ -257,6 +257,11 @@ func (e *Engine) Reconcile(ctx context.Context) (ReconcileResult, error) {
 	if err != nil {
 		return ReconcileResult{}, fmt.Errorf("reconcile invocations: %w", err)
 	}
+	// After reconcileInvocations, which runs dispatch and every collector, so
+	// the sweep sees this pass's hold writes and clears.
+	if err := e.reconcileHeldWorkNotices(ctx); err != nil {
+		return ReconcileResult{}, fmt.Errorf("reconcile held-work notices: %w", err)
+	}
 	result := ReconcileResult{
 		RunTransitions:     runTransitions,
 		InvocationsStarted: started,
