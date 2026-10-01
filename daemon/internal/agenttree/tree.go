@@ -87,6 +87,21 @@ type Tree struct {
 	Lineup   []LineupLine
 }
 
+// Sort puts every slice but the lineup in the order Parse yields (file path
+// order), so a tree built in code compares equal to its own round trip. The
+// lineup keeps its authored order, which is the file's line order.
+func (t *Tree) Sort() {
+	slices.SortFunc(t.Agents, func(a, b domain.AgentSource) int { return strings.Compare(a.Name, b.Name) })
+	slices.SortStableFunc(t.Marks, func(a, b Mark) int {
+		return strings.Compare(a.Agent+markSuffix, b.Agent+markSuffix)
+	})
+	slices.SortFunc(t.Routes, func(a, b Route) int { return strings.Compare(a.Name, b.Name) })
+	slices.SortFunc(t.Adapters, func(a, b Adapter) int { return strings.Compare(a.Name, b.Name) })
+	slices.SortFunc(t.Offers, func(a, b Offer) int {
+		return strings.Compare(a.Route+"/"+a.Name, b.Route+"/"+b.Name)
+	})
+}
+
 // Revision is the content address of a tree revision's files, recorded on an
 // admission as its lineup revision. It covers the bytes, not the commit, so
 // a commit that leaves the tree alone keeps the revision.

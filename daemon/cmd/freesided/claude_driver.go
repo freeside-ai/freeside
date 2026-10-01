@@ -2000,7 +2000,12 @@ func runClaudeConformance(
 	if err != nil {
 		return err
 	}
-	return suite.Full(ctx)
+	if err := suite.Full(ctx); err != nil {
+		return err
+	}
+	// Only a passed ward suite reaches here, so an adapter record never
+	// outlives the runner proof it rests on.
+	return recordBaselineAdapterConformance(ctx, st, time.Now().UTC())
 }
 
 // claudeAdmissionDerivation supplies the per-attempt workspace, and the
