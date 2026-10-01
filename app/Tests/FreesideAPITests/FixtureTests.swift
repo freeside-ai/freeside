@@ -156,6 +156,32 @@ import Testing
         #expect(item.yield_history?.value1.terminal_outcome == .findings)
     }
 
+    @Test func diminishingFixtureCarriesRoundDiffMetricsWithAGap() throws {
+        let item = AttentionFixtures.fixture(type: .review_diminishing_returns).item
+        let rounds = try #require(item.yield_history?.value1.rounds)
+
+        #expect(rounds.map { $0.diff_metrics != nil } == [true, false, true])
+        let first = try #require(rounds[0].diff_metrics)
+        #expect(first.cumulative == first.round)
+        let last = try #require(rounds[2].diff_metrics)
+        #expect(last.cumulative.base_sha == first.cumulative.base_sha)
+        #expect(last.round.base_sha != last.cumulative.base_sha)
+        #expect(last.cumulative.head_sha == item.pr_head_sha)
+        #expect(last.round.head_sha == item.pr_head_sha)
+    }
+
+    @Test func roundDiffMetricsAreOmittedNotNullOnTheWire() throws {
+        let item = AttentionFixtures.fixture(type: .review_diminishing_returns).item
+        let data = try JSONEncoder().encode(item)
+        let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let history = try #require(object["yield_history"] as? [String: Any])
+        let rounds = try #require(history["rounds"] as? [[String: Any]])
+
+        #expect(rounds.map { $0.keys.contains("diff_metrics") } == [true, false, true])
+        let decoded = try JSONDecoder().decode(Components.Schemas.AttentionItem.self, from: data)
+        #expect(decoded.yield_history == item.yield_history)
+    }
+
     @Test func reviewDisputeFixtureCarriesRenderableFindingEvidence() {
         let item = AttentionFixtures.fixture(type: .review_dispute).item
         let claim = item.agent_claims.first { $0.label.hasPrefix("Shadow finding") }

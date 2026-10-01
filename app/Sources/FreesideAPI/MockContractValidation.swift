@@ -350,6 +350,28 @@ enum MockContractValidation {
                 if (round.outcome == .clean) != (round.findings_ingested == 0) {
                     return "review yield outcome disagrees with findings"
                 }
+                // diff_metrics mirrors the domain's pair validation: each
+                // pair is a valid DiffStats, both end at one head, and two
+                // pairs over the same base are the same comparison. Whether
+                // the bases match the run's review records is the daemon
+                // store's check; the app holds no records to check against.
+                if let metrics = round.diff_metrics {
+                    for stats in [metrics.cumulative, metrics.round] {
+                        if stats.files_changed < 0 || stats.additions < 0 || stats.deletions < 0
+                            || stats.base_sha.isEmpty || stats.head_sha.isEmpty
+                        {
+                            return "invalid review yield diff_metrics"
+                        }
+                    }
+                    if metrics.cumulative.head_sha != metrics.round.head_sha {
+                        return "review yield diff_metrics heads disagree"
+                    }
+                    if metrics.cumulative.base_sha == metrics.round.base_sha
+                        && metrics.cumulative != metrics.round
+                    {
+                        return "review yield diff_metrics pairs disagree over one comparison"
+                    }
+                }
                 previousRound = round.round
             }
             if history.terminal_outcome != history.rounds.last?.outcome {

@@ -7565,7 +7565,7 @@ public enum Components {
                 ])
             }
         }
-        /// The daemon-derived yield totals for one persisted routed-review round. New and recurring findings are classified by stable finding fingerprint against earlier rounds in the same reviewer-configuration segment; dispositions remain attributed to the round that produced the finding.
+        /// The daemon-derived yield totals for one persisted routed-review round. New and recurring findings are classified by stable finding fingerprint against earlier rounds in the same reviewer-configuration segment; dispositions remain attributed to the round that produced the finding. diff_metrics is omitted, never null, when nothing was recorded for the round: that is how a gap shows, and every round recorded before the field existed is one.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/ReviewYieldRound`.
@@ -7586,6 +7586,8 @@ public enum Components {
             public var deferred: Swift.Int
             /// - Remark: Generated from `#/components/schemas/ReviewYieldRound/outcome`.
             public var outcome: Components.Schemas.ReviewOutcome
+            /// - Remark: Generated from `#/components/schemas/ReviewYieldRound/diff_metrics`.
+            public var diff_metrics: Components.Schemas.ReviewRoundDiffMetrics?
             /// Creates a new `ReviewYieldRound`.
             ///
             /// - Parameters:
@@ -7597,6 +7599,7 @@ public enum Components {
             ///   - declined:
             ///   - deferred:
             ///   - outcome:
+            ///   - diff_metrics:
             public init(
                 round: Swift.Int,
                 findings_ingested: Swift.Int,
@@ -7605,7 +7608,8 @@ public enum Components {
                 fixed: Swift.Int,
                 declined: Swift.Int,
                 deferred: Swift.Int,
-                outcome: Components.Schemas.ReviewOutcome
+                outcome: Components.Schemas.ReviewOutcome,
+                diff_metrics: Components.Schemas.ReviewRoundDiffMetrics? = nil
             ) {
                 self.round = round
                 self.findings_ingested = findings_ingested
@@ -7615,6 +7619,7 @@ public enum Components {
                 self.declined = declined
                 self.deferred = deferred
                 self.outcome = outcome
+                self.diff_metrics = diff_metrics
             }
             public enum CodingKeys: String, CodingKey {
                 case round
@@ -7625,6 +7630,7 @@ public enum Components {
                 case declined
                 case deferred
                 case outcome
+                case diff_metrics
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -7660,6 +7666,10 @@ public enum Components {
                     Components.Schemas.ReviewOutcome.self,
                     forKey: .outcome
                 )
+                self.diff_metrics = try container.decodeIfPresent(
+                    Components.Schemas.ReviewRoundDiffMetrics.self,
+                    forKey: .diff_metrics
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "round",
                     "findings_ingested",
@@ -7668,7 +7678,49 @@ public enum Components {
                     "fixed",
                     "declined",
                     "deferred",
-                    "outcome"
+                    "outcome",
+                    "diff_metrics"
+                ])
+            }
+        }
+        /// One review round's daemon-computed diff shape as two named pairs (plan §7 Review Drift). cumulative compares the round's bound base with its candidate head. round compares the previous round's candidate head with this round's; the run's first round has no predecessor, so there it compares the bound base with the head and equals cumulative. Both pairs share one head. These are engine facts, never model output.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReviewRoundDiffMetrics`.
+        public struct ReviewRoundDiffMetrics: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ReviewRoundDiffMetrics/cumulative`.
+            public var cumulative: Components.Schemas.DiffStats
+            /// - Remark: Generated from `#/components/schemas/ReviewRoundDiffMetrics/round`.
+            public var round: Components.Schemas.DiffStats
+            /// Creates a new `ReviewRoundDiffMetrics`.
+            ///
+            /// - Parameters:
+            ///   - cumulative:
+            ///   - round:
+            public init(
+                cumulative: Components.Schemas.DiffStats,
+                round: Components.Schemas.DiffStats
+            ) {
+                self.cumulative = cumulative
+                self.round = round
+            }
+            public enum CodingKeys: String, CodingKey {
+                case cumulative
+                case round
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.cumulative = try container.decode(
+                    Components.Schemas.DiffStats.self,
+                    forKey: .cumulative
+                )
+                self.round = try container.decode(
+                    Components.Schemas.DiffStats.self,
+                    forKey: .round
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "cumulative",
+                    "round"
                 ])
             }
         }

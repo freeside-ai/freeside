@@ -3680,7 +3680,9 @@ components:
         round. New and recurring findings are classified by stable finding
         fingerprint against earlier rounds in the same reviewer-configuration
         segment; dispositions remain attributed to the round that produced
-        the finding.
+        the finding. diff_metrics is omitted, never null, when nothing was
+        recorded for the round: that is how a gap shows, and every round
+        recorded before the field existed is one.
       required:
         - round
         - findings_ingested
@@ -3715,6 +3717,38 @@ components:
           minimum: 0
         outcome:
           $ref: "#/components/schemas/ReviewOutcome"
+        diff_metrics:
+          $ref: "#/components/schemas/ReviewRoundDiffMetrics"
+
+    ReviewRoundDiffMetrics:
+      type: object
+      description: >
+        One review round's daemon-computed diff shape as two named pairs (plan
+        §7 Review Drift). cumulative compares the round's bound base with its
+        candidate head. round compares the previous round's candidate head
+        with this round's; the run's first round has no predecessor, so there
+        it compares the bound base with the head and equals cumulative. Both
+        pairs share one head. These are engine facts, never model output.
+      additionalProperties: false
+      required: [cumulative, round]
+      properties:
+        cumulative:
+          $ref: "#/components/schemas/DiffStats"
+        round:
+          $ref: "#/components/schemas/DiffStats"
+      example:
+        cumulative:
+          files_changed: 6
+          additions: 210
+          deletions: 14
+          base_sha: "deadbeef"
+          head_sha: "cafebabe"
+        round:
+          files_changed: 2
+          additions: 35
+          deletions: 3
+          base_sha: "4e5f6a7b"
+          head_sha: "cafebabe"
 
     ReviewYieldHistory:
       type: object
