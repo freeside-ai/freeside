@@ -2279,3 +2279,39 @@ decisions of 2026-09-23 made in this revision's review;
 
 (Owner decision of 2026-09-29;
 [decision note](../../devlog/2026-09-29-0913-capacity-wave-placement.md).)
+
+## Revision 75 ("Filing Recovery Never Retries an Unproven Create")
+
+1. **Follow-up filing recovery adopts the comment rule.** Section
+   [5.17](../plan.md#517-follow-up-issue-filing) no longer lets recovery prove absence
+   before retrying. GitHub offers no idempotency key for issue creation, and
+   a listing can lag, so an empty listing cannot show that a create failed. A
+   create now needs the evidence Section
+   [5.11](../plan.md#511-github-integration-reconciliation-plus-intake) requires for the
+   approved-specification comment: no dispatch-started marker, or a recorded
+   definite rejection. A definite rejection, or a transient one whose retry
+   bound is spent, ends in a terminal `refused` outcome. An unproven attempt
+   with no candidate after the settle interval, two or more candidates, or an
+   incomplete listing is residual ambiguity: a terminal `ambiguous` outcome
+   for the creation intent and a `system_health` item. An intent adopts a
+   candidate only after its own first dispatch, since before it any candidate
+   is foreign. It records the IDs of candidates it saw before that dispatch,
+   the Section [5.11](../plan.md#511-github-integration-reconciliation-plus-intake)
+   pre-dispatch ID set, and never adopts one of them, so a foreign issue
+   cannot be adopted after a rejected or unproven dispatch. The intent window
+   still bounds a candidate. Rejected: keeping "proves absence" (it names no mechanism, and
+   none exists).
+2. **An ambiguous filing releases the repository but ends adoption there.**
+   Any terminal outcome ends the repository's outstanding intent, so later
+   filings go ahead. Because the ambiguous create may still commit and its
+   issue would pass a later intent's candidate validation, no later intent in
+   that repository adopts a candidate at any step; an unproven attempt there
+   is residual ambiguity at once. Rejected: blocking the repository
+   until a human settles the intent (it needs a new human action on the item,
+   an API and client change outside this revision); and adopting as before
+   (a late stray could be ledgered to the wrong proposal, and intake trusts
+   the ledger).
+
+(Owner-assigned #1441. The rule is the issue plan's recommendation, decided
+by the owner through this revision's review;
+[decision note](../../devlog/2026-09-30-1530-filing-recovery-rule.md).)
