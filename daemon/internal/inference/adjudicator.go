@@ -72,6 +72,11 @@ type FindingAdjudicationInput struct {
 	PriorEntries              []domain.FindingAdjudicationEntry
 	Dissent                   *AdjudicationDissent
 	Feedback                  *AdjudicationFeedback
+	// DiffMetrics is the round's diff shape (plan §7 Review Drift), nil when
+	// nothing was recorded for the round. Call does not send it yet: the site's
+	// field allowlist, the request map, and the Claude driver's field-count
+	// check have to change together, and that is the metrics floor unit (#1049).
+	DiffMetrics *domain.ReviewRoundDiffMetrics
 }
 
 type adjudicatorOutput struct {
