@@ -95,6 +95,7 @@ func TestProductionReviewUpgradePreservesRequestTime(t *testing.T) {
 				"DROP TABLE auth_store_read_holds",
 				"DROP TABLE review_round_diff_metrics",
 				"DROP TABLE drift_audits",
+				"DROP TABLE finding_disposition_supersessions",
 				"DELETE FROM schema_migrations WHERE version >= 67",
 			} {
 				if _, err := raw.ExecContext(p.ctx, query); err != nil {
