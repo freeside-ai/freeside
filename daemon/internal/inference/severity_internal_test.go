@@ -17,9 +17,27 @@ func TestAnnotateSiteCarriesExactlyOneAuthorityContract(t *testing.T) {
 		t.Fatal("annotate site accepted multiple authority contracts")
 	}
 	site.Annotation = nil
+	site.DriftAudit = DriftAuditorSite(budget).DriftAudit
+	if err := site.validate(); err == nil {
+		t.Fatal("annotate site accepted a drift audit contract beside another")
+	}
 	site.Adjudication = nil
+	if err := site.validate(); err != nil {
+		t.Fatalf("annotate site with one drift audit contract: %v", err)
+	}
+	site.DriftAudit = nil
 	if err := site.validate(); err == nil {
 		t.Fatal("annotate site accepted no authority contract")
+	}
+	site = DriftAuditorSite(budget)
+	site.DriftAudit.Verdicts = append(site.DriftAudit.Verdicts, "simplify")
+	if err := site.validate(); err == nil {
+		t.Fatal("drift audit contract accepted a verdict outside the domain")
+	}
+	explain := PublicationAuthorExplainSite(budget)
+	explain.DriftAudit = DriftAuditorSite(budget).DriftAudit
+	if err := explain.validate(); err == nil {
+		t.Fatal("non-annotation site accepted a drift audit contract")
 	}
 }
 

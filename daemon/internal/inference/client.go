@@ -112,6 +112,20 @@ func New(cfg Config) (*Client, error) {
 			)
 			site.Adjudication = &adjudication
 		}
+		if site.DriftAudit != nil {
+			driftAudit := *site.DriftAudit
+			driftAudit.Verdicts = append([]string(nil), driftAudit.Verdicts...)
+			driftAudit.Confidence = append([]string(nil), driftAudit.Confidence...)
+			driftAudit.ReducesWork = append([]string(nil), driftAudit.ReducesWork...)
+			driftAudit.SeverityMappings = append([]SeverityMapping(nil), driftAudit.SeverityMappings...)
+			driftAudit.NormalizedSeverityCeilings = append(
+				[]SeverityCeiling(nil), driftAudit.NormalizedSeverityCeilings...,
+			)
+			driftAudit.SecondAdjudicationRules = append(
+				[]SecondAdjudicationRule(nil), driftAudit.SecondAdjudicationRules...,
+			)
+			site.DriftAudit = &driftAudit
+		}
 		sites[site.ID] = site
 	}
 	ledger, err := openLedger(cfg.StatePath, cfg.AnchorPath, cfg.Now)

@@ -154,6 +154,22 @@ type AdjudicationRow struct {
 	UsesEngineCompatibility bool
 }
 
+// DriftAuditContract is the inspectable behavioral lattice and ceilings for
+// the drift-auditor annotation site (plan §7 Review Drift). The lattice is the
+// verdict and the auditor's confidence in it; the reversal list is not a third
+// axis, because the verdict fixes its cardinality. The severity ceilings are
+// the classifier's, unchanged (plan §5.13); plan §7 applies them to a reversal
+// that names a critical or high finding.
+type DriftAuditContract struct {
+	Verdicts                   []string
+	Confidence                 []string
+	ReducesWork                []string
+	SeverityMappings           []SeverityMapping
+	UnknownSeverityFallback    string
+	NormalizedSeverityCeilings []SeverityCeiling
+	SecondAdjudicationRules    []SecondAdjudicationRule
+}
+
 // Site is the complete authority and resource contract for one call site.
 type Site struct {
 	ID              string
@@ -169,6 +185,7 @@ type Site struct {
 	AuditEvery      int64
 	Annotation      *AnnotationContract
 	Adjudication    *AdjudicationContract
+	DriftAudit      *DriftAuditContract
 	ValidateOutput  func([]byte) error
 }
 
@@ -205,10 +222,16 @@ func (s Site) validate() error {
 				return err
 			}
 		}
+		if s.DriftAudit != nil {
+			contracts++
+			if err := s.DriftAudit.validate(); err != nil {
+				return err
+			}
+		}
 		if contracts != 1 {
 			return errors.New("annotation site must carry exactly one authority contract")
 		}
-	} else if s.Annotation != nil || s.Adjudication != nil {
+	} else if s.Annotation != nil || s.Adjudication != nil || s.DriftAudit != nil {
 		return errors.New("non-annotation site carries annotation authority contract")
 	}
 	return nil
@@ -306,6 +329,32 @@ func (c *AdjudicationContract) validate() error {
 		!slices.Equal(c.NormalizedSeverityCeilings, classifier.NormalizedSeverityCeilings) ||
 		!slices.Equal(c.SecondAdjudicationRules, classifier.SecondAdjudicationRules) {
 		return errors.New("adjudication severity ceilings diverge from classifier")
+	}
+	return nil
+}
+
+func (c *DriftAuditContract) validate() error {
+	if c == nil || len(c.Verdicts) == 0 || len(c.Confidence) == 0 || len(c.ReducesWork) == 0 ||
+		len(c.SeverityMappings) == 0 || c.UnknownSeverityFallback == "" ||
+		len(c.NormalizedSeverityCeilings) == 0 || len(c.SecondAdjudicationRules) == 0 {
+		return errors.New("invalid drift audit contract")
+	}
+	// The lattice is the domain's, as the adjudicator's rows are: a site
+	// cannot declare a verdict or confidence the artifact would refuse.
+	if !slices.Equal(c.Verdicts, driftAuditVerdicts()) || !slices.Equal(c.Confidence, driftAuditConfidences()) {
+		return errors.New("drift audit lattice diverges from domain")
+	}
+	for _, verdict := range c.ReducesWork {
+		if !slices.Contains(c.Verdicts, verdict) {
+			return errors.New("work-reducing output is outside drift audit lattice")
+		}
+	}
+	classifier := ClassifierSite(Budget{}).Annotation
+	if !slices.Equal(c.SeverityMappings, classifier.SeverityMappings) ||
+		c.UnknownSeverityFallback != classifier.UnknownSeverityFallback ||
+		!slices.Equal(c.NormalizedSeverityCeilings, classifier.NormalizedSeverityCeilings) ||
+		!slices.Equal(c.SecondAdjudicationRules, classifier.SecondAdjudicationRules) {
+		return errors.New("drift audit severity ceilings diverge from classifier")
 	}
 	return nil
 }
