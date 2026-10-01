@@ -332,6 +332,15 @@ var (
 		"lineup shadow line names a ward role; only a wardless role takes one")
 	ErrLineupShadowLimit = errors.New(
 		"lineup carries more than one shadow line for a role")
+	ErrRoleNotWardless = errors.New(
+		"role is not a wardless role")
+	ErrLineupSelectionMismatch = errors.New(
+		"resolved agent or prompt digest is not the one the lineup line names")
+	// ErrCallLaunchUnproved classifies the wardless Proved-step refusals of a
+	// well-formed input: no launch proof, or a proof that does not cover the
+	// agent's adapter build. A malformed proof fails with its field's error.
+	ErrCallLaunchUnproved = errors.New(
+		"adapter build has no proof that its call launch runs with no tools")
 	ErrAdmissionDerivationMismatch = errors.New(
 		"admission's derived fields disagree with its admitted agent closure")
 
