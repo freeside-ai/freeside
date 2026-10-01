@@ -231,9 +231,10 @@ type OfferFragment struct {
 	// RouteModelID is the model identifier as the route's protocol names it.
 	RouteModelID string `json:"route_model_id"`
 	// LineageGroup is the vendor-family lineage the §7 review-independence
-	// rule compares (curated conservatively; the same weights through any
-	// route are one group; empty means unknown, which fails that rule
-	// closed).
+	// record compares (curated conservatively; the same weights through any
+	// route are one group). Independence is a recorded fact and never an
+	// admission gate (plan revision 65): a same-lineage pairing is recorded,
+	// and empty means unknown, which is recorded as unknown.
 	LineageGroup      string            `json:"lineage_group"`
 	IdentityStability IdentityStability `json:"identity_stability"`
 	AllowedEfforts    []EffortLevel     `json:"allowed_efforts"`
@@ -274,8 +275,8 @@ func (f OfferFragment) ComputeDigest() (Digest, error) {
 
 // Validate reports whether the fragment is well-formed and its digest
 // authentic. LineageGroup may be empty — unknown lineage is a legal authored
-// state that the review-independence rule fails closed on, not a malformed
-// document.
+// state that the review-independence record carries as unknown, not a
+// malformed document, and nothing gates on it.
 func (f OfferFragment) Validate() error {
 	if f.EncodingVersion != AgentFragmentEncodingVersion {
 		return fmt.Errorf("offer fragment encoding_version %d: %w", f.EncodingVersion, ErrAgentEncodingVersion)
