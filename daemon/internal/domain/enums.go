@@ -2198,6 +2198,59 @@ func (c AdjudicationConfidence) meets(t DispatchThreshold) bool {
 	return c.rank() >= t.rank()
 }
 
+// DriftVerdict is a drift audit's judgment of the change as a whole against
+// the approved specification (plan §7 Review Drift). The verdict fixes the
+// reversal list's cardinality: over_hardened names what to undo, converged and
+// stuck name nothing (DriftAudit.Validate). The zero value is invalid by
+// design.
+type DriftVerdict string
+
+const (
+	DriftVerdictConverged    DriftVerdict = "converged"
+	DriftVerdictOverHardened DriftVerdict = "over_hardened"
+	DriftVerdictStuck        DriftVerdict = "stuck"
+)
+
+// AllDriftVerdicts lists every valid DriftVerdict.
+var AllDriftVerdicts = []DriftVerdict{
+	DriftVerdictConverged, DriftVerdictOverHardened, DriftVerdictStuck,
+}
+
+func (v DriftVerdict) valid() bool {
+	switch v {
+	case DriftVerdictConverged, DriftVerdictOverHardened, DriftVerdictStuck:
+		return true
+	default:
+		return false
+	}
+}
+
+// DriftAuditRoute is the resolved review.drift_audit_route policy value: how
+// an over_hardened verdict routes (plan §7 Review Drift). auto allows the
+// run's one automatic simplification round; park always opens the attention
+// item. The zero value is invalid by design; an unset key resolves to auto.
+type DriftAuditRoute string
+
+const (
+	DriftAuditRouteAuto DriftAuditRoute = "auto"
+	DriftAuditRoutePark DriftAuditRoute = "park"
+)
+
+// DefaultDriftAuditRoute is the recorded default (plan §13, revision 45).
+var DefaultDriftAuditRoute = DriftAuditRouteAuto
+
+// AllDriftAuditRoutes lists every valid DriftAuditRoute.
+var AllDriftAuditRoutes = []DriftAuditRoute{DriftAuditRouteAuto, DriftAuditRoutePark}
+
+func (r DriftAuditRoute) valid() bool {
+	switch r {
+	case DriftAuditRouteAuto, DriftAuditRoutePark:
+		return true
+	default:
+		return false
+	}
+}
+
 // DispatchThreshold is the resolved-policy dispatch threshold the not-accepted
 // predicate takes as a parameter, bounded below to `medium` or `high` (never
 // `low`) and defaulting to `high` (plan §7). Resolving it from a policy key is

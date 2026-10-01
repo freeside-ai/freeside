@@ -227,6 +227,10 @@ var (
 	ErrAdjudicationConfidenceMisplaced    = errors.New("proposal confidence must be present exactly on model-backed adjudication entries")
 	ErrFindingAdjudicationInconsistent    = errors.New("finding adjudication fields are internally inconsistent")
 	ErrFindingAdjudicationDigestMismatch  = errors.New("finding adjudication digest does not match its canonical content")
+	ErrInvalidDriftVerdict                = errors.New("invalid drift-audit verdict")
+	ErrInvalidDriftAuditRoute             = errors.New("invalid drift-audit route")
+	ErrDriftAuditInconsistent             = errors.New("drift audit fields are internally inconsistent")
+	ErrDriftAuditDigestMismatch           = errors.New("drift audit digest does not match its canonical content")
 	ErrPublicationAuthoringInconsistent   = errors.New("publication authoring fields are internally inconsistent")
 	ErrPublicationAuthoringDigestMismatch = errors.New("publication authoring digest does not match its canonical content")
 
