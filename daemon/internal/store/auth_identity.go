@@ -136,6 +136,8 @@ SELECT provider, account_binding, usage_pool, budget, auth_store_mutation_lease,
        auth_store_volume, max_parallel_executions, refresh_strategy,
        supports_read_only_auth_snapshot, enabled, cost_owner, recorded_at, body
 FROM auth_identities WHERE id = ?`
+	listAuthIdentityIDsSQL = `
+SELECT id FROM auth_identities ORDER BY id`
 	accountBindingHolderSQL = `
 SELECT id FROM auth_identities WHERE account_binding = ? AND id <> ?`
 
@@ -299,6 +301,46 @@ func (tx *InternalTx) requireForwardRevision(
 func (tx *ReadTx) authIdentityRecordedAt(ctx context.Context, id domain.AuthIdentityID) (time.Time, error) {
 	_, recordedAt, err := tx.getAuthIdentityRecord(ctx, id)
 	return recordedAt, err
+}
+
+// ListAuthIdentities reconstructs every identity declaration in id order.
+// Each row goes through GetAuthIdentity, so a listed identity carries exactly
+// the cross-checks a single read does, and one inconsistent row fails the
+// whole listing rather than being skipped.
+func (tx *ReadTx) ListAuthIdentities(ctx context.Context) ([]domain.AuthIdentity, error) {
+	ids, err := queryIDs[domain.AuthIdentityID](ctx, tx, listAuthIdentityIDsSQL)
+	if err != nil {
+		return nil, fmt.Errorf("list auth identities: %w", err)
+	}
+	identities := make([]domain.AuthIdentity, 0, len(ids))
+	for _, id := range ids {
+		identity, err := tx.GetAuthIdentity(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("list auth identities: %w", err)
+		}
+		identities = append(identities, identity)
+	}
+	return identities, nil
+}
+
+// queryIDs collects one string-keyed id column in full before the caller
+// reconstructs each row: the transaction holds one connection, so a nested
+// read cannot run while these rows are still open.
+func queryIDs[T ~string](ctx context.Context, tx *ReadTx, query string, args ...any) ([]T, error) {
+	rows, err := tx.tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var ids []T
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, T(id))
+	}
+	return ids, rows.Err()
 }
 
 // GetAuthIdentity reconstructs one identity declaration, cross-checking the

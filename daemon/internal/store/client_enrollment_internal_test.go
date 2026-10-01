@@ -275,6 +275,92 @@ WHERE id = 'enroll-1'`); err != nil {
 	})
 }
 
+// TestListIdentitiesAndEnrollments pins the list reads: each row
+// reconstructs through its single-row read, so the re-gate that refuses a
+// tampered enrollment there refuses the listing too.
+func TestListIdentitiesAndEnrollments(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("lists in id order", func(t *testing.T) {
+		s := openEnrollmentStore(t)
+		recordEnrollmentFixtures(t, s)
+		interim := domain.AuthIdentity{
+			ID: "auth-0", Provider: "claude", AuthStoreMutationLease: true,
+			MaxParallelExecutions: 1, Enabled: true,
+			Interim: domain.InterimClientFacts{
+				AuthStoreVolume: "claude-auth", RefreshStrategy: domain.RefreshOnDemand,
+			},
+		}
+		if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+			return tx.RecordAuthIdentity(ctx, interim, time.Date(2026, 1, 2, 3, 0, 0, 0, time.UTC))
+		}); err != nil {
+			t.Fatalf("record interim identity: %v", err)
+		}
+		var identities []domain.AuthIdentity
+		var enrolled, none []domain.ClientEnrollment
+		if err := s.Read(ctx, func(tx *ReadTx) error {
+			var err error
+			if identities, err = tx.ListAuthIdentities(ctx); err != nil {
+				return err
+			}
+			if enrolled, err = tx.ListClientEnrollments(ctx, "auth-1"); err != nil {
+				return err
+			}
+			none, err = tx.ListClientEnrollments(ctx, "auth-0")
+			return err
+		}); err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if len(identities) != 2 || identities[0] != interim || identities[1] != enrollmentIdentity() {
+			t.Fatalf("identities = %+v", identities)
+		}
+		if len(enrolled) != 1 || enrolled[0] != codexEnrollment() {
+			t.Fatalf("enrollments = %+v", enrolled)
+		}
+		if len(none) != 0 {
+			t.Fatalf("interim identity enrollments = %+v, want none", none)
+		}
+	})
+
+	t.Run("an enrollment failing the re-gate fails the listing", func(t *testing.T) {
+		s := openEnrollmentStore(t)
+		recordEnrollmentFixtures(t, s)
+		// The identity loses its binding coherently (column and body): the
+		// enrollment row it still owns must not reconstruct.
+		if _, err := s.db.ExecContext(ctx, `
+UPDATE auth_identities
+SET account_binding = '',
+    body = json_set(body, '$.identity.account_binding', '')
+WHERE id = 'auth-1'`); err != nil {
+			t.Fatalf("tamper: %v", err)
+		}
+		err := s.Read(ctx, func(tx *ReadTx) error {
+			_, err := tx.ListClientEnrollments(ctx, "auth-1")
+			return err
+		})
+		if !errors.Is(err, domain.ErrAccountBindingMismatch) {
+			t.Fatalf("listing = %v, want %v", err, domain.ErrAccountBindingMismatch)
+		}
+	})
+
+	t.Run("an inconsistent identity row fails the listing", func(t *testing.T) {
+		s := openEnrollmentStore(t)
+		recordEnrollmentFixtures(t, s)
+		if _, err := s.db.ExecContext(ctx, `
+UPDATE auth_identities SET cost_owner = 'someone-else' WHERE id = 'auth-1'`); err != nil {
+			t.Fatalf("tamper: %v", err)
+		}
+		err := s.Read(ctx, func(tx *ReadTx) error {
+			_, err := tx.ListAuthIdentities(ctx)
+			return err
+		})
+		if !errors.Is(err, errRowInconsistent) {
+			t.Fatalf("listing = %v, want %v", err, errRowInconsistent)
+		}
+	})
+}
+
 // TestAccountBindingUnique pins the §5.4 one-account-one-identity rule: a
 // second identity claiming a bound account is a typed refusal.
 func TestAccountBindingUnique(t *testing.T) {

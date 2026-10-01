@@ -461,6 +461,83 @@ that ran cleanly, or to 1. The
 [decision note](../devlog/2026-09-28-1220-identity-limit-rollout.md) records
 why this rollout check replaced the provider-overlap experiment.
 
+### Enroll An Agent Credential
+
+`freesided auth add` enrolls one harness client (`codex_cli` or
+`claude_code`) for a new or existing auth identity. It records the identity,
+binds it to one subscription account, records a client enrollment for the
+route, authors the credential store, and appends the enrollment's first store
+generation, all under the identity's mutation lease. Stop `freesided` first;
+like `enroll-codex`, it refuses a database the daemon holds.
+
+The enrollment id is `<auth-identity>/<client>`, one per identity and client.
+Every enrolled identity has a cost owner: name `-cost-owner` when the identity
+is created, or when an existing identity still has none. After that, name the
+same one or none. The account binding is set once: a second identity for the
+same account, or an identity bound to a different account, refuses. A client that already has a store generation refuses too; replacing
+an enrolled store is re-enrollment, not `auth add`.
+
+**Codex.** Pass the `enroll-codex` input and store flags (see
+[Enroll A Codex Subscription Identity](#enroll-a-codex-subscription-identity))
+plus the client, route, and cost owner. The sequence is the one `enroll-codex`
+runs: it spends the same refresh token and leaves the same recovery item to
+resolve before the identity runs. It reads the account from the login's
+`tokens.account_id` and refuses a login without one.
+
+```sh
+freesided auth add \
+  -db /path/to/freeside.db -client codex_cli \
+  -auth-identity codex-primary -route openai-subscription -cost-owner <owner> \
+  -project <project-id> \
+  -input-root /path/to/codex-enrollment-input \
+  -input-file /path/to/codex-enrollment-input/auth.json \
+  -auth-store-root /path/to/freeside/review-inputs \
+  -auth-store /path/to/freeside/review-inputs/codex-primary.json \
+  -approved-recipe sha256:<approved-verify-recipe-digest>
+```
+
+**Claude.** Run `claude setup-token` and give the printed token on standard
+input, never as an argument: at a terminal the command prompts without echo,
+and from a pipe it reads one line. The token must be a setup token
+(`sk-ant-oat…`); an API key refuses. `-account` is your attestation of the
+subscription account the token belongs to, since the pinned CLI exposes no
+account identity to read. The command creates `-auth-volume`, which must not
+exist yet, writes the token as the single root-owned `0400` file the
+`setup_token` manifest policy requires, and proves that shape with the same
+observer preflight runs before it records the generation. Any failure after
+the volume is created deletes it; the recorded enrollment stays, and rerunning
+the same command retries it.
+
+```sh
+claude setup-token   # copy the printed token
+freesided auth add \
+  -db /path/to/freeside.db -client claude_code \
+  -auth-identity claude-main -route anthropic-subscription -cost-owner <owner> \
+  -account <subscription-account> -auth-volume freeside-claude-main-auth \
+  -exporter-image <digest-pinned-exporter-image>
+```
+
+The token is not checked against the provider: `claude auth status` reports
+only local state, so a bad or revoked token fails closed at its first use.
+A provider probe is tracked in #1647. The identity also records the
+volume in the interim facts the daemon reads today, so start the daemon and
+preflight with the same `-auth-identity` and `-auth-volume`. `auth add` cannot
+enroll a Claude identity whose volume already exists; adopting an existing
+volume is part of the #867 cutover, which also retires `enroll-codex` in
+favour of `auth add`.
+
+### List Agent Credentials
+
+`freesided auth list -db /path/to/freeside.db` prints every auth identity with
+its enrollments as JSON. It works whether the daemon is stopped or running.
+Each identity shows its provider, cost owner, limits, and a `label` that masks
+the account binding to its last four characters; each enrollment shows its
+client, route, auth method, and current store generation, with a null
+generation for an enrollment whose bootstrap never completed. It prints no
+token, store content, or full account binding. A stored identity or enrollment
+that fails its account-binding re-check refuses the whole listing rather than
+showing a credential the store would not create.
+
 ### Enroll A Codex Subscription Identity
 
 `freesided enroll-codex` bootstraps a Codex subscription identity and repairs

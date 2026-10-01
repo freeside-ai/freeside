@@ -503,7 +503,7 @@ func TestEnrollmentAdapterCreatesExclusiveRecoverableOperation(t *testing.T) {
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "/private/auth/codex.json", RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true},
 	}
 	lease, err := adapters.Enrollment.Begin(
-		ctx, identity, "project-1", "enrollment-holder", at, at.Add(time.Minute),
+		ctx, identity, "project-1", "enrollment-holder", nil, at, at.Add(time.Minute),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -522,7 +522,7 @@ func TestEnrollmentAdapterCreatesExclusiveRecoverableOperation(t *testing.T) {
 	digest := domain.Digest("sha256:rotated-auth-store")
 	expiresAt := at.Add(4 * time.Hour)
 	if err := adapters.Enrollment.Verify(
-		ctx, identity.ID, lease.Holder, lease.Fence, digest, expiresAt, at.Add(2*time.Second),
+		ctx, identity.ID, lease.Holder, lease.Fence, digest, expiresAt, at.Add(2*time.Second), nil,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -547,7 +547,7 @@ func TestEnrollmentAdapterCreatesExclusiveRecoverableOperation(t *testing.T) {
 		t.Fatalf("release verified enrollment lease: %v", err)
 	}
 	if _, err := adapters.Enrollment.Begin(
-		ctx, identity, "project-1", "replacement-holder", at.Add(3*time.Second), at.Add(time.Minute),
+		ctx, identity, "project-1", "replacement-holder", nil, at.Add(3*time.Second), at.Add(time.Minute),
 	); err != nil {
 		t.Fatalf("begin replacement after projected binding: %v", err)
 	}
@@ -581,7 +581,7 @@ func TestEnrollmentAdapterRefusesChangedIdentityBindings(t *testing.T) {
 	changed := stored
 	changed.Interim.AuthStoreVolume = "/private/auth/rebound.json"
 	if _, err := adapters.Enrollment.Begin(
-		ctx, changed, "project-1", "enrollment-holder", at, at.Add(time.Minute),
+		ctx, changed, "project-1", "enrollment-holder", nil, at, at.Add(time.Minute),
 	); !errors.Is(err, domain.ErrImmutableTransition) {
 		t.Fatalf("changed identity binding = %v, want immutable transition", err)
 	}

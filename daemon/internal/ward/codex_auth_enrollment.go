@@ -60,6 +60,7 @@ type CodexAuthEnrollmentJournal interface {
 		identity domain.AuthIdentity,
 		projectID domain.ProjectID,
 		holder domain.InvocationID,
+		bootstrap *EnrollmentBootstrap,
 		now, expiresAt time.Time,
 	) (domain.AuthStoreMutationLease, error)
 	Fail(
@@ -77,6 +78,7 @@ type CodexAuthEnrollmentJournal interface {
 		fence int64,
 		digest domain.Digest,
 		expiresAt, verifiedAt time.Time,
+		generation *domain.EnrollmentGeneration,
 	) error
 	RecoverableVerified(
 		ctx context.Context,
@@ -96,6 +98,10 @@ type CodexAuthEnrollmentConfig struct {
 	AuthStorePath  string
 	AuthIdentityID domain.AuthIdentityID
 	ProjectID      domain.ProjectID
+	// Enrollment, when set, also records the identity's Codex client
+	// enrollment and its first generation (freesided auth add). Unset, the
+	// sequence and its stored state are exactly enroll-codex's.
+	Enrollment *CodexClientEnrollmentRequest
 
 	Journal         CodexAuthEnrollmentJournal
 	AuthStoreLeaser AuthStoreLeaser
@@ -108,6 +114,17 @@ type CodexAuthEnrollmentConfig struct {
 	AccessTokenRefreshThreshold time.Duration
 }
 
+// CodexClientEnrollmentRequest names the enrollment a Codex login creates. The
+// account binding is not an input: it is read from the login itself, so the
+// enrollment can only ever bind the account whose credential it stores.
+type CodexClientEnrollmentRequest struct {
+	EnrollmentID domain.ClientEnrollmentID
+	Route        string
+	// CostOwner is recorded on a new identity, and on an existing one whose
+	// cost owner is still empty; a different recorded owner refuses.
+	CostOwner string
+}
+
 // CodexAuthEnrollmentResult contains only the durable, non-secret recovery
 // coordinates an operator needs to finish the command-backed resolution.
 type CodexAuthEnrollmentResult struct {
@@ -118,6 +135,8 @@ type CodexAuthEnrollmentResult struct {
 	AccessTokenExpiresAt time.Time             `json:"access_token_expires_at"`
 	AttentionItemID      domain.ItemID         `json:"attention_item_id"`
 	AttentionItemVersion int                   `json:"attention_item_version"`
+	// EnrollmentID is set only when the sequence recorded an enrollment.
+	EnrollmentID domain.ClientEnrollmentID `json:"enrollment_id,omitempty"`
 }
 
 // EnrollCodexAuth seeds or replaces one Codex host auth store, deliberately
@@ -158,6 +177,17 @@ func EnrollCodexAuth(
 	if recovered, found, err := cfg.Journal.RecoverableVerified(ctx, identity); err != nil {
 		return CodexAuthEnrollmentResult{}, fmt.Errorf("recover verified Codex re-enrollment: %w", err)
 	} else if found {
+		if cfg.Enrollment != nil {
+			// Recovery only re-projects an earlier verified replacement, so
+			// finishing it here would report an enrollment this run did not
+			// create. That earlier run may have been an auth add whose
+			// generation committed with its verify, so the operator checks
+			// auth list before enrolling again.
+			return CodexAuthEnrollmentResult{}, errors.New(
+				"a verified Codex enrollment awaits recovery; finish it with enroll-codex and " +
+					"resolve its item. If auth list then shows this client enrolled, the earlier " +
+					"run recorded it; otherwise enroll from a fresh login")
+		}
 		result, ok, err := recoverVerifiedCodexAuthEnrollment(
 			ctx, cfg, storeRoot, storePath, recovered,
 		)
@@ -189,6 +219,29 @@ func EnrollCodexAuth(
 		*inputAuth.Tokens.RefreshToken == "" {
 		return CodexAuthEnrollmentResult{}, errors.New("enrollment auth.json is not a refreshable Codex subscription login")
 	}
+	var bootstrap *EnrollmentBootstrap
+	if cfg.Enrollment != nil {
+		if inputAuth.Tokens.AccountID == nil || *inputAuth.Tokens.AccountID == "" {
+			return CodexAuthEnrollmentResult{}, errors.New(
+				"enrollment auth.json carries no account id, so the enrollment cannot bind its account")
+		}
+		identity.AccountBinding = *inputAuth.Tokens.AccountID
+		identity.CostOwner = cfg.Enrollment.CostOwner
+		bootstrap = &EnrollmentBootstrap{
+			Enrollment: domain.ClientEnrollment{
+				ID: cfg.Enrollment.EnrollmentID, AuthIdentityID: cfg.AuthIdentityID,
+				HarnessClient: domain.HarnessClientCodexCLI, Route: cfg.Enrollment.Route,
+				AuthMethod:      domain.AuthMethodOAuth,
+				CredentialMode:  domain.CredentialSubscriptionContained,
+				RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
+				AccountBinding: identity.AccountBinding,
+			},
+			Binding: domain.LeaseGenerationBinding{
+				EnrollmentID: cfg.Enrollment.EnrollmentID, AuthStoreVolume: storePath,
+				StoreManifestDigest: domain.Digest(contentaddr.Sum(inputBody)),
+			},
+		}
+	}
 	owner, err := newOwnershipLabel()
 	if err != nil {
 		return CodexAuthEnrollmentResult{}, errors.New("mint Codex auth enrollment holder")
@@ -196,7 +249,7 @@ func EnrollCodexAuth(
 	holder := domain.InvocationID("codex-auth-enrollment-" + owner.Value)
 	now := cfg.Now()
 	lease, err := cfg.Journal.Begin(
-		ctx, identity, cfg.ProjectID, holder, now, now.Add(cfg.LeaseDuration),
+		ctx, identity, cfg.ProjectID, holder, bootstrap, now, now.Add(cfg.LeaseDuration),
 	)
 	if err != nil {
 		return CodexAuthEnrollmentResult{}, fmt.Errorf("begin Codex auth enrollment: %w", err)
@@ -333,8 +386,17 @@ func EnrollCodexAuth(
 		return fail(CodexAuthEnrollmentVerificationFailed, err)
 	}
 	digest := domain.Digest(contentaddr.Sum(rotatedBody))
+	var generation *domain.EnrollmentGeneration
+	if bootstrap != nil {
+		generation = &domain.EnrollmentGeneration{
+			EnrollmentID: bootstrap.Enrollment.ID, AuthStoreVolume: storePath,
+			StoreManifestDigest: digest, LeaseFence: lease.Fence,
+			AccountBinding: bootstrap.Enrollment.AccountBinding,
+			TokenExpiry:    &expiresAt, RecordedAt: verifiedAt,
+		}
+	}
 	if err := cfg.Journal.Verify(
-		ctx, cfg.AuthIdentityID, holder, lease.Fence, digest, expiresAt, verifiedAt,
+		ctx, cfg.AuthIdentityID, holder, lease.Fence, digest, expiresAt, verifiedAt, generation,
 	); err != nil {
 		return fail(CodexAuthEnrollmentVerificationFailed, err)
 	}
@@ -369,12 +431,16 @@ func EnrollCodexAuth(
 	if err := validateProjectedCodexAuthEnrollment(item, binding); err != nil {
 		return CodexAuthEnrollmentResult{}, err
 	}
-	return CodexAuthEnrollmentResult{
+	result := CodexAuthEnrollmentResult{
 		AuthIdentityID: cfg.AuthIdentityID, AuthStorePath: storePath,
 		LeaseFence: lease.Fence, AuthStoreDigest: digest,
 		AccessTokenExpiresAt: expiresAt,
 		AttentionItemID:      item.ID, AttentionItemVersion: item.ItemVersion,
-	}, nil
+	}
+	if bootstrap != nil {
+		result.EnrollmentID = bootstrap.Enrollment.ID
+	}
+	return result, nil
 }
 
 func recoverVerifiedCodexAuthEnrollment(
@@ -495,7 +561,8 @@ func normalizeCodexAuthEnrollmentConfig(cfg *CodexAuthEnrollmentConfig) error {
 	if cfg == nil || cfg.InputRoot == "" || cfg.InputFile == "" ||
 		cfg.AuthStoreRoot == "" || cfg.AuthStorePath == "" ||
 		cfg.AuthIdentityID == "" || cfg.ProjectID == "" || cfg.Journal == nil ||
-		cfg.AuthStoreLeaser == nil || cfg.AuthRefresher == nil {
+		cfg.AuthStoreLeaser == nil || cfg.AuthRefresher == nil ||
+		(cfg.Enrollment != nil && (cfg.Enrollment.EnrollmentID == "" || cfg.Enrollment.Route == "")) {
 		return errors.New("codex auth enrollment configuration is incomplete")
 	}
 	if cfg.Now == nil {

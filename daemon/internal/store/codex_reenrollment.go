@@ -303,6 +303,17 @@ func (tx *InternalTx) BeginCodexReenrollmentJournal(
 	ctx context.Context, id domain.AuthIdentityID, markerItemID domain.ItemID, holder domain.InvocationID,
 	now, expiresAt time.Time,
 ) (CodexReenrollmentJournal, domain.AuthStoreMutationLease, error) {
+	return tx.BeginCodexReenrollmentJournalBound(ctx, id, markerItemID, holder, nil, now, expiresAt)
+}
+
+// BeginCodexReenrollmentJournalBound is BeginCodexReenrollmentJournal with a
+// lease generation binding: the fence it takes names the enrollment store the
+// operation mutates, so the verified result can append that enrollment's next
+// generation. A nil binding takes the unbound interim lease.
+func (tx *InternalTx) BeginCodexReenrollmentJournalBound(
+	ctx context.Context, id domain.AuthIdentityID, markerItemID domain.ItemID, holder domain.InvocationID,
+	binding *domain.LeaseGenerationBinding, now, expiresAt time.Time,
+) (CodexReenrollmentJournal, domain.AuthStoreMutationLease, error) {
 	items, err := tx.ListAttentionItems(ctx)
 	if err != nil {
 		return CodexReenrollmentJournal{}, domain.AuthStoreMutationLease{}, err
@@ -333,7 +344,7 @@ func (tx *InternalTx) BeginCodexReenrollmentJournal(
 		return CodexReenrollmentJournal{}, domain.AuthStoreMutationLease{},
 			domain.ErrCodexReenrollmentMarkerMismatch
 	}
-	lease, err := tx.AcquireAuthStoreMutationLease(ctx, id, holder, now, expiresAt)
+	lease, err := tx.AcquireAuthStoreMutationLeaseBound(ctx, id, holder, binding, now, expiresAt)
 	if err != nil {
 		return CodexReenrollmentJournal{}, domain.AuthStoreMutationLease{}, err
 	}

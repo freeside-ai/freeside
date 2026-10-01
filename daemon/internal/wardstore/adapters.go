@@ -95,6 +95,7 @@ type Adapters struct {
 	Leaser     *Leaser
 	AuthState  *AuthState
 	Enrollment *Enrollment
+	Claude     *ClaudeEnrollment
 }
 
 // Journal backs ward's journal and atomic leased-open interfaces.
@@ -132,6 +133,7 @@ func New(st *store.Store) (*Adapters, error) {
 		Leaser:     &Leaser{store: st},
 		AuthState:  authState,
 		Enrollment: &Enrollment{store: st, authState: authState},
+		Claude:     &ClaudeEnrollment{store: st},
 	}, nil
 }
 
@@ -842,16 +844,30 @@ func (a *AuthState) ProjectVerifiedCodexReenrollment(
 
 // Begin creates an initial identity and marker when needed, or authenticates
 // the current unbound marker for an existing identity, then opens the #684
-// journal under the exact lease in the same synchronized transaction.
+// journal under the exact lease in the same synchronized transaction. A
+// non-nil bootstrap also binds the identity's account, records the client
+// enrollment, and takes the lease bound to the enrollment's first generation,
+// all in that same transaction; nil keeps the unbound interim lease.
 func (a *Enrollment) Begin(
 	ctx context.Context,
 	identity domain.AuthIdentity,
 	projectID domain.ProjectID,
 	holder domain.InvocationID,
+	bootstrap *ward.EnrollmentBootstrap,
 	now, expiresAt time.Time,
 ) (domain.AuthStoreMutationLease, error) {
 	var lease domain.AuthStoreMutationLease
 	err := a.store.Write(ctx, func(tx *store.WriteTx) error {
+		var binding *domain.LeaseGenerationBinding
+		if bootstrap != nil {
+			if err := recordEnrollingIdentity(ctx, &tx.InternalTx, identity, now); err != nil {
+				return err
+			}
+			if err := recordEnrollmentBootstrap(ctx, &tx.InternalTx, *bootstrap, now); err != nil {
+				return err
+			}
+			binding = &bootstrap.Binding
+		}
 		stored, err := tx.GetAuthIdentity(ctx, identity.ID)
 		switch {
 		case errors.Is(err, store.ErrNotFound):
@@ -923,8 +939,8 @@ func (a *Enrollment) Begin(
 				return err
 			}
 		}
-		_, lease, err = tx.BeginCodexReenrollmentJournal(
-			ctx, identity.ID, marker.ID, holder, now, expiresAt,
+		_, lease, err = tx.BeginCodexReenrollmentJournalBound(
+			ctx, identity.ID, marker.ID, holder, binding, now, expiresAt,
 		)
 		return err
 	})
@@ -982,7 +998,9 @@ func codexEnrollmentFailureClass(
 }
 
 // Verify records the exact digest and access-token expiry while this holder's
-// lease is still live.
+// lease is still live. A non-nil generation is appended in the same
+// transaction, so an enrollment's store history and the verified journal
+// entry never disagree about whether the mutation happened.
 func (a *Enrollment) Verify(
 	ctx context.Context,
 	id domain.AuthIdentityID,
@@ -990,11 +1008,19 @@ func (a *Enrollment) Verify(
 	fence int64,
 	digest domain.Digest,
 	expiresAt, verifiedAt time.Time,
+	generation *domain.EnrollmentGeneration,
 ) error {
 	return a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		return tx.VerifyCodexReenrollment(
+		if err := tx.VerifyCodexReenrollment(
 			ctx, id, holder, fence, digest, expiresAt, verifiedAt,
-		)
+		); err != nil {
+			return err
+		}
+		if generation == nil {
+			return nil
+		}
+		_, err := tx.AppendEnrollmentGeneration(ctx, *generation, verifiedAt)
+		return err
 	})
 }
 

@@ -316,6 +316,14 @@ func TestControlRoutesUseRunningDaemonStore(t *testing.T) {
 	if !json.Valid(shadow.Bytes()) {
 		t.Fatal("shadow review result is not JSON")
 	}
+	var authList bytes.Buffer
+	if err := runAuthListCommand(ctx, []string{"-db", dbPath}, &authList, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	var listed authListOutput
+	if err := json.Unmarshal(authList.Bytes(), &listed); err != nil || listed.Identities == nil {
+		t.Fatalf("auth list result = %s, err = %v", authList.String(), err)
+	}
 	var doctor bytes.Buffer
 	digest := "sha256:" + strings.Repeat("a", 64)
 	err = runDoctorCommand(ctx, []string{"-db", dbPath, "-backend-configuration-digest", digest}, &doctor, io.Discard)
@@ -400,6 +408,13 @@ func TestControlRefusesHeldLockWithoutSocket(t *testing.T) {
 				"-db", dbPath, "-auth-identity", "identity-1",
 				"-auth-store-root", root, "-auth-store", filepath.Join(root, "auth.json"),
 			}, io.Discard, io.Discard)
+		},
+		"auth add": func() error {
+			return runAuthAddCommand(ctx, []string{
+				"-db", dbPath, "-client", "codex_cli", "-auth-identity", "identity-1", "-route", "openai",
+				"-project", "project-1", "-input-root", root, "-input-file", filepath.Join(root, "input.json"),
+				"-auth-store-root", root, "-auth-store", filepath.Join(root, "auth.json"),
+			}, nil, io.Discard, io.Discard, authAddDeps{})
 		},
 		"enroll-codex": func() error {
 			return runEnrollCodexCommand(ctx, []string{
