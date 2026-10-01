@@ -93,10 +93,12 @@ func TestLegacyStageNameCanonicalizesOnDecode(t *testing.T) {
 	if role, err := domain.CanonicalStageRole("elaboration"); err != nil || role != domain.StageNameSpecification {
 		t.Fatalf("legacy role = %q, %v", role, err)
 	}
+	// Lineup keys name roles, so a stage spelling, legacy or current, is
+	// never one.
 	if err := domain.ValidateLineupPolicyKeys([]domain.PolicyKey{
 		{Key: domain.LineupRoleKeyPrefix + "elaboration", Value: "agent@sha256:" + string(make([]byte, 0))},
-	}); errors.Is(err, domain.ErrInvalidStageName) {
-		t.Fatalf("legacy lineup role rejected as a stage name: %v", err)
+	}); !errors.Is(err, domain.ErrInvalidRoleName) {
+		t.Fatalf("legacy stage spelling as a lineup role = %v, want %v", err, domain.ErrInvalidRoleName)
 	}
 }
 
