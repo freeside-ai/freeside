@@ -515,6 +515,22 @@ func seedReviewDiminishingDecisionWithHardLimit(
 	hardRoundLimit int,
 ) (*store.Store, store.ReviewDiminishingDecision) {
 	t.Helper()
+	return seedReviewDiminishingDecisionWith(t, path, runID, at, action, hardRoundLimit, false)
+}
+
+// seedReviewDiminishingDecisionWith optionally records each round's diff
+// metrics as the round is written, so the item snapshots a history that
+// carries them.
+func seedReviewDiminishingDecisionWith(
+	t *testing.T,
+	path string,
+	runID domain.RunID,
+	at time.Time,
+	action domain.Action,
+	hardRoundLimit int,
+	withDiffMetrics bool,
+) (*store.Store, store.ReviewDiminishingDecision) {
+	t.Helper()
 	ctx := context.Background()
 	st := storetest.Open(t, path, store.Options{})
 	policy, err := domain.NewResolvedPolicy(runID, []domain.PolicyKey{
@@ -591,6 +607,13 @@ func seedReviewDiminishingDecisionWithHardLimit(
 		for index := range records {
 			if err := tx.PutReviewRecord(ctx, records[index], reviewFindings[index]); err != nil {
 				return err
+			}
+			if withDiffMetrics {
+				if err := tx.PutReviewRoundDiffMetrics(
+					ctx, runID, records[index].Round, roundDiffMetrics(records[index].Round),
+				); err != nil {
+					return err
+				}
 			}
 			if err := tx.PutFindingAdjudication(ctx, artifacts[index]); err != nil {
 				return err
@@ -754,5 +777,117 @@ func TestReviewDiminishingReasonSummarizesGrowthWithoutBlockers(t *testing.T) {
 	summary, binding, ok := strings.Cut(reason, "\nBinding: ")
 	if !ok || summary == "" || !strings.Contains(binding, `"cause":"growth_without_blockers"`) {
 		t.Fatalf("growth reason = %q", reason)
+	}
+}
+
+// legacyDiminishingYieldHistory is the stored yield_history of the seeded
+// diminishing item exactly as a daemon wrote it before diff metrics existed.
+const legacyDiminishingYieldHistory = `{"rounds":[` +
+	`{"round":1,"findings_ingested":1,"new_findings":1,"recurring_findings":0,` +
+	`"fixed":1,"declined":0,"deferred":0,"outcome":"findings"},` +
+	`{"round":2,"findings_ingested":2,"new_findings":1,"recurring_findings":1,` +
+	`"fixed":0,"declined":0,"deferred":0,"outcome":"findings"}],` +
+	`"terminal_outcome":"findings"}`
+
+// TestReviewDiminishingItemStoredBeforeDiffMetricsStillLoads proves the
+// yield-history field is additive: a run with no metrics rows writes the same
+// bytes a daemon wrote before the field existed, and that item still
+// reconstructs and still equals its re-derived history after a restart.
+func TestReviewDiminishingItemStoredBeforeDiffMetricsStillLoads(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	at := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "store.db")
+	st, decision := seedReviewDiminishingDecision(t, path, "run-legacy-yield", at, domain.ActionFinishNow)
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored, inBody string
+	if err := raw.QueryRow(`SELECT yield_history, json_extract(body, '$.yield_history')
+FROM attention_items WHERE id = ?`, decision.Item.ID).Scan(&stored, &inBody); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if stored != legacyDiminishingYieldHistory || inBody != legacyDiminishingYieldHistory {
+		t.Fatalf("stored yield history is not the legacy bytes:\ncolumn %s\nbody   %s", stored, inBody)
+	}
+	reopened := storetest.Open(t, path, store.Options{})
+	defer func() { _ = reopened.Close() }()
+	if err := reopened.Read(ctx, func(tx *store.ReadTx) error {
+		got, err := tx.ReviewDiminishingDecision(ctx, decision.Item.ID)
+		if err != nil {
+			return err
+		}
+		for _, round := range got.Item.YieldHistory.Rounds {
+			if round.DiffMetrics != nil {
+				t.Fatalf("legacy round %d gained metrics: %+v", round.Round, round.DiffMetrics)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("legacy item no longer loads: %v", err)
+	}
+}
+
+// TestReviewDiminishingItemWithDiffMetricsReconstructs proves an item that
+// snapshotted metrics re-proves them against the stored rows after a restart.
+func TestReviewDiminishingItemWithDiffMetricsReconstructs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	at := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "store.db")
+	st, decision := seedReviewDiminishingDecisionWith(
+		t, path, "run-metrics-yield", at, domain.ActionFinishNow, 25, true)
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened := storetest.Open(t, path, store.Options{})
+	defer func() { _ = reopened.Close() }()
+	if err := reopened.Read(ctx, func(tx *store.ReadTx) error {
+		got, err := tx.ReviewDiminishingDecision(ctx, decision.Item.ID)
+		if err != nil {
+			return err
+		}
+		for _, round := range got.Item.YieldHistory.Rounds {
+			if round.DiffMetrics == nil || *round.DiffMetrics != roundDiffMetrics(round.Round) {
+				t.Fatalf("round %d metrics = %+v", round.Round, round.DiffMetrics)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("item with metrics: %v", err)
+	}
+}
+
+// TestLateDiffMetricsFailTheSnapshottedItemClosed shows why metrics are
+// written with the round and never afterwards: the latest round has no
+// successor to refuse the write, and the item that already snapshotted that
+// round then no longer equals its re-derived history.
+func TestLateDiffMetricsFailTheSnapshottedItemClosed(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	at := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	runID := domain.RunID("run-late-metrics")
+	st, decision := seedReviewDiminishingDecision(
+		t, filepath.Join(t.TempDir(), "store.db"), runID, at, domain.ActionFinishNow)
+	defer func() { _ = st.Close() }()
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutReviewRoundDiffMetrics(
+			ctx, runID, decision.Binding.Round, roundDiffMetrics(decision.Binding.Round))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err := st.Read(ctx, func(tx *store.ReadTx) error {
+		_, readErr := tx.ReviewDiminishingDecision(ctx, decision.Item.ID)
+		return readErr
+	})
+	if !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("item after late metrics = %v, want ErrParentKeyMismatch", err)
 	}
 }

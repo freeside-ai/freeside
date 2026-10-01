@@ -12,10 +12,14 @@ import (
 // from validated review rows. Keeping the pure derivation at the persistence
 // boundary lets both the engine and command-authority re-gates use one
 // definition instead of trusting a caller-supplied history.
+//
+// records is the run's review history in round order. diffMetrics is keyed by
+// round; a round without an entry carries no metrics.
 func DeriveReviewYieldHistory(
 	records []domain.ReviewRecord,
 	dispositions []domain.ReviewDispositionRecord,
 	findings map[domain.FindingID]domain.Finding,
+	diffMetrics map[int]domain.ReviewRoundDiffMetrics,
 ) (domain.ReviewYieldHistory, error) {
 	dispositionsByRound := make(map[int][]domain.ReviewDispositionRecord)
 	recordedRounds := make(map[int]struct{}, len(records))
@@ -32,16 +36,34 @@ func DeriveReviewYieldHistory(
 			dispositionsByRound[disposition.Round], disposition)
 	}
 
+	for round := range diffMetrics {
+		if _, ok := recordedRounds[round]; !ok {
+			return domain.ReviewYieldHistory{}, fmt.Errorf(
+				"diff metrics for absent round %d: %w",
+				round, domain.ErrReviewYieldHistoryInconsistent)
+		}
+	}
+
 	seen := map[domain.FindingFingerprint]struct{}{}
 	rounds := make([]domain.ReviewYieldRound, 0, len(records))
 	var segmentConfiguration domain.Digest
-	for _, record := range records {
+	for index, record := range records {
 		if len(rounds) == 0 || record.ConfigurationDigest != segmentConfiguration {
 			clear(seen)
 			segmentConfiguration = record.ConfigurationDigest
 		}
 		round := domain.ReviewYieldRound{
 			Round: record.Round, FindingsIngested: len(record.FindingIDs), Outcome: record.Outcome,
+		}
+		if metrics, ok := diffMetrics[record.Round]; ok {
+			var previous *domain.ReviewRecord
+			if index > 0 {
+				previous = &records[index-1]
+			}
+			if err := checkReviewRoundDiffMetrics(metrics, record, previous); err != nil {
+				return domain.ReviewYieldHistory{}, err
+			}
+			round.DiffMetrics = &metrics
 		}
 		current := make([]domain.FindingFingerprint, 0, len(record.FindingIDs))
 		for _, id := range record.FindingIDs {
@@ -159,5 +181,16 @@ func (tx *ReadTx) reviewYieldHistory(
 			findings[id] = finding
 		}
 	}
-	return DeriveReviewYieldHistory(records, dispositions, findings)
+	diffMetrics, err := tx.ListReviewRoundDiffMetrics(ctx, runID)
+	if err != nil {
+		return domain.ReviewYieldHistory{}, err
+	}
+	if throughRound > 0 {
+		for round := range diffMetrics {
+			if round > throughRound {
+				delete(diffMetrics, round)
+			}
+		}
+	}
+	return DeriveReviewYieldHistory(records, dispositions, findings, diffMetrics)
 }
