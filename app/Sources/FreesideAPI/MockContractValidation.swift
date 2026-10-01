@@ -330,7 +330,7 @@ enum MockContractValidation {
             }
             if history.rounds.isEmpty { return "empty review yield history" }
             var previousRound = 0
-            for round in history.rounds {
+            for (index, round) in history.rounds.enumerated() {
                 if round.round < 1 || round.round <= previousRound {
                     return "invalid review yield round order"
                 }
@@ -371,6 +371,13 @@ enum MockContractValidation {
                     {
                         return "review yield diff_metrics pairs disagree over one comparison"
                     }
+                }
+                // drift_verdict mirrors the domain's placement rule: a round
+                // shows its verdict only once the history holds a later
+                // round. The generated closed enum makes an unknown verdict
+                // unrepresentable here.
+                if round.drift_verdict != nil, index == history.rounds.count - 1 {
+                    return "review yield drift_verdict on the last round"
                 }
                 previousRound = round.round
             }

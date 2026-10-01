@@ -589,6 +589,34 @@ import Testing
                 == "review yield diff_metrics pairs disagree over one comparison")
     }
 
+    @Test func reviewYieldDriftVerdictIsRefusedOnTheLastRound() throws {
+        for type in [
+            Components.Schemas.AttentionType.ready_for_final_review, .review_diminishing_returns,
+        ] {
+            let item = AttentionFixtures.fixture(type: type).item
+            #expect(MockContractValidation.itemValidityBreach(item) == nil)
+            let lastIndex = try #require(item.yield_history?.value1.rounds.indices.last)
+
+            for verdict in Components.Schemas.DriftVerdict.allCases {
+                var onLast = item
+                onLast.yield_history?.value1.rounds[lastIndex].drift_verdict = verdict
+                #expect(
+                    MockContractValidation.itemValidityBreach(onLast)
+                        == "review yield drift_verdict on the last round")
+
+                var onFirst = item
+                onFirst.yield_history?.value1.rounds[0].drift_verdict = verdict
+                #expect(MockContractValidation.itemValidityBreach(onFirst) == nil)
+            }
+
+            var unaudited = item
+            for index in try #require(unaudited.yield_history?.value1.rounds.indices) {
+                unaudited.yield_history?.value1.rounds[index].drift_verdict = nil
+            }
+            #expect(MockContractValidation.itemValidityBreach(unaudited) == nil)
+        }
+    }
+
     @Test func itemValidityBreachNamesTheFailedInvariant() {
         var empty = AttentionFixtures.fixture(type: .spec_approval).item
         empty.id = ""
