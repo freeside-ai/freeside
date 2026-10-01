@@ -57,6 +57,9 @@ type authAdoptConfig struct {
 	// digests. The review prompt is code-owned and needs no file.
 	PromptPackage, SpecificationPromptPackage, RemediationPromptPackage string
 	PatchPath                                                           string
+	// RetireUnadoptable names the one identity to retire when this run
+	// reports it unadoptable.
+	RetireUnadoptable string
 }
 
 // authAdoptStatus is what adoption did for one identity.
@@ -78,6 +81,13 @@ type authAdoptIdentity struct {
 	// Reason says why an unadoptable identity cannot be adopted. The cutover
 	// retires that identity; enroll a fresh one with auth add.
 	Reason string `json:"reason,omitempty"`
+	// Disabled reports an adopted identity that is stored disabled. Adoption
+	// does not enable it, and agent resolution refuses it until it is enabled.
+	Disabled bool `json:"disabled,omitempty"`
+	// Retired reports that -retire-unadoptable disabled the identity, and
+	// StoppedTasks the open tasks it owned, each now holding a Stop.
+	Retired      bool            `json:"retired,omitempty"`
+	StoppedTasks []domain.TaskID `json:"stopped_tasks,omitempty"`
 }
 
 // authAdoptReport is the command's result. Patch is where the tree patch
@@ -158,11 +168,14 @@ func runAuthAdoptCommand(
 		AccountBinding:     cfg.ClaudeAccount,
 		ObserveVolume:      deps.observeVolume(cfg.ContainerBin, cfg.ExporterImage),
 	})
-	claudeEntry, err := adoptReportEntry(claudeID, domain.HarnessClientClaudeCode, claude, claudeErr)
+	claudeEntry, err := adoptReportEntry(claudeIdentity, domain.HarnessClientClaudeCode, claude, claudeErr)
 	if err != nil {
 		return err
 	}
 	report.Identities = append(report.Identities, claudeEntry)
+	if err := retireUnadoptable(ctx, st, cfg, &report.Identities[0], deps.now()); err != nil {
+		return errors.Join(err, writeAdoptReport(reportOut, report))
+	}
 
 	// One identity under both flags is one adoption: it holds one store, and
 	// that store is the Claude one, so the tree carries no review agent.
@@ -172,13 +185,16 @@ func runAuthAdoptCommand(
 			AuthAdoptionConfig: shared(reviewIdentity, domain.HarnessClientCodexCLI, cfg.CodexRoute, cfg.ReviewCostOwner),
 			AuthStoreRoot:      cfg.AuthStoreRoot,
 		})
-		entry, err := adoptReportEntry(reviewID, domain.HarnessClientCodexCLI, codex, codexErr)
+		entry, err := adoptReportEntry(reviewIdentity, domain.HarnessClientCodexCLI, codex, codexErr)
 		if err != nil {
 			// The first identity's adoption is already recorded; say so
 			// before failing, so the operator knows a rerun reuses it.
 			return errors.Join(err, writeAdoptReport(reportOut, report))
 		}
 		report.Identities = append(report.Identities, entry)
+		if err := retireUnadoptable(ctx, st, cfg, &report.Identities[1], deps.now()); err != nil {
+			return errors.Join(err, writeAdoptReport(reportOut, report))
+		}
 		if codexErr == nil {
 			codexEnrollment = &codex.Enrollment
 		}
@@ -239,6 +255,44 @@ func writeAdoptReport(out io.Writer, report authAdoptReport) error {
 	return nil
 }
 
+// retireUnadoptable retires the identity the operator named, when this run
+// reported it unadoptable: it disables the identity and records a Stop for
+// each open task it owns. The identity has no enrollment, so no agent can
+// resolve to it and that work cannot continue through the lineup. Nothing
+// else about the identity changes. An identity this run adopted is never
+// retired: naming one is refused, so an omitted argument cannot cost an
+// adoptable identity its work.
+func retireUnadoptable(
+	ctx context.Context, st *store.Store, cfg authAdoptConfig, entry *authAdoptIdentity, now time.Time,
+) error {
+	if cfg.RetireUnadoptable == "" || string(entry.AuthIdentityID) != cfg.RetireUnadoptable {
+		return nil
+	}
+	if entry.Status != authAdoptUnadoptable {
+		return fmt.Errorf("auth identity %s is %s, and -retire-unadoptable retires only an unadoptable identity",
+			entry.AuthIdentityID, entry.Status)
+	}
+	// Disabled first: if a Stop then fails, the daemon holds admission on
+	// the work that is left, and a rerun records the rest.
+	err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		identity, err := tx.GetAuthIdentity(ctx, entry.AuthIdentityID)
+		if err != nil || !identity.Enabled {
+			return err
+		}
+		identity.Enabled = false
+		return tx.RecordAuthIdentity(ctx, identity, now)
+	})
+	if err != nil {
+		return fmt.Errorf("retire auth identity %s: %w", entry.AuthIdentityID, err)
+	}
+	entry.Retired = true
+	entry.StoppedTasks, err = stopRetiredTasks(ctx, st, entry.AuthIdentityID, now)
+	if err != nil {
+		return fmt.Errorf("retire auth identity %s: %w", entry.AuthIdentityID, err)
+	}
+	return nil
+}
+
 // adoptableIdentity reads a flag-era identity and refuses a cost owner that
 // disagrees with the one it already has.
 func adoptableIdentity(
@@ -258,9 +312,9 @@ func adoptableIdentity(
 // adoptReportEntry turns one adoption's outcome into its report line. Only
 // an unadoptable identity is a reportable outcome; any other failure aborts.
 func adoptReportEntry(
-	id domain.AuthIdentityID, client domain.HarnessClientKind, result ward.AuthAdoptionResult, err error,
+	identity domain.AuthIdentity, client domain.HarnessClientKind, result ward.AuthAdoptionResult, err error,
 ) (authAdoptIdentity, error) {
-	entry := authAdoptIdentity{AuthIdentityID: id, Client: client}
+	entry := authAdoptIdentity{AuthIdentityID: identity.ID, Client: client}
 	switch {
 	case errors.Is(err, ward.ErrUnadoptable):
 		entry.Status, entry.Reason = authAdoptUnadoptable, err.Error()
@@ -273,6 +327,7 @@ func adoptReportEntry(
 		entry.Status = authAdoptReused
 	}
 	entry.EnrollmentID, entry.Generation = result.Enrollment.ID, result.Generation.Ordinal
+	entry.Disabled = !identity.Enabled
 	return entry, nil
 }
 
@@ -333,13 +388,13 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 	flags.StringVar(&cfg.DBPath, "db", "", "SQLite database path (required)")
 	flags.Var(&cfg.ApprovedRecipes, "approved-recipe", "approved verification-recipe digest (repeatable)")
 	flags.StringVar(&cfg.AuthIdentityID, "auth-identity", "",
-		"the daemon's -auth-identity: the Claude identity tasks run under (required)")
+		"the flag-era -auth-identity: the Claude identity tasks ran under (required)")
 	flags.StringVar(&cfg.ReviewAuthIdentityID, "review-auth-identity", "",
-		"the daemon's -review-auth-identity: the Codex review identity (required)")
+		"the flag-era -review-auth-identity: the Codex review identity (required)")
 	flags.StringVar(&cfg.CostOwner, "cost-owner", "", "who pays for the implementation identity's usage (required)")
-	flags.StringVar(&cfg.ReviewCostOwner, "review-cost-owner", "", "the daemon's -review-cost-owner (required)")
+	flags.StringVar(&cfg.ReviewCostOwner, "review-cost-owner", "", "the flag-era -review-cost-owner (required)")
 	flags.StringVar(&cfg.ShadowReviewCostOwner, "shadow-review-cost-owner", "",
-		"the daemon's -shadow-review-cost-owner; set exactly while the shadow arm is on")
+		"the flag-era -shadow-review-cost-owner; set exactly while the shadow arm is on")
 	flags.StringVar(&cfg.ClaudeAccount, "claude-account", "",
 		"operator-attested subscription account the Claude setup token belongs to")
 	flags.StringVar(&cfg.ContainerBin, "container-bin", "container", "Apple container CLI path")
@@ -359,6 +414,8 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 		"the daemon's -specification-prompt-package (required)")
 	flags.StringVar(&cfg.RemediationPromptPackage, "remediation-prompt-package", "",
 		"the daemon's -remediation-prompt-package (required)")
+	flags.StringVar(&cfg.RetireUnadoptable, "retire-unadoptable", "",
+		"identity to retire if this run reports it unadoptable: disable it and stop the open tasks it owns")
 	flags.StringVar(&cfg.PatchPath, "patch", "-", "file to write the tree patch to, outside any checkout; - is stdout")
 	if err := flags.Parse(args); err != nil {
 		return authAdoptConfig{}, err
@@ -392,6 +449,11 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 	}
 	if !oneIdentity && (cfg.AuthStoreRoot == "" || cfg.ReviewModel == "") {
 		return authAdoptConfig{}, errors.New("-auth-store-root and -review-model are required to adopt the review identity")
+	}
+	if cfg.RetireUnadoptable != "" && cfg.RetireUnadoptable != cfg.AuthIdentityID &&
+		cfg.RetireUnadoptable != cfg.ReviewAuthIdentityID {
+		return authAdoptConfig{}, errors.New(
+			"-retire-unadoptable must name the -auth-identity or the -review-auth-identity")
 	}
 	if cfg.PatchPath != "-" {
 		if err := refusePatchInsideCheckout(cfg.PatchPath); err != nil {

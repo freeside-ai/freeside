@@ -413,6 +413,48 @@ func TestAuthAdoptOneIdentityIsOneAdoption(t *testing.T) {
 	}
 }
 
+// TestAuthAdoptReportsADisabledIdentity covers an identity stored disabled:
+// the flag path never read the bit, so the daemon could run on one. Adoption
+// enrolls it, leaves it disabled (enrollment is not the place to enable an
+// identity), and says so, because the emitted tree refuses to resolve it.
+func TestAuthAdoptReportsADisabledIdentity(t *testing.T) {
+	ctx := context.Background()
+	f := newAuthAdoptFixture(t)
+	f.withStore(t, func(st *store.Store) { setIdentityEnabled(t, st, "codex-review", false) })
+	report, patch, err := f.run(t, f.args())
+	if err != nil || len(report.Identities) != 2 || report.Identities[0].Disabled ||
+		report.Identities[1].Status != authAdoptAdopted || !report.Identities[1].Disabled {
+		t.Fatalf("auth adopt = %+v, %v", report, err)
+	}
+	if f.snapshot(t).identity(t, "codex-review").Enabled {
+		t.Fatal("adoption enabled a disabled identity")
+	}
+	tree := loadAdoptedPatch(t, patch)
+	f.withStore(t, func(st *store.Store) {
+		if _, err := engine.ResolveRole(ctx, st, tree, domain.RoleImplementer); err != nil {
+			t.Fatalf("resolve implementer: %v", err)
+		}
+		if _, err := engine.ResolveRole(ctx, st, tree, domain.RoleReviewer); !errors.Is(err, engine.ErrAgentNotAdmissible) {
+			t.Fatalf("resolve reviewer under a disabled identity = %v", err)
+		}
+	})
+}
+
+func setIdentityEnabled(t *testing.T, st *store.Store, id domain.AuthIdentityID, enabled bool) {
+	t.Helper()
+	ctx := context.Background()
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		identity, err := tx.GetAuthIdentity(ctx, id)
+		if err != nil {
+			return err
+		}
+		identity.Enabled = enabled
+		return tx.RecordAuthIdentity(ctx, identity, time.Now().UTC())
+	}); err != nil {
+		t.Fatalf("set identity %s enabled=%t: %v", id, enabled, err)
+	}
+}
+
 // TestAuthAdoptShadowArm records the shadow reviewer line while the shadow
 // arm is on, and refuses a shadow cost owner that is not the implementation
 // identity's.
