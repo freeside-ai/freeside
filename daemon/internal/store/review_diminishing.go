@@ -28,13 +28,26 @@ const (
 	ReviewDiminishingLowValue        ReviewDiminishingCause = "low_value_streak"
 	ReviewDiminishingFixedRecurrence ReviewDiminishingCause = "fixed_recurrence"
 	ReviewDiminishingFinalFindings   ReviewDiminishingCause = "final_review_findings"
+	// ReviewDiminishingGrowthWithoutBlockers is the deterministic drift floor
+	// (plan §7 Review Drift): the cumulative diff kept growing while no round
+	// ingested a credible critical or high finding.
+	ReviewDiminishingGrowthWithoutBlockers ReviewDiminishingCause = "growth_without_blockers"
 )
+
+// AllReviewDiminishingCauses lists every valid ReviewDiminishingCause.
+var AllReviewDiminishingCauses = []ReviewDiminishingCause{
+	ReviewDiminishingLowValue,
+	ReviewDiminishingFixedRecurrence,
+	ReviewDiminishingFinalFindings,
+	ReviewDiminishingGrowthWithoutBlockers,
+}
 
 func (c ReviewDiminishingCause) valid() bool {
 	switch c {
 	case ReviewDiminishingLowValue,
 		ReviewDiminishingFixedRecurrence,
-		ReviewDiminishingFinalFindings:
+		ReviewDiminishingFinalFindings,
+		ReviewDiminishingGrowthWithoutBlockers:
 		return true
 	default:
 		return false
@@ -48,6 +61,10 @@ type ReviewConvergencePolicy struct {
 	ContinueWhile                 string
 	LowValueStreakBeforeAttention int
 	HardRoundLimit                int
+	// DriftGrowthStreakBeforeAttention is the growth_without_blockers streak
+	// length. Zero means the key is unset and the growth rule is off, so a
+	// policy that predates the key resolves exactly as it did before.
+	DriftGrowthStreakBeforeAttention int
 }
 
 // ReviewConvergenceState is the trusted decision-time input to the pure
@@ -97,6 +114,14 @@ func (tx *ReadTx) ReviewConvergencePolicy(
 					"resolved review.hard_round_limit %q: %w", key.Value, domain.ErrNonPositive)
 			}
 			policy.HardRoundLimit = limit
+		case "review.drift_growth_streak_before_attention":
+			streak, err := strconv.Atoi(key.Value)
+			if err != nil || streak < 1 {
+				return ReviewConvergencePolicy{}, fmt.Errorf(
+					"resolved review.drift_growth_streak_before_attention %q: %w",
+					key.Value, domain.ErrNonPositive)
+			}
+			policy.DriftGrowthStreakBeforeAttention = streak
 		}
 	}
 	return policy, nil
@@ -155,6 +180,8 @@ func ReviewDiminishingReason(binding ReviewDiminishingBinding) (string, error) {
 		summary = "A finding recurred after a fixed disposition."
 	case ReviewDiminishingFinalFindings:
 		summary = "The one final candidate-bound review found material issues."
+	case ReviewDiminishingGrowthWithoutBlockers:
+		summary = "The change kept growing while review found no critical or high issue."
 	}
 	body, err := json.Marshal(binding)
 	if err != nil {

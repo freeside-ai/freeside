@@ -554,6 +554,41 @@ import Testing
                 == "review yield terminal outcome disagrees with final round")
     }
 
+    @Test func reviewYieldDiffMetricsMirrorTheDomainPairValidation() throws {
+        let diminishing = AttentionFixtures.fixture(type: .review_diminishing_returns).item
+        #expect(MockContractValidation.itemValidityBreach(diminishing) == nil)
+        let lastIndex = try #require(diminishing.yield_history?.value1.rounds.indices.last)
+
+        var absent = diminishing
+        absent.yield_history?.value1.rounds[lastIndex].diff_metrics = nil
+        #expect(MockContractValidation.itemValidityBreach(absent) == nil)
+
+        var negative = diminishing
+        negative.yield_history?.value1.rounds[lastIndex].diff_metrics?.round.additions = -1
+        #expect(
+            MockContractValidation.itemValidityBreach(negative)
+                == "invalid review yield diff_metrics")
+
+        var emptyBase = diminishing
+        emptyBase.yield_history?.value1.rounds[lastIndex].diff_metrics?.cumulative.base_sha = ""
+        #expect(
+            MockContractValidation.itemValidityBreach(emptyBase)
+                == "invalid review yield diff_metrics")
+
+        var splitHeads = diminishing
+        splitHeads.yield_history?.value1.rounds[lastIndex].diff_metrics?.round.head_sha = "feedface"
+        #expect(
+            MockContractValidation.itemValidityBreach(splitHeads)
+                == "review yield diff_metrics heads disagree")
+
+        // Round 1's pairs share a base, so they must be one comparison.
+        var disagreeing = diminishing
+        disagreeing.yield_history?.value1.rounds[0].diff_metrics?.round.additions += 1
+        #expect(
+            MockContractValidation.itemValidityBreach(disagreeing)
+                == "review yield diff_metrics pairs disagree over one comparison")
+    }
+
     @Test func itemValidityBreachNamesTheFailedInvariant() {
         var empty = AttentionFixtures.fixture(type: .spec_approval).item
         empty.id = ""

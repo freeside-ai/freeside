@@ -677,10 +677,20 @@ public enum AttentionFixtures {
             yieldHistory = .init(
                 value1: .init(
                     rounds: [
+                        // Round 1 has no predecessor, so its two pairs are
+                        // the same comparison. Round 2 carries no metrics:
+                        // an omitted diff_metrics is how a gap shows.
                         .init(
                             round: 1, findings_ingested: 4, new_findings: 4,
                             recurring_findings: 0, fixed: 2, declined: 1, deferred: 1,
-                            outcome: .findings),
+                            outcome: .findings,
+                            diff_metrics: .init(
+                                cumulative: .init(
+                                    files_changed: 4, additions: 120, deletions: 8,
+                                    base_sha: "deadbeef", head_sha: "0a1b2c3d"),
+                                round: .init(
+                                    files_changed: 4, additions: 120, deletions: 8,
+                                    base_sha: "deadbeef", head_sha: "0a1b2c3d"))),
                         .init(
                             round: 2, findings_ingested: 3, new_findings: 1,
                             recurring_findings: 2, fixed: 1, declined: 1, deferred: 1,
@@ -688,7 +698,14 @@ public enum AttentionFixtures {
                         .init(
                             round: 3, findings_ingested: 3, new_findings: 0,
                             recurring_findings: 3, fixed: 0, declined: 2, deferred: 1,
-                            outcome: .findings),
+                            outcome: .findings,
+                            diff_metrics: .init(
+                                cumulative: .init(
+                                    files_changed: 6, additions: 210, deletions: 14,
+                                    base_sha: "deadbeef", head_sha: prHeadSHA),
+                                round: .init(
+                                    files_changed: 2, additions: 35, deletions: 3,
+                                    base_sha: "4e5f6a7b", head_sha: prHeadSHA))),
                     ],
                     terminal_outcome: .findings
                 ))

@@ -43,7 +43,7 @@ func TestDeriveReviewYieldHistoryTracksNewRecurringAndDispositions(t *testing.T)
 		{Round: 2, Disposition: domain.ReviewDispositionDeferred},
 	}
 
-	got, err := deriveReviewYieldHistory(records, dispositions, findings)
+	got, err := deriveReviewYieldHistory(records, dispositions, findings, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestDeriveReviewYieldHistoryCountsUnfingerprintableFindingsAsNew(t *testing
 		{Round: 2, Disposition: domain.ReviewDispositionDeferred},
 	}
 
-	got, err := deriveReviewYieldHistory(records, dispositions, findings)
+	got, err := deriveReviewYieldHistory(records, dispositions, findings, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestDeriveReviewYieldHistoryResetsRecurrenceForNewReviewerConfiguration(t *
 		{Round: 5, ConfigurationDigest: secondConfiguration, Outcome: domain.ReviewClean},
 	}
 
-	got, err := deriveReviewYieldHistory(records, nil, findings)
+	got, err := deriveReviewYieldHistory(records, nil, findings, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
