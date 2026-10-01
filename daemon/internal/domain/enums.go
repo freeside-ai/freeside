@@ -505,6 +505,71 @@ func (n StageName) valid() bool {
 	}
 }
 
+// RoleName is the closed role list of plan §5.13: one agent activity, finer
+// than a stage, owning one lineup line and one prompt (§5.4, Roles and Launch
+// Shapes). The list grows only by plan revision. Verification is an engine
+// job and never a role, so it is not a member. The researcher (plan revision
+// 76) joins through #1656; until then a researcher lineup key fails closed
+// like any unknown role.
+type RoleName string
+
+const (
+	RoleSpecifier           RoleName = "specifier"
+	RoleImplementer         RoleName = "implementer"
+	RoleRemediator          RoleName = "remediator"
+	RoleReviewer            RoleName = "reviewer"
+	RoleShadowReviewer      RoleName = "shadow_reviewer"
+	RoleDiagnostic          RoleName = "diagnostic"
+	RoleTaskNamer           RoleName = "task_namer"
+	RolePublicationAuthor   RoleName = "publication_author"
+	RoleFindingClassifier   RoleName = "finding_classifier"
+	RoleFindingAdjudicator  RoleName = "finding_adjudicator"
+	RoleDriftAuditor        RoleName = "drift_auditor"
+	RoleAttentionDiscussion RoleName = "attention_discussion"
+	RoleBriefer             RoleName = "briefer"
+)
+
+// AllRoleNames lists every valid RoleName; it is the single registration
+// point. A new role is one entry here plus the dispatch switches in role.go.
+var AllRoleNames = []RoleName{
+	RoleSpecifier, RoleImplementer, RoleRemediator, RoleReviewer, RoleShadowReviewer,
+	RoleDiagnostic, RoleTaskNamer, RolePublicationAuthor, RoleFindingClassifier,
+	RoleFindingAdjudicator, RoleDriftAuditor, RoleAttentionDiscussion, RoleBriefer,
+}
+
+func (r RoleName) valid() bool {
+	switch r {
+	case RoleSpecifier, RoleImplementer, RoleRemediator, RoleReviewer, RoleShadowReviewer,
+		RoleDiagnostic, RoleTaskNamer, RolePublicationAuthor, RoleFindingClassifier,
+		RoleFindingAdjudicator, RoleDriftAuditor, RoleAttentionDiscussion, RoleBriefer:
+		return true
+	default:
+		return false
+	}
+}
+
+// LaunchShape is which of the two §5.4 launch shapes a role's agent runs
+// under: a ward role has tools or a workspace and runs the stage launch in
+// the ward; a wardless role has neither and runs the call launch on the host.
+type LaunchShape string
+
+const (
+	LaunchShapeWard     LaunchShape = "ward"
+	LaunchShapeWardless LaunchShape = "wardless"
+)
+
+// AllLaunchShapes lists every valid LaunchShape.
+var AllLaunchShapes = []LaunchShape{LaunchShapeWard, LaunchShapeWardless}
+
+func (s LaunchShape) valid() bool {
+	switch s {
+	case LaunchShapeWard, LaunchShapeWardless:
+		return true
+	default:
+		return false
+	}
+}
+
 // ArtifactKind is the closed vocabulary of persisted artifact roles. It
 // includes the Phase 1A production roles, existing persisted evidence roles,
 // and the research/specification outputs needed by the 1B specifier.

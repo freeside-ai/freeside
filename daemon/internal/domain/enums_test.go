@@ -56,6 +56,14 @@ func TestEnumValidity(t *testing.T) {
 		valids["StageName"] = append(valids["StageName"], v.valid)
 	}
 	invalids["StageName"] = StageName("").valid
+	for _, v := range AllRoleNames {
+		valids["RoleName"] = append(valids["RoleName"], v.valid)
+	}
+	invalids["RoleName"] = RoleName("").valid
+	for _, v := range AllLaunchShapes {
+		valids["LaunchShape"] = append(valids["LaunchShape"], v.valid)
+	}
+	invalids["LaunchShape"] = LaunchShape("").valid
 	for _, v := range AllArtifactKinds {
 		valids["ArtifactKind"] = append(valids["ArtifactKind"], v.valid)
 	}
