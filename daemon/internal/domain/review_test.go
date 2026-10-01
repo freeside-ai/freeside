@@ -2,6 +2,7 @@ package domain_test
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -134,5 +135,130 @@ func TestReviewRetryValidatesIdentityAndTimestamp(t *testing.T) {
 	local.ObservedAt = time.Date(2026, 8, 3, 12, 0, 0, 0, time.Local)
 	if err := local.Validate(); !errors.Is(err, domain.ErrTimestampNotUTC) {
 		t.Fatalf("non-UTC observed_at = %v", err)
+	}
+}
+
+func validDispositionSupersession() domain.FindingDispositionSupersession {
+	return domain.FindingDispositionSupersession{
+		RunID: "run-1", ReversingRound: 3, FindingID: "finding-1", SupersededRound: 1,
+		RemediationInvocationID: "review-run-1-2",
+		DriftAuditDigest:        domain.Digest("sha256:" + strings.Repeat("b", 64)),
+		Authority: domain.DispositionSupersessionAuthority{
+			Kind: domain.DispositionSupersessionHumanCommand,
+			Command: &domain.DispositionSupersessionCommand{
+				ItemID: "item-1", ItemVersion: 1, CommandID: "command-1",
+			},
+		},
+		CreatedAt: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC),
+	}
+}
+
+func TestFindingDispositionSupersessionValidate(t *testing.T) {
+	t.Parallel()
+	valid := validDispositionSupersession()
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid human supersession rejected: %v", err)
+	}
+	if !slices.Equal(domain.AllDispositionSupersessionAuthorityKinds,
+		[]domain.DispositionSupersessionAuthorityKind{"auto_route", "human_command"}) {
+		t.Fatalf("authority kinds = %v, want the plan §7 pair", domain.AllDispositionSupersessionAuthorityKinds)
+	}
+	// Every registered kind validates with exactly the command reference its
+	// kind requires.
+	for _, kind := range domain.AllDispositionSupersessionAuthorityKinds {
+		record := validDispositionSupersession()
+		record.Authority.Kind = kind
+		if kind != domain.DispositionSupersessionHumanCommand {
+			record.Authority.Command = nil
+		}
+		if err := record.Validate(); err != nil {
+			t.Fatalf("valid %s supersession rejected: %v", kind, err)
+		}
+	}
+
+	type record = domain.FindingDispositionSupersession
+	command := func(mutate func(*domain.DispositionSupersessionCommand)) func(*record) {
+		return func(r *record) {
+			changed := *r.Authority.Command
+			mutate(&changed)
+			r.Authority.Command = &changed
+		}
+	}
+	for name, tc := range map[string]struct {
+		mutate func(*record)
+		want   error
+	}{
+		"run":         {func(r *record) { r.RunID = "" }, domain.ErrEmptyID},
+		"finding":     {func(r *record) { r.FindingID = "" }, domain.ErrEmptyID},
+		"remediation": {func(r *record) { r.RemediationInvocationID = "" }, domain.ErrEmptyID},
+		"superseded round": {
+			func(r *record) { r.SupersededRound = 0 }, domain.ErrNonPositive,
+		},
+		"reversing round equal": {
+			func(r *record) { r.ReversingRound = r.SupersededRound }, domain.ErrDispositionSupersessionInvalid,
+		},
+		"reversing round earlier": {
+			func(r *record) { r.SupersededRound = 4 }, domain.ErrDispositionSupersessionInvalid,
+		},
+		"audit digest empty": {
+			func(r *record) { r.DriftAuditDigest = "" }, domain.ErrDispositionSupersessionInvalid,
+		},
+		"audit digest malformed": {
+			func(r *record) { r.DriftAuditDigest = "sha256:short" }, domain.ErrDispositionSupersessionInvalid,
+		},
+		"authority kind zero": {
+			func(r *record) { r.Authority.Kind = "" }, domain.ErrInvalidSupersessionAuthorityKind,
+		},
+		"authority kind unknown": {
+			func(r *record) { r.Authority.Kind = "operator" }, domain.ErrInvalidSupersessionAuthorityKind,
+		},
+		"human without command": {
+			func(r *record) { r.Authority.Command = nil }, domain.ErrDispositionSupersessionInvalid,
+		},
+		"automatic with command": {
+			func(r *record) { r.Authority.Kind = domain.DispositionSupersessionAutoRoute },
+			domain.ErrDispositionSupersessionInvalid,
+		},
+		"command item": {
+			command(func(c *domain.DispositionSupersessionCommand) { c.ItemID = "" }), domain.ErrEmptyID,
+		},
+		"command id": {
+			command(func(c *domain.DispositionSupersessionCommand) { c.CommandID = "" }), domain.ErrEmptyID,
+		},
+		"command item version": {
+			command(func(c *domain.DispositionSupersessionCommand) { c.ItemVersion = 0 }), domain.ErrNonPositive,
+		},
+		"time zero": {func(r *record) { r.CreatedAt = time.Time{} }, domain.ErrMissingTimestamp},
+		"time not UTC": {
+			func(r *record) { r.CreatedAt = r.CreatedAt.In(time.FixedZone("offset", 3600)) },
+			domain.ErrTimestampNotUTC,
+		},
+		"run invalid UTF-8": {
+			func(r *record) { r.RunID = "run-\xff" }, domain.ErrDispositionSupersessionInvalid,
+		},
+		"finding invalid UTF-8": {
+			func(r *record) { r.FindingID = "finding-\xff" }, domain.ErrDispositionSupersessionInvalid,
+		},
+		"remediation invalid UTF-8": {
+			func(r *record) { r.RemediationInvocationID = "review-\xff" },
+			domain.ErrDispositionSupersessionInvalid,
+		},
+		"command item invalid UTF-8": {
+			command(func(c *domain.DispositionSupersessionCommand) { c.ItemID = "item-\xff" }),
+			domain.ErrDispositionSupersessionInvalid,
+		},
+		"command id invalid UTF-8": {
+			command(func(c *domain.DispositionSupersessionCommand) { c.CommandID = "command-\xff" }),
+			domain.ErrDispositionSupersessionInvalid,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			changed := validDispositionSupersession()
+			tc.mutate(&changed)
+			if err := changed.Validate(); !errors.Is(err, tc.want) {
+				t.Fatalf("Validate() = %v, want %v", err, tc.want)
+			}
+		})
 	}
 }

@@ -554,6 +554,22 @@ func TestGolden(t *testing.T) {
 		AdjudicationDigest: domain.Digest("sha256:" + strings.Repeat("a", 64)),
 		CreatedAt:          ts,
 	}
+	humanSupersession := domain.FindingDispositionSupersession{
+		RunID: finding.RunID, ReversingRound: 3, FindingID: finding.ID, SupersededRound: 1,
+		RemediationInvocationID: "review-run-1-2",
+		DriftAuditDigest:        domain.Digest("sha256:" + strings.Repeat("b", 64)),
+		Authority: domain.DispositionSupersessionAuthority{
+			Kind: domain.DispositionSupersessionHumanCommand,
+			Command: &domain.DispositionSupersessionCommand{
+				ItemID: "production-review-diminishing-run-1-3", ItemVersion: 1, CommandID: "command-1",
+			},
+		},
+		CreatedAt: ts,
+	}
+	autoSupersession := humanSupersession
+	autoSupersession.Authority = domain.DispositionSupersessionAuthority{
+		Kind: domain.DispositionSupersessionAutoRoute,
+	}
 	initiator := domain.InitiatorConfig{
 		Type: domain.InitiatorTypeLabel, Label: "freeside", Mode: domain.InitiatorModePropose,
 	}
@@ -1591,6 +1607,8 @@ func TestGolden(t *testing.T) {
 		{"shadow_review_record", shadowReviewRecord},
 		{"classifier_accuracy_sample", classifierAccuracySample},
 		{"review_disposition_record", reviewDisposition},
+		{"finding_disposition_supersession_human_command", humanSupersession},
+		{"finding_disposition_supersession_auto_route", autoSupersession},
 		{"review_failure", reviewFailure},
 		{"review_recovery_transition", reviewRecovery},
 		{"review_configuration_recovery_transition", configRecovery},

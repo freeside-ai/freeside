@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"time"
+	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
@@ -71,6 +72,92 @@ func (r ReviewDispositionRecord) Validate() error {
 		return fmt.Errorf("review disposition created_at: %w", ErrMissingTimestamp)
 	case r.CreatedAt.Location() != time.UTC:
 		return fmt.Errorf("review disposition created_at: %w", ErrTimestampNotUTC)
+	}
+	return nil
+}
+
+// DispositionSupersessionCommand identifies the human continue_under_policy
+// decision that ordered a reversal: the attention item, the item version the
+// command was issued against, and the command.
+type DispositionSupersessionCommand struct {
+	ItemID      ItemID `json:"item_id"`
+	ItemVersion int    `json:"item_version"`
+	CommandID   string `json:"command_id"`
+}
+
+// DispositionSupersessionAuthority is who ordered a reversal. Command is
+// present exactly for a human_command and renders an explicit null otherwise:
+// the automatic route carries no stored reference, because its gate re-derives
+// it from the audit, the run's policy, and the stored dispositions.
+type DispositionSupersessionAuthority struct {
+	Kind    DispositionSupersessionAuthorityKind `json:"kind"`
+	Command *DispositionSupersessionCommand      `json:"command"`
+}
+
+// FindingDispositionSupersession is the immutable record that a drift
+// audit's reversal undid a fix (plan §7 Review Drift). It never rewrites the
+// fixed disposition it names; the finding's effective latest disposition
+// reads as declined from ReversingRound on.
+//
+// RemediationInvocationID is copied from the superseded disposition and binds
+// the reversal to the change that made the fix. The record is a claim: store
+// reconstruction re-proves the disposition, the audit, and the authority
+// against current state before any caller acts on it.
+type FindingDispositionSupersession struct {
+	RunID                   RunID                            `json:"run_id"`
+	ReversingRound          int                              `json:"reversing_round"`
+	FindingID               FindingID                        `json:"finding_id"`
+	SupersededRound         int                              `json:"superseded_round"`
+	RemediationInvocationID InvocationID                     `json:"remediation_invocation_id"`
+	DriftAuditDigest        Digest                           `json:"drift_audit_digest"`
+	Authority               DispositionSupersessionAuthority `json:"authority"`
+	CreatedAt               time.Time                        `json:"created_at"`
+}
+
+// Validate reports whether the supersession is identified, orders its two
+// rounds, names a well-formed audit digest, and carries the authority shape
+// its kind requires.
+func (s FindingDispositionSupersession) Validate() error {
+	switch {
+	case s.RunID == "" || s.FindingID == "" || s.RemediationInvocationID == "":
+		return fmt.Errorf("disposition supersession identity: %w", ErrEmptyID)
+	case s.SupersededRound < 1:
+		return fmt.Errorf("disposition supersession superseded_round %d: %w", s.SupersededRound, ErrNonPositive)
+	case s.ReversingRound <= s.SupersededRound:
+		return fmt.Errorf("disposition supersession reversing_round %d is not after superseded_round %d: %w",
+			s.ReversingRound, s.SupersededRound, ErrDispositionSupersessionInvalid)
+	case !contentaddr.Valid(string(s.DriftAuditDigest)):
+		return fmt.Errorf("disposition supersession drift_audit_digest %q: %w",
+			s.DriftAuditDigest, ErrDispositionSupersessionInvalid)
+	case !s.Authority.Kind.valid():
+		return fmt.Errorf("disposition supersession authority kind %q: %w",
+			s.Authority.Kind, ErrInvalidSupersessionAuthorityKind)
+	case (s.Authority.Kind == DispositionSupersessionHumanCommand) != (s.Authority.Command != nil):
+		return fmt.Errorf("disposition supersession %s authority command reference: %w",
+			s.Authority.Kind, ErrDispositionSupersessionInvalid)
+	case s.CreatedAt.IsZero():
+		return fmt.Errorf("disposition supersession created_at: %w", ErrMissingTimestamp)
+	case s.CreatedAt.Location() != time.UTC:
+		return fmt.Errorf("disposition supersession created_at: %w", ErrTimestampNotUTC)
+	}
+	identifiers := []string{string(s.RunID), string(s.FindingID), string(s.RemediationInvocationID)}
+	if command := s.Authority.Command; command != nil {
+		if command.ItemID == "" || command.CommandID == "" {
+			return fmt.Errorf("disposition supersession authority command: %w", ErrEmptyID)
+		}
+		if command.ItemVersion < 1 {
+			return fmt.Errorf("disposition supersession authority item_version %d: %w",
+				command.ItemVersion, ErrNonPositive)
+		}
+		identifiers = append(identifiers, string(command.ItemID), command.CommandID)
+	}
+	// Marshaling rewrites invalid UTF-8 to U+FFFD, so two records differing
+	// only in such bytes would share a stored body.
+	for _, identifier := range identifiers {
+		if !utf8.ValidString(identifier) {
+			return fmt.Errorf("disposition supersession identifier %q: %w",
+				identifier, ErrDispositionSupersessionInvalid)
+		}
 	}
 	return nil
 }

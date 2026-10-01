@@ -2251,6 +2251,34 @@ func (r DriftAuditRoute) valid() bool {
 	}
 }
 
+// DispositionSupersessionAuthorityKind names who ordered a drift reversal
+// (plan §7 Review Drift): the automatic route for the run's one simplification
+// round, or a human continue_under_policy command. It fixes whether the
+// supersession record carries a command reference
+// (FindingDispositionSupersession.Validate). The zero value is invalid by
+// design.
+type DispositionSupersessionAuthorityKind string
+
+const (
+	DispositionSupersessionAutoRoute    DispositionSupersessionAuthorityKind = "auto_route"
+	DispositionSupersessionHumanCommand DispositionSupersessionAuthorityKind = "human_command"
+)
+
+// AllDispositionSupersessionAuthorityKinds lists every valid
+// DispositionSupersessionAuthorityKind.
+var AllDispositionSupersessionAuthorityKinds = []DispositionSupersessionAuthorityKind{
+	DispositionSupersessionAutoRoute, DispositionSupersessionHumanCommand,
+}
+
+func (k DispositionSupersessionAuthorityKind) valid() bool {
+	switch k {
+	case DispositionSupersessionAutoRoute, DispositionSupersessionHumanCommand:
+		return true
+	default:
+		return false
+	}
+}
+
 // DispatchThreshold is the resolved-policy dispatch threshold the not-accepted
 // predicate takes as a parameter, bounded below to `medium` or `high` (never
 // `low`) and defaulting to `high` (plan §7). Resolving it from a policy key is
