@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 75
+revision: 76
 status: active
 updated: 2026-09-30
 ---
@@ -181,9 +181,10 @@ and API name the entity `Task` and reference it by `task_id`.
 
 1. A manual submission from the CLI or a paired client, a labeled issue, or
    a scanner proposal creates a task.
-2. A specifier turns it into a specification using research artifacts fetched
-   by the daemon. When the submission is a sketch, the specifier asks me
-   first.
+2. A specifier turns it into a specification. It has no web access: a
+   researcher answers its research questions with a stored report, and the
+   daemon fetches allowlisted sources. When the submission is a sketch, the
+   specifier asks me first.
 3. I approve the specification in the attention inbox. For a task bound to an
    issue, the daemon then posts the approved public plan as one comment on
    that issue.
@@ -237,8 +238,10 @@ maintenance still decide whether Freeside creates a positive return.
    have lifecycles, type-specific actions, optimistic concurrency, cross-device
    synchronization, honest per-delivery status, push notification, and
    self-contained decision cards on iPhone and Mac.
-2. **Keep specification in the tested value proposition, but severable.** It uses
-   daemon-fetched research artifacts (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)). (Decider: user.)
+2. **Keep specification in the tested value proposition, but severable.** Its
+   research arrives as stored artifacts, a researcher's reports and
+   daemon-fetched sources, never as web access for the specifier (Section
+   [5.4](#54-credential-modes-egress-profiles-and-concurrency)). (Decider: user.)
 3. **Support autonomous initiation.** Manual, label, and scan initiators run in
    `propose` or `auto_start` mode.
 4. **Use yield-driven review remediation.** Round counts are emergency brakes,
@@ -943,7 +946,9 @@ and the mounted file is readable at agent privilege). That is the documented
 residual this mode accepts, backstopped by `provider_only` egress and export
 secret scanning. The vendor behaviors this path depends on are pinned-CLI
 empirical contracts, re-proved on every CLI version bump, not vendor-documented
-guarantees; the work unit's decision note lists them.
+guarantees; the work unit's decision note lists them. Where a harness's web
+search runs, on the provider's servers or inside the ward, is one of them
+(research for the specifier, below).
 
 Secret scanning is **best effort**, deliberately. It covers supported text
 formats. Size, type, provenance, and publication controls govern opaque
@@ -955,7 +960,7 @@ sit above the credential-mode floor and represent different risk classes:
 
 | Profile | Access and risk |
 | --- | --- |
-| `provider_only` | Default. The writer has one host-only network: no direct external path and no guest DNS, and the provider API is reachable only through the daemon's allowlisting proxy. The host gateway remains a network neighbor. The production API is isolated by its loopback-or-Tailscale-owned listener gate; a Tailscale-bound daemon also opens the loopback half of that gate at the same port for same-host clients, which admits no caller the gate refuses. Every other host service needs its own declared binding policy, and the ward proxy is the one intentional agent-reachable exception. |
+| `provider_only` | Default. The writer has one host-only network: no direct external path and no guest DNS, and the provider API is reachable only through the daemon's allowlisting proxy. The host gateway remains a network neighbor. The production API is isolated by its loopback-or-Tailscale-owned listener gate; a Tailscale-bound daemon also opens the loopback half of that gate at the same port for same-host clients, which admits no caller the gate refuses. Every other host service needs its own declared binding policy, and the ward proxy is the one intentional agent-reachable exception. The profile does not by itself withhold a web search that runs on the provider's servers, as the pinned Claude CLI's does (#1620); the launch decides which roles get that tool (research for the specifier, below). |
 | `provider_registry` | Opt-in per project policy; `provider_only` stays the default, and the rules follow the table. |
 | `provider_web_read` | Materially wider credential-exfiltration exposure. Read-only HTTP can still exfiltrate through URLs, headers, bodies, redirects, and DNS while the provider credential shares the trust domain. It requires an explicit record of the wider exposure and a small trusted-domain allowlist. |
 | Clean verification | No network access. |
@@ -991,13 +996,102 @@ Section [14](#14-risks) records the residual; a project policy may exclude such 
 exposure is materially narrower than `provider_web_read` and is priced
 separately from it, never folded into that record.
 
-The 1B specifier gets no general web access. It runs under `provider_only`
-and emits typed fetch requests. The daemon fetches allowed URLs and returns
-immutable, digest-addressed research artifacts, then reinvokes the
-specifier for a bounded number of iterations. This removes the broadest
-credential-exfiltration surface from the injection-exposed stage, and it
-makes research inputs provenance-bound, cacheable, and reproducible.
-Invocations bind to artifact IDs, not live web state.
+**Research for the specifier.** The 1B specifier gets no general web access.
+It runs under `provider_only` with no web tool, because it reads untrusted
+task text and research while it holds the task, the repository, and its
+provider credential. No web tool is a requirement on the specification
+launch, not a consequence of the profile: the Claude CLI's search works
+under `provider_only` (#1620), so the adapter withholds web tools from the
+specifier and its conformance record proves that per build (#1657). This
+revision sets the requirement for the specification launch only; whether
+the implementation and review launches keep provider-side search is open
+(#1659). The specifier's
+research reaches it only as immutable, digest-addressed artifacts, and its
+invocations bind to artifact IDs, not live web state. It asks in two typed
+forms, and the daemon reinvokes it with the results for a bounded number of
+iterations (`specification.max_iterations`):
+
+- **A fetch request** names a URL the specifier already knows. The daemon
+  fetches it when the project's research allowlist admits it, such as the
+  task's own issue (#748), and returns the page as an artifact. Fetched
+  research is provenance-bound, cacheable, and reproducible.
+- **A research request** carries research questions (revision 76). The
+  **researcher**, a second role in the specification stage, searches the web,
+  refines its queries, and returns one **research report**. The specifier
+  reads the report and never the pages behind it.
+
+The researcher's rules:
+
+- **It sees only the questions.** Its launch receives the research questions
+  and nothing else: no task text, no repository, no task files, no owner
+  answers, and no forge or write credential. It holds the provider
+  credential of its own agent's enrollment, which may be the specifier's.
+  The daemon bounds the questions' count and size and secret-scans them
+  before the launch, because they are the one thing that crosses from the
+  specifier's ward to the researcher's. A leak from the researcher's ward
+  exposes at most the questions and that credential. The questions are
+  themselves a channel: an injected specifier can write task or repository
+  text into them, and they leave as search queries. The bounds and the scan
+  narrow that channel and do not close it (Section [14](#14-risks)).
+- **It runs under `provider_only` with search as its only tool.** This gives
+  the researcher no network access the profile didn't already allow. In the
+  #1620 spike, on the Claude CLI build the agent image pinned, the search ran
+  on the provider's servers and the ward connected only to the provider.
+  That is one build's observed behavior, re-proved on every CLI version
+  bump. The researcher cannot read a full
+  page: for each search it gets the result URLs and titles and the summary
+  the provider writes from the pages. Fetching a page from inside the ward
+  would be a `provider_web_read` decision with that profile's explicit
+  wider-exposure record, and it is not granted. An adapter whose search needs
+  an authority beyond its provider's cannot run the research launch under this
+  profile, so it is not proved for the role (Admission). Search as the only
+  tool is a requirement on the adapter, which its conformance record proves
+  per build.
+- **The report is input, never authority.** It informs the specification and
+  cannot direct it, as with fetched research. The daemon validates the report
+  against its schema and stores it under its digest with the questions it
+  answers and the researcher's admission. Each finding lists its source URLs
+  and an observation time. The observation time is when the harness received
+  the search result, not when a source was retrieved: neither Claude CLI web
+  tool records a retrieval time (#1620). Unlike a fetched page, a report cannot be reproduced from
+  its sources, so the stored report is the record. A source URL in a report
+  is data. It never widens the research allowlist, and the daemon fetches it
+  only through an ordinary fetch request the allowlist admits.
+- **It is bounded and charged to the task.** Control-plane policy limits the
+  research requests in one specification run, the searches in one request,
+  and the report's size. A research request adds no iteration of its own: the
+  specifier invocation that issued it counted against
+  `specification.max_iterations`, and so does the one that reads the report.
+  A research launch's active time and usage are the task's, like other stage
+  work. The search limit is checked after the launch ends. The count the
+  daemon trusts is the harness's per-model usage record (`modelUsage` under
+  the Claude CLI, where `usage.server_tool_use` reads zero even when a
+  search ran), and that record exists only after the launch. So the limit
+  does not stop a running launch. A launch over the limit is a failed
+  request and its report is discarded. The searches it made stay spent and
+  are charged to the task. The stage's active-time budget is the only thing
+  that stops a running launch. Research requests from
+  one specifier invocation run one at a time.
+- **A failed request fails safe.** A research launch that fails, goes over a
+  limit, or returns an invalid report hands the specifier a typed failed
+  request in place of a report, and the specification run continues
+  (Roles and Launch Shapes). So does a researcher with no lineup line or a
+  failed admission. The specification's recorded inputs list every request
+  and its outcome, so spec approval shows research that failed. A missing
+  line, a failed admission, or a quota, credential-expiry, or capacity
+  failure also raises a `system_health` item naming the role, so missing
+  research is never silent (Admission).
+
+The `specification.research` policy key selects the path. `daemon_fetched`,
+the default, admits fetch requests only. `researcher` also admits research
+requests, and it asks work from the researcher role, so the role then needs
+a lineup line (Admitted Agents).
+
+This keeps the broadest credential-exfiltration surface away from the
+injection-exposed stage. Two rejected alternatives: search in the daemon
+fetcher (each refinement would reinvoke the whole specifier), and
+`provider_web_read` for the specifier (open web access beside its credential
+and the task).
 
 Provider concurrency has two independent controls:
 
@@ -1027,7 +1121,9 @@ account binding, and the token expiry where the auth method exposes one
    ward stage launch that draws on a pool holds one slot from its admission
    until the daemon proves every container of the launch absent, the point
    its memory reservation also ends (Machine Capacity): the specifier,
-   implementer, remediator, reviewer, and shadow reviewer alike. A recorded
+   researcher, implementer, remediator, reviewer, and shadow reviewer alike.
+   A research launch starts only after the specifier invocation that asked
+   for it has ended, so a specification run holds one slot at a time. A recorded
    outcome alone doesn't free the slot, because a cancelled launch records
    its outcome before its containers stop. A call launch takes no
    slot, because a one-turn call queued behind hour-long stage runs would
@@ -1059,7 +1155,8 @@ far more than one machine holds.
 - **Every ward container has declared limits.** The ward launches each
   container with an explicit CPU cap and memory limit, never the runtime's
   default. A stage launch declares one size for its long-lived container (the
-  agent for a ward role, the review container for a review) and runs its
+  agent for a ward role, the review container for a review; the research
+  launch is a launch class of its own, sized without a repository) and runs its
   short helpers (seeders, observers, the exporter) inside that reservation,
   because they run one after another within the launch. A verification job
   declares one size for its command containers, which also run one at a time.
@@ -1200,7 +1297,9 @@ the one its lineup line names.
   Claude subscription without editing a lineup. It covers the specifier,
   implementer, remediator, and reviewer. The shadow reviewer and every
   wardless role stay on the lineup, because their comparisons key on the
-  lineup line (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) and a per-task agent would split them. A task
+  lineup line (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) and a per-task agent would split them.
+  The researcher stays on the lineup too (revision 76), for a different
+  reason: no task has needed its own researcher agent yet. A task
   records one line per role, and one role never borrows another's line; a
   client may still set several lines from one choice, such as one writer
   agent for the specifier, implementer, and remediator. Only an
@@ -1216,7 +1315,10 @@ the one its lineup line names.
   and raises the ordinary card; it never falls back to the lineup.
 - **The Section [4](#4-the-attention-model) alternate-agent card** is the one per-attempt selection:
   a recorded choice for one attempt, for a stage attempt and for a call
-  alike. It overrides a task line for that attempt only.
+  alike. It overrides a task line for that attempt only. It never selects
+  the researcher: a failed research request fails safe and blocks no stage
+  (Roles and Launch Shapes), so there is no blocked attempt for the card to
+  retry and only the lineup picks that agent.
 
 The lines:
 
@@ -1276,8 +1378,9 @@ through current configuration.
 Specification, implementation, and review each
 define a launch: writer or read-only, output contract, severance, session
 mode, and an auxiliary-inference policy (`forbidden`, `declared`, or
-`observed`). The adapter maps the launch to harness-native controls or
-declares that it cannot. So any stage runs on any adapter whose proved
+`observed`). Specification also defines a second, narrower launch for its
+researcher, the research launch (Roles and Launch Shapes). The adapter maps
+the launch to harness-native controls or declares that it cannot. So any stage runs on any adapter whose proved
 capabilities cover its launch, and an agent carries no role. Review requires
 `forbidden`; the Claude baseline runs `observed`.
 An agent narrows behaviour inside a stage. It never waives or widens the
@@ -1289,16 +1392,20 @@ the agent.
 #### Roles and Launch Shapes
 
 A role owns a prompt and a lineup line, and it sits above stages and sites. A
-stage may hold several roles: implementation holds the implementer and the
-remediator, and review holds the reviewer and the shadow reviewer. Every role
-in a stage runs that stage's launch under that stage's floors. A role may span
+stage may hold several roles: specification holds the specifier and the
+researcher, implementation holds the implementer and the remediator, and
+review holds the reviewer and the shadow reviewer. Every role in a stage runs
+a launch that stage defines, under that stage's floors. Only specification
+defines more than one: the specifier runs the specification launch, and the
+researcher runs the research launch below. A role may span
 several Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) sites: the publication author has two. Each site keeps
 its own authority contract, whatever role it belongs to (Section
 [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)). Sites are not folded into stages, because a site's authority
 contract is what bounds a model answer and a stage has none to give it.
 
 There are two launch shapes. The **stage launch** is the one above: a
-workspace, tools, and a ward. The **call launch** is the shape of every Section
+workspace, tools, and a ward. The research launch is a stage launch with
+less in it, not a third shape. The **call launch** is the shape of every Section
 [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) site: no tools of any kind, no workspace, one turn, Freeside's prompt, the
 site's fixed instruction where it declares one, and no other instruction,
 structured output, no saved session, and no user or host
@@ -1324,10 +1431,26 @@ call in the ward would add nothing the no-tools proof does not already give
 while making every judgment call wait on a container and tying the daemon's
 fail-safe behaviour to ward availability.
 
+The **research launch** (revision 76) is the researcher's. It runs in the
+ward under `provider_only`, read-only, in a fresh context with no saved
+session, and its output contract is the research report's schema. Its
+workspace is empty: no repository and no task files. The research questions
+are its only input, web search is its only tool, and the research report is
+its only output. It has its own launch class and declared size (Machine
+Capacity) and takes a usage-pool slot like any ward stage launch. The
+specification stage's floors hold for it, and it widens none of them. The
+researcher is a ward role because its agent has a tool. Admission applies to
+it unchanged, including the attended first run of a new agent × launch pair.
+The Claude CLI's search is a side request (#1620), so two things are
+decided when the adapter is built and tested (#1657): the launch's
+auxiliary-inference policy, and whether that request's model can contradict
+the admitted offer.
+
 Whether a failure blocks the run or returns a declared fail-safe is a property
 of the role, not of the launch shape. The task namer fails safe to the
 identifier fallback; the adjudicator's fail-safe parks its batch to human
-attention; a ward role's failure blocks its stage.
+attention; the researcher's fail-safe hands the specifier a typed failed
+request; every other ward role's failure blocks its stage.
 
 #### Admission
 
@@ -1444,6 +1567,9 @@ run: each of its sites returns its declared fail-safe, and the daemon raises a
 entry. A wardless role whose admission fails at any step behaves the same way.
 The item's posture is the building unit's to settle (#1425). A ward role with
 no line blocks its stage and raises an AttentionItem, because a stage has no fail-safe to return.
+The researcher is the one ward role with a fail-safe (revision 76), so it
+follows the wardless rule: a missing line or a failed admission returns its
+failed request and raises the `system_health` item.
 
 Every run records what was requested (agent and prompt, each by name and bound
 digest, one provenance entry per role), what was admitted (the step 5
@@ -2560,8 +2686,8 @@ the pull request can find it, and the text outlives the daemon's store.
   what will be built, the approach, and what is out of scope. It quotes no
   research and no owner answers. The specification's summary and body are
   never posted. Both address the owner and the implementer, both may quote
-  daemon-fetched research and owner answers, and a body at its 64 KiB bound
-  fills a GitHub comment by itself. The specification artifact is minted at normal
+  daemon-fetched research, the research report, and owner answers, and a
+  body at its 64 KiB bound fills a GitHub comment by itself. The specification artifact is minted at normal
   sensitivity, and so is the public plan; a sensitivity value or public label
   grants nothing (Section [5.15](#515-evidence-and-images)). The approval and
   the screen make the public plan postable. The approved specification digest
@@ -2758,7 +2884,7 @@ initiators:
      mode: auto_start}                  # explicit, recorded preset override
   - {type: scan, query: stale_prs, schedule: daily, mode: propose}   # Phase 2
 specification:  {driver: claude, enabled: true, egress: provider_only,
-                 research: daemon_fetched}
+                 research: daemon_fetched}  # or researcher: adds web search
 implementation: {driver: claude, failed_execution_retries: 2,
                  egress: provider_only}
 review:
@@ -2788,6 +2914,14 @@ telemetry:      {shadow_review_rate: 0.2}
 Additional rules:
 
 - `rein` resolves into digested per-run policy with per-key provenance.
+- `specification.research` is `daemon_fetched` or `researcher`. Under
+  `daemon_fetched` the specifier's only research is the daemon fetcher's
+  allowlisted sources. `researcher` adds research requests, answered by the
+  researcher role's report (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)). `daemon_fetched` is the default. Neither value gives the
+  specifier web access. `egress` here is the specification launch's profile
+  only. It never admits `provider_web_read`, because that section keeps the
+  specifier off the web. The research launch always runs under
+  `provider_only`, whatever this key selects.
 - **Manual initiation uses `freesided submit`.** It registers the task's
   source as a digest-addressed artifact, creates a new task and specification
   run for each deliberate submission, and reserves its implementation identity.
@@ -2982,8 +3116,8 @@ The engine, not an agent, runs deterministic policy jobs:
 - the approved-specification comment (Section [5.11](#511-github-integration-reconciliation-plus-intake)); and
 - cleanup.
 
-Agents appear where judgment is the work: specifier, implementer, remediator,
-diagnostic, task namer, publication author, finding classifier, finding
+Agents appear where judgment is the work: specifier, researcher, implementer,
+remediator, diagnostic, task namer, publication author, finding classifier, finding
 adjudicator (Section [7](#7-review-policy)), drift auditor (Section [7](#7-review-policy)),
 attention discussion, reviewer, shadow reviewer, and, later, briefer.
 Attention discussion is the explain site that answers a Discuss turn on an
@@ -2998,8 +3132,15 @@ Each of these is a **role**, and this list is the closed role list of Section
 narrower selection picks one. A task line may pick the agent for the
 specifier, implementer, remediator, or reviewer of one task, and the
 alternate-agent card may pick it for one attempt (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted
-Agents; revision 73). The specifier, implementer, remediator, reviewer, and
-shadow reviewer are ward roles. The rest are wardless roles whose work is the judgment calls below.
+Agents; revision 73). Neither picks the researcher's agent, which only the
+lineup names (revision 76). The specifier, researcher, implementer,
+remediator, reviewer, and shadow reviewer are ward roles. The rest are
+wardless roles whose work is the judgment calls below. The researcher has a
+lineup line of its own, so it can run a cheaper agent than the specifier: a
+task line can put one task's specifier on a larger model while its research
+stays on the lineup's. Research fetching, above, stays an engine job: the
+fetcher still serves allowlisted sources, and the researcher adds web search
+beside it (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)).
 Verification is an engine job, above, and never a role.
 
 Evidence publication stays on the deterministic-jobs list. Writing the public
@@ -5432,7 +5573,8 @@ largest runtime unknown. It blocks only 1A.2, never 1A.0 or 1A.1.
 
 Phase 1B turns the secure path into the useful daily workflow:
 
-`labeled issue → daemon-fetched research → specification → spec approval →
+`labeled issue → research (the researcher's report and daemon-fetched
+sources) → specification → spec approval →
 implementation → gauntlet → Freeside-invoked review (Section [7](#7-review-policy),
 pre-publication) → finding adjudication → yield-driven remediation and
 pattern sweeps → diminishing-returns or dispute item → clean: PR under a
@@ -5447,6 +5589,9 @@ chain and never a readiness prerequisite.
 Phase 1B adds:
 
 - the specifier and research fetcher;
+- the researcher, which does the specifier's web search (revision 76; the
+  contract #1656, the ward's research launch #1657, and the specification
+  loop #1658, filed as deferrals with no wave yet);
 - label-initiator intake (scan-query initiators stay Phase 2);
 - the Freeside-invoked review stage (Section [7](#7-review-policy); implementation #427;
   pre-publication re-anchor #527), with ReviewSource freshness verification
@@ -5588,6 +5733,11 @@ Contracts and fakes coordinate implementation. CI keeps lanes honest.
 | **9 (1B.1): provider diversity** | Parallel lanes; split-eligible | One agent vocabulary and a second real provider. The agent-vocabulary contract chain, positions assigned at planning: review admission and provenance (#898), the cross-lane failure model (#899), judgment roles in the lineup (#900, decided in revision 65: every agent activity is a lineup role), the role-name lineup keys and wardless admission class that decision needs (#1421, `starts-after` #900), then agent and run facts in the clients (#979). The Codex tail: the adapter registration (#406, `starts-after` the merged admitted-agent contract #894), ward's second vendor topology (#407), the continuation compatibility digest (#873), then #397 by explicit owner decision on shadow evidence (none existed at the wave-6 exit because the shadow configuration was never approved for a project, #1001; #397 `starts-after` #898 and #869 `starts-after` #899 are recorded under the ambiguity rule for wave-9 planning to confirm), then the StageDriver binding (#408, `merges-after` #873; Section [7](#7-review-policy) keeps #397 ahead of it so that Codex-implements plus Codex-reviews does not become the default pairing); the alternate-provider retry card (#869, `starts-after` #406 and #408). The ward front with no open prerequisite, startable at wave start or earlier by fiat: the Codex probe refresh-safety spike (#866). Guided enrollment with the two-step cutover (#867) `starts-after` #1421, because `freesided auth adopt` emits the first real lineup and must not emit stage-named keys (owner decision, revision 65); until then #867 no longer starts early by fiat. The doctor account probe (#868) `starts-after` #406 and #866. The pi adapter, enrollment, and specification agent (#895) `starts-after` #897 and #867, specification only, with its pre-adoption gates run against the pinned build. The capacity cluster (revisions 72 and 73), its contract units placed in the same chain at planning: the shared-identity writer lease (#1585), per-pool execution limits (#1596, `starts-after` #1585), the host memory budget and machine-capacity hold (#1598, `starts-after` #898 and #1597), and task lines (#1600, `starts-after` #1421). #1585's prerequisite has merged, so it may start before the wave by fiat once the spine gives it a chain position. Beside the chain: the budget command (#1595, `starts-after` #1598), the task-line change command (#1601, `starts-after` #1600), the hold wording in the clients (#1599, `starts-after` #1596 and #1598), and the New Task agent picker (#1602, `starts-after` #1600 and #979). The spine splits this wave into 9a (contracts) and 9b (adapters) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because a wave tracker is titled `Wave N: <Name>`. Deferral drain: the agent, provider, and capacity clusters. Exit proof: a real unattended Codex run and a pi specification; provider switching explicit in the lineup and visible in the clients; correct cost and independence records (#901); quota and capacity failures recover through the retry card, never a silent fallback. 1B.1 exit evaluation. |
 | **10 (1B.2): the initiative view** | Integrated | Many work units become one picture. Typed relationship kinds in the Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection) capture records (#884, `exclusive-with` every open contract unit), the frontier projection, and the deterministic initiative view rendering the dependency graph (#885). 1B exit evaluation against recorded comprehension and operational evidence. |
 
+Wave 5's row stays as built: it shipped the specifier with daemon fetching
+only. The researcher (revision 76, #1656 to #1658) is Phase 1B work that no
+wave row names yet, so it waits in the deferral queue for a planning sweep or
+owner fiat.
+
 Wave 7's transaction closure also retires the `publish_blocked`
 `choose_alternate_profile` action (#936, revision 44). The publication path a
 repository uses is repository configuration, settled at onboarding, never a
@@ -5726,47 +5876,77 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 75 ("Filing Recovery Never Retries an Unproven Create"):
+Revision 76 ("A Researcher Does the Specifier's Web Search"):
 
-1. **Follow-up filing recovery adopts the comment rule.** Section
-   [5.17](#517-follow-up-issue-filing) no longer lets recovery prove absence
-   before retrying. GitHub offers no idempotency key for issue creation, and
-   a listing can lag, so an empty listing cannot show that a create failed. A
-   create now needs the evidence Section
-   [5.11](#511-github-integration-reconciliation-plus-intake) requires for the
-   approved-specification comment: no dispatch-started marker, or a recorded
-   definite rejection. A definite rejection, or a transient one whose retry
-   bound is spent, ends in a terminal `refused` outcome. An unproven attempt
-   with no candidate after the settle interval, two or more candidates, or an
-   incomplete listing is residual ambiguity: a terminal `ambiguous` outcome
-   for the creation intent and a `system_health` item. An intent adopts a
-   candidate only after its own first dispatch, since before it any candidate
-   is foreign. It records the IDs of candidates it saw before that dispatch,
-   the Section [5.11](#511-github-integration-reconciliation-plus-intake)
-   pre-dispatch ID set, and never adopts one of them, so a foreign issue
-   cannot be adopted after a rejected or unproven dispatch. The intent window
-   still bounds a candidate. Rejected: keeping "proves absence" (it names no mechanism, and
-   none exists).
-2. **An ambiguous filing releases the repository but ends adoption there.**
-   Any terminal outcome ends the repository's outstanding intent, so later
-   filings go ahead. Because the ambiguous create may still commit and its
-   issue would pass a later intent's candidate validation, no later intent in
-   that repository adopts a candidate at any step; an unproven attempt there
-   is residual ambiguity at once. Rejected: blocking the repository
-   until a human settles the intent (it needs a new human action on the item,
-   an API and client change outside this revision); and adopting as before
-   (a late stray could be ledgered to the wrong proposal, and intake trusts
-   the ledger).
+1. **The specification stage gains a researcher role.** The specifier writes
+   research questions, the researcher searches the web and refines, and the
+   daemon stores its report and reinvokes the specifier with it (Section
+   [5.4](#54-credential-modes-egress-profiles-and-concurrency), research for the specifier). The specifier still has no web access,
+   and the daemon fetcher stays for allowlisted sources. The researcher joins
+   the closed role list as a ward role (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)).
+   Rejected: search in the daemon fetcher (every refinement reinvokes the
+   whole specifier, up to its iteration bound, which is slow and costly on a
+   large model); and `provider_web_read` for the specifier (the stage most
+   exposed to injection would hold open web access beside its credential and
+   the task).
+2. **The researcher runs under `provider_only` with search as its only
+   tool.** The #1620 spike showed that the pinned Claude CLI's search runs on
+   the provider's servers and its page fetch runs inside the ward, so
+   search needs no wider profile and fetching would. The cost is that the
+   researcher cannot read a full page. Rejected: `provider_web_read` for the
+   researcher (a wider profile for a gain no run has yet shown to be
+   needed); and an API key under `api_key_isolated` calling a server-side
+   fetch tool (untested, and a second credential type for one role).
+3. **The researcher sees only the research questions.** No task text,
+   repository, task files, or owner answers reach it, and the daemon bounds
+   and secret-scans the questions. The questions remain a channel an
+   injected specifier can write into (Section [14](#14-risks)). Rejected: giving the
+   researcher the task for better search (the whole task would then sit in
+   a ward that reads the open web).
+4. **Only the lineup picks the researcher's agent.** A task line doesn't
+   cover it, because no task has needed its own researcher agent, and the
+   alternate-agent card never selects it, because its failures block no
+   stage. The plan names no model; the researcher has its own lineup line so
+   it can run a cheaper agent than the specifier. The baseline lineup's
+   line for it is #1426's to add, and the decision note records the owner's
+   pick.
+5. **Research is limited and charged to the task.** Policy limits research
+   requests per specification run, searches per request, and report size. A
+   request adds no specifier iteration of its own. The search limit is
+   checked after a launch ends, because the count the daemon trusts is the
+   harness's per-model usage record, which exists only then. A launch over
+   the limit has its report discarded, and the searches it made stay spent
+   and charged to the task. The stage's active-time budget is the only
+   thing that stops a running launch.
+6. **The researcher has its own launch, and its failure fails safe.** The
+   research launch is a second, narrower launch in the specification stage:
+   an empty workspace, the questions in, the report out. It is a stage
+   launch, not a third shape. A failed request, a missing line, or a failed admission reaches the
+   specifier as a typed result and does not block the stage; the last two,
+   and a quota, expiry, or capacity failure, also raise a `system_health`
+   item. Rejected: blocking the stage
+   (a search outage would stop specifications that can go on without it,
+   and the owner sees the failed request at spec approval either way).
+7. **A report records an observation time, not a retrieval time.** Neither
+   Claude CLI web tool records when a page was retrieved (#1620), so each
+   finding carries the time the harness received its search result.
+8. **The specifier's launch withholds web tools.** The #1620 spike showed
+   the Claude CLI's search working from a writer launch under
+   `provider_only`, so the profile alone does not keep the specifier off the
+   web. The specification launch now requires it, proved per adapter build
+   (#1657). Whether the implementation and review launches keep that search
+   is left open as #1659.
 
-(Owner-assigned #1441. The rule is the issue plan's recommendation, decided
-by the owner through this revision's review;
-[decision note](../devlog/2026-09-30-1530-filing-recovery-rule.md).)
+(Owner decision of 2026-09-29, #1614. Items 2 to 6 are the issue's
+recommended answers, decided by the owner through this revision's review;
+[decision note](../devlog/2026-09-30-1830-researcher-role.md). Implementation
+is filed as #1656, #1657, and #1658, and the open question as #1659.)
 
 ## 14. Risks
 
 | Risk | Current response |
 | --- | --- |
-| Provider credentials in `subscription_contained` | Document the residual; enforce egress floors; let the daemon fetch research for the most exposed stage; provide `api_key_isolated` as the escape. |
+| Provider credentials in `subscription_contained` | Document the residual; enforce egress floors; keep the most exposed stage, the specifier, off the web: the daemon fetches its allowlisted sources and a researcher in its own ward does its web search (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); provide `api_key_isolated` as the escape. Residual: the researcher's ward holds a provider credential. Its ward connects only to the provider, so its search queries are its one outward channel. That is reasoning from the #1620 connection record on one CLI build, not a tested exfiltration case. |
 | Registry egress under `subscription_contained` | Keep `provider_only` the default and the floor fixed. Admit `provider_registry` only per project policy through the per-authority proxy allowlist with TLS server-name pinning and no DNS, to public package registries consumed read-only, with any other authority routed to the `provider_web_read` record. Conformance-check the realized allowlist against the declared profile. Residual: the tunnel cannot constrain method or path. So a registry that co-hosts a write endpoint accepts an attacker-credentialed publish. Exclude such hosts per project where the residual is not acceptable, and provide `api_key_isolated` as the escape for anything wider. |
 | CI privilege crossing | Attest effective authority; block candidate automation changes; fail closed on drift; prohibit the daemon host as a runner. |
 | Reviewer-instruction poisoning | Compose agent and reviewer instructions from the trusted base, never the candidate; detect instruction-path edits mechanically and surface them as advisories that the human merge gate reads (Section [5.8](#58-control-plane-trust)). |
@@ -5789,7 +5969,7 @@ by the owner through this revision's review;
 | Backup confidentiality | Require encryption policy and exclude credentials by default. |
 | Large Phase 1A scope | Order it into three internal exits. |
 | Reviewer monoculture | Require a fresh-context adversarial review at every implementation wave exit. |
-| Prompt injection, the organizing threat | Keep write credentials out of workspaces; prove handoff; import through the out-of-process two-channel gauntlet; use trusted overlays; block automation paths and surface instruction-path edits; enforce egress floors; fetch research through the daemon; gate irreversible actions; use budgets and brakes. |
+| Prompt injection, the organizing threat | Keep write credentials out of workspaces; prove handoff; import through the out-of-process two-channel gauntlet; use trusted overlays; block automation paths and surface instruction-path edits; enforce egress floors; keep the specifier off the web, with allowlisted sources fetched by the daemon and web search done by a researcher that sees only the research questions (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); gate irreversible actions; use budgets and brakes. Residual: search results come from the open web, not an allowlist, so a research report can carry injected text to the specifier. The report is input and never authority, and the specifier's ward still connects only to its provider. An injected researcher can leak only what its ward holds, the questions and its credential. Also residual: an injected specifier can write task or repository text into its research questions, which leave as search queries; the daemon bounds and secret-scans the questions, which narrows that channel without closing it. And `provider_only` does not withhold provider-side search from the implementation and review launches (#1659). |
 
 ## 15. Naming and References
 
