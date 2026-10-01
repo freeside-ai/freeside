@@ -150,3 +150,48 @@ func (a *ClaudeEnrollment) AppendGeneration(
 	})
 	return stamped, err
 }
+
+// Adoption backs ward's adoption port: the first-enrollment writes, plus the
+// read that finds an enrollment an identity already holds.
+type Adoption struct {
+	*ClaudeEnrollment
+}
+
+// Enrolled returns the identity's enrollment for the client and its current
+// generation; found is false when none holds a generation yet.
+func (a *Adoption) Enrolled(
+	ctx context.Context, identity domain.AuthIdentityID, client domain.HarnessClientKind,
+) (domain.ClientEnrollment, domain.EnrollmentGeneration, bool, error) {
+	var (
+		enrollment domain.ClientEnrollment
+		generation domain.EnrollmentGeneration
+		found      bool
+	)
+	err := a.store.Read(ctx, func(tx *store.ReadTx) error {
+		enrollments, err := tx.ListClientEnrollments(ctx, identity)
+		if err != nil {
+			return err
+		}
+		for _, candidate := range enrollments {
+			if candidate.HarnessClient != client {
+				continue
+			}
+			current, err := tx.CurrentEnrollmentGeneration(ctx, candidate.ID)
+			if errors.Is(err, store.ErrNotFound) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if found {
+				return fmt.Errorf("auth identity %s holds more than one %s enrollment", identity, client)
+			}
+			enrollment, generation, found = candidate, current, true
+		}
+		return nil
+	})
+	if err != nil {
+		return domain.ClientEnrollment{}, domain.EnrollmentGeneration{}, false, err
+	}
+	return enrollment, generation, found, nil
+}

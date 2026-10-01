@@ -96,6 +96,7 @@ type Adapters struct {
 	AuthState  *AuthState
 	Enrollment *Enrollment
 	Claude     *ClaudeEnrollment
+	Adoption   *Adoption
 }
 
 // Journal backs ward's journal and atomic leased-open interfaces.
@@ -128,12 +129,14 @@ func New(st *store.Store) (*Adapters, error) {
 		return nil, errors.New("ward store adapters: nil store")
 	}
 	authState := &AuthState{store: st, now: time.Now}
+	claude := &ClaudeEnrollment{store: st}
 	return &Adapters{
 		Journal:    &Journal{store: st},
 		Leaser:     &Leaser{store: st},
 		AuthState:  authState,
 		Enrollment: &Enrollment{store: st, authState: authState},
-		Claude:     &ClaudeEnrollment{store: st},
+		Claude:     claude,
+		Adoption:   &Adoption{ClaudeEnrollment: claude},
 	}, nil
 }
 

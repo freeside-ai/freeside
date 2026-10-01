@@ -27,6 +27,15 @@ var ErrCodexReviewOutcomeNotFound = errors.New("codex review outcome not found")
 
 const codexProductionReviewPromptVersion = "codex-production-review-prompt-v5"
 
+// ProductionReviewPromptIdentity is the name and content digest a lineup line
+// records for the reviewer and shadow reviewer prompt. The prompt is built in
+// code for each request, so its identity is the protocol version and the
+// daemon-owned rules it carries, not a file.
+func ProductionReviewPromptIdentity() (name string, digest domain.Digest) {
+	return codexProductionReviewPromptVersion, domain.Digest(contentaddr.Sum(
+		[]byte(codexProductionReviewPromptVersion + "\n" + codexProductionReviewRules)))
+}
+
 const codexProductionReviewRules = `Apply these daemon-owned Freeside review rules:
 1. Trust re-derivation
    Flag: a change treats stored or caller-supplied publish eligibility, approval, or provenance bits as authoritative without re-running the applicable gate against current trusted state.

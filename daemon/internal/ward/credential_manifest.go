@@ -23,19 +23,33 @@ func InspectCredentialVolumeManifest(
 	manifest CredentialManifestPolicy,
 	authorize RuntimeResourceAuthorizer,
 ) error {
+	_, err := observeCredentialVolume(ctx, runtime, exporterImage, volume, manifest, authorize)
+	return err
+}
+
+// observeCredentialVolume is InspectCredentialVolumeManifest's observation,
+// also returning the hex SHA-256 the exporter proof binds over the volume's
+// complete tree.
+func observeCredentialVolume(
+	ctx context.Context,
+	runtime Runtime,
+	exporterImage, volume string,
+	manifest CredentialManifestPolicy,
+	authorize RuntimeResourceAuthorizer,
+) (string, error) {
 	if runtime == nil || exporterImage == "" || volume == "" || !manifest.valid() {
-		return errors.New("credential manifest inspection requires a runtime, exporter image, volume, and policy")
+		return "", errors.New("credential manifest inspection requires a runtime, exporter image, volume, and policy")
 	}
 	cfg := (Config{ExporterImage: exporterImage}).withDefaults()
 	owner, err := newOwnershipLabel()
 	if err != nil {
-		return err
+		return "", err
 	}
 	runID := "preflight-" + owner.Value[:12]
 	name := "freeside-preflight-credential-" + owner.Value[:12]
 	if authorize != nil {
 		if err := authorize(ctx, RuntimeResourceNames{Containers: []string{name}}); err != nil {
-			return err
+			return "", err
 		}
 	}
 	handoff := HandoffSpec{
@@ -52,12 +66,12 @@ func InspectCredentialVolumeManifest(
 	}
 	state := &runState{ownershipLabel: owner}
 	var claim objectClaim
-	_, inspectErr := backend.observeCredentialStore(ctx, handoff, name, state, &claim)
+	digest, inspectErr := backend.observeCredentialStore(ctx, handoff, name, state, &claim)
 	if inspectErr == nil {
-		return nil
+		return digest, nil
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), max(cfg.TeardownTimeout, time.Second))
 	defer cancel()
 	cleanupErr := backend.runtimeOps.reapUnlistedContainer(cleanupCtx, name, claim, owner)
-	return errors.Join(inspectErr, cleanupErr)
+	return "", errors.Join(inspectErr, cleanupErr)
 }
