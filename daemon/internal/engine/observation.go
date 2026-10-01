@@ -219,7 +219,10 @@ func (e *Engine) observeRunHold(
 		return nil
 	}
 	if err := e.store.Write(ctx, func(tx *store.WriteTx) error {
-		return recordRunHold(ctx, tx, runID, invocationID, reason, now)
+		if err := recordRunHold(ctx, tx, runID, invocationID, reason, now); err != nil {
+			return err
+		}
+		return raiseHeldWorkNotice(ctx, tx, runID, reason, now)
 	}); err != nil {
 		e.pace.forget(key)
 		return err
@@ -298,8 +301,9 @@ const refusalRecoveredPaceState = "refusal-recovered"
 // so a hold naming any other cause (a dispatch capacity hold, an operator stop)
 // keeps its row and its span; and it is paced on the run's hold key like the
 // hold writes, so a run whose holds are already cleared does not issue a delete
-// per reconcile. The hold is observability-only: no engine, recovery, or
-// publication decision reads it back.
+// per reconcile. The hold is observability-only: the held-work notice
+// (held_work_notice.go) reads it back to raise and resolve itself, and no
+// workflow, recovery, or publication decision does.
 func (e *Engine) clearRefusalHold(ctx context.Context, runID domain.RunID) error {
 	key := "hold:" + string(runID)
 	if !e.pace.due(key, refusalRecoveredPaceState, time.Now().UTC()) {
