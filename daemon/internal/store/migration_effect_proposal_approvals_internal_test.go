@@ -35,8 +35,8 @@ func TestEffectProposalApprovalsMigrationPreservesRows(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatal(err)
 	}
-	if got := rawVersion(t, db); got != 83 {
-		t.Fatalf("schema version = %d, want 83", got)
+	if got := rawVersion(t, db); got != 84 {
+		t.Fatalf("schema version = %d, want 84", got)
 	}
 
 	var action, selectedDigest string
