@@ -19,6 +19,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/stage"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -127,6 +128,44 @@ func TestHandoffSpecRefusesUnsupportedContainment(t *testing.T) {
 			if _, err := provider.HandoffSpec(context.Background(), in); !errors.Is(err, ErrUnsupportedStart) {
 				t.Fatalf("HandoffSpec error = %v, want ErrUnsupportedStart", err)
 			}
+		})
+	}
+}
+
+// handoffCommandCases are the launch shapes one HandoffSpec path produces:
+// both prompt deliveries, each with and without the preparation command.
+var handoffCommandCases = []struct {
+	name     string
+	delivery stage.PromptDelivery
+	prepare  []string
+}{
+	{"argument", stage.PromptArgument, nil},
+	{"argument-prepare", stage.PromptArgument, []string{"/usr/local/bin/freeside-project-prepare"}},
+	{"prompt-file", stage.PromptFileV1, nil},
+	{"prompt-file-prepare", stage.PromptFileV1, []string{"/usr/local/bin/freeside-project-prepare"}},
+}
+
+// TestHandoffSpecCommandGolden pins the whole launch command of a start that
+// carries neither a model nor an effort. Recovery rebuilds a running launch's
+// command from its stored intent, so that command must not drift by a byte
+// across a daemon upgrade.
+func TestHandoffSpecCommandGolden(t *testing.T) {
+	t.Parallel()
+	provider := claudeProvider{volumes: testAuthStoreVolumes{volume: "provider-volume"}}
+	for _, tc := range handoffCommandCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			in := testProviderHandoffInput()
+			in.PromptDelivery, in.Preparation = tc.delivery, tc.prepare
+			hs, err := provider.HandoffSpec(context.Background(), in)
+			if err != nil {
+				t.Fatalf("HandoffSpec: %v", err)
+			}
+			got, err := json.MarshalIndent(hs.Agent.Command, "", "  ")
+			if err != nil {
+				t.Fatalf("marshal command: %v", err)
+			}
+			golden.Assert(t, "handoff-command-"+tc.name, append(got, '\n'))
 		})
 	}
 }
