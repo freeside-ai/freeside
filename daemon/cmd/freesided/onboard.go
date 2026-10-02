@@ -12,6 +12,8 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -53,6 +55,7 @@ type onboardConfig struct {
 	BaseBuildRef          string
 	ReviewConfig          string
 	CommitPlan            domain.CommitPlanMode
+	ExternalReviewers     []domain.ExternalReviewer
 	Approval              string
 	Registry              string
 	LocalRegistryPort     int
@@ -75,6 +78,53 @@ func (v *stringList) Set(value string) error {
 	}
 	*v = append(*v, value)
 	return nil
+}
+
+// externalReviewerList collects repeatable -external-reviewer values, each
+// parsed and validated as it is read so a malformed entry fails before any
+// store or network work.
+type externalReviewerList []domain.ExternalReviewer
+
+func (v *externalReviewerList) String() string { return fmt.Sprint([]domain.ExternalReviewer(*v)) }
+
+func (v *externalReviewerList) Set(value string) error {
+	reviewer, err := parseExternalReviewer(value)
+	if err != nil {
+		return err
+	}
+	*v = append(*v, reviewer)
+	return nil
+}
+
+// parseExternalReviewer reads one <forge>:<account-id>:<login>=<authority>
+// entry. The authority is split at the last "=" and the login is everything
+// after the second ":", so a login the forge spells with either character
+// still parses; neither can appear in a forge, an account ID, or an
+// authority.
+func parseExternalReviewer(value string) (domain.ExternalReviewer, error) {
+	const form = "<forge>:<account-id>:<login>=<authority>"
+	eq := strings.LastIndex(value, "=")
+	if eq < 0 {
+		return domain.ExternalReviewer{}, fmt.Errorf("%q is not %s", value, form)
+	}
+	parts := strings.SplitN(value[:eq], ":", 3)
+	if len(parts) != 3 {
+		return domain.ExternalReviewer{}, fmt.Errorf("%q is not %s", value, form)
+	}
+	accountID, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return domain.ExternalReviewer{}, fmt.Errorf("account ID %q is not a number", parts[1])
+	}
+	reviewer := domain.ExternalReviewer{
+		Forge:     domain.ExternalReviewForge(parts[0]),
+		AccountID: accountID,
+		Login:     parts[2],
+		Authority: domain.ExternalReviewAuthority(value[eq+1:]),
+	}
+	if err := reviewer.Validate(); err != nil {
+		return domain.ExternalReviewer{}, err
+	}
+	return reviewer, nil
 }
 
 func runOnboardCommand(
@@ -253,11 +303,12 @@ func runOnboardCommand(
 			BaseRef:        cfg.BaseRef,
 			ApprovalDigest: domain.Digest(cfg.Approval),
 			Policy: operations.OnboardPolicy{
-				PRExecution:    domain.PRExecutionAuditedSameRepo,
-				CommitPlan:     cfg.CommitPlan,
-				MessageRuleset: domain.MessageRulesetGitHub1,
-				ReviewMode:     domain.ReviewFreesideInvoked,
-				ReviewConfig:   domain.Digest(cfg.ReviewConfig),
+				PRExecution:       domain.PRExecutionAuditedSameRepo,
+				CommitPlan:        cfg.CommitPlan,
+				MessageRuleset:    domain.MessageRulesetGitHub1,
+				ReviewMode:        domain.ReviewFreesideInvoked,
+				ReviewConfig:      domain.Digest(cfg.ReviewConfig),
+				ExternalReviewers: cfg.ExternalReviewers,
 			},
 			Image: projectimage.Request{
 				Repository: cfg.Repository, RepositoryID: cfg.RepositoryID,
@@ -301,6 +352,7 @@ func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) 
 	cfg := onboardConfig{Repository: args[0]}
 	var commitPlan string
 	var dns stringList
+	var externalReviewers externalReviewerList
 	flags.StringVar(&cfg.DBPath, "db", "", "SQLite database path (required)")
 	flags.StringVar(&cfg.StateDir, "state-dir", "", "GitHub App authority state directory (required)")
 	flags.Int64Var(&cfg.RegistrationID, "registration-id", 0, "selected numeric GitHub App ID (required)")
@@ -324,6 +376,9 @@ func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) 
 	flags.StringVar(&commitPlan,
 		"commit-plan", string(domain.CommitPlanSingleCommit),
 		"commit-plan mode: single_commit or plan_preferred")
+	flags.Var(&externalReviewers, "external-reviewer",
+		"reviewer outside Freeside whose findings on a published pull request may start a review round, "+
+			"as github:<account-id>:<login>=drive_round with the login spelled as GitHub returns it; repeatable")
 	flags.StringVar(&cfg.Approval, "approve", "", "exact proposed review digest; omit for the one-time review")
 	flags.StringVar(&cfg.Registry, "registry", "", "registry host/path destination")
 	flags.IntVar(&cfg.LocalRegistryPort, "local-registry-port", 0, "managed loopback registry port")
@@ -342,6 +397,7 @@ func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) 
 		return onboardConfig{}, fmt.Errorf("unexpected positional arguments: %v", flags.Args())
 	}
 	cfg.DNS = append([]string(nil), dns...)
+	cfg.ExternalReviewers = slices.Clone([]domain.ExternalReviewer(externalReviewers))
 	for _, required := range []struct {
 		name  string
 		value string

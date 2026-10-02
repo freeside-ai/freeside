@@ -73,6 +73,69 @@ func TestParseOnboardConfigBuildEgress(t *testing.T) {
 	})
 }
 
+func TestParseOnboardConfigExternalReviewers(t *testing.T) {
+	baseArgs := []string{
+		"example/repo",
+		"-db", "/tmp/freeside.db",
+		"-state-dir", "/tmp/freeside-state",
+		"-registration-id", "11",
+		"-repository-id", "44",
+		"-commit", "0123456789012345678901234567890123456789",
+		"-base-ref", "main",
+		"-base-image", "example.invalid/agent@sha256:test",
+		"-base-build-ref", "local/agent:test",
+		"-review-config-digest", "sha256:review",
+		"-recipe", "/tmp/verify.json",
+	}
+	t.Run("absent flag admits nobody", func(t *testing.T) {
+		cfg, err := parseOnboardConfig(baseArgs, io.Discard)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.ExternalReviewers != nil {
+			t.Fatalf("ExternalReviewers = %v, want nil", cfg.ExternalReviewers)
+		}
+	})
+	t.Run("repeated flag collects entries", func(t *testing.T) {
+		cfg, err := parseOnboardConfig(append(slices.Clone(baseArgs),
+			"-external-reviewer", "github:900:maintainer=drive_round",
+			"-external-reviewer", "github:41:codex[bot]=drive_round",
+		), io.Discard)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []domain.ExternalReviewer{
+			{Forge: domain.ExternalReviewForgeGitHub, AccountID: 900, Login: "maintainer", Authority: domain.ExternalReviewDriveRound},
+			{Forge: domain.ExternalReviewForgeGitHub, AccountID: 41, Login: "codex[bot]", Authority: domain.ExternalReviewDriveRound},
+		}
+		if !slices.Equal(cfg.ExternalReviewers, want) {
+			t.Fatalf("ExternalReviewers = %v, want %v", cfg.ExternalReviewers, want)
+		}
+	})
+	for _, tt := range []struct {
+		name  string
+		value string
+	}{
+		{"no authority", "github:41:codex[bot]"},
+		{"no login", "github:41=drive_round"},
+		{"empty login", "github:41:=drive_round"},
+		{"login with a space", "github:41:codex bot=drive_round"},
+		{"account ID not a number", "github:codex[bot]:41=drive_round"},
+		{"zero account ID", "github:0:codex[bot]=drive_round"},
+		{"unknown forge", "gitlab:41:codex[bot]=drive_round"},
+		{"unknown authority", "github:41:codex[bot]=advise"},
+		{"empty authority", "github:41:codex[bot]="},
+		{"empty value", ""},
+	} {
+		t.Run("rejects "+tt.name, func(t *testing.T) {
+			_, err := parseOnboardConfig(append(slices.Clone(baseArgs), "-external-reviewer", tt.value), io.Discard)
+			if err == nil {
+				t.Fatalf("accepted -external-reviewer %q", tt.value)
+			}
+		})
+	}
+}
+
 func TestOnboardStoreCanPassSubmitTopicKeyGate(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "freeside.db")
