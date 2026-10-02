@@ -209,7 +209,7 @@ import Testing
     @Test func everyTypedLeadComesFromItsOwnFactFieldAndDisappearsWithIt() {
         let expected: [Components.Schemas.AttentionType: [String]] = [
             .execution_failure: ["Outcome", "Failing stage", "Invocation"],
-            .review_diminishing_returns: ["Cost so far"],
+            .review_diminishing_returns: ["Cost so far", "Diff growth"],
             .review_dispute: ["Run", "Round", "Disputed findings", "Completion evidence"],
             .ready_for_final_review: ["Diff"],
             .publish_blocked: ["Failed trust rule"],
@@ -224,6 +224,7 @@ import Testing
 
             item.execution_failure = nil
             item.billable_cost_so_far = nil
+            item.yield_history = nil
             item.review_dispute = nil
             item.diff_stats = nil
             item.publish_block = nil
@@ -256,7 +257,10 @@ import Testing
         #expect(
             AttentionDisplay.cardFacts(
                 AttentionFixtures.fixture(type: .review_diminishing_returns).item, now: now
-            ).map(\.value) == ["USD 42.75 across 6 invocations, still accruing"])
+            ).map(\.value) == [
+                "USD 42.75 across 6 invocations, still accruing",
+                "Round 1: 4 files, +120 -8; round 3: 6 files, +210 -14",
+            ])
         #expect(
             AttentionDisplay.cardFacts(
                 AttentionFixtures.fixture(type: .ready_for_final_review).item, now: now
@@ -750,6 +754,45 @@ import Testing
                     value: "0 findings · 0 new · 0 recurring · 0 fixed · 0 declined · 0 deferred · Clean"),
                 .init(label: "Terminal review", value: "Clean"),
             ])
+    }
+
+    /// Diff growth compares round 1 with the latest measured round. A round
+    /// without metrics is a gap: without round 1 the row names the latest
+    /// measured round alone, and without any measurement there is no row.
+    @Test func diffGrowthHandlesBothMetricGaps() throws {
+        let now = AttentionFixtures.createdInstant
+        func diffRow(_ item: Components.Schemas.AttentionItem) -> AttentionDisplay.FactRow? {
+            AttentionDisplay.cardFacts(item, now: now).first { $0.label != "Cost so far" }
+        }
+        var item = AttentionFixtures.fixture(type: .review_diminishing_returns).item
+        let latest = try #require(item.yield_history?.value1.rounds.indices.last)
+
+        item.yield_history?.value1.rounds[0].diff_metrics = nil
+        #expect(diffRow(item) == .init("Diff size", "Round 3: 6 files, +210 -14"))
+
+        item.yield_history?.value1.rounds[latest].diff_metrics = nil
+        #expect(diffRow(item) == nil)
+
+        // Round 1 measured alone is a size, not growth.
+        item = AttentionFixtures.fixture(type: .review_diminishing_returns).item
+        item.yield_history?.value1.rounds[latest].diff_metrics = nil
+        #expect(diffRow(item) == .init("Diff size", "Round 1: 4 files, +120 -8"))
+
+        // The row needs no cost: every cause shows it from the yield history.
+        item = AttentionFixtures.reviewDiminishing(cause: .growth_without_blockers).item
+        item.billable_cost_so_far = nil
+        #expect(AttentionDisplay.cardFacts(item, now: now).map(\.label) == ["Diff growth"])
+    }
+
+    @Test func driftAuditItemsNameTheirAuditDigestInDetails() {
+        let drift = AttentionFixtures.reviewDiminishing(cause: .drift_audit, verdict: .stuck).item
+        #expect(
+            AttentionDisplay.detailBindingRows(drift).contains(
+                .init(label: "Drift audit", value: "sha256:drift-audit-stuck")))
+        #expect(
+            !AttentionDisplay.detailBindingRows(
+                AttentionFixtures.fixture(type: .review_diminishing_returns).item
+            ).contains { $0.label == "Drift audit" })
     }
 
     @Test func diminishingReviewYieldRendersEveryRoundAndTerminalOutcome() {

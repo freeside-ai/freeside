@@ -182,8 +182,10 @@ enum AttentionDisplay {
                 .init("Invocation", failure.invocation_id, monospaced: true),
             ]
         case .review_diminishing_returns:
-            guard let cost = item.billable_cost_so_far?.value1 else { return [] }
-            return [.init("Cost so far", costSoFar(cost))]
+            return [
+                item.billable_cost_so_far.map { .init("Cost so far", costSoFar($0.value1)) },
+                diffGrowth(item),
+            ].compactMap { $0 }
         case .review_dispute:
             guard let dispute = item.review_dispute?.value1 else { return [] }
             return [
@@ -338,6 +340,27 @@ enum AttentionDisplay {
             cost.invocations == 1 ? "1 invocation" : "\(cost.invocations) invocations"
         return "\(cost.currency) \(cost.amount) across \(invocations)"
             + (cost.complete ? "" : ", still accruing")
+    }
+
+    /// The change's cumulative diff size at round 1 beside the latest round
+    /// the daemon measured, both from `yield_history` (plan §9). A round
+    /// without `diff_metrics` is a gap: with no round-1 measurement there is
+    /// nothing to grow from, so the row names the latest measured round
+    /// alone, and with no measurement at all there is no row.
+    private static func diffGrowth(_ item: Components.Schemas.AttentionItem) -> FactRow? {
+        let rounds = item.yield_history?.value1.rounds ?? []
+        guard let latest = rounds.last(where: { $0.diff_metrics != nil }),
+            let latestMetrics = latest.diff_metrics
+        else { return nil }
+        let latestSize = diffStats(latestMetrics.cumulative)
+        guard latest.round != 1,
+            let first = rounds.first(where: { $0.round == 1 })?.diff_metrics
+        else {
+            return .init("Diff size", "Round \(latest.round): \(latestSize)")
+        }
+        return .init(
+            "Diff growth",
+            "Round 1: \(diffStats(first.cumulative)); round \(latest.round): \(latestSize)")
     }
 
     private static func diffStats(_ diff: Components.Schemas.DiffStats) -> String {
@@ -757,6 +780,9 @@ enum AttentionDisplay {
         rows.append(contentsOf: findingAdjudicationRows(item))
         rows.append(contentsOf: readinessSummaryRows(item))
         rows.append(contentsOf: reviewYieldRows(item))
+        if let drift = item.review_diminishing?.value1.drift_audit?.value1 {
+            rows.append(.init(label: "Drift audit", value: drift.audit_digest))
+        }
         return rows
     }
 

@@ -9,6 +9,7 @@ enum DecisionCardModule: String, CaseIterable {
     case factBlock
     case findingFacts
     case recommendation
+    case stopCause
     case checklist
     case stageRail
     case comparison
@@ -101,8 +102,19 @@ struct DecisionCardComposition: Equatable {
     /// alone, a shape `verifySpecificationApprovalClaims` in
     /// daemon/internal/engine/specification.go still accepts, and dropping
     /// Context there would take the item's reason off the card entirely.
+    ///
+    /// A diminishing-returns item that carries typed stop-cause facts also
+    /// drops it: the daemon writes that `reason` as a summary line followed by
+    /// a `Binding: {…}` JSON line (`ReviewDiminishingReason` in
+    /// daemon/internal/store/review_diminishing.go), and the `.stopCause`
+    /// module states the cause from the typed field instead. An item without
+    /// the facts, stored before they existed or raised by a review
+    /// escalation, has no other statement of its cause and keeps Context.
     func rendersContext(for item: Components.Schemas.AttentionItem) -> Bool {
-        !Self.reasonIsAgentSummary(item._type) || summaries(from: item.agent_claims).isEmpty
+        if item._type == .review_diminishing_returns, item.review_diminishing != nil {
+            return false
+        }
+        return !Self.reasonIsAgentSummary(item._type) || summaries(from: item.agent_claims).isEmpty
     }
 
     static let sharedModuleSet = DecisionCardModule.allCases
@@ -141,12 +153,15 @@ struct DecisionCardComposition: Equatable {
                 actionInsertionIndex: 3,
                 reviewingActionInsertionIndex: nil)
         case .review_diminishing_returns:
+            // Plan §7 "Routing": the card leads with the verdict and the
+            // reversal list, so the stop cause sits ahead of the yield chart
+            // and the cost and diff-growth facts, all above the actions.
             return .init(
                 modules: [
-                    .recommendation, .yieldChart, .facts, .factBlock, .summary, .claims,
-                    .evidence, .details,
+                    .recommendation, .stopCause, .yieldChart, .facts, .factBlock, .summary,
+                    .claims, .evidence, .details,
                 ],
-                actionInsertionIndex: 3,
+                actionInsertionIndex: 4,
                 reviewingActionInsertionIndex: nil)
         case .finding_adjudication:
             // Section 9's finding_adjudication row leads with two things: the
@@ -615,7 +630,7 @@ struct DecisionFactPresentation: Equatable {
     let facts: [Fact]
 }
 
-private struct DecisionModuleContainer<Content: View>: View {
+struct DecisionModuleContainer<Content: View>: View {
     let title: String
     var dashed = false
     @ViewBuilder let content: Content
