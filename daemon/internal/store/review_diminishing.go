@@ -219,6 +219,72 @@ func reviewDiminishingBinding(reason string) (ReviewDiminishingBinding, error) {
 	return binding, nil
 }
 
+// ErrReviewDiminishingSimplificationUnproven refuses card facts that say
+// continue_under_policy will run the audit's simplification round. That claim
+// holds only when the reversal list passed the route gate (plan §7 Review
+// Drift), and the gate arrives with #1051; until then nothing can re-prove it.
+var ErrReviewDiminishingSimplificationUnproven = errors.New(
+	"review diminishing facts promise a simplification round no route gate has proven")
+
+// gateReviewDiminishingItem re-proves an item's review-diminishing card facts
+// against the records they copy, so a client never trusts the copy: the cause
+// must be the one the item's own Reason binds, that binding must name this
+// item's run, round, and head, and drift facts must be the stored DriftAudit
+// they name, for the bound run and round. It reads only the
+// item's Reason and the audit, never another item, and both are immutable, so
+// every reconstruction tier runs it.
+//
+// An item without the facts passes: items stored before the field existed, and
+// review-escalation items whose Reason carries no binding, have none.
+func (tx *ReadTx) gateReviewDiminishingItem(ctx context.Context, item domain.AttentionItem) error {
+	facts := item.ReviewDiminishing
+	if facts == nil {
+		return nil
+	}
+	binding, err := reviewDiminishingBinding(item.Reason)
+	if err != nil {
+		return fmt.Errorf("reason binding: %w", err)
+	}
+	// The binding must be this item's own: the item the bound round mints, on
+	// the bound run and head. Otherwise a card could show another run's cause
+	// or audit while every comparison below still held.
+	ownSubject := item.Subject.Type == domain.SubjectRun &&
+		item.Subject.ID == domain.SubjectID(binding.RunID) && item.Subject.RunID != nil &&
+		*item.Subject.RunID == binding.RunID
+	if item.Type != domain.AttentionReviewDiminishing || binding.ItemID != item.ID ||
+		binding.ItemID != ReviewDiminishingItemID(binding.RunID, binding.Round) ||
+		!ownSubject || item.PRHeadSHA != binding.HeadSHA {
+		return domain.ErrParentKeyMismatch
+	}
+	if facts.Cause != binding.Cause {
+		return fmt.Errorf("card cause %q, reason binds %q: %w",
+			facts.Cause, binding.Cause, domain.ErrParentKeyMismatch)
+	}
+	drift := facts.DriftAudit
+	if drift == nil {
+		return nil
+	}
+	audit, err := tx.GetDriftAudit(ctx, drift.AuditDigest)
+	if err != nil {
+		// A missing audit is a broken binding, not a missing item: a caller
+		// reads ErrNotFound from an item load as "no such item".
+		if errors.Is(err, ErrNotFound) {
+			return fmt.Errorf("drift audit: %s: %w", err.Error(), domain.ErrParentKeyMismatch)
+		}
+		return fmt.Errorf("drift audit: %w", err)
+	}
+	if audit.RunID != binding.RunID || audit.Round != binding.Round ||
+		audit.Verdict != drift.Verdict || audit.Confidence != drift.Confidence ||
+		audit.Explanation != drift.Explanation ||
+		!slices.Equal(audit.Reversals, drift.Reversals) {
+		return fmt.Errorf("drift audit %q: %w", drift.AuditDigest, domain.ErrParentKeyMismatch)
+	}
+	if drift.SimplificationOnContinue {
+		return ErrReviewDiminishingSimplificationUnproven
+	}
+	return nil
+}
+
 type ReviewDiminishingDecision struct {
 	Item    domain.AttentionItem
 	Command *domain.Command

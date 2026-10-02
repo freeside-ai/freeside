@@ -489,6 +489,12 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 	if err := tx.gateAgentQuestionItem(ctx, item); err != nil {
 		return fmt.Errorf("put attention item %q agent question binding: %w", item.ID, err)
 	}
+	// No write path restores these facts from the stored body (a same-version
+	// replay can only drop them), so one check before the replay branches
+	// covers every path below.
+	if err := tx.gateReviewDiminishingItem(ctx, item); err != nil {
+		return fmt.Errorf("put attention item %q review diminishing facts: %w", item.ID, err)
+	}
 	existing, err := tx.existingBody(ctx, `SELECT body FROM attention_items WHERE id = ?`, item.ID)
 	if err != nil {
 		return fmt.Errorf("put attention item %q: %w", item.ID, err)
@@ -595,6 +601,9 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 			}
 			if decoded.AgentQuestion == nil {
 				item.AgentQuestion = nil
+			}
+			if decoded.ReviewDiminishing == nil {
+				item.ReviewDiminishing = nil
 			}
 		}
 		body, err := encode(item)
@@ -1420,6 +1429,9 @@ func (tx *ReadTx) scanAttentionItemHistory(ctx context.Context, sc scanner) (dom
 	if err := tx.gateAgentQuestionItem(ctx, item); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
+	if err := tx.gateReviewDiminishingItem(ctx, item); err != nil {
+		return domain.AttentionItem{}, Snapshot{}, err
+	}
 	if err := tx.gateDecisionSurface(ctx, item); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
@@ -1461,6 +1473,9 @@ func (tx *ReadTx) scanAttentionItemSnapshot(ctx context.Context, sc scanner) (do
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	if err := tx.gateAgentQuestionItem(ctx, item); err != nil {
+		return domain.AttentionItem{}, Snapshot{}, err
+	}
+	if err := tx.gateReviewDiminishingItem(ctx, item); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	if err := tx.gateReadyItemPRReference(ctx, item); err != nil {
