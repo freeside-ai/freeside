@@ -1,0 +1,31 @@
+{
+  "expectation_source": "https://github.com/freeside-ai/freeside/issues/1053 comment 'Owner's expected reversals, recorded before any live audit run' (2026-10-02)",
+  "expected_verdict": "over_hardened",
+  "expected_reversals": [
+    {
+      "finding_id": "pr279-r11-f1",
+      "note": "The operator runs quarantine by hand; a directory with the wrong permissions or shape fails the command with an error and loses nothing."
+    },
+    {
+      "finding_id": "pr279-r12-f1",
+      "note": "The operator runs quarantine by hand; a directory with the wrong permissions or shape fails the command with an error and loses nothing."
+    },
+    {
+      "finding_id": "pr279-r13-f1",
+      "note": "The operator runs quarantine by hand; a directory with the wrong permissions or shape fails the command with an error and loses nothing."
+    },
+    {
+      "finding_id": "pr279-r15-f1",
+      "note": "The operator runs quarantine by hand; a directory with the wrong permissions or shape fails the command with an error and loses nothing."
+    },
+    {
+      "finding_id": "pr279-r16-f1",
+      "note": "The operator runs quarantine by hand; a directory with the wrong permissions or shape fails the command with an error and loses nothing."
+    },
+    {
+      "finding_id": "pr279-r17-f1",
+      "note": "The operator runs quarantine by hand; a directory with the wrong permissions or shape fails the command with an error and loses nothing."
+    }
+  ],
+  "reversal_assessments": []
+}

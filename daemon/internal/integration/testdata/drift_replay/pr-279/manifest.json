@@ -1,0 +1,44 @@
+{
+  "pr": 279,
+  "title": "Stop one unreadable keystore record denying all resolution",
+  "specification_source": "pull request #279 description (no closing issue)",
+  "instructions_source": "AGENTS.md at 7e8bb0074d2bb67dc11d65e7493822ec323d6223",
+  "base_sha": "7e8bb0074d2bb67dc11d65e7493822ec323d6223",
+  "head_sha": "57019c581635b2ad93bc8d92a82510638e71e7b3",
+  "round_one_base_sha": "f233e347a391138c764702938433c60f8d7d9828",
+  "round_one_head_sha": "bd95a9e3926d48ac52559f3250042c5442e6ad5b",
+  "last_finding_round": 17,
+  "declared_paths": [
+    "daemon/internal/publish/**",
+    "devlog/**"
+  ],
+  "diff_metrics": {
+    "cumulative": {
+      "files_changed": 6,
+      "additions": 1665,
+      "deletions": 10,
+      "base_sha": "7e8bb0074d2bb67dc11d65e7493822ec323d6223",
+      "head_sha": "57019c581635b2ad93bc8d92a82510638e71e7b3"
+    },
+    "round": {
+      "files_changed": 3,
+      "additions": 190,
+      "deletions": 83,
+      "base_sha": "cea7961ec511c778bebf615d27e6b65b1ad913a1",
+      "head_sha": "57019c581635b2ad93bc8d92a82510638e71e7b3"
+    }
+  },
+  "commands": [
+    "gh api repos/freeside-ai/freeside/pulls/279/reviews --paginate  # rounds: Codex reviews with inline findings, by submitted_at; each round's head is its commit_id",
+    "gh api repos/freeside-ai/freeside/pulls/279/comments --paginate  # findings: Codex root comments; dispositions: the first reply to each",
+    "git fetch origin bd95a9e3926d48ac52559f3250042c5442e6ad5b cea7961ec511c778bebf615d27e6b65b1ad913a1 57019c581635b2ad93bc8d92a82510638e71e7b3",
+    "git merge-base d27e3741f0b8f82db14d8b218f2c92b9750bf8de^1 bd95a9e3926d48ac52559f3250042c5442e6ad5b  # round_one_base_sha",
+    "git merge-base d27e3741f0b8f82db14d8b218f2c92b9750bf8de^1 57019c581635b2ad93bc8d92a82510638e71e7b3  # base_sha",
+    "git diff --binary --full-index --no-ext-diff --no-textconv f233e347a391138c764702938433c60f8d7d9828 bd95a9e3926d48ac52559f3250042c5442e6ad5b -- > round_one.patch",
+    "git diff --binary --full-index --no-ext-diff --no-textconv 7e8bb0074d2bb67dc11d65e7493822ec323d6223 57019c581635b2ad93bc8d92a82510638e71e7b3 -- > final.patch",
+    "git show 7e8bb0074d2bb67dc11d65e7493822ec323d6223:AGENTS.md > instructions.md",
+    "gh pr view 279 --json body --jq .body > spec.md",
+    "git diff --numstat 7e8bb0074d2bb67dc11d65e7493822ec323d6223 57019c581635b2ad93bc8d92a82510638e71e7b3 --  # diff_metrics.cumulative",
+    "git diff --numstat cea7961ec511c778bebf615d27e6b65b1ad913a1 57019c581635b2ad93bc8d92a82510638e71e7b3 --  # diff_metrics.round: the last round with findings against the merged head"
+  ]
+}

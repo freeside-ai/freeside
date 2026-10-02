@@ -1,0 +1,23 @@
+{
+  "expectation_source": "https://github.com/freeside-ai/freeside/issues/1053 comment 'Owner's expected reversals, recorded before any live audit run' (2026-10-02)",
+  "expected_verdict": "over_hardened",
+  "expected_reversals": [
+    {
+      "finding_id": "pr960-r06-f1",
+      "note": "#959 does not name the certificate-allowlist check, and macOS already refuses such an app at launch."
+    },
+    {
+      "finding_id": "pr960-r07-f1",
+      "note": "#959 does not name the certificate-allowlist check, and macOS already refuses such an app at launch."
+    },
+    {
+      "finding_id": "pr960-r08-f1",
+      "note": "#959 does not name the certificate-allowlist check, and macOS already refuses such an app at launch."
+    },
+    {
+      "finding_id": "pr960-r09-f1",
+      "note": "#959 does not name the certificate-allowlist check, and macOS already refuses such an app at launch."
+    }
+  ],
+  "reversal_assessments": []
+}

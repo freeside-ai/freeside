@@ -1,0 +1,1798 @@
+diff --git a/daemon/internal/publish/doctor.go b/daemon/internal/publish/doctor.go
+index a7f26ca2343324044a548e2ccffbca8a9eeea31b..e9439fa3fea6b4dfa7f3e813d6aa4bee477658c8 100644
+--- a/daemon/internal/publish/doctor.go
++++ b/daemon/internal/publish/doctor.go
+@@ -18,6 +18,7 @@ const (
+ 	CredentialFindingJanitorInactive    CredentialFindingCode = "janitor_inactive"
+ 	CredentialFindingLegacyLayout       CredentialFindingCode = "legacy_singleton_layout"
+ 	CredentialFindingReusedMachineKey   CredentialFindingCode = "reused_machine_key"
++	CredentialFindingUnreadableRecord   CredentialFindingCode = "unreadable_registration" //nolint:gosec // diagnostic vocabulary, not a credential
+ )
+ 
+ // AllCredentialFindingCodes is the single registration point for doctor
+@@ -30,6 +31,7 @@ var AllCredentialFindingCodes = []CredentialFindingCode{
+ 	CredentialFindingJanitorInactive,
+ 	CredentialFindingLegacyLayout,
+ 	CredentialFindingReusedMachineKey,
++	CredentialFindingUnreadableRecord,
+ }
+ 
+ func (c CredentialFindingCode) valid() bool {
+@@ -40,7 +42,8 @@ func (c CredentialFindingCode) valid() bool {
+ 		CredentialFindingMetadataMismatch,
+ 		CredentialFindingJanitorInactive,
+ 		CredentialFindingLegacyLayout,
+-		CredentialFindingReusedMachineKey:
++		CredentialFindingReusedMachineKey,
++		CredentialFindingUnreadableRecord:
+ 		return true
+ 	default:
+ 		return false
+@@ -110,11 +113,24 @@ func (d *CredentialDoctor) Check(
+ 
+ 	apps, err := d.onboarder.keystore.ListApps()
+ 	if err != nil {
++		// Enumeration fails closed on the whole keystore, so whenever the
++		// failure belongs to one record its owner ID rides every finding
++		// code, not only the unreadable one: an operator told "missing key"
++		// or "bad permissions" with no owner cannot tell which of several
++		// registrations is blocking every resolver and janitor cycle. A
++		// keystore-wide failure carries no owner and reports zero.
++		var unreadable *UnreadableRegistrationError
++		var ownerID int64
++		if errors.As(err, &unreadable) {
++			ownerID = unreadable.OwnerID
++		}
+ 		switch {
+ 		case errors.Is(err, ErrCredentialPermissions):
+-			return []CredentialFinding{credentialFinding(CredentialFindingBadPermissions, 0, 0, "")}, nil
++			return []CredentialFinding{credentialFinding(CredentialFindingBadPermissions, 0, ownerID, "")}, nil
+ 		case errors.Is(err, ErrNoAppCredentials), errors.Is(err, ErrNoAppRegistration):
+-			return []CredentialFinding{credentialFinding(CredentialFindingMissingKey, 0, 0, "")}, nil
++			return []CredentialFinding{credentialFinding(CredentialFindingMissingKey, 0, ownerID, "")}, nil
++		case errors.Is(err, ErrUnreadableRegistration):
++			return []CredentialFinding{credentialFinding(CredentialFindingUnreadableRecord, 0, ownerID, "")}, nil
+ 		default:
+ 			return nil, fmt.Errorf("credential doctor: inspect keystore: %w", err)
+ 		}
+diff --git a/daemon/internal/publish/errors.go b/daemon/internal/publish/errors.go
+index e532eeb0b3a93c1abd618a6aad454a1509ace0ad..3acaa55fb74be132e4e9ef95319d871245552d73 100644
+--- a/daemon/internal/publish/errors.go
++++ b/daemon/internal/publish/errors.go
+@@ -58,6 +58,17 @@ var ErrNoAppRegistration = errors.New("no GitHub App registration for owner")
+ // requires both values explicitly before relocating the credential.
+ var ErrLegacyAppMigrationRequired = errors.New("legacy GitHub App credentials require explicit migration")
+ 
++// ErrUnreadableRegistration reports that one owner-keyed registration
++// failed the trust gate every load runs (its key, metadata, or persisted
++// identity). Enumeration still fails closed rather than skipping the
++// record: owner resolution selects among all local registrations, so a
++// partial view could bind an owner through a second registration while
++// the unreadable one binds it too, and the janitor cannot claim complete
++// coverage while one registration is invisible. The error names the
++// record so the operator repairs or quarantines exactly that
++// registration instead of the whole keystore reading as broken.
++var ErrUnreadableRegistration = errors.New("GitHub App registration in the keystore is unreadable")
++
+ // ErrCredentialPermissions is returned when on-disk credential files or
+ // directories are reachable by group or other. The keystore re-asserts
+ // containment on every load and fails closed rather than narrowing the
+diff --git a/daemon/internal/publish/keystore.go b/daemon/internal/publish/keystore.go
+index 939b557ef69c4d5cb8bfa51c4dd82ff55e26ca87..713bd6aa489041857a1c5501aa06afc1d8e8e587 100644
+--- a/daemon/internal/publish/keystore.go
++++ b/daemon/internal/publish/keystore.go
+@@ -35,8 +35,35 @@ const (
+ 	appDirName   = "github-app"
+ 	keyFileName  = "app.pem"
+ 	metaFileName = "app.json"
++
++	// quarantineDirSuffix names the sibling directory holding records the
++	// operator has withdrawn from this host. It is deliberately not one of
++	// the legacy-singleton journal suffixes (.legacy/.old/.staging), which
++	// migration treats as credential sources.
++	quarantineDirSuffix = ".quarantine"
+ )
+ 
++// UnreadableRegistrationError names the single registration whose record
++// failed to load, so a caller can route the operator to it. OwnerID is
++// the record's directory key: safe numeric routing information, never
++// credential material.
++type UnreadableRegistrationError struct {
++	OwnerID int64
++	Err     error
++}
++
++func (e *UnreadableRegistrationError) Error() string {
++	return fmt.Sprintf("keystore: registration for owner %d is unreadable: %v", e.OwnerID, e.Err)
++}
++
++// Unwrap exposes the sentinel and the underlying cause together, so a
++// caller that already distinguishes a specific cause (widened
++// permissions, an absent key) keeps matching it, while a caller that only
++// needs "this record is unusable" matches the sentinel.
++func (e *UnreadableRegistrationError) Unwrap() []error {
++	return []error{ErrUnreadableRegistration, e.Err}
++}
++
+ // Keystore stores the GitHub App's credentials (private key and
+ // registration metadata) under a dedicated credentials directory with
+ // owner-only permissions: directories 0700, files 0600, re-asserted on
+@@ -402,10 +429,23 @@ func (k *Keystore) listAppsLocked() ([]AppCredentials, error) {
+ 			return nil, err
+ 		}
+ 		appDir := filepath.Join(k.dir, ownerKey)
++		// Failures from here on belong to one record, so each is attributed
++		// to its owner: an unattributed error is what made a single damaged
++		// record read as a broken keystore (#271). Attribution is not
++		// automatic, though. It claims the record is unreadable, which routes
++		// the operator to withdrawal, so it must hold only where withdrawal
++		// can actually help: recovery both promotes a record and clears the
++		// journals afterwards, and a cleanup failure after a successful
++		// promotion leaves a registration that loads fine and would be
++		// refused. Ask the record itself rather than trusting the error's
++		// shape.
+ 		if err := k.recoverSwap(appDir, true); err != nil {
+-			return nil, err
++			if _, loadErr := k.loadRegistrationAt(appDir, ownerID); loadErr == nil {
++				return nil, err
++			}
++			return nil, k.attributeRecord(ownerID, appDir, err)
+ 		}
+-		creds, err := k.loadAppFrom(appDir)
++		creds, err := k.loadRegistrationAt(appDir, ownerID)
+ 		if err != nil {
+ 			if errors.Is(err, ErrNoAppCredentials) {
+ 				active, existsErr := realDirExists(appDir)
+@@ -417,13 +457,16 @@ func (k *Keystore) listAppsLocked() ([]AppCredentials, error) {
+ 					// there is no registration to enumerate.
+ 					continue
+ 				}
+-				return nil, fmt.Errorf("keystore: registration %q is incomplete: %w", ownerKey, err)
++				return nil, k.attributeRecord(ownerID, appDir,
++					fmt.Errorf("keystore: registration %q is incomplete: %w", ownerKey, err))
+ 			}
+-			return nil, err
+-		}
+-		if creds.OwnerID != ownerID {
+-			return nil, fmt.Errorf("keystore: registration directory %q does not match persisted owner id %d", ownerKey, creds.OwnerID)
++			return nil, k.attributeRecord(ownerID, appDir, err)
+ 		}
++		// Deliberately not attributed as an unreadable record: the
++		// registration loaded and bound, so withdrawal is the wrong remedy
++		// for a leftover that will not clear, and routing the operator to it
++		// would drop a working registration out of janitor coverage. The
++		// error already names the leftover path.
+ 		if err := k.clearSwapLeftovers(appDir); err != nil {
+ 			return nil, err
+ 		}
+@@ -432,6 +475,236 @@ func (k *Keystore) listAppsLocked() ([]AppCredentials, error) {
+ 	return apps, nil
+ }
+ 
++// attributeRecord names the owner a per-record failure belongs to, unless
++// the roots make every record unwithdrawable. Attribution is a promise
++// that withdrawal is the remedy, so it must not be made where withdrawal
++// is refused: routing an operator to a remedy that declines leaves
++// enumeration blocked with nowhere to go. Every attribution in the
++// enumeration loop passes through here, so the two cannot disagree about
++// when the promise holds.
++func (k *Keystore) attributeRecord(ownerID int64, appDir string, err error) error {
++	// Ask the withdrawal's own preconditions rather than re-deriving them.
++	// Every recurrence of this defect has been a condition present in one
++	// side and absent from the other, so the two sides now run the same
++	// checks and a new precondition is inherited by both.
++	if reason := k.withdrawalUnavailable(appDir); reason != nil {
++		return errors.Join(err, reason)
++	}
++	return &UnreadableRegistrationError{OwnerID: ownerID, Err: err}
++}
++
++// withdrawalUnavailable returns why a withdrawal of the record at appDir
++// would be refused, or nil when it would be accepted. It is the preflight
++// half of QuarantineApp: everything that method checks before it mutates
++// anything.
++func (k *Keystore) withdrawalUnavailable(appDir string) error {
++	if err := k.assertWithdrawalDirs(); err != nil {
++		return err
++	}
++	return k.assertWithdrawalTargets(appDir)
++}
++
++// QuarantineApp withdraws one unreadable registration from the enumerated
++// set, so a record this host cannot load stops denying resolution for
++// every other registration. It is deliberately an explicit operator act,
++// not a silent skip inside enumeration: the record's installations remain
++// live on GitHub and simply leave this host's view, which is a decision
++// only the operator can make.
++//
++// Quarantine is not deletion. The key and metadata move intact to a
++// sibling directory under the same credentials root, keeping them
++// available for repair or forensics and inside the containment boundary
++// that keeps App keys out of checkpoints and workspaces.
++//
++// It reaches every state that blocks enumeration, including a record
++// whose persisted identity does not bind to its directory key and one
++// left as an invalid recovery journal with no active directory; refusing
++// either would route the operator to a remedy that declines the record
++// enumeration rejected.
++//
++// A readable registration is refused, judged by the same gate enumeration
++// applies: withdrawing a working registration would drop it from janitor
++// coverage while its installations keep running, which is the fail-open
++// direction. An existing quarantine record whose source is still present
++// is a distinct earlier withdrawal and is refused rather than
++// overwritten; one with nothing left to move is this owner's own
++// withdrawal, which completes idempotently.
++func (k *Keystore) QuarantineApp(ownerID int64) error {
++	k.mu.Lock()
++	defer k.mu.Unlock()
++
++	// The directories gate everything below, so they are checked first: a
++	// mode that blocks reads, traversal, or renames disables this remedy for
++	// every record alike, and the legacy and record checks cannot even be
++	// evaluated through an unsearchable root.
++	if err := k.assertWithdrawalDirs(); err != nil {
++		return err
++	}
++	quarantineDir := k.dir + quarantineDirSuffix
++
++	legacy, err := k.hasLegacyLayout()
++	if err != nil {
++		return err
++	}
++	if legacy {
++		return ErrLegacyAppMigrationRequired
++	}
++	ownerKey, err := appOwnerKey(ownerID)
++	if err != nil {
++		return err
++	}
++	appDir := filepath.Join(k.dir, ownerKey)
++	// Settle the swap journals first, so quarantine acts on the same state
++	// enumeration would have loaded rather than on a half-finished save. A
++	// recovery that itself fails is not a reason to refuse: an invalid
++	// journal is one of the states that blocks enumeration, and withdrawal
++	// is precisely its remedy.
++	recoverErr := k.recoverSwap(appDir, true)
++	sources, err := k.quarantineSources(appDir)
++	if err != nil {
++		return err
++	}
++	if len(sources) == 0 {
++		if recoverErr != nil {
++			return recoverErr
++		}
++		// Nothing left to move means either this owner was never here or an
++		// earlier attempt moved everything and then failed at the durability
++		// barrier. A failing sync cannot be journalled past, since the
++		// journal write carries the same barrier, so the tractable guarantee
++		// is that a retry finishes the sequence rather than reporting a
++		// missing record over a withdrawal that already happened. Re-issuing
++		// both syncs is idempotent, and reporting success is honest: the
++		// postcondition, withdrawn and preserved, holds.
++		withdrawn, err := k.quarantineHoldsRecord(quarantineDir, ownerKey)
++		if err != nil {
++			return err
++		}
++		if !withdrawn {
++			return ErrNoAppRegistration
++		}
++		return k.syncWithdrawal(quarantineDir)
++	}
++	if _, err := k.loadRegistrationAt(appDir, ownerID); err == nil {
++		return fmt.Errorf(
++			"keystore: registration for owner %d is readable; quarantine withdraws only unreadable records",
++			ownerID,
++		)
++	}
++
++	if err := k.assertWithdrawalTargets(appDir); err != nil {
++		return err
++	}
++	if err := mkdirAllSync(quarantineDir); err != nil {
++		return fmt.Errorf("keystore: create quarantine directory: %w", err)
++	}
++	activePresent := slices.Contains(sources, appDir)
++	for _, source := range sources {
++		if source == appDir {
++			continue
++		}
++		target := filepath.Join(quarantineDir, filepath.Base(source))
++		if err := os.Rename(source, target); err != nil {
++			return fmt.Errorf("keystore: quarantine registration for owner %d: %w", ownerID, err)
++		}
++		// Persist each journal removal before the next rename. Rename order
++		// alone does not survive a crash, and a journal left on the source
++		// side is promotion-capable: with no active directory, recovery
++		// adopts a valid .old or .staging and resurrects the registration
++		// the operator withdrew. Syncing here bounds the exposure to the one
++		// rename in flight rather than any earlier one, and subsumes the
++		// barrier the active record would otherwise need.
++		if err := k.syncWithdrawal(quarantineDir); err != nil {
++			return err
++		}
++	}
++	if activePresent {
++		target := filepath.Join(quarantineDir, filepath.Base(appDir))
++		if err := os.Rename(appDir, target); err != nil {
++			return fmt.Errorf("keystore: quarantine registration for owner %d: %w", ownerID, err)
++		}
++	}
++	return k.syncWithdrawal(quarantineDir)
++}
++
++// syncWithdrawal persists the withdrawal's two directory changes.
++// Destination first: this is a cross-directory rename, so persisting the
++// source's removal before the destination's new entry would make a crash
++// between them lose the credential outright. In this order the only
++// crash-side divergence is a stale source entry, which still holds the
++// record and is refused rather than silently overwritten on the retry.
++// Re-issuing both is idempotent, so a retry after a transient sync failure
++// completes the sequence.
++func (k *Keystore) syncWithdrawal(quarantineDir string) error {
++	if err := syncDir(quarantineDir); err != nil {
++		return fmt.Errorf("keystore: sync quarantine directory: %w", err)
++	}
++	if err := syncDir(k.dir); err != nil {
++		return fmt.Errorf("keystore: sync quarantined registration: %w", err)
++	}
++	return nil
++}
++
++// quarantineHoldsRecord reports whether any piece of one owner's record is
++// already withdrawn, which distinguishes a completed-but-unsynced
++// withdrawal from an owner that was never present.
++func (k *Keystore) quarantineHoldsRecord(quarantineDir, ownerKey string) (bool, error) {
++	for _, suffix := range []string{"", ".staging", ".old"} {
++		exists, err := realDirExists(filepath.Join(quarantineDir, ownerKey+suffix))
++		if err != nil {
++			return false, err
++		}
++		if exists {
++			return true, nil
++		}
++	}
++	return false, nil
++}
++
++// assertWithdrawalRoot rejects a root the withdrawal cannot operate
++// through, in either direction: too permissive to trust, or missing an
++// owner bit it needs.
++func (k *Keystore) assertWithdrawalRoot(dir string) error {
++	if err := assertMode(dir, true); err != nil {
++		return err
++	}
++	usable, err := rootUsable(dir)
++	if err != nil {
++		return err
++	}
++	if !usable {
++		return fmt.Errorf("keystore: %s lacks owner access: %w", dir, ErrCredentialPermissions)
++	}
++	return nil
++}
++
++// quarantineSources lists any swap journals recoverSwap left behind and
++// the active registration directory, in that order. All of them move
++// together: leaving a .staging or .old sibling would let the next
++// enumeration promote the record back into the active set, undoing the
++// withdrawal.
++//
++// The order is load-bearing, not cosmetic. Moving the active directory
++// last means a failure part-way through always leaves the active
++// directory in place, so recovery never sees the journals-without-active
++// shape it would promote, and the retry finds free destinations for
++// whatever is left. Moving it first would let a later failure strand the
++// record: recovery would promote a journal into the active slot the retry
++// then finds already occupied in quarantine, wedging the only remedy.
++func (k *Keystore) quarantineSources(appDir string) ([]string, error) {
++	var sources []string
++	for _, candidate := range []string{appDir + ".staging", appDir + ".old", appDir} {
++		exists, err := realDirExists(candidate)
++		if err != nil {
++			return nil, err
++		}
++		if exists {
++			sources = append(sources, candidate)
++		}
++	}
++	return sources, nil
++}
++
+ // MigrateLegacyApp relocates the former singleton only after the caller
+ // explicitly supplies the owner login, numeric ID, and visibility that its
+ // metadata could not record. Repeating the migration after a partial failure
+@@ -600,6 +873,27 @@ func (k *Keystore) loadAppFrom(dir string) (AppCredentials, error) {
+ 	}, nil
+ }
+ 
++// loadRegistrationAt is the keystore's one readability gate: the record
++// must load, and its persisted identity must bind to the directory key it
++// was found under. Enumeration and quarantine share it so they cannot
++// disagree about which records are usable; when they did, the doctor
++// could route an operator to quarantine a record quarantine then refused,
++// leaving resolution blocked with no remedy.
++func (k *Keystore) loadRegistrationAt(appDir string, ownerID int64) (AppCredentials, error) {
++	creds, err := k.loadAppFrom(appDir)
++	if err != nil {
++		return AppCredentials{}, err
++	}
++	if creds.OwnerID != ownerID {
++		return AppCredentials{}, fmt.Errorf(
++			"keystore: registration directory %q does not match persisted owner id %d",
++			filepath.Base(appDir),
++			creds.OwnerID,
++		)
++	}
++	return creds, nil
++}
++
+ // recoverSwap repairs the only two crash states in which no active
+ // directory is visible. A previous directory wins over a staged one;
+ // without a previous version, a staged directory is promoted only after
+@@ -843,6 +1137,87 @@ func (k *Keystore) loadLegacyAppFrom(dir string) (AppCredentials, error) {
+ 	}, nil
+ }
+ 
++// withdrawalAvailable reports whether a withdrawal would be accepted at
++// all: every directory it operates through, judged by the same gate the
++// withdrawal itself applies. A mode deviation in either direction
++// disqualifies a directory — too permissive to trust with credential
++// material, or missing an owner bit the withdrawal needs — and either way
++// it disables the remedy for every record alike, so a failure under it is
++// keystore-wide and must not be attributed to whichever record met it.
++//
++// narrowDir deliberately lets a caller keep a directory tighter than 0700,
++// so an under-permissive one is a supported state rather than corruption;
++// it simply means the remedy is unavailable until the operator restores
++// access.
++func (k *Keystore) assertWithdrawalDirs() error {
++	if err := k.assertWithdrawalRoot(k.root); err != nil {
++		return err
++	}
++	// Ordered deliberately: the registration root cannot be examined through
++	// an unsearchable credentials root, and neither can the quarantine
++	// directory beside it.
++	exists, err := realDirExists(k.dir)
++	if err != nil {
++		return err
++	}
++	if !exists {
++		return ErrNoAppRegistration
++	}
++	if err := k.assertWithdrawalRoot(k.dir); err != nil {
++		return err
++	}
++	quarantineDir := k.dir + quarantineDirSuffix
++	quarantineExists, err := realDirExists(quarantineDir)
++	if err != nil {
++		return err
++	}
++	if !quarantineExists {
++		// Absent is fine: it is created through the credentials root, which
++		// this function already accepted.
++		return nil
++	}
++	// The destination is as load-bearing as the sources: one the owner
++	// cannot write into fails every rename, and one that is too permissive
++	// would hold credential material exposed.
++	return k.assertWithdrawalRoot(quarantineDir)
++}
++
++// assertWithdrawalTargets rejects the destinations a withdrawal of the
++// record at appDir would occupy. It runs after recovery has settled the
++// swap journals, since recovery changes which pieces exist. A destination
++// whose source still exists is a distinct earlier withdrawal for the same
++// owner, and overwriting it would be the loss this path exists to avoid; a
++// piece an interrupted attempt already moved is absent from the source
++// list entirely, so its destination is never examined and the retry
++// resumes. A malformed destination — a file or symlink where a directory
++// belongs — fails the same way.
++func (k *Keystore) assertWithdrawalTargets(appDir string) error {
++	sources, err := k.quarantineSources(appDir)
++	if err != nil {
++		return err
++	}
++	quarantineDir := k.dir + quarantineDirSuffix
++	for _, source := range sources {
++		target := filepath.Join(quarantineDir, filepath.Base(source))
++		exists, err := realDirExists(target)
++		if err != nil {
++			return err
++		}
++		if exists {
++			return fmt.Errorf("keystore: quarantine record already exists at %s: %w", target, ErrCredentialPermissions)
++		}
++	}
++	return nil
++}
++
++func rootUsable(dir string) (bool, error) {
++	info, err := os.Lstat(dir)
++	if err != nil {
++		return false, fmt.Errorf("keystore: lstat %s: %w", dir, err)
++	}
++	return info.Mode().Perm()&0o700 == 0o700, nil
++}
++
+ func assertMode(path string, dir bool) error {
+ 	// Lstat, not Stat: a symlink in the keystore would carry reads and
+ 	// writes outside the validated credentials root, so it must fail
+diff --git a/daemon/internal/publish/keystore_test.go b/daemon/internal/publish/keystore_test.go
+index 235215b9820b7787f550928fb049c98186e3cbb7..8cb73dc81515d5fd85596430fdc262ee7c445598 100644
+--- a/daemon/internal/publish/keystore_test.go
++++ b/daemon/internal/publish/keystore_test.go
+@@ -1136,3 +1136,884 @@ const (
+ 	metaFileNameForTest = "app.json"
+ 	testOwnerID         = int64(24680)
+ )
++
++// stripOwnerMetadata reproduces the pre-#245 record shape found on the
++// maintainer's machine (#271): an owner-keyed directory whose metadata
++// carries the app id and slug but null owner, owner id, visibility, key
++// id, and name.
++func stripOwnerMetadata(t *testing.T, ks *publish.Keystore, ownerID int64) {
++	t.Helper()
++	metaPath := filepath.Join(testAppDir(ks, ownerID), metaFileNameForTest)
++	metaRaw, err := os.ReadFile(metaPath) //nolint:gosec // test fixture under t.TempDir
++	if err != nil {
++		t.Fatal(err)
++	}
++	var meta map[string]any
++	if err := json.Unmarshal(metaRaw, &meta); err != nil {
++		t.Fatal(err)
++	}
++	for _, field := range []string{"owner", "owner_id", "visibility", "key_id", "name"} {
++		meta[field] = nil
++	}
++	stripped, err := json.MarshalIndent(meta, "", "  ")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(metaPath, stripped, 0o600); err != nil {
++		t.Fatal(err)
++	}
++}
++
++// TestListAppsNamesTheUnreadableRegistration is #271's core property: one
++// record with incomplete metadata still fails enumeration closed, but the
++// failure now names that record instead of reading as a broken keystore.
++func TestListAppsNamesTheUnreadableRegistration(t *testing.T) {
++	ks := newTestKeystore(t)
++	personal, org := twoRegistrations()
++	saveAll(t, ks, personal, org)
++	stripOwnerMetadata(t, ks, org.OwnerID)
++
++	apps, err := ks.ListApps()
++	if err == nil {
++		t.Fatalf("ListApps returned %d registrations over an incomplete record, want error", len(apps))
++	}
++	if !errors.Is(err, publish.ErrUnreadableRegistration) {
++		t.Fatalf("ListApps error = %v, want ErrUnreadableRegistration", err)
++	}
++	var unreadable *publish.UnreadableRegistrationError
++	if !errors.As(err, &unreadable) {
++		t.Fatalf("ListApps error %v does not carry *UnreadableRegistrationError", err)
++	}
++	if unreadable.OwnerID != org.OwnerID {
++		t.Errorf("unreadable owner id = %d, want %d", unreadable.OwnerID, org.OwnerID)
++	}
++	if !strings.Contains(err.Error(), strconv.FormatInt(org.OwnerID, 10)) {
++		t.Errorf("ListApps error %q does not identify owner ID %d", err, org.OwnerID)
++	}
++}
++
++// TestQuarantineAppRestoresEnumeration proves the operator's withdrawal is
++// what re-opens resolution, and that it preserves rather than deletes the
++// record.
++func TestQuarantineAppRestoresEnumeration(t *testing.T) {
++	ks := newTestKeystore(t)
++	personal, org := twoRegistrations()
++	saveAll(t, ks, personal, org)
++	stripOwnerMetadata(t, ks, org.OwnerID)
++
++	if err := ks.QuarantineApp(org.OwnerID); err != nil {
++		t.Fatalf("QuarantineApp: %v", err)
++	}
++	apps, err := ks.ListApps()
++	if err != nil {
++		t.Fatalf("ListApps after quarantine: %v", err)
++	}
++	if len(apps) != 1 || apps[0].OwnerID != personal.OwnerID {
++		t.Fatalf("ListApps after quarantine = %+v, want only owner %d", apps, personal.OwnerID)
++	}
++	quarantined := filepath.Join(
++		ks.Dir(), "github-app"+".quarantine", strconv.FormatInt(org.OwnerID, 10),
++	)
++	for _, name := range []string{keyFileNameForTest, metaFileNameForTest} {
++		if _, err := os.Lstat(filepath.Join(quarantined, name)); err != nil {
++			t.Errorf("quarantined %s: %v", name, err)
++		}
++	}
++	if _, err := os.Lstat(testAppDir(ks, org.OwnerID)); !errors.Is(err, fs.ErrNotExist) {
++		t.Errorf("active registration remains after quarantine: %v", err)
++	}
++}
++
++// TestQuarantineAppRefusesReadableRegistration keeps the withdrawal from
++// becoming a way to drop a working registration out of janitor coverage
++// while its installations stay live on GitHub.
++func TestQuarantineAppRefusesReadableRegistration(t *testing.T) {
++	ks := newTestKeystore(t)
++	personal, org := twoRegistrations()
++	saveAll(t, ks, personal, org)
++
++	if err := ks.QuarantineApp(org.OwnerID); err == nil {
++		t.Fatal("QuarantineApp over a readable registration = nil, want refusal")
++	}
++	apps, err := ks.ListApps()
++	if err != nil {
++		t.Fatalf("ListApps after refused quarantine: %v", err)
++	}
++	if len(apps) != 2 {
++		t.Errorf("ListApps after refused quarantine returned %d registrations, want 2", len(apps))
++	}
++}
++
++// TestQuarantineAppRefusesOverwrite keeps a second withdrawal from
++// destroying the first record it preserved.
++func TestQuarantineAppRefusesOverwrite(t *testing.T) {
++	ks := newTestKeystore(t)
++	personal, org := twoRegistrations()
++	saveAll(t, ks, personal, org)
++	stripOwnerMetadata(t, ks, org.OwnerID)
++	if err := ks.QuarantineApp(org.OwnerID); err != nil {
++		t.Fatalf("QuarantineApp: %v", err)
++	}
++
++	reSaved := org
++	if err := ks.SaveApp(reSaved); err != nil {
++		t.Fatal(err)
++	}
++	stripOwnerMetadata(t, ks, org.OwnerID)
++	if err := ks.QuarantineApp(org.OwnerID); err == nil {
++		t.Fatal("second QuarantineApp = nil, want refusal rather than overwrite")
++	}
++}
++
++// TestQuarantineAppWithdrawsSwapLeftovers proves a .staging sibling cannot
++// resurrect a withdrawn record on the next enumeration.
++func TestQuarantineAppWithdrawsSwapLeftovers(t *testing.T) {
++	ks := newTestKeystore(t)
++	personal, org := twoRegistrations()
++	saveAll(t, ks, personal, org)
++	stripOwnerMetadata(t, ks, org.OwnerID)
++	leftover := testAppDir(ks, org.OwnerID) + ".old"
++	if err := os.MkdirAll(leftover, 0o700); err != nil {
++		t.Fatal(err)
++	}
++	for _, name := range []string{keyFileNameForTest, metaFileNameForTest} {
++		source, err := os.ReadFile(filepath.Join(testAppDir(ks, org.OwnerID), name)) //nolint:gosec // test fixture under t.TempDir
++		if err != nil {
++			t.Fatal(err)
++		}
++		if err := os.WriteFile(filepath.Join(leftover, name), source, 0o600); err != nil { //nolint:gosec // test fixture under t.TempDir
++			t.Fatal(err)
++		}
++	}
++
++	if err := ks.QuarantineApp(org.OwnerID); err != nil {
++		t.Fatalf("QuarantineApp: %v", err)
++	}
++	if _, err := os.Lstat(leftover); !errors.Is(err, fs.ErrNotExist) {
++		t.Errorf("swap leftover remains in the active set after quarantine: %v", err)
++	}
++	apps, err := ks.ListApps()
++	if err != nil {
++		t.Fatalf("ListApps after quarantine: %v", err)
++	}
++	if len(apps) != 1 || apps[0].OwnerID != personal.OwnerID {
++		t.Fatalf("ListApps after quarantine = %+v, want only owner %d", apps, personal.OwnerID)
++	}
++}
++
++// TestQuarantineAppAbsentOwner keeps the withdrawal from inventing a record.
++func TestQuarantineAppAbsentOwner(t *testing.T) {
++	ks := newTestKeystore(t)
++	if err := ks.SaveApp(testCredentials()); err != nil {
++		t.Fatal(err)
++	}
++	if err := ks.QuarantineApp(999999); !errors.Is(err, publish.ErrNoAppRegistration) {
++		t.Fatalf("QuarantineApp(absent) = %v, want ErrNoAppRegistration", err)
++	}
++}
++
++func twoRegistrations() (personal, org publish.AppCredentials) {
++	personal = testCredentials()
++	personal.Owner = "BenNelsonWeiss"
++	personal.OwnerID = 111
++	personal.AppID = 111
++	org = testCredentials()
++	org.Owner = "freeside-ai"
++	org.OwnerID = 222
++	org.AppID = 222
++	return personal, org
++}
++
++func saveAll(t *testing.T, ks *publish.Keystore, creds ...publish.AppCredentials) {
++	t.Helper()
++	for _, c := range creds {
++		if err := ks.SaveApp(c); err != nil {
++			t.Fatalf("SaveApp(%s): %v", c.Owner, err)
++		}
++	}
++}
++
++// rewriteOwnerID makes a record internally valid but bound to a different
++// owner than its directory key: readable to loadAppFrom, rejected by
++// enumeration. This is the state that let the doctor and the quarantine
++// remedy disagree.
++func rewriteOwnerID(t *testing.T, ks *publish.Keystore, dirOwnerID, persistedOwnerID int64) {
++	t.Helper()
++	metaPath := filepath.Join(testAppDir(ks, dirOwnerID), metaFileNameForTest)
++	metaRaw, err := os.ReadFile(metaPath) //nolint:gosec // test fixture under t.TempDir
++	if err != nil {
++		t.Fatal(err)
++	}
++	var meta map[string]any
++	if err := json.Unmarshal(metaRaw, &meta); err != nil {
++		t.Fatal(err)
++	}
++	meta["owner_id"] = persistedOwnerID
++	rewritten, err := json.MarshalIndent(meta, "", "  ")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(metaPath, rewritten, 0o600); err != nil {
++		t.Fatal(err)
++	}
++}
++
++// TestQuarantineWithdrawsEveryEnumerationBlocker is the refute-first
++// harness for the withdrawal path: it enumerates the record states that
++// block ListApps and requires each to be both attributed to its owner and
++// withdrawable. A state that enumeration rejects but quarantine refuses
++// would leave resolution blocked with no remedy.
++func TestQuarantineWithdrawsEveryEnumerationBlocker(t *testing.T) {
++	cases := []struct {
++		name   string
++		damage func(t *testing.T, ks *publish.Keystore, ownerID int64)
++	}{
++		{"incomplete metadata", func(t *testing.T, ks *publish.Keystore, ownerID int64) {
++			stripOwnerMetadata(t, ks, ownerID)
++		}},
++		{"identity does not bind to directory", func(t *testing.T, ks *publish.Keystore, ownerID int64) {
++			rewriteOwnerID(t, ks, ownerID, ownerID+1)
++		}},
++		{"absent key", func(t *testing.T, ks *publish.Keystore, ownerID int64) {
++			if err := os.Remove(filepath.Join(testAppDir(ks, ownerID), keyFileNameForTest)); err != nil {
++				t.Fatal(err)
++			}
++		}},
++		{"widened key permissions", func(t *testing.T, ks *publish.Keystore, ownerID int64) {
++			//nolint:gosec // deliberately exposed fixture under t.TempDir
++			if err := os.Chmod(filepath.Join(testAppDir(ks, ownerID), keyFileNameForTest), 0o644); err != nil {
++				t.Fatal(err)
++			}
++		}},
++		{"invalid recovery journal without an active record", func(t *testing.T, ks *publish.Keystore, ownerID int64) {
++			appDir := testAppDir(ks, ownerID)
++			if err := os.Rename(appDir, appDir+".old"); err != nil {
++				t.Fatal(err)
++			}
++			stripJournalMetadata(t, appDir+".old")
++		}},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			ks := newTestKeystore(t)
++			personal, org := twoRegistrations()
++			saveAll(t, ks, personal, org)
++			tc.damage(t, ks, org.OwnerID)
++
++			apps, err := ks.ListApps()
++			if err == nil {
++				t.Fatalf("ListApps returned %d registrations over a damaged record, want error", len(apps))
++			}
++			var unreadable *publish.UnreadableRegistrationError
++			if !errors.As(err, &unreadable) {
++				t.Fatalf("ListApps error %v does not attribute the damaged record", err)
++			}
++			if unreadable.OwnerID != org.OwnerID {
++				t.Fatalf("attributed owner = %d, want %d", unreadable.OwnerID, org.OwnerID)
++			}
++
++			if err := ks.QuarantineApp(unreadable.OwnerID); err != nil {
++				t.Fatalf("QuarantineApp(%d) after ListApps routed to it: %v", unreadable.OwnerID, err)
++			}
++			apps, err = ks.ListApps()
++			if err != nil {
++				t.Fatalf("ListApps after quarantine: %v", err)
++			}
++			if len(apps) != 1 || apps[0].OwnerID != personal.OwnerID {
++				t.Fatalf("ListApps after quarantine = %+v, want only owner %d", apps, personal.OwnerID)
++			}
++		})
++	}
++}
++
++// stripJournalMetadata damages a swap journal in place, so recovery cannot
++// promote it and the record has no active directory at all.
++func stripJournalMetadata(t *testing.T, journalDir string) {
++	t.Helper()
++	if err := os.WriteFile(filepath.Join(journalDir, metaFileNameForTest), []byte("{}"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++}
++
++// TestQuarantineAppDiscardedStageLeavesNothingToWithdraw keeps the remedy
++// honest about the one state recovery resolves on its own: an incomplete
++// first-save stage is discarded, not withdrawn.
++func TestQuarantineAppDiscardedStageLeavesNothingToWithdraw(t *testing.T) {
++	ks := newTestKeystore(t)
++	if err := ks.SaveApp(testCredentials()); err != nil {
++		t.Fatal(err)
++	}
++	stage := testAppDir(ks, 333) + ".staging"
++	if err := os.MkdirAll(stage, 0o700); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(filepath.Join(stage, metaFileNameForTest), []byte("{}"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++
++	if err := ks.QuarantineApp(333); !errors.Is(err, publish.ErrNoAppRegistration) {
++		t.Fatalf("QuarantineApp over a discarded stage = %v, want ErrNoAppRegistration", err)
++	}
++	if _, err := ks.ListApps(); err != nil {
++		t.Fatalf("ListApps after discarded stage: %v", err)
++	}
++}
++
++// TestQuarantineAppRefusesKeystoreWideFailure keeps a widened directory
++// mode from being read as a damaged record: it fails the load gate for
++// every registration alike, so withdrawing the named owner would drop a
++// working registration while leaving enumeration just as blocked.
++func TestQuarantineAppRefusesKeystoreWideFailure(t *testing.T) {
++	for _, tc := range []struct {
++		name   string
++		widen  func(ks *publish.Keystore) string
++		damage bool
++	}{
++		{"widened registration root", func(ks *publish.Keystore) string {
++			return filepath.Join(ks.Dir(), "github-app")
++		}, false},
++		{"widened credentials root", func(ks *publish.Keystore) string {
++			return ks.Dir()
++		}, false},
++		{"widened root over a damaged record", func(ks *publish.Keystore) string {
++			return filepath.Join(ks.Dir(), "github-app")
++		}, true},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			ks := newTestKeystore(t)
++			personal, org := twoRegistrations()
++			saveAll(t, ks, personal, org)
++			if tc.damage {
++				stripOwnerMetadata(t, ks, org.OwnerID)
++			}
++			if err := os.Chmod(tc.widen(ks), 0o755); err != nil { //nolint:gosec // deliberately exposed fixture under t.TempDir
++				t.Fatal(err)
++			}
++
++			if err := ks.QuarantineApp(org.OwnerID); !errors.Is(err, publish.ErrCredentialPermissions) {
++				t.Fatalf("QuarantineApp under a keystore-wide failure = %v, want ErrCredentialPermissions", err)
++			}
++			if _, err := os.Lstat(testAppDir(ks, org.OwnerID)); err != nil {
++				t.Errorf("registration withdrawn despite a keystore-wide failure: %v", err)
++			}
++		})
++	}
++}
++
++// TestQuarantineAppResumesPartialWithdrawal covers the partial-failure
++// state the move order is designed to leave: journals already withdrawn,
++// the active directory still in place. Recovery must not promote anything
++// (the active directory is present), and the retry must complete rather
++// than refuse on a destination its own earlier attempt created.
++func TestQuarantineAppResumesPartialWithdrawal(t *testing.T) {
++	ks := newTestKeystore(t)
++	personal, org := twoRegistrations()
++	saveAll(t, ks, personal, org)
++	stripOwnerMetadata(t, ks, org.OwnerID)
++
++	// Stand in for a run that moved the journal and then failed before the
++	// active directory.
++	appDir := testAppDir(ks, org.OwnerID)
++	journal := appDir + ".old"
++	if err := os.MkdirAll(journal, 0o700); err != nil {
++		t.Fatal(err)
++	}
++	quarantineDir := filepath.Join(ks.Dir(), "github-app.quarantine")
++	if err := os.MkdirAll(quarantineDir, 0o700); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Rename(journal, filepath.Join(quarantineDir, filepath.Base(journal))); err != nil {
++		t.Fatal(err)
++	}
++
++	if err := ks.QuarantineApp(org.OwnerID); err != nil {
++		t.Fatalf("QuarantineApp resuming a partial withdrawal: %v", err)
++	}
++	apps, err := ks.ListApps()
++	if err != nil {
++		t.Fatalf("ListApps after resumed withdrawal: %v", err)
++	}
++	if len(apps) != 1 || apps[0].OwnerID != personal.OwnerID {
++		t.Fatalf("ListApps after resumed withdrawal = %+v, want only owner %d", apps, personal.OwnerID)
++	}
++	for _, name := range []string{
++		strconv.FormatInt(org.OwnerID, 10),
++		strconv.FormatInt(org.OwnerID, 10) + ".old",
++	} {
++		if _, err := os.Lstat(filepath.Join(quarantineDir, name)); err != nil {
++			t.Errorf("quarantined %s: %v", name, err)
++		}
++	}
++}
++
++// TestQuarantineAppMovesTheActiveRecordLast pins the ordering the
++// resumption property depends on: a failure after the active directory
++// moved would leave journals recovery promotes back into the active slot,
++// and the retry would then collide with its own quarantined record.
++func TestQuarantineAppMovesTheActiveRecordLast(t *testing.T) {
++	ks := newTestKeystore(t)
++	_, org := twoRegistrations()
++	if err := ks.SaveApp(org); err != nil {
++		t.Fatal(err)
++	}
++	stripOwnerMetadata(t, ks, org.OwnerID)
++	appDir := testAppDir(ks, org.OwnerID)
++	if err := os.MkdirAll(appDir+".old", 0o700); err != nil {
++		t.Fatal(err)
++	}
++
++	// A destination collision on the last source proves ordering: the
++	// occupied name is the active record's, so the journals must already
++	// have been examined and the active directory reached last.
++	quarantineDir := filepath.Join(ks.Dir(), "github-app.quarantine")
++	if err := os.MkdirAll(filepath.Join(quarantineDir, strconv.FormatInt(org.OwnerID, 10)), 0o700); err != nil {
++		t.Fatal(err)
++	}
++	if err := ks.QuarantineApp(org.OwnerID); err == nil {
++		t.Fatal("QuarantineApp onto an occupied destination = nil, want refusal")
++	}
++	if _, err := os.Lstat(appDir); err != nil {
++		t.Errorf("active record moved despite the refusal: %v", err)
++	}
++	if _, err := os.Lstat(appDir + ".old"); err != nil {
++		t.Errorf("journal moved despite the refusal: %v", err)
++	}
++}
++
++// TestListAppsDoesNotAttributePostPromotionCleanup keeps enumeration from
++// claiming a record is unreadable when recovery promoted it successfully
++// and only the leftover cleanup failed. The registration loads, so
++// withdrawal would refuse it; attributing the failure would route the
++// operator to a remedy that cannot help while enumeration stays blocked
++// on the leftover.
++func TestListAppsDoesNotAttributePostPromotionCleanup(t *testing.T) {
++	ks := newTestKeystore(t)
++	personal, org := twoRegistrations()
++	saveAll(t, ks, personal, org)
++
++	// No active directory, a valid journal to promote, and a second journal
++	// whose contents cannot be unlinked.
++	appDir := testAppDir(ks, org.OwnerID)
++	if err := os.Rename(appDir, appDir+".old"); err != nil {
++		t.Fatal(err)
++	}
++	undeletable := filepath.Join(appDir+".staging", "sub")
++	if err := os.MkdirAll(undeletable, 0o700); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(filepath.Join(undeletable, "pinned"), []byte("x"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Chmod(undeletable, 0o500); err != nil { //nolint:gosec // directory mode; blocks unlink to simulate an uncleanable leftover
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = os.Chmod(undeletable, 0o700) }) //nolint:gosec // restore owner traversal so t.TempDir can clean up
++
++	_, err := ks.ListApps()
++	if err == nil {
++		t.Fatal("ListApps with an uncleanable leftover = nil, want error")
++	}
++	var unreadable *publish.UnreadableRegistrationError
++	if errors.As(err, &unreadable) {
++		t.Fatalf("post-promotion cleanup failure attributed as unreadable owner %d: %v", unreadable.OwnerID, err)
++	}
++	// Once the leftover can be cleared, enumeration succeeds with both
++	// registrations present: the failure was never a property of the record,
++	// which is exactly why withdrawing it would have been the wrong remedy.
++	if err := os.Chmod(undeletable, 0o700); err != nil { //nolint:gosec // directory mode, restoring owner traversal
++		t.Fatal(err)
++	}
++	apps, err := ks.ListApps()
++	if err != nil {
++		t.Fatalf("ListApps once the leftover is clearable: %v", err)
++	}
++	if len(apps) != 2 {
++		t.Fatalf("ListApps returned %d registrations, want both", len(apps))
++	}
++}
++
++// TestQuarantineAppCompletesAnUnsyncedWithdrawal covers the failure
++// boundary after every rename has landed: a sync failure leaves nothing to
++// move, and a retry must finish the durability sequence rather than report
++// a record that is in fact already withdrawn.
++func TestQuarantineAppCompletesAnUnsyncedWithdrawal(t *testing.T) {
++	ks := newTestKeystore(t)
++	personal, org := twoRegistrations()
++	saveAll(t, ks, personal, org)
++	stripOwnerMetadata(t, ks, org.OwnerID)
++
++	// Stand in for a run whose renames all landed and whose sync then failed.
++	quarantineDir := filepath.Join(ks.Dir(), "github-app.quarantine")
++	if err := os.MkdirAll(quarantineDir, 0o700); err != nil {
++		t.Fatal(err)
++	}
++	ownerKey := strconv.FormatInt(org.OwnerID, 10)
++	if err := os.Rename(testAppDir(ks, org.OwnerID), filepath.Join(quarantineDir, ownerKey)); err != nil {
++		t.Fatal(err)
++	}
++
++	if err := ks.QuarantineApp(org.OwnerID); err != nil {
++		t.Fatalf("QuarantineApp completing an unsynced withdrawal: %v", err)
++	}
++	apps, err := ks.ListApps()
++	if err != nil {
++		t.Fatalf("ListApps after the completed withdrawal: %v", err)
++	}
++	if len(apps) != 1 || apps[0].OwnerID != personal.OwnerID {
++		t.Fatalf("ListApps = %+v, want only owner %d", apps, personal.OwnerID)
++	}
++	for _, name := range []string{keyFileNameForTest, metaFileNameForTest} {
++		if _, err := os.Lstat(filepath.Join(quarantineDir, ownerKey, name)); err != nil {
++			t.Errorf("quarantined %s: %v", name, err)
++		}
++	}
++}
++
++// TestQuarantineAppWithdrawsJournalsAndActiveTogether pins the shape the
++// crash barrier protects: with both a journal and an active record, every
++// piece leaves the active set and none is left behind on the source side
++// for recovery to promote.
++func TestQuarantineAppWithdrawsJournalsAndActiveTogether(t *testing.T) {
++	ks := newTestKeystore(t)
++	personal, org := twoRegistrations()
++	saveAll(t, ks, personal, org)
++	stripOwnerMetadata(t, ks, org.OwnerID)
++	appDir := testAppDir(ks, org.OwnerID)
++	if err := os.MkdirAll(appDir+".old", 0o700); err != nil {
++		t.Fatal(err)
++	}
++
++	if err := ks.QuarantineApp(org.OwnerID); err != nil {
++		t.Fatalf("QuarantineApp: %v", err)
++	}
++	for _, leftover := range []string{appDir, appDir + ".old", appDir + ".staging"} {
++		if _, err := os.Lstat(leftover); !errors.Is(err, fs.ErrNotExist) {
++			t.Errorf("%s survives on the source side after withdrawal: %v", leftover, err)
++		}
++	}
++	// Nothing recovery could promote: a second enumeration must not
++	// resurrect the record.
++	for round := range 2 {
++		apps, err := ks.ListApps()
++		if err != nil {
++			t.Fatalf("ListApps round %d: %v", round, err)
++		}
++		if len(apps) != 1 || apps[0].OwnerID != personal.OwnerID {
++			t.Fatalf("ListApps round %d = %+v, want only owner %d", round, apps, personal.OwnerID)
++		}
++	}
++}
++
++// deficientRootModes enumerates the owner-access deviations a root can
++// carry, rather than the one that happened to be reported: no write, no
++// search, and neither. Each disables the withdrawal for every record
++// alike, so each must be classified keystore-wide.
++var deficientRootModes = []struct {
++	name string
++	mode fs.FileMode
++}{
++	{"no owner write", 0o500},
++	{"no owner search", 0o600},
++	{"read only", 0o400},
++	{"group and other bits", 0o755},
++}
++
++// TestDeficientRegistrationRootIsKeystoreWide is the mirror of the
++// widened-mode case: a registration root missing any owner bit blocks
++// recovery for every record alike, so it must not be attributed to
++// whichever record met it, and the withdrawal must refuse rather than
++// attempt a move that cannot succeed. narrowDir deliberately preserves a
++// tighter-than-0700 root, so these are supported states, not corruption.
++func TestDeficientRegistrationRootIsKeystoreWide(t *testing.T) {
++	for _, tc := range deficientRootModes {
++		t.Run(tc.name, func(t *testing.T) {
++			ks := newTestKeystore(t)
++			personal, org := twoRegistrations()
++			saveAll(t, ks, personal, org)
++			// The owner exists only as a journal, so recovery must rename it
++			// into place and cannot.
++			appDir := testAppDir(ks, org.OwnerID)
++			if err := os.Rename(appDir, appDir+".old"); err != nil {
++				t.Fatal(err)
++			}
++			locked := filepath.Join(ks.Dir(), "github-app")
++			if err := os.Chmod(locked, tc.mode); err != nil {
++				t.Fatal(err)
++			}
++			t.Cleanup(func() { _ = os.Chmod(locked, 0o700) }) //nolint:gosec // restore owner access
++
++			_, err := ks.ListApps()
++			if err == nil {
++				t.Fatal("ListApps under a deficient registration root = nil, want error")
++			}
++			var unreadable *publish.UnreadableRegistrationError
++			if errors.As(err, &unreadable) {
++				t.Errorf("keystore-wide failure attributed to owner %d: %v", unreadable.OwnerID, err)
++			}
++			if err := ks.QuarantineApp(org.OwnerID); !errors.Is(err, publish.ErrCredentialPermissions) {
++				t.Fatalf("QuarantineApp under a deficient root = %v, want ErrCredentialPermissions", err)
++			}
++
++			// Restoring owner access makes it an ordinary recoverable record.
++			if err := os.Chmod(locked, 0o700); err != nil { //nolint:gosec // restore owner access
++				t.Fatal(err)
++			}
++			if _, err := os.Lstat(appDir + ".old"); err != nil {
++				t.Errorf("journal disturbed by the refused withdrawal: %v", err)
++			}
++			apps, err := ks.ListApps()
++			if err != nil {
++				t.Fatalf("ListApps once the root is usable: %v", err)
++			}
++			if len(apps) != 2 {
++				t.Fatalf("ListApps returned %d registrations, want both", len(apps))
++			}
++		})
++	}
++}
++
++// TestDeficientCredentialsRootRefusesWithdrawal covers the other root the
++// withdrawal writes: enumeration is unaffected, since recovery renames
++// within the registration root, but the quarantine directory is created
++// beside it, so the withdrawal must refuse rather than fail part-way.
++func TestDeficientCredentialsRootRefusesWithdrawal(t *testing.T) {
++	for _, tc := range deficientRootModes {
++		t.Run(tc.name, func(t *testing.T) {
++			ks := newTestKeystore(t)
++			personal, org := twoRegistrations()
++			saveAll(t, ks, personal, org)
++			stripOwnerMetadata(t, ks, org.OwnerID)
++			if err := os.Chmod(ks.Dir(), tc.mode); err != nil {
++				t.Fatal(err)
++			}
++			t.Cleanup(func() { _ = os.Chmod(ks.Dir(), 0o700) }) //nolint:gosec // restore owner access
++
++			if err := ks.QuarantineApp(org.OwnerID); !errors.Is(err, publish.ErrCredentialPermissions) {
++				t.Fatalf("QuarantineApp under a deficient credentials root = %v, want ErrCredentialPermissions", err)
++			}
++			if err := os.Chmod(ks.Dir(), 0o700); err != nil { //nolint:gosec // restore owner access
++				t.Fatal(err)
++			}
++			if _, err := os.Lstat(testAppDir(ks, org.OwnerID)); err != nil {
++				t.Errorf("record disturbed by the refused withdrawal: %v", err)
++			}
++			if err := ks.QuarantineApp(org.OwnerID); err != nil {
++				t.Fatalf("QuarantineApp once the root is usable: %v", err)
++			}
++			apps, err := ks.ListApps()
++			if err != nil {
++				t.Fatalf("ListApps after withdrawal: %v", err)
++			}
++			if len(apps) != 1 || apps[0].OwnerID != personal.OwnerID {
++				t.Fatalf("ListApps = %+v, want only owner %d", apps, personal.OwnerID)
++			}
++		})
++	}
++}
++
++// TestDeficientRootDoesNotAttributeActiveRecordFailure covers the other
++// attribution branch: an active record that simply fails to load, with no
++// recovery involved. Mode 0500 is the mode that makes the point — it
++// permits the read and the traversal, so the load failure is genuine, and
++// forbids the rename, so withdrawal would refuse. Attribution promises a
++// remedy, so it must not be made here either.
++func TestDeficientRootDoesNotAttributeActiveRecordFailure(t *testing.T) {
++	ks := newTestKeystore(t)
++	personal, org := twoRegistrations()
++	saveAll(t, ks, personal, org)
++	stripOwnerMetadata(t, ks, org.OwnerID)
++	locked := filepath.Join(ks.Dir(), "github-app")
++	if err := os.Chmod(locked, 0o500); err != nil { //nolint:gosec // directory mode is the state under test
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) }) //nolint:gosec // restore owner access
++
++	_, err := ks.ListApps()
++	if err == nil {
++		t.Fatal("ListApps over a damaged record under a deficient root = nil, want error")
++	}
++	var unreadable *publish.UnreadableRegistrationError
++	if errors.As(err, &unreadable) {
++		t.Errorf("attributed owner %d while withdrawal would refuse: %v", unreadable.OwnerID, err)
++	}
++	if err := ks.QuarantineApp(org.OwnerID); !errors.Is(err, publish.ErrCredentialPermissions) {
++		t.Fatalf("QuarantineApp under a deficient root = %v, want ErrCredentialPermissions", err)
++	}
++
++	// With the root usable the promise holds again: the same failure is
++	// attributed, and the remedy it advertises works.
++	if err := os.Chmod(locked, 0o700); err != nil { //nolint:gosec // restore owner access
++		t.Fatal(err)
++	}
++	_, err = ks.ListApps()
++	if !errors.As(err, &unreadable) {
++		t.Fatalf("ListApps once the root is usable = %v, want an attributed failure", err)
++	}
++	if unreadable.OwnerID != org.OwnerID {
++		t.Fatalf("attributed owner = %d, want %d", unreadable.OwnerID, org.OwnerID)
++	}
++	if err := ks.QuarantineApp(unreadable.OwnerID); err != nil {
++		t.Fatalf("QuarantineApp after attribution: %v", err)
++	}
++	apps, err := ks.ListApps()
++	if err != nil {
++		t.Fatalf("ListApps after withdrawal: %v", err)
++	}
++	if len(apps) != 1 || apps[0].OwnerID != personal.OwnerID {
++		t.Fatalf("ListApps = %+v, want only owner %d", apps, personal.OwnerID)
++	}
++}
++
++// TestDeficientQuarantineDestinationIsKeystoreWide extends the root-mode
++// table to the destination: an existing quarantine directory the owner
++// cannot write into fails every rename just as a deficient source root
++// does, so it must not be attributed to a record either.
++func TestDeficientQuarantineDestinationIsKeystoreWide(t *testing.T) {
++	for _, tc := range deficientRootModes {
++		t.Run(tc.name, func(t *testing.T) {
++			ks := newTestKeystore(t)
++			personal, org := twoRegistrations()
++			saveAll(t, ks, personal, org)
++			stripOwnerMetadata(t, ks, org.OwnerID)
++			quarantineDir := filepath.Join(ks.Dir(), "github-app.quarantine")
++			if err := os.MkdirAll(quarantineDir, 0o700); err != nil {
++				t.Fatal(err)
++			}
++			if err := os.Chmod(quarantineDir, tc.mode); err != nil {
++				t.Fatal(err)
++			}
++			t.Cleanup(func() { _ = os.Chmod(quarantineDir, 0o700) }) //nolint:gosec // restore owner access
++
++			_, err := ks.ListApps()
++			if err == nil {
++				t.Fatal("ListApps with a deficient quarantine destination = nil, want error")
++			}
++			var unreadable *publish.UnreadableRegistrationError
++			if errors.As(err, &unreadable) {
++				t.Errorf("attributed owner %d while the destination blocks withdrawal: %v", unreadable.OwnerID, err)
++			}
++			if err := ks.QuarantineApp(org.OwnerID); !errors.Is(err, publish.ErrCredentialPermissions) {
++				t.Fatalf("QuarantineApp into a deficient destination = %v, want ErrCredentialPermissions", err)
++			}
++
++			// Restoring owner access restores both the attribution and the
++			// remedy it advertises.
++			if err := os.Chmod(quarantineDir, 0o700); err != nil { //nolint:gosec // restore owner access
++				t.Fatal(err)
++			}
++			_, err = ks.ListApps()
++			if !errors.As(err, &unreadable) || unreadable.OwnerID != org.OwnerID {
++				t.Fatalf("ListApps once the destination is usable = %v, want owner %d attributed", err, org.OwnerID)
++			}
++			if err := ks.QuarantineApp(org.OwnerID); err != nil {
++				t.Fatalf("QuarantineApp once the destination is usable: %v", err)
++			}
++			apps, err := ks.ListApps()
++			if err != nil {
++				t.Fatalf("ListApps after withdrawal: %v", err)
++			}
++			if len(apps) != 1 || apps[0].OwnerID != personal.OwnerID {
++				t.Fatalf("ListApps = %+v, want only owner %d", apps, personal.OwnerID)
++			}
++		})
++	}
++}
++
++// TestMalformedQuarantineTargetIsNotAttributed closes the last shape of
++// the availability class: the destination directories are fine, but the
++// owner's own target inside them is a file or a symlink, so the rename
++// cannot land. Attribution promises the withdrawal, so it must ask the
++// withdrawal's own preconditions rather than only the directory modes.
++func TestMalformedQuarantineTargetIsNotAttributed(t *testing.T) {
++	for _, tc := range []struct {
++		name  string
++		plant func(t *testing.T, target string)
++	}{
++		{"regular file", func(t *testing.T, target string) {
++			if err := os.WriteFile(target, []byte("x"), 0o600); err != nil {
++				t.Fatal(err)
++			}
++		}},
++		{"symlink", func(t *testing.T, target string) {
++			if err := os.Symlink(t.TempDir(), target); err != nil {
++				t.Fatal(err)
++			}
++		}},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			ks := newTestKeystore(t)
++			personal, org := twoRegistrations()
++			saveAll(t, ks, personal, org)
++			stripOwnerMetadata(t, ks, org.OwnerID)
++			quarantineDir := filepath.Join(ks.Dir(), "github-app.quarantine")
++			if err := os.MkdirAll(quarantineDir, 0o700); err != nil {
++				t.Fatal(err)
++			}
++			target := filepath.Join(quarantineDir, strconv.FormatInt(org.OwnerID, 10))
++			tc.plant(t, target)
++
++			_, err := ks.ListApps()
++			if err == nil {
++				t.Fatal("ListApps with a malformed quarantine target = nil, want error")
++			}
++			var unreadable *publish.UnreadableRegistrationError
++			if errors.As(err, &unreadable) {
++				t.Errorf("attributed owner %d while its destination is unusable: %v", unreadable.OwnerID, err)
++			}
++			if err := ks.QuarantineApp(org.OwnerID); err == nil {
++				t.Fatal("QuarantineApp onto a malformed target = nil, want refusal")
++			}
++			if _, err := os.Lstat(testAppDir(ks, org.OwnerID)); err != nil {
++				t.Errorf("record disturbed by the refused withdrawal: %v", err)
++			}
++
++			// Clearing the obstruction restores both the attribution and the
++			// remedy it advertises.
++			if err := os.Remove(target); err != nil {
++				t.Fatal(err)
++			}
++			_, err = ks.ListApps()
++			if !errors.As(err, &unreadable) || unreadable.OwnerID != org.OwnerID {
++				t.Fatalf("ListApps once the target is clear = %v, want owner %d attributed", err, org.OwnerID)
++			}
++			if err := ks.QuarantineApp(org.OwnerID); err != nil {
++				t.Fatalf("QuarantineApp once the target is clear: %v", err)
++			}
++			apps, err := ks.ListApps()
++			if err != nil {
++				t.Fatalf("ListApps after withdrawal: %v", err)
++			}
++			if len(apps) != 1 || apps[0].OwnerID != personal.OwnerID {
++				t.Fatalf("ListApps = %+v, want only owner %d", apps, personal.OwnerID)
++			}
++		})
++	}
++}
++
++// TestExistingWithdrawalIsNotAttributed pins the other precondition
++// attribution now inherits: a destination whose source still exists is a
++// distinct earlier withdrawal that the remedy refuses, so it must not be
++// advertised either.
++func TestExistingWithdrawalIsNotAttributed(t *testing.T) {
++	ks := newTestKeystore(t)
++	personal, org := twoRegistrations()
++	saveAll(t, ks, personal, org)
++	stripOwnerMetadata(t, ks, org.OwnerID)
++	quarantineDir := filepath.Join(ks.Dir(), "github-app.quarantine")
++	occupied := filepath.Join(quarantineDir, strconv.FormatInt(org.OwnerID, 10))
++	if err := os.MkdirAll(occupied, 0o700); err != nil {
++		t.Fatal(err)
++	}
++
++	_, err := ks.ListApps()
++	if err == nil {
++		t.Fatal("ListApps with an occupied destination = nil, want error")
++	}
++	var unreadable *publish.UnreadableRegistrationError
++	if errors.As(err, &unreadable) {
++		t.Errorf("attributed owner %d while the withdrawal would refuse: %v", unreadable.OwnerID, err)
++	}
++	if err := ks.QuarantineApp(org.OwnerID); err == nil {
++		t.Fatal("QuarantineApp onto an occupied destination = nil, want refusal")
++	}
++}
+diff --git a/daemon/internal/publish/onboarding_test.go b/daemon/internal/publish/onboarding_test.go
+index 28d13f98c0b6083374193e9cb08b631493bdaa19..192d7922a324872b7a5e87daa0ba2ae779db751b 100644
+--- a/daemon/internal/publish/onboarding_test.go
++++ b/daemon/internal/publish/onboarding_test.go
+@@ -586,6 +586,98 @@ func TestCredentialDoctorDetections(t *testing.T) {
+ 		assertFinding(t, findings, publish.CredentialFindingBadPermissions)
+ 	})
+ 
++	// A keystore-wide failure has no owner to name; a per-record one always
++	// does, whichever finding code it lands on. Without the owner the
++	// operator cannot tell which of several registrations blocks every
++	// resolver and janitor cycle, which is the whole point of #271.
++	t.Run("per-record failures name their owner", func(t *testing.T) {
++		cases := []struct {
++			name   string
++			damage func(t *testing.T, appDir string)
++			want   publish.CredentialFindingCode
++		}{
++			{"absent key", func(t *testing.T, appDir string) {
++				if err := os.Remove(filepath.Join(appDir, "app.pem")); err != nil {
++					t.Fatal(err)
++				}
++			}, publish.CredentialFindingMissingKey},
++			{"widened key permissions", func(t *testing.T, appDir string) {
++				//nolint:gosec // deliberately exposed doctor fixture
++				if err := os.Chmod(filepath.Join(appDir, "app.pem"), 0o644); err != nil {
++					t.Fatal(err)
++				}
++			}, publish.CredentialFindingBadPermissions},
++		}
++		for _, tc := range cases {
++			t.Run(tc.name, func(t *testing.T) {
++				ks := newTestKeystore(t)
++				damaged := publicFixtureCredentials(t)
++				other := publicFixtureCredentials(t)
++				other.OwnerID = damaged.OwnerID + 1
++				other.AppID = damaged.AppID + 1
++				for _, creds := range []publish.AppCredentials{damaged, other} {
++					if err := ks.SaveApp(creds); err != nil {
++						t.Fatal(err)
++					}
++				}
++				tc.damage(t, filepath.Join(
++					ks.Dir(), "github-app", strconv.FormatInt(damaged.OwnerID, 10),
++				))
++
++				onboarder, _, _ := newTestOnboarder(t, ks, activeJanitorStatus{})
++				findings, err := publish.NewCredentialDoctor(onboarder, activeJanitorStatus{}).
++					Check(context.Background(), nil)
++				if err != nil {
++					t.Fatalf("Check: %v", err)
++				}
++				assertFinding(t, findings, tc.want)
++				if len(findings) != 1 || findings[0].OwnerID != damaged.OwnerID {
++					t.Fatalf("findings = %+v, want owner %d", findings, damaged.OwnerID)
++				}
++			})
++		}
++	})
++
++	t.Run("keystore-wide failure names no owner", func(t *testing.T) {
++		ks := newTestKeystore(t)
++		if err := ks.SaveApp(publicFixtureCredentials(t)); err != nil {
++			t.Fatal(err)
++		}
++		// Widening the registration root, not one record: the failure belongs
++		// to no single owner, so the finding must not name one.
++		if err := os.Chmod(filepath.Join(ks.Dir(), "github-app"), 0o755); err != nil { //nolint:gosec // deliberately exposed doctor fixture
++			t.Fatal(err)
++		}
++		onboarder, _, _ := newTestOnboarder(t, ks, activeJanitorStatus{})
++		findings, err := publish.NewCredentialDoctor(onboarder, activeJanitorStatus{}).
++			Check(context.Background(), nil)
++		if err != nil {
++			t.Fatalf("Check: %v", err)
++		}
++		assertFinding(t, findings, publish.CredentialFindingBadPermissions)
++		if len(findings) != 1 || findings[0].OwnerID != 0 {
++			t.Fatalf("findings = %+v, want no owner named", findings)
++		}
++	})
++
++	t.Run("unreadable registration", func(t *testing.T) {
++		ks := newTestKeystore(t)
++		if err := ks.SaveApp(publicFixtureCredentials(t)); err != nil {
++			t.Fatal(err)
++		}
++		stripOwnerMetadata(t, ks, testOwnerID)
++		onboarder, _, _ := newTestOnboarder(t, ks, activeJanitorStatus{})
++		findings, err := publish.NewCredentialDoctor(onboarder, activeJanitorStatus{}).
++			Check(context.Background(), nil)
++		if err != nil {
++			t.Fatalf("Check over an unreadable record returned an operational error: %v", err)
++		}
++		assertFinding(t, findings, publish.CredentialFindingUnreadableRecord)
++		if len(findings) != 1 || findings[0].OwnerID != testOwnerID {
++			t.Fatalf("findings = %+v, want the unreadable record's owner %d", findings, testOwnerID)
++		}
++	})
++
+ 	t.Run("visibility mismatch", func(t *testing.T) {
+ 		ks := newTestKeystore(t)
+ 		if err := ks.SaveApp(publicFixtureCredentials(t)); err != nil {
+diff --git a/devlog/2026-07-24-1647-keystore-unreadable-record.md b/devlog/2026-07-24-1647-keystore-unreadable-record.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..fca3f378ee25d26eb112732e4cb00aad4ce3f247
+--- /dev/null
++++ b/devlog/2026-07-24-1647-keystore-unreadable-record.md
+@@ -0,0 +1,280 @@
++# Keystore: Name The Unreadable Record, Don't Skip It
++
++Issue: #271. Chain context: `devlog/2026-07-24-1637-wave2-chain-amendment.md`.
++
++One pre-#245 record on the maintainer's machine (owner-keyed, but with null
++`owner`, `owner_id`, `visibility`, `key_id`, and `name`) made
++`Keystore.ListApps` fail with `registration owner is empty`, which fail-closed
++every `InstallationResolver.Resolve` and every `InstallationJanitor` cycle: one
++unusable record denied all credential operation, and the error named nothing an
++operator could act on.
++
++## Decisions
++
++- **Chose keeping enumeration fail-closed and naming the offending record over
++  skipping it.** Owner resolution selects among *all* local registrations and
++  refuses more than one match; a view that silently omitted one record could
++  bind an owner through a second registration while the omitted one bound it
++  too. The janitor has the same requirement from the other side: it cannot claim
++  complete coverage while one registration is invisible to it, and coverage is
++  what gates minting. So the blast radius is the bug, not the refusal.
++  `ListApps` now returns `*UnreadableRegistrationError` carrying the record's
++  numeric owner key and wrapping both `ErrUnreadableRegistration` and the
++  underlying cause.
++- **Chose multi-error unwrap over a flat sentinel** so callers that already
++  distinguish a cause keep working: a widened-permissions record still matches
++  `ErrCredentialPermissions` and still produces the doctor's
++  `bad_keystore_permissions` finding, while a record that fails only on identity
++  falls through to the new `unreadable_registration` finding carrying its owner
++  ID. The finding deliberately carries numeric coordinates only, like every
++  other credential finding.
++- **Chose an explicit `QuarantineApp` withdrawal over in-place repair as the
++  operator's remedy.** Repair would return the registration to janitor coverage,
++  and the janitor deletes installations absent from its authority snapshot, so
++  "fixing" a record the operator no longer manages is the destructive direction.
++  Quarantine is not deletion: the key and metadata move intact to a sibling
++  directory inside the same credentials root, staying within the containment
++  boundary that keeps App keys out of checkpoints and workspaces. It refuses a
++  readable registration (withdrawing a working one is fail-open), refuses to
++  overwrite an existing quarantine record, and moves the `.staging`/`.old` swap
++  journals with the active directory so the next enumeration cannot promote the
++  record back.
++
++## Rejected Alternatives
++
++- **Return the valid registrations plus a rejected set, and let consumers decide.**
++  Rejected: every current consumer needs the complete set to be correct, so each
++  would have to re-derive the same refusal, and the first one that forgot would
++  fail open silently.
++- **Repair the record in place from the App's canonical GitHub metadata.**
++  Rejected for the janitor-coverage reason above, and because it would make the
++  keystore contact the forge during a local load.
++- **Extend `MigrateLegacyApp` to cover this shape.** Rejected: that path exists
++  for the pre-owner-keyed *singleton* layout and requires the operator to supply
++  the missing attribution; this record is already owner-keyed, and the operator's
++  intent here is withdrawal, not attribution.
++
++## Refute-First Findings
++
++The withdrawal path moves credential directories, so it took the destructive-path
++pass. It took the harness form rather than delegated lenses: the failure mode is
++a disagreement between two code paths over which records are usable, which a
++state-space enumeration measures and a diff-read can only assert.
++
++- **Confirmed (raised by review, P1): enumeration and quarantine disagreed about
++  readability.** A record whose metadata is internally valid but whose persisted
++  owner ID does not bind to its directory key is rejected by enumeration and was
++  accepted as "readable" by quarantine, so the doctor routed the operator to a
++  remedy that refused the record. Both paths now share one gate,
++  `loadRegistrationAt`, which is the only place readability is decided.
++- **Confirmed (raised by review, P2): a record stuck in recovery was
++  unreachable.** With no active directory and an invalid `.old` journal,
++  `recoverSwap` fails, which blocked enumeration and made quarantine exit before
++  it could collect the journal. Withdrawal now tolerates a failed recovery,
++  because an invalid journal is one of the states it exists to remedy.
++- **Confirmed by extension: recovery failures were unattributed.** A failed
++  `recoverSwap` is a per-record state that blocks enumeration and whose remedy is
++  withdrawal, so it left the same nameless error the issue is about and now
++  carries its owner ID.
++- **Corrected (raised by review, round 2): a leftover-clearing failure is not a
++  readability failure.** An over-wide first sweep attributed it too, which put
++  it on the withdrawal path while quarantine still judged the record readable.
++  The disagreement is real, but the right resolution is the narrower
++  classification, not the wider gate: the registration loaded and bound, so
++  withdrawing it would drop a working registration out of janitor coverage over
++  a stale journal, and the cleanup error already names the leftover path.
++  Enumeration returns it unattributed again, and readability now means exactly
++  load-plus-binding in both paths.
++- **Confirmed (raised by review, round 2): the withdrawal persisted its source
++  removal before its destination entry.** For a cross-directory rename that
++  makes a crash between the two syncs lose the credential outright. The
++  destination is now persisted first, so the only crash-side divergence is a
++  stale source entry that still holds the record.
++- **Confirmed (raised by review, round 3): the owner ID was dropped by the
++  finding codes that matched first.** A record present but missing its key wraps
++  `ErrNoAppCredentials`, which the doctor's switch matched before the sentinel,
++  reporting `missing_machine_key` with owner zero; a per-record permissions
++  failure had the same defect uncited. The owner is now extracted once, before
++  the switch, and rides every finding code, since the specific code is more
++  useful to the operator than collapsing all three into
++  `unreadable_registration`. A keystore-wide failure still names no owner.
++- **Rejected by verification: the crash-side divergence wedges the remedy.**
++  A retry meeting an existing destination refuses rather than overwriting, and
++  that refusal is correct rather than a wedge: POSIX forbids a second directory
++  entry for one directory inode, so a state with both present is two distinct
++  records, not one interrupted move, and silently replacing the preserved one
++  would be the credential loss the ordering exists to prevent.
++- **Confirmed (raised by review, round 4): a keystore-wide failure read as a
++  damaged record.** `assertPermissionsAt` asserts the credentials root and the
++  registration root as well as the record's own directory, so a widened mode on
++  either failed the load gate for every registration alike and let withdrawal
++  proceed against whichever owner was named — dropping a working registration
++  out of janitor coverage over a directory mode, while leaving enumeration just
++  as blocked. Withdrawal now rejects those two modes before it reaches any
++  record, matching the order enumeration already uses.
++- **Confirmed (raised by review, round 17), and the class closed structurally.**
++  A malformed destination — a file or symlink where the owner's target
++  directory belongs — passed every directory-mode check and still made the
++  rename impossible. That was the seventh member of one family: attribution
++  re-derived the withdrawal's preconditions instead of asking it. Each earlier
++  round widened the derivation (permissive modes, owner access, the directory
++  set, the predicate), and each time a precondition present in one side and
++  absent from the other produced another member. Attribution now runs the
++  withdrawal's own preflight, `withdrawalUnavailable`, which is exactly what
++  `QuarantineApp` checks before it mutates anything, so a new precondition is
++  inherited by both by construction. Two preconditions attribution had never
++  applied came along for free: a malformed target, and a destination whose
++  source still exists, which is a distinct earlier withdrawal the remedy
++  refuses.
++- **Confirmed (raised by review, round 16): the two sides of the gate used
++  different predicates.** Splitting the check into a helper for attribution and
++  one for withdrawal left attribution testing only owner access, so a
++  too-permissive quarantine destination was accepted there and rejected by the
++  withdrawal. Enumeration never sees that asymmetry on the two roots, which it
++  mode-checks itself, so the destination was the only place it showed. Both
++  sides now call one per-directory gate, which is the point: a predicate that
++  accepts what the withdrawal rejects recreates the defect the gate exists to
++  prevent. The mode table gained the permissive direction, which exercises all
++  three tables at once.
++- **Confirmed (raised by review, round 15): the mode gate covered the sources and
++  not the destination.** An existing quarantine directory the owner cannot write
++  into fails every rename exactly as a deficient source root does, yet the gate
++  listed only the two roots, so the record was attributed and the remedy refused.
++  Rounds 4, 11, 12, 13 and 15 are one class with one statement: every directory
++  the withdrawal operates through must permit what it does there. The directory
++  list is now derived in one place, `withdrawalDirs`, whose comment says that a
++  directory missing from it is precisely this defect, and the mode table runs
++  over the destination as well as the roots.
++- **Confirmed (raised by review, round 14): the crash barrier was conditioned on
++  the wrong thing.** Round 9 persisted the journal moves only when an active
++  record was also moving. With no active directory and two journals — an invalid
++  `.old` blocking recovery and a valid `.staging` — the barrier was skipped, so a
++  crash could persist the second removal and not the first, leaving recovery a
++  promotable stage and resurrecting the withdrawn record. The condition was never
++  the active record: it is that a journal on the source side is
++  promotion-capable. Each journal removal is now persisted before the next
++  rename, which also subsumes the barrier the active record needed.
++- **Confirmed (raised by review, round 13): the keystore-wide gate was applied
++  per-branch instead of per-policy.** Round 12 put it on the recovery-failure
++  attribution and not on the ordinary load-failure attribution, so a damaged
++  active record under an unwritable root was still attributed and still routed to
++  a remedy that refuses. Every attribution now passes through one function whose
++  contract is the promise it makes: name an owner only where withdrawal is
++  actually available. The predicate was right; its placement was the miss.
++- **Confirmed (raised by review, round 12): the root-mode class recurred a third
++  time, so the gate moved to the invariant.** Owner-write alone is not what the
++  remedy needs: a directory without owner search can have its names listed but
++  not be traversed or renamed within, so a `0600` root passed the write check and
++  still broke both recovery and withdrawal. Rounds 4, 11 and 12 were three
++  members of one class — the roots must permit everything the remedy performs —
++  which the fix now states directly, requiring all three owner bits, with the
++  mode space enumerated as a table (no write, no search, neither) rather than
++  the member that happened to be reported. Withdrawal also checks the roots
++  before anything else, since an unsearchable credentials root cannot be
++  evaluated for legacy layout or records at all.
++- **Confirmed (raised by review, round 11): the keystore-wide class recurred
++  from the opposite direction.** Round 4 rejected roots that are too permissive,
++  using `assertMode`, which only inspects group and other bits. A root the owner
++  cannot write passes it, yet blocks the rename recovery and withdrawal both
++  need, for every record alike — so a record reachable only as a journal was
++  attributed as unreadable and routed to a remedy that fails against the same
++  unwritable parent. `narrowDir` deliberately preserves a tighter-than-0700
++  root, so this is a supported state rather than corruption. Both roots are now
++  checked for owner-write, and the failure is classified keystore-wide in both
++  paths. The first sweep was one-directional; the class is the mode of the roots,
++  not the direction of the deviation.
++- **Rejected by verification: quarantine can be used to drop a working
++  registration.** A record that loads and binds is refused, and the refusal is
++  now judged by the same gate enumeration uses, so the two cannot drift apart
++  again.
++- **Confirmed (raised by review, round 9): the move order was sound against
++  errors and not against crashes.** Moving the active directory last makes every
++  *error* partial state safe, because the failing rename simply does not happen.
++  A crash is different: with no persist between the journal moves and the active
++  move, the active rename can reach disk while a journal rename has not, and
++  recovery then promotes the surviving journal and resurrects the registration
++  the withdrawal promised to remove. The round-5 ordering argument silently
++  assumed a durability it never established. A barrier now persists the journal
++  moves before the active directory leaves, which makes that promotion
++  impossible whatever happens to the active rename.
++- **Confirmed (raised by review, round 7): a sync failure left the withdrawal
++  unfinishable.** With every rename landed and a directory sync failing, nothing
++  remained to move, so a retry reported a missing record and never re-issued the
++  sync. The suggested remedy of persisting resumable state does not reach this
++  boundary: a journal write carries the same barrier that just failed, so it
++  cannot make durability recoverable. What is tractable is idempotent
++  completion, so an owner whose record is already in quarantine re-issues both
++  syncs and reports success. That is also the honest contract for a remedy: the
++  postcondition it promises, withdrawn and preserved, holds.
++- **Confirmed (raised by review, round 6): the cleanup class recurred through a
++  second call site.** Recovery clears the journals itself after promoting a
++  record, so a cleanup failure there was still labelled unreadable even though
++  the promoted registration loads fine and withdrawal would refuse it. The
++  round-2 sweep had narrowed only the outer call site, which is a miss, not
++  convergence. Attribution is now decided by the invariant it actually claims —
++  whether the record loads after recovery, and therefore whether withdrawal can
++  help — rather than by which error the failure carries, so a third call site
++  cannot reintroduce the class.
++- **Confirmed (raised by review, round 5): a multi-directory withdrawal could
++  strand its own record.** A damaged registration with a swap journal moves more
++  than one directory, so a failure part-way left the record split. The wedge is
++  not the split itself: with the active directory gone and a journal left,
++  recovery promotes that journal into the active slot, and the retry then
++  collides with the record its own earlier attempt had already quarantined.
++  Ordering closes it rather than rollback, which can fail in turn: journals move
++  first and the active directory last, so any partial state keeps the active
++  directory present, recovery has nothing to promote, and the retry finds free
++  destinations for whatever remains. A piece already moved is absent from the
++  source list entirely, so its destination is never re-examined.
++- **Rejected by verification: withdrawal can be made to destroy a preserved
++  record.** A second withdrawal for the same owner is refused rather than
++  overwriting the first, and an incomplete first-save stage is discarded by
++  recovery rather than withdrawn, so quarantine reports nothing to withdraw.
++- **Rejected by verification: a withdrawn record can be resurrected.** The
++  `.staging` and `.old` journals move with the active directory, so the next
++  enumeration cannot promote the record back into the active set.
++
++## Deferred, With The Tension Named
++
++Withdrawing a journal-only record leaves `<owner>.old` with no `<owner>`, so a
++later generation for the same owner can be withdrawn beside it and the preserved
++pieces stop being attributable to a key. Refusing whenever any owner suffix
++already exists would fix that and break the resumption property above: the
++resumed partial withdrawal is the same on-disk state, journals in quarantine
++with the active record still on the source side, and the two are
++indistinguishable from the filesystem alone. Separating generations therefore
++needs a withdrawal identity, which needs somewhere to record which withdrawal is
++in flight — persistence with no consumer today. Deferred to #280, whose
++acceptance carries both resumption properties so the fix cannot regress them.
++`QuarantineApp` has no non-test caller yet, so the layout stays free to change.
++
++## Verification Gap
++
++The crash barriers between renames are verified by inspection of the call order,
++not by a harness: the daemon has no crash or fsync-failure injection at this
++layer, and adding an injectable sync purely to observe them would put test
++scaffolding in the credential path. The fixtures pin what is observable without
++injection — the move order, the resumption of a partial withdrawal, and that no
++source-side piece survives for recovery to promote.
++
++One residual window is irreducible without a withdrawal manifest: the final
++rename has no persist after it until the closing sync, so a crash inside it can
++return that one directory, and if it is a promotable journal recovery may adopt
++it. Per-rename persistence bounds the exposure to that single in-flight rename
++rather than to any earlier one; closing it entirely needs the explicit resumable
++state #280 would introduce.
++
++## Accepted By Decision
++
++`.DS_Store` and other unexpected entries inside the registration root still fail
++enumeration closed (`unexpected registration entry`, surfaced as the doctor's
++`bad_keystore_permissions`). Refusing an unexpected entry in a credential store
++is the correct posture, and the failure is loud and names the entry in its error
++text; giving it its own finding code is a diagnostics refinement that belongs
++with the doctor packaging work, not here.
++
++## Revisit When
++
++`freesided onboard`/`doctor` (#238) gains an operator-facing repair path: at that
++point quarantine becomes one branch of a remedy menu, and the finding should
++route to it rather than to a library call.
