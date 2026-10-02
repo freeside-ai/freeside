@@ -50,6 +50,7 @@
   "review_dispute": null,
   "spec_revision": null,
   "agent_question": null,
+  "review_diminishing": null,
   "item_version": 2,
   "interruption_class": "exceptional",
   "conversation_id": null,

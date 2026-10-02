@@ -572,18 +572,22 @@ type AttentionItem struct {
 	// The remaining card facts are populated by daemon producers. They are nil
 	// on legacy items and fixed once first attached, except PublishBlock, which
 	// follows the current canonical cause across versioned publication holds.
-	ExecutionFailure  *ExecutionFailureFacts `json:"execution_failure"`
-	PublishBlock      *PublishBlockFacts     `json:"publish_block"`
-	DiffStats         *DiffStats             `json:"diff_stats"`
-	BlockedOn         *BlockedWait           `json:"blocked_on"`
-	HealthDiagnostic  *HealthDiagnostic      `json:"health_diagnostic"`
-	ReviewDispute     *ReviewDisputeBinding  `json:"review_dispute"`
-	SpecRevision      *SpecRevisionFacts     `json:"spec_revision"`
-	AgentQuestion     *AgentQuestionFacts    `json:"agent_question"`
-	ItemVersion       int                    `json:"item_version"`
-	InterruptionClass InterruptionClass      `json:"interruption_class"`
-	ConversationID    *ConversationID        `json:"conversation_id"`
-	Timing            TimingSummary          `json:"timing"`
+	ExecutionFailure *ExecutionFailureFacts `json:"execution_failure"`
+	PublishBlock     *PublishBlockFacts     `json:"publish_block"`
+	DiffStats        *DiffStats             `json:"diff_stats"`
+	BlockedOn        *BlockedWait           `json:"blocked_on"`
+	HealthDiagnostic *HealthDiagnostic      `json:"health_diagnostic"`
+	ReviewDispute    *ReviewDisputeBinding  `json:"review_dispute"`
+	SpecRevision     *SpecRevisionFacts     `json:"spec_revision"`
+	AgentQuestion    *AgentQuestionFacts    `json:"agent_question"`
+	// ReviewDiminishing carries the stop cause, and for a drift_audit stop the
+	// audit's facts, on a review_diminishing_returns item (plan §7 Review
+	// Drift). It is nil on items created before the field existed.
+	ReviewDiminishing *ReviewDiminishingFacts `json:"review_diminishing"`
+	ItemVersion       int                     `json:"item_version"`
+	InterruptionClass InterruptionClass       `json:"interruption_class"`
+	ConversationID    *ConversationID         `json:"conversation_id"`
+	Timing            TimingSummary           `json:"timing"`
 	// CreatedAt is the daemon-stamped instant this item was created. It is
 	// immutable across the item's lifecycle and nil only for legacy items
 	// persisted before the field existed.
@@ -651,6 +655,7 @@ type AttentionItemInput struct {
 	ReviewDispute                    *ReviewDisputeBinding
 	SpecRevision                     *SpecRevisionFacts
 	AgentQuestion                    *AgentQuestionFacts
+	ReviewDiminishing                *ReviewDiminishingFacts
 	ItemVersion                      int
 	InterruptionClass                InterruptionClass
 	ConversationID                   *ConversationID
@@ -710,6 +715,7 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 		ReviewDispute:                    cloneReviewDisputeBinding(in.ReviewDispute),
 		SpecRevision:                     cloneSpecRevisionFacts(in.SpecRevision),
 		AgentQuestion:                    cloneAgentQuestionFacts(in.AgentQuestion),
+		ReviewDiminishing:                cloneReviewDiminishingFacts(in.ReviewDiminishing),
 		ItemVersion:                      in.ItemVersion,
 		InterruptionClass:                in.InterruptionClass,
 		ConversationID:                   clonePtr(in.ConversationID),
@@ -986,6 +992,15 @@ func (i AttentionItem) Validate() error {
 		}
 		if err := i.BillableCostSoFar.Validate(); err != nil {
 			return fmt.Errorf("item %s billable_cost_so_far: %w", i.ID, err)
+		}
+	}
+	if i.ReviewDiminishing != nil {
+		if i.Type != AttentionReviewDiminishing {
+			return fmt.Errorf("item %s type %q carries review diminishing facts: %w",
+				i.ID, i.Type, ErrCardFactOutsideItem)
+		}
+		if err := i.ReviewDiminishing.Validate(); err != nil {
+			return fmt.Errorf("item %s review_diminishing: %w", i.ID, err)
 		}
 	}
 	if i.ExecutionFailure != nil {

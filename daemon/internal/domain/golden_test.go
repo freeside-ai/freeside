@@ -271,6 +271,40 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// One diminishing item per new stop cause, and per verdict under
+	// drift_audit, so the card facts' every shape is pinned.
+	diminishingFactsItem := func(suffix string, facts domain.ReviewDiminishingFacts) domain.AttentionItem {
+		t.Helper()
+		in := domain.AttentionItemInput{
+			ID: domain.ItemID("item-diminishing-" + suffix), ProjectID: "proj-1", Subject: subject,
+			Type: domain.AttentionReviewDiminishing, Priority: domain.PriorityNormal,
+			Reason: "review rounds are surfacing only marginal findings",
+			RequestedDecision: []domain.Action{
+				domain.ActionFinishNow, domain.ActionApplyThenFinish, domain.ActionContinueUnderPolicy,
+			},
+			EvidenceSnapshot:  []domain.Artifact{},
+			AgentClaims:       []domain.AgentClaim{},
+			YieldHistory:      &yieldHistory,
+			ReviewDiminishing: &facts,
+			ItemVersion:       1,
+			InterruptionClass: domain.InterruptionPlannedGate,
+			CreatedAt:         &ts,
+			Status:            domain.StatusOpen,
+		}
+		built, err := domain.NewAttentionItem(in, approved)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return built
+	}
+	growthItem := diminishingFactsItem("growth", domain.ReviewDiminishingFacts{
+		Cause: domain.ReviewDiminishingGrowthWithoutBlockers,
+	})
+	driftItems := map[domain.DriftVerdict]domain.AttentionItem{}
+	for _, verdict := range domain.AllDriftVerdicts {
+		driftItems[verdict] = diminishingFactsItem(
+			"drift-"+string(verdict), reviewDiminishingDriftFacts(verdict))
+	}
 	degradedItem := item
 	degradedItem.Readiness = &domain.ReadinessSummary{
 		Class: domain.ReadinessReadyDegraded, EvaluationSetDigest: "sha256:evaluation-degraded",
@@ -1577,6 +1611,10 @@ func TestGolden(t *testing.T) {
 		{"decision_surface", decisionSurface},
 		{"recommendation_source_record", recommendationSource},
 		{"attention_item_review_diminishing_yield", diminishingItem},
+		{"attention_item_review_diminishing_growth", growthItem},
+		{"attention_item_review_diminishing_drift_converged", driftItems[domain.DriftVerdictConverged]},
+		{"attention_item_review_diminishing_drift_over_hardened", driftItems[domain.DriftVerdictOverHardened]},
+		{"attention_item_review_diminishing_drift_stuck", driftItems[domain.DriftVerdictStuck]},
 		{"attention_item_readiness_degraded", degradedItem},
 		{"attention_item_blocked", blockedItem},
 		{"attention_item_execution_failure", executionFailureItem},

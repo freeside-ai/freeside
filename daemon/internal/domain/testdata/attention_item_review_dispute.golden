@@ -54,6 +54,7 @@
   },
   "spec_revision": null,
   "agent_question": null,
+  "review_diminishing": null,
   "item_version": 1,
   "interruption_class": "exceptional",
   "conversation_id": null,

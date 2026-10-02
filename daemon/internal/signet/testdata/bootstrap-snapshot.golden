@@ -52,6 +52,7 @@
         "review_dispute": null,
         "spec_revision": null,
         "agent_question": null,
+        "review_diminishing": null,
         "item_version": 3,
         "interruption_class": "planned_gate",
         "conversation_id": "conversation-569",
