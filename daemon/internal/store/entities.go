@@ -1761,7 +1761,18 @@ INSERT INTO findings (id, run_id, entity_version, as_of_revision, body)
 VALUES (?, ?, 1, ?, ?)
 ON CONFLICT (id) DO NOTHING`
 
+// PutFinding persists a finding from a Freeside-invoked review. It refuses
+// an external finding, so PutExternalFinding is that record's only write
+// door and every caller of this one, the review-record and shadow-record
+// writes included, inherits the plan §5.19 quarantine.
 func (tx *WriteTx) PutFinding(ctx context.Context, finding domain.Finding) error {
+	if finding.External != nil {
+		return fmt.Errorf("put finding %q: %w", finding.ID, domain.ErrExternalFindingQuarantined)
+	}
+	return tx.putFinding(ctx, finding)
+}
+
+func (tx *WriteTx) putFinding(ctx context.Context, finding domain.Finding) error {
 	body, err := encode(finding)
 	if err != nil {
 		return fmt.Errorf("put finding %q: %w", finding.ID, err)

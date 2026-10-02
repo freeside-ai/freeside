@@ -151,6 +151,13 @@ func (tx *WriteTx) PutShadowReviewRecord(
 	}
 	findingsByID := make(map[domain.FindingID]domain.Finding, len(findings))
 	for _, finding := range findings {
+		// Named before the source check below, which would refuse an external
+		// finding only incidentally: plan §5.19 quarantines it from every
+		// review record, shadow ones included.
+		if finding.External != nil {
+			return fmt.Errorf("put shadow review record %q finding %q: %w",
+				record.InvocationID, finding.ID, domain.ErrExternalFindingQuarantined)
+		}
 		if finding.RunID != record.RunID {
 			return fmt.Errorf("put shadow review record %q finding %q source binding: %w",
 				record.InvocationID, finding.ID, domain.ErrParentKeyMismatch)
