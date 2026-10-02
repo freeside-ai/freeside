@@ -1316,10 +1316,13 @@ import Testing
         // Mirrors signet's stop/resume transactions (#319): accepting
         // stop_unattended concludes the decided health item and raises the
         // system-scoped notice offering resume_unattended; accepting the
-        // resume concludes that notice. The durable transition log has no
-        // API surface, so the item effects are the whole observable parity.
+        // resume concludes that notice. The operating state itself rides the
+        // bootstrap's unattended_operation (#980).
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)
+        #expect(
+            try await client.getSyncBootstrap().ok.body.json.unattended_operation
+                == .init(admission: .open, stops: []))
         let health =
             try await client
             .getAttentionItem(path: .init(item_id: "item-system_health")).ok.body.json
@@ -1344,18 +1347,71 @@ import Testing
         #expect(notice.item.posture?.value1 == .blocking)
         #expect(notice.item.blocking_supersession == nil)
         #expect(notice.item.created_at != nil)
+        #expect(notice.item.health_diagnostic?.value1.code == "unattended_operation_stopped")
+        // One stop, not two: the notice is the operator stop's item, never a
+        // second blocking finding.
+        let stopped = try await client.getSyncBootstrap().ok.body.json.unattended_operation
+        #expect(stopped.admission == .stopped)
+        #expect(
+            stopped.stops == [
+                .init(
+                    kind: .operator_stop, item_id: noticeID, command_id: "cmd-stop",
+                    since: notice.item.created_at)
+            ])
+
+        // Acknowledge is seen, never resolved: the stop stands.
+        _ =
+            try await client
+            .submitCommand(
+                body: .json(Self.command(id: "cmd-ack", against: notice, action: .acknowledge))
+            ).ok.body.json
+        let acknowledged =
+            try await client
+            .getAttentionItem(path: .init(item_id: noticeID)).ok.body.json
+        #expect(
+            try await client.getSyncBootstrap().ok.body.json.unattended_operation.stops.map(\.kind)
+                == [.operator_stop])
 
         _ =
             try await client
             .submitCommand(
                 body: .json(
-                    Self.command(id: "cmd-resume", against: notice, action: .resume_unattended))
+                    Self.command(
+                        id: "cmd-resume", against: acknowledged, action: .resume_unattended))
             ).ok.body.json
         let resolved =
             try await client
             .getAttentionItem(path: .init(item_id: noticeID)).ok.body.json
         #expect(resolved.item.status == .resolved)
         #expect(resolved.item.decided_at != nil)
+        #expect(
+            try await client.getSyncBootstrap().ok.body.json.unattended_operation
+                == .init(admission: .open, stops: []))
+    }
+
+    @Test func aBlockingHealthItemProjectsAsABlockingStop() async throws {
+        // The daemon's own durable stop is a blocking system_health item with
+        // no operator transition behind it; it closes admission as a
+        // blocking-item stop until the daemon resolves the item.
+        var durableStop = AttentionFixtures.fixture(type: .system_health)
+        durableStop.item.id = "system-health-daemon-durable-stop-7"
+        durableStop.item.posture = .init(value1: .blocking)
+        durableStop.item.requested_decision = [.acknowledge, .run_doctor]
+        durableStop.item.codex_reenrollment_recovery_binding = nil
+        durableStop.item.health_diagnostic = .init(
+            value1: .init(code: "daemon_durable_stop", impairs: .unattended_admission))
+        let advisory = AttentionFixtures.fixture(type: .system_health)
+        let server = MockServer(items: [advisory, durableStop])
+        let client = APIClientFactory.mock(server: server)
+
+        let operation = try await client.getSyncBootstrap().ok.body.json.unattended_operation
+        #expect(operation.admission == .stopped)
+        #expect(
+            operation.stops == [
+                .init(
+                    kind: .blocking_system_health, item_id: durableStop.item.id,
+                    command_id: nil, since: durableStop.item.created_at)
+            ])
     }
 
     @Test func findingAdjudicationAcceptAndAlternativeChoiceResolve() async throws {
