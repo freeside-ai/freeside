@@ -1,6 +1,8 @@
 package domain_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"reflect"
 	"strings"
@@ -309,5 +311,205 @@ func TestFindingIdentityAbsent(t *testing.T) {
 	// precedes it in the batch.
 	if _, err := domain.FindingIdentityAbsent(prior, []domain.Finding{reemitted, bad}); !errors.Is(err, domain.ErrUnfingerprintableFinding) {
 		t.Errorf("unfingerprintable current err = %v, want ErrUnfingerprintableFinding", err)
+	}
+}
+
+func externalFindingInput() domain.ExternalFindingInput {
+	return domain.ExternalFindingInput{
+		RunID: "run-1", Forge: domain.ExternalReviewForgeGitHub,
+		ReviewerAccountID: 41, ReviewerLogin: "codex[bot]",
+		ThreadID: "PRRT_kwDOexample", HeadSHA: "cafebabe",
+		Severity:  domain.FindingSeverityP1,
+		Location:  &domain.FindingLocation{Path: "daemon/main.go", StartLine: 42, EndLine: 42},
+		Message:   "unchecked error",
+		RawText:   "P1: the error return is dropped",
+		CreatedAt: time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC),
+	}
+}
+
+// TestNewExternalFinding: the constructor derives every field a caller must
+// not choose (plan §5.19), and the ID keys on where the finding was left and
+// what it says, so a replayed ingest converges and an edit is a new finding.
+func TestNewExternalFinding(t *testing.T) {
+	in := externalFindingInput()
+	f, err := domain.NewExternalFinding(in)
+	if err != nil {
+		t.Fatalf("NewExternalFinding: %v", err)
+	}
+	if f.External == nil || f.External.Class != domain.FindingProvenanceExternalUntrusted {
+		t.Fatalf("external provenance = %+v, want external_untrusted", f.External)
+	}
+	if f.Source != "external_github" || f.Source != domain.ExternalFindingSource(domain.ExternalReviewForgeGitHub) {
+		t.Fatalf("source = %q, want external_github", f.Source)
+	}
+	sum := sha256.Sum256([]byte(in.RawText))
+	if want := domain.Digest("sha256:" + hex.EncodeToString(sum[:])); f.External.RawSourceDigest != want {
+		t.Fatalf("raw source digest = %q, want %q", f.External.RawSourceDigest, want)
+	}
+	// The constructor detaches the location from the caller's value.
+	in.Location.Path = "elsewhere.go"
+	if f.Location.Path != "daemon/main.go" {
+		t.Fatal("finding location aliases the caller's value")
+	}
+
+	in = externalFindingInput()
+	replayed, err := domain.NewExternalFinding(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.ID != f.ID {
+		t.Fatalf("replayed ID %q, want %q", replayed.ID, f.ID)
+	}
+	for _, tt := range []struct {
+		name   string
+		mutate func(*domain.ExternalFindingInput)
+	}{
+		{"edited text", func(in *domain.ExternalFindingInput) { in.RawText += " (edited)" }},
+		{"another thread", func(in *domain.ExternalFindingInput) { in.ThreadID = "PRRT_other" }},
+		{"another head", func(in *domain.ExternalFindingInput) { in.HeadSHA = "deadbeef" }},
+		{"another run", func(in *domain.ExternalFindingInput) { in.RunID = "run-2" }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			in := externalFindingInput()
+			tt.mutate(&in)
+			other, err := domain.NewExternalFinding(in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if other.ID == f.ID {
+				t.Fatalf("%s kept finding ID %q", tt.name, f.ID)
+			}
+		})
+	}
+}
+
+// TestExternalFindingCarriesNoAdmission pins the shape: nothing stored on a
+// finding can say its reviewer is admitted or what they may do. Admission is
+// the trust profile's answer at read time (plan §5.19), so a field here
+// would be a trust bit a decoded row could forge.
+func TestExternalFindingCarriesNoAdmission(t *testing.T) {
+	rt := reflect.TypeOf(domain.ExternalFindingProvenance{})
+	want := []string{"Class", "Forge", "ReviewerAccountID", "ReviewerLogin", "ThreadID", "RawSourceDigest", "HeadSHA"}
+	var got []string
+	for i := range rt.NumField() {
+		got = append(got, rt.Field(i).Name)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("external provenance fields = %v, want exactly %v", got, want)
+	}
+}
+
+// TestExternalFindingValidate is the literal path a decoded row takes: each
+// derived field is recomputed and each third-party string is bounded.
+func TestExternalFindingValidate(t *testing.T) {
+	tooLarge := strings.Repeat("x", domain.MaxNativeReviewTextBytes+1)
+	tests := []struct {
+		name   string
+		mutate func(*domain.Finding)
+		want   error
+	}{
+		{"raw text edited under its digest", func(f *domain.Finding) { f.RawText = "LGTM" }, domain.ErrExternalFindingInconsistent},
+		{"forged raw source digest", func(f *domain.Finding) { f.External.RawSourceDigest = "sha256:forged" }, domain.ErrExternalFindingInconsistent},
+		{"a Freeside review source's label", func(f *domain.Finding) { f.Source = "codex_github" }, domain.ErrExternalFindingInconsistent},
+		{"caller-chosen ID", func(f *domain.Finding) { f.ID = "find-1" }, domain.ErrExternalFindingInconsistent},
+		{"another run under the same ID", func(f *domain.Finding) { f.RunID = "run-2" }, domain.ErrExternalFindingInconsistent},
+		{"another head under the same ID", func(f *domain.Finding) { f.External.HeadSHA = "deadbeef" }, domain.ErrExternalFindingInconsistent},
+		{"another thread under the same ID", func(f *domain.Finding) { f.External.ThreadID = "PRRT_other" }, domain.ErrExternalFindingInconsistent},
+		{"another account under the same ID", func(f *domain.Finding) { f.External.ReviewerAccountID++ }, domain.ErrExternalFindingInconsistent},
+		{"unknown class", func(f *domain.Finding) { f.External.Class = "external_trusted" }, domain.ErrInvalidFindingProvenanceClass},
+		{"empty class", func(f *domain.Finding) { f.External.Class = "" }, domain.ErrInvalidFindingProvenanceClass},
+		{"unknown forge", func(f *domain.Finding) { f.External.Forge = "gitlab" }, domain.ErrInvalidExternalReviewForge},
+		{"zero reviewer account", func(f *domain.Finding) { f.External.ReviewerAccountID = 0 }, domain.ErrNonPositive},
+		{"empty reviewer login", func(f *domain.Finding) { f.External.ReviewerLogin = "" }, domain.ErrEmptyField},
+		{"reviewer login with whitespace", func(f *domain.Finding) { f.External.ReviewerLogin = "codex bot" }, domain.ErrExternalReviewerLoginInvalid},
+		{"empty thread", func(f *domain.Finding) { f.External.ThreadID = "" }, domain.ErrEmptyField},
+		{"empty head", func(f *domain.Finding) { f.External.HeadSHA = "" }, domain.ErrEmptyField},
+		{"message not UTF-8", func(f *domain.Finding) { f.Message = "bad\xff" }, domain.ErrNativeReviewTextNotUTF8},
+		{"message too large", func(f *domain.Finding) { f.Message = tooLarge }, domain.ErrNativeReviewTextTooLarge},
+		{"location path not UTF-8", func(f *domain.Finding) { f.Location.Path = "bad\xff.go" }, domain.ErrNativeReviewTextNotUTF8},
+		{"thread too large", func(f *domain.Finding) { f.External.ThreadID = tooLarge }, domain.ErrNativeReviewTextTooLarge},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f, err := domain.NewExternalFinding(externalFindingInput())
+			if err != nil {
+				t.Fatal(err)
+			}
+			tt.mutate(&f)
+			if err := f.Validate(); !errors.Is(err, tt.want) {
+				t.Fatalf("error = %v, want %v", err, tt.want)
+			}
+		})
+	}
+
+	// Raw text is bounded before it is digested, through the constructor too.
+	for _, tt := range []struct {
+		name string
+		raw  string
+		want error
+	}{
+		{"empty raw text", "", domain.ErrEmptyField},
+		{"raw text not UTF-8", "bad\xff", domain.ErrNativeReviewTextNotUTF8},
+		{"raw text too large", tooLarge, domain.ErrNativeReviewTextTooLarge},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			in := externalFindingInput()
+			in.RawText = tt.raw
+			if _, err := domain.NewExternalFinding(in); !errors.Is(err, tt.want) {
+				t.Fatalf("error = %v, want %v", err, tt.want)
+			}
+		})
+	}
+
+	// The label is reserved in the other direction too: a finding without
+	// external provenance cannot wear it, or its fingerprint would be an
+	// external finding's.
+	native := codexFinding("find-1", "run-1", domain.FindingSeverityP2, "daemon/main.go", "unchecked error", 42, 42)
+	if err := native.Validate(); err != nil {
+		t.Fatalf("native finding rejected: %v", err)
+	}
+	native.Source = domain.ExternalFindingSource(domain.ExternalReviewForgeGitHub)
+	if err := native.Validate(); !errors.Is(err, domain.ErrExternalFindingInconsistent) {
+		t.Fatalf("native finding with the external label error = %v, want ErrExternalFindingInconsistent", err)
+	}
+}
+
+// TestNativeReviewObservationRefusesExternalFinding is one third of the
+// §5.19 quarantine (the store pins the review-record and shadow-record
+// thirds): an external finding never rides inside a native observation, and
+// re-deriving an identical external finding is not a material change.
+func TestNativeReviewObservationRefusesExternalFinding(t *testing.T) {
+	external, err := domain.NewExternalFinding(externalFindingInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 10, 2, 13, 0, 0, 0, time.UTC)
+	observation := domain.NativeReviewObservation{
+		Repo: "owner/repo", RepositoryID: 84958515, PRNumber: 450,
+		Provider: domain.NativeReviewCodexGitHub, Kind: domain.NativeReviewFindings,
+		NativeID: 900100, AuthorLogin: "chatgpt-codex-connector",
+		ReviewCommitSHA: "cafebabe", ReviewState: "COMMENTED", BindingHeadSHA: "cafebabe",
+		SubmittedAt: at, ObservedAt: at,
+		Findings: []domain.Finding{external},
+	}
+	if err := observation.Validate(); !errors.Is(err, domain.ErrExternalFindingQuarantined) {
+		t.Fatalf("observation with an external finding error = %v, want ErrExternalFindingQuarantined", err)
+	}
+
+	rederived, err := domain.NewExternalFinding(externalFindingInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rederived.External == external.External {
+		t.Fatal("fixture shares one provenance pointer; the comparison below would prove nothing")
+	}
+	previous := observation
+	previous.Findings = []domain.Finding{rederived}
+	if observation.MaterialChangeFrom(previous) {
+		t.Fatal("identical external provenance behind a different pointer read as a material change")
+	}
+	rederived.External.ReviewerLogin = "someone-else"
+	if !observation.MaterialChangeFrom(previous) {
+		t.Fatal("a changed external provenance did not read as a material change")
 	}
 }

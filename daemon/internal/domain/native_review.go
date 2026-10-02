@@ -172,6 +172,12 @@ func (o NativeReviewObservation) Validate() error {
 		if err := f.Validate(); err != nil {
 			return fmt.Errorf("native review observation finding: %w", err)
 		}
+		// An observation is native evidence about a Freeside-published PR;
+		// an external finding is a separate, quarantined record and never
+		// rides inside one (plan §5.19).
+		if f.External != nil {
+			return fmt.Errorf("native review observation finding %s: %w", f.ID, ErrExternalFindingQuarantined)
+		}
 		if f.Source != string(o.Provider) {
 			return fmt.Errorf("native review observation finding %s source %q: %w",
 				f.ID, f.Source, ErrNativeReviewInconsistent)

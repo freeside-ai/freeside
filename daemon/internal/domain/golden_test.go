@@ -566,6 +566,16 @@ func TestGolden(t *testing.T) {
 		ID: "find-1", RunID: "run-1", Source: "codex_github",
 		Severity: "P2", Location: &domain.FindingLocation{Path: "daemon/main.go", StartLine: 42, EndLine: 42}, Message: "unchecked error", RawText: "err not handled", CreatedAt: ts,
 	}
+	findingExternal, err := domain.NewExternalFinding(domain.ExternalFindingInput{
+		RunID: "run-1", Forge: domain.ExternalReviewForgeGitHub,
+		ReviewerAccountID: 41, ReviewerLogin: "codex[bot]",
+		ThreadID: "PRRT_kwDOexample", HeadSHA: "cafebabe",
+		Severity: "P1", Location: &domain.FindingLocation{Path: "daemon/main.go", StartLine: 42, EndLine: 42},
+		Message: "unchecked error", RawText: "P1: the error return is dropped", CreatedAt: ts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	reviewRecord, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-run-1-1", RunID: "run-1", Round: 1,
 		Provider: "openai", ModelConfiguration: "gpt-5.2-codex/high",
@@ -1672,6 +1682,7 @@ func TestGolden(t *testing.T) {
 		{"device_credential", credential},
 		{"pairing_code", pairingCode},
 		{"finding", finding},
+		{"finding_external", findingExternal},
 		{"review_record", reviewRecord},
 		{"shadow_review_record", shadowReviewRecord},
 		{"classifier_accuracy_sample", classifierAccuracySample},

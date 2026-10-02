@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
 
 // FindingLocation is a machine-actionable source location for a review
@@ -56,6 +58,102 @@ func (l FindingLocation) String() string {
 	return fmt.Sprintf("%s:%d-%d", l.Path, l.StartLine, l.EndLine)
 }
 
+// ExternalFindingProvenance says where a finding from outside Freeside came
+// from (plan §5.19): who left it, on which thread, and on which published
+// head. It records facts only. It has no authority and no admission bit:
+// whether the reviewer may drive a round is the trust profile's answer at the
+// moment of the read, so a stored finding can never carry a stale or forged
+// "admitted".
+type ExternalFindingProvenance struct {
+	Class             FindingProvenanceClass `json:"class"`
+	Forge             ExternalReviewForge    `json:"forge"`
+	ReviewerAccountID int64                  `json:"reviewer_account_id"`
+	ReviewerLogin     string                 `json:"reviewer_login"`
+	// ThreadID is the forge's identifier for the review thread the finding
+	// was left on.
+	ThreadID string `json:"thread_id"`
+	// RawSourceDigest is the content address of the finding's RawText, so the
+	// text an authority was triggered by can be named without repeating it.
+	RawSourceDigest Digest `json:"raw_source_digest"`
+	// HeadSHA is the published head the finding was left on.
+	HeadSHA string `json:"head_sha"`
+}
+
+// ExternalFindingSource is the Source label of every external finding from
+// one forge. Source feeds Fingerprint, so the label is reserved in both
+// directions: an external finding cannot claim a Freeside review source's
+// identity, and no Freeside review source can claim this one.
+func ExternalFindingSource(forge ExternalReviewForge) string {
+	return "external_" + string(forge)
+}
+
+// externalFindingIDVersion tags the external finding ID derivation, as
+// findingFingerprintVersion does for the fingerprint.
+const externalFindingIDVersion = "extv1"
+
+// externalFindingID derives the ID from who left the finding, where, and what
+// it says, so a replayed ingest converges on one row and an edited comment is
+// a new finding. The account is part of it so that someone else posting the
+// same text in the same thread cannot occupy an admitted reviewer's row.
+func externalFindingID(runID RunID, p ExternalFindingProvenance) FindingID {
+	identity := fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%s\x00%s\x00%s",
+		externalFindingIDVersion, runID, p.Forge, p.ReviewerAccountID, p.ThreadID, p.RawSourceDigest, p.HeadSHA)
+	sum := sha256.Sum256([]byte(identity))
+	return FindingID(fmt.Sprintf("external-%x", sum[:16]))
+}
+
+// ExternalFindingInput carries the caller-supplied fields of an external
+// finding. It has no ID, Source, Class, or RawSourceDigest: all four are
+// derived, so no input path can set them.
+type ExternalFindingInput struct {
+	RunID             RunID
+	Forge             ExternalReviewForge
+	ReviewerAccountID int64
+	ReviewerLogin     string
+	ThreadID          string
+	HeadSHA           string
+	Severity          FindingSeverity
+	Location          *FindingLocation
+	Message           string
+	RawText           string
+	// CreatedAt should be the forge's own timestamp for the comment: the
+	// stored finding is immutable, so a replayed ingest converges only when
+	// every field, this one included, is the same.
+	CreatedAt time.Time
+}
+
+// NewExternalFinding builds a validated external finding (plan §5.19).
+func NewExternalFinding(in ExternalFindingInput) (Finding, error) {
+	provenance := ExternalFindingProvenance{
+		Class:             FindingProvenanceExternalUntrusted,
+		Forge:             in.Forge,
+		ReviewerAccountID: in.ReviewerAccountID,
+		ReviewerLogin:     in.ReviewerLogin,
+		ThreadID:          in.ThreadID,
+		RawSourceDigest:   Digest(contentaddr.Sum([]byte(in.RawText))),
+		HeadSHA:           in.HeadSHA,
+	}
+	var location *FindingLocation
+	if in.Location != nil {
+		location = new(*in.Location)
+	}
+	f := Finding{
+		ID:        externalFindingID(in.RunID, provenance),
+		RunID:     in.RunID,
+		Source:    ExternalFindingSource(in.Forge),
+		Severity:  in.Severity,
+		Location:  location,
+		Message:   in.Message,
+		RawText:   in.RawText,
+		CreatedAt: in.CreatedAt,
+		External:  &provenance,
+	}
+	if err := f.Validate(); err != nil {
+		return Finding{}, err
+	}
+	return f, nil
+}
+
 // Finding is a raw, immutable observation from a review source (plan §5.12).
 // It has no mutators and no verdict field: the raw finding is never edited and
 // is never itself marked fixed. Interpretation lives in Classification.
@@ -68,6 +166,11 @@ type Finding struct {
 	Message   string           `json:"message"`
 	RawText   string           `json:"raw_text"`
 	CreatedAt time.Time        `json:"created_at"`
+	// External is set only on a finding from outside Freeside. It is omitted
+	// when nil, not rendered as null: stored findings converge on
+	// byte-identical bodies, so every finding stored before the field existed
+	// must keep its bytes.
+	External *ExternalFindingProvenance `json:"external,omitempty"`
 }
 
 // Validate reports whether the finding is well-formed. Severity is optional at
@@ -92,27 +195,97 @@ func (f Finding) Validate() error {
 	if f.CreatedAt.IsZero() {
 		return fmt.Errorf("finding %s created_at: %w", f.ID, ErrMissingTimestamp)
 	}
+	if f.External == nil {
+		for _, forge := range AllExternalReviewForges {
+			if f.Source == ExternalFindingSource(forge) {
+				return fmt.Errorf("finding %s source %q without external provenance: %w",
+					f.ID, f.Source, ErrExternalFindingInconsistent)
+			}
+		}
+		return nil
+	}
+	return f.validateExternal()
+}
+
+// validateExternal is the trust boundary over an external finding. Every
+// string on it is third-party text, so each is held to the native-review
+// UTF-8 and size limits, and every derived field is recomputed instead of
+// read: the ID, the source label, and the raw-source digest of a decoded or
+// caller-built finding must be what its content resolves to.
+func (f Finding) validateExternal() error {
+	p := *f.External
+	if !p.Class.valid() {
+		return fmt.Errorf("finding %s external class %q: %w", f.ID, p.Class, ErrInvalidFindingProvenanceClass)
+	}
+	if !p.Forge.valid() {
+		return fmt.Errorf("finding %s external forge %q: %w", f.ID, p.Forge, ErrInvalidExternalReviewForge)
+	}
+	if p.ReviewerAccountID <= 0 {
+		return fmt.Errorf("finding %s external reviewer_account_id %d: %w", f.ID, p.ReviewerAccountID, ErrNonPositive)
+	}
+	if err := validateExternalReviewerLogin(p.ReviewerLogin); err != nil {
+		return fmt.Errorf("finding %s: %w", f.ID, err)
+	}
+	for _, required := range []struct{ name, value string }{
+		{"thread_id", p.ThreadID}, {"head_sha", p.HeadSHA}, {"raw_text", f.RawText},
+	} {
+		if required.value == "" {
+			return fmt.Errorf("finding %s external %s: %w", f.ID, required.name, ErrEmptyField)
+		}
+	}
+	bounded := []struct{ name, value string }{
+		{"reviewer_login", p.ReviewerLogin},
+		{"thread_id", p.ThreadID},
+		{"head_sha", p.HeadSHA},
+		{"message", f.Message},
+		{"raw_text", f.RawText},
+	}
+	if f.Location != nil {
+		bounded = append(bounded, struct{ name, value string }{"location path", f.Location.Path})
+	}
+	for _, tv := range bounded {
+		if err := nativeTextBounded(tv.value); err != nil {
+			return fmt.Errorf("finding %s external %s: %w", f.ID, tv.name, err)
+		}
+	}
+	if want := Digest(contentaddr.Sum([]byte(f.RawText))); p.RawSourceDigest != want {
+		return fmt.Errorf("finding %s external raw_source_digest %q, raw text resolves to %q: %w",
+			f.ID, p.RawSourceDigest, want, ErrExternalFindingInconsistent)
+	}
+	if want := ExternalFindingSource(p.Forge); f.Source != want {
+		return fmt.Errorf("finding %s source %q, external forge requires %q: %w",
+			f.ID, f.Source, want, ErrExternalFindingInconsistent)
+	}
+	if want := externalFindingID(f.RunID, p); f.ID != want {
+		return fmt.Errorf("finding %s, external provenance resolves to %s: %w",
+			f.ID, want, ErrExternalFindingInconsistent)
+	}
 	return nil
 }
 
 // findingsEqual compares two finding slices by value. It is the value-aware
-// counterpart to slices.Equal: because Finding now carries an optional
-// *FindingLocation, a plain == (and thus slices.Equal) compares the location by
-// pointer identity, so a fresh re-derivation of an otherwise-identical finding
-// would read as a change. Callers that coalesce re-derived findings (native
-// review's MaterialChangeFrom) compare the pointed-to location value instead.
+// counterpart to slices.Equal: because Finding carries optional pointers (the
+// location and the external provenance), a plain == (and thus slices.Equal)
+// compares them by pointer identity, so a fresh re-derivation of an
+// otherwise-identical finding would read as a change. Callers that coalesce
+// re-derived findings (native review's MaterialChangeFrom) compare the
+// pointed-to values instead.
 func findingsEqual(a, b []Finding) bool {
 	return slices.EqualFunc(a, b, func(x, y Finding) bool {
-		switch {
-		case x.Location == nil && y.Location == nil:
-		case x.Location == nil || y.Location == nil:
-			return false
-		case *x.Location != *y.Location:
+		if !pointeesEqual(x.Location, y.Location) || !pointeesEqual(x.External, y.External) {
 			return false
 		}
 		x.Location, y.Location = nil, nil
+		x.External, y.External = nil, nil
 		return x == y
 	})
+}
+
+func pointeesEqual[T comparable](a, b *T) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // FindingFingerprint is a deterministic cross-round semantic identity for a

@@ -1,0 +1,23 @@
+{
+  "id": "external-bcd35f3299c61de23210682a659cead3",
+  "run_id": "run-1",
+  "source": "external_github",
+  "severity": "P1",
+  "location": {
+    "path": "daemon/main.go",
+    "start_line": 42,
+    "end_line": 42
+  },
+  "message": "unchecked error",
+  "raw_text": "P1: the error return is dropped",
+  "created_at": "2026-01-02T03:04:05Z",
+  "external": {
+    "class": "external_untrusted",
+    "forge": "github",
+    "reviewer_account_id": 41,
+    "reviewer_login": "codex[bot]",
+    "thread_id": "PRRT_kwDOexample",
+    "raw_source_digest": "sha256:d711e93f658d48799487ee8326377eeb692b905768017cbb8f3c3d6046744ddf",
+    "head_sha": "cafebabe"
+  }
+}
