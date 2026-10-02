@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
@@ -182,6 +184,13 @@ func (tx *ReadTx) validateReadyItemPRBindingAgainst(
 	if run.ProjectID != item.ProjectID {
 		return errRowInconsistent
 	}
+	inPlace, err := tx.reenteredInPlace(ctx, binding)
+	if err != nil {
+		return err
+	}
+	if inPlace {
+		return tx.validateReenteredReadyItemPRBinding(ctx, item, binding)
+	}
 	admission, err := tx.GetExecutionAdmissionRecord(ctx, binding.ProducingInvocationID)
 	if err != nil {
 		return fmt.Errorf("producing admission: %w", err)
@@ -245,6 +254,49 @@ func (tx *ReadTx) validateReadyItemPRBindingAgainst(
 		if err != nil || !reflect.DeepEqual(target, *intent.Successor) {
 			return domain.ErrParentKeyMismatch
 		}
+	}
+	return nil
+}
+
+// reenteredInPlace reports whether the binding claims a re-entry authority as
+// its publication and that cycle published nothing: it re-earned readiness on
+// the head already on the pull request. The claim is only a route to the
+// authority's gate. With no such authenticated record the binding is refused,
+// and every other binding still needs its own producing export and
+// publication outcome. That includes a re-entered cycle whose remediation
+// pushed a new head: it has a publication intent, so the ordinary successor
+// gate proves it.
+func (tx *ReadTx) reenteredInPlace(ctx context.Context, binding domain.ReadyItemPRBinding) (bool, error) {
+	if !strings.HasPrefix(string(binding.PublicationInvocationID), reentryPublicationPrefix) {
+		return false, nil
+	}
+	_, err := tx.GetOutbox(ctx, "publish/"+string(binding.PublicationInvocationID)+"/"+readyPublicationIntentKind)
+	if errors.Is(err, ErrNotFound) {
+		return true, nil
+	}
+	return false, err
+}
+
+// validateReenteredReadyItemPRBinding proves an in-place re-entered cycle's
+// binding by its authority instead of an export and outcome it never had: the
+// cycle pushed nothing, so its head is the one the authority re-entered for
+// and every resource coordinate is its predecessor's. The authority's gate
+// authenticated that predecessor binding, so by induction those coordinates
+// are the last actually published ancestor's.
+func (tx *ReadTx) validateReenteredReadyItemPRBinding(
+	ctx context.Context, item domain.AttentionItem, binding domain.ReadyItemPRBinding,
+) error {
+	authority, err := tx.sealedPublicationSuccessor(ctx, binding.RunID, binding.PublicationInvocationID)
+	if err != nil || authority.Reentry == nil || authority.ReadyItemID() != item.ID ||
+		authority.Reentry.HeadSHA != binding.HeadSHA {
+		return errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	published, err := tx.reentryPredecessorBinding(ctx, authority)
+	if err != nil || published.RunID != binding.RunID || published.Repo != binding.Repo ||
+		published.RepositoryID != binding.RepositoryID || published.PRNumber != binding.PRNumber ||
+		published.BaseRef != binding.BaseRef || published.ProducingInvocationID != binding.ProducingInvocationID ||
+		published.PublicationIdentity != binding.PublicationIdentity {
+		return errors.Join(err, domain.ErrParentKeyMismatch)
 	}
 	return nil
 }
