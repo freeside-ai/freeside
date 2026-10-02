@@ -1,0 +1,15 @@
+{
+  "version": "freeside.publication-successor/v3",
+  "run_id": "run-1",
+  "command_id": "",
+  "feedback_invocation_id": "",
+  "predecessor_item_id": "production-ready-run-1",
+  "prior_review_invocation_id": "review-1",
+  "review_round": 2,
+  "origin": "readiness_invalidation",
+  "reentry": {
+    "reason": "base_advanced",
+    "base_sha": "base-2",
+    "head_sha": "head-1"
+  }
+}
