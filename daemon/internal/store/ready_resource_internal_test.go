@@ -485,125 +485,10 @@ func TestReadyItemBindingRegatesEveryResourceCoordinate(t *testing.T) {
 func testReadyItemBranchBinding(t *testing.T, branch string) {
 	t.Helper()
 	ctx := context.Background()
-	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
-		domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
-	}})
-	runID := domain.RunID("run-ready-anchor")
-	invocationID := domain.InvocationID("inv-ready-anchor")
-	stageID := domain.StageID("stage-ready-anchor")
-	attemptID := domain.AttemptID("attempt-ready-anchor")
-	policy, err := domain.NewResolvedPolicy(runID, []domain.PolicyKey{{
-		Key: "driver", Value: "claude", Provenance: domain.KeyProvenance{
-			Source: domain.ProvenanceOverride,
-			Digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		},
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	run := domain.Run{
-		ID: runID, ProjectID: "project-1", SpecDigest: "sha256:spec", PolicyDigest: policy.Digest,
-		Stages: []domain.Stage{{
-			ID: stageID, RunID: runID, Name: "implementation",
-			Attempts: []domain.Attempt{{ID: attemptID, StageID: stageID, Number: 1, InvocationID: invocationID}},
-		}},
-	}
-	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
-		ID: "item-ready-anchor", ProjectID: run.ProjectID,
-		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
-		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
-		Reason: "published", RequestedDecision: []domain.Action{domain.ActionOpenPR},
-		PRHeadSHA: "cafed00d", PRReference: &domain.PRReference{Repo: "owner/repo", Number: 450},
-		ItemVersion:       1,
-		InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
-	}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := st.Write(ctx, func(tx *WriteTx) error {
-		if err := tx.PutRun(ctx, run); err != nil {
-			return err
-		}
-		if err := tx.PutResolvedPolicy(ctx, policy); err != nil {
-			return err
-		}
-		return putTestAttentionItem(ctx, tx, &item)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	admittedAt := time.Date(2026, 8, 2, 11, 0, 0, 0, time.UTC)
-	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
-		InvocationID: invocationID, RunID: runID, StageID: stageID, AttemptID: attemptID,
-		Backend: "ready-anchor-test", Capabilities: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
-		OperatingMode: domain.ModeAttendedDev, CredentialMode: domain.CredentialSubscriptionContained,
-		EgressProfile: domain.EgressCleanVerification,
-		ImageRef:      domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("a", 64)),
-		SpecDigest:    run.SpecDigest, PolicyDigest: run.PolicyDigest, InputDigest: "sha256:input",
-		Base:      domain.BaseRevision{Repo: "owner/repo", RepositoryID: 424242, BaseRef: "main", BaseSHA: "deadbeef"},
-		Workspace: "workspace", AdmittedAt: admittedAt,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	export, err := domain.NewExecutionExport(domain.ExecutionExportInput{
-		InvocationID: invocationID, AdmissionID: admission.ID,
-		ObservedBaseSHA: admission.Base.BaseSHA, HeadSHA: item.PRHeadSHA,
-		ManifestDigest: "sha256:manifest", RecordedAt: admittedAt.Add(time.Minute),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	identity := domain.Digest("sha256:" + strings.Repeat("a", 64))
-	publicationInvocationID := domain.InvocationID("publish-production-" + string(runID))
-	intentPayload, err := json.Marshal(readyPublicationIntent{
-		FormatVersion: publicationrecord.IntentFormatCurrent,
-		Identity:      identity, InvocationID: publicationInvocationID,
-		Branch: branch,
-		Repo:   admission.Base.Repo, BaseRef: admission.Base.BaseRef,
-		SourceHeadSHA:         export.HeadSHA,
-		AuthorizationID:       domain.Digest("sha256:" + strings.Repeat("c", 64)),
-		ProducingInvocationID: invocationID, ReservationRunID: runID,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload, err := json.Marshal(readyPublicationOutcome{
-		Identity: identity, Repo: admission.Base.Repo, BaseRef: admission.Base.BaseRef,
-		HeadSHA: export.HeadSHA, Branch: branch,
-		PRNumber: 450, EvidenceEligible: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	binding := domain.ReadyItemPRBinding{
-		ItemID: item.ID, RunID: runID, ProducingInvocationID: invocationID,
-		PublicationInvocationID: publicationInvocationID,
-		PublicationIdentity:     identity, Repo: admission.Base.Repo,
-		RepositoryID: admission.Base.RepositoryID, PRNumber: 450,
-		BaseRef: admission.Base.BaseRef, HeadSHA: export.HeadSHA,
-		RecordedAt: admittedAt.Add(2 * time.Minute),
-	}
-	intentKey := "publish/" + string(publicationInvocationID) + "/" + readyPublicationIntentKind
-	if err := st.Write(ctx, func(tx *WriteTx) error {
-		if err := tx.RecordExecutionAdmission(ctx, admission); err != nil {
-			return err
-		}
-		if err := tx.RecordExecutionExport(ctx, export); err != nil {
-			return err
-		}
-		if _, _, err := tx.EnqueueOutbox(ctx, intentKey, readyPublicationIntentKind, intentPayload); err != nil {
-			return err
-		}
-		if err := tx.MarkOutboxDispatched(ctx, intentKey); err != nil {
-			return err
-		}
-		if _, _, err := tx.RecordInbox(ctx, "publish.outcome/"+string(identity), "publish.outcome", payload); err != nil {
-			return err
-		}
-		return tx.RecordReadyItemPRBinding(ctx, binding)
-	}); err != nil {
-		t.Fatal(err)
-	}
+	fixture := seedReadyItemBinding(t, branch, "deadbeef", "cafed00d")
+	st, item, admission, export := fixture.st, fixture.item, fixture.admission, fixture.export
+	identity, binding := fixture.binding.PublicationIdentity, fixture.binding
+	intentKey, intentPayload, payload := fixture.intentKey, fixture.intentPayload, fixture.outcomePayload
 
 	assertAttentionReadRejected := func(t *testing.T) {
 		t.Helper()
@@ -888,5 +773,147 @@ func TestReadyResourceMigrationBackfillsOnlyExactHistory(t *testing.T) {
 					repositoryID, prNumber, repo, baseRef, headSHA)
 			}
 		})
+	}
+}
+
+// readyBindingFixture is one published ready item with every record its
+// binding gate re-reads.
+type readyBindingFixture struct {
+	st             *Store
+	run            domain.Run
+	item           domain.AttentionItem
+	admission      domain.ExecutionAdmission
+	export         domain.ExecutionExport
+	binding        domain.ReadyItemPRBinding
+	intentKey      string
+	intentPayload  []byte
+	outcomePayload []byte
+}
+
+func seedReadyItemBinding(t *testing.T, branch, baseSHA, headSHA string) readyBindingFixture {
+	t.Helper()
+	ctx := context.Background()
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+		domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+	}})
+	runID := domain.RunID("run-ready-anchor")
+	invocationID := domain.InvocationID("inv-ready-anchor")
+	stageID := domain.StageID("stage-ready-anchor")
+	attemptID := domain.AttemptID("attempt-ready-anchor")
+	policy, err := domain.NewResolvedPolicy(runID, []domain.PolicyKey{{
+		Key: "driver", Value: "claude", Provenance: domain.KeyProvenance{
+			Source: domain.ProvenanceOverride,
+			Digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := domain.Run{
+		ID: runID, ProjectID: "project-1", SpecDigest: "sha256:spec", PolicyDigest: policy.Digest,
+		Stages: []domain.Stage{{
+			ID: stageID, RunID: runID, Name: "implementation",
+			Attempts: []domain.Attempt{{ID: attemptID, StageID: stageID, Number: 1, InvocationID: invocationID}},
+		}},
+	}
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: domain.ProductionReadyItemID(runID), ProjectID: run.ProjectID,
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
+		Reason: "published", RequestedDecision: []domain.Action{domain.ActionOpenPR},
+		PRHeadSHA: headSHA, PRReference: &domain.PRReference{Repo: "owner/repo", Number: 450},
+		ItemVersion:       1,
+		InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		if err := tx.PutRun(ctx, run); err != nil {
+			return err
+		}
+		if err := tx.PutResolvedPolicy(ctx, policy); err != nil {
+			return err
+		}
+		return putTestAttentionItem(ctx, tx, &item)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	admittedAt := time.Date(2026, 8, 2, 11, 0, 0, 0, time.UTC)
+	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
+		InvocationID: invocationID, RunID: runID, StageID: stageID, AttemptID: attemptID,
+		Backend: "ready-anchor-test", Capabilities: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		OperatingMode: domain.ModeAttendedDev, CredentialMode: domain.CredentialSubscriptionContained,
+		EgressProfile: domain.EgressCleanVerification,
+		ImageRef:      domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("a", 64)),
+		SpecDigest:    run.SpecDigest, PolicyDigest: run.PolicyDigest, InputDigest: "sha256:input",
+		Base:      domain.BaseRevision{Repo: "owner/repo", RepositoryID: 424242, BaseRef: "main", BaseSHA: baseSHA},
+		Workspace: "workspace", AdmittedAt: admittedAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	export, err := domain.NewExecutionExport(domain.ExecutionExportInput{
+		InvocationID: invocationID, AdmissionID: admission.ID,
+		ObservedBaseSHA: admission.Base.BaseSHA, HeadSHA: item.PRHeadSHA,
+		ManifestDigest: "sha256:manifest", RecordedAt: admittedAt.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := domain.Digest("sha256:" + strings.Repeat("a", 64))
+	publicationInvocationID := domain.InvocationID("publish-production-" + string(runID))
+	intentPayload, err := json.Marshal(readyPublicationIntent{
+		FormatVersion: publicationrecord.IntentFormatCurrent,
+		Identity:      identity, InvocationID: publicationInvocationID,
+		Branch: branch,
+		Repo:   admission.Base.Repo, BaseRef: admission.Base.BaseRef,
+		SourceHeadSHA:         export.HeadSHA,
+		AuthorizationID:       domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		ProducingInvocationID: invocationID, ReservationRunID: runID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(readyPublicationOutcome{
+		Identity: identity, Repo: admission.Base.Repo, BaseRef: admission.Base.BaseRef,
+		HeadSHA: export.HeadSHA, Branch: branch,
+		PRNumber: 450, EvidenceEligible: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := domain.ReadyItemPRBinding{
+		ItemID: item.ID, RunID: runID, ProducingInvocationID: invocationID,
+		PublicationInvocationID: publicationInvocationID,
+		PublicationIdentity:     identity, Repo: admission.Base.Repo,
+		RepositoryID: admission.Base.RepositoryID, PRNumber: 450,
+		BaseRef: admission.Base.BaseRef, HeadSHA: export.HeadSHA,
+		RecordedAt: admittedAt.Add(2 * time.Minute),
+	}
+	intentKey := "publish/" + string(publicationInvocationID) + "/" + readyPublicationIntentKind
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		if err := tx.RecordExecutionAdmission(ctx, admission); err != nil {
+			return err
+		}
+		if err := tx.RecordExecutionExport(ctx, export); err != nil {
+			return err
+		}
+		if _, _, err := tx.EnqueueOutbox(ctx, intentKey, readyPublicationIntentKind, intentPayload); err != nil {
+			return err
+		}
+		if err := tx.MarkOutboxDispatched(ctx, intentKey); err != nil {
+			return err
+		}
+		if _, _, err := tx.RecordInbox(ctx, "publish.outcome/"+string(identity), "publish.outcome", payload); err != nil {
+			return err
+		}
+		return tx.RecordReadyItemPRBinding(ctx, binding)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return readyBindingFixture{
+		st: st, run: run, item: item, admission: admission, export: export, binding: binding,
+		intentKey: intentKey, intentPayload: intentPayload, outcomePayload: payload,
 	}
 }
