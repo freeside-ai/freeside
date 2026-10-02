@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"path/filepath"
 	"strings"
@@ -468,6 +469,132 @@ func TestReadyItemPRReferenceAnchorRegatesWithoutProductionBinding(t *testing.T)
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+// TestHeldItemPRReferenceAnchorIsWrittenOnceAndRegated covers a hold that
+// outlives its run's publication: the version that first carries the pull
+// request stamps the anchor, no later version can name another one, and both
+// synchronized read shapes refuse a body that changed, dropped, or invented a
+// reference the anchor does not back.
+func TestHeldItemPRReferenceAnchorIsWrittenOnceAndRegated(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+	runID := domain.RunID("run-held-anchor")
+	hold := func(id domain.ItemID, version int, reference *domain.PRReference) domain.AttentionItem {
+		t.Helper()
+		item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+			ID: id, ProjectID: "project-1",
+			Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+			Type:    domain.AttentionPublishBlocked, Priority: domain.PriorityHigh,
+			Reason:            fmt.Sprintf("publication is held (version %d)", version),
+			RequestedDecision: []domain.Action{domain.ActionInspectTrustFailure},
+			PRHeadSHA:         "cafed00d", PRReference: reference,
+			ItemVersion: version, InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
+		}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return item
+	}
+	put := func(item domain.AttentionItem) error {
+		return st.Write(ctx, func(tx *WriteTx) error { return putTestAttentionItem(ctx, tx, &item) })
+	}
+	anchors := func(id domain.ItemID) int {
+		t.Helper()
+		var count int
+		if err := st.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM attention_item_pr_references WHERE item_id = ?`, id).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		return count
+	}
+	reads := map[string]func(*ReadTx) error{
+		"get": func(tx *ReadTx) error {
+			_, _, err := tx.GetAttentionItemSnapshot(ctx, "held-anchor")
+			return err
+		},
+		"list": func(tx *ReadTx) error {
+			_, err := tx.ListAttentionItems(ctx)
+			return err
+		},
+	}
+	assertReads := func(t *testing.T, want error) {
+		t.Helper()
+		for name, read := range reads {
+			if err := st.Read(ctx, read); !errors.Is(err, want) {
+				t.Fatalf("%s error = %v, want %v", name, err, want)
+			}
+		}
+	}
+
+	reference := &domain.PRReference{Repo: "owner/repo", Number: 123}
+	if err := put(hold("held-anchor", 1, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if got := anchors("held-anchor"); got != 0 {
+		t.Fatalf("anchors before publication = %d, want 0", got)
+	}
+	assertReads(t, nil)
+
+	if _, err := st.db.ExecContext(ctx, `UPDATE attention_items
+		SET body = json_set(body, '$.pr_reference', json('{"repo":"owner/repo","number":123}'))
+		WHERE id = 'held-anchor'`); err != nil {
+		t.Fatal(err)
+	}
+	t.Run("body reference without an anchor", func(t *testing.T) { assertReads(t, errRowInconsistent) })
+	if _, err := st.db.ExecContext(ctx, `UPDATE attention_items
+		SET body = json_set(body, '$.pr_reference', json('null')) WHERE id = 'held-anchor'`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := put(hold("held-anchor", 2, reference)); err != nil {
+		t.Fatalf("attach reference: %v", err)
+	}
+	if got := anchors("held-anchor"); got != 1 {
+		t.Fatalf("anchors after the attaching version = %d, want 1", got)
+	}
+	assertReads(t, nil)
+	if err := put(hold("held-anchor", 3, reference)); err != nil {
+		t.Fatalf("later version restating the reference: %v", err)
+	}
+	if err := put(hold("held-anchor", 4, &domain.PRReference{Repo: "owner/repo", Number: 124})); !errors.Is(err, ErrImmutableConflict) {
+		t.Fatalf("retargeting version error = %v, want ErrImmutableConflict", err)
+	}
+	if err := put(hold("held-anchor", 4, nil)); !errors.Is(err, ErrImmutableConflict) {
+		t.Fatalf("reference-dropping version error = %v, want ErrImmutableConflict", err)
+	}
+
+	var body string
+	if err := st.db.QueryRowContext(ctx,
+		`SELECT body FROM attention_items WHERE id = 'held-anchor'`).Scan(&body); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, sql string }{
+		{"repo", `UPDATE attention_items SET body = json_set(body, '$.pr_reference.repo', 'other/repo') WHERE id = 'held-anchor'`},
+		{"pr number", `UPDATE attention_items SET body = json_set(body, '$.pr_reference.number', 999) WHERE id = 'held-anchor'`},
+		{"removed", `UPDATE attention_items SET body = json_set(body, '$.pr_reference', json('null')) WHERE id = 'held-anchor'`},
+	} {
+		t.Run("body "+tc.name, func(t *testing.T) {
+			if _, err := st.db.ExecContext(ctx, tc.sql); err != nil {
+				t.Fatal(err)
+			}
+			assertReads(t, errRowInconsistent)
+			if _, err := st.db.ExecContext(ctx,
+				`UPDATE attention_items SET body = ? WHERE id = 'held-anchor'`, body); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	assertReads(t, nil)
+
+	// A hold created after publication is anchored by its creating Put.
+	if err := put(hold("held-anchor-created-published", 1, reference)); err != nil {
+		t.Fatal(err)
+	}
+	if got := anchors("held-anchor-created-published"); got != 1 {
+		t.Fatalf("anchors for a hold created with a reference = %d, want 1", got)
 	}
 }
 

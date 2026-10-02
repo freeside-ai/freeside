@@ -1478,7 +1478,7 @@ func (tx *ReadTx) scanAttentionItemSnapshot(ctx context.Context, sc scanner) (do
 	if err := tx.gateReviewDiminishingItem(ctx, item); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
-	if err := tx.gateReadyItemPRReference(ctx, item); err != nil {
+	if err := tx.gateItemPRReference(ctx, item); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	if err := tx.gateDecisionSurface(ctx, item); err != nil {
@@ -1621,21 +1621,35 @@ func (tx *ReadTx) gateEvidence(ctx context.Context, item domain.AttentionItem) e
 	return nil
 }
 
-// gateReadyItemPRReference re-anchors a ready item's client-visible pull
-// request coordinates to the immutable store-owned reference. Production
-// items additionally re-run the deeper first-party publication binding gate.
-// The mutable synchronized body is data, never authority to retarget an
-// operator action.
-func (tx *ReadTx) gateReadyItemPRReference(ctx context.Context, item domain.AttentionItem) error {
-	if item.Type != domain.AttentionReadyForFinalReview {
+// gateItemPRReference re-anchors an item's client-visible pull request
+// coordinates to the immutable store-owned reference. Production ready items
+// additionally re-run the deeper first-party publication binding gate. The
+// mutable synchronized body is data, never authority to retarget an operator
+// action.
+//
+// A ready item always has an anchor. A publish_blocked item has one exactly
+// when it carries a reference: a hold that predates its run's publication has
+// neither, and a body that gained, lost, or changed a reference without the
+// anchor agreeing fails closed.
+func (tx *ReadTx) gateItemPRReference(ctx context.Context, item domain.AttentionItem) error {
+	if item.Type != domain.AttentionReadyForFinalReview && item.Type != domain.AttentionPublishBlocked {
 		return nil
 	}
 	anchored, err := tx.getAttentionItemPRReference(ctx, item.ID)
+	if errors.Is(err, ErrNotFound) && item.Type == domain.AttentionPublishBlocked {
+		if item.PRReference != nil {
+			return errRowInconsistent
+		}
+		return nil
+	}
 	if err != nil {
 		return err
 	}
 	if item.PRReference == nil || *item.PRReference != anchored {
 		return errRowInconsistent
+	}
+	if item.Type == domain.AttentionPublishBlocked {
+		return nil
 	}
 	binding, err := tx.GetReadyItemPRBinding(ctx, item.ID)
 	if errors.Is(err, ErrNotFound) {
@@ -1644,8 +1658,7 @@ func (tx *ReadTx) gateReadyItemPRReference(ctx context.Context, item domain.Atte
 	if err != nil {
 		return err
 	}
-	if item.PRReference == nil || item.PRReference.Repo != binding.Repo ||
-		item.PRReference.Number != binding.PRNumber {
+	if item.PRReference.Repo != binding.Repo || item.PRReference.Number != binding.PRNumber {
 		return errRowInconsistent
 	}
 	return nil

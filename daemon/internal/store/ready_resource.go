@@ -32,10 +32,16 @@ const (
 
 const readyPublicationIntentKind = "publish.publication"
 
+// putAttentionItemPRReference anchors the item's pull request coordinates the
+// first time a version carries them: at creation for a ready item, and for a
+// publish_blocked item either at creation or on the one later version that
+// attaches them. putImmutable makes the anchor write-once, so a later version
+// naming another pull request is an immutable conflict.
 func (tx *WriteTx) putAttentionItemPRReference(
 	ctx context.Context, item domain.AttentionItem,
 ) error {
-	if item.Type != domain.AttentionReadyForFinalReview || item.PRReference == nil {
+	if item.PRReference == nil ||
+		(item.Type != domain.AttentionReadyForFinalReview && item.Type != domain.AttentionPublishBlocked) {
 		return nil
 	}
 	body, err := encode(*item.PRReference)
