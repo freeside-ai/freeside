@@ -126,6 +126,50 @@ public enum AttentionFixtures {
         return snapshot
     }
 
+    /// A review_diminishing_returns item that parked on `cause`. The base
+    /// fixture carries low_value_streak; this names any other cause.
+    /// `verdict` shapes the drift facts and matters only under drift_audit,
+    /// the one cause that carries them.
+    public static func reviewDiminishing(
+        cause: Components.Schemas.ReviewDiminishingCause,
+        verdict: Components.Schemas.DriftVerdict = .over_hardened
+    ) -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = fixture(type: .review_diminishing_returns)
+        guard cause == .drift_audit else {
+            snapshot.item.id = "item-review-diminishing-\(cause.rawValue)"
+            snapshot.item.review_diminishing = .init(value1: .init(cause: cause))
+            return snapshot
+        }
+        snapshot.item.id = "item-review-diminishing-drift-\(verdict.rawValue)"
+        let explanation: String
+        var reversals: [Components.Schemas.DriftReversal] = []
+        switch verdict {
+        case .converged:
+            explanation = "The change implements the approved specification without excess hardening."
+        case .over_hardened:
+            explanation = "Two review fixes add defenses the approved specification does not need."
+            reversals = [
+                .init(
+                    finding_id: "finding-1", undo: "Remove the retry wrapper around the config load.",
+                    rationale: "The specification treats a missing config as fatal."),
+                .init(
+                    finding_id: "finding-2", undo: "Drop the nil guard on the injected clock.",
+                    rationale: "Every caller constructs the clock; the guard is unreachable."),
+            ]
+        case .stuck:
+            explanation = "Three rounds of fixes have not moved the change toward the approved specification."
+        }
+        snapshot.item.review_diminishing = .init(
+            value1: .init(
+                cause: .drift_audit,
+                drift_audit: .init(
+                    value1: .init(
+                        audit_digest: "sha256:drift-audit-\(verdict.rawValue)", verdict: verdict,
+                        confidence: .high, explanation: explanation, reversals: reversals,
+                        simplification_on_continue: false))))
+        return snapshot
+    }
+
     public static func scopeKeptReady() -> Components.Schemas.AttentionItemSnapshot {
         var snapshot = fixture(type: .ready_for_final_review)
         snapshot.item.id = "item-scope-kept-ready"
@@ -914,6 +958,10 @@ public enum AttentionFixtures {
                     kind: .init(value1: .owner_decision),
                     decisions: agentQuestionDecisions))
             : nil
+        let reviewDiminishing: Components.Schemas.AttentionItem.review_diminishingPayload? =
+            type == .review_diminishing_returns
+            ? .init(value1: .init(cause: .low_value_streak))
+            : nil
         let reviewDispute: Components.Schemas.AttentionItem.review_disputePayload? =
             type == .review_dispute
             ? .init(
@@ -969,6 +1017,7 @@ public enum AttentionFixtures {
             review_dispute: reviewDispute,
             spec_revision: nil,
             agent_question: agentQuestion,
+            review_diminishing: reviewDiminishing,
             item_version: 1,
             interruption_class: interruption,
             conversation_id: type == .spec_approval ? "conv-item-spec_approval" : nil,

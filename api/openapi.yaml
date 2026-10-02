@@ -4564,6 +4564,7 @@ components:
         - review_dispute
         - spec_revision
         - agent_question
+        - review_diminishing
         - item_version
         - interruption_class
         - conversation_id
@@ -4803,6 +4804,15 @@ components:
           description: >
             Typed question facts, present on every agent_question item and
             null on every other type.
+        review_diminishing:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ReviewDiminishingFacts"
+          description: >
+            Why the review loop stopped, on a review_diminishing_returns
+            item; null on every other type. Also null on such an item stored
+            before the facts existed and on one a review escalation raised,
+            so a client must render the item without them.
         item_version:
           type: integer
           minimum: 1
@@ -4996,6 +5006,7 @@ components:
         review_dispute: null
         spec_revision: null
         agent_question: null
+        review_diminishing: null
         item_version: 1
         interruption_class: "planned_gate"
         conversation_id: "conv-1"
@@ -6001,6 +6012,98 @@ components:
         - converged
         - over_hardened
         - stuck
+
+    ReviewDiminishingCause:
+      type: string
+      description: >
+        Why the review loop stopped and asked for a decision (plan §7).
+        low_value_streak means the latest rounds raised only low-value
+        findings; fixed_recurrence means a finding already fixed came back;
+        final_review_findings means the last allowed round still had findings;
+        growth_without_blockers means the change kept growing while no round
+        raised a blocker; drift_audit means a drift audit judged the change
+        against the approved specification.
+      enum:
+        - low_value_streak
+        - fixed_recurrence
+        - final_review_findings
+        - growth_without_blockers
+        - drift_audit
+
+    DriftReversal:
+      type: object
+      description: >
+        One review fix a drift audit says to undo (plan §7 Review Drift);
+        mirrors domain.DriftReversal.
+      required: [finding_id, undo, rationale]
+      properties:
+        finding_id:
+          type: string
+          minLength: 1
+          description: The finding whose fix the audit says to undo.
+        undo:
+          type: string
+          minLength: 1
+          description: What to undo.
+        rationale:
+          type: string
+          minLength: 1
+          description: Why the approved specification does not need the fix.
+
+    DriftAuditFacts:
+      type: object
+      description: >
+        The drift audit a review_diminishing_returns item parked on (plan §7
+        Review Drift); mirrors domain.DriftAuditFacts. The daemon copies these facts
+        from the stored audit named by audit_digest and re-checks the copy on
+        every read.
+      required:
+        - audit_digest
+        - verdict
+        - confidence
+        - explanation
+        - reversals
+        - simplification_on_continue
+      properties:
+        audit_digest:
+          $ref: "#/components/schemas/Digest"
+        verdict:
+          $ref: "#/components/schemas/DriftVerdict"
+        confidence:
+          $ref: "#/components/schemas/AdjudicationConfidence"
+        explanation:
+          type: string
+          minLength: 1
+          description: The audit's explanation of its verdict.
+        reversals:
+          type: array
+          description: >
+            The fixes to undo, ascending by finding_id. Nonempty exactly when
+            verdict is over_hardened.
+          items:
+            $ref: "#/components/schemas/DriftReversal"
+        simplification_on_continue:
+          type: boolean
+          description: >
+            Whether continue_under_policy runs a simplification round that
+            applies the reversals. True only with verdict over_hardened.
+
+    ReviewDiminishingFacts:
+      type: object
+      description: >
+        Why the review loop stopped, as card facts on a
+        review_diminishing_returns item; mirrors domain.ReviewDiminishingFacts.
+      required: [cause, drift_audit]
+      properties:
+        cause:
+          $ref: "#/components/schemas/ReviewDiminishingCause"
+        drift_audit:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/DriftAuditFacts"
+          description: >
+            The audit behind the stop; present exactly when cause is
+            drift_audit.
 
     InterruptionClass:
       type: string

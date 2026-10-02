@@ -10487,6 +10487,32 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AttentionItem/agent_question`.
             public var agent_question: Components.Schemas.AttentionItem.agent_questionPayload?
+            /// Why the review loop stopped, on a review_diminishing_returns item; null on every other type. Also null on such an item stored before the facts existed and on one a review escalation raised, so a client must render the item without them.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/AttentionItem/review_diminishing`.
+            public struct review_diminishingPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/AttentionItem/review_diminishing/value1`.
+                public var value1: Components.Schemas.ReviewDiminishingFacts
+                /// Creates a new `review_diminishingPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.ReviewDiminishingFacts) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// Why the review loop stopped, on a review_diminishing_returns item; null on every other type. Also null on such an item stored before the facts existed and on one a review escalation raised, so a client must render the item without them.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/AttentionItem/review_diminishing`.
+            public var review_diminishing: Components.Schemas.AttentionItem.review_diminishingPayload?
             /// - Remark: Generated from `#/components/schemas/AttentionItem/item_version`.
             public var item_version: Swift.Int
             /// - Remark: Generated from `#/components/schemas/AttentionItem/interruption_class`.
@@ -10599,6 +10625,7 @@ public enum Components {
             ///   - review_dispute:
             ///   - spec_revision: Authenticated revision facts for a revised spec_approval item; null on the initial approval and every other item type.
             ///   - agent_question: Typed question facts, present on every agent_question item and null on every other type.
+            ///   - review_diminishing: Why the review loop stopped, on a review_diminishing_returns item; null on every other type. Also null on such an item stored before the facts existed and on one a review escalation raised, so a client must render the item without them.
             ///   - item_version:
             ///   - interruption_class:
             ///   - conversation_id:
@@ -10645,6 +10672,7 @@ public enum Components {
                 review_dispute: Components.Schemas.AttentionItem.review_disputePayload? = nil,
                 spec_revision: Components.Schemas.AttentionItem.spec_revisionPayload? = nil,
                 agent_question: Components.Schemas.AttentionItem.agent_questionPayload? = nil,
+                review_diminishing: Components.Schemas.AttentionItem.review_diminishingPayload? = nil,
                 item_version: Swift.Int,
                 interruption_class: Components.Schemas.InterruptionClass,
                 conversation_id: Swift.String? = nil,
@@ -10691,6 +10719,7 @@ public enum Components {
                 self.review_dispute = review_dispute
                 self.spec_revision = spec_revision
                 self.agent_question = agent_question
+                self.review_diminishing = review_diminishing
                 self.item_version = item_version
                 self.interruption_class = interruption_class
                 self.conversation_id = conversation_id
@@ -10738,6 +10767,7 @@ public enum Components {
                 case review_dispute
                 case spec_revision
                 case agent_question
+                case review_diminishing
                 case item_version
                 case interruption_class
                 case conversation_id
@@ -12437,6 +12467,163 @@ public enum Components {
             case converged = "converged"
             case over_hardened = "over_hardened"
             case stuck = "stuck"
+        }
+        /// Why the review loop stopped and asked for a decision (plan §7). low_value_streak means the latest rounds raised only low-value findings; fixed_recurrence means a finding already fixed came back; final_review_findings means the last allowed round still had findings; growth_without_blockers means the change kept growing while no round raised a blocker; drift_audit means a drift audit judged the change against the approved specification.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReviewDiminishingCause`.
+        @frozen public enum ReviewDiminishingCause: String, Codable, Hashable, Sendable, CaseIterable {
+            case low_value_streak = "low_value_streak"
+            case fixed_recurrence = "fixed_recurrence"
+            case final_review_findings = "final_review_findings"
+            case growth_without_blockers = "growth_without_blockers"
+            case drift_audit = "drift_audit"
+        }
+        /// One review fix a drift audit says to undo (plan §7 Review Drift); mirrors domain.DriftReversal.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/DriftReversal`.
+        public struct DriftReversal: Codable, Hashable, Sendable {
+            /// The finding whose fix the audit says to undo.
+            ///
+            /// - Remark: Generated from `#/components/schemas/DriftReversal/finding_id`.
+            public var finding_id: Swift.String
+            /// What to undo.
+            ///
+            /// - Remark: Generated from `#/components/schemas/DriftReversal/undo`.
+            public var undo: Swift.String
+            /// Why the approved specification does not need the fix.
+            ///
+            /// - Remark: Generated from `#/components/schemas/DriftReversal/rationale`.
+            public var rationale: Swift.String
+            /// Creates a new `DriftReversal`.
+            ///
+            /// - Parameters:
+            ///   - finding_id: The finding whose fix the audit says to undo.
+            ///   - undo: What to undo.
+            ///   - rationale: Why the approved specification does not need the fix.
+            public init(
+                finding_id: Swift.String,
+                undo: Swift.String,
+                rationale: Swift.String
+            ) {
+                self.finding_id = finding_id
+                self.undo = undo
+                self.rationale = rationale
+            }
+            public enum CodingKeys: String, CodingKey {
+                case finding_id
+                case undo
+                case rationale
+            }
+        }
+        /// The drift audit a review_diminishing_returns item parked on (plan §7 Review Drift); mirrors domain.DriftAuditFacts. The daemon copies these facts from the stored audit named by audit_digest and re-checks the copy on every read.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/DriftAuditFacts`.
+        public struct DriftAuditFacts: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/DriftAuditFacts/audit_digest`.
+            public var audit_digest: Components.Schemas.Digest
+            /// - Remark: Generated from `#/components/schemas/DriftAuditFacts/verdict`.
+            public var verdict: Components.Schemas.DriftVerdict
+            /// - Remark: Generated from `#/components/schemas/DriftAuditFacts/confidence`.
+            public var confidence: Components.Schemas.AdjudicationConfidence
+            /// The audit's explanation of its verdict.
+            ///
+            /// - Remark: Generated from `#/components/schemas/DriftAuditFacts/explanation`.
+            public var explanation: Swift.String
+            /// The fixes to undo, ascending by finding_id. Nonempty exactly when verdict is over_hardened.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/DriftAuditFacts/reversals`.
+            public var reversals: [Components.Schemas.DriftReversal]
+            /// Whether continue_under_policy runs a simplification round that applies the reversals. True only with verdict over_hardened.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/DriftAuditFacts/simplification_on_continue`.
+            public var simplification_on_continue: Swift.Bool
+            /// Creates a new `DriftAuditFacts`.
+            ///
+            /// - Parameters:
+            ///   - audit_digest:
+            ///   - verdict:
+            ///   - confidence:
+            ///   - explanation: The audit's explanation of its verdict.
+            ///   - reversals: The fixes to undo, ascending by finding_id. Nonempty exactly when verdict is over_hardened.
+            ///   - simplification_on_continue: Whether continue_under_policy runs a simplification round that applies the reversals. True only with verdict over_hardened.
+            public init(
+                audit_digest: Components.Schemas.Digest,
+                verdict: Components.Schemas.DriftVerdict,
+                confidence: Components.Schemas.AdjudicationConfidence,
+                explanation: Swift.String,
+                reversals: [Components.Schemas.DriftReversal],
+                simplification_on_continue: Swift.Bool
+            ) {
+                self.audit_digest = audit_digest
+                self.verdict = verdict
+                self.confidence = confidence
+                self.explanation = explanation
+                self.reversals = reversals
+                self.simplification_on_continue = simplification_on_continue
+            }
+            public enum CodingKeys: String, CodingKey {
+                case audit_digest
+                case verdict
+                case confidence
+                case explanation
+                case reversals
+                case simplification_on_continue
+            }
+        }
+        /// Why the review loop stopped, as card facts on a review_diminishing_returns item; mirrors domain.ReviewDiminishingFacts.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReviewDiminishingFacts`.
+        public struct ReviewDiminishingFacts: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ReviewDiminishingFacts/cause`.
+            public var cause: Components.Schemas.ReviewDiminishingCause
+            /// The audit behind the stop; present exactly when cause is drift_audit.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/ReviewDiminishingFacts/drift_audit`.
+            public struct drift_auditPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/ReviewDiminishingFacts/drift_audit/value1`.
+                public var value1: Components.Schemas.DriftAuditFacts
+                /// Creates a new `drift_auditPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.DriftAuditFacts) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The audit behind the stop; present exactly when cause is drift_audit.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/ReviewDiminishingFacts/drift_audit`.
+            public var drift_audit: Components.Schemas.ReviewDiminishingFacts.drift_auditPayload?
+            /// Creates a new `ReviewDiminishingFacts`.
+            ///
+            /// - Parameters:
+            ///   - cause:
+            ///   - drift_audit: The audit behind the stop; present exactly when cause is drift_audit.
+            public init(
+                cause: Components.Schemas.ReviewDiminishingCause,
+                drift_audit: Components.Schemas.ReviewDiminishingFacts.drift_auditPayload? = nil
+            ) {
+                self.cause = cause
+                self.drift_audit = drift_audit
+            }
+            public enum CodingKeys: String, CodingKey {
+                case cause
+                case drift_audit
+            }
         }
         /// Whether the interruption was a planned gate or exceptional (plan §3.2).
         ///

@@ -156,6 +156,15 @@ import Testing
         #expect(item.yield_history?.value1.terminal_outcome == .findings)
     }
 
+    @Test func diminishingFixtureCarriesItsStopCause() {
+        let facts = AttentionFixtures.fixture(type: .review_diminishing_returns).item
+            .review_diminishing?.value1
+
+        #expect(facts?.cause == .low_value_streak)
+        #expect(facts?.drift_audit == nil)
+        #expect(AttentionFixtures.fixture(type: .spec_approval).item.review_diminishing == nil)
+    }
+
     @Test func diminishingFixtureCarriesRoundDiffMetricsWithAGap() throws {
         let item = AttentionFixtures.fixture(type: .review_diminishing_returns).item
         let rounds = try #require(item.yield_history?.value1.rounds)
