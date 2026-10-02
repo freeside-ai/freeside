@@ -50,7 +50,7 @@ func TestEvaluateReviewConvergencePolicy(t *testing.T) {
 
 	t.Run("low-value streak", func(t *testing.T) {
 		cause, stop, err := store.EvaluateReviewConvergence(base, base.Records[2])
-		if err != nil || !stop || cause != store.ReviewDiminishingLowValue {
+		if err != nil || !stop || cause != domain.ReviewDiminishingLowValue {
 			t.Fatalf("evaluate = %q, %v, %v", cause, stop, err)
 		}
 	})
@@ -75,7 +75,7 @@ func TestEvaluateReviewConvergencePolicy(t *testing.T) {
 			t.Fatalf("round 4 evaluate = %q, %v, %v", cause, stop, err)
 		}
 		cause, stop, err := store.EvaluateReviewConvergence(state, state.Records[4])
-		if err != nil || !stop || cause != store.ReviewDiminishingLowValue {
+		if err != nil || !stop || cause != domain.ReviewDiminishingLowValue {
 			t.Fatalf("round 5 evaluate = %q, %v, %v", cause, stop, err)
 		}
 	})
@@ -91,7 +91,7 @@ func TestEvaluateReviewConvergencePolicy(t *testing.T) {
 			state.History.Rounds[index].RecurringFindings = 0
 		}
 		cause, stop, err := store.EvaluateReviewConvergence(state, state.Records[2])
-		if err != nil || !stop || cause != store.ReviewDiminishingLowValue {
+		if err != nil || !stop || cause != domain.ReviewDiminishingLowValue {
 			t.Fatalf("evaluate = %q, %v, %v", cause, stop, err)
 		}
 	})
@@ -119,7 +119,7 @@ func TestEvaluateReviewConvergencePolicy(t *testing.T) {
 			Disposition: domain.ReviewDispositionFixed,
 		}}
 		cause, stop, err := store.EvaluateReviewConvergence(state, state.Records[1])
-		if err != nil || !stop || cause != store.ReviewDiminishingFixedRecurrence {
+		if err != nil || !stop || cause != domain.ReviewDiminishingFixedRecurrence {
 			t.Fatalf("evaluate = %q, %v, %v", cause, stop, err)
 		}
 	})
@@ -131,7 +131,7 @@ func TestEvaluateReviewConvergencePolicy(t *testing.T) {
 			Command: &domain.Command{Action: domain.ActionApplyThenFinish},
 		}}
 		cause, stop, err := store.EvaluateReviewConvergence(state, state.Records[1])
-		if err != nil || !stop || cause != store.ReviewDiminishingFinalFindings {
+		if err != nil || !stop || cause != domain.ReviewDiminishingFinalFindings {
 			t.Fatalf("evaluate = %q, %v, %v", cause, stop, err)
 		}
 	})
@@ -244,12 +244,12 @@ func TestEvaluateReviewConvergenceGrowthWithoutBlockers(t *testing.T) {
 		configurations []domain.Digest
 		growthStreak   int
 		mutate         func(*store.ReviewConvergenceState)
-		want           store.ReviewDiminishingCause
+		want           domain.ReviewDiminishingCause
 	}{
 		{name: "streak below the policy value", configurations: same(3), growthStreak: 3},
 		{
 			name: "streak at the policy value", configurations: same(3), growthStreak: 2,
-			want: store.ReviewDiminishingGrowthWithoutBlockers,
+			want: domain.ReviewDiminishingGrowthWithoutBlockers,
 		},
 		{
 			name: "first recorded round never counts", configurations: same(1), growthStreak: 1,
@@ -269,7 +269,7 @@ func TestEvaluateReviewConvergenceGrowthWithoutBlockers(t *testing.T) {
 		{
 			name: "low findings still count", configurations: same(3), growthStreak: 2,
 			mutate: func(s *store.ReviewConvergenceState) { setSeverity(*s, 2, domain.FindingSeverityP3) },
-			want:   store.ReviewDiminishingGrowthWithoutBlockers,
+			want:   domain.ReviewDiminishingGrowthWithoutBlockers,
 		},
 		{
 			name: "equal net resets", configurations: same(3), growthStreak: 1,
@@ -302,7 +302,7 @@ func TestEvaluateReviewConvergenceGrowthWithoutBlockers(t *testing.T) {
 		{
 			name: "fresh window fills again", configurations: same(5), growthStreak: 2,
 			mutate: func(s *store.ReviewConvergenceState) { continueAt(s, 3) },
-			want:   store.ReviewDiminishingGrowthWithoutBlockers,
+			want:   domain.ReviewDiminishingGrowthWithoutBlockers,
 		},
 		{
 			name:           "reviewer configuration change opens a fresh window",
@@ -313,7 +313,7 @@ func TestEvaluateReviewConvergenceGrowthWithoutBlockers(t *testing.T) {
 			// it is compared with may sit before the segment start.
 			name:           "segment's first round compares with the round before it",
 			configurations: []domain.Digest{first, second, second}, growthStreak: 2,
-			want: store.ReviewDiminishingGrowthWithoutBlockers,
+			want: domain.ReviewDiminishingGrowthWithoutBlockers,
 		},
 		{
 			name: "missing metrics on the current round", configurations: same(3), growthStreak: 1,
@@ -332,7 +332,7 @@ func TestEvaluateReviewConvergenceGrowthWithoutBlockers(t *testing.T) {
 		{
 			name: "landed cause wins on the same round", configurations: same(3), growthStreak: 2,
 			mutate: func(s *store.ReviewConvergenceState) { s.Policy.LowValueStreakBeforeAttention = 2 },
-			want:   store.ReviewDiminishingLowValue,
+			want:   domain.ReviewDiminishingLowValue,
 		},
 		{name: "policy key unset", configurations: same(3), growthStreak: 0},
 	}

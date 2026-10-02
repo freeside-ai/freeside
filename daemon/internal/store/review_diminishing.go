@@ -22,38 +22,6 @@ const (
 	reviewDiminishingFinishReasonPrefix    = "Review ended by finish_now.\nAuthority: "
 )
 
-type ReviewDiminishingCause string
-
-const (
-	ReviewDiminishingLowValue        ReviewDiminishingCause = "low_value_streak"
-	ReviewDiminishingFixedRecurrence ReviewDiminishingCause = "fixed_recurrence"
-	ReviewDiminishingFinalFindings   ReviewDiminishingCause = "final_review_findings"
-	// ReviewDiminishingGrowthWithoutBlockers is the deterministic drift floor
-	// (plan §7 Review Drift): the cumulative diff kept growing while no round
-	// ingested a credible critical or high finding.
-	ReviewDiminishingGrowthWithoutBlockers ReviewDiminishingCause = "growth_without_blockers"
-)
-
-// AllReviewDiminishingCauses lists every valid ReviewDiminishingCause.
-var AllReviewDiminishingCauses = []ReviewDiminishingCause{
-	ReviewDiminishingLowValue,
-	ReviewDiminishingFixedRecurrence,
-	ReviewDiminishingFinalFindings,
-	ReviewDiminishingGrowthWithoutBlockers,
-}
-
-func (c ReviewDiminishingCause) valid() bool {
-	switch c {
-	case ReviewDiminishingLowValue,
-		ReviewDiminishingFixedRecurrence,
-		ReviewDiminishingFinalFindings,
-		ReviewDiminishingGrowthWithoutBlockers:
-		return true
-	default:
-		return false
-	}
-}
-
 // ReviewConvergencePolicy is the daemon-internal resolved policy consumed by
 // the convergence controller. It is not a sync or persistence contract.
 type ReviewConvergencePolicy struct {
@@ -154,18 +122,18 @@ func (tx *ReadTx) ReviewConvergencePolicy(
 // payload lets reconstruction re-prove the exact policy and adjudication the
 // rendered decision described without adding a shared contract field.
 type ReviewDiminishingBinding struct {
-	ItemID                        domain.ItemID          `json:"item_id"`
-	RunID                         domain.RunID           `json:"run_id"`
-	Round                         int                    `json:"round"`
-	HeadSHA                       string                 `json:"head_sha"`
-	FindingIDs                    []domain.FindingID     `json:"finding_ids"`
-	AdjudicationDigest            domain.Digest          `json:"adjudication_digest"`
-	FindingBatchDigest            domain.Digest          `json:"finding_batch_digest"`
-	PolicyDigest                  domain.Digest          `json:"policy_digest"`
-	ContinueWhile                 string                 `json:"continue_while"`
-	LowValueStreakBeforeAttention int                    `json:"low_value_streak_before_attention"`
-	HardRoundLimit                int                    `json:"hard_round_limit"`
-	Cause                         ReviewDiminishingCause `json:"cause"`
+	ItemID                        domain.ItemID                 `json:"item_id"`
+	RunID                         domain.RunID                  `json:"run_id"`
+	Round                         int                           `json:"round"`
+	HeadSHA                       string                        `json:"head_sha"`
+	FindingIDs                    []domain.FindingID            `json:"finding_ids"`
+	AdjudicationDigest            domain.Digest                 `json:"adjudication_digest"`
+	FindingBatchDigest            domain.Digest                 `json:"finding_batch_digest"`
+	PolicyDigest                  domain.Digest                 `json:"policy_digest"`
+	ContinueWhile                 string                        `json:"continue_while"`
+	LowValueStreakBeforeAttention int                           `json:"low_value_streak_before_attention"`
+	HardRoundLimit                int                           `json:"hard_round_limit"`
+	Cause                         domain.ReviewDiminishingCause `json:"cause"`
 }
 
 func (b ReviewDiminishingBinding) validate() error {
@@ -184,7 +152,10 @@ func (b ReviewDiminishingBinding) validate() error {
 	if b.Round < 1 || b.LowValueStreakBeforeAttention < 1 || b.HardRoundLimit < 1 {
 		return domain.ErrNonPositive
 	}
-	if b.ContinueWhile != ReviewContinueWhileNewMaterialFindings || !b.Cause.valid() {
+	if b.ContinueWhile != ReviewContinueWhileNewMaterialFindings {
+		return domain.ErrParentKeyMismatch
+	}
+	if _, err := domain.ParseReviewDiminishingCause(string(b.Cause)); err != nil {
 		return domain.ErrParentKeyMismatch
 	}
 	return nil
@@ -196,14 +167,16 @@ func ReviewDiminishingReason(binding ReviewDiminishingBinding) (string, error) {
 	}
 	var summary string
 	switch binding.Cause {
-	case ReviewDiminishingLowValue:
+	case domain.ReviewDiminishingLowValue:
 		summary = "Review yield has remained low under the resolved policy."
-	case ReviewDiminishingFixedRecurrence:
+	case domain.ReviewDiminishingFixedRecurrence:
 		summary = "A finding recurred after a fixed disposition."
-	case ReviewDiminishingFinalFindings:
+	case domain.ReviewDiminishingFinalFindings:
 		summary = "The one final candidate-bound review found material issues."
-	case ReviewDiminishingGrowthWithoutBlockers:
+	case domain.ReviewDiminishingGrowthWithoutBlockers:
 		summary = "The change kept growing while review found no critical or high issue."
+	case domain.ReviewDiminishingDriftAudit:
+		summary = "A drift audit judged the change against the approved specification."
 	}
 	body, err := json.Marshal(binding)
 	if err != nil {
@@ -589,7 +562,7 @@ func (tx *ReadTx) reviewConvergenceStateAtDecision(
 // decision stored under one re-evaluates to the same cause.
 func EvaluateReviewConvergence(
 	state ReviewConvergenceState, current domain.ReviewRecord,
-) (ReviewDiminishingCause, bool, error) {
+) (domain.ReviewDiminishingCause, bool, error) {
 	currentIndex := -1
 	for index, record := range state.Records {
 		if record.Round == current.Round {
@@ -613,7 +586,7 @@ func EvaluateReviewConvergence(
 		for _, decision := range state.Decisions {
 			if decision.Binding.Round == priorRound && decision.Command != nil &&
 				decision.Command.Action == domain.ActionApplyThenFinish {
-				return ReviewDiminishingFinalFindings, true, nil
+				return domain.ReviewDiminishingFinalFindings, true, nil
 			}
 		}
 	}
@@ -715,7 +688,7 @@ func EvaluateReviewConvergence(
 			return "", false, err
 		}
 		if _, recurring := fixed[fingerprint]; recurring {
-			return ReviewDiminishingFixedRecurrence, true, nil
+			return domain.ReviewDiminishingFixedRecurrence, true, nil
 		}
 	}
 
@@ -728,7 +701,7 @@ func EvaluateReviewConvergence(
 		streak++
 	}
 	if streak >= state.Policy.LowValueStreakBeforeAttention {
-		return ReviewDiminishingLowValue, true, nil
+		return domain.ReviewDiminishingLowValue, true, nil
 	}
 	if state.Policy.DriftGrowthStreakBeforeAttention > 0 {
 		growth := 0
@@ -746,7 +719,7 @@ func EvaluateReviewConvergence(
 			growth++
 		}
 		if growth >= state.Policy.DriftGrowthStreakBeforeAttention {
-			return ReviewDiminishingGrowthWithoutBlockers, true, nil
+			return domain.ReviewDiminishingGrowthWithoutBlockers, true, nil
 		}
 	}
 	return "", false, nil
