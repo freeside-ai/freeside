@@ -1649,7 +1649,7 @@ func (tx *ReadTx) gateItemPRReference(ctx context.Context, item domain.Attention
 		return errRowInconsistent
 	}
 	if item.Type == domain.AttentionPublishBlocked {
-		return nil
+		return tx.gateHeldItemPRBinding(ctx, item.ID)
 	}
 	binding, err := tx.GetReadyItemPRBinding(ctx, item.ID)
 	if errors.Is(err, ErrNotFound) {
@@ -1660,6 +1660,17 @@ func (tx *ReadTx) gateItemPRReference(ctx context.Context, item domain.Attention
 	}
 	if item.PRReference.Repo != binding.Repo || item.PRReference.Number != binding.PRNumber {
 		return errRowInconsistent
+	}
+	return nil
+}
+
+// gateHeldItemPRBinding re-runs the held binding's gate when the item has
+// one. That gate compares the binding to the item and its anchor, so a
+// binding that reads at all names the item's pull request. The read reports
+// ErrNotFound only when the item has no binding row.
+func (tx *ReadTx) gateHeldItemPRBinding(ctx context.Context, itemID domain.ItemID) error {
+	if _, err := tx.GetHeldItemPRBinding(ctx, itemID); err != nil && !errors.Is(err, ErrNotFound) {
+		return err
 	}
 	return nil
 }
