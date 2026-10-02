@@ -39,7 +39,7 @@ func TestAllowedActionsByType(t *testing.T) {
 		},
 		domain.AttentionPublishBlocked: {
 			domain.ActionRerunTrustEvaluation,
-			domain.ActionInspectTrustFailure, domain.ActionStop,
+			domain.ActionInspectTrustFailure, domain.ActionOpenPR, domain.ActionStop,
 		},
 		domain.AttentionReadyForFinalReview: {
 			domain.ActionOpenPR, domain.ActionReturnToAgent, domain.ActionMarkSeen,
@@ -63,28 +63,61 @@ func TestAllowedActionsByType(t *testing.T) {
 		t.Fatalf("attention-type fixture/table sizes = %d/%d, want %d registered types",
 			len(fixtures), len(allowedActionsByType), len(domain.AllAttentionTypes))
 	}
+	// The table is checked on an item that carries a reference wherever the
+	// type permits one, so open_pr's reference condition does not hide a cell;
+	// TestOpenPRNeedsAPRReference pins that condition by itself.
+	offering := func(itemType domain.AttentionType, actions []domain.Action) domain.AttentionItem {
+		item := domain.AttentionItem{Type: itemType, RequestedDecision: actions}
+		if itemType == domain.AttentionReadyForFinalReview || itemType == domain.AttentionPublishBlocked {
+			item.PRReference = &domain.PRReference{Repo: "owner/repo", Number: 123}
+		}
+		return item
+	}
 	for _, itemType := range domain.AllAttentionTypes {
 		allowed, ok := fixtures[itemType]
 		if !ok {
 			t.Fatalf("missing fixture for attention type %q", itemType)
 		}
 		t.Run(string(itemType), func(t *testing.T) {
-			if err := validateRequestedActions(itemType, allowed); err != nil {
+			if err := validateRequestedActions(offering(itemType, allowed)); err != nil {
 				t.Fatalf("allowed set rejected: %v", err)
 			}
 			for _, action := range domain.AllActions {
 				if slices.Contains(allowed, action) {
 					continue
 				}
-				if err := validateRequestedActions(itemType, []domain.Action{action}); !errors.Is(err, ErrActionNotAllowedForType) {
+				if err := validateRequestedActions(offering(itemType, []domain.Action{action})); !errors.Is(err, ErrActionNotAllowedForType) {
 					t.Errorf("action %q error = %v, want ErrActionNotAllowedForType", action, err)
 				}
 			}
 			if itemType != domain.AttentionBlocked {
-				if err := validateRequestedActions(itemType, nil); !errors.Is(err, domain.ErrNoActions) {
+				if err := validateRequestedActions(offering(itemType, nil)); !errors.Is(err, domain.ErrNoActions) {
 					t.Errorf("empty set error = %v, want ErrNoActions", err)
 				}
 			}
 		})
+	}
+}
+
+// TestOpenPRNeedsAPRReference pins the conditional cell of the action table:
+// a publish_blocked item offers open_pr only when it carries the pull request
+// the action opens. The app's cross-language policy matrix leaves this cell to
+// this test, because its seeded holds carry no reference.
+func TestOpenPRNeedsAPRReference(t *testing.T) {
+	hold := domain.AttentionItem{
+		Type:              domain.AttentionPublishBlocked,
+		RequestedDecision: []domain.Action{domain.ActionInspectTrustFailure, domain.ActionOpenPR},
+	}
+	if err := validateRequestedActions(hold); !errors.Is(err, ErrActionNotAllowedForType) {
+		t.Fatalf("open_pr without a reference = %v, want ErrActionNotAllowedForType", err)
+	}
+	hold.PRReference = &domain.PRReference{Repo: "owner/repo", Number: 123}
+	if err := validateRequestedActions(hold); err != nil {
+		t.Fatalf("open_pr with a reference = %v, want accepted", err)
+	}
+	// A hold with a reference need not offer the action.
+	hold.RequestedDecision = []domain.Action{domain.ActionInspectTrustFailure}
+	if err := validateRequestedActions(hold); err != nil {
+		t.Fatalf("reference without open_pr = %v, want accepted", err)
 	}
 }

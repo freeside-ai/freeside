@@ -184,7 +184,7 @@ func ValidateItemIntake(item domain.AttentionItem) error {
 	if item.DecidedAt != nil {
 		return fmt.Errorf("put item %q: %w", item.ID, ErrCallerSetDecidedAt)
 	}
-	if err := validateRequestedActions(item.Type, item.RequestedDecision); err != nil {
+	if err := validateRequestedActions(item); err != nil {
 		return fmt.Errorf("put item %q: %w", item.ID, err)
 	}
 	// A task or effect proposal is authoritative only when its dedicated opener
@@ -284,7 +284,7 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 			// Re-run current signet policy against the durable row. PutItem gates
 			// new writes, but a pre-policy row or an internal direct-store write
 			// must not remain an authority for accepting a now-illegitimate action.
-			if err := validateRequestedActions(item.Type, item.RequestedDecision); err != nil {
+			if err := validateRequestedActions(item); err != nil {
 				return fmt.Errorf("submit command %q: item %q: %w", command.CommandID, item.ID, err)
 			}
 			if snoozed, err := proposalSnoozed(ctx, tx, item, s.now().UTC()); err != nil {
