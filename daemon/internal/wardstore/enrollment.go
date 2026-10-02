@@ -12,16 +12,20 @@ import (
 )
 
 // recordEnrollingIdentity records a new identity as declared (it must name a
-// cost owner), or binds an
-// existing one for its first enrollment. An existing identity must agree on
-// the fixed bindings; its account binding and cost owner are set when empty
-// and must match when set, so enrollment never rebinds an account or silently
-// changes who pays, and it leaves no enrolled identity without a cost owner. Everything else keeps the stored value: enrollment is not
-// the place to re-enable an identity or re-measure its limit. The store's
-// own gates (the set-once transition, one identity per account binding) still
-// run underneath on the write.
+// cost owner), or binds an existing one for its first enrollment. An existing
+// identity must agree on the fixed bindings; its account binding and cost
+// owner are set when empty and must match when set, so enrollment never
+// rebinds an account or silently changes who pays, and it leaves no enrolled
+// identity without a cost owner. Everything else keeps the stored value:
+// enrollment does not re-measure an identity's limit, and it keeps the stored
+// enabled bit unless enable is set, which writes the bit with the bindings in
+// the one record. Only adoption asks for that (ward.EnrollmentBootstrap), and
+// the request is not trusted: the identity must hold no enrollment with a
+// generation, checked here in the same transaction, or the write refuses. The
+// store's own gates (the set-once transition, one identity per account
+// binding) still run underneath on the write.
 func recordEnrollingIdentity(
-	ctx context.Context, tx *store.InternalTx, identity domain.AuthIdentity, now time.Time,
+	ctx context.Context, tx *store.InternalTx, identity domain.AuthIdentity, enable bool, now time.Time,
 ) error {
 	stored, err := tx.GetAuthIdentity(ctx, identity.ID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -61,10 +65,42 @@ func recordEnrollingIdentity(
 	if next.CostOwner == "" {
 		return fmt.Errorf("auth identity %s has no cost owner; name one to enroll it", identity.ID)
 	}
+	if enable {
+		if err := refuseEnablingAnEnrolledIdentity(ctx, tx, identity.ID); err != nil {
+			return err
+		}
+		next.Enabled = true
+	}
 	if next == stored {
 		return nil
 	}
 	return tx.RecordAuthIdentity(ctx, next, now)
+}
+
+// refuseEnablingAnEnrolledIdentity is the gate on a bootstrap's enable
+// request. Enrollment enables only an identity that is not yet enrolled, and
+// an identity is enrolled once any of its enrollments holds a generation: a
+// disable recorded after that is deliberate. The caller's request alone does
+// not prove that, so the store re-reads it and fails closed.
+func refuseEnablingAnEnrolledIdentity(
+	ctx context.Context, tx *store.InternalTx, identity domain.AuthIdentityID,
+) error {
+	enrollments, err := tx.ListClientEnrollments(ctx, identity)
+	if err != nil {
+		return err
+	}
+	for _, enrollment := range enrollments {
+		_, err := tx.CurrentEnrollmentGeneration(ctx, enrollment.ID)
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("auth identity %s is already enrolled (%s), so enrollment will not enable it",
+			identity, enrollment.ID)
+	}
+	return nil
 }
 
 // recordEnrollmentBootstrap records the bootstrap's enrollment, or accepts an
@@ -118,7 +154,7 @@ func (a *ClaudeEnrollment) Begin(
 ) (domain.AuthStoreMutationLease, error) {
 	var lease domain.AuthStoreMutationLease
 	err := a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		if err := recordEnrollingIdentity(ctx, tx, identity, now); err != nil {
+		if err := recordEnrollingIdentity(ctx, tx, identity, bootstrap.EnableIdentity, now); err != nil {
 			return err
 		}
 		if err := recordEnrollmentBootstrap(ctx, tx, bootstrap, now); err != nil {

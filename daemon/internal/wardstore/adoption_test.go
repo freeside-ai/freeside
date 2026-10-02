@@ -33,14 +33,16 @@ func (s *failingAppendStore) AppendGeneration(
 // TestClaudeAdoptionRetriesAfterAFailedAppendAndReleasesItsLease covers the
 // adoption's own lease handling against the real store: a failed append
 // leaves the enrollment recorded with no generation and no live lease, the
-// rerun adopts over it, and a third run reuses the enrollment.
+// rerun adopts over it, and a third run reuses the enrollment. The identity
+// starts disabled, as the old harness seed step left it: adoption's
+// first-enrollment write enables it.
 func TestClaudeAdoptionRetriesAfterAFailedAppendAndReleasesItsLease(t *testing.T) {
 	ctx := context.Background()
 	st, adapters := openEnrollmentStore(t)
 	identity := domain.AuthIdentity{
 		ID: "claude-main", Provider: "claude", AuthStoreMutationLease: true,
-		MaxParallelExecutions: 1, Enabled: true,
-		Interim: domain.InterimClientFacts{AuthStoreVolume: "claude-main-auth", RefreshStrategy: domain.RefreshOnDemand},
+		MaxParallelExecutions: 1,
+		Interim:               domain.InterimClientFacts{AuthStoreVolume: "claude-main-auth", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordAuthIdentity(ctx, identity, enrollmentTestAt)
@@ -98,6 +100,11 @@ func TestClaudeAdoptionRetriesAfterAFailedAppendAndReleasesItsLease(t *testing.T
 	if _, _, found, err := adapters.Adoption.Enrolled(ctx, identity.ID, domain.HarnessClientClaudeCode); err != nil || found {
 		t.Fatalf("enrolled after a failed append = %v, %v", found, err)
 	}
+	// The enable committed with the enrollment, so the rerun completes an
+	// identity that is already enabled.
+	if stored, err := adapters.Leaser.GetIdentity(ctx, identity.ID); err != nil || !stored.Enabled {
+		t.Fatalf("identity after a failed append = %+v, %v", stored, err)
+	}
 
 	result, err := adopt()
 	if err != nil || result.Reused || result.Generation.Ordinal != 1 ||
@@ -113,7 +120,7 @@ func TestClaudeAdoptionRetriesAfterAFailedAppendAndReleasesItsLease(t *testing.T
 		t.Fatalf("third run = %+v, %v (observed %d)", again, err, observed)
 	}
 	stored, err := adapters.Leaser.GetIdentity(ctx, identity.ID)
-	if err != nil || !stored.SameFixedBindings(identity) ||
+	if err != nil || !stored.SameFixedBindings(identity) || !stored.Enabled ||
 		stored.AccountBinding != "acct-fixture-0002" || stored.CostOwner != "operator" {
 		t.Fatalf("stored identity = %+v, %v", stored, err)
 	}

@@ -65,6 +65,32 @@ func TestAuthAdoptRetiresOnlyTheNamedUnadoptableIdentity(t *testing.T) {
 	}
 }
 
+// TestAuthAdoptRetiresAnUnadoptableIdentityStoredDisabled names an
+// unadoptable identity that was disabled before the run. Its adoption is
+// refused inside the first-enrollment transaction, the one that enables an
+// adopted identity, so it stays disabled and is reported retired.
+func TestAuthAdoptRetiresAnUnadoptableIdentityStoredDisabled(t *testing.T) {
+	f := newAuthAdoptFixture(t)
+	f.recordIdentity(t, domain.AuthIdentity{
+		ID: "codex-other", Provider: "openai", AccountBinding: adoptCodexAccount,
+		MaxParallelExecutions: 1, Enabled: true, CostOwner: "operator",
+	})
+	f.withStore(t, func(st *store.Store) { setIdentityEnabled(t, st, "codex-review", false) })
+	before := f.snapshot(t).identity(t, "codex-review")
+
+	report, _, err := f.run(t, f.args("-retire-unadoptable", "codex-review"))
+	if err != nil {
+		t.Fatalf("auth adopt: %v", err)
+	}
+	if len(report.Identities) != 2 || report.Identities[1].Status != authAdoptUnadoptable ||
+		!report.Identities[1].Retired || report.Identities[1].Enabled {
+		t.Fatalf("report = %+v", report)
+	}
+	if got := f.snapshot(t).identity(t, "codex-review"); got != before || got.Enabled {
+		t.Fatalf("retired identity = %+v, want %+v", got, before)
+	}
+}
+
 // TestRetiredOwnershipFollowsTheNewestAdmission: a task whose newest
 // admission names another identity is no longer the retired identity's.
 func TestRetiredOwnershipFollowsTheNewestAdmission(t *testing.T) {

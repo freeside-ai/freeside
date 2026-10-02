@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -422,6 +423,115 @@ func TestClaudeEnrollmentBeginBindsAnUnboundInterimIdentity(t *testing.T) {
 			t.Fatalf("bound identity = %+v, want %+v", got, want)
 		}
 		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestClaudeEnrollmentBeginEnablesAnIdentityWhenAsked covers the bootstrap's
+// EnableIdentity: a disabled flag-era identity is enabled in the write that
+// binds it, keeping every other stored fact, and a bootstrap the transaction
+// refuses leaves it disabled and unbound.
+func TestClaudeEnrollmentBeginEnablesAnIdentityWhenAsked(t *testing.T) {
+	ctx := context.Background()
+	stored, _ := claudeEnrollmentFixture("claude-main", "")
+	stored.CostOwner, stored.Enabled, stored.MaxParallelExecutions = "", false, 3
+	bound := stored
+	bound.AccountBinding, bound.CostOwner, bound.Enabled = "acct-fixture-0002", "operator", true
+	for name, tc := range map[string]struct {
+		accountHolder bool
+		wantErr       error
+		want          domain.AuthIdentity
+	}{
+		"first enrollment":                  {want: bound},
+		"account taken by another identity": {accountHolder: true, wantErr: domain.ErrAccountBindingTaken, want: stored},
+	} {
+		t.Run(name, func(t *testing.T) {
+			st, adapters := openEnrollmentStore(t)
+			if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+				if tc.accountHolder {
+					if err := tx.RecordAuthIdentity(ctx, domain.AuthIdentity{
+						ID: "claude-other", Provider: "claude", AccountBinding: "acct-fixture-0002",
+						AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true, CostOwner: "operator",
+					}, enrollmentTestAt); err != nil {
+						return err
+					}
+				}
+				return tx.RecordAuthIdentity(ctx, stored, enrollmentTestAt)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			identity, bootstrap := claudeEnrollmentFixture("claude-main", "acct-fixture-0002")
+			bootstrap.EnableIdentity = true
+			later := enrollmentTestAt.Add(time.Minute)
+			_, err := adapters.Claude.Begin(ctx, identity, bootstrap, "holder-1", later, later.Add(time.Minute))
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Begin = %v, want %v", err, tc.wantErr)
+			}
+			if err := st.Read(ctx, func(tx *store.ReadTx) error {
+				got, err := tx.GetAuthIdentity(ctx, "claude-main")
+				if err == nil && got != tc.want {
+					t.Fatalf("identity = %+v, want %+v", got, tc.want)
+				}
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// TestClaudeEnrollmentBeginRefusesEnablingAnEnrolledIdentity covers the
+// store's gate on EnableIdentity: an identity whose enrollment holds a
+// generation, disabled since, is not enabled by a bootstrap under another
+// enrollment id. The bootstrap refuses and records nothing.
+func TestClaudeEnrollmentBeginRefusesEnablingAnEnrolledIdentity(t *testing.T) {
+	ctx := context.Background()
+	st, adapters := openEnrollmentStore(t)
+	identity, bootstrap := claudeEnrollmentFixture("claude-main", "acct-fixture-0002")
+	lease, err := adapters.Claude.Begin(ctx, identity, bootstrap, "holder-1", enrollmentTestAt, enrollmentTestAt.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapters.Claude.AppendGeneration(ctx, domain.EnrollmentGeneration{
+		EnrollmentID: bootstrap.Enrollment.ID, AuthStoreVolume: "claude-main-auth",
+		StoreManifestDigest: bootstrap.Binding.StoreManifestDigest, LeaseFence: lease.Fence,
+		AccountBinding: "acct-fixture-0002", RecordedAt: enrollmentTestAt,
+	}, enrollmentTestAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapters.Leaser.Release(ctx, identity.ID, "holder-1", lease.Fence, enrollmentTestAt); err != nil {
+		t.Fatal(err)
+	}
+	disabled := identity
+	disabled.Enabled = false
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordAuthIdentity(ctx, disabled, enrollmentTestAt.Add(time.Minute))
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	second := bootstrap
+	second.Enrollment.ID = "claude-main/second"
+	second.Binding.EnrollmentID = second.Enrollment.ID
+	second.EnableIdentity = true
+	later := enrollmentTestAt.Add(2 * time.Minute)
+	_, err = adapters.Claude.Begin(ctx, identity, second, "holder-2", later, later.Add(time.Minute))
+	if err == nil || !strings.Contains(err.Error(), "is already enrolled") {
+		t.Fatalf("enabling bootstrap of an enrolled identity = %v, want the already-enrolled refusal", err)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		got, err := tx.GetAuthIdentity(ctx, identity.ID)
+		if err != nil {
+			return err
+		}
+		if got != disabled {
+			t.Fatalf("identity = %+v, want it left disabled: %+v", got, disabled)
+		}
+		if _, err := tx.GetClientEnrollment(ctx, second.Enrollment.ID); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("second enrollment = %v, want it unrecorded", err)
+		}
+		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
