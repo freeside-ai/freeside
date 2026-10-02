@@ -265,12 +265,24 @@ func ValidateAttentionItemTransition(old, updated AttentionItem) error {
 		return fmt.Errorf("attention item %s: publish_block would be removed: %w",
 			updated.ID, ErrImmutableTransition)
 	}
-	samePRReference, err := jsonEqual(old.PRReference, updated.PRReference)
-	if err != nil {
-		return fmt.Errorf("attention item %s: %w", updated.ID, err)
-	}
-	if !samePRReference {
-		return fmt.Errorf("attention item %s: pr reference would change: %w",
+	// A hold opened before publication learns its pull request once, while it
+	// is still open: the deterministic publish_blocked item outlives the
+	// publication it was blocking. Every other difference is forbidden on every
+	// type, because a changed or removed reference would retarget or drop an
+	// already rendered open_pr action. The type is fixed above, so old.Type
+	// speaks for both versions.
+	if old.PRReference != nil {
+		samePRReference, err := jsonEqual(old.PRReference, updated.PRReference)
+		if err != nil {
+			return fmt.Errorf("attention item %s: %w", updated.ID, err)
+		}
+		if !samePRReference {
+			return fmt.Errorf("attention item %s: pr reference would change: %w",
+				updated.ID, ErrImmutableTransition)
+		}
+	} else if updated.PRReference != nil &&
+		(old.Type != AttentionPublishBlocked || old.Status != StatusOpen || updated.Status != StatusOpen) {
+		return fmt.Errorf("attention item %s: pr reference cannot be attached in this transition: %w",
 			updated.ID, ErrImmutableTransition)
 	}
 	return nil

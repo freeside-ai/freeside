@@ -221,11 +221,46 @@ func TestAttentionItemPRReferenceIsExactAndTypeScoped(t *testing.T) {
 			t.Fatalf("NewAttentionItem = %v, want %v", err, domain.ErrPRReferenceInconsistent)
 		}
 	})
-	t.Run("other type rejects reference", func(t *testing.T) {
-		in := validItemInput(domain.AttentionSpecApproval)
-		in.PRReference = &domain.PRReference{Repo: "owner/repo", Number: 123}
-		if _, err := domain.NewAttentionItem(in, nil); !errors.Is(err, domain.ErrPRReferenceInconsistent) {
-			t.Fatalf("NewAttentionItem = %v, want %v", err, domain.ErrPRReferenceInconsistent)
+	// Every member is pinned with and without a reference, so a new type has
+	// to pick its rule here instead of inheriting one silently.
+	type rule struct{ withReference, withoutReference bool }
+	accepts := map[domain.AttentionType]rule{
+		domain.AttentionReadyForFinalReview: {withReference: true},
+		domain.AttentionPublishBlocked:      {withReference: true, withoutReference: true},
+	}
+	for _, typ := range domain.AllAttentionTypes {
+		want, ok := accepts[typ]
+		if !ok {
+			want = rule{withoutReference: true}
+		}
+		for _, withReference := range []bool{true, false} {
+			accepted := want.withoutReference
+			name := string(typ) + " without reference"
+			if withReference {
+				accepted = want.withReference
+				name = string(typ) + " with reference"
+			}
+			t.Run(name, func(t *testing.T) {
+				in := validItemInput(typ)
+				in.PRReference = nil
+				if withReference {
+					in.PRReference = &domain.PRReference{Repo: "owner/repo", Number: 123}
+				}
+				_, err := domain.NewAttentionItem(in, nil)
+				if accepted && err != nil {
+					t.Fatalf("NewAttentionItem = %v, want valid", err)
+				}
+				if !accepted && !errors.Is(err, domain.ErrPRReferenceInconsistent) {
+					t.Fatalf("NewAttentionItem = %v, want %v", err, domain.ErrPRReferenceInconsistent)
+				}
+			})
+		}
+	}
+	t.Run("publish_blocked reference must be well formed", func(t *testing.T) {
+		in := validItemInput(domain.AttentionPublishBlocked)
+		in.PRReference = &domain.PRReference{Repo: "owner/../repo", Number: 123}
+		if _, err := domain.NewAttentionItem(in, nil); err == nil {
+			t.Fatal("NewAttentionItem succeeded, want invalid PR reference")
 		}
 	})
 	for name, reference := range map[string]domain.PRReference{

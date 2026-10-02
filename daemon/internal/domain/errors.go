@@ -171,7 +171,7 @@ var (
 	ErrScheduleDetailMismatch       = errors.New("schedule detail fields do not match the kind's contract")
 	ErrBaseFreshnessInconsistent    = errors.New("base freshness fields are internally inconsistent")
 	ErrBaseFreshnessOutsideReview   = errors.New("base freshness is a ready_for_final_review semantic")
-	ErrPRReferenceInconsistent      = errors.New("pr reference is required exactly for ready_for_final_review items")
+	ErrPRReferenceInconsistent      = errors.New("pr reference is required on ready_for_final_review, optional on publish_blocked, and rejected on every other type")
 	ErrInitiatorInconsistent        = errors.New("initiator fields do not match its type")
 	ErrCheckStateInconsistent       = errors.New("check state does not match its requirement resolution")
 	ErrReadinessVerdictInconsistent = errors.New("readiness verdict does not match its payload")
