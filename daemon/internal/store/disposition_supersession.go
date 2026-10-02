@@ -9,13 +9,13 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
-// ErrSupersessionAutoRouteUnproven refuses an automatic-route supersession
-// authority. The record's automatic kind stores no reference: the route gate
-// re-derives it from the audit, the run's policy, and the stored dispositions,
-// and that gate does not exist yet (#1051). Until it does, nothing can
-// re-prove the authority, so writes and reads both refuse it.
-var ErrSupersessionAutoRouteUnproven = errors.New(
-	"automatic-route disposition supersession cannot be re-derived")
+// ErrSupersessionRouteUnproven refuses a supersession whose reversal the route
+// gate does not re-derive from stored records (plan §7 Review Drift). The
+// automatic kind stores no reference, so the gate must report that the round
+// routes automatically; a human command still needs the reversal list to pass
+// the gate, because the command orders the round, not the list's validity.
+var ErrSupersessionRouteUnproven = errors.New(
+	"disposition supersession is not re-derived by the drift route gate")
 
 const putDispositionSupersessionSQL = `
 INSERT INTO finding_disposition_supersessions
@@ -37,15 +37,8 @@ func supersessionBindingFailure(what string, err error) error {
 }
 
 // validateDispositionSupersessionScope re-runs the joins that say what was
-// reversed, without following the authority (plan §7 Review Drift). The
-// superseded disposition must be this run's, be fixed, and name the copied
-// remediation invocation. The audit must be this run's, be over_hardened, list
-// the finding among its reversals, and have judged the reversing round. Both
-// loads re-run their own bindings.
-//
-// It is separate from the authority check because the convergence rebuild
-// (#1051) must read a record's scope while it is rebuilding the item the
-// record's human authority names.
+// reversed, without following the authority (plan §7 Review Drift). Both loads
+// re-run their own bindings.
 func (tx *ReadTx) validateDispositionSupersessionScope(
 	ctx context.Context, supersession domain.FindingDispositionSupersession,
 ) error {
@@ -53,16 +46,36 @@ func (tx *ReadTx) validateDispositionSupersessionScope(
 	if err != nil {
 		return supersessionBindingFailure("superseded disposition", err)
 	}
-	if disposition.RunID != supersession.RunID ||
-		disposition.Disposition != domain.ReviewDispositionFixed ||
-		disposition.RemediationInvocationID != supersession.RemediationInvocationID {
-		return fmt.Errorf("superseded disposition: %w", domain.ErrParentKeyMismatch)
-	}
 	audit, err := tx.GetDriftAudit(ctx, supersession.DriftAuditDigest)
 	if err != nil {
 		return supersessionBindingFailure("drift audit", err)
 	}
-	if audit.RunID != supersession.RunID || audit.Round != supersession.ReversingRound ||
+	return checkDispositionSupersessionScope(supersession, disposition, audit)
+}
+
+// checkDispositionSupersessionScope is the scope rule over rows the caller has
+// already authenticated. The superseded disposition must be this run's, be
+// fixed, and name the copied remediation invocation. The audit must be this
+// run's, be over_hardened, list the finding among its reversals, and have
+// judged the reversing round.
+//
+// It is separate from the loads because the decision-time reads take the
+// disposition from their own causal slice: GetFindingDisposition follows every
+// deferred row's item authority, and that item's rebuild is what is reading.
+func checkDispositionSupersessionScope(
+	supersession domain.FindingDispositionSupersession,
+	disposition domain.ReviewDispositionRecord,
+	audit domain.DriftAudit,
+) error {
+	if disposition.FindingID != supersession.FindingID ||
+		disposition.Round != supersession.SupersededRound ||
+		disposition.RunID != supersession.RunID ||
+		disposition.Disposition != domain.ReviewDispositionFixed ||
+		disposition.RemediationInvocationID != supersession.RemediationInvocationID {
+		return fmt.Errorf("superseded disposition: %w", domain.ErrParentKeyMismatch)
+	}
+	if audit.Digest != supersession.DriftAuditDigest ||
+		audit.RunID != supersession.RunID || audit.Round != supersession.ReversingRound ||
 		audit.Verdict != domain.DriftVerdictOverHardened ||
 		!slices.ContainsFunc(audit.Reversals, func(reversal domain.DriftReversal) bool {
 			return reversal.FindingID == supersession.FindingID
@@ -73,19 +86,25 @@ func (tx *ReadTx) validateDispositionSupersessionScope(
 }
 
 // validateDispositionSupersessionAuthority re-proves who ordered the reversal
-// against current state. A human authority must be the stored
-// continue_under_policy command on the reversing round's diminishing-returns
-// item, at the item version it was issued against.
+// against current state, and that the route gate still derives the reversal
+// itself. Both kinds need the reversal list to pass the gate for the reversing
+// round, which is what proves the superseded row was the finding's effective
+// latest disposition and that the finding is outside the round's own batch.
 //
-// It does not check that the item parked on a drift audit: that check arrives
-// with #1051, the first unit in which such a decision can load. Nothing writes
-// a record before then.
+// An automatic route stores no reference: the gate must report that the round
+// routes automatically. A human authority must be the stored
+// continue_under_policy command on the reversing round's diminishing-returns
+// item, at the item version it was issued against, and that item must have
+// parked on this drift audit with the promise that continuing runs the
+// simplification round. A continue on any other stop, or on a card without
+// the promise, orders an ordinary review round, never a reversal.
 func (tx *ReadTx) validateDispositionSupersessionAuthority(
 	ctx context.Context, supersession domain.FindingDispositionSupersession,
 ) error {
+	// The switch dispatches on the kind, so it omits default.
 	switch supersession.Authority.Kind {
 	case domain.DispositionSupersessionAutoRoute:
-		return ErrSupersessionAutoRouteUnproven
+		return tx.validateDispositionSupersessionRoute(ctx, supersession, true)
 	case domain.DispositionSupersessionHumanCommand:
 		// Validate guarantees the reference for this kind.
 		reference := supersession.Authority.Command
@@ -95,15 +114,44 @@ func (tx *ReadTx) validateDispositionSupersessionAuthority(
 		}
 		if decision.Binding.RunID != supersession.RunID ||
 			decision.Binding.Round != supersession.ReversingRound ||
+			decision.Binding.Cause != domain.ReviewDiminishingDriftAudit ||
 			decision.Command == nil ||
 			decision.Command.Action != domain.ActionContinueUnderPolicy ||
 			decision.Command.CommandID != reference.CommandID ||
 			decision.Command.ItemVersion != reference.ItemVersion {
 			return fmt.Errorf("authority command: %w", domain.ErrParentKeyMismatch)
 		}
-		return nil
+		// The command orders a reversal only when the card it decided promised
+		// one for this audit. A continue on a card that promised nothing orders
+		// an ordinary review round.
+		facts := decision.Item.ReviewDiminishing
+		if facts == nil || facts.DriftAudit == nil || !facts.DriftAudit.SimplificationOnContinue ||
+			facts.DriftAudit.AuditDigest != supersession.DriftAuditDigest {
+			return fmt.Errorf("authority command promised no simplification round: %w",
+				ErrSupersessionRouteUnproven)
+		}
+		return tx.validateDispositionSupersessionRoute(ctx, supersession, false)
 	}
 	return domain.ErrInvalidSupersessionAuthorityKind
+}
+
+// validateDispositionSupersessionRoute re-derives the route gate for the
+// record's reversing round. automatic also requires that the round routes
+// without a human.
+func (tx *ReadTx) validateDispositionSupersessionRoute(
+	ctx context.Context, supersession domain.FindingDispositionSupersession, automatic bool,
+) error {
+	gate, err := tx.DriftAuditRouteGate(ctx, supersession.RunID, supersession.ReversingRound)
+	if err != nil {
+		return supersessionBindingFailure("route gate", err)
+	}
+	if gate.Audit.Digest != supersession.DriftAuditDigest {
+		return fmt.Errorf("route gate audit: %w", domain.ErrParentKeyMismatch)
+	}
+	if !gate.ListValid || (automatic && !gate.Auto) {
+		return ErrSupersessionRouteUnproven
+	}
+	return nil
 }
 
 func (tx *ReadTx) validateDispositionSupersession(
@@ -120,8 +168,8 @@ func (tx *ReadTx) validateDispositionSupersession(
 // record for the same disposition is an immutable conflict.
 //
 // A record changes a finding's effective disposition from its reversing round
-// on, and #1051 re-derives each stored item's stop cause through these
-// records. A record that appeared for a round the run has already moved past
+// on, and each stored item's stop cause is re-derived through the records of
+// earlier rounds. A record that appeared for a round the run has already moved past
 // would change a cause an item already stored, so a new record is refused once
 // a later round is recorded or failed (the PutDriftAudit rule). Reads don't
 // repeat this check: later rounds are expected by the time a record is read.
@@ -193,13 +241,11 @@ func scanDispositionSupersessionRow(sc scanner) (dispositionSupersessionRow, err
 	return row, err
 }
 
-// reconstructDispositionSupersession is the one rebuild path for every read.
-// It re-runs the body integrity digest, the decode with the record's
-// validation, the agreement of the copied keys with the decoded body, and the
-// same scope and authority checks a write runs. No copied column and no stored
-// round, invocation, digest, or command reference is trusted.
-func (tx *ReadTx) reconstructDispositionSupersession(
-	ctx context.Context, row dispositionSupersessionRow,
+// decodeDispositionSupersessionRow re-runs the body integrity digest, the
+// decode with the record's validation, and the agreement of the copied keys
+// with the decoded body. It follows no join.
+func decodeDispositionSupersessionRow(
+	row dispositionSupersessionRow,
 ) (domain.FindingDispositionSupersession, error) {
 	if row.bodyDigest != reviewBodyDigest(string(row.body)) {
 		return domain.FindingDispositionSupersession{}, errRowInconsistent
@@ -212,6 +258,20 @@ func (tx *ReadTx) reconstructDispositionSupersession(
 		supersession.SupersededRound != row.supersededRound ||
 		string(supersession.RunID) != row.runID || supersession.ReversingRound != row.reversingRound {
 		return domain.FindingDispositionSupersession{}, errRowInconsistent
+	}
+	return supersession, nil
+}
+
+// reconstructDispositionSupersession is the one rebuild path for every public
+// read. It decodes the row and re-runs the same scope and authority checks a
+// write runs. No copied column and no stored round, invocation, digest, or
+// command reference is trusted.
+func (tx *ReadTx) reconstructDispositionSupersession(
+	ctx context.Context, row dispositionSupersessionRow,
+) (domain.FindingDispositionSupersession, error) {
+	supersession, err := decodeDispositionSupersessionRow(row)
+	if err != nil {
+		return domain.FindingDispositionSupersession{}, err
 	}
 	if err := tx.validateDispositionSupersession(ctx, supersession); err != nil {
 		return domain.FindingDispositionSupersession{}, err
@@ -247,22 +307,8 @@ func (tx *ReadTx) GetFindingDispositionSupersession(
 func (tx *ReadTx) ListFindingDispositionSupersessions(
 	ctx context.Context, runID domain.RunID,
 ) ([]domain.FindingDispositionSupersession, error) {
-	rows, err := tx.tx.QueryContext(ctx,
-		`SELECT `+selectDispositionSupersessionColumns+` FROM finding_disposition_supersessions
-			ORDER BY run_id, reversing_round, finding_id, superseded_round`)
+	raw, err := tx.dispositionSupersessionRows(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list disposition supersessions %q: %w", runID, err)
-	}
-	var raw []dispositionSupersessionRow
-	for rows.Next() {
-		row, err := scanDispositionSupersessionRow(rows)
-		if err != nil {
-			_ = rows.Close()
-			return nil, fmt.Errorf("list disposition supersessions %q row %d: %w", runID, len(raw)+1, err)
-		}
-		raw = append(raw, row)
-	}
-	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, fmt.Errorf("list disposition supersessions %q: %w", runID, err)
 	}
 	out := make([]domain.FindingDispositionSupersession, 0, len(raw))
@@ -274,6 +320,89 @@ func (tx *ReadTx) ListFindingDispositionSupersessions(
 		if supersession.RunID == runID {
 			out = append(out, supersession)
 		}
+	}
+	return out, nil
+}
+
+func (tx *ReadTx) dispositionSupersessionRows(ctx context.Context) ([]dispositionSupersessionRow, error) {
+	rows, err := tx.tx.QueryContext(ctx,
+		`SELECT `+selectDispositionSupersessionColumns+` FROM finding_disposition_supersessions
+			ORDER BY run_id, reversing_round, finding_id, superseded_round`)
+	if err != nil {
+		return nil, err
+	}
+	var raw []dispositionSupersessionRow
+	for rows.Next() {
+		row, err := scanDispositionSupersessionRow(rows)
+		if err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("row %d: %w", len(raw)+1, err)
+		}
+		raw = append(raw, row)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+// loadDispositionSupersessionsAtDecision returns the run's records whose
+// reversing round is before boundaryRound, checked against dispositions, the
+// run's rows before that round as loadFindingDispositionsAtDecision returned
+// them. It is the read for a decision-time rebuild (the recurrence rule and
+// the route gate), and differs from the public reads in two ways.
+//
+// It checks a record's scope and never follows its authority. A human
+// authority names the diminishing-returns item of the record's own reversing
+// round, and loading that item rebuilds its convergence state; the rebuild of a
+// later round reads this record, so following the authority here would recurse
+// through every reversing round. The authority is proven when the record is
+// written and on every public read.
+//
+// It takes the superseded disposition from the caller's slice for the same
+// reason: a superseded row is always older than its reversing round, so it is
+// in the slice, and a record whose row is missing fails closed.
+//
+// Every row is decoded and cross-checked before the run and round filter, so
+// a corrupted copied key cannot move a record out of the result.
+func (tx *ReadTx) loadDispositionSupersessionsAtDecision(
+	ctx context.Context,
+	runID domain.RunID,
+	boundaryRound int,
+	dispositions []domain.ReviewDispositionRecord,
+) ([]domain.FindingDispositionSupersession, error) {
+	raw, err := tx.dispositionSupersessionRows(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("disposition supersessions %q before round %d: %w", runID, boundaryRound, err)
+	}
+	var out []domain.FindingDispositionSupersession
+	for i, row := range raw {
+		fail := func(err error) error {
+			return fmt.Errorf("disposition supersessions %q before round %d row %d: %w",
+				runID, boundaryRound, i+1, err)
+		}
+		supersession, err := decodeDispositionSupersessionRow(row)
+		if err != nil {
+			return nil, fail(err)
+		}
+		if supersession.RunID != runID || supersession.ReversingRound >= boundaryRound {
+			continue
+		}
+		index := slices.IndexFunc(dispositions, func(disposition domain.ReviewDispositionRecord) bool {
+			return disposition.FindingID == supersession.FindingID &&
+				disposition.Round == supersession.SupersededRound
+		})
+		if index < 0 {
+			return nil, fail(fmt.Errorf("superseded disposition: %w", domain.ErrParentKeyMismatch))
+		}
+		audit, err := tx.GetDriftAudit(ctx, supersession.DriftAuditDigest)
+		if err != nil {
+			return nil, fail(supersessionBindingFailure("drift audit", err))
+		}
+		if err := checkDispositionSupersessionScope(supersession, dispositions[index], audit); err != nil {
+			return nil, fail(err)
+		}
+		out = append(out, supersession)
 	}
 	return out, nil
 }

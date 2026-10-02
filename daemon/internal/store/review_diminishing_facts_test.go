@@ -26,7 +26,9 @@ const driftFactsRound = 1
 
 // diminishingFactsFixture is a seeded run whose round 2 parked on a
 // diminishing item (cause fixed_recurrence, no card facts) and was audited,
-// beside driftFactsRun, which carries two audited rounds and no item.
+// beside driftFactsRun, which carries a resolved policy, two audited rounds,
+// and no item. Each of its audits reverses its own round's finding, so neither
+// reversal list passes the route gate.
 type diminishingFactsFixture struct {
 	st            *store.Store
 	decision      store.ReviewDiminishingDecision
@@ -43,10 +45,23 @@ func seedDiminishingFacts(
 	st, decision := seedReviewDiminishingDecision(t, path, runID, diminishingFactsAt, action)
 	input := driftAuditInputFor(runID, decision.Binding.Round, domain.DriftVerdictOverHardened, "finding-a")
 	input.ResolvedPolicyDigest = decision.Binding.PolicyDigest
+	policy, err := domain.NewResolvedPolicy(driftFactsRun, []domain.PolicyKey{{
+		Key: "paths", Value: "daemon/**", Provenance: domain.KeyProvenance{
+			Source: domain.ProvenancePreset, Digest: adjPolicyDigest,
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	driftRunAudit := func(round int) domain.DriftAudit {
+		input := driftAuditInputFor(driftFactsRun, round, domain.DriftVerdictOverHardened,
+			driftRoundFinding(driftFactsRun, round))
+		input.ResolvedPolicyDigest = policy.Digest
+		return newDriftAudit(t, input)
+	}
 	fx := diminishingFactsFixture{
 		st: st, decision: decision, decisionAudit: newDriftAudit(t, input),
-		audit:      driftAuditFor(t, driftFactsRun, driftFactsRound, domain.DriftVerdictOverHardened),
-		laterAudit: driftAuditFor(t, driftFactsRun, driftFactsRound+1, domain.DriftVerdictOverHardened),
+		audit: driftRunAudit(driftFactsRound), laterAudit: driftRunAudit(driftFactsRound + 1),
 	}
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutDriftAudit(ctx, fx.decisionAudit); err != nil {
@@ -54,8 +69,11 @@ func seedDiminishingFacts(
 		}
 		if err := tx.PutRun(ctx, domain.Run{
 			ID: driftFactsRun, ProjectID: decision.Item.ProjectID,
-			SpecDigest: adjSpecDigest, PolicyDigest: adjPolicyDigest,
+			SpecDigest: adjSpecDigest, PolicyDigest: policy.Digest,
 		}); err != nil {
+			return err
+		}
+		if err := tx.PutResolvedPolicy(ctx, policy); err != nil {
 			return err
 		}
 		for _, audit := range []domain.DriftAudit{fx.audit, fx.laterAudit} {
@@ -506,11 +524,12 @@ func TestReviewDiminishingFactsReadsFailClosed(t *testing.T) {
 	}
 }
 
-// TestReviewDiminishingDecisionRefusesADriftAuditItem shows the decision load
-// fails closed on cause drift_audit even when the item's card facts and Reason
-// agree with a stored audit: convergence evaluation cannot re-derive that
-// cause until the load learns about the audit (#1051).
-func TestReviewDiminishingDecisionRefusesADriftAuditItem(t *testing.T) {
+// TestReviewDiminishingDecisionRefusesADriftItemOnAStoppedRound shows the
+// decision load fails closed on cause drift_audit when a deterministic cause
+// stops the round, even though the item's card facts and Reason agree with a
+// stored audit: the audit never runs on such a round, so the cause the item
+// claims is not the one the round parked on.
+func TestReviewDiminishingDecisionRefusesADriftItemOnAStoppedRound(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "store.db")

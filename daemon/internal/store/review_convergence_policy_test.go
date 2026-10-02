@@ -64,11 +64,12 @@ func TestReviewConvergencePolicyWithoutDriftKeysIsUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := store.ReviewConvergencePolicy{
-		Digest:                        digest,
-		ContinueWhile:                 store.ReviewContinueWhileNewMaterialFindings,
-		LowValueStreakBeforeAttention: 2,
-		HardRoundLimit:                25,
-		DriftAuditRoute:               domain.DriftAuditRouteAuto,
+		Digest:                          digest,
+		ContinueWhile:                   store.ReviewContinueWhileNewMaterialFindings,
+		LowValueStreakBeforeAttention:   2,
+		HardRoundLimit:                  25,
+		DriftAuditRoute:                 domain.DriftAuditRouteAuto,
+		AdjudicationConfidenceThreshold: domain.DispatchThresholdHigh,
 	}
 	if got != want {
 		t.Fatalf("policy without drift keys = %+v, want %+v", got, want)
@@ -150,12 +151,13 @@ func TestReviewConvergencePolicyDecodesDriftAuditKeys(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := store.ReviewConvergencePolicy{
-				Digest:                        digest,
-				ContinueWhile:                 store.ReviewContinueWhileNewMaterialFindings,
-				LowValueStreakBeforeAttention: 2,
-				HardRoundLimit:                25,
-				DriftAuditAfter:               tc.wantAfter,
-				DriftAuditRoute:               tc.wantRoute,
+				Digest:                          digest,
+				ContinueWhile:                   store.ReviewContinueWhileNewMaterialFindings,
+				LowValueStreakBeforeAttention:   2,
+				HardRoundLimit:                  25,
+				DriftAuditAfter:                 tc.wantAfter,
+				DriftAuditRoute:                 tc.wantRoute,
+				AdjudicationConfidenceThreshold: domain.DispatchThresholdHigh,
 			}
 			if got != want {
 				t.Fatalf("policy = %+v, want %+v", got, want)
@@ -188,6 +190,34 @@ func TestReviewConvergencePolicyRejectsInvalidDriftAuditKeys(t *testing.T) {
 			})
 			if !errors.Is(err, domain.ErrParentKeyMismatch) {
 				t.Fatalf("audit route %q: got %v, want ErrParentKeyMismatch", value, err)
+			}
+		})
+	}
+}
+
+// TestReviewConvergencePolicyResolvesTheAdjudicationThreshold pins that the
+// drift route's confidence threshold resolves as the adjudication threshold
+// does: medium and high are honored, and anything else is the default, so the
+// threshold is never below medium.
+func TestReviewConvergencePolicyResolvesTheAdjudicationThreshold(t *testing.T) {
+	t.Parallel()
+	for value, want := range map[string]domain.DispatchThreshold{
+		"medium": domain.DispatchThresholdMedium,
+		"high":   domain.DispatchThresholdHigh,
+		"low":    domain.DefaultDispatchThreshold,
+		"":       domain.DefaultDispatchThreshold,
+		"Medium": domain.DefaultDispatchThreshold,
+	} {
+		t.Run("value "+value, func(t *testing.T) {
+			t.Parallel()
+			got, _, err := resolveReviewConvergencePolicy(t, map[string]string{
+				"review.adjudication_confidence_threshold": value,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.AdjudicationConfidenceThreshold != want {
+				t.Fatalf("threshold %q = %q, want %q", value, got.AdjudicationConfidenceThreshold, want)
 			}
 		})
 	}

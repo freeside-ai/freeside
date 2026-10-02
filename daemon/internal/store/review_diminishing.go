@@ -40,6 +40,11 @@ type ReviewConvergencePolicy struct {
 	// the recorded default when the key is unset, and means nothing while the
 	// audit is off.
 	DriftAuditRoute domain.DriftAuditRoute
+	// AdjudicationConfidenceThreshold is the confidence a drift verdict needs
+	// to route automatically: the adjudication threshold, which is never below
+	// medium. It resolves exactly as the engine resolves it for adjudication,
+	// so an unset or unknown value is the recorded default.
+	AdjudicationConfidenceThreshold domain.DispatchThreshold
 }
 
 // ReviewConvergenceState is the trusted decision-time input to the pure
@@ -50,8 +55,12 @@ type ReviewConvergenceState struct {
 	Dispositions     []domain.ReviewDispositionRecord
 	Findings         map[domain.FindingID]domain.Finding
 	MaterialFindings map[int]map[domain.FindingID]struct{}
-	Policy           ReviewConvergencePolicy
-	Decisions        []ReviewDiminishingDecision
+	// Supersessions holds the run's reversal records whose reversing round is
+	// before the current round. The recurrence rule reads each finding's
+	// effective latest disposition through them.
+	Supersessions []domain.FindingDispositionSupersession
+	Policy        ReviewConvergencePolicy
+	Decisions     []ReviewDiminishingDecision
 }
 
 func (tx *ReadTx) ReviewConvergencePolicy(
@@ -63,9 +72,10 @@ func (tx *ReadTx) ReviewConvergencePolicy(
 	}
 	policy := ReviewConvergencePolicy{
 		Digest: resolved.Digest, ContinueWhile: ReviewContinueWhileNewMaterialFindings,
-		LowValueStreakBeforeAttention: defaultReviewLowValueStreak,
-		HardRoundLimit:                defaultReviewHardRoundLimit,
-		DriftAuditRoute:               domain.DefaultDriftAuditRoute,
+		LowValueStreakBeforeAttention:   defaultReviewLowValueStreak,
+		HardRoundLimit:                  defaultReviewHardRoundLimit,
+		DriftAuditRoute:                 domain.DefaultDriftAuditRoute,
+		AdjudicationConfidenceThreshold: domain.DefaultDispatchThreshold,
 	}
 	for _, key := range resolved.Keys {
 		switch key.Key {
@@ -112,6 +122,11 @@ func (tx *ReadTx) ReviewConvergencePolicy(
 					"resolved review.drift_audit_route: %w: %w", err, domain.ErrParentKeyMismatch)
 			}
 			policy.DriftAuditRoute = route
+		case "review.adjudication_confidence_threshold":
+			switch threshold := domain.DispatchThreshold(key.Value); threshold {
+			case domain.DispatchThresholdMedium, domain.DispatchThresholdHigh:
+				policy.AdjudicationConfidenceThreshold = threshold
+			}
 		}
 	}
 	return policy, nil
@@ -220,19 +235,24 @@ func reviewDiminishingBinding(reason string) (ReviewDiminishingBinding, error) {
 }
 
 // ErrReviewDiminishingSimplificationUnproven refuses card facts that say
-// continue_under_policy will run the audit's simplification round. That claim
-// holds only when the reversal list passed the route gate (plan §7 Review
-// Drift), and the gate arrives with #1051; until then nothing can re-prove it.
+// continue_under_policy will run the audit's simplification round when the
+// route gate does not re-derive that from stored records (plan §7 Review
+// Drift).
 var ErrReviewDiminishingSimplificationUnproven = errors.New(
-	"review diminishing facts promise a simplification round no route gate has proven")
+	"review diminishing facts promise a simplification round the route gate does not prove")
 
 // gateReviewDiminishingItem re-proves an item's review-diminishing card facts
 // against the records they copy, so a client never trusts the copy: the cause
 // must be the one the item's own Reason binds, that binding must name this
 // item's run, round, and head, and drift facts must be the stored DriftAudit
-// they name, for the bound run and round. It reads only the
-// item's Reason and the audit, never another item, and both are immutable, so
-// every reconstruction tier runs it.
+// they name, for the bound run and round. A promised simplification round must
+// be one the route gate re-derives: the reversal list is valid and a review
+// round remains. The gate cannot see whether the batch routed a fix, so a
+// false promise always passes; the engine withholds the promise then.
+//
+// It reads the item's Reason, the audit, and for a promised simplification the
+// route gate, which reads only records older than the bound round and never
+// this item. Every reconstruction tier runs it.
 //
 // An item without the facts passes: items stored before the field existed, and
 // review-escalation items whose Reason carries no binding, have none.
@@ -279,7 +299,17 @@ func (tx *ReadTx) gateReviewDiminishingItem(ctx context.Context, item domain.Att
 		!slices.Equal(audit.Reversals, drift.Reversals) {
 		return fmt.Errorf("drift audit %q: %w", drift.AuditDigest, domain.ErrParentKeyMismatch)
 	}
-	if drift.SimplificationOnContinue {
+	if !drift.SimplificationOnContinue {
+		return nil
+	}
+	gate, err := tx.DriftAuditRouteGate(ctx, binding.RunID, binding.Round)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return fmt.Errorf("route gate: %s: %w", err.Error(), domain.ErrParentKeyMismatch)
+		}
+		return fmt.Errorf("route gate: %w", err)
+	}
+	if gate.Audit.Digest != drift.AuditDigest || !gate.ListValid || !gate.RoundRemains {
 		return ErrReviewDiminishingSimplificationUnproven
 	}
 	return nil
@@ -395,7 +425,23 @@ func (tx *ReadTx) reviewDiminishingDecisionUncached(
 	if err != nil {
 		return ReviewDiminishingDecision{}, err
 	}
-	if !stop || cause != binding.Cause {
+	if binding.Cause == domain.ReviewDiminishingDriftAudit {
+		// A drift stop is the audit's, not the convergence rule's: the audit
+		// runs only on a round no deterministic cause stopped, and its verdict
+		// must be one that can park. Parking is always allowed for those two
+		// verdicts; only routing has to be proven, by the route gate.
+		if stop {
+			return ReviewDiminishingDecision{}, domain.ErrParentKeyMismatch
+		}
+		audit, err := tx.GetDriftAuditForRound(ctx, binding.RunID, binding.Round)
+		if err != nil {
+			// A missing audit is a broken binding, not a missing item.
+			return ReviewDiminishingDecision{}, supersessionBindingFailure("drift audit", err)
+		}
+		if audit.Verdict != domain.DriftVerdictStuck && audit.Verdict != domain.DriftVerdictOverHardened {
+			return ReviewDiminishingDecision{}, domain.ErrParentKeyMismatch
+		}
+	} else if !stop || cause != binding.Cause {
 		return ReviewDiminishingDecision{}, domain.ErrParentKeyMismatch
 	}
 	commands, err := tx.ListCommandsForItem(ctx, item.ID)
@@ -576,6 +622,11 @@ func (tx *ReadTx) reviewConvergenceStateAtDecision(
 		}
 	}
 	state.Dispositions = selectedDispositions
+	state.Supersessions, err = tx.loadDispositionSupersessionsAtDecision(
+		ctx, current.RunID, current.Round, state.Dispositions)
+	if err != nil {
+		return ReviewConvergenceState{}, err
+	}
 	state.Policy, err = tx.ReviewConvergencePolicy(ctx, current.RunID)
 	if err != nil {
 		return ReviewConvergenceState{}, err
@@ -626,6 +677,13 @@ func (tx *ReadTx) reviewConvergenceStateAtDecision(
 // trusted decision-time state. Growth without blockers is checked last, so a
 // round one of the earlier causes also stops keeps that cause, and every
 // decision stored under one re-evaluates to the same cause.
+//
+// Dispositions are read as each finding's effective latest disposition as of
+// the round before current (plan §7 Review Drift). A fix a drift audit reversed
+// reads as declined, so its re-emission is a known decline and never
+// fixed_recurrence. A record whose reversing round is current or later is not
+// applied: it is written after current is evaluated, and applying it on a
+// rebuild would change a cause an item already stored.
 func EvaluateReviewConvergence(
 	state ReviewConvergenceState, current domain.ReviewRecord,
 ) (domain.ReviewDiminishingCause, bool, error) {
@@ -674,9 +732,10 @@ func EvaluateReviewConvergence(
 		}
 	}
 	newMaterial := make(map[int]bool, currentIndex-segmentStart+1)
-	dispositions := make(map[domain.FindingID]domain.ReviewDisposition, len(state.Dispositions))
-	for _, disposition := range state.Dispositions {
-		dispositions[disposition.FindingID] = disposition.Disposition
+	effective := resolveEffectiveDispositions(state.Dispositions, state.Supersessions, current.Round-1)
+	dispositions := make(map[domain.FindingID]domain.ReviewDisposition, len(effective))
+	for _, disposition := range effective {
+		dispositions[disposition.Stored.FindingID] = disposition.Effective
 	}
 	seen := map[domain.FindingFingerprint]struct{}{}
 	for index := segmentStart; index <= currentIndex; index++ {
@@ -722,13 +781,12 @@ func EvaluateReviewConvergence(
 	}
 
 	fixed := map[domain.FindingFingerprint]struct{}{}
-	for _, disposition := range state.Dispositions {
-		if disposition.Round < state.Records[segmentStart].Round ||
-			disposition.Round >= current.Round ||
-			disposition.Disposition != domain.ReviewDispositionFixed {
+	for _, disposition := range effective {
+		if disposition.Stored.Round < state.Records[segmentStart].Round ||
+			disposition.Effective != domain.ReviewDispositionFixed {
 			continue
 		}
-		finding, ok := state.Findings[disposition.FindingID]
+		finding, ok := state.Findings[disposition.Stored.FindingID]
 		if !ok {
 			return "", false, domain.ErrReviewYieldHistoryInconsistent
 		}

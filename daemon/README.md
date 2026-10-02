@@ -1063,9 +1063,20 @@ Security limitations, stated for the operator surface:
 
 The production classifier, finding adjudicator, drift auditor, and task namer
 can use the existing Claude subscription setup-token mechanism. The drift
-auditor (`drift_auditor`, plan §7 Review Drift) is registered with the other
-judgment sites, but nothing calls it until the unit that adds the audit
-trigger and routes its verdict (#1051). Configure all four flags together:
+auditor (`drift_auditor`, plan §7 Review Drift) runs once per review round
+from the round `review.drift_audit_after` names, on a round that reported
+findings and that no deterministic stop cause already parked; with the key
+unset it never runs. A failed audit is recorded once as a
+`drift-audit-failure-<round>-<run>` evidence artifact and the round continues
+as if the audit were off. A `converged` verdict changes nothing. A `stuck`
+verdict parks the round on its `review_diminishing_returns` item with the
+`drift_audit` cause. The run's first `over_hardened` verdict that passes the
+store's route gate becomes the round's remediation under
+`review.drift_audit_route: auto`: the remediation input carries the audit's
+reversal list with engine-derived paths, and the same write records one
+disposition-supersession record per reversed fix. Every other `over_hardened`
+verdict parks, and the item says whether `continue_under_policy` would run
+the simplification round. Configure all four flags together:
 
 ```text
 -judgment-claude-bin /absolute/path/to/claude

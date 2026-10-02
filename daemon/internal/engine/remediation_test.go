@@ -209,6 +209,24 @@ func TestRemediationPromptMatchesInstruction(t *testing.T) {
 			t.Errorf("remediator prompt omits %q", shared)
 		}
 	}
+	// A simplification round keeps every shared claim and adds the reversal
+	// list, whose prose both sides call advisory: a prompt that treated the
+	// audit's text as an instruction would let model output steer the round.
+	for _, shared := range []string{
+		"candidate_patch_base64",
+		"exact-base workspace",
+		"before remediating",
+		"preserve all prior candidate changes",
+		"undo each listed reversal",
+		"advisory",
+	} {
+		if !strings.Contains(simplificationInstruction, shared) {
+			t.Errorf("simplification instruction omits %q", shared)
+		}
+		if !bytes.Contains(bytes.ToLower(remediator), []byte(shared)) {
+			t.Errorf("remediator prompt omits %q", shared)
+		}
+	}
 	for _, version := range []string{remediationInputVersion, operatorFeedbackInputVersion} {
 		if !bytes.Contains(remediator, []byte(version)) {
 			t.Errorf("remediator prompt omits %q", version)

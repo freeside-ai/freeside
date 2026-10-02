@@ -306,7 +306,7 @@ func (w *productionPublicationWorkflow) startPublicationContinuation(ctx context
 	}
 	task := source
 	task.Successor, task.PublicationID, task.reevaluation = &r.Successor, r.Successor.PublicationID(), nil
-	intent, err := w.prepareRemediationIntent(ctx, task, record, artifact, routes, root)
+	intent, err := w.prepareRemediationIntent(ctx, task, record, artifact, routes, root, nil)
 	if errors.Is(err, ErrRemediationInputUndeliverable) {
 		return w.refusePublicationContinuation(ctx, source, "The accepted remediation continuation cannot start because its input exceeds the delivery limit.")
 	}
@@ -317,7 +317,7 @@ func (w *productionPublicationWorkflow) startPublicationContinuation(ctx context
 		return productionTaskOutcome{}, domain.ErrParentKeyMismatch
 	}
 	err = w.store.Write(ctx, func(tx *store.WriteTx) error {
-		if err := intent.persist(ctx, tx); err != nil {
+		if err := intent.persist(ctx, tx, artifact.CreatedAt); err != nil {
 			return err
 		}
 		return persistFindingRouteDispositions(ctx, tx, artifact, routes, artifact.CreatedAt)
