@@ -1,0 +1,54 @@
+{
+  "expectation_source": "https://github.com/freeside-ai/freeside/issues/1053 comment 'Owner's expected reversals, recorded before any live audit run' (2026-10-02)",
+  "expected_verdict": "over_hardened",
+  "expected_reversals": [
+    {
+      "finding_id": "pr1520-r07-f1",
+      "note": "Firmlink spellings and hard-linked sidecars do not happen by accident; #1501 asked for symlink resolution only."
+    },
+    {
+      "finding_id": "pr1520-r08-f1",
+      "note": "Firmlink spellings and hard-linked sidecars do not happen by accident; #1501 asked for symlink resolution only."
+    },
+    {
+      "finding_id": "pr1520-r09-f1",
+      "note": "Firmlink spellings and hard-linked sidecars do not happen by accident; #1501 asked for symlink resolution only."
+    },
+    {
+      "finding_id": "pr1520-r10-f1",
+      "note": "Firmlink spellings and hard-linked sidecars do not happen by accident; #1501 asked for symlink resolution only."
+    }
+  ],
+  "reversal_assessments": [
+    {
+      "finding_id": "pr1520-r01-f1",
+      "assessment": "inaccurate",
+      "note": "The owner's recorded position is to keep this fix."
+    },
+    {
+      "finding_id": "pr1520-r06-f1",
+      "assessment": "inaccurate",
+      "note": "The owner's recorded position is to keep this fix."
+    },
+    {
+      "finding_id": "pr1520-r07-f1",
+      "assessment": "accurate",
+      "note": "The owner's recorded position is to undo this fix."
+    },
+    {
+      "finding_id": "pr1520-r08-f1",
+      "assessment": "accurate",
+      "note": "The owner's recorded position is to undo this fix."
+    },
+    {
+      "finding_id": "pr1520-r09-f1",
+      "assessment": "accurate",
+      "note": "The owner's recorded position is to undo this fix."
+    },
+    {
+      "finding_id": "pr1520-r10-f1",
+      "assessment": "accurate",
+      "note": "The owner's recorded position is to undo this fix."
+    }
+  ]
+}

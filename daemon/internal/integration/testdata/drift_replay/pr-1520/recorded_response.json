@@ -1,0 +1,43 @@
+{
+  "model": "claude-opus-5-5",
+  "recorded_at": "2026-10-02T15:42:51.8381Z",
+  "daemon_commit": "fc6d41707098b582c68510b2ec9fc38a032b169c",
+  "compute_units": 3167,
+  "output": {
+    "verdict": "over_hardened",
+    "confidence": "medium",
+    "reversals": [
+      {
+        "finding_id": "pr1520-r01-f1",
+        "undo": "Remove currentAccountHome() and the user.Current import from main.go, the second ephemeral-only checkEnvironment call against the account home, and the TestEnvironmentAccountHomeIgnoresHOME and TestEnvironmentAccountHomeIgnoresHOMEProcess tests. Keep the single os.UserHomeDir()-based check.",
+        "rationale": "The contract fixes the home source: \"with `$HOME` from `os.UserHomeDir()`\". Acceptance tests prod \"with an overridden home\". A second guard keyed to the OS account record is a threat model the spec does not adopt. The round-5 decline (pr1520-r05-f1) already cites the spec's os.UserHomeDir() semantics."
+      },
+      {
+        "finding_id": "pr1520-r06-f1",
+        "undo": "Drop the cfg.withDefaults() call added to runFakePublicationCommand in fake_publication.go and leave that file as it was at base.",
+        "rationale": "The spec places the environment check in main before the -fake-publication branch. That ordering is already satisfied. It does not change fake-publication lock or default ordering. Exclusive database locking is an explicit non-goal (\"its own unit\"), and daemonlock semantics are declared unchanged. This finding hardens a database multiple-link path outside this unit."
+      },
+      {
+        "finding_id": "pr1520-r07-f1",
+        "undo": "Remove the rootIdentityContains fallback from underRoot. Restore round one's underRoot: lexical prefix, or case-fold plus SameFile on the root spelling. Remove TestUnderRootAcceptsAPFSFirmlinkAlias.",
+        "rationale": "The contract specifies the comparison method exactly. Resolve the longest existing prefix of the root and the candidate through filepath.EvalSymlinks, \"then compare the rest lexically\". Only the /var to /private/var symlink is named as the reason to resolve. Inode-identity walks over every candidate ancestor to catch APFS firmlink spellings go beyond that rule."
+      },
+      {
+        "finding_id": "pr1520-r08-f1",
+        "undo": "Remove existingAncestor and the root-ancestor identity matching in rootIdentityContains that this round introduced.",
+        "rationale": "This extends the r07 firmlink-identity mechanism to roots that do not exist yet. The spec already covers a missing root with lexical comparison after EvalSymlinks on the existing prefix. Ancestor inode matching is not required."
+      },
+      {
+        "finding_id": "pr1520-r09-f1",
+        "undo": "Remove mayBeUnderRoot and suffixUnderRoot. Make checkEnvironment's per-tier test caseFoldUnderRoot(resolved, root) again, as in round one.",
+        "rationale": "This is a third layer on the firmlink-identity path: case-folding the missing suffix after an inode match. The spec asks for element-wise lexical comparison and nothing beyond it. The round-one case-fold rejection under ephemeral already covers case aliases of the root spelling."
+      },
+      {
+        "finding_id": "pr1520-r10-f1",
+        "undo": "Remove linkedUnderSupervisedRoot, which walks both supervised roots comparing inodes for multiply linked sidecars. Remove its call site in checkEnvironment, the syscall import, and the \"hard-linked WAL\" and \"hard-linked SHM\" test cases. Revise or drop the devlog note. The re-check of paths reconstructed after a missing component is optional to keep, since it serves symlink following.",
+        "rationale": "The guarded set is resolved with \"symlinks followed, `-wal` and `-shm` sidecars included\". The spec says nothing about hard links. A full WalkDir of both state roots at startup is defense the contract does not ask for. The devlog note itself says it rejected broader alias policy because #1523 and #1524 own those decisions."
+      }
+    ],
+    "explanation": "The round-one diff already met the contract. It parsed -environment with ephemeral as the default. It guarded exactly db plus -wal/-shm, state-dir, publication-state-dir, and both credentials dirs, resolving them through EvalSymlinks on the longest existing prefix. It refused ports 7331 and 7332 by resolved port. It enforced own-root and other-tier rules for prod and dev, ran in main before -fake-publication with exit 2, and logged logger.Info(\"environment\", \"tier\", env). The tests and README note were also in place.\n\nSince round one, cumulative additions reached 741 lines across 6 files, with 127 added this round. Rounds 7 through 10 added filesystem-identity machinery the spec does not call for: firmlink inode walks, folded suffixes after an ancestor match, and hard-link scans of whole roots. Round 1 added a second account-home guard, which contradicts the spec's os.UserHomeDir() choice. Round 6 touched fake_publication.go for database locking, which the spec lists as a non-goal.\n\nKeep the fixes that are needed. pr1520-r04-f1 (exported AllEnvironments) satisfies the binding daemon enum convention in the instruction snapshot. The deferred findings (r01-f2, r02-f1, r02-f2, r03-f1) correctly stayed within scope. pr1520-r05-f2 is not reversed here because its change is not visible in the current diff beyond r06's withDefaults line.\n\nConfidence is medium. The firmlink and hard-link findings describe reachable aliases. The spec's explicit \"compare the rest lexically\" rule and its deferral of broader alias policy to follow-ups argue for reversal, but an owner could reasonably treat these as real blockers instead."
+  }
+}

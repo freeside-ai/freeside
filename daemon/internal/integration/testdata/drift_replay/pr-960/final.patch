@@ -1,0 +1,1628 @@
+diff --git a/app/Apps/macOS/FreesideMac.entitlements b/app/Apps/macOS/FreesideMac.entitlements
+new file mode 100644
+index 0000000000000000000000000000000000000000..208b0731117b86109b291e829245ec5f4d309196
+--- /dev/null
++++ b/app/Apps/macOS/FreesideMac.entitlements
+@@ -0,0 +1,10 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
++<plist version="1.0">
++<dict>
++	<key>keychain-access-groups</key>
++	<array>
++		<string>$(AppIdentifierPrefix)ai.freeside.app.macos</string>
++	</array>
++</dict>
++</plist>
+diff --git a/app/Freeside.xcodeproj/project.pbxproj b/app/Freeside.xcodeproj/project.pbxproj
+index 5c7720a90675cda8006d3e898182727884a83922..951ef61c70f630e51aef2dd194eac33968b6bebc 100644
+--- a/app/Freeside.xcodeproj/project.pbxproj
++++ b/app/Freeside.xcodeproj/project.pbxproj
+@@ -40,6 +40,7 @@
+ 		100000000000000000000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+ 		100000000000000000000017 /* ai.freeside.daemon.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = LaunchAgents/ai.freeside.daemon.plist; sourceTree = "<group>"; };
+ 		100000000000000000000018 /* FreesideMenuMark.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = FreesideMenuMark.png; sourceTree = "<group>"; };
++		100000000000000000000019 /* FreesideMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = FreesideMac.entitlements; sourceTree = "<group>"; };
+ /* End PBXFileReference section */
+ 
+ /* Begin PBXFrameworksBuildPhase section */
+@@ -92,6 +93,7 @@
+ 			isa = PBXGroup;
+ 			children = (
+ 				100000000000000000000011 /* FreesideMacApp.swift */,
++				100000000000000000000019 /* FreesideMac.entitlements */,
+ 				100000000000000000000015 /* AppIcon.icon */,
+ 				100000000000000000000016 /* Info.plist */,
+ 				100000000000000000000017 /* ai.freeside.daemon.plist */,
+@@ -210,8 +212,8 @@
+ /* Begin XCBuildConfiguration section */
+ 		100000000000000000000091 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; ONLY_ACTIVE_ARCH = YES; SWIFT_VERSION = 6.0;}; name = Debug;};
+ 		100000000000000000000092 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; SWIFT_COMPILATION_MODE = wholemodule; SWIFT_VERSION = 6.0;}; name = Release;};
+-		100000000000000000000093 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; ENABLE_PREVIEWS = YES; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Apps/macOS/Info.plist; MACOSX_DEPLOYMENT_TARGET = 14.0; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = ai.freeside.app.macos; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = macosx; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 6.0;}; name = Debug;};
+-		100000000000000000000094 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Apps/macOS/Info.plist; MACOSX_DEPLOYMENT_TARGET = 14.0; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = ai.freeside.app.macos; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = macosx; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 6.0;}; name = Release;};
++		100000000000000000000093 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_ENTITLEMENTS = Apps/macOS/FreesideMac.entitlements; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; ENABLE_PREVIEWS = YES; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Apps/macOS/Info.plist; MACOSX_DEPLOYMENT_TARGET = 14.0; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = ai.freeside.app.macos; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = macosx; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 6.0;}; name = Debug;};
++		100000000000000000000094 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_ENTITLEMENTS = Apps/macOS/FreesideMac.entitlements; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Apps/macOS/Info.plist; MACOSX_DEPLOYMENT_TARGET = 14.0; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = ai.freeside.app.macos; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = macosx; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 6.0;}; name = Release;};
+ 		100000000000000000000095 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; ENABLE_PREVIEWS = YES; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Apps/iOS/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 17.0; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = ai.freeside.app.ios; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Debug;};
+ 		100000000000000000000096 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Apps/iOS/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 17.0; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = ai.freeside.app.ios; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Release;};
+ /* End XCBuildConfiguration section */
+diff --git a/app/README.md b/app/README.md
+index 7f5252a8e2fd180a481a1dad4c6acec8ab51f280..c69a96518dd29730592aa24f265f1261adc69ff6 100644
+--- a/app/README.md
++++ b/app/README.md
+@@ -43,9 +43,11 @@ Launch arguments also pin the presentation per launch (`LaunchInputs`), so scree
+   --launch
+ ```
+ 
+-Re-run it after a source change and it updates the installed app in place. The supplied daemon is copied into `Contents/Resources` before the bundle is sealed; the app re-registers that bundled helper once after each install. The point of signing here is Keychain stability, not Gatekeeper: the device credential's access control names the application that created it, so as long as the bundle identifier, install path, and signing identity hold steady across updates, the paired device survives a rebuild. The script prints the designated requirement each run and warns loudly when an update changes it, because that change — not the rebuild — is what forces a re-pair.
++Re-run it after a source change and it updates the installed app in place. The supplied daemon is copied into `Contents/Resources` before the bundle is sealed; the app re-registers that bundled helper once after each install. Xcode automatically provisions the private Keychain access group, and the installer preserves those entitlements while sealing the modified outer bundle. Before replacement it verifies the signature, the exact signing certificate against the embedded profile, native macOS `com.apple.application-identifier`, Team ID, and access group; profile values may authorize the exact identifier through a trailing wildcard, while the signed values must remain exact. The stable credential identity is the profile's application-identifier prefix plus `ai.freeside.app.macos`; that prefix normally equals the Team ID, but older accounts can retain a distinct bundle-seed prefix, which the installer verifies separately from the signing team. Rebuilds and updates under the same prefix and bundle ID retain the pairing. A build under another application-identifier prefix or bundle ID has a different Keychain identity and appears unpaired; pair it as a new client and revoke the old device if that identity change was intentional.
+ 
+-Signing needs an `Apple Development` identity, which Xcode mints from the free personal team once an Apple ID is added under Settings > Accounts. `FREESIDE_MAC_SIGNING_IDENTITY` overrides the choice; `-` selects ad-hoc signing, whose designated requirement is the code directory hash and therefore changes on every build. Ad-hoc is opt-in for that reason, not a silent fallback. `FREESIDE_MAC_INSTALL_DIR` and `FREESIDE_MAC_BUILD_DIR` move the install root and derived-data path. The supervised daemon state directory is fixed at `~/Library/Application Support/Freeside/daemon`, matching the app's readiness reader; launchd captures its structured stderr at `freesided.log` in that protected directory.
++On the first launch after this change, an existing valid credential under the exact current deployment service is copied from the legacy file-based Keychain into the Data Protection Keychain, read back in full, and only then removed from the legacy store. That one-time legacy read or cleanup may present one final Keychain ACL password prompt. Once migration completes, ordinary launches and same-identity updates use the provisioned Data Protection Keychain silently. A separate `codesign wants to sign using key` prompt concerns access to the Apple Development private key during installation; it is not a Freeside credential prompt and this installer does not alter that key's ACL.
++
++Signing needs an `Apple Development` identity, which Xcode mints from the free personal team once an Apple ID is added under Settings > Accounts. `FREESIDE_MAC_SIGNING_IDENTITY` overrides the choice by certificate name or SHA-1 fingerprint. Ad-hoc signing (`-`) is rejected because it cannot carry the profile-authorized private Keychain access group. `FREESIDE_MAC_INSTALL_DIR` and `FREESIDE_MAC_BUILD_DIR` move the install root and derived-data path. The supervised daemon state directory is fixed at `~/Library/Application Support/Freeside/daemon`, matching the app's readiness reader; launchd captures its structured stderr at `freesided.log` in that protected directory.
+ 
+ ## Installing on an iOS Device
+ 
+diff --git a/app/Sources/FreesideCore/DeviceCredentialStore.swift b/app/Sources/FreesideCore/DeviceCredentialStore.swift
+index 72f6fa3823b068b334c5aff8332b8376b43ac67f..0693ab19171f87285f25c8fcdf92a2f8d240765f 100644
+--- a/app/Sources/FreesideCore/DeviceCredentialStore.swift
++++ b/app/Sources/FreesideCore/DeviceCredentialStore.swift
+@@ -256,17 +256,50 @@ public protocol DeviceCredentialStore: Sendable {
+     func delete() throws
+ }
+ 
++struct KeychainSecurityOperations: @unchecked Sendable {
++    let copyMatching: ([String: Any]) -> (OSStatus, Any?)
++    let add: ([String: Any]) -> OSStatus
++    let delete: ([String: Any]) -> OSStatus
++
++    static let live = KeychainSecurityOperations(
++        copyMatching: { query in
++            var result: CFTypeRef?
++            let status = SecItemCopyMatching(query as CFDictionary, &result)
++            return (status, result)
++        },
++        add: { attributes in
++            SecItemAdd(attributes as CFDictionary, nil)
++        },
++        delete: { query in
++            SecItemDelete(query as CFDictionary)
++        })
++}
++
+ /// The real store: one generic-password item per service name, the device id
+ /// as the account and a versioned encoding of the private grant as item data,
+-/// readable after first unlock so background work can authenticate and
+-/// subscribe. A legacy token-only payload fails loud and requires re-pairing;
+-/// there is no safe way to reconstruct its one-time subscription.
++/// stored in the Data Protection Keychain and readable after first unlock so
++/// background work can authenticate and subscribe. On macOS, a valid item in
++/// the legacy file-based Keychain is copied and verified before removal. A
++/// legacy token-only payload fails loud and requires re-pairing; there is no
++/// safe way to reconstruct its one-time subscription.
+ public struct KeychainCredentialStore: DeviceCredentialStore {
+     public struct KeychainError: Error {
+         public let status: OSStatus
+     }
+ 
+     private let service: String
++    private let operations: KeychainSecurityOperations
++    private let legacyBackendEnabled: Bool
++
++    private enum Backend {
++        case dataProtection
++        case legacy
++    }
++
++    private struct KeychainItem {
++        let credential: DeviceCredential
++        let data: Data
++    }
+ 
+     private struct StoredCredential: Codable {
+         let formatVersion: Int
+@@ -285,16 +318,98 @@ public struct KeychainCredentialStore: DeviceCredentialStore {
+     }
+ 
+     public init(service: String = "ai.freeside.device-credential") {
++        self.init(service: service, operations: .live)
++    }
++
++    init(service: String, operations: KeychainSecurityOperations) {
++        #if os(macOS)
++            let legacyBackendEnabled = true
++        #else
++            let legacyBackendEnabled = false
++        #endif
++        self.init(
++            service: service,
++            operations: operations,
++            legacyBackendEnabled: legacyBackendEnabled)
++    }
++
++    init(
++        service: String,
++        operations: KeychainSecurityOperations,
++        legacyBackendEnabled: Bool
++    ) {
+         self.service = service
++        self.operations = operations
++        self.legacyBackendEnabled = legacyBackendEnabled
+     }
+ 
+     public func load() throws -> DeviceCredential? {
+-        var query = baseQuery
++        if let authoritative = try loadItem(from: .dataProtection) {
++            if legacyBackendEnabled {
++                try delete(from: .legacy)
++            }
++            return authoritative.credential
++        }
++
++        guard legacyBackendEnabled else { return nil }
++        guard let legacy = try loadItem(from: .legacy) else { return nil }
++        try add(legacy, to: .dataProtection)
++        guard let copied = try loadItem(from: .dataProtection),
++            copied.credential == legacy.credential,
++            copied.data == legacy.data
++        else {
++            throw KeychainError(status: errSecDecode)
++        }
++        try delete(from: .legacy)
++        return copied.credential
++    }
++
++    public func save(_ credential: DeviceCredential) throws {
++        // Pairing replaces the whole identity (a new pairing is a new
++        // device, #64), so save is delete-then-add, not an update of token
++        // bytes under an old account. On macOS, remove legacy material first:
++        // a legacy ACL failure must not delete the usable authoritative item.
++        let data: Data
++        do {
++            data = try JSONEncoder().encode(StoredCredential(credential))
++        } catch {
++            throw KeychainError(status: errSecParam)
++        }
++        let item = KeychainItem(credential: credential, data: data)
++        if legacyBackendEnabled {
++            try delete(from: .legacy)
++        }
++        try delete(from: .dataProtection)
++        try add(item, to: .dataProtection)
++        guard let saved = try loadItem(from: .dataProtection),
++            saved.credential == credential,
++            saved.data == data
++        else {
++            throw KeychainError(status: errSecDecode)
++        }
++    }
++
++    public func delete() throws {
++        var firstError: KeychainError?
++        let backends: [Backend] =
++            legacyBackendEnabled ? [.dataProtection, .legacy] : [.dataProtection]
++        for backend in backends {
++            do {
++                try delete(from: backend)
++            } catch let error as KeychainError {
++                if firstError == nil { firstError = error }
++            }
++        }
++        if let firstError { throw firstError }
++    }
++
++    private func loadItem(from backend: Backend) throws -> KeychainItem? {
++        var query = baseQuery(for: backend)
+         query[kSecReturnAttributes as String] = true
+         query[kSecReturnData as String] = true
+         query[kSecMatchLimit as String] = kSecMatchLimitOne
+-        var result: CFTypeRef?
+-        switch SecItemCopyMatching(query as CFDictionary, &result) {
++        let (status, result) = operations.copyMatching(query)
++        switch status {
+         case errSecSuccess:
+             guard let item = result as? [String: Any],
+                 let deviceID = item[kSecAttrAccount as String] as? String,
+@@ -309,47 +424,41 @@ public struct KeychainCredentialStore: DeviceCredentialStore {
+                     token: stored.token,
+                     ntfySubscription: subscription)
+             else { throw KeychainError(status: errSecDecode) }
+-            return credential
++            return KeychainItem(credential: credential, data: data)
+         case errSecItemNotFound:
+             return nil
+-        case let status:
++        default:
+             throw KeychainError(status: status)
+         }
+     }
+ 
+-    public func save(_ credential: DeviceCredential) throws {
+-        // Pairing replaces the whole identity (a new pairing is a new
+-        // device, #64), so save is delete-then-add, not an update of
+-        // token bytes under an old account.
+-        try delete()
+-        let data: Data
+-        do {
+-            data = try JSONEncoder().encode(StoredCredential(credential))
+-        } catch {
+-            throw KeychainError(status: errSecParam)
+-        }
+-        var attributes = baseQuery
+-        attributes[kSecAttrAccount as String] = credential.deviceID
+-        attributes[kSecValueData as String] = data
++    private func add(_ item: KeychainItem, to backend: Backend) throws {
++        var attributes = baseQuery(for: backend)
++        attributes[kSecAttrAccount as String] = item.credential.deviceID
++        attributes[kSecValueData as String] = item.data
+         attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+-        let status = SecItemAdd(attributes as CFDictionary, nil)
++        let status = operations.add(attributes)
+         guard status == errSecSuccess else {
+             throw KeychainError(status: status)
+         }
+     }
+ 
+-    public func delete() throws {
+-        let status = SecItemDelete(baseQuery as CFDictionary)
++    private func delete(from backend: Backend) throws {
++        let status = operations.delete(baseQuery(for: backend))
+         guard status == errSecSuccess || status == errSecItemNotFound else {
+             throw KeychainError(status: status)
+         }
+     }
+ 
+-    private var baseQuery: [String: Any] {
+-        [
++    private func baseQuery(for backend: Backend) -> [String: Any] {
++        var query: [String: Any] = [
+             kSecClass as String: kSecClassGenericPassword,
+             kSecAttrService as String: service,
+         ]
++        if backend == .dataProtection {
++            query[kSecUseDataProtectionKeychain as String] = true
++        }
++        return query
+     }
+ }
+ 
+diff --git a/app/Tests/FreesideCoreTests/CacheStoreTests.swift b/app/Tests/FreesideCoreTests/CacheStoreTests.swift
+index b01b9b71fdbc036be32fb03d9f7e34ab86ec9942..8e2ef9aad9f414ff3beed181b70d12cb214d3f00 100644
+--- a/app/Tests/FreesideCoreTests/CacheStoreTests.swift
++++ b/app/Tests/FreesideCoreTests/CacheStoreTests.swift
+@@ -1,8 +1,10 @@
+ import Foundation
+ import FreesideAPI
+-import FreesideCore
++import Security
+ import Testing
+ 
++@testable import FreesideCore
++
+ private func temporaryStore() -> (DiskCacheStore, URL) {
+     let directory = FileManager.default.temporaryDirectory
+         .appendingPathComponent("freeside-cache-tests-\(UUID().uuidString)")
+@@ -251,7 +253,125 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
+     }
+ }
+ 
+-@Suite struct CredentialStoreTests {
++private enum FakeKeychainBackend: Hashable {
++    case dataProtection
++    case legacy
++}
++
++private struct FakeKeychainCall: Equatable {
++    enum Kind: Equatable {
++        case copy
++        case add
++        case delete
++    }
++
++    let kind: Kind
++    let backend: FakeKeychainBackend
++    let service: String
++}
++
++private final class FakeKeychain: @unchecked Sendable {
++    var items: [FakeKeychainBackend: [String: Any]] = [:]
++    var calls: [FakeKeychainCall] = []
++    var addedAttributes: [[String: Any]] = []
++    var copyOverrides: [FakeKeychainBackend: [(OSStatus, Any?)]] = [:]
++    var addStatuses: [OSStatus] = []
++    var deleteStatuses: [FakeKeychainBackend: [OSStatus]] = [:]
++
++    var operations: KeychainSecurityOperations {
++        KeychainSecurityOperations(
++            copyMatching: { [self] query in
++                let backend = backend(for: query)
++                calls.append(call(.copy, backend: backend, query: query))
++                if var overrides = copyOverrides[backend], !overrides.isEmpty {
++                    let result = overrides.removeFirst()
++                    copyOverrides[backend] = overrides
++                    return result
++                }
++                guard let item = items[backend] else {
++                    return (errSecItemNotFound, nil)
++                }
++                return (errSecSuccess, item)
++            },
++            add: { [self] attributes in
++                let backend = backend(for: attributes)
++                calls.append(call(.add, backend: backend, query: attributes))
++                addedAttributes.append(attributes)
++                if !addStatuses.isEmpty {
++                    let status = addStatuses.removeFirst()
++                    if status != errSecSuccess { return status }
++                }
++                if items[backend] != nil { return errSecDuplicateItem }
++                items[backend] = [
++                    kSecAttrAccount as String: attributes[kSecAttrAccount as String] as Any,
++                    kSecValueData as String: attributes[kSecValueData as String] as Any,
++                ]
++                return errSecSuccess
++            },
++            delete: { [self] query in
++                let backend = backend(for: query)
++                calls.append(call(.delete, backend: backend, query: query))
++                if var statuses = deleteStatuses[backend], !statuses.isEmpty {
++                    let status = statuses.removeFirst()
++                    deleteStatuses[backend] = statuses
++                    if status != errSecSuccess && status != errSecItemNotFound {
++                        return status
++                    }
++                }
++                guard items.removeValue(forKey: backend) != nil else {
++                    return errSecItemNotFound
++                }
++                return errSecSuccess
++            })
++    }
++
++    private func backend(for query: [String: Any]) -> FakeKeychainBackend {
++        query[kSecUseDataProtectionKeychain as String] as? Bool == true
++            ? .dataProtection : .legacy
++    }
++
++    private func call(
++        _ kind: FakeKeychainCall.Kind,
++        backend: FakeKeychainBackend,
++        query: [String: Any]
++    ) -> FakeKeychainCall {
++        FakeKeychainCall(
++            kind: kind,
++            backend: backend,
++            service: query[kSecAttrService as String] as? String ?? "")
++    }
++}
++
++private func credential(
++    deviceID: String = "device-1",
++    secretByte: UInt8 = 1,
++    serverURL: String = "https://ntfy.example",
++    topic: String = "fs-00000000000000000000000000000000"
++) throws -> DeviceCredential {
++    let subscription = try #require(
++        DeviceNtfySubscription(serverURL: serverURL, topic: topic))
++    return try #require(
++        DeviceCredential(
++            deviceID: deviceID,
++            token: testDeviceToken(for: deviceID, secretByte: secretByte),
++            ntfySubscription: subscription))
++}
++
++private func storedItem(_ credential: DeviceCredential) throws -> [String: Any] {
++    let data = try JSONSerialization.data(withJSONObject: [
++        "formatVersion": 1,
++        "deviceID": credential.deviceID,
++        "token": credential.token,
++        "ntfyServerURL": credential.ntfySubscription.serverURL,
++        "ntfyTopic": credential.ntfySubscription.topic,
++    ])
++    return [
++        kSecAttrAccount as String: credential.deviceID,
++        kSecValueData as String: data,
++    ]
++}
++
++@Suite(.serialized) struct CredentialStoreTests {
+     @Test func inMemoryStoreRoundTrips() throws {
+         let store = InMemoryCredentialStore()
+         #expect(try store.load() == nil)
+@@ -266,34 +386,232 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
+         #expect(try store.load() == nil)
+     }
+ 
+-    @Test func keychainStoreRoundTripsUnderAScopedService() throws {
+-        // Runs against the real Keychain (FreesideCoreTests are
+-        // Apple-platform, developer-machine tests; CI's Linux job never
+-        // sees them). The service name is unique per run and the item
+-        // is removed either way.
++    @Test func dataProtectionSaveAndLoadUseTheScopedBackend() throws {
++        let fake = FakeKeychain()
+         let store = KeychainCredentialStore(
+-            service: "ai.freeside.tests.\(UUID().uuidString)")
+-        defer { try? store.delete() }
++            service: "ai.freeside.tests.deployment-a", operations: fake.operations)
++        let value = try credential()
+ 
+-        #expect(try store.load() == nil)
+-        let first = DeviceCredential(
+-            deviceID: "device-1", token: testDeviceToken(for: "device-1"),
+-            ntfySubscription: .mock)!
+-        try store.save(first)
+-        #expect(try store.load() == first)
++        try store.save(value)
++        #expect(try store.load() == value)
++        #expect(fake.items[.legacy] == nil)
++        #expect(fake.items[.dataProtection] != nil)
++        #expect(
++            fake.calls == [
++                FakeKeychainCall(
++                    kind: .delete, backend: .legacy,
++                    service: "ai.freeside.tests.deployment-a"),
++                FakeKeychainCall(
++                    kind: .delete, backend: .dataProtection,
++                    service: "ai.freeside.tests.deployment-a"),
++                FakeKeychainCall(
++                    kind: .add, backend: .dataProtection,
++                    service: "ai.freeside.tests.deployment-a"),
++                FakeKeychainCall(
++                    kind: .copy, backend: .dataProtection,
++                    service: "ai.freeside.tests.deployment-a"),
++                FakeKeychainCall(
++                    kind: .copy, backend: .dataProtection,
++                    service: "ai.freeside.tests.deployment-a"),
++                FakeKeychainCall(
++                    kind: .delete, backend: .legacy,
++                    service: "ai.freeside.tests.deployment-a"),
++            ])
++        let added = try #require(fake.addedAttributes.first)
++        #expect(added[kSecUseDataProtectionKeychain as String] as? Bool == true)
++        #expect(
++            added[kSecAttrAccessible as String] as? String
++                == kSecAttrAccessibleAfterFirstUnlock as String)
++    }
+ 
+-        // A re-pair replaces the whole identity.
+-        let secondSubscription = try #require(
+-            DeviceNtfySubscription(
+-                serverURL: "https://other-ntfy.example",
+-                topic: "fs-11111111111111111111111111111111"))
+-        let second = DeviceCredential(
+-            deviceID: "device-2", token: testDeviceToken(for: "device-2", secretByte: 2),
+-            ntfySubscription: secondSubscription)!
+-        try store.save(second)
+-        #expect(try store.load() == second)
++    @Test func failedLegacyCleanupBeforeReplacementPreservesAuthoritativeItem() throws {
++        let fake = FakeKeychain()
++        let existing = try credential()
++        let existingItem = try storedItem(existing)
++        fake.items[.dataProtection] = existingItem
++        fake.items[.legacy] = existingItem
++        fake.deleteStatuses[.legacy] = [errSecInteractionNotAllowed]
++        let store = KeychainCredentialStore(service: "service", operations: fake.operations)
++
++        do {
++            try store.save(try credential(deviceID: "device-2", secretByte: 2))
++            Issue.record("expected legacy cleanup to fail")
++        } catch let error as KeychainCredentialStore.KeychainError {
++            #expect(error.status == errSecInteractionNotAllowed)
++        }
++
++        #expect(
++            fake.items[.dataProtection]?[kSecValueData as String] as? Data
++                == existingItem[kSecValueData as String] as? Data)
++        #expect(fake.items[.legacy] != nil)
++        #expect(fake.calls.map(\.kind) == [.delete])
++        #expect(fake.calls.map(\.backend) == [.legacy])
++    }
+ 
++    @Test func platformWithoutDistinctLegacyBackendNeverConsultsIt() throws {
++        let fake = FakeKeychain()
++        let value = try credential()
++        fake.items[.dataProtection] = try storedItem(value)
++        let store = KeychainCredentialStore(
++            service: "service",
++            operations: fake.operations,
++            legacyBackendEnabled: false)
++
++        #expect(try store.load() == value)
++        #expect(try store.load() == value)
+         try store.delete()
+-        #expect(try store.load() == nil)
++
++        #expect(fake.items[.dataProtection] == nil)
++        #expect(fake.calls.map(\.kind) == [.copy, .copy, .delete])
++        #expect(fake.calls.allSatisfy { $0.backend == .dataProtection })
++    }
++
++    @Test func exactServiceLegacyItemMigratesCopyVerifyDelete() throws {
++        let fake = FakeKeychain()
++        let value = try credential()
++        let legacy = try storedItem(value)
++        fake.items[.legacy] = legacy
++        let store = KeychainCredentialStore(
++            service: "ai.freeside.tests.encoded%2Fpath", operations: fake.operations)
++
++        #expect(try store.load() == value)
++        #expect(fake.items[.legacy] == nil)
++        #expect(fake.items[.dataProtection] != nil)
++        #expect(fake.calls.map(\.kind) == [.copy, .copy, .add, .copy, .delete])
++        #expect(
++            fake.calls.map(\.backend) == [
++                .dataProtection, .legacy, .dataProtection, .dataProtection, .legacy,
++            ])
++        #expect(fake.calls.allSatisfy { $0.service == "ai.freeside.tests.encoded%2Fpath" })
++        #expect(
++            fake.addedAttributes[0][kSecValueData as String] as? Data
++                == legacy[kSecValueData as String] as? Data)
++    }
++
++    @Test func failedLegacyCopyLeavesTheLegacyItemUntouched() throws {
++        let fake = FakeKeychain()
++        fake.items[.legacy] = try storedItem(credential())
++        fake.addStatuses = [errSecAuthFailed]
++        let store = KeychainCredentialStore(service: "service", operations: fake.operations)
++
++        #expect(throws: KeychainCredentialStore.KeychainError.self) {
++            try store.load()
++        }
++        #expect(fake.items[.legacy] != nil)
++        #expect(fake.items[.dataProtection] == nil)
++        #expect(fake.calls.map(\.kind) == [.copy, .copy, .add])
++    }
++
++    @Test func failedLegacyVerificationLeavesTheLegacyItemUntouched() throws {
++        let fake = FakeKeychain()
++        let legacy = try credential()
++        fake.items[.legacy] = try storedItem(legacy)
++        fake.copyOverrides[.dataProtection] = [
++            (errSecItemNotFound, nil),
++            (errSecSuccess, try storedItem(credential(deviceID: "device-2", secretByte: 2))),
++        ]
++        let store = KeychainCredentialStore(service: "service", operations: fake.operations)
++
++        do {
++            _ = try store.load()
++            Issue.record("expected read-back mismatch to fail")
++        } catch let error as KeychainCredentialStore.KeychainError {
++            #expect(error.status == errSecDecode)
++        }
++        #expect(fake.items[.legacy] != nil)
++        #expect(fake.calls.map(\.kind) == [.copy, .copy, .add, .copy])
++    }
++
++    @Test func authoritativeCorruptionFailsClosedWithoutLegacyFallback() throws {
++        let fake = FakeKeychain()
++        fake.items[.dataProtection] = [
++            kSecAttrAccount as String: "device-1",
++            kSecValueData as String: Data("not-json".utf8),
++        ]
++        fake.items[.legacy] = try storedItem(credential())
++        let store = KeychainCredentialStore(service: "service", operations: fake.operations)
++
++        do {
++            _ = try store.load()
++            Issue.record("expected corrupt authoritative item to fail")
++        } catch let error as KeychainCredentialStore.KeychainError {
++            #expect(error.status == errSecDecode)
++        }
++        #expect(fake.calls.map(\.kind) == [.copy])
++        #expect(fake.calls.map(\.backend) == [.dataProtection])
++        #expect(fake.items[.legacy] != nil)
++    }
++
++    @Test func authoritativeErrorFailsClosedWithoutLegacyFallback() throws {
++        let fake = FakeKeychain()
++        fake.items[.legacy] = try storedItem(credential())
++        fake.copyOverrides[.dataProtection] = [(errSecInteractionNotAllowed, nil)]
++        let store = KeychainCredentialStore(service: "service", operations: fake.operations)
++
++        do {
++            _ = try store.load()
++            Issue.record("expected authoritative Keychain error to fail")
++        } catch let error as KeychainCredentialStore.KeychainError {
++            #expect(error.status == errSecInteractionNotAllowed)
++        }
++        #expect(fake.calls.map(\.kind) == [.copy])
++        #expect(fake.calls.map(\.backend) == [.dataProtection])
++    }
++
++    @Test func authoritativeDuplicateWinsAndCleansLegacy() throws {
++        let fake = FakeKeychain()
++        let authoritative = try credential()
++        let conflictingLegacy = try credential(
++            deviceID: "device-2", secretByte: 2,
++            serverURL: "https://other-ntfy.example",
++            topic: "fs-11111111111111111111111111111111")
++        fake.items[.dataProtection] = try storedItem(authoritative)
++        fake.items[.legacy] = try storedItem(conflictingLegacy)
++        let store = KeychainCredentialStore(service: "service", operations: fake.operations)
++
++        #expect(try store.load() == authoritative)
++        #expect(fake.items[.legacy] == nil)
++        #expect(fake.calls.map(\.kind) == [.copy, .delete])
++        #expect(fake.calls.map(\.backend) == [.dataProtection, .legacy])
++    }
++
++    @Test func interruptedCleanupFailsLoudAndRetries() throws {
++        let fake = FakeKeychain()
++        let value = try credential()
++        fake.items[.dataProtection] = try storedItem(value)
++        fake.items[.legacy] = try storedItem(value)
++        fake.deleteStatuses[.legacy] = [errSecInteractionNotAllowed, errSecSuccess]
++        let store = KeychainCredentialStore(service: "service", operations: fake.operations)
++
++        #expect(throws: KeychainCredentialStore.KeychainError.self) {
++            try store.load()
++        }
++        #expect(fake.items[.legacy] != nil)
++        #expect(try store.load() == value)
++        #expect(fake.items[.legacy] == nil)
++    }
++
++    @Test func deleteClearsBothBackendsAndPreservesTheFirstError() throws {
++        let fake = FakeKeychain()
++        let value = try credential()
++        fake.items[.dataProtection] = try storedItem(value)
++        fake.items[.legacy] = try storedItem(value)
++        fake.deleteStatuses[.dataProtection] = [errSecAuthFailed]
++        let store = KeychainCredentialStore(service: "service", operations: fake.operations)
++
++        do {
++            try store.delete()
++            Issue.record("expected the first backend error")
++        } catch let error as KeychainCredentialStore.KeychainError {
++            #expect(error.status == errSecAuthFailed)
++        }
++        #expect(fake.items[.dataProtection] != nil)
++        #expect(fake.items[.legacy] == nil)
++        #expect(fake.calls.map(\.kind) == [.delete, .delete])
++        #expect(fake.calls.map(\.backend) == [.dataProtection, .legacy])
++
++        fake.deleteStatuses[.dataProtection] = [errSecSuccess]
++        try store.delete()
++        #expect(fake.items.isEmpty)
+     }
+ }
+diff --git a/app/scripts/install-mac-app.sh b/app/scripts/install-mac-app.sh
+index 50d743ac8ae58f5f0e5317101257388337eb89d5..048d03f52cf8a87a3ca0484f46778279478de8a1 100755
+--- a/app/scripts/install-mac-app.sh
++++ b/app/scripts/install-mac-app.sh
+@@ -4,15 +4,15 @@
+ #
+ # Usage: install-mac-app.sh --daemon-path <absolute-path> [--server-url <url>] [--launch]
+ #
+-# Builds the Release product, signs it with a stable identity, and
++# Builds the Release product with automatic provisioning, signs it with a
++# stable Apple Development identity, and
+ # installs or replaces Freeside.app at a fixed path. Re-running it after
+ # a source change updates the installed app in place without disturbing
+-# the Keychain-held device credential: the bundle identifier, install
+-# path, and signing identity stay fixed across runs, so the credential
+-# item's access control still names the same application and the
+-# operator never re-pairs. The script prints the designated requirement
+-# and warns loudly when an update changes it, because that change — not
+-# the rebuild — is what costs the pairing.
++# the Data Protection Keychain-held device credential: the provisioned App ID
++# prefix and bundle identifier stay fixed across runs, while the Team ID is
++# verified independently. A valid legacy file-based credential is migrated
++# once by the app; that transition may present one final legacy ACL prompt,
++# while later launches are silent.
+ #
+ # --server-url persists the daemon URL into the installed app's
+ # preferences (`AppSession.fromEnvironment` reads `FreesideServerURL`
+@@ -23,18 +23,15 @@
+ # before the app receives its final code-signature seal.
+ #
+ # Signing identity, in resolution order:
+-#   FREESIDE_MAC_SIGNING_IDENTITY  explicit codesign identity, by name or
+-#                                  SHA-1 hash; "-" selects ad-hoc signing
++#   FREESIDE_MAC_SIGNING_IDENTITY  explicit Apple Development identity, by
++#                                  name or SHA-1 hash
+ #   otherwise                      the sole "Apple Development:" identity
+ #                                  in the login keychain (Xcode's free
+ #                                  personal team mints one once an Apple
+ #                                  ID is added under Settings > Accounts)
+ #
+-# Ad-hoc signing stays opt-in rather than a silent fallback: its
+-# designated requirement is the code directory hash, which changes on
+-# every build, so each update presents as a different application and
+-# costs a Keychain prompt or a re-pair. Signing exists here for that
+-# stability, not for Gatekeeper.
++# Ad-hoc signing is rejected: it cannot carry the profile-authorized private
++# Keychain access group that the installed operator client requires.
+ #
+ # Environment:
+ #   FREESIDE_MAC_INSTALL_DIR  install root (default: ~/Applications)
+@@ -348,23 +345,54 @@ restore_interrupted_install
+ 
+ resolve_identity() {
+     if [[ -n "${FREESIDE_MAC_SIGNING_IDENTITY:-}" ]]; then
+-        printf '%s' "$FREESIDE_MAC_SIGNING_IDENTITY"
++        if [[ "$FREESIDE_MAC_SIGNING_IDENTITY" == - || \
++            "$FREESIDE_MAC_SIGNING_IDENTITY" =~ ^[0-9A-Fa-f]{40}$ ]]; then
++            printf '%s' "$FREESIDE_MAC_SIGNING_IDENTITY"
++            return
++        fi
++        local matches match_count
++        matches="$(security find-identity -v -p codesigning 2>/dev/null |
++            awk -v want="$FREESIDE_MAC_SIGNING_IDENTITY" '
++                {
++                    hash = $2
++                    name = $0
++                    sub(/^[^"]*"/, "", name)
++                    sub(/"[^"]*$/, "", name)
++                    if (name == want && length(hash) == 40 &&
++                        hash ~ /^[[:xdigit:]]+$/) print hash
++                }
++            ')"
++        match_count=0
++        if [[ -n "$matches" ]]; then
++            match_count=$(printf '%s\n' "$matches" | wc -l | tr -d ' ')
++        fi
++        [[ "$match_count" -eq 1 ]] ||
++            die "the requested signing identity '$FREESIDE_MAC_SIGNING_IDENTITY' did not resolve to exactly one certificate; use its SHA-1 fingerprint"
++        printf '%s' "$matches"
+         return
+     fi
+     local candidates
+     candidates="$(security find-identity -v -p codesigning 2>/dev/null |
+-        sed -n 's/.*"\(Apple Development: .*\)"$/\1/p')"
++        awk '
++            {
++                hash = $2
++                name = $0
++                sub(/^[^"]*"/, "", name)
++                sub(/"[^"]*$/, "", name)
++                if (name ~ /^Apple Development: / && length(hash) == 40 &&
++                    hash ~ /^[[:xdigit:]]+$/) print hash "\t" name
++            }
++        ')"
+     local count=0
+     if [[ -n "$candidates" ]]; then
+         count="$(printf '%s\n' "$candidates" | wc -l | tr -d ' ')"
+     fi
+     case "$count" in
+-    1) printf '%s' "$candidates" ;;
++    1) printf '%s' "${candidates%%[[:space:]]*}" ;;
+     0)
+         die "no 'Apple Development' signing identity found. Add an Apple ID in
+   Xcode > Settings > Accounts to mint one from the free personal team, or set
+-  FREESIDE_MAC_SIGNING_IDENTITY (use '-' for ad-hoc signing, which costs the
+-  pairing on every update)."
++  FREESIDE_MAC_SIGNING_IDENTITY to an Apple Development identity."
+         ;;
+     *)
+         die "several 'Apple Development' identities found; set
+@@ -374,6 +402,26 @@ $(printf '%s\n' "$candidates" | sed 's/^/    /')"
+     esac
+ }
+ 
++identity_certificate() {
++    if [[ "$1" =~ ^[0-9A-Fa-f]{40}$ ]]; then
++        security find-certificate -a -Z -p 2>/dev/null |
++            awk -v want="$1" '
++                /^SHA-1 hash:/ { sel = (toupper($NF) == toupper(want)); next }
++                /^SHA-256 hash:/ { next }
++                sel
++            '
++        return
++    fi
++    security find-certificate -c "$1" -p 2>/dev/null
++}
++
++team_id_of_identity() {
++    identity_certificate "$1" |
++        openssl x509 -noout -subject -nameopt multiline 2>/dev/null |
++        sed -n 's/^[[:space:]]*organizationalUnitName[[:space:]]*=[[:space:]]*//p' |
++        head -1
++}
++
+ # codesign prints the requirement on stderr, and marks an implicit one
+ # (the common case: nothing embeds an explicit requirement here) with a
+ # leading "# ".
+@@ -382,13 +430,123 @@ designated_requirement() {
+         sed -n 's/^#* *designated => //p'
+ }
+ 
++plist_value() {
++    plutil -extract "$2" raw -o - "$1" 2>/dev/null
++}
++
++require_plist_value() {
++    local plist=$1 key=$2 expected=$3 description=$4 actual
++    actual=$(plist_value "$plist" "$key") ||
++        die "$description is missing from $plist"
++    [[ "$actual" == "$expected" ]] ||
++        die "$description is '$actual', expected '$expected'"
++}
++
++profile_authorizes() {
++    local authorization=$1 expected=$2 prefix
++    [[ "$authorization" == "$expected" ]] && return 0
++    [[ "$authorization" == *\* ]] || return 1
++    prefix=${authorization%\*}
++    [[ "$prefix" != *\* && "$expected" == "$prefix"* ]]
++}
++
++require_plist_authorization() {
++    local plist=$1 key=$2 expected=$3 description=$4 actual
++    actual=$(plist_value "$plist" "$key") ||
++        die "$description is missing from $plist"
++    profile_authorizes "$actual" "$expected" ||
++        die "$description is '$actual', which does not authorize '$expected'"
++}
++
++require_plist_array_authorization() {
++    local plist=$1 key=$2 expected=$3 description=$4 actual index=0
++    while actual=$(plist_value "$plist" "$key.$index"); do
++        profile_authorizes "$actual" "$expected" && return 0
++        index=$((index + 1))
++    done
++    ((index > 0)) || die "$description is missing from $plist"
++    die "$description does not authorize '$expected'"
++}
++
++require_profile_signer() {
++    local profile_plist=$1
++    local profile_certificate="$build_dir/FreesideMac.profile-signer.cer"
++    local encoded_certificate index=0
++    while encoded_certificate=$(plist_value \
++        "$profile_plist" "DeveloperCertificates.$index"); do
++        [[ -n "$encoded_certificate" && \
++            "$encoded_certificate" =~ ^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$ ]] ||
++            die "the profile has a malformed developer certificate at index $index"
++        printf '%s' "$encoded_certificate" |
++            openssl base64 -d -A -out "$profile_certificate" 2>/dev/null ||
++            die "the profile has a malformed developer certificate at index $index"
++        cmp -s "$signing_certificate" "$profile_certificate" && return
++        index=$((index + 1))
++    done
++    ((index > 0)) ||
++        die "the profile has no authorized developer certificates: $profile_plist"
++    die "the selected signing certificate is not authorized by $profile_plist"
++}
++
++verify_provisioned_app() {
++    local candidate=$1 entitlements=$2
++    local profile="$candidate/Contents/embedded.provisionprofile"
++    local profile_plist="$build_dir/FreesideMac.verified-profile.plist"
++    local application_prefix application_identifier
++
++    codesign --verify --strict "$candidate" ||
++        die "the app failed signature verification: $candidate"
++    codesign --display --entitlements :- "$candidate" >"$entitlements" 2>/dev/null ||
++        die "could not read the app's signed entitlements: $candidate"
++    [[ -s "$entitlements" ]] ||
++        die "the app has no signed entitlements: $candidate"
++    [[ -f "$profile" ]] ||
++        die "the app has no embedded provisioning profile: $candidate"
++    security cms -D -i "$profile" >"$profile_plist" 2>/dev/null ||
++        die "could not decode the app's embedded provisioning profile: $candidate"
++    require_profile_signer "$profile_plist"
++
++    application_prefix=$(plist_value "$profile_plist" ApplicationIdentifierPrefix.0) ||
++        die "the profile application-identifier prefix is missing from $profile_plist"
++    [[ "$application_prefix" =~ ^[A-Z0-9]{10}$ ]] ||
++        die "the profile application-identifier prefix is '$application_prefix', expected a 10-character identifier"
++    application_identifier="$application_prefix.$bundle_id"
++
++    require_plist_value "$entitlements" 'com\.apple\.application-identifier' \
++        "$application_identifier" "the signed application identifier"
++    require_plist_value "$entitlements" 'com\.apple\.developer\.team-identifier' \
++        "$team_id" "the signed team identifier"
++    require_plist_value "$entitlements" keychain-access-groups.0 \
++        "$application_identifier" "the signed Keychain access group"
++    if plist_value "$entitlements" keychain-access-groups.1 >/dev/null; then
++        die "the app has an unexpected additional Keychain access group"
++    fi
++
++    require_plist_value "$profile_plist" TeamIdentifier.0 \
++        "$team_id" "the profile Team ID"
++    require_plist_value \
++        "$profile_plist" 'Entitlements.com\.apple\.developer\.team-identifier' \
++        "$team_id" "the profile-authorized team identifier"
++    require_plist_authorization \
++        "$profile_plist" 'Entitlements.com\.apple\.application-identifier' \
++        "$application_identifier" \
++        "the profile-authorized application identifier"
++    require_plist_array_authorization \
++        "$profile_plist" Entitlements.keychain-access-groups \
++        "$application_identifier" \
++        "the profile-authorized Keychain access group"
++}
++
+ identity="$(resolve_identity)"
+ if [[ "$identity" == "-" ]]; then
+-    echo "install-mac-app: signing ad-hoc; every update will change the" >&2
+-    echo "  designated requirement, so the device must be re-paired." >&2
+-else
+-    echo "install-mac-app: signing identity: $identity"
++    die "ad-hoc signing cannot authorize the Data Protection Keychain access group.
++  Add an Apple ID in Xcode > Settings > Accounts and use its Apple Development identity."
+ fi
++team_id=$(team_id_of_identity "$identity") || team_id=""
++[[ "$team_id" =~ ^[A-Z0-9]{10}$ ]] ||
++    die "could not derive a 10-character Team ID from the '$identity' certificate"
++echo "install-mac-app: signing identity: $identity"
++echo "install-mac-app: signing team: $team_id"
+ 
+ # Never replace a bundle that is not a Freeside client: the install root
+ # is the operator's own ~/Applications, and a name collision there is
+@@ -446,6 +604,12 @@ mkdir -p "$daemon_state_dir"
+ chmod 700 "$daemon_state_dir"
+ 
+ mkdir -p "$build_dir"
++signing_certificate="$build_dir/FreesideMac.selected-signer.cer"
++identity_certificate "$identity" |
++    openssl x509 -outform DER -out "$signing_certificate" 2>/dev/null ||
++    die "could not encode the '$identity' signing certificate"
++[[ -s "$signing_certificate" ]] ||
++    die "the '$identity' signing certificate is empty"
+ build_log="$build_dir/xcodebuild.log"
+ echo "install-mac-app: building Release (log: $build_log)"
+ if ! xcodebuild \
+@@ -455,9 +619,10 @@ if ! xcodebuild \
+     -destination 'platform=macOS' \
+     -skipPackagePluginValidation \
+     -derivedDataPath "$build_dir" \
+-    CODE_SIGN_STYLE=Manual \
+-    CODE_SIGN_IDENTITY="$identity" \
+-    PROVISIONING_PROFILE_SPECIFIER="" \
++    -allowProvisioningUpdates \
++    CODE_SIGN_STYLE=Automatic \
++    CODE_SIGN_IDENTITY="Apple Development" \
++    DEVELOPMENT_TEAM="$team_id" \
+     build >"$build_log" 2>&1; then
+     tail -40 "$build_log" >&2
+     die "build failed; full log at $build_log"
+@@ -465,6 +630,8 @@ fi
+ 
+ built_app="$build_dir/Build/Products/Release/FreesideMac.app"
+ [[ -d "$built_app" ]] || die "build produced no app at $built_app"
++preserved_entitlements="$build_dir/FreesideMac.xcode.entitlements"
++verify_provisioned_app "$built_app" "$preserved_entitlements"
+ launch_agent_plist="$built_app/Contents/Library/LaunchAgents/ai.freeside.daemon.plist"
+ [[ -f "$launch_agent_plist" ]] ||
+     die "the built app contains no bundled LaunchAgent at $launch_agent_plist"
+@@ -521,17 +688,18 @@ templated_stderr=$(plutil -extract StandardErrorPath raw -o - "$launch_agent_pli
+     die "the templated daemon stderr path does not match the expected value (see #762)"
+ 
+ # Templating changes the outer bundle seal produced by Xcode. Re-sign only
+-# after every host-local path is final. The helper gets the same identity first
+-# so Service Management can validate it, then the outer seal binds that exact
+-# executable before the artifact can replace the installed app.
++# after every host-local path is final, explicitly reusing Xcode's provisioned
++# entitlements. The helper gets the same identity first so Service Management
++# can validate it, then the outer seal binds that exact executable before the
++# artifact can replace the installed app.
+ codesign --force --sign "$identity" "$bundled_daemon" ||
+     die "the bundled freesided executable could not be signed"
+ codesign --verify --strict "$bundled_daemon" ||
+     die "the bundled freesided executable failed signature verification"
+-codesign --force --sign "$identity" "$built_app" ||
++codesign --force --sign "$identity" --entitlements "$preserved_entitlements" "$built_app" ||
+     die "the templated app could not be signed"
+-codesign --verify --strict "$built_app" ||
+-    die "the built app failed signature verification"
++final_entitlements="$build_dir/FreesideMac.final.entitlements"
++verify_provisioned_app "$built_app" "$final_entitlements"
+ 
+ # A running instance holds the bundle open and would keep serving stale
+ # code after the swap. The client's disk cache is written atomically
+@@ -662,8 +830,8 @@ mv "$staged" "$destination"
+ # copy or the rename fails here, and dropping the backup first would
+ # leave the operator an unusable app and nothing to fall back to.
+ new_requirement="$(designated_requirement "$destination")"
+-codesign --verify --strict "$destination" ||
+-    die "the installed app failed signature verification"
++installed_entitlements="$build_dir/FreesideMac.installed.entitlements"
++verify_provisioned_app "$destination" "$installed_entitlements"
+ trap - EXIT INT TERM
+ rm -rf "$superseded"
+ 
+diff --git a/devlog/2026-08-26-1110-data-protection-keychain.md b/devlog/2026-08-26-1110-data-protection-keychain.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..a1137f4feb4f154885a5e4c049067c5244df9adf
+--- /dev/null
++++ b/devlog/2026-08-26-1110-data-protection-keychain.md
+@@ -0,0 +1,146 @@
++# Data Protection Keychain Custody
++
++Work unit: [#959](https://github.com/freeside-ai/freeside/issues/959)
++(`kind:fix`, `lane:saddle`). This mandatory note records the revised
++credential-custody and destructive-cleanup decision.
++
++## Decision
++
++Chose the macOS Data Protection Keychain with a private, provisioned
++`$(AppIdentifierPrefix)ai.freeside.app.macos` access group over the legacy
++file-based login Keychain. Signed operator packaging now satisfies the revisit
++condition recorded in
++`devlog/2026-07-16-1030-saddle-cache-pairing.md`: the app has a stable Team ID
++and profile-authorized App ID prefix plus bundle ID, so the credential can
++retain `AfterFirstUnlock` accessibility without inheriting a rebuilt binary's
++changing code requirement. The prefix normally equals the Team ID, but legacy
++accounts can retain a distinct bundle-seed prefix; the installer verifies the
++profile Team ID independently rather than conflating the two authorities.
++
++Migration is restricted to the exact current deployment-scoped service name.
++The ambiguous pre-#782 decoded-path service remains untouched because it cannot
++prove which deployment minted its bearer token. A valid Data Protection item
++is authoritative; only its absence permits consulting the exact-service legacy
++item. Migration copies and verifies the complete credential before deleting
++legacy material, and ordinary deletion clears both backends so a stale grant
++cannot resurrect a deliberately forgotten identity.
++
++Chose profile-backed Apple Development signing over ad-hoc operator installs.
++The installer's final outer-bundle re-sign preserves the Xcode-generated
++entitlements and verifies the application identifier, access group, embedded
++profile authorization, and signature before replacement. Rejected installing
++an apparently healthy ad-hoc app because it cannot be authorized for this
++Data Protection Keychain group and would fail credential custody at runtime.
++
++## Refute-First Findings
++
++Confirmed and fixed one signing defect during a real provisioned-build attempt:
++passing the selected certificate's full common name to Xcode conflicts with
++automatic signing. The build now passes the generic `Apple Development`
++selector plus the certificate-derived Team ID; the final post-templating
++`codesign` still uses the operator's exact selected identity.
++
++Rejected by tests and inspection: an authoritative corruption or Security
++error cannot reach legacy fallback; migration never deletes legacy material
++before a byte-identical authoritative read-back; interrupted cleanup remains
++loud and retryable; conflicting duplicates cannot override the authoritative
++credential; and macOS deletion attempts both backends while retaining the
++first real error. Every constructed query retains only the caller-supplied
++exact service, so neither decoded-path nor cross-deployment lookup exists.
++Errors carry only Security status values, never credential bytes.
++
++Automated review confirmed two cross-platform signing and custody defects.
++Because iOS already uses the Data Protection Keychain by default, a query that
++omits its selector is not a distinct legacy backend there; all legacy reads and
++cleanup are now macOS-only, and a simulated iOS-policy test proves repeated
++loads retain the authoritative item. Provisioning profiles may authorize the
++app's exact signed group with an `APPIDPREFIX.*` pattern, so installer
++verification now accepts that profile pattern while continuing to require the
++signed app entitlement itself to equal the exact private group.
++
++A second automated-review pass found that replacement called the public
++two-backend delete in authoritative-first order. If legacy ACL cleanup failed,
++that could remove the usable Data Protection item before aborting the new
++pairing save. Replacement now encodes first and removes legacy material before
++touching the authoritative item; a focused failure test proves the old item
++survives. Explicit local-identity deletion still attempts both backends and
++retains its original fail-loud, retryable behavior.
++
++The third automated-review pass identified the conflation of Team ID with
++`ApplicationIdentifierPrefix`. Apple Development profiles for legacy accounts
++may carry a distinct bundle-seed prefix, and Xcode expands the Keychain group
++with that value. The owner accepted the corrected identity rule: derive the
++exact application identifier and private group from the validated profile
++prefix plus bundle ID, while requiring the certificate, signed team
++entitlement, and profile `TeamIdentifier` to agree independently. Installer
++tests now cover both the common equal-prefix case and a distinct legacy prefix.
++
++The fourth automated-review pass found that the installer checked the
++iOS-family `application-identifier` key instead of native macOS's
++`com.apple.application-identifier`, which would reject every real provisioned
++FreesideMac build. A widened refute-first pass confirmed the native key in both
++the signed entitlements and profile, and found the same false fixture premise.
++It also found that valid profile authorization is an allowlist: a trailing
++wildcard may be scoped below the App ID prefix, and a matching Keychain group
++need not be its first entry. Verification now checks the native key, accepts
++any valid trailing-prefix wildcard and any matching profile group entry, and
++independently requires the profile's team entitlement to match the signing
++team. Signed application and group values remain exact, with exactly one
++signed Keychain group.
++
++At the fifth blocker-sustained fix round, the convergence checkpoint remained
++a go because the new defect was reachable and narrow: Xcode's generic
++`Apple Development` build selector can choose a different certificate from the
++operator-selected identity used for the final seal, even when both certificates
++share a Team ID. Team and entitlement equality therefore did not prove the
++profile authorized the final signer. Verification now encodes the exact
++operator-selected certificate as DER and requires it to match one entry in the
++profile's `DeveloperCertificates` allowlist before using that same identity for
++the final seal. Deterministic installer cases cover both mismatch rejection and
++a match after another authorized certificate. Expiry, device policy, and
++unrelated profile hardening remain outside this work unit unless they become a
++reachable contract blocker.
++
++The next exact-head pass found that `plutil -extract` treats periods as
++key-path separators. Although the installer had switched to native macOS's
++dotted entitlement names, it did not escape those dictionary-key periods, so
++every valid provisioned build would still fail closed before installation. The
++installer now escapes literal periods in signed and profile entitlement-key
++components while retaining real separators for the profile's `Entitlements`
++dictionary. The command-stand-in parser now accepts only that escaped form, so
++the former green-but-blind fixture premise turns red if it regresses.
++
++The following pass exposed a second failed representation assumption in signer
++binding: `plutil` emits a profile's certificate data as base64 text, while the
++selected certificate is binary DER. The first byte comparison could therefore
++never match. Work stopped for an anti-thrash reassessment; a read-only local
++profile experiment then proved that OpenSSL's portable base64 decoder
++reconstructs a valid DER certificate from the extracted value. The verifier
++now performs that decode, fails closed on malformed data, and compares exact
++DER bytes. Harness profiles now carry base64 too, including mismatch,
++later-match, and malformed cases, so the storage-boundary representation can
++no longer be masked. Using the already-required OpenSSL boundary also keeps the
++installer harness portable to the required Ubuntu scripts-CI job; Darwin-only
++`base64 -D -o` flags would fail there.
++
++The installed macOS SDK's `SecItem.h` confirms that
++`kSecUseDataProtectionKeychain` enables access-group and accessibility
++semantics on macOS, and that omitting `kSecAttrAccessGroup` selects the first
++declared Keychain access group. Installer tests independently reject missing
++or mismatched signed entitlements and profile authorization after the final
++re-sign, preventing an unprovisioned replacement from appearing healthy.
++
++Accepted verification limit: the real signed smoke reached automatic
++provisioning but stopped because the selected development team has not
++registered this Mac and has no matching development profile. No install,
++credential migration, or developer-account mutation was attempted, and the
++implementation did not fall back to legacy or ad-hoc signing. The profile and
++prompt-free relaunch observations therefore remain environment-limited for
++human verification on a registered Mac.
++
++## Revisit When
++
++The credential becomes intentionally shared across app targets or signing
++teams, Apple changes the provisioning requirements for macOS Data Protection
++Keychain access, or deployment identity no longer maps one-to-one to the exact
++Keychain service.
+diff --git a/scripts/test-install-mac-app.sh b/scripts/test-install-mac-app.sh
+index 6ae831fd13d6483dd742eba0cd39c006ca9a898d..d724aa793f91dc1f3ec632fe400afa6fb3f5ea25 100755
+--- a/scripts/test-install-mac-app.sh
++++ b/scripts/test-install-mac-app.sh
+@@ -16,7 +16,9 @@ set -euo pipefail
+ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+ INSTALLER=${FREESIDE_INSTALLER_UNDER_TEST:-$SCRIPT_DIR/../app/scripts/install-mac-app.sh}
+ REAL_SWIFT=$(command -v swift || true)
++REAL_OPENSSL=$(command -v openssl || true)
+ export STUB_REAL_SWIFT=$REAL_SWIFT
++export STUB_REAL_OPENSSL=$REAL_OPENSSL
+ 
+ TMP=$(mktemp -d)
+ trap 'rm -rf "$TMP"' EXIT
+@@ -45,6 +47,29 @@ case "${1:-}" in
+ -extract)
+     case "$2" in
+     CFBundleIdentifier) printf '%s\n' "${STUB_BUNDLE_ID:-ai.freeside.app.macos}" ;;
++    'com\.apple\.application-identifier' | \
++        'com\.apple\.developer\.team-identifier' | keychain-access-groups.* | \
++        TeamIdentifier.0 | ApplicationIdentifierPrefix.0 | DeveloperCertificates.* | \
++        'Entitlements.com\.apple\.application-identifier' | \
++        'Entitlements.com\.apple\.developer\.team-identifier' | \
++        Entitlements.keychain-access-groups.*)
++        key=${2//\\./.}
++        value=$(awk -F= -v key="$key" '
++            index($0, key "=") == 1 {
++                sub(/^[^=]*=/, "")
++                print
++                found = 1
++                exit
++            }
++            END { exit(found ? 0 : 1) }
++        ' "$target") || exit 1
++        if [[ "${4:-}" == -o && "${5:-}" != - ]]; then
++            printf '%s' "$value" >"$5"
++        else
++            printf '%s\n' "$value"
++        fi
++        exit 0
++        ;;
+     ProgramArguments)
+         awk '
+             /<key>ProgramArguments<\/key>/ { p=1; next }
+@@ -187,11 +212,35 @@ case " $* " in
+     fi
+     [[ ! -e "$target/.invalid-signature" ]]
+     ;;
++*" --display --entitlements :- "*)
++    cat "$target/Contents/entitlements.fixture"
++    ;;
+ *" --display "*)
+     printf '%s\n' '# designated => identifier "ai.freeside.app.macos"' >&2
+     ;;
+ *" --force --sign "*)
+     printf 'called\n' >"${STUB_CASE_DIR:?}/codesign-sign-called"
++    printf '%s\n' "$*" >>"$STUB_CASE_DIR/codesign-sign-calls"
++    if [[ -d "$target/Contents" ]]; then
++        previous=''
++        entitlements=''
++        for argument in "$@"; do
++            if [[ "$previous" == --entitlements ]]; then
++                entitlements=$argument
++                break
++            fi
++            previous=$argument
++        done
++        [[ -n "$entitlements" ]] || exit 1
++        cp "$entitlements" "$target/Contents/entitlements.fixture"
++        if [[ -n "${STUB_CODESIGN_DROP_ENTITLEMENTS:-}" ]]; then
++            sed 's/^keychain-access-groups.0=.*/keychain-access-groups.0=WRONGTEAM0.ai.freeside.app.macos/' \
++                "$target/Contents/entitlements.fixture" \
++                >"$target/Contents/entitlements.fixture.tmp"
++            mv "$target/Contents/entitlements.fixture.tmp" \
++                "$target/Contents/entitlements.fixture"
++        fi
++    fi
+     ;;
+ *) exit 1 ;;
+ esac
+@@ -200,6 +249,7 @@ STUB
+ cat >"$STUB_BIN/xcodebuild" <<'STUB'
+ #!/usr/bin/env bash
+ printf 'called\n' >"${STUB_CASE_DIR:?}/xcodebuild-called"
++printf '%s\n' "$@" >"$STUB_CASE_DIR/xcodebuild-args"
+ if [[ -n "${STUB_BUILD_SUCCEEDS:-}" ]]; then
+     built_app="$STUB_CASE_DIR/Build/Build/Products/Release/FreesideMac.app"
+     mkdir -p "$built_app/Contents"
+@@ -208,6 +258,42 @@ if [[ -n "${STUB_BUILD_SUCCEEDS:-}" ]]; then
+     mkdir -p "$built_app/Contents/Library/LaunchAgents"
+     cp "$STUB_AGENT_TEMPLATE" \
+         "$built_app/Contents/Library/LaunchAgents/ai.freeside.daemon.plist"
++    team_id=''
++    for argument in "$@"; do
++        case "$argument" in
++        DEVELOPMENT_TEAM=*) team_id=${argument#DEVELOPMENT_TEAM=} ;;
++        esac
++    done
++    signed_team=${STUB_SIGNED_TEAM_ID:-$team_id}
++    signed_application=${STUB_SIGNED_APPLICATION_ID:-$signed_team.ai.freeside.app.macos}
++    signed_group=${STUB_SIGNED_KEYCHAIN_GROUP:-$signed_application}
++    cat >"$built_app/Contents/entitlements.fixture" <<EOF
++com.apple.application-identifier=$signed_application
++com.apple.developer.team-identifier=$signed_team
++keychain-access-groups.0=$signed_group
++EOF
++    profile_team=${STUB_PROFILE_TEAM_ID:-$team_id}
++    profile_prefix=${STUB_PROFILE_APPLICATION_PREFIX:-$profile_team}
++    profile_application=${STUB_PROFILE_APPLICATION_ID:-$profile_prefix.ai.freeside.app.macos}
++    profile_group=${STUB_PROFILE_KEYCHAIN_GROUP:-$profile_application}
++    profile_team_entitlement=${STUB_PROFILE_TEAM_ENTITLEMENT:-$profile_team}
++    profile_certificate=${STUB_PROFILE_CERTIFICATE:-Zml4dHVyZSBjZXJ0aWZpY2F0ZQ==}
++    cat >"$built_app/Contents/embedded.provisionprofile" <<EOF
++TeamIdentifier.0=$profile_team
++ApplicationIdentifierPrefix.0=$profile_prefix
++DeveloperCertificates.0=$profile_certificate
++Entitlements.com.apple.application-identifier=$profile_application
++Entitlements.com.apple.developer.team-identifier=$profile_team_entitlement
++Entitlements.keychain-access-groups.0=$profile_group
++EOF
++    if [[ -n "${STUB_PROFILE_KEYCHAIN_GROUP_1:-}" ]]; then
++        printf 'Entitlements.keychain-access-groups.1=%s\n' \
++            "$STUB_PROFILE_KEYCHAIN_GROUP_1" >>"$built_app/Contents/embedded.provisionprofile"
++    fi
++    if [[ -n "${STUB_PROFILE_CERTIFICATE_1:-}" ]]; then
++        printf 'DeveloperCertificates.1=%s\n' \
++            "$STUB_PROFILE_CERTIFICATE_1" >>"$built_app/Contents/embedded.provisionprofile"
++    fi
+     if [[ -n "${STUB_INTERLOPER_AFTER_BUILD:-}" ]]; then
+         mkdir -p "$STUB_INTERLOPER_AFTER_BUILD/Contents"
+         printf 'interloper after build\n' >"$STUB_INTERLOPER_AFTER_BUILD/Contents/marker"
+@@ -283,9 +369,59 @@ STUB
+ 
+ cat >"$STUB_BIN/security" <<'STUB'
+ #!/usr/bin/env bash
+-# No signing identities. Exit successfully, like an empty keychain query, so
+-# the installer's explicit no-identity diagnostic owns the failure.
+-exit 0
++case "${1:-}" in
++find-identity)
++    if [[ -n "${FREESIDE_MAC_SIGNING_IDENTITY:-}" && \
++        "$FREESIDE_MAC_SIGNING_IDENTITY" != - && \
++        ! "$FREESIDE_MAC_SIGNING_IDENTITY" =~ ^[0-9A-Fa-f]{40}$ ]]; then
++        printf '  1) 1111111111111111111111111111111111111111 "%s"\n' \
++            "$FREESIDE_MAC_SIGNING_IDENTITY"
++    fi
++    exit 0
++    ;;
++find-certificate)
++    if [[ " $* " == *" -a "* && " $* " == *" -Z "* ]]; then
++        printf 'SHA-1 hash: 1111111111111111111111111111111111111111\n'
++    fi
++    printf '%s\n' "${STUB_SIGNER_CERTIFICATE:-fixture certificate}"
++    ;;
++cms)
++    while [[ $# -gt 0 ]]; do
++        if [[ "$1" == -i && $# -ge 2 ]]; then
++            cat "$2"
++            exit
++        fi
++        shift
++    done
++    exit 1
++    ;;
++*) exit 1 ;;
++esac
++STUB
++
++cat >"$STUB_BIN/openssl" <<'STUB'
++#!/usr/bin/env bash
++if [[ "${1:-}" == base64 ]]; then
++    [[ -n "${STUB_REAL_OPENSSL:-}" ]] || exit 1
++    exec "$STUB_REAL_OPENSSL" "$@"
++fi
++certificate=$(cat)
++case " $* " in
++*" -outform DER "*)
++    previous=''
++    output=''
++    for argument in "$@"; do
++        if [[ "$previous" == -out ]]; then
++            output=$argument
++            break
++        fi
++        previous=$argument
++    done
++    [[ -n "$output" ]] || exit 1
++    printf '%s' "$certificate" >"$output"
++    ;;
++*) printf '    organizationalUnitName = ABCDE12345\n' ;;
++esac
+ STUB
+ 
+ if [[ "${FREESIDE_TEST_REAL_RENAME:-false}" != true ]]; then
+@@ -389,6 +525,19 @@ begin_case() {
+     unset STUB_TERM_AFTER_MV_SOURCE
+     unset STUB_FAIL_VERIFY_CALL
+     unset STUB_SIGNING_IDENTITY
++    unset STUB_SIGNED_TEAM_ID
++    unset STUB_SIGNED_APPLICATION_ID
++    unset STUB_SIGNED_KEYCHAIN_GROUP
++    unset STUB_PROFILE_TEAM_ID
++    unset STUB_PROFILE_APPLICATION_PREFIX
++    unset STUB_PROFILE_APPLICATION_ID
++    unset STUB_PROFILE_KEYCHAIN_GROUP
++    unset STUB_PROFILE_KEYCHAIN_GROUP_1
++    unset STUB_PROFILE_TEAM_ENTITLEMENT
++    unset STUB_PROFILE_CERTIFICATE
++    unset STUB_PROFILE_CERTIFICATE_1
++    unset STUB_SIGNER_CERTIFICATE
++    unset STUB_CODESIGN_DROP_ENTITLEMENTS
+     unset RUN_HOME
+     echo "case: $CASE"
+ }
+@@ -442,7 +591,7 @@ assert_exists() {
+ assert_file_contains() {
+     local path=$1
+     local text=$2
+-    if [[ -f "$path" ]] && grep -Fq "$text" "$path"; then
++    if [[ -f "$path" ]] && grep -Fq -- "$text" "$path"; then
+         pass=$((pass + 1))
+     else
+         report_failure "expected $path to contain: $text"
+@@ -452,7 +601,7 @@ assert_file_contains() {
+ assert_file_omits() {
+     local path=$1
+     local text=$2
+-    if [[ -f "$path" ]] && ! grep -Fq "$text" "$path"; then
++    if [[ -f "$path" ]] && ! grep -Fq -- "$text" "$path"; then
+         pass=$((pass + 1))
+     else
+         report_failure "expected $path to omit: $text"
+@@ -900,10 +1049,10 @@ fi
+ begin_case "first install verification failure removes the replacement" 13
+ destination=$CASE_DIR/Applications/Freeside.app
+ export STUB_BUILD_SUCCEEDS=true
+-export STUB_FAIL_VERIFY_CALL=3
++export STUB_FAIL_VERIFY_CALL=4
+ run_installer
+ assert_rc 1
+-assert_contains "the installed app failed signature verification"
++assert_contains "the app failed signature verification: $destination"
+ assert_contains "removed the unverified install"
+ assert_absent "$destination"
+ assert_absent "$destination.install-superseded"
+@@ -926,10 +1075,10 @@ superseded=$destination.install-superseded
+ make_recovery_app "$destination"
+ old_inode=$(inode "$destination")
+ export STUB_BUILD_SUCCEEDS=true
+-export STUB_FAIL_VERIFY_CALL=3
++export STUB_FAIL_VERIFY_CALL=4
+ run_installer
+ assert_rc 1
+-assert_contains "the installed app failed signature verification"
++assert_contains "the app failed signature verification: $destination"
+ assert_contains "restored the previous install"
+ assert_exists "$destination/Contents/marker"
+ assert_absent "$superseded"
+@@ -1002,7 +1151,7 @@ export STUB_BUILD_SUCCEEDS=true
+ export STUB_INTERLOPER_ON_VERIFY_DEST=$destination
+ run_installer
+ assert_rc 1
+-assert_contains "the installed app failed signature verification"
++assert_contains "the app failed signature verification: $destination"
+ assert_contains "something else now occupies $destination"
+ assert_contains "previous install was left at $superseded"
+ assert_exists "$destination/marker"
+@@ -1109,6 +1258,166 @@ assert_rc 1
+ assert_contains "--daemon-path is not an executable file"
+ assert_absent "$CASE_DIR/xcodebuild-called"
+ 
++begin_case "ad-hoc signing is rejected before building" ad-hoc
++export STUB_SIGNING_IDENTITY=-
++run_installer
++assert_rc 1
++assert_contains "ad-hoc signing cannot authorize the Data Protection Keychain access group"
++assert_absent "$CASE_DIR/xcodebuild-called"
++
++begin_case "profile authorization mismatch fails before replacement" profile-mismatch
++destination=$CASE_DIR/Applications/Freeside.app
++make_recovery_app "$destination"
++old_inode=$(inode "$destination")
++export STUB_BUILD_SUCCEEDS=true
++export STUB_PROFILE_KEYCHAIN_GROUP=ABCDE12345.ai.freeside.other
++run_installer
++assert_rc 1
++assert_contains "the profile-authorized Keychain access group"
++assert_inode "$destination" "$old_inode" \
++    "profile mismatch replaced the existing app"
++
++begin_case "signed macOS application identifier mismatch fails before replacement" signed-app-id-mismatch
++destination=$CASE_DIR/Applications/Freeside.app
++make_recovery_app "$destination"
++old_inode=$(inode "$destination")
++export STUB_BUILD_SUCCEEDS=true
++export STUB_SIGNED_APPLICATION_ID=ABCDE12345.ai.freeside.other
++run_installer
++assert_rc 1
++assert_contains "the signed application identifier"
++assert_inode "$destination" "$old_inode" \
++    "signed application identifier mismatch replaced the existing app"
++
++begin_case "profile application identifier mismatch fails before replacement" profile-app-id-mismatch
++destination=$CASE_DIR/Applications/Freeside.app
++make_recovery_app "$destination"
++old_inode=$(inode "$destination")
++export STUB_BUILD_SUCCEEDS=true
++export STUB_PROFILE_APPLICATION_ID=ABCDE12345.ai.freeside.other
++run_installer
++assert_rc 1
++assert_contains "the profile-authorized application identifier"
++assert_inode "$destination" "$old_inode" \
++    "profile application identifier mismatch replaced the existing app"
++
++begin_case "profile team entitlement mismatch fails before replacement" profile-team-mismatch
++destination=$CASE_DIR/Applications/Freeside.app
++make_recovery_app "$destination"
++old_inode=$(inode "$destination")
++export STUB_BUILD_SUCCEEDS=true
++export STUB_PROFILE_TEAM_ENTITLEMENT=ZXCVB67890
++run_installer
++assert_rc 1
++assert_contains "the profile-authorized team identifier"
++assert_inode "$destination" "$old_inode" \
++    "profile team entitlement mismatch replaced the existing app"
++
++begin_case "profile signer mismatch fails before replacement" profile-signer-mismatch
++destination=$CASE_DIR/Applications/Freeside.app
++make_recovery_app "$destination"
++old_inode=$(inode "$destination")
++export STUB_BUILD_SUCCEEDS=true
++export STUB_PROFILE_CERTIFICATE=b3RoZXIgY2VydGlmaWNhdGU=
++run_installer
++assert_rc 1
++assert_contains "the selected signing certificate is not authorized"
++assert_inode "$destination" "$old_inode" \
++    "profile signer mismatch replaced the existing app"
++
++begin_case "profile signer allowlist may match after another certificate" profile-signer-second-entry
++destination=$CASE_DIR/Applications/Freeside.app
++export STUB_BUILD_SUCCEEDS=true
++export STUB_PROFILE_CERTIFICATE=b3RoZXIgY2VydGlmaWNhdGU=
++export STUB_PROFILE_CERTIFICATE_1=Zml4dHVyZSBjZXJ0aWZpY2F0ZQ==
++run_installer
++assert_rc 0
++assert_exists "$destination"
++assert_file_contains \
++    "$destination/Contents/embedded.provisionprofile" \
++    'DeveloperCertificates.1=Zml4dHVyZSBjZXJ0aWZpY2F0ZQ=='
++
++begin_case "malformed profile signer fails before replacement" malformed-profile-signer
++destination=$CASE_DIR/Applications/Freeside.app
++make_recovery_app "$destination"
++old_inode=$(inode "$destination")
++export STUB_BUILD_SUCCEEDS=true
++export STUB_PROFILE_CERTIFICATE='not base64!'
++run_installer
++assert_rc 1
++assert_contains "the profile has a malformed developer certificate at index 0"
++assert_inode "$destination" "$old_inode" \
++    "malformed profile signer replaced the existing app"
++
++begin_case "team wildcard profile authorizes the exact signed group" profile-wildcard
++destination=$CASE_DIR/Applications/Freeside.app
++export STUB_BUILD_SUCCEEDS=true
++export STUB_PROFILE_APPLICATION_ID='ABCDE12345.*'
++export STUB_PROFILE_KEYCHAIN_GROUP='ABCDE12345.*'
++run_installer
++assert_rc 0
++assert_exists "$destination"
++assert_file_contains \
++    "$destination/Contents/embedded.provisionprofile" \
++    'Entitlements.keychain-access-groups.0=ABCDE12345.*'
++
++begin_case "scoped profile wildcards authorize exact signed identifiers" scoped-profile-wildcard
++destination=$CASE_DIR/Applications/Freeside.app
++export STUB_BUILD_SUCCEEDS=true
++export STUB_PROFILE_APPLICATION_ID='ABCDE12345.ai.freeside.*'
++export STUB_PROFILE_KEYCHAIN_GROUP='ABCDE12345.ai.freeside.*'
++run_installer
++assert_rc 0
++assert_exists "$destination"
++assert_file_contains \
++    "$destination/Contents/entitlements.fixture" \
++    'com.apple.application-identifier=ABCDE12345.ai.freeside.app.macos'
++
++begin_case "profile group allowlist may match after an unrelated entry" profile-group-second-entry
++destination=$CASE_DIR/Applications/Freeside.app
++export STUB_BUILD_SUCCEEDS=true
++export STUB_PROFILE_KEYCHAIN_GROUP=com.apple.token
++export STUB_PROFILE_KEYCHAIN_GROUP_1='ABCDE12345.ai.freeside.*'
++run_installer
++assert_rc 0
++assert_exists "$destination"
++assert_file_contains \
++    "$destination/Contents/embedded.provisionprofile" \
++    'Entitlements.keychain-access-groups.1=ABCDE12345.ai.freeside.*'
++
++begin_case "legacy App ID prefix is verified independently of team" legacy-prefix
++destination=$CASE_DIR/Applications/Freeside.app
++export STUB_BUILD_SUCCEEDS=true
++export STUB_PROFILE_APPLICATION_PREFIX=ZXCVB67890
++export STUB_PROFILE_APPLICATION_ID=ZXCVB67890.ai.freeside.app.macos
++export STUB_PROFILE_KEYCHAIN_GROUP='ZXCVB67890.*'
++export STUB_SIGNED_APPLICATION_ID=ZXCVB67890.ai.freeside.app.macos
++export STUB_SIGNED_KEYCHAIN_GROUP=ZXCVB67890.ai.freeside.app.macos
++run_installer
++assert_rc 0
++assert_exists "$destination"
++assert_file_contains \
++    "$destination/Contents/embedded.provisionprofile" \
++    'TeamIdentifier.0=ABCDE12345'
++assert_file_contains \
++    "$destination/Contents/embedded.provisionprofile" \
++    'ApplicationIdentifierPrefix.0=ZXCVB67890'
++assert_file_contains \
++    "$destination/Contents/entitlements.fixture" \
++    'keychain-access-groups.0=ZXCVB67890.ai.freeside.app.macos'
++
++begin_case "post-sign entitlement mismatch fails before replacement" entitlement-mismatch
++destination=$CASE_DIR/Applications/Freeside.app
++make_recovery_app "$destination"
++old_inode=$(inode "$destination")
++export STUB_BUILD_SUCCEEDS=true
++export STUB_CODESIGN_DROP_ENTITLEMENTS=true
++run_installer
++assert_rc 1
++assert_contains "the signed Keychain access group"
++assert_inode "$destination" "$old_inode" \
++    "post-sign entitlement mismatch replaced the existing app"
++
+ begin_case "daemon is bundled and state paths are templated before the final seal" 29
+ destination=$CASE_DIR/Applications/Freeside.app
+ export STUB_BUILD_SUCCEEDS=true
+@@ -1129,6 +1438,16 @@ assert_program_arguments "$agent" \
+     -listen 127.0.0.1:7331
+ assert_file_contains "$destination/Contents/Resources/freesided" "#!/usr/bin/env bash"
+ assert_exists "$CASE_DIR/codesign-sign-called"
++assert_file_contains "$CASE_DIR/xcodebuild-args" "-allowProvisioningUpdates"
++assert_file_contains "$CASE_DIR/xcodebuild-args" "CODE_SIGN_STYLE=Automatic"
++assert_file_contains "$CASE_DIR/xcodebuild-args" "CODE_SIGN_IDENTITY=Apple Development"
++assert_file_contains "$CASE_DIR/xcodebuild-args" "DEVELOPMENT_TEAM=ABCDE12345"
++assert_file_omits "$CASE_DIR/xcodebuild-args" "CODE_SIGN_STYLE=Manual"
++assert_file_contains "$CASE_DIR/codesign-sign-calls" "--entitlements"
++assert_file_contains \
++    "$destination/Contents/entitlements.fixture" \
++    "keychain-access-groups.0=ABCDE12345.ai.freeside.app.macos"
++assert_exists "$destination/Contents/embedded.provisionprofile"
+ assert_file_contains \
+     "$SCRIPT_DIR/../app/Apps/macOS/LaunchAgents/ai.freeside.daemon.plist" \
+     "Contents/Resources/freesided"

@@ -1,0 +1,124 @@
+{
+  "findings": [
+    {
+      "id": "pr960-r01-f1",
+      "round": 1,
+      "severity": "P1",
+      "path": "app/Sources/FreesideCore/DeviceCredentialStore.swift",
+      "title": "Keep legacy cleanup off iOS",
+      "comment_url": "https://github.com/freeside-ai/freeside/pull/960#discussion_r3864833661",
+      "disposition": "fixed",
+      "reason": "Fixed in `830ea6b60797d4ba65ec6eece637b58c436d333a`: legacy migration and cleanup are now disabled on non-macOS platforms, with a regression test that loads the authoritative item twice and verifies no legacy query or delete occurs.",
+      "reply_url": "https://github.com/freeside-ai/freeside/pull/960#discussion_r3864906620",
+      "disposed_at": "2026-08-26T16:55:31Z"
+    },
+    {
+      "id": "pr960-r01-f2",
+      "round": 1,
+      "severity": "P1",
+      "path": "app/scripts/install-mac-app.sh",
+      "title": "Honor wildcard Keychain groups in provisioning profiles",
+      "comment_url": "https://github.com/freeside-ai/freeside/pull/960#discussion_r3864833671",
+      "disposition": "fixed",
+      "reason": "Fixed in `830ea6b60797d4ba65ec6eece637b58c436d333a`: profile validation now accepts the exact group or the verified team-wide `TEAMID.*` authorization, while the signed app entitlement remains exact; the installer harness covers wildcard acceptance and mismatch rejection.",
+      "reply_url": "https://github.com/freeside-ai/freeside/pull/960#discussion_r3864906935",
+      "disposed_at": "2026-08-26T16:55:34Z"
+    },
+    {
+      "id": "pr960-r02-f1",
+      "round": 2,
+      "severity": "P1",
+      "path": "app/Sources/FreesideCore/DeviceCredentialStore.swift",
+      "title": "Preserve the authoritative credential if legacy cleanup fails",
+      "comment_url": "https://github.com/freeside-ai/freeside/pull/960#discussion_r3864958541",
+      "disposition": "fixed",
+      "reason": "Fixed in `3579da130da81a8970025ae901242b43ffefa0b1`: replacement now encodes first and removes legacy material before touching the authoritative Data Protection item, so a legacy ACL failure preserves the usable credential; the focused failure test pins that ordering.",
+      "reply_url": "https://github.com/freeside-ai/freeside/pull/960#discussion_r3864998490",
+      "disposed_at": "2026-08-26T17:08:26Z"
+    },
+    {
+      "id": "pr960-r03-f1",
+      "round": 3,
+      "severity": "P2",
+      "path": "app/scripts/install-mac-app.sh",
+      "title": "Honor distinct application-identifier prefixes",
+      "comment_url": "https://github.com/freeside-ai/freeside/pull/960#discussion_r3865042147",
+      "disposition": "fixed",
+      "reason": "Fixed in `88f517933e9a22f19845bad12ca61100ec45508d`: the installer now derives the exact application identifier and private group from the validated profile App ID prefix plus bundle ID, while independently requiring the certificate, signed team entitlement, and profile Team ID to agree; the harness covers a distinct legacy bundle-seed prefix.",
+      "reply_url": "https://github.com/freeside-ai/freeside/pull/960#discussion_r3865097190",
+      "disposed_at": "2026-08-26T17:21:36Z"
+    },
+    {
+      "id": "pr960-r04-f1",
+      "round": 4,
+      "severity": "P1",
+      "path": "app/scripts/install-mac-app.sh",
+      "title": "Use the macOS application identifier entitlement key",
+      "comment_url": "https://github.com/freeside-ai/freeside/pull/960#discussion_r3865133703",
+      "disposition": "fixed",
+      "reason": "Fixed in cb6666a51b90ae7640148643f71e502c8fef813b. The installer now validates native macOS `com.apple.application-identifier` in both the signed entitlements and provisioning profile.",
+      "reply_url": "https://github.com/freeside-ai/freeside/pull/960#discussion_r3865214175",
+      "disposed_at": "2026-08-26T17:36:15Z"
+    },
+    {
+      "id": "pr960-r05-f1",
+      "round": 5,
+      "severity": "P1",
+      "path": "app/scripts/install-mac-app.sh",
+      "title": "Allow Xcode to register the target Mac",
+      "comment_url": "https://github.com/freeside-ai/freeside/pull/960#discussion_r3865267573",
+      "disposition": "declined",
+      "reason": "Declined for this work unit. `-allowProvisioningDeviceRegistration` mutates the Apple developer account by registering this Mac, which #959 explicitly excludes and this run was not authorized to do.",
+      "reply_url": "https://github.com/freeside-ai/freeside/pull/960#discussion_r3865281174",
+      "disposed_at": "2026-08-26T17:45:24Z"
+    },
+    {
+      "id": "pr960-r06-f1",
+      "round": 6,
+      "severity": "P2",
+      "path": "app/scripts/install-mac-app.sh",
+      "title": "Bind the final signer to the provisioning profile",
+      "comment_url": "https://github.com/freeside-ai/freeside/pull/960#discussion_r3865372376",
+      "disposition": "fixed",
+      "reason": "Fixed in 25861064531c9573be8ffea8f9601df3235d4b56. The installer now resolves the selected identity to one exact SHA-1 fingerprint, encodes that certificate as DER, and requires an exact match in the embedded profile’s `DeveloperCertificates` allowlist before using the same identity for the final seal.",
+      "reply_url": "https://github.com/freeside-ai/freeside/pull/960#discussion_r3865496464",
+      "disposed_at": "2026-08-26T18:11:57Z"
+    },
+    {
+      "id": "pr960-r07-f1",
+      "round": 7,
+      "severity": "P1",
+      "path": "app/scripts/install-mac-app.sh",
+      "title": "Escape dots in entitlement key paths",
+      "comment_url": "https://github.com/freeside-ai/freeside/pull/960#discussion_r3865529215",
+      "disposition": "fixed",
+      "reason": "Fixed in 52fc241e946c538d02579563d4d3f280877291ef. All literal periods in native macOS signed-entitlement keys and the dotted profile entitlement-key components are now escaped for `plutil` key-path parsing.",
+      "reply_url": "https://github.com/freeside-ai/freeside/pull/960#discussion_r3865569635",
+      "disposed_at": "2026-08-26T18:21:50Z"
+    },
+    {
+      "id": "pr960-r08-f1",
+      "round": 8,
+      "severity": "P1",
+      "path": "app/scripts/install-mac-app.sh",
+      "title": "Decode profile certificates before comparing them",
+      "comment_url": "https://github.com/freeside-ai/freeside/pull/960#discussion_r3865636590",
+      "disposition": "fixed",
+      "reason": "Fixed in 6b9ecea97fd04453bd46272a836a671cc17ec853. The verifier now strictly validates each raw profile value as base64, decodes it with native `/usr/bin/base64 -D` to DER, fails closed on malformed data, and compares exact DER bytes.",
+      "reply_url": "https://github.com/freeside-ai/freeside/pull/960#discussion_r3865689525",
+      "disposed_at": "2026-08-26T18:38:28Z"
+    },
+    {
+      "id": "pr960-r09-f1",
+      "round": 9,
+      "severity": "P1",
+      "path": "app/scripts/install-mac-app.sh",
+      "title": "Keep certificate decoding portable for Linux CI",
+      "comment_url": "https://github.com/freeside-ai/freeside/pull/960#discussion_r3865707106",
+      "disposition": "fixed",
+      "reason": "Fixed in 8639ad3609e0d7ed8515a66a0b85a70938f346d5. Certificate decoding now uses portable `openssl base64 -d -A -out`, which is already an installer dependency and works on both macOS and Ubuntu.",
+      "reply_url": "https://github.com/freeside-ai/freeside/pull/960#discussion_r3865746430",
+      "disposed_at": "2026-08-26T18:46:13Z"
+    }
+  ]
+}

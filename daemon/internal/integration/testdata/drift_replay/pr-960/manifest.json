@@ -1,0 +1,45 @@
+{
+  "pr": 960,
+  "title": "Use the Data Protection Keychain for device credentials",
+  "specification_source": "issue #959 body",
+  "instructions_source": "AGENTS.md at ab7dc2483430237c24deaefa77d5233728843ec7",
+  "base_sha": "ab7dc2483430237c24deaefa77d5233728843ec7",
+  "head_sha": "8639ad3609e0d7ed8515a66a0b85a70938f346d5",
+  "round_one_base_sha": "ab7dc2483430237c24deaefa77d5233728843ec7",
+  "round_one_head_sha": "986fee97fcdd833cf0aa6034eb4701851c054770",
+  "last_finding_round": 9,
+  "declared_paths": [
+    "app/**",
+    "devlog/**",
+    "scripts/test-install-mac-app.sh"
+  ],
+  "diff_metrics": {
+    "cumulative": {
+      "files_changed": 8,
+      "additions": 1175,
+      "deletions": 101,
+      "base_sha": "ab7dc2483430237c24deaefa77d5233728843ec7",
+      "head_sha": "8639ad3609e0d7ed8515a66a0b85a70938f346d5"
+    },
+    "round": {
+      "files_changed": 3,
+      "additions": 15,
+      "deletions": 6,
+      "base_sha": "6b9ecea97fd04453bd46272a836a671cc17ec853",
+      "head_sha": "8639ad3609e0d7ed8515a66a0b85a70938f346d5"
+    }
+  },
+  "commands": [
+    "gh api repos/freeside-ai/freeside/pulls/960/reviews --paginate  # rounds: Codex reviews with inline findings, by submitted_at; each round's head is its commit_id",
+    "gh api repos/freeside-ai/freeside/pulls/960/comments --paginate  # findings: Codex root comments; dispositions: the first reply to each",
+    "git fetch origin 986fee97fcdd833cf0aa6034eb4701851c054770 6b9ecea97fd04453bd46272a836a671cc17ec853 8639ad3609e0d7ed8515a66a0b85a70938f346d5",
+    "git merge-base c4ef2e9819d0b9021189a00b27dbba5dbd11f412^1 986fee97fcdd833cf0aa6034eb4701851c054770  # round_one_base_sha",
+    "git merge-base c4ef2e9819d0b9021189a00b27dbba5dbd11f412^1 8639ad3609e0d7ed8515a66a0b85a70938f346d5  # base_sha",
+    "git diff --binary --full-index --no-ext-diff --no-textconv ab7dc2483430237c24deaefa77d5233728843ec7 986fee97fcdd833cf0aa6034eb4701851c054770 -- > round_one.patch",
+    "git diff --binary --full-index --no-ext-diff --no-textconv ab7dc2483430237c24deaefa77d5233728843ec7 8639ad3609e0d7ed8515a66a0b85a70938f346d5 -- > final.patch",
+    "git show ab7dc2483430237c24deaefa77d5233728843ec7:AGENTS.md > instructions.md",
+    "gh issue view 959 --json body --jq .body > spec.md",
+    "git diff --numstat ab7dc2483430237c24deaefa77d5233728843ec7 8639ad3609e0d7ed8515a66a0b85a70938f346d5 --  # diff_metrics.cumulative",
+    "git diff --numstat 6b9ecea97fd04453bd46272a836a671cc17ec853 8639ad3609e0d7ed8515a66a0b85a70938f346d5 --  # diff_metrics.round: the last round with findings against the merged head"
+  ]
+}

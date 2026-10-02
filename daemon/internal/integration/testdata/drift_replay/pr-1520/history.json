@@ -1,0 +1,160 @@
+{
+  "findings": [
+    {
+      "id": "pr1520-r01-f1",
+      "round": 1,
+      "severity": "P1",
+      "path": "daemon/cmd/freesided/main.go",
+      "title": "Resolve the account home without trusting `$HOME`",
+      "comment_url": "https://github.com/freeside-ai/freeside/pull/1520#discussion_r4085959471",
+      "disposition": "fixed",
+      "reason": "Fixed in a1984a5a561e3f184e0aa3f3cd4e721e86f29944. The daemon retains its os.UserHomeDir() behavior, then separately resolves the effective account home for ephemeral runs and applies the same guard.",
+      "reply_url": "https://github.com/freeside-ai/freeside/pull/1520#discussion_r4086016491",
+      "disposed_at": "2026-09-23T18:43:17Z"
+    },
+    {
+      "id": "pr1520-r01-f2",
+      "round": 1,
+      "severity": "P1",
+      "path": "daemon/cmd/freesided/environment.go",
+      "title": "Guard every writable daemon path",
+      "comment_url": "https://github.com/freeside-ai/freeside/pull/1520#discussion_r4085959482",
+      "disposition": "deferred",
+      "reason": "Deferred to #1523. The alias is reachable, but #1501’s approved contract explicitly limits this PR to -db plus WAL/SHM, -state-dir, -publication-state-dir, -publication-credentials-dir, and -review-input-root.",
+      "reply_url": "https://github.com/freeside-ai/freeside/pull/1520#discussion_r4086018038",
+      "disposed_at": "2026-09-23T18:43:27Z"
+    },
+    {
+      "id": "pr1520-r02-f1",
+      "round": 2,
+      "severity": "P1",
+      "path": "daemon/cmd/freesided/environment.go",
+      "title": "Pin supervised paths to the exact tier layout",
+      "comment_url": "https://github.com/freeside-ai/freeside/pull/1520#discussion_r4086050341",
+      "disposition": "deferred",
+      "reason": "Deferred to #1524. #1501’s approved contract intentionally requires prod/dev database and state paths to be under their own tier root; it does not derive or pin exact daemon and credential directories.",
+      "reply_url": "https://github.com/freeside-ai/freeside/pull/1520#discussion_r4086059780",
+      "disposed_at": "2026-09-23T18:48:11Z"
+    },
+    {
+      "id": "pr1520-r02-f2",
+      "round": 2,
+      "severity": "P1",
+      "path": "daemon/cmd/freesided/environment.go",
+      "title": "Enforce the fixed port for each supervised tier",
+      "comment_url": "https://github.com/freeside-ai/freeside/pull/1520#discussion_r4086050359",
+      "disposition": "deferred",
+      "reason": "Deferred to #1524. #1501’s approved contract reserves ports 7331 and 7332 only from ephemeral callers; it intentionally has no prod/dev port constraint.",
+      "reply_url": "https://github.com/freeside-ai/freeside/pull/1520#discussion_r4086061318",
+      "disposed_at": "2026-09-23T18:48:22Z"
+    },
+    {
+      "id": "pr1520-r03-f1",
+      "round": 3,
+      "severity": "P1",
+      "path": "daemon/cmd/freesided/main.go",
+      "title": "Update the LaunchAgent atomically with the new default",
+      "comment_url": "https://github.com/freeside-ai/freeside/pull/1520#discussion_r4086140008",
+      "disposition": "deferred",
+      "reason": "Deferred to #1500, the declared `merges-after #1501` installer unit. This PR’s Review Notes already state that #1500 must merge immediately after it and that the production installer must not run from an intervening base; changing app launch vectors is an explicit #1501 non-goal.",
+      "reply_url": "https://github.com/freeside-ai/freeside/pull/1520#discussion_r4086228661",
+      "disposed_at": "2026-09-23T19:06:56Z"
+    },
+    {
+      "id": "pr1520-r04-f1",
+      "round": 4,
+      "severity": "P1",
+      "path": "daemon/cmd/freesided/environment.go",
+      "title": "Export the environment registry as AllEnvironments",
+      "comment_url": "https://github.com/freeside-ai/freeside/pull/1520#discussion_r4086212537",
+      "disposition": "fixed",
+      "reason": "Fixed in 618d2d27f1cbd10f9d5d6cf08a21955c6c16ea10. The enum registry is now the exported AllEnvironments catalog required by the daemon convention.",
+      "reply_url": "https://github.com/freeside-ai/freeside/pull/1520#discussion_r4086295418",
+      "disposed_at": "2026-09-23T19:14:14Z"
+    },
+    {
+      "id": "pr1520-r05-f1",
+      "round": 5,
+      "severity": "P1",
+      "path": "daemon/cmd/freesided/main.go",
+      "title": "Resolve the account home for the dev tier",
+      "comment_url": "https://github.com/freeside-ai/freeside/pull/1520#discussion_r4086275192",
+      "disposition": "declined",
+      "reason": "Declined: the approved #1501 contract explicitly preserves os.UserHomeDir() semantics for prod and dev so overridden-home tests remain valid. The effective-account home check is intentionally an additional ephemeral-only guard.",
+      "reply_url": "https://github.com/freeside-ai/freeside/pull/1520#discussion_r4086295599",
+      "disposed_at": "2026-09-23T19:14:15Z"
+    },
+    {
+      "id": "pr1520-r05-f2",
+      "round": 5,
+      "severity": "P1",
+      "path": "daemon/cmd/freesided/environment.go",
+      "title": "Reject hard-linked databases before fake publication",
+      "comment_url": "https://github.com/freeside-ai/freeside/pull/1520#discussion_r4086275206",
+      "disposition": "fixed",
+      "reason": "Fixed in 618d2d27f1cbd10f9d5d6cf08a21955c6c16ea10. The fake-publication command now acquires daemonlock before opening either the database or its blob store, so its existing multiple-link rejection and exclusive lock cover this path too.",
+      "reply_url": "https://github.com/freeside-ai/freeside/pull/1520#discussion_r4086295788",
+      "disposed_at": "2026-09-23T19:14:16Z"
+    },
+    {
+      "id": "pr1520-r06-f1",
+      "round": 6,
+      "severity": "P1",
+      "path": "daemon/cmd/freesided/fake_publication.go",
+      "title": "Acquire the lock before fake-publication bootstrap",
+      "comment_url": "https://github.com/freeside-ai/freeside/pull/1520#discussion_r4086346306",
+      "disposition": "fixed",
+      "reason": "Fixed in ab339f94d2823bc90f7fd93b1489d1869fae60f6. The fake-publication command now applies defaults and acquires daemonlock before replay bootstrap, so a multiple-link database is rejected before any store open.",
+      "reply_url": "https://github.com/freeside-ai/freeside/pull/1520#discussion_r4086357315",
+      "disposed_at": "2026-09-23T19:21:15Z"
+    },
+    {
+      "id": "pr1520-r07-f1",
+      "round": 7,
+      "severity": "P1",
+      "path": "daemon/cmd/freesided/environment.go",
+      "title": "Reject APFS firmlink aliases of supervised roots",
+      "comment_url": "https://github.com/freeside-ai/freeside/pull/1520#discussion_r4088503609",
+      "disposition": "fixed",
+      "reason": "Fixed in be95aa3d056868f558bf7a6a70f4df6cc089a25f. `underRoot` now walks existing candidate ancestors and compares filesystem identity with the supervised root, so APFS firmlink spellings are rejected.",
+      "reply_url": "https://github.com/freeside-ai/freeside/pull/1520#discussion_r4088539453",
+      "disposed_at": "2026-09-24T00:12:27Z"
+    },
+    {
+      "id": "pr1520-r08-f1",
+      "round": 8,
+      "severity": "P1",
+      "path": "daemon/cmd/freesided/environment.go",
+      "title": "Handle nonexistent roots when detecting firmlink aliases",
+      "comment_url": "https://github.com/freeside-ai/freeside/pull/1520#discussion_r4088555882",
+      "disposition": "fixed",
+      "reason": "Fixed in 49a0a29e34da1bfec15cf671cd4dd11777b7e4a8. The guard now compares candidate ancestry with the supervised root’s deepest existing ancestor and requires the missing root suffix to match, so the APFS alias is rejected before `MkdirAll` can create the supervised root.",
+      "reply_url": "https://github.com/freeside-ai/freeside/pull/1520#discussion_r4088572039",
+      "disposed_at": "2026-09-24T00:18:37Z"
+    },
+    {
+      "id": "pr1520-r09-f1",
+      "round": 9,
+      "severity": "P1",
+      "path": "daemon/cmd/freesided/environment.go",
+      "title": "Fold suffix case when matching firmlink aliases",
+      "comment_url": "https://github.com/freeside-ai/freeside/pull/1520#discussion_r4088585710",
+      "disposition": "fixed",
+      "reason": "Fixed in 52d00f38f54682633d79a47d6ad404e796a2d8b8. After matching the existing ancestor by filesystem identity, the guard now folds the missing suffix only for the rejection check.",
+      "reply_url": "https://github.com/freeside-ai/freeside/pull/1520#discussion_r4088602322",
+      "disposed_at": "2026-09-24T00:24:42Z"
+    },
+    {
+      "id": "pr1520-r10-f1",
+      "round": 10,
+      "severity": "P1",
+      "path": "daemon/cmd/freesided/environment.go",
+      "title": "Reject hard-linked database sidecars",
+      "comment_url": "https://github.com/freeside-ai/freeside/pull/1520#discussion_r4088617427",
+      "disposition": "fixed",
+      "reason": "Fixed in d845b6cbd7bbc7839bad57c14e913959b337d49b. The ephemeral guard now compares any multiply linked WAL or SHM sidecar with files under both supervised roots, and rechecks reconstructed missing-component paths so a trailing `..` cannot expose a supervised child symlink.",
+      "reply_url": "https://github.com/freeside-ai/freeside/pull/1520#discussion_r4088696073",
+      "disposed_at": "2026-09-24T00:39:52Z"
+    }
+  ]
+}

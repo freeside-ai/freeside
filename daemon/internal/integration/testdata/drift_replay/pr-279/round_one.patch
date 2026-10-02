@@ -1,0 +1,550 @@
+diff --git a/daemon/internal/publish/doctor.go b/daemon/internal/publish/doctor.go
+index a7f26ca2343324044a548e2ccffbca8a9eeea31b..b29baf167a7e05fdbbed20c55f687c6d58ce47cd 100644
+--- a/daemon/internal/publish/doctor.go
++++ b/daemon/internal/publish/doctor.go
+@@ -18,6 +18,7 @@ const (
+ 	CredentialFindingJanitorInactive    CredentialFindingCode = "janitor_inactive"
+ 	CredentialFindingLegacyLayout       CredentialFindingCode = "legacy_singleton_layout"
+ 	CredentialFindingReusedMachineKey   CredentialFindingCode = "reused_machine_key"
++	CredentialFindingUnreadableRecord   CredentialFindingCode = "unreadable_registration" //nolint:gosec // diagnostic vocabulary, not a credential
+ )
+ 
+ // AllCredentialFindingCodes is the single registration point for doctor
+@@ -30,6 +31,7 @@ var AllCredentialFindingCodes = []CredentialFindingCode{
+ 	CredentialFindingJanitorInactive,
+ 	CredentialFindingLegacyLayout,
+ 	CredentialFindingReusedMachineKey,
++	CredentialFindingUnreadableRecord,
+ }
+ 
+ func (c CredentialFindingCode) valid() bool {
+@@ -40,7 +42,8 @@ func (c CredentialFindingCode) valid() bool {
+ 		CredentialFindingMetadataMismatch,
+ 		CredentialFindingJanitorInactive,
+ 		CredentialFindingLegacyLayout,
+-		CredentialFindingReusedMachineKey:
++		CredentialFindingReusedMachineKey,
++		CredentialFindingUnreadableRecord:
+ 		return true
+ 	default:
+ 		return false
+@@ -115,6 +118,16 @@ func (d *CredentialDoctor) Check(
+ 			return []CredentialFinding{credentialFinding(CredentialFindingBadPermissions, 0, 0, "")}, nil
+ 		case errors.Is(err, ErrNoAppCredentials), errors.Is(err, ErrNoAppRegistration):
+ 			return []CredentialFinding{credentialFinding(CredentialFindingMissingKey, 0, 0, "")}, nil
++		case errors.Is(err, ErrUnreadableRegistration):
++			// Enumeration fails closed on the whole keystore, so the finding
++			// carries the one record's owner ID: without it the operator
++			// cannot tell which registration to repair or quarantine.
++			var unreadable *UnreadableRegistrationError
++			var ownerID int64
++			if errors.As(err, &unreadable) {
++				ownerID = unreadable.OwnerID
++			}
++			return []CredentialFinding{credentialFinding(CredentialFindingUnreadableRecord, 0, ownerID, "")}, nil
+ 		default:
+ 			return nil, fmt.Errorf("credential doctor: inspect keystore: %w", err)
+ 		}
+diff --git a/daemon/internal/publish/errors.go b/daemon/internal/publish/errors.go
+index e532eeb0b3a93c1abd618a6aad454a1509ace0ad..3acaa55fb74be132e4e9ef95319d871245552d73 100644
+--- a/daemon/internal/publish/errors.go
++++ b/daemon/internal/publish/errors.go
+@@ -58,6 +58,17 @@ var ErrNoAppRegistration = errors.New("no GitHub App registration for owner")
+ // requires both values explicitly before relocating the credential.
+ var ErrLegacyAppMigrationRequired = errors.New("legacy GitHub App credentials require explicit migration")
+ 
++// ErrUnreadableRegistration reports that one owner-keyed registration
++// failed the trust gate every load runs (its key, metadata, or persisted
++// identity). Enumeration still fails closed rather than skipping the
++// record: owner resolution selects among all local registrations, so a
++// partial view could bind an owner through a second registration while
++// the unreadable one binds it too, and the janitor cannot claim complete
++// coverage while one registration is invisible. The error names the
++// record so the operator repairs or quarantines exactly that
++// registration instead of the whole keystore reading as broken.
++var ErrUnreadableRegistration = errors.New("GitHub App registration in the keystore is unreadable")
++
+ // ErrCredentialPermissions is returned when on-disk credential files or
+ // directories are reachable by group or other. The keystore re-asserts
+ // containment on every load and fails closed rather than narrowing the
+diff --git a/daemon/internal/publish/keystore.go b/daemon/internal/publish/keystore.go
+index 939b557ef69c4d5cb8bfa51c4dd82ff55e26ca87..c856a905332e7b07d4e2ac60a5577eff04c843de 100644
+--- a/daemon/internal/publish/keystore.go
++++ b/daemon/internal/publish/keystore.go
+@@ -35,8 +35,35 @@ const (
+ 	appDirName   = "github-app"
+ 	keyFileName  = "app.pem"
+ 	metaFileName = "app.json"
++
++	// quarantineDirSuffix names the sibling directory holding records the
++	// operator has withdrawn from this host. It is deliberately not one of
++	// the legacy-singleton journal suffixes (.legacy/.old/.staging), which
++	// migration treats as credential sources.
++	quarantineDirSuffix = ".quarantine"
+ )
+ 
++// UnreadableRegistrationError names the single registration whose record
++// failed to load, so a caller can route the operator to it. OwnerID is
++// the record's directory key: safe numeric routing information, never
++// credential material.
++type UnreadableRegistrationError struct {
++	OwnerID int64
++	Err     error
++}
++
++func (e *UnreadableRegistrationError) Error() string {
++	return fmt.Sprintf("keystore: registration for owner %d is unreadable: %v", e.OwnerID, e.Err)
++}
++
++// Unwrap exposes the sentinel and the underlying cause together, so a
++// caller that already distinguishes a specific cause (widened
++// permissions, an absent key) keeps matching it, while a caller that only
++// needs "this record is unusable" matches the sentinel.
++func (e *UnreadableRegistrationError) Unwrap() []error {
++	return []error{ErrUnreadableRegistration, e.Err}
++}
++
+ // Keystore stores the GitHub App's credentials (private key and
+ // registration metadata) under a dedicated credentials directory with
+ // owner-only permissions: directories 0700, files 0600, re-asserted on
+@@ -417,12 +444,19 @@ func (k *Keystore) listAppsLocked() ([]AppCredentials, error) {
+ 					// there is no registration to enumerate.
+ 					continue
+ 				}
+-				return nil, fmt.Errorf("keystore: registration %q is incomplete: %w", ownerKey, err)
++				return nil, &UnreadableRegistrationError{
++					OwnerID: ownerID,
++					Err:     fmt.Errorf("keystore: registration %q is incomplete: %w", ownerKey, err),
++				}
+ 			}
+-			return nil, err
++			return nil, &UnreadableRegistrationError{OwnerID: ownerID, Err: err}
+ 		}
+ 		if creds.OwnerID != ownerID {
+-			return nil, fmt.Errorf("keystore: registration directory %q does not match persisted owner id %d", ownerKey, creds.OwnerID)
++			return nil, &UnreadableRegistrationError{
++				OwnerID: ownerID,
++				Err: fmt.Errorf("keystore: registration directory %q does not match persisted owner id %d",
++					ownerKey, creds.OwnerID),
++			}
+ 		}
+ 		if err := k.clearSwapLeftovers(appDir); err != nil {
+ 			return nil, err
+@@ -432,6 +466,108 @@ func (k *Keystore) listAppsLocked() ([]AppCredentials, error) {
+ 	return apps, nil
+ }
+ 
++// QuarantineApp withdraws one unreadable registration from the enumerated
++// set, so a record this host cannot load stops denying resolution for
++// every other registration. It is deliberately an explicit operator act,
++// not a silent skip inside enumeration: the record's installations remain
++// live on GitHub and simply leave this host's view, which is a decision
++// only the operator can make.
++//
++// Quarantine is not deletion. The key and metadata move intact to a
++// sibling directory under the same credentials root, keeping them
++// available for repair or forensics and inside the containment boundary
++// that keeps App keys out of checkpoints and workspaces.
++//
++// A readable registration is refused: withdrawing a working registration
++// would drop it from janitor coverage while its installations keep
++// running, which is the fail-open direction. An existing quarantine
++// record for the same owner is refused rather than overwritten.
++func (k *Keystore) QuarantineApp(ownerID int64) error {
++	k.mu.Lock()
++	defer k.mu.Unlock()
++
++	legacy, err := k.hasLegacyLayout()
++	if err != nil {
++		return err
++	}
++	if legacy {
++		return ErrLegacyAppMigrationRequired
++	}
++	ownerKey, err := appOwnerKey(ownerID)
++	if err != nil {
++		return err
++	}
++	appDir := filepath.Join(k.dir, ownerKey)
++	// Settle the swap journals first, so quarantine acts on the same state
++	// enumeration would have loaded rather than on a half-finished save.
++	if err := k.recoverSwap(appDir, true); err != nil {
++		return err
++	}
++	active, err := realDirExists(appDir)
++	if err != nil {
++		return err
++	}
++	if !active {
++		return ErrNoAppRegistration
++	}
++	if _, err := k.loadAppFrom(appDir); err == nil {
++		return fmt.Errorf(
++			"keystore: registration for owner %d is readable; quarantine withdraws only unreadable records",
++			ownerID,
++		)
++	}
++	sources, err := k.quarantineSources(appDir)
++	if err != nil {
++		return err
++	}
++
++	quarantineDir := k.dir + quarantineDirSuffix
++	for _, source := range sources {
++		target := filepath.Join(quarantineDir, filepath.Base(source))
++		exists, err := realDirExists(target)
++		if err != nil {
++			return err
++		}
++		if exists {
++			return fmt.Errorf("keystore: quarantine record for owner %d already exists at %s", ownerID, target)
++		}
++	}
++	if err := mkdirAllSync(quarantineDir); err != nil {
++		return fmt.Errorf("keystore: create quarantine directory: %w", err)
++	}
++	for _, source := range sources {
++		target := filepath.Join(quarantineDir, filepath.Base(source))
++		if err := os.Rename(source, target); err != nil {
++			return fmt.Errorf("keystore: quarantine registration for owner %d: %w", ownerID, err)
++		}
++	}
++	if err := syncDir(k.dir); err != nil {
++		return fmt.Errorf("keystore: sync quarantined registration: %w", err)
++	}
++	if err := syncDir(quarantineDir); err != nil {
++		return fmt.Errorf("keystore: sync quarantine directory: %w", err)
++	}
++	return nil
++}
++
++// quarantineSources lists the active registration directory and any swap
++// journals recoverSwap left behind. All of them move together: leaving a
++// .staging or .old sibling would let the next enumeration promote the
++// record back into the active set, undoing the withdrawal.
++func (k *Keystore) quarantineSources(appDir string) ([]string, error) {
++	var sources []string
++	for _, candidate := range []string{appDir, appDir + ".staging", appDir + ".old"} {
++		exists, err := realDirExists(candidate)
++		if err != nil {
++			return nil, err
++		}
++		if exists {
++			sources = append(sources, candidate)
++		}
++	}
++	return sources, nil
++}
++
+ // MigrateLegacyApp relocates the former singleton only after the caller
+ // explicitly supplies the owner login, numeric ID, and visibility that its
+ // metadata could not record. Repeating the migration after a partial failure
+diff --git a/daemon/internal/publish/keystore_test.go b/daemon/internal/publish/keystore_test.go
+index 235215b9820b7787f550928fb049c98186e3cbb7..8a794cf0b534ee1ec9ce127d24c4b2d62d0b3068 100644
+--- a/daemon/internal/publish/keystore_test.go
++++ b/daemon/internal/publish/keystore_test.go
+@@ -1136,3 +1136,199 @@ const (
+ 	metaFileNameForTest = "app.json"
+ 	testOwnerID         = int64(24680)
+ )
++
++// stripOwnerMetadata reproduces the pre-#245 record shape found on the
++// maintainer's machine (#271): an owner-keyed directory whose metadata
++// carries the app id and slug but null owner, owner id, visibility, key
++// id, and name.
++func stripOwnerMetadata(t *testing.T, ks *publish.Keystore, ownerID int64) {
++	t.Helper()
++	metaPath := filepath.Join(testAppDir(ks, ownerID), metaFileNameForTest)
++	metaRaw, err := os.ReadFile(metaPath) //nolint:gosec // test fixture under t.TempDir
++	if err != nil {
++		t.Fatal(err)
++	}
++	var meta map[string]any
++	if err := json.Unmarshal(metaRaw, &meta); err != nil {
++		t.Fatal(err)
++	}
++	for _, field := range []string{"owner", "owner_id", "visibility", "key_id", "name"} {
++		meta[field] = nil
++	}
++	stripped, err := json.MarshalIndent(meta, "", "  ")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(metaPath, stripped, 0o600); err != nil {
++		t.Fatal(err)
++	}
++}
++
++// TestListAppsNamesTheUnreadableRegistration is #271's core property: one
++// record with incomplete metadata still fails enumeration closed, but the
++// failure now names that record instead of reading as a broken keystore.
++func TestListAppsNamesTheUnreadableRegistration(t *testing.T) {
++	ks := newTestKeystore(t)
++	personal, org := twoRegistrations()
++	saveAll(t, ks, personal, org)
++	stripOwnerMetadata(t, ks, org.OwnerID)
++
++	apps, err := ks.ListApps()
++	if err == nil {
++		t.Fatalf("ListApps returned %d registrations over an incomplete record, want error", len(apps))
++	}
++	if !errors.Is(err, publish.ErrUnreadableRegistration) {
++		t.Fatalf("ListApps error = %v, want ErrUnreadableRegistration", err)
++	}
++	var unreadable *publish.UnreadableRegistrationError
++	if !errors.As(err, &unreadable) {
++		t.Fatalf("ListApps error %v does not carry *UnreadableRegistrationError", err)
++	}
++	if unreadable.OwnerID != org.OwnerID {
++		t.Errorf("unreadable owner id = %d, want %d", unreadable.OwnerID, org.OwnerID)
++	}
++	if !strings.Contains(err.Error(), strconv.FormatInt(org.OwnerID, 10)) {
++		t.Errorf("ListApps error %q does not identify owner ID %d", err, org.OwnerID)
++	}
++}
++
++// TestQuarantineAppRestoresEnumeration proves the operator's withdrawal is
++// what re-opens resolution, and that it preserves rather than deletes the
++// record.
++func TestQuarantineAppRestoresEnumeration(t *testing.T) {
++	ks := newTestKeystore(t)
++	personal, org := twoRegistrations()
++	saveAll(t, ks, personal, org)
++	stripOwnerMetadata(t, ks, org.OwnerID)
++
++	if err := ks.QuarantineApp(org.OwnerID); err != nil {
++		t.Fatalf("QuarantineApp: %v", err)
++	}
++	apps, err := ks.ListApps()
++	if err != nil {
++		t.Fatalf("ListApps after quarantine: %v", err)
++	}
++	if len(apps) != 1 || apps[0].OwnerID != personal.OwnerID {
++		t.Fatalf("ListApps after quarantine = %+v, want only owner %d", apps, personal.OwnerID)
++	}
++	quarantined := filepath.Join(
++		ks.Dir(), "github-app"+".quarantine", strconv.FormatInt(org.OwnerID, 10),
++	)
++	for _, name := range []string{keyFileNameForTest, metaFileNameForTest} {
++		if _, err := os.Lstat(filepath.Join(quarantined, name)); err != nil {
++			t.Errorf("quarantined %s: %v", name, err)
++		}
++	}
++	if _, err := os.Lstat(testAppDir(ks, org.OwnerID)); !errors.Is(err, fs.ErrNotExist) {
++		t.Errorf("active registration remains after quarantine: %v", err)
++	}
++}
++
++// TestQuarantineAppRefusesReadableRegistration keeps the withdrawal from
++// becoming a way to drop a working registration out of janitor coverage
++// while its installations stay live on GitHub.
++func TestQuarantineAppRefusesReadableRegistration(t *testing.T) {
++	ks := newTestKeystore(t)
++	personal, org := twoRegistrations()
++	saveAll(t, ks, personal, org)
++
++	if err := ks.QuarantineApp(org.OwnerID); err == nil {
++		t.Fatal("QuarantineApp over a readable registration = nil, want refusal")
++	}
++	apps, err := ks.ListApps()
++	if err != nil {
++		t.Fatalf("ListApps after refused quarantine: %v", err)
++	}
++	if len(apps) != 2 {
++		t.Errorf("ListApps after refused quarantine returned %d registrations, want 2", len(apps))
++	}
++}
++
++// TestQuarantineAppRefusesOverwrite keeps a second withdrawal from
++// destroying the first record it preserved.
++func TestQuarantineAppRefusesOverwrite(t *testing.T) {
++	ks := newTestKeystore(t)
++	personal, org := twoRegistrations()
++	saveAll(t, ks, personal, org)
++	stripOwnerMetadata(t, ks, org.OwnerID)
++	if err := ks.QuarantineApp(org.OwnerID); err != nil {
++		t.Fatalf("QuarantineApp: %v", err)
++	}
++
++	reSaved := org
++	if err := ks.SaveApp(reSaved); err != nil {
++		t.Fatal(err)
++	}
++	stripOwnerMetadata(t, ks, org.OwnerID)
++	if err := ks.QuarantineApp(org.OwnerID); err == nil {
++		t.Fatal("second QuarantineApp = nil, want refusal rather than overwrite")
++	}
++}
++
++// TestQuarantineAppWithdrawsSwapLeftovers proves a .staging sibling cannot
++// resurrect a withdrawn record on the next enumeration.
++func TestQuarantineAppWithdrawsSwapLeftovers(t *testing.T) {
++	ks := newTestKeystore(t)
++	personal, org := twoRegistrations()
++	saveAll(t, ks, personal, org)
++	stripOwnerMetadata(t, ks, org.OwnerID)
++	leftover := testAppDir(ks, org.OwnerID) + ".old"
++	if err := os.MkdirAll(leftover, 0o700); err != nil {
++		t.Fatal(err)
++	}
++	for _, name := range []string{keyFileNameForTest, metaFileNameForTest} {
++		source, err := os.ReadFile(filepath.Join(testAppDir(ks, org.OwnerID), name)) //nolint:gosec // test fixture under t.TempDir
++		if err != nil {
++			t.Fatal(err)
++		}
++		if err := os.WriteFile(filepath.Join(leftover, name), source, 0o600); err != nil { //nolint:gosec // test fixture under t.TempDir
++			t.Fatal(err)
++		}
++	}
++
++	if err := ks.QuarantineApp(org.OwnerID); err != nil {
++		t.Fatalf("QuarantineApp: %v", err)
++	}
++	if _, err := os.Lstat(leftover); !errors.Is(err, fs.ErrNotExist) {
++		t.Errorf("swap leftover remains in the active set after quarantine: %v", err)
++	}
++	apps, err := ks.ListApps()
++	if err != nil {
++		t.Fatalf("ListApps after quarantine: %v", err)
++	}
++	if len(apps) != 1 || apps[0].OwnerID != personal.OwnerID {
++		t.Fatalf("ListApps after quarantine = %+v, want only owner %d", apps, personal.OwnerID)
++	}
++}
++
++// TestQuarantineAppAbsentOwner keeps the withdrawal from inventing a record.
++func TestQuarantineAppAbsentOwner(t *testing.T) {
++	ks := newTestKeystore(t)
++	if err := ks.SaveApp(testCredentials()); err != nil {
++		t.Fatal(err)
++	}
++	if err := ks.QuarantineApp(999999); !errors.Is(err, publish.ErrNoAppRegistration) {
++		t.Fatalf("QuarantineApp(absent) = %v, want ErrNoAppRegistration", err)
++	}
++}
++
++func twoRegistrations() (personal, org publish.AppCredentials) {
++	personal = testCredentials()
++	personal.Owner = "BenNelsonWeiss"
++	personal.OwnerID = 111
++	personal.AppID = 111
++	org = testCredentials()
++	org.Owner = "freeside-ai"
++	org.OwnerID = 222
++	org.AppID = 222
++	return personal, org
++}
++
++func saveAll(t *testing.T, ks *publish.Keystore, creds ...publish.AppCredentials) {
++	t.Helper()
++	for _, c := range creds {
++		if err := ks.SaveApp(c); err != nil {
++			t.Fatalf("SaveApp(%s): %v", c.Owner, err)
++		}
++	}
++}
+diff --git a/daemon/internal/publish/onboarding_test.go b/daemon/internal/publish/onboarding_test.go
+index 28d13f98c0b6083374193e9cb08b631493bdaa19..3b46bf81d2dd8eb71e247851153ea51b69929dd7 100644
+--- a/daemon/internal/publish/onboarding_test.go
++++ b/daemon/internal/publish/onboarding_test.go
+@@ -586,6 +586,24 @@ func TestCredentialDoctorDetections(t *testing.T) {
+ 		assertFinding(t, findings, publish.CredentialFindingBadPermissions)
+ 	})
+ 
++	t.Run("unreadable registration", func(t *testing.T) {
++		ks := newTestKeystore(t)
++		if err := ks.SaveApp(publicFixtureCredentials(t)); err != nil {
++			t.Fatal(err)
++		}
++		stripOwnerMetadata(t, ks, testOwnerID)
++		onboarder, _, _ := newTestOnboarder(t, ks, activeJanitorStatus{})
++		findings, err := publish.NewCredentialDoctor(onboarder, activeJanitorStatus{}).
++			Check(context.Background(), nil)
++		if err != nil {
++			t.Fatalf("Check over an unreadable record returned an operational error: %v", err)
++		}
++		assertFinding(t, findings, publish.CredentialFindingUnreadableRecord)
++		if len(findings) != 1 || findings[0].OwnerID != testOwnerID {
++			t.Fatalf("findings = %+v, want the unreadable record's owner %d", findings, testOwnerID)
++		}
++	})
++
+ 	t.Run("visibility mismatch", func(t *testing.T) {
+ 		ks := newTestKeystore(t)
+ 		if err := ks.SaveApp(publicFixtureCredentials(t)); err != nil {
+diff --git a/devlog/2026-07-24-1647-keystore-unreadable-record.md b/devlog/2026-07-24-1647-keystore-unreadable-record.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..9137382dd6084bbf6dfb2c4fe7edee953dc9226f
+--- /dev/null
++++ b/devlog/2026-07-24-1647-keystore-unreadable-record.md
+@@ -0,0 +1,70 @@
++# Keystore: Name The Unreadable Record, Don't Skip It
++
++Issue: #271. Chain context: `devlog/2026-07-24-1637-wave2-chain-amendment.md`.
++
++One pre-#245 record on the maintainer's machine (owner-keyed, but with null
++`owner`, `owner_id`, `visibility`, `key_id`, and `name`) made
++`Keystore.ListApps` fail with `registration owner is empty`, which fail-closed
++every `InstallationResolver.Resolve` and every `InstallationJanitor` cycle: one
++unusable record denied all credential operation, and the error named nothing an
++operator could act on.
++
++## Decisions
++
++- **Chose keeping enumeration fail-closed and naming the offending record over
++  skipping it.** Owner resolution selects among *all* local registrations and
++  refuses more than one match; a view that silently omitted one record could
++  bind an owner through a second registration while the omitted one bound it
++  too. The janitor has the same requirement from the other side: it cannot claim
++  complete coverage while one registration is invisible to it, and coverage is
++  what gates minting. So the blast radius is the bug, not the refusal.
++  `ListApps` now returns `*UnreadableRegistrationError` carrying the record's
++  numeric owner key and wrapping both `ErrUnreadableRegistration` and the
++  underlying cause.
++- **Chose multi-error unwrap over a flat sentinel** so callers that already
++  distinguish a cause keep working: a widened-permissions record still matches
++  `ErrCredentialPermissions` and still produces the doctor's
++  `bad_keystore_permissions` finding, while a record that fails only on identity
++  falls through to the new `unreadable_registration` finding carrying its owner
++  ID. The finding deliberately carries numeric coordinates only, like every
++  other credential finding.
++- **Chose an explicit `QuarantineApp` withdrawal over in-place repair as the
++  operator's remedy.** Repair would return the registration to janitor coverage,
++  and the janitor deletes installations absent from its authority snapshot, so
++  "fixing" a record the operator no longer manages is the destructive direction.
++  Quarantine is not deletion: the key and metadata move intact to a sibling
++  directory inside the same credentials root, staying within the containment
++  boundary that keeps App keys out of checkpoints and workspaces. It refuses a
++  readable registration (withdrawing a working one is fail-open), refuses to
++  overwrite an existing quarantine record, and moves the `.staging`/`.old` swap
++  journals with the active directory so the next enumeration cannot promote the
++  record back.
++
++## Rejected Alternatives
++
++- **Return the valid registrations plus a rejected set, and let consumers decide.**
++  Rejected: every current consumer needs the complete set to be correct, so each
++  would have to re-derive the same refusal, and the first one that forgot would
++  fail open silently.
++- **Repair the record in place from the App's canonical GitHub metadata.**
++  Rejected for the janitor-coverage reason above, and because it would make the
++  keystore contact the forge during a local load.
++- **Extend `MigrateLegacyApp` to cover this shape.** Rejected: that path exists
++  for the pre-owner-keyed *singleton* layout and requires the operator to supply
++  the missing attribution; this record is already owner-keyed, and the operator's
++  intent here is withdrawal, not attribution.
++
++## Accepted By Decision
++
++`.DS_Store` and other unexpected entries inside the registration root still fail
++enumeration closed (`unexpected registration entry`, surfaced as the doctor's
++`bad_keystore_permissions`). Refusing an unexpected entry in a credential store
++is the correct posture, and the failure is loud and names the entry in its error
++text; giving it its own finding code is a diagnostics refinement that belongs
++with the doctor packaging work, not here.
++
++## Revisit When
++
++`freesided onboard`/`doctor` (#238) gains an operator-facing repair path: at that
++point quarantine becomes one branch of a remedy menu, and the finding should
++route to it rather than to a library call.

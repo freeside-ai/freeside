@@ -1,0 +1,45 @@
+{
+  "pr": 1520,
+  "title": "Guard ephemeral daemons against supervised paths and ports",
+  "specification_source": "issue #1501 body",
+  "instructions_source": "AGENTS.md at 785980351110efdee2dcb20c45144a67655679df",
+  "base_sha": "785980351110efdee2dcb20c45144a67655679df",
+  "head_sha": "0d4c1cd1de611cb4eca21e722159ec1b1dcd342d",
+  "round_one_base_sha": "b7ec79e7b51c7fac0d836a14df0b08ef972bf168",
+  "round_one_head_sha": "8594daeae04ec285c18961e36f4fe15ca0200cdc",
+  "last_finding_round": 10,
+  "declared_paths": [
+    "daemon/README.md",
+    "daemon/cmd/freesided/**",
+    "devlog/**"
+  ],
+  "diff_metrics": {
+    "cumulative": {
+      "files_changed": 6,
+      "additions": 741,
+      "deletions": 0,
+      "base_sha": "785980351110efdee2dcb20c45144a67655679df",
+      "head_sha": "0d4c1cd1de611cb4eca21e722159ec1b1dcd342d"
+    },
+    "round": {
+      "files_changed": 3,
+      "additions": 127,
+      "deletions": 0,
+      "base_sha": "52d00f38f54682633d79a47d6ad404e796a2d8b8",
+      "head_sha": "0d4c1cd1de611cb4eca21e722159ec1b1dcd342d"
+    }
+  },
+  "commands": [
+    "gh api repos/freeside-ai/freeside/pulls/1520/reviews --paginate  # rounds: Codex reviews with inline findings, by submitted_at; each round's head is its commit_id",
+    "gh api repos/freeside-ai/freeside/pulls/1520/comments --paginate  # findings: Codex root comments; dispositions: the first reply to each",
+    "git fetch origin 8594daeae04ec285c18961e36f4fe15ca0200cdc 52d00f38f54682633d79a47d6ad404e796a2d8b8 0d4c1cd1de611cb4eca21e722159ec1b1dcd342d",
+    "git merge-base ea4e6366f991502034ea517a7c2525c6bf8a7068^1 8594daeae04ec285c18961e36f4fe15ca0200cdc  # round_one_base_sha",
+    "git merge-base ea4e6366f991502034ea517a7c2525c6bf8a7068^1 0d4c1cd1de611cb4eca21e722159ec1b1dcd342d  # base_sha",
+    "git diff --binary --full-index --no-ext-diff --no-textconv b7ec79e7b51c7fac0d836a14df0b08ef972bf168 8594daeae04ec285c18961e36f4fe15ca0200cdc -- > round_one.patch",
+    "git diff --binary --full-index --no-ext-diff --no-textconv 785980351110efdee2dcb20c45144a67655679df 0d4c1cd1de611cb4eca21e722159ec1b1dcd342d -- > final.patch",
+    "git show 785980351110efdee2dcb20c45144a67655679df:AGENTS.md > instructions.md",
+    "gh issue view 1501 --json body --jq .body > spec.md",
+    "git diff --numstat 785980351110efdee2dcb20c45144a67655679df 0d4c1cd1de611cb4eca21e722159ec1b1dcd342d --  # diff_metrics.cumulative",
+    "git diff --numstat 52d00f38f54682633d79a47d6ad404e796a2d8b8 0d4c1cd1de611cb4eca21e722159ec1b1dcd342d --  # diff_metrics.round: the last round with findings against the merged head"
+  ]
+}

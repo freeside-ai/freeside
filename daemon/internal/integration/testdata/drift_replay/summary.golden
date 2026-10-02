@@ -1,0 +1,90 @@
+{
+  "input_limit_bytes": 2097152,
+  "pull_requests": [
+    {
+      "pr": 279,
+      "input_bytes": 181440,
+      "verdict": "converged",
+      "confidence": "medium",
+      "expected_verdict": "over_hardened",
+      "verdict_agrees": false,
+      "reversals": [],
+      "missed": [
+        "pr279-r11-f1",
+        "pr279-r12-f1",
+        "pr279-r13-f1",
+        "pr279-r15-f1",
+        "pr279-r16-f1",
+        "pr279-r17-f1"
+      ],
+      "list_valid": false,
+      "auto": false
+    },
+    {
+      "pr": 960,
+      "input_bytes": 208976,
+      "verdict": "converged",
+      "confidence": "medium",
+      "expected_verdict": "over_hardened",
+      "verdict_agrees": false,
+      "reversals": [],
+      "missed": [
+        "pr960-r06-f1",
+        "pr960-r07-f1",
+        "pr960-r08-f1",
+        "pr960-r09-f1"
+      ],
+      "list_valid": false,
+      "auto": false
+    },
+    {
+      "pr": 1520,
+      "input_bytes": 109916,
+      "verdict": "over_hardened",
+      "confidence": "medium",
+      "expected_verdict": "over_hardened",
+      "verdict_agrees": true,
+      "reversals": [
+        {
+          "finding_id": "pr1520-r01-f1",
+          "severity": "P1",
+          "assessment": "inaccurate"
+        },
+        {
+          "finding_id": "pr1520-r06-f1",
+          "severity": "P1",
+          "assessment": "inaccurate"
+        },
+        {
+          "finding_id": "pr1520-r07-f1",
+          "severity": "P1",
+          "assessment": "accurate"
+        },
+        {
+          "finding_id": "pr1520-r08-f1",
+          "severity": "P1",
+          "assessment": "accurate"
+        },
+        {
+          "finding_id": "pr1520-r09-f1",
+          "severity": "P1",
+          "assessment": "accurate"
+        },
+        {
+          "finding_id": "pr1520-r10-f1",
+          "severity": "P1",
+          "assessment": "accurate"
+        }
+      ],
+      "missed": [],
+      "list_valid": true,
+      "auto": false
+    }
+  ],
+  "agreement": {
+    "accurate": 4,
+    "inaccurate": 2,
+    "indeterminate": 0,
+    "missed": 10
+  }
+}
