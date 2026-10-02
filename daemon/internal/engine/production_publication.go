@@ -31,6 +31,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/gitrun"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
+	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -4695,9 +4696,9 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 		// the run recovers if the reviewer configuration is restored (an
 		// old-order run with no record instead stays held until the operator
 		// dispositions it). A store read failure from latestReviewState is
-		// environmental and still propagates for retry. The already-published
-		// PR carries no binding on this held item, matching the recipe re-gate's
-		// pre-existing behavior across axes (tracked as a follow-up, not #527).
+		// environmental and still propagates for retry. holdBlockedTask attaches
+		// the already-published pull request to the held item and records its
+		// binding, on this axis and the recipe re-gate below (issue #531).
 		if errors.Is(err, errShadowReviewStopped) {
 			return productionTaskOutcome{}, fmt.Errorf(
 				"shadow review stopped after publication completed: %w",
@@ -4776,7 +4777,7 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 	// published state, write-once from the same first-party facts. Both
 	// bindings commit before the durable watches arm, so a startup
 	// reconciliation pass never sees an active item with an ambiguous PR.
-	if err := w.recordWorkUnitPRBinding(ctx, task, binding, published); err != nil {
+	if err := w.recordWorkUnitPRBinding(ctx, task, binding.admission.Base, published.PRNumber); err != nil {
 		return productionTaskOutcome{}, err
 	}
 	// The §5.16 publication watches converge beside the item on every pass
@@ -4892,6 +4893,22 @@ func (w *productionPublicationWorkflow) holdBlockedTask(
 	reason string,
 	cause domain.RunHoldReason,
 ) (productionTaskOutcome, error) {
+	var current domain.AttentionItem
+	currentErr := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		current, err = tx.GetAttentionItemRecord(ctx, task.blockedItemID())
+		return err
+	})
+	if currentErr != nil && !errors.Is(currentErr, store.ErrNotFound) {
+		return productionTaskOutcome{}, currentErr
+	}
+	currentFound := currentErr == nil
+	// The pull request is resolved before the first write, so a hold that
+	// cannot restate the reference it already carries writes nothing.
+	pull, err := w.heldPullRequest(ctx, task, current, currentFound, cause)
+	if err != nil {
+		return productionTaskOutcome{}, err
+	}
 	// The durable hold's typed cause is stated by each call site, never
 	// derived from the operator prose; the retry window paces the write
 	// (issue #394).
@@ -4900,17 +4917,12 @@ func (w *productionPublicationWorkflow) holdBlockedTask(
 	}); err != nil {
 		return productionTaskOutcome{}, err
 	}
-	item, err := w.blockedHoldItem(ctx, task, imported, reason, cause)
+	item, err := w.blockedHoldItem(ctx, task, imported, reason, cause, pull)
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
-	var current domain.AttentionItem
-	err = w.store.Read(ctx, func(tx *store.ReadTx) error {
-		var err error
-		current, err = tx.GetAttentionItemRecord(ctx, item.ID)
-		return err
-	})
-	if err == nil {
+	outcome := productionTaskOutcome{blocked: !currentFound}
+	if currentFound {
 		if current.ProjectID != item.ProjectID || current.Subject.Type != item.Subject.Type ||
 			current.Subject.ID != item.Subject.ID || current.Subject.RunID == nil ||
 			item.Subject.RunID == nil || *current.Subject.RunID != *item.Subject.RunID ||
@@ -4921,32 +4933,170 @@ func (w *productionPublicationWorkflow) holdBlockedTask(
 				item.ID, domain.ErrParentKeyMismatch,
 			)
 		}
-		if current.Reason == item.Reason &&
+		// The reference is part of the comparison so a hold that opened before
+		// its run published gains the pull request on its next version.
+		unchanged := current.Reason == item.Reason &&
 			slices.Equal(current.RequestedDecision, item.RequestedDecision) &&
 			reflect.DeepEqual(current.AgentClaims, item.AgentClaims) &&
-			reflect.DeepEqual(current.CommitPlanNotice, item.CommitPlanNotice) {
-			w.deferHeldTask(task)
-			return productionTaskOutcome{}, nil
+			reflect.DeepEqual(current.CommitPlanNotice, item.CommitPlanNotice) &&
+			reflect.DeepEqual(current.PRReference, item.PRReference)
+		if !unchanged {
+			item.ItemVersion = current.ItemVersion + 1
+			item.Timing = current.Timing
+			item.ConversationID = current.ConversationID
+			item.CreatedAt = current.CreatedAt
+			item.ExpiresWhen = current.ExpiresWhen
+			if err := w.attention.PutItem(ctx, item); err != nil {
+				return productionTaskOutcome{}, err
+			}
 		}
-		item.ItemVersion = current.ItemVersion + 1
-		item.Timing = current.Timing
-		item.ConversationID = current.ConversationID
-		item.CreatedAt = current.CreatedAt
-		item.ExpiresWhen = current.ExpiresWhen
-		if err := w.attention.PutItem(ctx, item); err != nil {
+	} else if err := w.attention.PutItem(ctx, item); err != nil {
+		return productionTaskOutcome{}, err
+	}
+	// The bindings converge on every pass, unchanged item included, so a crash
+	// between the item and its bindings heals on the next paced retry.
+	if pull != nil {
+		if err := w.recordHeldItemPRBinding(ctx, task, *pull); err != nil {
 			return productionTaskOutcome{}, err
 		}
-		w.deferHeldTask(task)
-		return productionTaskOutcome{}, nil
-	}
-	if !errors.Is(err, store.ErrNotFound) {
-		return productionTaskOutcome{}, err
-	}
-	if err := w.attention.PutItem(ctx, item); err != nil {
-		return productionTaskOutcome{}, err
+		// A declared work unit can complete while its run is held, so its
+		// binding must not wait for readiness.
+		if err := w.recordWorkUnitPRBinding(ctx, task, pull.base, pull.number); err != nil {
+			return productionTaskOutcome{}, err
+		}
 	}
 	w.deferHeldTask(task)
-	return productionTaskOutcome{blocked: true}, nil
+	return outcome, nil
+}
+
+// recordedPullRequest is the pull request a run's publication records prove
+// it published, with the coordinates its held-item binding needs.
+type recordedPullRequest struct {
+	identity domain.Digest
+	base     domain.BaseRevision
+	number   int
+}
+
+func (p recordedPullRequest) reference() domain.PRReference {
+	return domain.PRReference{Repo: p.base.Repo, Number: p.number}
+}
+
+// heldPullRequest decides which pull request a hold carries (issue #531). A
+// hold carries its run's recorded pull request unless its cause is an
+// external conflict, where that pull request is the thing in doubt. A
+// reference already on the item overrides the cause: the store refuses a
+// later version that drops or changes it, so the hold restates it or fails
+// before writing anything.
+func (w *productionPublicationWorkflow) heldPullRequest(
+	ctx context.Context,
+	task productionPublicationTask,
+	current domain.AttentionItem,
+	currentFound bool,
+	cause domain.RunHoldReason,
+) (*recordedPullRequest, error) {
+	carried := currentFound && current.PRReference != nil
+	if !carried && cause == domain.HoldExternalConflict {
+		return nil, nil
+	}
+	pull, err := w.recordedPullRequest(ctx, task)
+	if err != nil {
+		return nil, err
+	}
+	if carried && (pull == nil || pull.reference() != *current.PRReference) {
+		return nil, fmt.Errorf(
+			"production publication hold %q carries a pull request the publication records no longer prove: %w",
+			current.ID, domain.ErrParentKeyMismatch,
+		)
+	}
+	return pull, nil
+}
+
+// recordedPullRequest reads the pull request the task's publication recorded,
+// from the store alone. It returns nil while the publication has no recorded
+// outcome. The number comes from a decoded outcome row, so it is returned
+// only after the same comparisons the store's binding proof makes
+// (validateItemPRBindingAgainst): the dispatched intent against the task, the
+// outcome against the intent, and both against the producing admission. A
+// disagreement is an error, never a missing pull request.
+//
+// publish.LoadOutcome is not used here: its verifier converges the outcome
+// with the forge, and a refused repair is one of the holds this serves.
+func (w *productionPublicationWorkflow) recordedPullRequest(
+	ctx context.Context, task productionPublicationTask,
+) (*recordedPullRequest, error) {
+	intentKey, err := publish.IntentKey(task.PublicationID, publish.IntentKindPublication)
+	if err != nil {
+		return nil, err
+	}
+	var found *recordedPullRequest
+	err = w.store.Read(ctx, func(tx *store.ReadTx) error {
+		entry, err := tx.GetOutbox(ctx, intentKey)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if entry.IdempotencyKey != intentKey {
+			return fmt.Errorf("production publication intent read back the wrong key: %w",
+				domain.ErrParentKeyMismatch)
+		}
+		if entry.Kind != publish.IntentKindPublication || !entry.Dispatched() {
+			return nil
+		}
+		intent, err := publish.DecodeStoredIntent(entry)
+		if err != nil {
+			return fmt.Errorf("decode durable production publication intent: %w",
+				errors.Join(err, domain.ErrParentKeyMismatch))
+		}
+		if intent.InvocationID != task.PublicationID || intent.SourceHeadSHA != task.HeadSHA ||
+			intent.ProducingInvocationID != task.ProducingInvocationID ||
+			intent.ReservationRunID != task.RunID {
+			return fmt.Errorf("production publication intent disagrees with task: %w",
+				domain.ErrParentKeyMismatch)
+		}
+		outcomeKey := publicationrecord.OutcomeKey(intent.Identity)
+		outcomeEntry, err := tx.GetInbox(ctx, outcomeKey)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if outcomeEntry.IdempotencyKey != outcomeKey || outcomeEntry.Kind != publish.IntentKindOutcome {
+			return fmt.Errorf("production publication outcome %q has kind %q: %w",
+				outcomeKey, outcomeEntry.Kind, domain.ErrParentKeyMismatch)
+		}
+		outcome, err := publish.DecodeOutcome(outcomeEntry.Payload)
+		if err != nil {
+			return fmt.Errorf("decode durable production publication outcome: %w",
+				errors.Join(err, domain.ErrParentKeyMismatch))
+		}
+		if outcome.Identity != intent.Identity || outcome.Repo != intent.Repo ||
+			outcome.BaseRef != intent.BaseRef || outcome.HeadSHA != task.HeadSHA ||
+			outcome.Branch != publicationrecord.ExpectedBranch(intent) ||
+			!reflect.DeepEqual(outcome.Successor, intent.Successor) {
+			return fmt.Errorf("production publication outcome disagrees with its intent: %w",
+				domain.ErrParentKeyMismatch)
+		}
+		admission, err := tx.GetExecutionAdmissionRecord(ctx, task.ProducingInvocationID)
+		if err != nil {
+			return fmt.Errorf("production publication producing admission: %w", err)
+		}
+		if admission.RunID != task.RunID || admission.Base.Repo != intent.Repo ||
+			admission.Base.BaseRef != intent.BaseRef {
+			return fmt.Errorf("production publication intent disagrees with its admission: %w",
+				domain.ErrParentKeyMismatch)
+		}
+		found = &recordedPullRequest{
+			identity: intent.Identity, base: admission.Base, number: outcome.PRNumber,
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return found, nil
 }
 
 // recordAttendedPublicationHolds records the attended_mode_active hold for
@@ -5043,17 +5193,18 @@ func (w *productionPublicationWorkflow) appendPublicationMilestone(
 
 // recordWorkUnitPRBinding captures the §5.18 exact work-unit binding once
 // the run's PR durably exists: every coordinate is a first-party fact (the
-// admitted base revision, the publish result's PR number, the publication
-// task's head). An undeclared run records nothing. The record is
-// write-once; a converged re-pass must restate the same coordinates
+// admitted base revision, the recorded PR number, the publication task's
+// head). A held run records it from its hold, a ready run from readiness.
+// An undeclared run records nothing. The record is write-once; a converged
+// re-pass must restate the same coordinates
 // (compared modulo the stamped instant), and a disagreement fails loud —
 // publication converges on exactly one PR, so a second binding is
 // corruption, never an update.
 func (w *productionPublicationWorkflow) recordWorkUnitPRBinding(
 	ctx context.Context,
 	task productionPublicationTask,
-	binding productionBinding,
-	published publish.Result,
+	base domain.BaseRevision,
+	prNumber int,
 ) error {
 	return w.store.Write(ctx, func(tx *store.WriteTx) error {
 		declaration, err := tx.GetWorkUnitDeclarationByRun(ctx, task.RunID)
@@ -5065,10 +5216,10 @@ func (w *productionPublicationWorkflow) recordWorkUnitPRBinding(
 		}
 		record := domain.WorkUnitPRBinding{
 			UnitID:       declaration.ID,
-			Repo:         binding.admission.Base.Repo,
-			RepositoryID: binding.admission.Base.RepositoryID,
-			PRNumber:     published.PRNumber,
-			BaseRef:      binding.admission.Base.BaseRef,
+			Repo:         base.Repo,
+			RepositoryID: base.RepositoryID,
+			PRNumber:     prNumber,
+			BaseRef:      base.BaseRef,
 			HeadSHA:      task.HeadSHA,
 			RecordedAt:   w.now().UTC(),
 		}
@@ -5131,6 +5282,50 @@ func (w *productionPublicationWorkflow) recordReadyItemPRBinding(
 		case errors.Is(err, store.ErrNotFound):
 			return tx.RecordReadyItemPRBinding(ctx, record)
 		default:
+			return err
+		}
+	})
+}
+
+// recordHeldItemPRBinding records the pull request behind a hold that carries
+// one, so the active-resource reconciler can observe it while no ready item
+// exists. It is write-once like the ready binding: a repeated pass restates
+// the same record, and a different pull request for the same item fails loud.
+// The store proves the coordinates against the publication records on the
+// write and on every read.
+func (w *productionPublicationWorkflow) recordHeldItemPRBinding(
+	ctx context.Context,
+	task productionPublicationTask,
+	pull recordedPullRequest,
+) error {
+	return w.store.Write(ctx, func(tx *store.WriteTx) error {
+		record := domain.HeldItemPRBinding{
+			ItemID:                  task.blockedItemID(),
+			RunID:                   task.RunID,
+			ProducingInvocationID:   task.ProducingInvocationID,
+			PublicationInvocationID: task.PublicationID,
+			PublicationIdentity:     pull.identity,
+			Repo:                    pull.base.Repo,
+			RepositoryID:            pull.base.RepositoryID,
+			PRNumber:                pull.number,
+			BaseRef:                 pull.base.BaseRef,
+			HeadSHA:                 task.HeadSHA,
+			RecordedAt:              w.now().UTC(),
+		}
+		existing, err := tx.GetHeldItemPRBinding(ctx, record.ItemID)
+		switch {
+		case err == nil:
+			want := record
+			want.RecordedAt = existing.RecordedAt
+			if want != existing {
+				return fmt.Errorf("stored held-item pr binding disagrees with the published state: %w",
+					store.ErrImmutableConflict)
+			}
+			return nil
+		case errors.Is(err, store.ErrNotFound):
+			return tx.RecordHeldItemPRBinding(ctx, record)
+		default:
+			// A corrupt binding reads as an inconsistent row, never as absent.
 			return err
 		}
 	})
@@ -6219,7 +6414,7 @@ func (w *productionPublicationWorkflow) blockedItemWithActionsAndRecipes(
 	facts *domain.PublishBlockFacts,
 ) (domain.AttentionItem, error) {
 	return w.newBlockedItem(
-		ctx, task, imported, artifacts, reason, actions, approvedRecipes, facts,
+		ctx, task, imported, artifacts, reason, actions, approvedRecipes, facts, nil,
 	)
 }
 
@@ -6251,11 +6446,21 @@ func (w *productionPublicationWorkflow) blockedHoldItem(
 	imported importer.Result,
 	reason string,
 	cause domain.RunHoldReason,
+	pull *recordedPullRequest,
 ) (domain.AttentionItem, error) {
+	// open_pr is offered only with the reference it navigates to; signet
+	// recognizes a hold by exactly these two decision lists
+	// (signet.PublicationHoldDecision).
+	actions := []domain.Action{domain.ActionInspectTrustFailure}
+	var reference *domain.PRReference
+	if pull != nil {
+		actions = append(actions, domain.ActionOpenPR)
+		value := pull.reference()
+		reference = &value
+	}
 	return w.newBlockedItem(
-		ctx, task, imported, nil, reason,
-		[]domain.Action{domain.ActionInspectTrustFailure},
-		w.approvedRecipes, publishBlockHoldReason(cause),
+		ctx, task, imported, nil, reason, actions,
+		w.approvedRecipes, publishBlockHoldReason(cause), reference,
 	)
 }
 
@@ -6268,6 +6473,7 @@ func (w *productionPublicationWorkflow) newBlockedItem(
 	actions []domain.Action,
 	approvedRecipes map[domain.Digest]bool,
 	facts *domain.PublishBlockFacts,
+	reference *domain.PRReference,
 ) (domain.AttentionItem, error) {
 	runID := task.RunID
 	createdAt := w.attentionCreatedAt()
@@ -6285,6 +6491,7 @@ func (w *productionPublicationWorkflow) newBlockedItem(
 		EvidenceSnapshot:  artifacts,
 		AgentClaims:       normalizeSummaryClaims(imported.Claims, task.ProducingInvocationID),
 		PRHeadSHA:         imported.CommitSHA,
+		PRReference:       reference,
 		CommitPlanNotice:  imported.CommitPlanNotice,
 		PublishBlock:      facts,
 		DisplayNames:      names,
@@ -6314,7 +6521,7 @@ func (w *productionPublicationWorkflow) recoverDefinitiveBlockedTask(
 		}
 		return nil, err
 	}
-	if slices.Equal(current.RequestedDecision, []domain.Action{domain.ActionInspectTrustFailure}) {
+	if signet.PublicationHoldDecision(current) {
 		return nil, nil
 	}
 	if !slices.Equal(current.RequestedDecision, productionRerunnableBlockActions) &&
@@ -6405,7 +6612,7 @@ func (w *productionPublicationWorkflow) completeBlockedTask(
 	actions []domain.Action,
 	facts *domain.PublishBlockFacts,
 ) (productionTaskOutcome, error) {
-	item, err := w.newBlockedItem(ctx, task, imported, artifacts, reason, actions, w.approvedRecipes, facts)
+	item, err := w.newBlockedItem(ctx, task, imported, artifacts, reason, actions, w.approvedRecipes, facts, nil)
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}

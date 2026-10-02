@@ -31,7 +31,7 @@ import (
 )
 
 func TestPublishedFeedbackRetryPreservesFailedAttemptAndInput(t *testing.T) {
-	for _, name := range []string{"clean", "questions", "completed-before-failure", "completed-after-retry", "completed-before-retry-commit", "completed-after-sealing", "completed-after-successor-block", "attended-successor", "remediation", "reevaluation", "reevaluation-escalation", "reevaluation-continuation", "reevaluation-continuation-upgrade", "reevaluation-continuation-repeated", "reevaluation-continuation-completed-before-approve", "reevaluation-continuation-completed-after-approve", "reevaluation-continuation-completed-after-queue", "reevaluation-continuation-corrupt", "reevaluation-continuation-cyclic", "reevaluation-continuation-moved", "reevaluation-continuation-missing", "reevaluation-continuation-foreign", "reevaluation-continuation-closed", "reevaluation-continuation-stop", "reevaluation-continuation-discuss", "lagging-empty-listing", "lagging-head-listing", "lagging-persistent"} {
+	for _, name := range []string{"clean", "questions", "completed-before-failure", "completed-after-retry", "completed-before-retry-commit", "completed-after-sealing", "completed-after-successor-block", "attended-successor", "remediation", "reevaluation", "reevaluation-escalation", "reevaluation-continuation", "reevaluation-continuation-upgrade", "reevaluation-continuation-repeated", "reevaluation-continuation-completed-before-approve", "reevaluation-continuation-completed-after-approve", "reevaluation-continuation-completed-after-queue", "reevaluation-continuation-corrupt", "reevaluation-continuation-cyclic", "reevaluation-continuation-moved", "reevaluation-continuation-missing", "reevaluation-continuation-foreign", "reevaluation-continuation-closed", "reevaluation-continuation-stop", "reevaluation-continuation-discuss", "lagging-empty-listing", "lagging-head-listing", "lagging-persistent", "held-after-publication"} {
 		t.Run(name, func(t *testing.T) { testPublishedFeedbackRetry(t, name) })
 	}
 }
@@ -627,6 +627,9 @@ func completeFeedbackSuccessor(t *testing.T, p *productionPublicationHarness, in
 	}
 	if strings.HasPrefix(scenario, "lagging-") {
 		absorbLaggingSuccessorListings(t, p, oldHead, scenario)
+	}
+	if scenario == "held-after-publication" {
+		holdPublishedSuccessor(t, p)
 	}
 	var completed engine.ReconcileResult
 	for range 4 {

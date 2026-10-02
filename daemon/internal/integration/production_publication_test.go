@@ -3115,6 +3115,9 @@ func TestProductionPublishedWithoutCleanRecordFailsClosed(t *testing.T) {
 	if err != nil || replay.BlockedItemsCreated != 0 || replay.ReadyItemsCreated != 0 {
 		t.Fatalf("lane did not survive the hold or was not idempotent = %#v, %v", replay, err)
 	}
+	// The held run keeps its published pull request on the card and in a
+	// binding, on this pass and after a restart (issue #531).
+	p.assertHoldSurvivesRestart(t, map[domain.Digest]bool{p.recipeD: true})
 }
 
 func TestProductionPublishedReviewConfigMustStayProfileApproved(t *testing.T) {
@@ -3188,6 +3191,7 @@ func TestProductionPublishedReviewConfigMustStayProfileApproved(t *testing.T) {
 		!strings.Contains(blocked.Item.Reason, domain.ErrReviewConfigurationUnapproved.Error()) {
 		t.Fatalf("profile-unapproved hold item = %#v, %v", blocked, err)
 	}
+	p.assertHoldSurvivesRestart(t, map[domain.Digest]bool{p.recipeD: true})
 }
 
 func TestProductionPendingReviewPublishesNothing(t *testing.T) {
@@ -4904,6 +4908,7 @@ func TestPostPublicationRecipeRevocationHoldsWhenStoreAlsoRevoked(t *testing.T) 
 	if err != nil || !strings.Contains(hold.Item.Reason, "no longer approves the verification recipe") {
 		t.Fatalf("recipe revocation hold = %#v, %v", hold, err)
 	}
+	p.assertHoldSurvivesRestart(t, revoked)
 }
 
 func TestReadyPublicationDriftAfterRecipeRevocationHoldsWithoutRepair(t *testing.T) {
@@ -5106,6 +5111,8 @@ func TestProductionReviewRegatesRecipeAuthorityBeforeReadiness(t *testing.T) {
 	if err != nil || !strings.Contains(hold.Item.Reason, "no longer approves") {
 		t.Fatalf("revoked review hold = %#v, %v", hold, err)
 	}
+	p.assertHoldSurvivesRestart(t, revokedRecipes)
+	p.now = p.now.Add(time.Minute)
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	result, err = p.reconcileLanes()
 	if err != nil || result.ReadyItemsCreated != 1 || result.PublicationTasksCompleted != 1 {
