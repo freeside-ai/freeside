@@ -79,6 +79,14 @@ type activeResourceObservation struct {
 	nativeObservations []domain.NativeReviewObservation
 	nativeErr          error
 	foreclosure        *completionForeclosure
+	// held marks an observation of a publication hold's pull request, read
+	// through the held binding because the run has no ready item (issue #531).
+	// It is always completion-only: it records facts and work-unit completion
+	// and leaves the hold item and the publication task alone.
+	held bool
+	// bindingAbsent reports a hold whose binding the engine has not recorded
+	// yet. The hold is skipped until a later pass; nothing was observed.
+	bindingAbsent bool
 }
 
 type completionForeclosure struct {
@@ -289,7 +297,9 @@ func activeResourceInterval(
 	return defaultInterval
 }
 
-// Reconcile makes one independent pass over every active ready item.
+// Reconcile makes one independent pass over every active ready item, and over
+// every open publication hold that carries a pull request for a run with no
+// ready item.
 // Per-resource observation failures remain retryable and do not prevent a
 // healthy sibling from converging in the same pass.
 func (r *activeResourceReconciler) Reconcile(
@@ -308,8 +318,28 @@ func (r *activeResourceReconciler) Reconcile(
 		return result, fmt.Errorf("list active ready resources: %w", err)
 	}
 	result.failures = make([]error, 0)
+	// A run with a ready item is observed through that item's binding alone,
+	// whatever the ready item's status, so one pull request is never polled
+	// twice. A held successor therefore keeps the watch its predecessor's
+	// ready item already has, no more: its own held binding is not read.
+	readyRuns := make(map[domain.RunID]bool)
+	for _, snapshot := range snapshots {
+		if item := snapshot.Value; item.Type == domain.AttentionReadyForFinalReview && item.Subject.RunID != nil {
+			readyRuns[*item.Subject.RunID] = true
+		}
+	}
 	for _, snapshot := range snapshots {
 		item := snapshot.Value
+		if item.Type == domain.AttentionPublishBlocked {
+			if item.Status != domain.StatusOpen || item.PRReference == nil ||
+				item.Subject.RunID == nil || readyRuns[*item.Subject.RunID] {
+				continue
+			}
+			if err := r.reconcileHeldResource(ctx, item, &result); err != nil {
+				return result, err
+			}
+			continue
+		}
 		if item.Type != domain.AttentionReadyForFinalReview {
 			continue
 		}
@@ -401,6 +431,37 @@ func (r *activeResourceReconciler) Reconcile(
 		}
 	}
 	return result, nil
+}
+
+// reconcileHeldResource observes the pull request behind an open publication
+// hold. A held run has no readiness to invalidate or conclude, so the pass
+// only records what it sees: the pull request fact, and for a declared work
+// unit the issue fact and completion. The hold item stays open and the
+// publication task stays queued; ending a held run is the engine's decision.
+// Observation failures are isolated to this hold, like a ready item's.
+func (r *activeResourceReconciler) reconcileHeldResource(
+	ctx context.Context, item domain.AttentionItem, result *activeResourceReconcileResult,
+) error {
+	observation, err := r.observeReadyResource(ctx, item, r.now().UTC(), true, true)
+	if err != nil {
+		result.failures = append(result.failures,
+			fmt.Errorf("reconcile held resource %s: %w", item.ID, err))
+		return nil
+	}
+	if observation.bindingAbsent {
+		return nil
+	}
+	if observation.material || observation.completion != nil {
+		if err := r.commit(ctx, observation); err != nil {
+			return fmt.Errorf("commit held resource %s: %w", item.ID, err)
+		}
+	}
+	if observation.foreclosure != nil {
+		if err := r.convergeCompletionForeclosure(ctx, item, *observation.foreclosure); err != nil {
+			return fmt.Errorf("surface held resource completion foreclosure %s: %w", item.ID, err)
+		}
+	}
+	return nil
 }
 
 func completionForeclosureItemID(unitID domain.WorkUnitID) domain.ItemID {
@@ -699,7 +760,7 @@ func (r activeResourceReconciler) settleSchedules(
 func (r activeResourceReconciler) observe(
 	ctx context.Context, item domain.AttentionItem, observedAt time.Time,
 ) (activeResourceObservation, error) {
-	return r.observeReadyResource(ctx, item, observedAt, false)
+	return r.observeReadyResource(ctx, item, observedAt, false, false)
 }
 
 // observeCompletionOnly reuses the ready-resource trust gates and fact
@@ -709,22 +770,43 @@ func (r activeResourceReconciler) observe(
 func (r activeResourceReconciler) observeCompletionOnly(
 	ctx context.Context, item domain.AttentionItem, observedAt time.Time,
 ) (activeResourceObservation, error) {
-	return r.observeReadyResource(ctx, item, observedAt, true)
+	return r.observeReadyResource(ctx, item, observedAt, true, false)
 }
 
+// observeReadyResource observes the pull request an item is bound to. held
+// reads a publication hold's binding instead of a ready item's and requires
+// completionOnly: both bindings carry the same store-proven coordinates, so
+// everything after the read is shared.
 func (r activeResourceReconciler) observeReadyResource(
-	ctx context.Context, item domain.AttentionItem, observedAt time.Time, completionOnly bool,
+	ctx context.Context, item domain.AttentionItem, observedAt time.Time, completionOnly, held bool,
 ) (activeResourceObservation, error) {
 	var (
-		binding     domain.ReadyItemPRBinding
-		declaration *domain.WorkUnitDeclaration
-		unitBinding *domain.WorkUnitPRBinding
-		completed   bool
-		foreclosure *completionForeclosure
+		binding       domain.ReadyItemPRBinding
+		declaration   *domain.WorkUnitDeclaration
+		unitBinding   *domain.WorkUnitPRBinding
+		completed     bool
+		foreclosure   *completionForeclosure
+		bindingAbsent bool
+		mergeRecorded bool
 	)
+	if held && !completionOnly {
+		return activeResourceObservation{}, errors.New("a held resource is observed for completion only")
+	}
 	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		binding, err = tx.GetReadyItemPRBinding(ctx, item.ID)
+		if held {
+			var heldBinding domain.HeldItemPRBinding
+			heldBinding, err = tx.GetHeldItemPRBinding(ctx, item.ID)
+			// Only a missing row is absence. A binding that exists but cannot
+			// be proven reads as an inconsistent row and is reported.
+			if errors.Is(err, store.ErrNotFound) {
+				bindingAbsent = true
+				return nil
+			}
+			binding = domain.ReadyItemPRBinding(heldBinding)
+		} else {
+			binding, err = tx.GetReadyItemPRBinding(ctx, item.ID)
+		}
 		if err != nil {
 			return err
 		}
@@ -735,6 +817,15 @@ func (r activeResourceReconciler) observeReadyResource(
 			}
 			declaration, unitBinding = state.declaration, state.binding
 			completed, foreclosure = state.completed, state.foreclosure
+			if held {
+				latest, err := tx.LatestPullMergeFact(ctx, binding.RepositoryID, binding.PRNumber)
+				switch {
+				case err == nil:
+					mergeRecorded = latest.Merged
+				case !errors.Is(err, store.ErrNotFound):
+					return err
+				}
+			}
 			return nil
 		}
 		d, err := tx.GetWorkUnitDeclarationByRun(ctx, binding.RunID)
@@ -770,9 +861,22 @@ func (r activeResourceReconciler) observeReadyResource(
 	observation := activeResourceObservation{
 		itemID: item.ID, binding: binding, completionOnly: completionOnly,
 		completed: completed, foreclosure: foreclosure,
+		held: held, bindingAbsent: bindingAbsent,
 	}
-	if completionOnly && (declaration == nil || unitBinding == nil || completed || foreclosure != nil) {
+	if bindingAbsent {
 		return observation, nil
+	}
+	if completionOnly && (completed || foreclosure != nil) {
+		return observation, nil
+	}
+	if completionOnly && (declaration == nil || unitBinding == nil) {
+		// A concluded ready item already recorded its pull request's end, so
+		// only a declared unit's completion is left to observe. A hold has
+		// recorded nothing yet: keep polling until its merge is on record. A
+		// closed pull request can reopen, so only a merge stops the polling.
+		if !held || mergeRecorded {
+			return observation, nil
+		}
 	}
 	observed, err := r.pull(ctx, binding.Repo, binding.PRNumber)
 	if err != nil {
@@ -928,7 +1032,15 @@ func (r activeResourceReconciler) observeReadyResource(
 
 func (r activeResourceReconciler) commit(ctx context.Context, observation activeResourceObservation) error {
 	return r.store.Write(ctx, func(tx *store.WriteTx) error {
-		binding, err := tx.GetReadyItemPRBinding(ctx, observation.itemID)
+		var binding domain.ReadyItemPRBinding
+		var err error
+		if observation.held {
+			var heldBinding domain.HeldItemPRBinding
+			heldBinding, err = tx.GetHeldItemPRBinding(ctx, observation.itemID)
+			binding = domain.ReadyItemPRBinding(heldBinding)
+		} else {
+			binding, err = tx.GetReadyItemPRBinding(ctx, observation.itemID)
+		}
 		if err != nil {
 			return err
 		}
