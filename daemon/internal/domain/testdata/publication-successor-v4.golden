@@ -1,0 +1,16 @@
+{
+  "version": "freeside.publication-successor/v4",
+  "run_id": "run-1",
+  "command_id": "",
+  "feedback_invocation_id": "",
+  "predecessor_item_id": "production-ready-run-1",
+  "prior_review_invocation_id": "review-1",
+  "review_round": 2,
+  "origin": "external_review",
+  "reentry": {
+    "base_sha": "base-1",
+    "head_sha": "head-1"
+  },
+  "external_finding_id": "external-0123456789abcdef0123456789abcdef",
+  "admitting_profile_digest": "sha256:profile"
+}

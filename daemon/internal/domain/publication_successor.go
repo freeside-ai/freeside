@@ -15,6 +15,9 @@ const (
 	PublicationSuccessorVersion    = "freeside.publication-successor/v1"
 	PublicationContinuationVersion = "freeside.publication-successor/v2"
 	PublicationReentryVersion      = "freeside.publication-successor/v3"
+	// PublicationExternalReviewVersion is the v3 shape plus the finding and
+	// trust profile an external_review re-entry rests on.
+	PublicationExternalReviewVersion = "freeside.publication-successor/v4"
 )
 
 type PublicationSuccessorOrigin string
@@ -26,27 +29,37 @@ const (
 	// review for a ready item the daemon invalidated (issue #1622). No operator
 	// command starts it, so its identities key on the superseded item.
 	PublicationSuccessorReadinessInvalidation PublicationSuccessorOrigin = "readiness_invalidation"
+	// PublicationSuccessorExternalReview re-enters review for a ready item
+	// whose published head drew a finding from an admitted external reviewer
+	// (issue #1623). Like a readiness invalidation it has no operator command
+	// and pushes nothing of its own, so it shares that origin's identities.
+	PublicationSuccessorExternalReview PublicationSuccessorOrigin = "external_review"
 )
 
 var AllPublicationSuccessorOrigins = []PublicationSuccessorOrigin{
 	PublicationSuccessorFeedback, PublicationSuccessorRemediation, PublicationSuccessorReadinessInvalidation,
+	PublicationSuccessorExternalReview,
 }
 
 func (o PublicationSuccessorOrigin) valid() bool {
 	switch o {
-	case PublicationSuccessorFeedback, PublicationSuccessorRemediation, PublicationSuccessorReadinessInvalidation:
+	case PublicationSuccessorFeedback, PublicationSuccessorRemediation, PublicationSuccessorReadinessInvalidation,
+		PublicationSuccessorExternalReview:
 		return true
 	default:
 		return false
 	}
 }
 
-// PublicationSuccessorReentry names what an invalidated ready item re-enters
+// PublicationSuccessorReentry names what a superseded ready item re-enters
 // for: the base and head already on its pull request. A re-entered cycle
 // builds no candidate and pushes nothing; it re-earns readiness in place
-// (devlog/2026-10-02-0222-readiness-reentry-authority.md).
+// (devlog/2026-10-02-0222-readiness-reentry-authority.md). Reason is the
+// readiness invalidation behind a readiness_invalidation re-entry and is
+// empty for an external_review one, whose item was never invalidated: the
+// pull request did not move, a reviewer spoke.
 type PublicationSuccessorReentry struct {
-	Reason  ReadinessInvalidationReason `json:"reason"`
+	Reason  ReadinessInvalidationReason `json:"reason,omitempty"`
 	BaseSHA string                      `json:"base_sha"`
 	HeadSHA string                      `json:"head_sha"`
 }
@@ -64,7 +77,7 @@ func (r PublicationSuccessorReentry) valid() bool {
 }
 
 // PublicationSuccessor binds a cycle to an accepted feedback return, a recheck
-// approval, or a readiness invalidation. Remediation may produce a later
+// approval, a readiness invalidation, or an admitted external review. Remediation may produce a later
 // candidate under this authority, but cannot change its predecessor or review
 // floor.
 type PublicationSuccessor struct {
@@ -78,6 +91,13 @@ type PublicationSuccessor struct {
 	Origin                  PublicationSuccessorOrigin   `json:"origin,omitempty"`
 	ReevaluationCommandID   string                       `json:"reevaluation_command_id,omitempty"`
 	Reentry                 *PublicationSuccessorReentry `json:"reentry,omitempty"`
+	// ExternalFindingID and AdmittingProfileDigest are set together, on an
+	// external_review record only: the finding that triggered the cycle and
+	// the trust profile revision whose allowlist admitted its reviewer. The
+	// profile is named, not looked up, so removing the reviewer later stops
+	// new cycles without making this one unreadable.
+	ExternalFindingID      FindingID `json:"external_finding_id,omitempty"`
+	AdmittingProfileDigest Digest    `json:"admitting_profile_digest,omitempty"`
 }
 
 // EffectiveOrigin preserves the byte-identical v1 feedback representation.
@@ -153,6 +173,18 @@ func (s PublicationSuccessor) Validate() error {
 		s.PriorReviewInvocationID == "" || s.ReviewRound < 2 {
 		return ErrParentKeyMismatch
 	}
+	if s.Version == PublicationExternalReviewVersion {
+		if s.Origin != PublicationSuccessorExternalReview || s.CommandID != "" ||
+			s.FeedbackInvocationID != "" || s.ReevaluationCommandID != "" ||
+			s.Reentry == nil || s.Reentry.Reason != "" || s.Reentry.BaseSHA == "" || s.Reentry.HeadSHA == "" ||
+			s.ExternalFindingID == "" || s.AdmittingProfileDigest == "" {
+			return ErrParentKeyMismatch
+		}
+		return nil
+	}
+	if s.ExternalFindingID != "" || s.AdmittingProfileDigest != "" {
+		return ErrParentKeyMismatch
+	}
 	if s.Version == PublicationReentryVersion {
 		if s.Origin != PublicationSuccessorReadinessInvalidation || s.CommandID != "" ||
 			s.FeedbackInvocationID != "" || s.ReevaluationCommandID != "" ||
@@ -182,7 +214,7 @@ func (s PublicationSuccessor) Validate() error {
 		if s.FeedbackInvocationID != "" || s.ReevaluationCommandID == "" {
 			return ErrParentKeyMismatch
 		}
-	case PublicationSuccessorReadinessInvalidation:
+	case PublicationSuccessorReadinessInvalidation, PublicationSuccessorExternalReview:
 		return ErrParentKeyMismatch
 	}
 	return nil
@@ -190,17 +222,21 @@ func (s PublicationSuccessor) Validate() error {
 
 // AllowsRemediation binds the first continuation producer to the recheck's
 // findings round. Later producers obey the cycle's ordinary review floor. A
-// re-entered cycle admits remediation only after a base advance: a remediation
-// candidate is rebuilt from the admitted base, so on a head Freeside did not
-// produce it would replace the commits someone else pushed. The authority is
-// for one base, so every request must be for findings reviewed against it, and
-// the cycle's first review must be of the head it re-entered for.
+// re-entered cycle admits remediation after a base advance or an external
+// review and never after a head change: a remediation candidate is rebuilt
+// from the admitted base, so on a head Freeside did not produce it would
+// replace the commits someone else pushed. The store refuses an
+// external_review authority on such a head for the same reason. The authority
+// is for one base, so every request must be for findings reviewed against it,
+// and the cycle's first review must be of the head it re-entered for.
 func (s PublicationSuccessor) AllowsRemediation(r RemediationInvocationIntent) bool {
 	if r.RunID != s.RunID || r.SuccessorPublicationID != s.PublicationID() {
 		return false
 	}
 	if s.Reentry != nil {
-		if s.Reentry.Reason != ReadinessInvalidationBaseAdvanced || r.BaseSHA != s.Reentry.BaseSHA ||
+		ownHead := s.Reentry.Reason == ReadinessInvalidationBaseAdvanced ||
+			s.Origin == PublicationSuccessorExternalReview
+		if !ownHead || r.BaseSHA != s.Reentry.BaseSHA ||
 			(r.Round == s.ReviewRound && r.HeadSHA != s.Reentry.HeadSHA) {
 			return false
 		}

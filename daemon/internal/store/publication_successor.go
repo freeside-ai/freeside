@@ -122,7 +122,7 @@ func (tx *ReadTx) validatePublicationSuccessor(ctx context.Context, successor do
 		return err
 	}
 	switch successor.EffectiveOrigin() {
-	case domain.PublicationSuccessorReadinessInvalidation:
+	case domain.PublicationSuccessorReadinessInvalidation, domain.PublicationSuccessorExternalReview:
 		return tx.validateReentrySuccessor(ctx, successor)
 	case domain.PublicationSuccessorRemediation:
 		if err := tx.requireUninvalidatedPredecessor(ctx, successor); err != nil {
