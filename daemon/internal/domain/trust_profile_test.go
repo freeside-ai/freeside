@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -344,6 +345,198 @@ func TestTrustProfileV2DigestRequiresReapproval(t *testing.T) {
 	stale.ProfileDigest = v2Digest
 	if err := stale.Validate(); !errors.Is(err, domain.ErrProfileDigestMismatch) {
 		t.Fatalf("v2-approved digest error = %v, want ErrProfileDigestMismatch", err)
+	}
+}
+
+// TestTrustProfileDigestStableWithoutExternalReviewers: the allowlist joined
+// the profile without an encoding bump, which is sound only while a profile
+// without one encodes to the bytes it always had. The fully populated
+// fixture has no allowlist, so its digest is still the v6 pin above; nil and
+// empty input are the same content; and the serialized body carries no
+// external_reviewers member, so a stored row is byte-identical too.
+func TestTrustProfileDigestStableWithoutExternalReviewers(t *testing.T) {
+	in := fullyPopulatedTrustProfileInput()
+	in.ExternalReviewers = []domain.ExternalReviewer{}
+	p, err := domain.NewAutomationTrustProfile(in)
+	if err != nil {
+		t.Fatalf("NewAutomationTrustProfile: %v", err)
+	}
+	if p.ExternalReviewers != nil {
+		t.Fatalf("empty allowlist = %#v, want nil", p.ExternalReviewers)
+	}
+	const want = domain.Digest("sha256:b94adf427ed789a207d3e42b2e10022575defc54f3317fa739a5e7704eb2dd47")
+	if p.ProfileDigest != want {
+		t.Fatalf("digest without an allowlist = %q, want the v6 pin %q", p.ProfileDigest, want)
+	}
+	body, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(body), "external_reviewers") {
+		t.Fatalf("profile without an allowlist serializes the member: %s", body)
+	}
+}
+
+func externalReviewer(accountID int64, login string) domain.ExternalReviewer {
+	return domain.ExternalReviewer{
+		Forge: domain.ExternalReviewForgeGitHub, AccountID: accountID, Login: login,
+		Authority: domain.ExternalReviewDriveRound,
+	}
+}
+
+// TestTrustProfileExternalReviewers: the allowlist is part of the content
+// address, canonical by construction, and admits only an exact identity.
+func TestTrustProfileExternalReviewers(t *testing.T) {
+	base, err := domain.NewAutomationTrustProfile(validTrustProfileInput())
+	if err != nil {
+		t.Fatalf("NewAutomationTrustProfile: %v", err)
+	}
+	in := validTrustProfileInput()
+	in.ExternalReviewers = []domain.ExternalReviewer{
+		externalReviewer(900, "maintainer"),
+		externalReviewer(41, "codex[bot]"),
+		externalReviewer(900, "maintainer"),
+	}
+	listed, err := domain.NewAutomationTrustProfile(in)
+	if err != nil {
+		t.Fatalf("NewAutomationTrustProfile with allowlist: %v", err)
+	}
+	want := []domain.ExternalReviewer{externalReviewer(41, "codex[bot]"), externalReviewer(900, "maintainer")}
+	if !reflect.DeepEqual(listed.ExternalReviewers, want) {
+		t.Fatalf("allowlist = %#v, want sorted and deduplicated %#v", listed.ExternalReviewers, want)
+	}
+	if listed.ProfileDigest == base.ProfileDigest {
+		t.Fatal("adding external reviewers left the profile digest unchanged")
+	}
+	// The constructor detaches the list from the caller's backing array.
+	in.ExternalReviewers[1].Login = "someone-else"
+	if listed.ExternalReviewers[0].Login != "codex[bot]" {
+		t.Fatal("profile allowlist aliases the caller's slice")
+	}
+
+	// Entries added under a bound digest are drift, like any posture field:
+	// nobody is admitted without the owner approving a new digest.
+	smuggled := base
+	smuggled.ExternalReviewers = want
+	if err := smuggled.Validate(); !errors.Is(err, domain.ErrProfileDigestMismatch) {
+		t.Fatalf("allowlist under a bound digest error = %v, want ErrProfileDigestMismatch", err)
+	}
+
+	// A serialized profile with entries decodes to the same value and passes
+	// the digest recompute, which is the store's read path.
+	body, err := json.Marshal(listed)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded domain.AutomationTrustProfile
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if err := decoded.Validate(); err != nil {
+		t.Fatalf("decoded profile rejected: %v", err)
+	}
+	if !reflect.DeepEqual(decoded, listed) {
+		t.Fatalf("round trip diverged:\n got %#v\nwant %#v", decoded, listed)
+	}
+
+	admitted := []struct {
+		name      string
+		forge     domain.ExternalReviewForge
+		accountID int64
+		login     string
+		want      bool
+	}{
+		{"exact identity", domain.ExternalReviewForgeGitHub, 41, "codex[bot]", true},
+		{"renamed login", domain.ExternalReviewForgeGitHub, 41, "codex-renamed[bot]", false},
+		{"reused login on another account", domain.ExternalReviewForgeGitHub, 42, "codex[bot]", false},
+		{"login in another case", domain.ExternalReviewForgeGitHub, 41, "Codex[bot]", false},
+		{"another forge", "gitlab", 41, "codex[bot]", false},
+		{"unlisted reviewer", domain.ExternalReviewForgeGitHub, 7, "stranger", false},
+	}
+	for _, tt := range admitted {
+		t.Run(tt.name, func(t *testing.T) {
+			authority, ok := listed.ExternalReviewAuthorityFor(tt.forge, tt.accountID, tt.login)
+			if ok != tt.want {
+				t.Fatalf("admitted = %v, want %v", ok, tt.want)
+			}
+			if ok && authority != domain.ExternalReviewDriveRound {
+				t.Fatalf("authority = %q, want drive_round", authority)
+			}
+			if !ok && authority != "" {
+				t.Fatalf("unadmitted reviewer got authority %q", authority)
+			}
+		})
+	}
+	if _, ok := base.ExternalReviewAuthorityFor(domain.ExternalReviewForgeGitHub, 41, "codex[bot]"); ok {
+		t.Fatal("a profile without an allowlist admitted a reviewer")
+	}
+}
+
+// TestTrustProfileExternalReviewersValidation rejects each malformed entry
+// through the constructor and each non-canonical list on the literal path
+// that decode and exported structs take.
+func TestTrustProfileExternalReviewersValidation(t *testing.T) {
+	entries := []struct {
+		name   string
+		mutate func(*domain.ExternalReviewer)
+		want   error
+	}{
+		{"unknown forge", func(r *domain.ExternalReviewer) { r.Forge = "gitlab" }, domain.ErrInvalidExternalReviewForge},
+		{"empty forge", func(r *domain.ExternalReviewer) { r.Forge = "" }, domain.ErrInvalidExternalReviewForge},
+		{"unknown authority", func(r *domain.ExternalReviewer) { r.Authority = "advise" }, domain.ErrInvalidExternalReviewAuthority},
+		{"empty authority", func(r *domain.ExternalReviewer) { r.Authority = "" }, domain.ErrInvalidExternalReviewAuthority},
+		{"zero account id", func(r *domain.ExternalReviewer) { r.AccountID = 0 }, domain.ErrNonPositive},
+		{"negative account id", func(r *domain.ExternalReviewer) { r.AccountID = -41 }, domain.ErrNonPositive},
+		{"empty login", func(r *domain.ExternalReviewer) { r.Login = "" }, domain.ErrEmptyField},
+		{"login with a space", func(r *domain.ExternalReviewer) { r.Login = "codex bot" }, domain.ErrExternalReviewerLoginInvalid},
+		{"login with a newline", func(r *domain.ExternalReviewer) { r.Login = "codex\nbot" }, domain.ErrExternalReviewerLoginInvalid},
+		{"login with a control character", func(r *domain.ExternalReviewer) { r.Login = "codex\x1b[0m" }, domain.ErrExternalReviewerLoginInvalid},
+		{"login not UTF-8", func(r *domain.ExternalReviewer) { r.Login = "codex\xff" }, domain.ErrExternalReviewerLoginInvalid},
+	}
+	for _, tt := range entries {
+		t.Run(tt.name, func(t *testing.T) {
+			in := validTrustProfileInput()
+			r := externalReviewer(41, "codex[bot]")
+			tt.mutate(&r)
+			in.ExternalReviewers = []domain.ExternalReviewer{r}
+			if _, err := domain.NewAutomationTrustProfile(in); !errors.Is(err, tt.want) {
+				t.Fatalf("error = %v, want %v", err, tt.want)
+			}
+		})
+	}
+
+	// One account with two logins is a contradiction the constructor refuses
+	// to settle: it cannot know which spelling the owner approved.
+	in := validTrustProfileInput()
+	in.ExternalReviewers = []domain.ExternalReviewer{
+		externalReviewer(41, "codex[bot]"), externalReviewer(41, "codex-renamed[bot]"),
+	}
+	if _, err := domain.NewAutomationTrustProfile(in); !errors.Is(err, domain.ErrExternalReviewersNotCanonical) {
+		t.Fatalf("two logins for one account error = %v, want ErrExternalReviewersNotCanonical", err)
+	}
+
+	in = validTrustProfileInput()
+	in.ExternalReviewers = []domain.ExternalReviewer{externalReviewer(41, "codex[bot]"), externalReviewer(900, "maintainer")}
+	base, err := domain.NewAutomationTrustProfile(in)
+	if err != nil {
+		t.Fatalf("NewAutomationTrustProfile: %v", err)
+	}
+	literals := []struct {
+		name string
+		list []domain.ExternalReviewer
+	}{
+		{"unsorted", []domain.ExternalReviewer{externalReviewer(900, "maintainer"), externalReviewer(41, "codex[bot]")}},
+		{"duplicate account", []domain.ExternalReviewer{externalReviewer(41, "codex[bot]"), externalReviewer(41, "codex[bot]")}},
+		{"empty non-nil", []domain.ExternalReviewer{}},
+	}
+	for _, tt := range literals {
+		t.Run(tt.name, func(t *testing.T) {
+			p := base
+			p.ExternalReviewers = tt.list
+			if err := p.Validate(); !errors.Is(err, domain.ErrExternalReviewersNotCanonical) {
+				t.Fatalf("error = %v, want ErrExternalReviewersNotCanonical", err)
+			}
+		})
 	}
 }
 

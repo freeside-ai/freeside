@@ -41,6 +41,10 @@ type OnboardPolicy struct {
 	ReviewMode     domain.ReviewMode
 	ReviewConfig   domain.Digest
 	ProtectedPaths domain.ProtectedPathConfig
+	// ExternalReviewers is the owner's allowlist of reviewers outside
+	// Freeside whose findings may start a round (plan §5.19). Empty admits
+	// nobody and proposes the same profile as before the field existed.
+	ExternalReviewers []domain.ExternalReviewer
 }
 
 // OnboardRequest binds the review and image build to one repository identity.
@@ -257,7 +261,8 @@ func (o Onboard) Run(ctx context.Context, req OnboardRequest) (OnboardResult, er
 		Review: domain.ReviewSettings{
 			Mode: req.Policy.ReviewMode, ConfigDigest: req.Policy.ReviewConfig,
 		},
-		ProtectedPaths: req.Policy.ProtectedPaths,
+		ProtectedPaths:    req.Policy.ProtectedPaths,
+		ExternalReviewers: req.Policy.ExternalReviewers,
 	})
 	if err != nil {
 		return OnboardResult{}, fmt.Errorf("onboard: construct trust profile: %w", err)

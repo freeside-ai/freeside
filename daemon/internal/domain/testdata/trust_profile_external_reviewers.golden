@@ -1,0 +1,56 @@
+{
+  "repo": "freeside-ai/demo",
+  "repository_id": 123456789,
+  "pr_execution": "audited_same_repo",
+  "candidate_automation_changes": "block",
+  "pr_github_token_permissions": "read_only",
+  "allow_oidc": false,
+  "allow_environment_secrets": false,
+  "allow_secret_bearing_pr_jobs": false,
+  "allow_self_hosted_ci": false,
+  "allow_pull_request_target": false,
+  "allow_reusable_workflows": false,
+  "allow_package_publishing": false,
+  "allow_artifact_consumers": false,
+  "commit_plan": "single_commit",
+  "message_ruleset": "github/1",
+  "workflow_audit_digest": "sha256:workflow-audit",
+  "review": {
+    "mode": "freeside_invoked",
+    "config_digest": "sha256:review-config"
+  },
+  "protected_paths": {
+    "extra_automation_control_patterns": [
+      "ci/*.sh",
+      "deploy/**"
+    ],
+    "extra_reviewer_instruction_patterns": null,
+    "extra_git_metadata_patterns": null,
+    "extra_verification_control_patterns": [
+      "Makefile"
+    ],
+    "extra_prompts_and_policy_patterns": [
+      "policy/**",
+      "prompts/**"
+    ],
+    "extra_egress_and_trust_patterns": null,
+    "extra_materiality_rules_patterns": [
+      "docs/plan.md"
+    ]
+  },
+  "external_reviewers": [
+    {
+      "forge": "github",
+      "account_id": 41,
+      "login": "codex[bot]",
+      "authority": "drive_round"
+    },
+    {
+      "forge": "github",
+      "account_id": 900,
+      "login": "maintainer",
+      "authority": "drive_round"
+    }
+  ],
+  "profile_digest": "sha256:70590a20660ff5b41b96d3a62624216de0df1a60f9729bd788a9311eacb5639f"
+}

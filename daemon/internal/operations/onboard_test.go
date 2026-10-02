@@ -2,7 +2,9 @@ package operations_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -214,6 +216,119 @@ func TestOnboardRoundTripsPlanPreferredIntoActivatedProfile(t *testing.T) {
 	if active.CommitPlan != domain.CommitPlanPlanPreferred ||
 		active.ProfileDigest != preferredReview.Profile.ProfileDigest {
 		t.Fatalf("active profile = %+v, want plan-preferred review profile", active)
+	}
+}
+
+// TestOnboardReRunAdmitsExternalReviewers: the allowlist is an owner choice
+// carried by the reviewed profile, so adding a reviewer to an onboarded
+// repository is a second onboard pass with its own approval digest, and the
+// approved profile becomes the active one the admission check reads.
+func TestOnboardReRunAdmitsExternalReviewers(t *testing.T) {
+	ctx := t.Context()
+	st, err := store.Open(ctx, t.TempDir()+"/freeside.db", store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	evidence, err := domain.NewWorkflowAuditEvidence([]byte(
+		`{"version":"freeside-workflow-audit/v2","repo":"example/repo","workflows":[]}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	audit := domain.WorkflowAudit{
+		Repo: "example/repo", AuditedCommitSHA: "0123456789012345678901234567890123456789",
+		AuditedAt:           time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC),
+		WorkflowAuditDigest: evidence.Digest(), Evidence: &evidence,
+		EffectiveTokenPerms: domain.TokenPermissionsReadOnly,
+	}
+	onboard := operations.Onboard{
+		Store: st, Builder: &imageBuilderStub{store: st}, Auditor: workflowAuditorStub{audit: audit},
+		Authority: authorityStub{publish.InstallationAuthority{
+			TrustedInstallations: []publish.TrustedInstallation{{
+				RegistrationID: 11, InstallationID: 22,
+				Account: "example", AccountID: 33, RepositoryIDs: []int64{44},
+			}},
+		}},
+		Gate: pendingGateStub(true), Now: func() time.Time { return audit.AuditedAt },
+	}
+	req := operations.OnboardRequest{
+		Repository: "example/repo", RepositoryID: 44, RegistrationID: 11,
+		BaseRef: "main",
+		Policy: operations.OnboardPolicy{
+			PRExecution: domain.PRExecutionAuditedSameRepo,
+			CommitPlan:  domain.CommitPlanSingleCommit, MessageRuleset: domain.MessageRulesetGitHub1,
+			ReviewMode: domain.ReviewFreesideInvoked, ReviewConfig: "sha256:review",
+		},
+		Image: projectimage.Request{
+			Repository: "example/repo", RepositoryID: 44,
+			CommitSHA: "0123456789012345678901234567890123456789",
+			Recipe:    []byte(`{"commands":[["npm","test"]],"capture":"none"}`),
+			BaseImageRef: domain.ImageRef(
+				"ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("a", 64)),
+			BaseBuildRef: "local/base:v1", LocalRegistryPort: 5100,
+		},
+	}
+	approve := func(t *testing.T) operations.OnboardResult {
+		t.Helper()
+		req.ApprovalDigest = ""
+		review, err := onboard.Run(ctx, req)
+		if err != nil {
+			t.Fatalf("review pass: %v", err)
+		}
+		req.ApprovalDigest = review.ApprovalDigest
+		complete, err := onboard.Run(ctx, req)
+		if err != nil {
+			t.Fatalf("approval pass: %v", err)
+		}
+		if complete.Status != "complete" {
+			t.Fatalf("completion = %+v", complete)
+		}
+		return complete
+	}
+	first := approve(t)
+	if first.Profile.ExternalReviewers != nil {
+		t.Fatalf("profile without the choice carries reviewers %v", first.Profile.ExternalReviewers)
+	}
+
+	reviewer := domain.ExternalReviewer{
+		Forge: domain.ExternalReviewForgeGitHub, AccountID: 41, Login: "codex[bot]",
+		Authority: domain.ExternalReviewDriveRound,
+	}
+	req.Policy.ExternalReviewers = []domain.ExternalReviewer{reviewer}
+	// The first pass's approval does not cover the new reviewer.
+	if _, err := onboard.Run(ctx, req); err == nil {
+		t.Fatal("the earlier approval digest admitted a new external reviewer")
+	}
+	second := approve(t)
+	if second.ApprovalDigest == first.ApprovalDigest {
+		t.Fatal("adding an external reviewer reused the earlier approval digest")
+	}
+	if !slices.Equal(second.Profile.ExternalReviewers, []domain.ExternalReviewer{reviewer}) {
+		t.Fatalf("reviewed profile reviewers = %v, want %v", second.Profile.ExternalReviewers, reviewer)
+	}
+	// The one-time review output is the profile itself, so the owner sees
+	// the entry they approve.
+	body, err := json.Marshal(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"external_reviewers":[{"forge":"github","account_id":41,"login":"codex[bot]","authority":"drive_round"}]`) {
+		t.Fatalf("review output omits the allowlist: %s", body)
+	}
+	var active domain.AutomationTrustProfile
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var readErr error
+		active, readErr = tx.LatestTrustProfile(ctx, req.Repository)
+		return readErr
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if active.ProfileDigest != second.Profile.ProfileDigest {
+		t.Fatalf("active profile = %s, want the re-approved %s", active.ProfileDigest, second.Profile.ProfileDigest)
+	}
+	if _, ok := active.ExternalReviewAuthorityFor(reviewer.Forge, reviewer.AccountID, reviewer.Login); !ok {
+		t.Fatal("active profile does not admit the approved reviewer")
 	}
 }
 

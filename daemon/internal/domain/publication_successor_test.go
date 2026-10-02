@@ -23,7 +23,12 @@ func TestPublicationSuccessorVersions(t *testing.T) {
 	for _, fixture := range []struct {
 		name  string
 		value domain.PublicationSuccessor
-	}{{"publication-successor-v1", legacy}, {"publication-successor-v2", continuation}, {"publication-successor-v3", reentry}} {
+	}{
+		{"publication-successor-v1", legacy},
+		{"publication-successor-v2", continuation},
+		{"publication-successor-v3", reentry},
+		{"publication-successor-v4", externalReviewSuccessor()},
+	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			if err := fixture.value.Validate(); err != nil {
 				t.Fatal(err)
@@ -57,6 +62,8 @@ func TestPublicationSuccessorVersions(t *testing.T) {
 			value.FeedbackInvocationID, value.ReevaluationCommandID = "feedback-1", ""
 		case domain.PublicationSuccessorReadinessInvalidation:
 			value = reentry
+		case domain.PublicationSuccessorExternalReview:
+			value = externalReviewSuccessor()
 		case domain.PublicationSuccessorRemediation:
 		}
 		if err := value.Validate(); err != nil {
@@ -81,6 +88,9 @@ func TestPublicationSuccessorVersions(t *testing.T) {
 		func(s *domain.PublicationSuccessor) { s.Origin = domain.PublicationSuccessorReadinessInvalidation },
 		func(s *domain.PublicationSuccessor) { s.Reentry = reentry.Reentry },
 		func(s *domain.PublicationSuccessor) { s.CommandID = "" },
+		func(s *domain.PublicationSuccessor) { s.Origin = domain.PublicationSuccessorExternalReview },
+		func(s *domain.PublicationSuccessor) { s.ExternalFindingID = "external-1" },
+		func(s *domain.PublicationSuccessor) { s.AdmittingProfileDigest = "sha256:profile" },
 	} {
 		invalid := continuation
 		mutate(&invalid)
@@ -113,6 +123,91 @@ func reentrySuccessor() domain.PublicationSuccessor {
 		Reentry: &domain.PublicationSuccessorReentry{
 			Reason: domain.ReadinessInvalidationBaseAdvanced, BaseSHA: "base-2", HeadSHA: "head-1",
 		},
+	}
+}
+
+func externalReviewSuccessor() domain.PublicationSuccessor {
+	return domain.PublicationSuccessor{
+		Version: domain.PublicationExternalReviewVersion, Origin: domain.PublicationSuccessorExternalReview,
+		RunID: "run-1", PredecessorItemID: "production-ready-run-1", PriorReviewInvocationID: "review-1", ReviewRound: 2,
+		Reentry:           &domain.PublicationSuccessorReentry{BaseSHA: "base-1", HeadSHA: "head-1"},
+		ExternalFindingID: "external-0123456789abcdef0123456789abcdef", AdmittingProfileDigest: "sha256:profile",
+	}
+}
+
+// An external_review record carries the triggering finding and the admitting
+// profile and nothing an operator command or a readiness invalidation would;
+// the earlier versions carry neither of its two fields.
+func TestPublicationSuccessorExternalReviewValidation(t *testing.T) {
+	if err := externalReviewSuccessor().Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*domain.PublicationSuccessor){
+		"no finding":           func(s *domain.PublicationSuccessor) { s.ExternalFindingID = "" },
+		"no profile":           func(s *domain.PublicationSuccessor) { s.AdmittingProfileDigest = "" },
+		"invalidation reason":  func(s *domain.PublicationSuccessor) { s.Reentry.Reason = domain.ReadinessInvalidationBaseAdvanced },
+		"no base":              func(s *domain.PublicationSuccessor) { s.Reentry.BaseSHA = "" },
+		"no head":              func(s *domain.PublicationSuccessor) { s.Reentry.HeadSHA = "" },
+		"no reentry":           func(s *domain.PublicationSuccessor) { s.Reentry = nil },
+		"command":              func(s *domain.PublicationSuccessor) { s.CommandID = "return-1" },
+		"feedback invocation":  func(s *domain.PublicationSuccessor) { s.FeedbackInvocationID = "inv-feedback-1" },
+		"reevaluation command": func(s *domain.PublicationSuccessor) { s.ReevaluationCommandID = "rerun-1" },
+		"invalidation origin":  func(s *domain.PublicationSuccessor) { s.Origin = domain.PublicationSuccessorReadinessInvalidation },
+		"reentry version":      func(s *domain.PublicationSuccessor) { s.Version = domain.PublicationReentryVersion },
+		"first round":          func(s *domain.PublicationSuccessor) { s.ReviewRound = 1 },
+	} {
+		invalid := externalReviewSuccessor()
+		reentry := *invalid.Reentry
+		invalid.Reentry = &reentry
+		mutate(&invalid)
+		if invalid.Validate() == nil {
+			t.Errorf("%s: invalid external_review successor accepted", name)
+		}
+	}
+	for name, mutate := range map[string]func(*domain.PublicationSuccessor){
+		"finding": func(s *domain.PublicationSuccessor) { s.ExternalFindingID = "external-1" },
+		"profile": func(s *domain.PublicationSuccessor) { s.AdmittingProfileDigest = "sha256:profile" },
+		"origin":  func(s *domain.PublicationSuccessor) { s.Origin = domain.PublicationSuccessorExternalReview },
+	} {
+		invalid := reentrySuccessor()
+		mutate(&invalid)
+		if invalid.Validate() == nil {
+			t.Errorf("readiness re-entry carrying an external review %s accepted", name)
+		}
+	}
+	// One superseded item admits one commandless successor, whatever its
+	// origin: the two origins share every predecessor-keyed identity.
+	external, invalidated := externalReviewSuccessor(), reentrySuccessor()
+	if external.PublicationID() != invalidated.PublicationID() || external.Key() != invalidated.Key() ||
+		external.ReadyItemID() != invalidated.ReadyItemID() || external.BlockedItemID() != invalidated.BlockedItemID() ||
+		external.TaskKey() != invalidated.TaskKey() {
+		t.Fatal("external_review and readiness_invalidation re-entries of one item have different identities")
+	}
+}
+
+// The head an external reviewer commented on is Freeside's own, so
+// remediation may replace it, under the same one-base rule as a base advance.
+func TestPublicationSuccessorExternalReviewRemediation(t *testing.T) {
+	external := externalReviewSuccessor()
+	request := domain.RemediationInvocationIntent{
+		RunID: external.RunID, SuccessorPublicationID: external.PublicationID(), Round: external.ReviewRound,
+		BaseSHA: external.Reentry.BaseSHA, HeadSHA: external.Reentry.HeadSHA,
+	}
+	if !external.AllowsRemediation(request) {
+		t.Fatal("external_review re-entry refused remediation at its review round")
+	}
+	otherBase, otherHead := request, request
+	otherBase.BaseSHA, otherHead.HeadSHA = "another-base", "another-head"
+	if external.AllowsRemediation(otherBase) || external.AllowsRemediation(otherHead) {
+		t.Fatal("external_review re-entry admitted a first-round request for other coordinates")
+	}
+	otherHead.Round, otherBase.Round = external.ReviewRound+1, external.ReviewRound+1
+	if !external.AllowsRemediation(otherHead) || external.AllowsRemediation(otherBase) {
+		t.Fatal("later-round remediation is not bound to the re-entry base alone")
+	}
+	request.Round, request.ReviewInvocationID = external.ReviewRound-1, external.PriorReviewInvocationID
+	if external.AllowsRemediation(request) {
+		t.Fatal("external_review re-entry admitted the prior round's findings")
 	}
 }
 

@@ -146,6 +146,18 @@ func TestEnumValidity(t *testing.T) {
 		valids["ReviewMode"] = append(valids["ReviewMode"], v.valid)
 	}
 	invalids["ReviewMode"] = ReviewMode("").valid
+	for _, v := range AllExternalReviewForges {
+		valids["ExternalReviewForge"] = append(valids["ExternalReviewForge"], v.valid)
+	}
+	invalids["ExternalReviewForge"] = ExternalReviewForge("").valid
+	for _, v := range AllFindingProvenanceClasses {
+		valids["FindingProvenanceClass"] = append(valids["FindingProvenanceClass"], v.valid)
+	}
+	invalids["FindingProvenanceClass"] = FindingProvenanceClass("").valid
+	for _, v := range AllExternalReviewAuthorities {
+		valids["ExternalReviewAuthority"] = append(valids["ExternalReviewAuthority"], v.valid)
+	}
+	invalids["ExternalReviewAuthority"] = ExternalReviewAuthority("").valid
 	for _, v := range AllCandidateFindingClasses {
 		valids["CandidateFindingClass"] = append(valids["CandidateFindingClass"], v.valid)
 	}

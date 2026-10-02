@@ -1781,6 +1781,19 @@ repository_security:
                                              # under the versioned digest;
                                              # native review is observation-
                                              # only evidence
+  external_reviewers:                        # optional; empty by default.
+    - {forge: github, account_id: 41, login: "codex[bot]", authority: drive_round}
+                                             # the source-specific admission
+                                             # of Section 5.19: an identity
+                                             # outside the control plane
+                                             # whose finding on a published
+                                             # PR may start a review round.
+                                             # Forge, immutable account ID,
+                                             # and login must all match; an
+                                             # unlisted identity's finding is
+                                             # stored and drives nothing. An
+                                             # empty list leaves the profile
+                                             # digest unchanged
 ```
 
 The audit attests the PR job's **effective authority**, including:
@@ -4069,7 +4082,10 @@ trigger remediation, or consume remediation budgets. Automatic blocking or
 remediation requires source-specific admission or explicit human promotion,
 deduplication, and a declared authority-site contract (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)). External
 findings never satisfy ReviewSource freshness, independence, or
-review-completeness.
+review-completeness. For review activity on a published PR, source-specific
+admission is the trust profile's `external_reviewers` allowlist (Section
+[5.5](#55-the-ci-trust-boundary)), re-checked against the active profile whenever an external
+finding is read for authority and never stored with the finding.
 
 #### Pre-Publication Adversarial Pass (Deferred)
 
@@ -4307,7 +4323,9 @@ Review activity from outside the control plane includes human maintainers,
 GitHub-native Codex when it fires, and other bots. On a published PR, that
 activity is the external review response capability (Section [11](#11-roadmap-build-order-and-coordination), wave
 8; #524). It never satisfies this section's requirement, which stays
-Freeside-invoked and pre-publication.
+Freeside-invoked and pre-publication. Which identities may start a round is
+the trust profile's `external_reviewers` allowlist (Section [5.5](#55-the-ci-trust-boundary)); a
+finding from anyone else is stored as history and drives nothing.
 
 ### Review Independence, Credibility, and Severity
 
