@@ -598,7 +598,6 @@ func renderDispositionHistoryUnbounded(h DispositionHistory) (string, error) {
 		fmt.Fprintf(&out, "- Model configuration: %s\n", dispositionCode(review.ModelConfiguration))
 		fmt.Fprintf(&out, "- Configuration digest: %s\n", dispositionCode(string(review.ConfigurationDigest)))
 		fmt.Fprintf(&out, "- Instruction digest: %s\n", dispositionCode(string(review.InstructionDigest)))
-		fmt.Fprintf(&out, "- Cost owner: %s\n", dispositionCode(review.CostOwner))
 		fmt.Fprintf(&out, "- Base/head: %s / %s\n", dispositionCode(review.BaseSHA), dispositionCode(review.HeadSHA))
 		fmt.Fprintf(&out, "- Completed: %s\n", dispositionCode(review.CompletedAt.UTC().Format(time.RFC3339Nano)))
 		fmt.Fprintf(&out, "- Completion evidence: %s\n", dispositionCode(string(review.CompletionEvidence)))
