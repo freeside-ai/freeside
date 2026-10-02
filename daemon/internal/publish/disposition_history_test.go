@@ -15,6 +15,11 @@ const (
 	dispositionDigestC = domain.Digest("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
 )
 
+// dispositionCostOwnerSentinel is the fixture's review cost owner. A cost
+// owner names a bill, so it is recorded but never published; the value is
+// distinctive so a test can prove no rendered text carries it.
+const dispositionCostOwnerSentinel = "cost-owner-sentinel-must-not-publish"
+
 func dispositionHistoryFixture(t *testing.T) DispositionHistory {
 	t.Helper()
 	runID := domain.RunID("run-disposition-history")
@@ -22,7 +27,7 @@ func dispositionHistoryFixture(t *testing.T) DispositionHistory {
 		InvocationID: "review-round-1", RunID: runID, Round: 1,
 		Provider: "openai", ModelConfiguration: "codex <frontier>",
 		ConfigurationDigest: dispositionDigestA, InstructionDigest: dispositionDigestB,
-		CostOwner: "operator", BaseSHA: strings.Repeat("1", 40), HeadSHA: strings.Repeat("2", 40),
+		CostOwner: dispositionCostOwnerSentinel, BaseSHA: strings.Repeat("1", 40), HeadSHA: strings.Repeat("2", 40),
 		CompletedAt:        time.Date(2026, 8, 11, 15, 4, 5, 0, time.UTC),
 		CompletionEvidence: dispositionDigestC, Outcome: domain.ReviewFindings,
 		FindingIDs: []domain.FindingID{"finding-deferred", "finding-fixed", "finding-declined"},
@@ -34,7 +39,7 @@ func dispositionHistoryFixture(t *testing.T) DispositionHistory {
 		InvocationID: "review-round-2", RunID: runID, Round: 2,
 		Provider: "openai", ModelConfiguration: "codex frontier",
 		ConfigurationDigest: dispositionDigestA, InstructionDigest: dispositionDigestB,
-		CostOwner: "operator", BaseSHA: strings.Repeat("1", 40), HeadSHA: strings.Repeat("3", 40),
+		CostOwner: dispositionCostOwnerSentinel, BaseSHA: strings.Repeat("1", 40), HeadSHA: strings.Repeat("3", 40),
 		CompletedAt:        time.Date(2026, 8, 11, 15, 14, 5, 0, time.UTC),
 		CompletionEvidence: dispositionDigestC, Outcome: domain.ReviewClean,
 	})
@@ -113,6 +118,55 @@ func dispositionHistoryFixture(t *testing.T) DispositionHistory {
 		t.Fatal(err)
 	}
 	return history
+}
+
+// TestPublicationTextOmitsReviewCostOwner covers every text the publisher
+// renders for the forge: the disposition history at full size and at its
+// truncation floor, and the composed pull request title and body (the
+// package posts no comments). It searches for the recorded value, not the
+// label, so a later field cannot republish the cost owner under another name.
+func TestPublicationTextOmitsReviewCostOwner(t *testing.T) {
+	t.Parallel()
+	history := dispositionHistoryFixture(t)
+	for _, review := range history.reviews {
+		if review.CostOwner != dispositionCostOwnerSentinel {
+			t.Fatalf("round %d cost owner = %q, want the sentinel", review.Round, review.CostOwner)
+		}
+	}
+	section, err := RenderDispositionHistory(history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	truncated, err := renderDispositionHistoryWithin(history, minRenderedDispositionHistoryBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := DeriveIdentity(IdentityInput{
+		Repo: "freeside-ai/repo", BaseRef: "main", SourceHeadSHA: history.headSHA,
+		ArtifactDigests: []domain.Digest{dispositionDigestA},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	title, body, err := desiredPRContent(identity, Candidate{
+		Title: "Publish the review record", Body: "Operator prose.",
+		RunID: history.runID, HeadSHA: history.headSHA, DispositionHistory: &history,
+		Advisories: []domain.CandidateFinding{advisoryFinding("")},
+	}, closureResolution{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body, dispositionHistoryOpenMarker) {
+		t.Fatal("composed body omitted the disposition history")
+	}
+	for name, text := range map[string]string{
+		"disposition history": section, "truncated disposition history": truncated,
+		"pull request title": title, "pull request body": body,
+	} {
+		if strings.Contains(text, dispositionCostOwnerSentinel) {
+			t.Errorf("%s publishes the review cost owner:\n%s", name, text)
+		}
+	}
 }
 
 func TestDispositionHistoryGolden(t *testing.T) {
