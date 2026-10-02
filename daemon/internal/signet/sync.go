@@ -230,6 +230,30 @@ type ScheduleSnapshot struct {
 	Schedule      domain.Schedule `json:"schedule"`
 }
 
+// UnattendedOperationSnapshot is the daemon's unattended-admission state,
+// matching api/openapi.yaml: the verdict of the one gate admission enforces
+// (store.UnattendedOperationGate) and every stop that closes it. It carries
+// no sync metadata of its own because it is not an entity: it is derived
+// inside the bootstrap read, so the enclosing snapshot's revision is its
+// revision.
+type UnattendedOperationSnapshot struct {
+	Admission domain.UnattendedAdmission `json:"admission"`
+	Stops     []UnattendedStop           `json:"stops"`
+}
+
+// UnattendedStop is one stop in force. ItemID is the open system_health item
+// whose decision or resolution reopens admission: the blocking item itself,
+// or for an operator stop the notice offering resume_unattended (null when
+// none is open). CommandID is the accepted stop_unattended command, null for
+// a blocking item. Since is null only for an item recorded without a
+// creation instant.
+type UnattendedStop struct {
+	Kind      domain.UnattendedStopKind `json:"kind"`
+	ItemID    *domain.ItemID            `json:"item_id"`
+	CommandID *string                   `json:"command_id"`
+	Since     *time.Time                `json:"since"`
+}
+
 // BootstrapSnapshot is one canonical view of all synchronized resources.
 // Service.Bootstrap constructs every field inside one Store.Read callback, so
 // Revision is the upper bound for every resource's AsOfRevision and no write
@@ -243,6 +267,7 @@ type BootstrapSnapshot struct {
 	Tasks               []TaskSnapshot              `json:"tasks"`
 	Conversations       []ConversationSnapshot      `json:"conversations"`
 	Schedules           []ScheduleSnapshot          `json:"schedules"`
+	UnattendedOperation UnattendedOperationSnapshot `json:"unattended_operation"`
 }
 
 // Bootstrap returns the one response that advances a client's
@@ -287,6 +312,10 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 		if err != nil {
 			return err
 		}
+		gate, err := tx.UnattendedOperationGate(ctx)
+		if err != nil {
+			return fmt.Errorf("unattended operation gate: %w", err)
+		}
 
 		out = BootstrapSnapshot{
 			SyncEpoch: state.SyncEpoch, Revision: state.Revision,
@@ -296,6 +325,7 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 			Tasks:               make([]TaskSnapshot, 0, len(tasks)),
 			Conversations:       make([]ConversationSnapshot, 0, len(conversations)),
 			Schedules:           make([]ScheduleSnapshot, 0, len(schedules)),
+			UnattendedOperation: unattendedOperationSnapshot(gate),
 		}
 		snoozedItems := make(map[domain.ItemID]bool)
 		for _, item := range items {

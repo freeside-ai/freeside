@@ -262,6 +262,14 @@ func TestEnumValidity(t *testing.T) {
 		valids["UnattendedOperationState"] = append(valids["UnattendedOperationState"], v.valid)
 	}
 	invalids["UnattendedOperationState"] = UnattendedOperationState("").valid
+	for _, v := range AllUnattendedAdmissions {
+		valids["UnattendedAdmission"] = append(valids["UnattendedAdmission"], v.valid)
+	}
+	invalids["UnattendedAdmission"] = UnattendedAdmission("").valid
+	for _, v := range AllUnattendedStopKinds {
+		valids["UnattendedStopKind"] = append(valids["UnattendedStopKind"], v.valid)
+	}
+	invalids["UnattendedStopKind"] = UnattendedStopKind("").valid
 	for _, v := range AllSupersessionKinds {
 		valids["SupersessionKind"] = append(valids["SupersessionKind"], v.valid)
 	}

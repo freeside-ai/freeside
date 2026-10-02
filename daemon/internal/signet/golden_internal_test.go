@@ -159,6 +159,22 @@ func TestSignetWireGoldens(t *testing.T) {
 				Schedules: []ScheduleSnapshot{
 					scheduleSnapshot(schedule, store.Snapshot{AsOfRevision: 22, EntityVersion: 1}),
 				},
+				UnattendedOperation: UnattendedOperationSnapshot{
+					Admission: domain.UnattendedAdmissionStopped,
+					Stops: []UnattendedStop{
+						{
+							Kind:      domain.UnattendedStopOperator,
+							ItemID:    new(domain.ItemID("system-health-unattended-stopped-command-980")),
+							CommandID: new("command-980"),
+							Since:     new(createdAt.Add(4 * time.Minute)),
+						},
+						{
+							Kind:   domain.UnattendedStopBlockingSystemHealth,
+							ItemID: new(domain.ItemID("system-health-daemon-durable-stop-22")),
+							Since:  &createdAt,
+						},
+					},
+				},
 			},
 		},
 		{name: "server-revision", value: ServerRevision{SyncEpoch: "sync-epoch-569", Revision: 23}},

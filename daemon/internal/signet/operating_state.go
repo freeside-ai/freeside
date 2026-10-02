@@ -18,6 +18,58 @@ func stoppedNoticeID(commandID string) domain.ItemID {
 	return domain.ItemID("system-health-unattended-stopped-" + commandID)
 }
 
+// stoppedNoticeDiagnostic is the typed finding code on the notice an operator
+// stop raises. The sync projection recognises the notice by this code and its
+// offered action, never by the item-ID convention above.
+const stoppedNoticeDiagnostic = "unattended_operation_stopped"
+
+// unattendedOperationSnapshot projects the gate's verdict for sync. The
+// operator stop comes first, bound to its open resume notice; that notice is
+// itself a blocking item, so it is reported once, as the operator stop,
+// rather than a second time as an unrelated finding. Every other blocking
+// item follows in the gate's item-id order.
+func unattendedOperationSnapshot(gate domain.UnattendedOperationGate) UnattendedOperationSnapshot {
+	out := UnattendedOperationSnapshot{
+		Admission: domain.UnattendedAdmissionOpen,
+		Stops:     []UnattendedStop{},
+	}
+	var notice *domain.ItemID
+	if stop := gate.OperatorStop; stop != nil {
+		for _, blocking := range gate.Blocking {
+			if isStoppedNotice(blocking.Item) {
+				notice = &blocking.Item.ID
+				break
+			}
+		}
+		out.Stops = append(out.Stops, UnattendedStop{
+			Kind:      domain.UnattendedStopOperator,
+			ItemID:    notice,
+			CommandID: stop.CommandID,
+			Since:     &stop.OccurredAt,
+		})
+	}
+	for _, blocking := range gate.Blocking {
+		if notice != nil && blocking.Item.ID == *notice {
+			continue
+		}
+		out.Stops = append(out.Stops, UnattendedStop{
+			Kind:   domain.UnattendedStopBlockingSystemHealth,
+			ItemID: &blocking.Item.ID,
+			Since:  blocking.Item.CreatedAt,
+		})
+	}
+	if len(out.Stops) > 0 {
+		out.Admission = domain.UnattendedAdmissionStopped
+	}
+	return out
+}
+
+func isStoppedNotice(item domain.AttentionItem) bool {
+	return item.HealthDiagnostic != nil &&
+		item.HealthDiagnostic.Code == stoppedNoticeDiagnostic &&
+		item.Offers(domain.ActionResumeUnattended)
+}
+
 // applyStopUnattended runs the stop transaction's steps inside the accepting
 // Write (plan §4 stop_unattended; issue #319): conclude the decided item,
 // append the durable stopped transition, and ensure exactly one open notice
@@ -76,7 +128,7 @@ func (s *Service) applyStopUnattended(
 			item.ID),
 		RequestedDecision: []domain.Action{domain.ActionResumeUnattended, domain.ActionAcknowledge},
 		HealthDiagnostic: &domain.HealthDiagnostic{
-			Code: "unattended_operation_stopped", Impairs: domain.ImpairedCapabilityUnattendedAdmission,
+			Code: stoppedNoticeDiagnostic, Impairs: domain.ImpairedCapabilityUnattendedAdmission,
 		},
 		DisplayNames:      displayNames,
 		ItemVersion:       1,

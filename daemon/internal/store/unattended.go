@@ -279,39 +279,95 @@ func (tx *ReadTx) RequireUnattendedAdmissible(
 // where "unknown fails closed" must mean the full gate, not whichever half
 // was remembered.
 func (tx *ReadTx) RequireUnattendedOperationOpen(ctx context.Context) error {
+	stop, err := tx.operatorStop(ctx)
+	if err != nil {
+		return err
+	}
+	// An operator stop answers the predicate before the items are read, so
+	// an unreadable item list under a stop is still reported as the stop.
+	if stop != nil {
+		return domain.UnattendedOperationGate{OperatorStop: stop}.Err()
+	}
+	blocking, err := tx.blockingSystemHealthItems(ctx)
+	if err != nil {
+		return err
+	}
+	return domain.UnattendedOperationGate{Blocking: blocking}.Err()
+}
+
+// operatorStop is the gate's first half: the latest operating transition
+// when it is a stop, nil when unattended operation was never stopped or was
+// resumed.
+func (tx *ReadTx) operatorStop(ctx context.Context) (*domain.UnattendedOperationTransition, error) {
 	latest, found, err := tx.LatestUnattendedOperationTransition(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if found && latest.State == domain.UnattendedStopped {
-		return domain.ErrUnattendedOperationStopped
+	if !found || latest.State != domain.UnattendedStopped {
+		return nil, nil
 	}
+	return &latest, nil
+}
+
+// UnattendedOperationGate evaluates both halves of the operating-state gate
+// and returns the verdict as data. RequireUnattendedOperationOpen is this
+// predicate's two halves read together, and signet's sync projection reads
+// it, so what a client is shown and what admission enforces cannot drift
+// apart.
+func (tx *ReadTx) UnattendedOperationGate(ctx context.Context) (domain.UnattendedOperationGate, error) {
+	stop, err := tx.operatorStop(ctx)
+	if err != nil {
+		return domain.UnattendedOperationGate{}, err
+	}
+	blocking, err := tx.blockingSystemHealthItems(ctx)
+	if err != nil {
+		return domain.UnattendedOperationGate{}, err
+	}
+	return domain.UnattendedOperationGate{OperatorStop: stop, Blocking: blocking}, nil
+}
+
+// blockingSystemHealthItems is the gate's second half: every open
+// system_health item that currently blocks, in id order. It evaluates every
+// item rather than stopping at the first, because the sync projection names
+// each one.
+func (tx *ReadTx) blockingSystemHealthItems(ctx context.Context) ([]domain.UnattendedBlockingItem, error) {
 	items, err := tx.ListOpenAttentionItems(ctx, domain.AttentionSystemHealth)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	var blocking []domain.UnattendedBlockingItem
 	policy := tx.admissionPolicy
 	backupHealthLoaded := false
+	var backupHealthErr error
 	for _, item := range items {
 		if *item.Posture == domain.HealthPostureAdvisory {
 			continue
 		}
 		if item.BlockingSupersession == nil {
-			return fmt.Errorf("item %q: %w", item.ID, domain.ErrBlockingSystemHealth)
+			blocking = append(blocking, domain.UnattendedBlockingItem{
+				Item: item, Err: fmt.Errorf("item %q: %w", item.ID, domain.ErrBlockingSystemHealth),
+			})
+			continue
 		}
 		if !backupHealthLoaded {
-			health, healthErr := tx.transactionBackupHealth(ctx)
-			if healthErr != nil {
-				return fmt.Errorf("item %q: backup health: %w", item.ID, healthErr)
-			}
-			policy.BackupHealth = health
+			policy.BackupHealth, backupHealthErr = tx.transactionBackupHealth(ctx)
 			backupHealthLoaded = true
 		}
+		// Unreadable backup health cannot prove the supersession holds, so
+		// the item still blocks.
+		if backupHealthErr != nil {
+			blocking = append(blocking, domain.UnattendedBlockingItem{
+				Item: item, Err: fmt.Errorf("item %q: backup health: %w", item.ID, backupHealthErr),
+			})
+			continue
+		}
 		if err := item.BlockingSupersession.Supersedes(policy); err != nil {
-			return fmt.Errorf("item %q: %w: %w", item.ID, domain.ErrBlockingSystemHealth, err)
+			blocking = append(blocking, domain.UnattendedBlockingItem{
+				Item: item, Err: fmt.Errorf("item %q: %w: %w", item.ID, domain.ErrBlockingSystemHealth, err),
+			})
 		}
 	}
-	return nil
+	return blocking, nil
 }
 
 // ListOpenAttentionItems returns every open item of one type, in id order,

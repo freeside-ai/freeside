@@ -88,6 +88,61 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         #expect(store.load() == nil)
     }
 
+    @Test func theUnattendedOperationStateRoundTrips() throws {
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var state = sampleState()
+        state.unattendedOperation = .init(
+            admission: .stopped,
+            stops: [
+                .init(
+                    kind: .operator_stop, item_id: "notice", command_id: "cmd-stop",
+                    since: Date(timeIntervalSince1970: 1_786_502_645)),
+                .init(kind: .blocking_system_health, item_id: "finding", command_id: nil, since: nil),
+            ])
+        try store.save(state)
+
+        #expect(store.load()?.unattendedOperation == state.unattendedOperation)
+    }
+
+    @Test func aPreOperatingStateFormatFiveCacheForcesABootstrap() throws {
+        // Format 5 predates the unattended-admission state. Keeping its
+        // cursors would let an unchanged server revision skip the bootstrap
+        // that supplies the state, so a stopped daemon would show no
+        // indicator. The unsettled client commands still survive.
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var state = sampleState()
+        state.pendingCommands = [
+            "item-a": .init(command: makeCommand(itemID: "item-a"), state: .unresolved)
+        ]
+        let submission = Components.Schemas.ClientCommand(
+            command_id: "submission-1", device_id: "device-1",
+            payload: .submit_task(
+                .init(kind: .submit_task, project_id: "project-1", source: "Saved work")))
+        state.pendingTaskSubmissions = [submission.command_id: submission]
+        state.submissionDaemonID = "daemon-1"
+        try store.save(state)
+
+        let file = directory.appendingPathComponent("cache.json")
+        var object = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        var legacyState = try #require(object["state"] as? [String: Any])
+        legacyState.removeValue(forKey: "unattendedOperation")
+        object["format"] = 5
+        object["state"] = legacyState
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+
+        let migrated = try #require(store.load())
+        #expect(migrated.cursors == nil)
+        #expect(migrated.attentionItems.isEmpty)
+        #expect(migrated.tasks.isEmpty)
+        #expect(migrated.unattendedOperation == nil)
+        #expect(migrated.pendingCommands == state.pendingCommands)
+        #expect(migrated.pendingTaskSubmissions == state.pendingTaskSubmissions)
+        #expect(migrated.submissionDaemonID == "daemon-1")
+    }
+
     @Test func aPreConversationsFormatThreeCachePreservesOnlyTheCommandLedger() throws {
         let (store, directory) = temporaryStore()
         defer { try? FileManager.default.removeItem(at: directory) }

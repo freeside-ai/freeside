@@ -186,6 +186,9 @@ func TestHTTPBootstrapMatchesOpenAPIEnvelope(t *testing.T) {
 		len(bootstrap.Runs) != 1 || len(bootstrap.Conversations) != 1 {
 		t.Fatalf("bootstrap envelope = %+v", bootstrap)
 	}
+	if !strings.Contains(response.Body.String(), `"unattended_operation":{"admission":"open","stops":[]}`) {
+		t.Errorf("bootstrap lacks the open unattended_operation envelope: %s", response.Body.String())
+	}
 	for _, forbidden := range []string{
 		`"evidence_snapshot":null`, `"agent_claims":null`, `"artifact_digests":null`,
 		`"attempts":null`, `"messages":null`,

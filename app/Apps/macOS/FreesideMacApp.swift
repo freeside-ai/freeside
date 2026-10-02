@@ -76,12 +76,16 @@ struct FreesideMacApp: App {
         } label: {
             Image(
                 nsImage: FreesideMenuIcon.image(
-                    look: environment.look, badgeColor: daemonMenuState.menuBadgeColor)
+                    look: environment.look,
+                    badgeColor: daemonMenuState.menuBadgeColor(
+                        unattendedStopped: unattendedStopped))
             )
             .renderingMode(.original)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(
-                "\(environment.statusItemName): \(daemonMenuState.accessibilityDescription)"
+                "\(environment.statusItemName): "
+                    + daemonMenuState.accessibilityDescription(
+                        unattendedStopped: unattendedStopped)
             )
             .task(id: menuSyncCoordinatorID) {
                 guard case .ready(let coordinator) = session.phase else { return }
@@ -99,6 +103,14 @@ struct FreesideMacApp: App {
 
     private var daemonMenuState: DaemonMenuState {
         daemon?.state ?? .unsupervised
+    }
+
+    /// Whether the synced operating state says unattended operation is
+    /// stopped. The menu bar's heartbeat loop keeps it current with the
+    /// window closed, so the dot appears without opening the app.
+    private var unattendedStopped: Bool {
+        guard case .ready(let coordinator) = session.phase else { return false }
+        return coordinator.unattendedStoppedMessage() != nil
     }
 
     private var menuSyncCoordinatorID: ObjectIdentifier? {
@@ -168,6 +180,7 @@ private struct DaemonMenu: View {
                     open: $0.store.openSnapshots.count,
                     urgent: $0.store.urgentOpenCount)
             },
+            unattendedStopped: coordinator?.unattendedStoppedMessage(),
             actions: DaemonMenuPanel.Actions(
                 openApp: showApp,
                 showInbox: {

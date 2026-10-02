@@ -104,6 +104,10 @@ public actor MockServer {
     private var proposalFactsByItemID: [String: Components.Schemas.TaskProposalFactsSnapshot] = [:]
     private var effectProposalFactsByItemID: [String: Components.Schemas.EffectProposalFactsSnapshot] = [:]
     private var proposalSnoozesByItemID: [String: Date] = [:]
+    /// The operator stop in force: the accepted stop_unattended command and
+    /// its accepting instant, cleared only by resume_unattended. It stands in
+    /// for the daemon's durable transition log, whose latest row wins.
+    private var operatorStop: (commandID: String, since: Date)?
     private var currentTime = Date(timeIntervalSince1970: 1_786_502_645)
     private var revision: Int64 = 1
     private var syncEpoch = "mock-epoch"
@@ -444,6 +448,9 @@ public actor MockServer {
             uniqueKeysWithValues: conversations.map { ($0.conversation.id, $0) })
         commandsByID.removeAll()
         resultsByCommandID.removeAll()
+        // The restored store carries its own transition log; this restore
+        // models one with no stop in force.
+        operatorStop = nil
         pendingSpecificationReplacements.removeAll()
         pendingSpecificationComments.removeAll()
         proposalFactsByItemID.removeAll()
@@ -752,9 +759,51 @@ public actor MockServer {
             runs: try listRuns(),
             tasks: try listTasks(),
             conversations: conversationsByID.keys.sorted().compactMap { conversationsByID[$0] },
-            schedules: listSchedules()
+            schedules: listSchedules(),
+            unattended_operation: unattendedOperationSnapshot()
         )
         return bootstrapTransform?(snapshot) ?? snapshot
+    }
+
+    /// The finding code on the notice an operator stop raises, as the
+    /// daemon's signet stamps it.
+    static let stoppedNoticeDiagnostic = "unattended_operation_stopped"
+
+    /// The daemon's unattended-admission projection (signet
+    /// unattendedOperationSnapshot over store.UnattendedOperationGate): the
+    /// operator stop first, bound to its open resume notice, then every other
+    /// open blocking system_health item in id order. The notice is itself a
+    /// blocking item, so it is reported once, as the operator stop. The mock
+    /// holds no admission policy to evaluate a supersession against, so an
+    /// item carrying one is treated as superseded.
+    func unattendedOperationSnapshot() -> Components.Schemas.UnattendedOperationSnapshot {
+        let items: [Components.Schemas.AttentionItem] = itemsByID.keys.sorted().compactMap {
+            itemsByID[$0]?.item
+        }
+        let blocking = items.filter { item in
+            guard item.status == .open, item._type == .system_health else { return false }
+            return item.posture?.value1 == .blocking && item.blocking_supersession == nil
+        }
+        var stops: [Components.Schemas.UnattendedStop] = []
+        var noticeID: String?
+        if let operatorStop {
+            noticeID =
+                blocking.first { item in
+                    item.health_diagnostic?.value1.code == Self.stoppedNoticeDiagnostic
+                        && item.requested_decision.contains(.resume_unattended)
+                }?.id
+            stops.append(
+                .init(
+                    kind: .operator_stop, item_id: noticeID,
+                    command_id: operatorStop.commandID, since: operatorStop.since))
+        }
+        for item in blocking where item.id != noticeID {
+            stops.append(
+                .init(
+                    kind: .blocking_system_health, item_id: item.id,
+                    command_id: nil, since: item.created_at))
+        }
+        return .init(admission: stops.isEmpty ? .open : .stopped, stops: stops)
     }
 
     func conversation(id: String) -> Components.Schemas.ConversationSnapshot? {
@@ -1587,9 +1636,10 @@ public actor MockServer {
             // notice offers resume_unattended — a duplicate open notice
             // would still block after the other one resumed, so a second
             // stop converges on the existing one. The durable transition
-            // log itself has no API surface, so the item effects are the
-            // whole observable parity.
+            // is recorded for every accepted stop, converged or not, and
+            // rides the bootstrap's unattended_operation.
             itemsByID[payload.item_id] = concluded(current, as: .resolved)
+            operatorStop = (commandID: command.command_id, since: currentTime)
             let alreadyOffered = itemsByID.values.contains {
                 $0.item.status == .open && $0.item._type == .system_health
                     && $0.item.requested_decision.contains(.resume_unattended)
@@ -1622,6 +1672,10 @@ public actor MockServer {
                         review_recovery_binding: nil,
                         codex_reenrollment_recovery_binding: nil,
                         review_configuration_recovery: nil,
+                        health_diagnostic: .init(
+                            value1: .init(
+                                code: Self.stoppedNoticeDiagnostic,
+                                impairs: .unattended_admission)),
                         item_version: 1,
                         interruption_class: .exceptional,
                         conversation_id: nil,
@@ -1641,9 +1695,10 @@ public actor MockServer {
                     ))
             }
         case .resumesUnattended:
-            // The daemon's resume transaction concludes the stopped notice;
-            // the operating-state effect has no API surface.
+            // The daemon's resume transaction concludes the stopped notice
+            // and appends the resumed transition, lifting the operator stop.
             itemsByID[payload.item_id] = concluded(current, as: .resolved)
+            operatorStop = nil
         case .recoversReview:
             // The daemon also appends the exact-row transition; it has no API
             // surface, so resolving the carrier is the mock's observable parity.

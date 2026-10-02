@@ -894,6 +894,8 @@ public enum Components {
             public var conversations: [Components.Schemas.ConversationSnapshot]
             /// - Remark: Generated from `#/components/schemas/BootstrapSnapshot/schedules`.
             public var schedules: [Components.Schemas.ScheduleSnapshot]
+            /// - Remark: Generated from `#/components/schemas/BootstrapSnapshot/unattended_operation`.
+            public var unattended_operation: Components.Schemas.UnattendedOperationSnapshot
             /// Creates a new `BootstrapSnapshot`.
             ///
             /// - Parameters:
@@ -905,6 +907,7 @@ public enum Components {
             ///   - tasks:
             ///   - conversations:
             ///   - schedules:
+            ///   - unattended_operation:
             public init(
                 sync_epoch: Swift.String,
                 revision: Swift.Int64,
@@ -913,7 +916,8 @@ public enum Components {
                 runs: [Components.Schemas.RunSnapshot],
                 tasks: [Components.Schemas.TaskSnapshot],
                 conversations: [Components.Schemas.ConversationSnapshot],
-                schedules: [Components.Schemas.ScheduleSnapshot]
+                schedules: [Components.Schemas.ScheduleSnapshot],
+                unattended_operation: Components.Schemas.UnattendedOperationSnapshot
             ) {
                 self.sync_epoch = sync_epoch
                 self.revision = revision
@@ -923,6 +927,7 @@ public enum Components {
                 self.tasks = tasks
                 self.conversations = conversations
                 self.schedules = schedules
+                self.unattended_operation = unattended_operation
             }
             public enum CodingKeys: String, CodingKey {
                 case sync_epoch
@@ -933,6 +938,138 @@ public enum Components {
                 case tasks
                 case conversations
                 case schedules
+                case unattended_operation
+            }
+        }
+        /// Whether the daemon admits new unattended work, and what stops it (plan §4 stop_unattended, §5.7). It is the verdict of the one gate admission enforces, read in the bootstrap transaction, so it is current as of the enclosing snapshot's revision and carries no sync metadata of its own. A client renders it as a standing indicator and never infers the state from attention items: acknowledging or dismissing an item does not change it.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/UnattendedOperationSnapshot`.
+        public struct UnattendedOperationSnapshot: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/UnattendedOperationSnapshot/admission`.
+            public var admission: Components.Schemas.UnattendedAdmission
+            /// Every stop in force; empty exactly when admission is open. An operator stop comes first, then blocking system_health items in item-id order.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/UnattendedOperationSnapshot/stops`.
+            public var stops: [Components.Schemas.UnattendedStop]
+            /// Creates a new `UnattendedOperationSnapshot`.
+            ///
+            /// - Parameters:
+            ///   - admission:
+            ///   - stops: Every stop in force; empty exactly when admission is open. An operator stop comes first, then blocking system_health items in item-id order.
+            public init(
+                admission: Components.Schemas.UnattendedAdmission,
+                stops: [Components.Schemas.UnattendedStop]
+            ) {
+                self.admission = admission
+                self.stops = stops
+            }
+            public enum CodingKeys: String, CodingKey {
+                case admission
+                case stops
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.admission = try container.decode(
+                    Components.Schemas.UnattendedAdmission.self,
+                    forKey: .admission
+                )
+                self.stops = try container.decode(
+                    [Components.Schemas.UnattendedStop].self,
+                    forKey: .stops
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "admission",
+                    "stops"
+                ])
+            }
+        }
+        /// The unattended-operation gate's verdict (mirrors domain.UnattendedAdmission). Widening it is a contract change.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/UnattendedAdmission`.
+        @frozen public enum UnattendedAdmission: String, Codable, Hashable, Sendable, CaseIterable {
+            case open = "open"
+            case stopped = "stopped"
+        }
+        /// Why unattended admission is closed (mirrors domain.UnattendedStopKind). operator_stop is an accepted stop_unattended that only resume_unattended lifts; blocking_system_health is an open blocking system_health item, which includes the daemon's own durable stop and clears when the daemon resolves the item or a validated configuration supersedes it. Widening it is a contract change.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/UnattendedStopKind`.
+        @frozen public enum UnattendedStopKind: String, Codable, Hashable, Sendable, CaseIterable {
+            case operator_stop = "operator_stop"
+            case blocking_system_health = "blocking_system_health"
+        }
+        /// One stop that closes unattended admission.
+        ///
+        /// - Remark: Generated from `#/components/schemas/UnattendedStop`.
+        public struct UnattendedStop: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/UnattendedStop/kind`.
+            public var kind: Components.Schemas.UnattendedStopKind
+            /// The open system_health item whose decision or resolution reopens admission: the blocking item itself, or for an operator stop the notice that offers resume_unattended. Null only for an operator stop with no such notice open.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/UnattendedStop/item_id`.
+            public var item_id: Swift.String?
+            /// The accepted stop_unattended command for an operator stop; null for a blocking item.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/UnattendedStop/command_id`.
+            public var command_id: Swift.String?
+            /// When the stop took effect: the accepting instant of the stop command, or the blocking item's creation instant. Null only for an item recorded without a creation instant.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/UnattendedStop/since`.
+            public var since: Foundation.Date?
+            /// Creates a new `UnattendedStop`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - item_id: The open system_health item whose decision or resolution reopens admission: the blocking item itself, or for an operator stop the notice that offers resume_unattended. Null only for an operator stop with no such notice open.
+            ///   - command_id: The accepted stop_unattended command for an operator stop; null for a blocking item.
+            ///   - since: When the stop took effect: the accepting instant of the stop command, or the blocking item's creation instant. Null only for an item recorded without a creation instant.
+            public init(
+                kind: Components.Schemas.UnattendedStopKind,
+                item_id: Swift.String? = nil,
+                command_id: Swift.String? = nil,
+                since: Foundation.Date? = nil
+            ) {
+                self.kind = kind
+                self.item_id = item_id
+                self.command_id = command_id
+                self.since = since
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case item_id
+                case command_id
+                case since
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Components.Schemas.UnattendedStopKind.self,
+                    forKey: .kind
+                )
+                self.item_id = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .item_id
+                )
+                self.command_id = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .command_id
+                )
+                self.since = try container.decodeIfPresent(
+                    Foundation.Date.self,
+                    forKey: .since
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
+                    "item_id",
+                    "command_id",
+                    "since"
+                ])
             }
         }
         /// A resource snapshot wrapping one attention item (plan §5.14).

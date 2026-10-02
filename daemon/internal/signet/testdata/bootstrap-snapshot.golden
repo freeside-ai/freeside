@@ -229,5 +229,22 @@
         "resolution": null
       }
     }
-  ]
+  ],
+  "unattended_operation": {
+    "admission": "stopped",
+    "stops": [
+      {
+        "kind": "operator_stop",
+        "item_id": "system-health-unattended-stopped-command-980",
+        "command_id": "command-980",
+        "since": "2026-08-10T12:38:56Z"
+      },
+      {
+        "kind": "blocking_system_health",
+        "item_id": "system-health-daemon-durable-stop-22",
+        "command_id": null,
+        "since": "2026-08-10T12:34:56Z"
+      }
+    ]
+  }
 }

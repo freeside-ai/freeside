@@ -1002,6 +1002,7 @@ components:
         - tasks
         - conversations
         - schedules
+        - unattended_operation
       properties:
         sync_epoch:
           type: string
@@ -1038,6 +1039,99 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ScheduleSnapshot"
+        unattended_operation:
+          $ref: "#/components/schemas/UnattendedOperationSnapshot"
+
+    UnattendedOperationSnapshot:
+      type: object
+      description: >
+        Whether the daemon admits new unattended work, and what stops it
+        (plan §4 stop_unattended, §5.7). It is the verdict of the one gate
+        admission enforces, read in the bootstrap transaction, so it is
+        current as of the enclosing snapshot's revision and carries no sync
+        metadata of its own. A client renders it as a standing indicator and
+        never infers the state from attention items: acknowledging or
+        dismissing an item does not change it.
+      additionalProperties: false
+      required: [admission, stops]
+      properties:
+        admission:
+          $ref: "#/components/schemas/UnattendedAdmission"
+        stops:
+          type: array
+          description: >
+            Every stop in force; empty exactly when admission is open. An
+            operator stop comes first, then blocking system_health items in
+            item-id order.
+          items:
+            $ref: "#/components/schemas/UnattendedStop"
+      example:
+        admission: stopped
+        stops:
+          - kind: operator_stop
+            item_id: system-health-unattended-stopped-command-980
+            command_id: command-980
+            since: "2026-08-10T12:38:56Z"
+          - kind: blocking_system_health
+            item_id: system-health-daemon-durable-stop-22
+            command_id: null
+            since: "2026-08-10T12:34:56Z"
+
+    UnattendedAdmission:
+      type: string
+      description: >
+        The unattended-operation gate's verdict (mirrors
+        domain.UnattendedAdmission). Widening it is a contract change.
+      enum:
+        - open
+        - stopped
+
+    UnattendedStopKind:
+      type: string
+      description: >
+        Why unattended admission is closed (mirrors
+        domain.UnattendedStopKind). operator_stop is an accepted
+        stop_unattended that only resume_unattended lifts;
+        blocking_system_health is an open blocking system_health item, which
+        includes the daemon's own durable stop and clears when the daemon
+        resolves the item or a validated configuration supersedes it.
+        Widening it is a contract change.
+      enum:
+        - operator_stop
+        - blocking_system_health
+
+    UnattendedStop:
+      type: object
+      description: One stop that closes unattended admission.
+      additionalProperties: false
+      required: [kind, item_id, command_id, since]
+      properties:
+        kind:
+          $ref: "#/components/schemas/UnattendedStopKind"
+        item_id:
+          type: string
+          minLength: 1
+          nullable: true
+          description: >
+            The open system_health item whose decision or resolution reopens
+            admission: the blocking item itself, or for an operator stop the
+            notice that offers resume_unattended. Null only for an operator
+            stop with no such notice open.
+        command_id:
+          type: string
+          minLength: 1
+          nullable: true
+          description: >
+            The accepted stop_unattended command for an operator stop; null
+            for a blocking item.
+        since:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            When the stop took effect: the accepting instant of the stop
+            command, or the blocking item's creation instant. Null only for
+            an item recorded without a creation instant.
 
     AttentionItemSnapshot:
       type: object

@@ -68,6 +68,11 @@
         let state: DaemonMenuState
         let actionError: String?
         let inbox: InboxCounts?
+        /// The standing stopped indicator's message while unattended
+        /// operation is stopped; nil when admission is open or unknown. This
+        /// is the daemon's operating state, not its process state: a running
+        /// daemon can have unattended operation stopped.
+        let unattendedStopped: String?
         let actions: Actions
         /// The row a screenshot golden shows hovered; the live panel reads
         /// the pointer instead.
@@ -89,11 +94,13 @@
             state: DaemonMenuState,
             actionError: String?,
             inbox: InboxCounts?,
+            unattendedStopped: String? = nil,
             actions: Actions
         ) {
             self.state = state
             self.actionError = actionError
             self.inbox = inbox
+            self.unattendedStopped = unattendedStopped
             self.actions = actions
         }
 
@@ -132,6 +139,16 @@
                         .padding(.horizontal, 10)
                         .padding(.bottom, 8)
                         .accessibilityElement(children: .combine)
+                    }
+                }
+                if let unattendedStopped {
+                    insetCard(fill: .waxWash) {
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            KeywordLabel(text: "Stopped", color: .waxText)
+                            Text(unattendedStopped)
+                                .font(FreesideFont.callout)
+                                .foregroundStyle(Color.ink)
+                        }
                     }
                 }
                 if let actionError {
@@ -538,6 +555,21 @@
             case .unavailable, .unreachable:
                 NSColor(hex: FreesidePalette.waxText.day)
             }
+        }
+
+        /// The status dot once the synced operating state is folded in. The
+        /// daemon's own lifecycle dot wins, because a daemon that is down or
+        /// unreachable makes the synced state old news; otherwise stopped
+        /// unattended operation shows the wax dot on a running daemon.
+        public func menuBadgeColor(unattendedStopped: Bool) -> NSColor? {
+            menuBadgeColor
+                ?? (unattendedStopped ? NSColor(hex: FreesidePalette.waxText.day) : nil)
+        }
+
+        public func accessibilityDescription(unattendedStopped: Bool) -> String {
+            unattendedStopped
+                ? "\(accessibilityDescription), unattended operation stopped"
+                : accessibilityDescription
         }
 
         public var accessibilityDescription: String {
