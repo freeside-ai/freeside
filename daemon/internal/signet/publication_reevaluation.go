@@ -561,16 +561,14 @@ func publicationBlockResolutionAuthenticated(
 				if found {
 					if completion.Outcome != PublicationReevaluationPublished ||
 						!readyAfterBlock || item.Status != domain.StatusSuperseded ||
-						!slices.Equal(item.RequestedDecision,
-							[]domain.Action{domain.ActionInspectTrustFailure}) ||
+						!PublicationHoldDecision(item) ||
 						!publicationBlockReasonsMatch(observation, matchedReasons) {
 						return false, domain.ErrParentKeyMismatch
 					}
 					return true, nil
 				}
 				if readyAfterBlock {
-					if !slices.Equal(item.RequestedDecision,
-						[]domain.Action{domain.ActionInspectTrustFailure}) ||
+					if !PublicationHoldDecision(item) ||
 						(item.Status != domain.StatusOpen && item.Status != domain.StatusSuperseded) ||
 						!publicationBlockReasonsMatch(observation, matchedReasons) {
 						return false, domain.ErrParentKeyMismatch
@@ -761,10 +759,24 @@ func authenticatePublicationReevaluationCompletion(
 	return completion, true, nil
 }
 
+// PublicationHoldDecision reports whether the item offers a repairable
+// publication hold's decisions, which is how a hold is told apart from a
+// definitive block on the same publish_blocked identity. A hold offers
+// inspect_trust_failure alone, or with open_pr once it carries its run's
+// published pull request (issue #531). open_pr without a reference is not a
+// hold: the reference is what lets the action be offered at all.
+func PublicationHoldDecision(item domain.AttentionItem) bool {
+	if slices.Equal(item.RequestedDecision, []domain.Action{domain.ActionInspectTrustFailure}) {
+		return true
+	}
+	return item.PRReference != nil && slices.Equal(item.RequestedDecision,
+		[]domain.Action{domain.ActionInspectTrustFailure, domain.ActionOpenPR})
+}
+
 func publicationHoldItemAuthenticated(
 	run domain.Run, observation domain.RunObservation, item domain.AttentionItem,
 ) bool {
-	if !slices.Equal(item.RequestedDecision, []domain.Action{domain.ActionInspectTrustFailure}) {
+	if !PublicationHoldDecision(item) {
 		return false
 	}
 	switch item.Status {
