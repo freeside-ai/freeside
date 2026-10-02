@@ -52,10 +52,10 @@ follow this full sequence:
    Address findings that belong to this PR, or record the bounded timeout or
    no-review result with its baseline.
 
-   One exception applies when §review-convergence allows one last push for
-   locally verified non-blockers. Do not wait for the re-review that push
-   triggers. Record that push as the new baseline and say the human should
-   check the final pass before merge.
+   The same wait applies after the one last push §review-convergence allows.
+   Wait for the review that push triggers, or for the bounded timeout, before
+   step 7. A blocker in that review reopens fix rounds. If it has none, defer
+   or decline its findings and do not push again.
 
 7. **Stop and summarize.** State that the PR is open and green. Name anything
    the reviewer should inspect closely. Leave merging, branch cleanup, and
@@ -249,8 +249,13 @@ another review round is required.
 
 ## pre-push-review
 
-For non-trivial work, or any repository without an external bot reviewer, seek
-fresh eyes before pushing.
+Seek fresh eyes before pushing risky work, or any work in a repository without
+an external bot reviewer. Risky work touches a destructive path, a
+credential-leak surface, or a returned-object trust boundary, changes a
+contract or public interface, or changes behavior without tests. A large
+mechanical change (a rename, move, format, or generated update) that does
+none of those relies on CI and the recorded bot reviewer, however many files
+it touches.
 
 - When the platform supports delegation and session policy permits it, ask a
   reviewer in a fresh session to look for reasons the change may be wrong. Give
@@ -259,7 +264,7 @@ fresh eyes before pushing.
 - When delegation is unavailable or needs permission you don't have, skip it
   and rely on the external bot or human. You may ask the user first.
 - A same-model delegate is only partly independent and costs tokens. Match the
-  review effort to risk, and skip this step for trivial or mechanical work.
+  review effort to risk.
 
 Never write a step that assumes the running platform can delegate.
 
