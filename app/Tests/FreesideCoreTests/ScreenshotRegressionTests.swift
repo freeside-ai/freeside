@@ -2148,6 +2148,68 @@
                             Text("Inbox").padding()
                         })))
 
+            // The standing stopped indicator (#980) under the freshness
+            // banner, where the root view places it, on Mac and phone widths.
+            // It reads the same wall clock the banner does, so the fresh and
+            // stale timestamps carry the margins described above. Fresh, it
+            // states the stop as current; stale, it sits under the Stale row
+            // and reports only the last known state. The finding surface
+            // pins the wording for a stop no operator made.
+            let operatorStopped = Components.Schemas.UnattendedOperationSnapshot(
+                admission: .stopped,
+                stops: [
+                    .init(
+                        kind: .operator_stop,
+                        item_id: "system-health-unattended-stopped-cmd-stop",
+                        command_id: "cmd-stop", since: AttentionFixtures.createdInstant)
+                ])
+            let findingStopped = Components.Schemas.UnattendedOperationSnapshot(
+                admission: .stopped,
+                stops: [
+                    .init(
+                        kind: .blocking_system_health,
+                        item_id: "system-health-daemon-durable-stop-7",
+                        command_id: nil, since: AttentionFixtures.createdInstant)
+                ])
+            func stoppedSurface(
+                name: String, width: CGFloat,
+                operation: Components.Schemas.UnattendedOperationSnapshot,
+                lastUpdatedAt: Date
+            ) -> Surface {
+                Surface(
+                    name: name,
+                    width: width,
+                    view: AnyView(
+                        VStack(spacing: 0) {
+                            FreshnessBanner(freshness: .fresh, lastUpdatedAt: lastUpdatedAt)
+                            UnattendedStoppedIndicator(
+                                operation: operation, freshness: .fresh,
+                                lastUpdatedAt: lastUpdatedAt,
+                                reason: { _ in
+                                    "The daemon stopped unattended operation after repeated restarts"
+                                },
+                                onOpenItem: { _ in })
+                            Text("Inbox").padding()
+                        }))
+            }
+            let stoppedFresh = Date().addingTimeInterval(3_600)
+            let stoppedStale = Date().addingTimeInterval(
+                -(SyncCoordinator.stalenessThreshold + 1))
+            for (suffix, width) in [("", CGFloat(640)), ("-phone", CGFloat(390))] {
+                surfaces.append(
+                    stoppedSurface(
+                        name: "unattended-stopped-fresh" + suffix, width: width,
+                        operation: operatorStopped, lastUpdatedAt: stoppedFresh))
+                surfaces.append(
+                    stoppedSurface(
+                        name: "unattended-stopped-stale" + suffix, width: width,
+                        operation: operatorStopped, lastUpdatedAt: stoppedStale))
+            }
+            surfaces.append(
+                stoppedSurface(
+                    name: "unattended-stopped-finding", width: 640,
+                    operation: findingStopped, lastUpdatedAt: stoppedFresh))
+
             // The non-image attachment reader as a sheet: inline serif title,
             // the mono text preview laid out in place of its scroll view,
             // and the single Done pill.
@@ -2228,6 +2290,21 @@
                             actions: panelActions
                         )
                         .screenshotHovering(.showInbox))))
+            // A healthy daemon whose unattended operation is stopped (#980):
+            // the Running block stands and the wax card says what is stopped.
+            surfaces.append(
+                Surface(
+                    name: "menu-panel-unattended-stopped",
+                    width: 320,
+                    view: AnyView(
+                        DaemonMenuPanel(
+                            state: .running(panelHealth, restartObserved: false),
+                            actionError: nil,
+                            inbox: .init(open: 6, urgent: 2),
+                            unattendedStopped:
+                                "Unattended operation is stopped by operator decision. "
+                                + "No new unattended work starts until it is resumed.",
+                            actions: panelActions))))
             surfaces.append(
                 Surface(
                     name: "menu-panel-mismatch-restart-dark",

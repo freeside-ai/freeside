@@ -45,6 +45,10 @@ public struct CachedState: Codable, Equatable, Sendable {
     public var conversations: [Components.Schemas.ConversationSnapshot]
     public var runs: [Components.Schemas.RunSnapshot]
     public var schedules: [Components.Schemas.ScheduleSnapshot]
+    /// The daemon's unattended-admission state as of `cursors`; nil when no
+    /// bootstrap has supplied one, which renders no indicator rather than
+    /// guessing "open".
+    public var unattendedOperation: Components.Schemas.UnattendedOperationSnapshot?
     public var runTimelines: [Components.Schemas.RunTimeline]
     public var tasks: [Components.Schemas.TaskSnapshot]
     public var taskTimelines: [Components.Schemas.TaskTimeline]
@@ -73,6 +77,7 @@ public struct CachedState: Codable, Equatable, Sendable {
         conversations: [Components.Schemas.ConversationSnapshot] = [],
         runs: [Components.Schemas.RunSnapshot] = [],
         schedules: [Components.Schemas.ScheduleSnapshot] = [],
+        unattendedOperation: Components.Schemas.UnattendedOperationSnapshot? = nil,
         runTimelines: [Components.Schemas.RunTimeline] = [],
         tasks: [Components.Schemas.TaskSnapshot] = [],
         taskTimelines: [Components.Schemas.TaskTimeline] = [],
@@ -91,6 +96,7 @@ public struct CachedState: Codable, Equatable, Sendable {
         self.conversations = conversations
         self.runs = runs
         self.schedules = schedules
+        self.unattendedOperation = unattendedOperation
         self.runTimelines = runTimelines
         self.tasks = tasks
         self.taskTimelines = taskTimelines
@@ -119,6 +125,8 @@ public struct CachedState: Codable, Equatable, Sendable {
         schedules =
             try container.decodeIfPresent(
                 [Components.Schemas.ScheduleSnapshot].self, forKey: .schedules) ?? []
+        unattendedOperation = try container.decodeIfPresent(
+            Components.Schemas.UnattendedOperationSnapshot.self, forKey: .unattendedOperation)
         runTimelines =
             try container.decodeIfPresent(
                 [Components.Schemas.RunTimeline].self, forKey: .runTimelines) ?? []
@@ -171,14 +179,17 @@ public protocol CacheStore: Sendable {
 /// discard is `rm`; a database earns nothing here.
 public struct DiskCacheStore: CacheStore {
     /// Bumped when persisted snapshots change incompatibly. A pre-ledger
-    /// file loads absent; formats 2 to 4 preserve their independent ledger
+    /// file loads absent; formats 2 to 5 preserve their independent ledger
     /// and telemetry sections while invalidating snapshots and forcing a
     /// bootstrap. 2: cursors became optional and the pending-command ledger
     /// joined (#115). 3: run and schedule snapshots joined. 4: conversation
-    /// snapshots joined. 5: task snapshots and task timelines joined. A
-    /// pre-current cache cannot claim freshness while durable rows from a
-    /// newer client surface are absent.
-    static let format = 5
+    /// snapshots joined. 5: task snapshots and task timelines joined. 6: the
+    /// unattended-admission state joined; keeping a format 5 cursor would let
+    /// an unchanged revision skip the bootstrap that supplies it, so a
+    /// stopped daemon would show no indicator. A pre-current cache cannot
+    /// claim freshness while durable rows from a newer client surface are
+    /// absent.
+    static let format = 6
 
     private struct CacheFile: Codable {
         var format: Int
@@ -199,18 +210,24 @@ public struct DiskCacheStore: CacheStore {
         switch file.format {
         case Self.format:
             return file.state
-        case 2, 3, 4:
-            // Formats 2 to 4 already carried retryable commands, but predate
+        case 2, 3, 4, 5:
+            // Formats 2 to 5 already carried retryable commands, but predate
             // later durable read surfaces. Keep only the epoch-independent
             // client state: the ledger, because losing a command ID could
             // duplicate an operator decision after relaunch, and the
             // telemetry queue and its registration (absent before format 4),
-            // because a queued event should drain rather than vanish. Their
-            // cursors cannot scope an incomplete cache.
+            // because a queued event should drain rather than vanish. A
+            // format 5 file may also hold unsettled task submissions and
+            // stops, which are the same kind of state. Their cursors cannot
+            // scope an incomplete cache.
             return CachedState(
                 cursors: nil,
                 attentionItems: [],
                 pendingCommands: file.state.pendingCommands,
+                pendingTaskSubmissions: file.state.pendingTaskSubmissions,
+                submissionDaemonID: file.state.submissionDaemonID,
+                pendingTaskStops: file.state.pendingTaskStops,
+                stopDaemonID: file.state.stopDaemonID,
                 comprehensionQueue: file.state.comprehensionQueue,
                 comprehensionSequence: file.state.comprehensionSequence,
                 registeredCapabilityFingerprint: file.state.registeredCapabilityFingerprint,

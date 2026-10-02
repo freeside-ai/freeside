@@ -114,6 +114,15 @@ public struct FreesideRootView: View {
                 freshness: coordinator.store.freshness,
                 lastUpdatedAt: coordinator.lastUpdatedAt,
                 onRePair: { rePairConfirmationPresented = true })
+            UnattendedStoppedIndicator(
+                operation: coordinator.unattendedOperation,
+                freshness: coordinator.store.freshness,
+                lastUpdatedAt: coordinator.lastUpdatedAt,
+                reason: { coordinator.store.openItemReason($0) },
+                onOpenItem: { itemID in
+                    navigation.selectTab(.inbox)
+                    navigation.selectAttentionItem(itemID)
+                })
             platformNavigation(
                 coordinator,
                 selectedTab: operatorSelectedTabBinding,

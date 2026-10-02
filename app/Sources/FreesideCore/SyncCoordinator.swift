@@ -43,6 +43,13 @@ public final class SyncCoordinator {
     public private(set) var cursors: SyncCursors?
     public private(set) var runs: [Components.Schemas.RunSnapshot] = []
     public private(set) var schedules: [Components.Schemas.ScheduleSnapshot] = []
+    /// The daemon's unattended-admission state from the last adopted
+    /// bootstrap, the only source for the standing stopped indicator: it is
+    /// never inferred from attention items, so acknowledging or dismissing
+    /// the item that raised a stop cannot clear it. Nil until a bootstrap
+    /// supplies one. Like every restored row it is only as current as
+    /// `store.freshness` says.
+    public private(set) var unattendedOperation: Components.Schemas.UnattendedOperationSnapshot?
     public private(set) var timelinesByRunID: [String: Components.Schemas.RunTimeline] = [:]
     public private(set) var timelineLoadStates: [String: TimelineLoadState] = [:]
     public private(set) var tasks: [Components.Schemas.TaskSnapshot] = []
@@ -189,6 +196,7 @@ public final class SyncCoordinator {
                 store.replaceAllConversations(with: cached.conversations)
                 runs = cached.runs
                 schedules = cached.schedules
+                unattendedOperation = cached.unattendedOperation
                 timelinesByRunID = cached.runTimelines.reduce(into: [:]) { timelines, timeline in
                     timelines[timeline.run_id] = timeline
                 }
@@ -784,6 +792,7 @@ public final class SyncCoordinator {
         store.replaceAllConversations(with: snapshot.conversations)
         runs = snapshot.runs
         schedules = snapshot.schedules
+        unattendedOperation = snapshot.unattended_operation
         tasks = snapshot.tasks
         // Timelines are not in the bootstrap payload, so a same-epoch
         // bootstrap can neither replace nor invalidate a cached one: keep
@@ -898,6 +907,7 @@ public final class SyncCoordinator {
         store.discardSnapshots()
         runs = []
         schedules = []
+        unattendedOperation = nil
         timelinesByRunID = [:]
         timelineLoadStates = [:]
         tasks = []
@@ -939,6 +949,7 @@ public final class SyncCoordinator {
                     conversations: cursors == nil ? [] : store.orderedConversations,
                     runs: cursors == nil ? [] : runs,
                     schedules: cursors == nil ? [] : schedules,
+                    unattendedOperation: cursors == nil ? nil : unattendedOperation,
                     runTimelines: cursors == nil
                         ? [] : timelinesByRunID.keys.sorted().compactMap { timelinesByRunID[$0] },
                     tasks: cursors == nil ? [] : tasks,
