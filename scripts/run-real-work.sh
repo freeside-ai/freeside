@@ -69,8 +69,32 @@
 #                                    holds the admitted-agent tree; its lineup
 #                                    selects every identity the run uses
 #   FREESIDE_REAL_RUN_AGENT_TREE_COMMIT exact 40-character commit of that
-#                                    checkout the tree is read at (freesided
-#                                    auth adopt emits the patch to commit)
+#                                    checkout the tree is read at. The harness
+#                                    runs freesided auth adopt on the state
+#                                    root and stops before preflight, naming
+#                                    the patch it wrote, when the emitted tree
+#                                    is not the tree at this commit. It never
+#                                    writes to the checkout.
+#   FREESIDE_REAL_RUN_COST_OWNER     auth adopt's -cost-owner for the writer
+#                                    identity, for example <cost-owner>
+#   FREESIDE_REAL_RUN_REVIEW_COST_OWNER auth adopt's -review-cost-owner for the
+#                                    reviewer identity
+#   FREESIDE_REAL_RUN_CLAUDE_ACCOUNT auth adopt's -claude-account, for example
+#                                    <subscription-account>
+#   FREESIDE_REAL_RUN_TERMS_BASIS_DATE auth adopt's -terms-basis-date
+#                                    (YYYY-MM-DD)
+#   FREESIDE_REAL_RUN_PRICING_REVISION auth adopt's -pricing-revision (YYYY-MM)
+#   FREESIDE_REAL_RUN_OFFER_NOT_AFTER auth adopt's -offer-not-after (RFC 3339).
+#                                    auth adopt defaults these three to the
+#                                    current date, and each enters the emitted
+#                                    tree, so keep the values the committed
+#                                    tree was adopted with: other values, or
+#                                    the defaults on a later day, no longer
+#                                    match the commit.
+#                                    The cost owners and the account are read
+#                                    from the environment only; the harness
+#                                    writes them to no session file and echoes
+#                                    none of auth adopt's output.
 #   FREESIDE_REAL_RUN_AUTH_VOLUME    the writer roles' credential volume, which
 #                                    preflight probes and checks against the
 #                                    lineup's enrollment
@@ -321,6 +345,16 @@ source "$repo_root/scripts/run-real-work-supervision.sh"
 source "$repo_root/scripts/real-work-lifecycle.sh"
 # shellcheck source=scripts/real-work-client-target.sh
 source "$repo_root/scripts/real-work-client-target.sh"
+# shellcheck source=scripts/real-work-agent-tree.sh
+source "$repo_root/scripts/real-work-agent-tree.sh"
+# Credential recovery adopts nothing, so it needs none of adoption's inputs.
+if [[ "$recover_codex_credentials" == false ]]; then
+  missing_adoption_inputs=$(real_work_missing_adoption_inputs)
+  if [[ -n "$missing_adoption_inputs" ]]; then
+    echo "run-real-work: missing required environment: ${missing_adoption_inputs//$'\n'/ }" >&2
+    exit 2
+  fi
+fi
 if [[ -n "$retained_session" ]]; then
   python3 "$repo_root/scripts/real-work-retained.py" validate "$retained_session"
 fi
@@ -781,6 +815,13 @@ env -u FREESIDE_REAL_RUN_RUN_ID -u FREESIDE_REAL_RUN_INVOCATION \
   cat "$workdir/seed.log" >&2
   exit 1
 }
+require_live_rig
+
+# The recorded identities hold no enrollment on a fresh state root, so adopt
+# them before the composition check resolves the lineup; an adopted root
+# reports both identities reused.
+echo "adopting the auth identities and checking the agent tree" >&2
+real_work_adopt_agent_tree "$workdir/freesided" "$db_path" "$workdir" || exit $?
 require_live_rig
 
 if ! "$workdir/freesided" preflight "${preflight_args[@]}" >"$composition_manifest"; then
