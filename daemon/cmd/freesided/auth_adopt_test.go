@@ -413,21 +413,28 @@ func TestAuthAdoptOneIdentityIsOneAdoption(t *testing.T) {
 	}
 }
 
-// TestAuthAdoptReportsADisabledIdentity covers an identity stored disabled:
-// the flag path never read the bit, so the daemon could run on one. Adoption
-// enrolls it, leaves it disabled (enrollment is not the place to enable an
-// identity), and says so, because the emitted tree refuses to resolve it.
-func TestAuthAdoptReportsADisabledIdentity(t *testing.T) {
+// TestAuthAdoptKeepsAnEnrolledIdentityDisabled covers the ordering rule:
+// adoption enables only in its first-enrollment write. An identity disabled
+// after it was enrolled (the write here stands in for `auth disable`) is
+// reused as it stands, and the report says so, because the emitted tree
+// refuses to resolve it.
+func TestAuthAdoptKeepsAnEnrolledIdentityDisabled(t *testing.T) {
 	ctx := context.Background()
 	f := newAuthAdoptFixture(t)
-	f.withStore(t, func(st *store.Store) { setIdentityEnabled(t, st, "codex-review", false) })
-	report, patch, err := f.run(t, f.args())
-	if err != nil || len(report.Identities) != 2 || report.Identities[0].Disabled ||
-		report.Identities[1].Status != authAdoptAdopted || !report.Identities[1].Disabled {
-		t.Fatalf("auth adopt = %+v, %v", report, err)
+	if _, _, err := f.run(t, f.args()); err != nil {
+		t.Fatalf("first adopt: %v", err)
 	}
-	if f.snapshot(t).identity(t, "codex-review").Enabled {
-		t.Fatal("adoption enabled a disabled identity")
+	f.withStore(t, func(st *store.Store) { setIdentityEnabled(t, st, "codex-review", false) })
+	before := f.snapshot(t)
+	report, patch, err := f.run(t, f.args())
+	if err != nil || len(report.Identities) != 2 ||
+		report.Identities[0].Status != authAdoptReused || report.Identities[0].Disabled ||
+		report.Identities[1].Status != authAdoptReused || !report.Identities[1].Disabled ||
+		report.Identities[0].Enabled || report.Identities[1].Enabled {
+		t.Fatalf("second adopt = %+v, %v", report, err)
+	}
+	if after := f.snapshot(t); !reflect.DeepEqual(before, after) {
+		t.Fatalf("second adopt changed the store:\n%+v\n%+v", before, after)
 	}
 	tree := loadAdoptedPatch(t, patch)
 	f.withStore(t, func(st *store.Store) {
@@ -507,7 +514,10 @@ func TestAuthAdoptRefusesACostOwnerMismatchBeforeRecording(t *testing.T) {
 
 // TestAuthAdoptReportsAnUnadoptableReviewIdentity covers both unadoptable
 // shapes for the review identity: nothing is recorded for it, the Claude
-// identity is still adopted, and the tree carries no review agent.
+// identity is still adopted, and the tree carries no review agent. Each shape
+// also runs with the identity stored disabled: an adoption that records no
+// enrollment enables nothing, including the one refused inside the
+// first-enrollment transaction.
 func TestAuthAdoptReportsAnUnadoptableReviewIdentity(t *testing.T) {
 	for name, arrange := range map[string]func(*testing.T, *authAdoptFixture){
 		"store names no account": func(t *testing.T, f *authAdoptFixture) { f.writeCodexStore(t, "") },
@@ -518,32 +528,35 @@ func TestAuthAdoptReportsAnUnadoptableReviewIdentity(t *testing.T) {
 			})
 		},
 	} {
-		t.Run(name, func(t *testing.T) {
-			f := newAuthAdoptFixture(t)
-			arrange(t, f)
-			before := f.snapshot(t).identity(t, "codex-review")
-			report, patch, err := f.run(t, f.args())
-			if err != nil {
-				t.Fatalf("auth adopt: %v", err)
-			}
-			if len(report.Identities) != 2 || report.Identities[0].Status != authAdoptAdopted ||
-				report.Identities[1].Status != authAdoptUnadoptable || report.Identities[1].Reason == "" ||
-				report.Identities[1].EnrollmentID != "" ||
-				strings.Contains(report.Identities[1].Reason, adoptCodexAccount) {
-				t.Fatalf("report = %+v", report)
-			}
-			after := f.snapshot(t)
-			if got := after.identity(t, "codex-review"); got != before {
-				t.Fatalf("unadoptable identity changed: %+v", got)
-			}
-			if len(after.Enrollments) != 1 || after.Enrollments[0].AuthIdentityID != "claude-main" {
-				t.Fatalf("enrollments = %+v", after.Enrollments)
-			}
-			tree := loadAdoptedPatch(t, patch)
-			if len(tree.Agents) != 1 || len(tree.Lineup) != 3 {
-				t.Fatalf("tree agents = %+v, lineup = %v", tree.Agents, lineupRoles(tree))
-			}
-		})
+		for state, enabled := range map[string]bool{"stored enabled": true, "stored disabled": false} {
+			t.Run(name+"/"+state, func(t *testing.T) {
+				f := newAuthAdoptFixture(t)
+				arrange(t, f)
+				f.withStore(t, func(st *store.Store) { setIdentityEnabled(t, st, "codex-review", enabled) })
+				before := f.snapshot(t).identity(t, "codex-review")
+				report, patch, err := f.run(t, f.args())
+				if err != nil {
+					t.Fatalf("auth adopt: %v", err)
+				}
+				if len(report.Identities) != 2 || report.Identities[0].Status != authAdoptAdopted ||
+					report.Identities[1].Status != authAdoptUnadoptable || report.Identities[1].Reason == "" ||
+					report.Identities[1].EnrollmentID != "" || report.Identities[1].Enabled ||
+					strings.Contains(report.Identities[1].Reason, adoptCodexAccount) {
+					t.Fatalf("report = %+v", report)
+				}
+				after := f.snapshot(t)
+				if got := after.identity(t, "codex-review"); got != before || got.Enabled != enabled {
+					t.Fatalf("unadoptable identity changed: %+v", got)
+				}
+				if len(after.Enrollments) != 1 || after.Enrollments[0].AuthIdentityID != "claude-main" {
+					t.Fatalf("enrollments = %+v", after.Enrollments)
+				}
+				tree := loadAdoptedPatch(t, patch)
+				if len(tree.Agents) != 1 || len(tree.Lineup) != 3 {
+					t.Fatalf("tree agents = %+v, lineup = %v", tree.Agents, lineupRoles(tree))
+				}
+			})
+		}
 	}
 }
 
@@ -683,14 +696,42 @@ func TestDaemonLoadsTheAdoptedTreeAtItsCommit(t *testing.T) {
 // TestAdoptedPatchResolvesAndAdmitsEveryRole is the cutover's admission
 // proof: against the store adoption wrote, the committed patch resolves all
 // five roles, and each writer role passes the five admission steps for the
-// prompt the daemon runs it with, attended and unattended.
+// prompt the daemon runs it with, attended and unattended. It runs from both
+// starting stores: identities stored enabled, and the upgrade case, the rows
+// the pre-#867 harness seed step wrote (disabled, with no account binding and
+// no cost owner), which adoption enables.
 func TestAdoptedPatchResolvesAndAdmitsEveryRole(t *testing.T) {
-	ctx := context.Background()
-	f := newAuthAdoptFixture(t)
-	_, patch, err := f.run(t, f.args("-shadow-review-cost-owner", "operator"))
-	if err != nil {
-		t.Fatalf("auth adopt: %v", err)
+	for name, seedDisabled := range map[string]bool{
+		"identities stored enabled":                  false,
+		"identities the old seed step left disabled": true,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newAuthAdoptFixture(t)
+			if seedDisabled {
+				f.withStore(t, func(st *store.Store) {
+					setIdentityEnabled(t, st, "claude-main", false)
+					setIdentityEnabled(t, st, "codex-review", false)
+				})
+			}
+			report, patch, err := f.run(t, f.args("-shadow-review-cost-owner", "operator"))
+			if err != nil || len(report.Identities) != 2 {
+				t.Fatalf("auth adopt = %+v, %v", report, err)
+			}
+			after := f.snapshot(t)
+			for _, entry := range report.Identities {
+				if entry.Status != authAdoptAdopted || entry.Enabled != seedDisabled || entry.Disabled ||
+					!after.identity(t, entry.AuthIdentityID).Enabled {
+					t.Fatalf("report entry = %+v, stored = %+v", entry, after.identity(t, entry.AuthIdentityID))
+				}
+			}
+			assertAdoptedPatchResolvesAndAdmitsEveryRole(t, f, patch)
+		})
 	}
+}
+
+func assertAdoptedPatchResolvesAndAdmitsEveryRole(t *testing.T, f *authAdoptFixture, patch []byte) {
+	t.Helper()
+	ctx := context.Background()
 	checkout, commit := commitAdoptedPatch(t, patch)
 	selection, err := loadAgentSelection(ctx, claudeDriverConfig{
 		AgentTreeCheckout: checkout, AgentTreeCommit: commit,

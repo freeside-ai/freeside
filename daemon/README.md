@@ -564,10 +564,13 @@ lineup line for `specifier`, `implementer`, `remediator`, and `reviewer`, and
 a `shadow_reviewer` line when `-shadow-review-cost-owner` is given. Review the
 patch, commit it in the checkout, and start the daemon with that commit. The
 report lists each identity as `adopted`, `reused`, or `unadoptable`; running
-the command again changes nothing. An adopted identity reported `disabled`
-stays disabled, and its lines do not resolve until it is enabled (#1639). The
-review and shadow review configuration digests are the ones the flags
-produced, so existing approvals stand.
+the command again changes nothing. The review and shadow review configuration
+digests are the ones the flags produced, so existing approvals stand.
+
+Adoption enables an identity that was stored disabled, in the same write that
+first enrolls it, and reports it `enabled`. A `reused` identity keeps its
+stored bit: one reported `disabled` stays disabled, and its lines do not
+resolve until `auth enable` (#1639) enables it.
 
 An `unadoptable` identity (its store names no account, or its account is bound
 to another identity) gets no enrollment. To retire it, name it:

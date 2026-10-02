@@ -17,6 +17,14 @@ type EnrollmentBootstrap struct {
 	// the digest of the bytes about to be written. The store checks the digest
 	// only past bootstrap, so here it is provenance.
 	Binding domain.LeaseGenerationBinding
+	// EnableIdentity asks the store to enable an existing identity in the
+	// same transaction that records the enrollment, so no failure leaves it
+	// enrolled and disabled. Only adoption sets it: a flag-era identity can be
+	// stored disabled by the old harness seed step. `auth add` leaves it
+	// unset and keeps the stored bit. The store does not trust the request:
+	// it refuses the bootstrap when the identity already holds an enrollment
+	// with a generation.
+	EnableIdentity bool
 }
 
 // ErrEnrollmentExists refuses a first enrollment whose id already names a

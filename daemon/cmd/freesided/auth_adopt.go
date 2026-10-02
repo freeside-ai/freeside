@@ -81,8 +81,12 @@ type authAdoptIdentity struct {
 	// Reason says why an unadoptable identity cannot be adopted. The cutover
 	// retires that identity; enroll a fresh one with auth add.
 	Reason string `json:"reason,omitempty"`
-	// Disabled reports an adopted identity that is stored disabled. Adoption
-	// does not enable it, and agent resolution refuses it until it is enabled.
+	// Enabled reports an identity that was stored disabled and that this run
+	// enabled in its first-enrollment write.
+	Enabled bool `json:"enabled,omitempty"`
+	// Disabled reports a reused identity that is stored disabled. Adoption
+	// enables only at first enrollment, so a disable recorded after it stands,
+	// and agent resolution refuses the identity until it is enabled.
 	Disabled bool `json:"disabled,omitempty"`
 	// Retired reports that -retire-unadoptable disabled the identity, and
 	// StoppedTasks the open tasks it owned, each now holding a Stop.
@@ -322,12 +326,16 @@ func adoptReportEntry(
 	case err != nil:
 		return authAdoptIdentity{}, err
 	}
+	// identity is the value read before adoption. The command holds the daemon
+	// lock, so nothing else wrote the bit: a first enrollment enabled it, and a
+	// reused enrollment left it as read.
 	entry.Status = authAdoptAdopted
 	if result.Reused {
 		entry.Status = authAdoptReused
 	}
 	entry.EnrollmentID, entry.Generation = result.Enrollment.ID, result.Generation.Ordinal
-	entry.Disabled = !identity.Enabled
+	entry.Enabled = !result.Reused && !identity.Enabled
+	entry.Disabled = result.Reused && !identity.Enabled
 	return entry, nil
 }
 

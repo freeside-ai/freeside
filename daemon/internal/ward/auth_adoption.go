@@ -19,7 +19,8 @@ var ErrUnadoptable = errors.New("auth identity cannot be adopted")
 
 // AuthAdoptionStore is the persistence port for adopting a flag-era
 // identity. Begin and AppendGeneration are the first-enrollment writes
-// `auth add` uses; Enrolled finds an enrollment the identity already holds.
+// `auth add` uses, except that adoption's Begin also enables the identity;
+// Enrolled finds an enrollment the identity already holds.
 type AuthAdoptionStore interface {
 	ClaudeAuthEnrollmentStore
 	// Enrolled returns the identity's enrollment for the client and its
@@ -215,8 +216,11 @@ func reuseEnrollment(
 
 // adoptStore records the enrollment and its first generation over a store
 // that already exists. Begin binds the account and cost owner onto the
-// identity, records the enrollment, and takes the bound lease in one
-// transaction, so an account another identity holds records nothing.
+// identity, enables it, records the enrollment, and takes the bound lease in
+// one transaction, so an account another identity holds records nothing and
+// leaves the identity as it was. Only this first enrollment enables: an
+// identity whose enrollment holds a generation is reused and keeps its stored
+// bit, because a disable recorded after that is deliberate.
 func adoptStore(
 	ctx context.Context, cfg AuthAdoptionConfig, enrollment domain.ClientEnrollment,
 	volume string, digest domain.Digest, expiry *time.Time, holderPrefix string,
@@ -235,6 +239,7 @@ func adoptStore(
 		Binding: domain.LeaseGenerationBinding{
 			EnrollmentID: enrollment.ID, AuthStoreVolume: volume, StoreManifestDigest: digest,
 		},
+		EnableIdentity: true,
 	}, holder, now, now.Add(cfg.LeaseDuration))
 	if errors.Is(err, domain.ErrAccountBindingTaken) {
 		// The store's error names the account binding, and this message is
