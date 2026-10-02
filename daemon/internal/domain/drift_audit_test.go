@@ -37,6 +37,30 @@ func TestDriftEnumRegistrationReferences(t *testing.T) {
 	}
 }
 
+// TestReviewDiminishingCauseRegistration pins the stop-cause vocabulary: the
+// four deterministic causes and the audit's, in registration order. Their
+// values are stored in item reasons, so none may be renamed.
+func TestReviewDiminishingCauseRegistration(t *testing.T) {
+	t.Parallel()
+	want := []domain.ReviewDiminishingCause{
+		"low_value_streak", "fixed_recurrence", "final_review_findings",
+		"growth_without_blockers", "drift_audit",
+	}
+	if !slices.Equal(domain.AllReviewDiminishingCauses, want) {
+		t.Fatalf("causes = %v, want %v", domain.AllReviewDiminishingCauses, want)
+	}
+	for _, cause := range domain.AllReviewDiminishingCauses {
+		if got, err := domain.ParseReviewDiminishingCause(string(cause)); err != nil || got != cause {
+			t.Fatalf("parse %q = %q, %v", cause, got, err)
+		}
+	}
+	for _, value := range []string{"", "Drift_Audit", "hard_round_limit"} {
+		if _, err := domain.ParseReviewDiminishingCause(value); !errors.Is(err, domain.ErrInvalidReviewDiminishingCause) {
+			t.Fatalf("parse %q = %v, want ErrInvalidReviewDiminishingCause", value, err)
+		}
+	}
+}
+
 func driftReversals() []domain.DriftReversal {
 	return []domain.DriftReversal{
 		{

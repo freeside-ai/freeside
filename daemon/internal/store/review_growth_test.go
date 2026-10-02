@@ -80,10 +80,10 @@ func TestGrowthWithoutBlockersDecisionReconstructsAndContinueOpensAWindow(t *tes
 		}
 		return record, artifact
 	}
-	evaluate := func(s *store.Store, record domain.ReviewRecord) (store.ReviewDiminishingCause, bool) {
+	evaluate := func(s *store.Store, record domain.ReviewRecord) (domain.ReviewDiminishingCause, bool) {
 		t.Helper()
 		var (
-			cause store.ReviewDiminishingCause
+			cause domain.ReviewDiminishingCause
 			stop  bool
 		)
 		if err := s.Read(ctx, func(tx *store.ReadTx) error {
@@ -105,7 +105,7 @@ func TestGrowthWithoutBlockersDecisionReconstructsAndContinueOpensAWindow(t *tes
 		t.Fatalf("round 2 stopped with %q below the streak", cause)
 	}
 	record, artifact := putRound(3)
-	if cause, stop := evaluate(st, record); !stop || cause != store.ReviewDiminishingGrowthWithoutBlockers {
+	if cause, stop := evaluate(st, record); !stop || cause != domain.ReviewDiminishingGrowthWithoutBlockers {
 		t.Fatalf("round 3 evaluate = %q, %v", cause, stop)
 	}
 
@@ -124,7 +124,7 @@ func TestGrowthWithoutBlockersDecisionReconstructsAndContinueOpensAWindow(t *tes
 		AdjudicationDigest: artifact.Digest, FindingBatchDigest: artifact.FindingBatchDigest,
 		PolicyDigest: policy.Digest, ContinueWhile: store.ReviewContinueWhileNewMaterialFindings,
 		LowValueStreakBeforeAttention: 9, HardRoundLimit: 25,
-		Cause: store.ReviewDiminishingGrowthWithoutBlockers,
+		Cause: domain.ReviewDiminishingGrowthWithoutBlockers,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -176,7 +176,7 @@ func TestGrowthWithoutBlockersDecisionReconstructsAndContinueOpensAWindow(t *tes
 		if err != nil {
 			return err
 		}
-		if decision.Binding.Cause != store.ReviewDiminishingGrowthWithoutBlockers ||
+		if decision.Binding.Cause != domain.ReviewDiminishingGrowthWithoutBlockers ||
 			decision.Command == nil || decision.Command.Action != domain.ActionContinueUnderPolicy {
 			t.Fatalf("reloaded decision = %+v, command %+v", decision.Binding, decision.Command)
 		}
@@ -189,7 +189,7 @@ func TestGrowthWithoutBlockersDecisionReconstructsAndContinueOpensAWindow(t *tes
 		t.Fatalf("round 4 stopped with %q inside the fresh window", cause)
 	}
 	fifth, _ := putRound(5)
-	if cause, stop := evaluate(st, fifth); !stop || cause != store.ReviewDiminishingGrowthWithoutBlockers {
+	if cause, stop := evaluate(st, fifth); !stop || cause != domain.ReviewDiminishingGrowthWithoutBlockers {
 		t.Fatalf("round 5 evaluate = %q, %v", cause, stop)
 	}
 }

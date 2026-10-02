@@ -602,6 +602,34 @@ enum MockContractValidation {
                 return "invalid billable_cost_so_far"
             }
         }
+        if let facts = item.review_diminishing?.value1 {
+            if item._type != .review_diminishing_returns {
+                return "review_diminishing facts on a different item type"
+            }
+            let drift = facts.drift_audit?.value1
+            if (facts.cause == .drift_audit) != (drift != nil) {
+                return "drift_audit facts must accompany exactly the drift_audit cause"
+            }
+            if let drift {
+                if isBlank(drift.explanation) {
+                    return "blank drift_audit explanation"
+                }
+                if (drift.verdict == .over_hardened) == drift.reversals.isEmpty {
+                    return "drift_audit reversals must accompany exactly the over_hardened verdict"
+                }
+                let ids = drift.reversals.map(\.finding_id)
+                if zip(ids, ids.dropFirst()).contains(where: { $0 >= $1 })
+                    || drift.reversals.contains(where: {
+                        $0.finding_id.isEmpty || isBlank($0.undo) || isBlank($0.rationale)
+                    })
+                {
+                    return "invalid drift_audit reversals"
+                }
+                if drift.simplification_on_continue && drift.verdict != .over_hardened {
+                    return "simplification_on_continue without the over_hardened verdict"
+                }
+            }
+        }
         if let failure = item.execution_failure?.value1 {
             if item._type != .execution_failure {
                 return "execution_failure facts on a different item type"

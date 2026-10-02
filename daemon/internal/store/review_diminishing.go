@@ -22,38 +22,6 @@ const (
 	reviewDiminishingFinishReasonPrefix    = "Review ended by finish_now.\nAuthority: "
 )
 
-type ReviewDiminishingCause string
-
-const (
-	ReviewDiminishingLowValue        ReviewDiminishingCause = "low_value_streak"
-	ReviewDiminishingFixedRecurrence ReviewDiminishingCause = "fixed_recurrence"
-	ReviewDiminishingFinalFindings   ReviewDiminishingCause = "final_review_findings"
-	// ReviewDiminishingGrowthWithoutBlockers is the deterministic drift floor
-	// (plan §7 Review Drift): the cumulative diff kept growing while no round
-	// ingested a credible critical or high finding.
-	ReviewDiminishingGrowthWithoutBlockers ReviewDiminishingCause = "growth_without_blockers"
-)
-
-// AllReviewDiminishingCauses lists every valid ReviewDiminishingCause.
-var AllReviewDiminishingCauses = []ReviewDiminishingCause{
-	ReviewDiminishingLowValue,
-	ReviewDiminishingFixedRecurrence,
-	ReviewDiminishingFinalFindings,
-	ReviewDiminishingGrowthWithoutBlockers,
-}
-
-func (c ReviewDiminishingCause) valid() bool {
-	switch c {
-	case ReviewDiminishingLowValue,
-		ReviewDiminishingFixedRecurrence,
-		ReviewDiminishingFinalFindings,
-		ReviewDiminishingGrowthWithoutBlockers:
-		return true
-	default:
-		return false
-	}
-}
-
 // ReviewConvergencePolicy is the daemon-internal resolved policy consumed by
 // the convergence controller. It is not a sync or persistence contract.
 type ReviewConvergencePolicy struct {
@@ -154,18 +122,18 @@ func (tx *ReadTx) ReviewConvergencePolicy(
 // payload lets reconstruction re-prove the exact policy and adjudication the
 // rendered decision described without adding a shared contract field.
 type ReviewDiminishingBinding struct {
-	ItemID                        domain.ItemID          `json:"item_id"`
-	RunID                         domain.RunID           `json:"run_id"`
-	Round                         int                    `json:"round"`
-	HeadSHA                       string                 `json:"head_sha"`
-	FindingIDs                    []domain.FindingID     `json:"finding_ids"`
-	AdjudicationDigest            domain.Digest          `json:"adjudication_digest"`
-	FindingBatchDigest            domain.Digest          `json:"finding_batch_digest"`
-	PolicyDigest                  domain.Digest          `json:"policy_digest"`
-	ContinueWhile                 string                 `json:"continue_while"`
-	LowValueStreakBeforeAttention int                    `json:"low_value_streak_before_attention"`
-	HardRoundLimit                int                    `json:"hard_round_limit"`
-	Cause                         ReviewDiminishingCause `json:"cause"`
+	ItemID                        domain.ItemID                 `json:"item_id"`
+	RunID                         domain.RunID                  `json:"run_id"`
+	Round                         int                           `json:"round"`
+	HeadSHA                       string                        `json:"head_sha"`
+	FindingIDs                    []domain.FindingID            `json:"finding_ids"`
+	AdjudicationDigest            domain.Digest                 `json:"adjudication_digest"`
+	FindingBatchDigest            domain.Digest                 `json:"finding_batch_digest"`
+	PolicyDigest                  domain.Digest                 `json:"policy_digest"`
+	ContinueWhile                 string                        `json:"continue_while"`
+	LowValueStreakBeforeAttention int                           `json:"low_value_streak_before_attention"`
+	HardRoundLimit                int                           `json:"hard_round_limit"`
+	Cause                         domain.ReviewDiminishingCause `json:"cause"`
 }
 
 func (b ReviewDiminishingBinding) validate() error {
@@ -184,7 +152,10 @@ func (b ReviewDiminishingBinding) validate() error {
 	if b.Round < 1 || b.LowValueStreakBeforeAttention < 1 || b.HardRoundLimit < 1 {
 		return domain.ErrNonPositive
 	}
-	if b.ContinueWhile != ReviewContinueWhileNewMaterialFindings || !b.Cause.valid() {
+	if b.ContinueWhile != ReviewContinueWhileNewMaterialFindings {
+		return domain.ErrParentKeyMismatch
+	}
+	if _, err := domain.ParseReviewDiminishingCause(string(b.Cause)); err != nil {
 		return domain.ErrParentKeyMismatch
 	}
 	return nil
@@ -196,14 +167,16 @@ func ReviewDiminishingReason(binding ReviewDiminishingBinding) (string, error) {
 	}
 	var summary string
 	switch binding.Cause {
-	case ReviewDiminishingLowValue:
+	case domain.ReviewDiminishingLowValue:
 		summary = "Review yield has remained low under the resolved policy."
-	case ReviewDiminishingFixedRecurrence:
+	case domain.ReviewDiminishingFixedRecurrence:
 		summary = "A finding recurred after a fixed disposition."
-	case ReviewDiminishingFinalFindings:
+	case domain.ReviewDiminishingFinalFindings:
 		summary = "The one final candidate-bound review found material issues."
-	case ReviewDiminishingGrowthWithoutBlockers:
+	case domain.ReviewDiminishingGrowthWithoutBlockers:
 		summary = "The change kept growing while review found no critical or high issue."
+	case domain.ReviewDiminishingDriftAudit:
+		summary = "A drift audit judged the change against the approved specification."
 	}
 	body, err := json.Marshal(binding)
 	if err != nil {
@@ -244,6 +217,72 @@ func reviewDiminishingBinding(reason string) (ReviewDiminishingBinding, error) {
 		return ReviewDiminishingBinding{}, domain.ErrParentKeyMismatch
 	}
 	return binding, nil
+}
+
+// ErrReviewDiminishingSimplificationUnproven refuses card facts that say
+// continue_under_policy will run the audit's simplification round. That claim
+// holds only when the reversal list passed the route gate (plan §7 Review
+// Drift), and the gate arrives with #1051; until then nothing can re-prove it.
+var ErrReviewDiminishingSimplificationUnproven = errors.New(
+	"review diminishing facts promise a simplification round no route gate has proven")
+
+// gateReviewDiminishingItem re-proves an item's review-diminishing card facts
+// against the records they copy, so a client never trusts the copy: the cause
+// must be the one the item's own Reason binds, that binding must name this
+// item's run, round, and head, and drift facts must be the stored DriftAudit
+// they name, for the bound run and round. It reads only the
+// item's Reason and the audit, never another item, and both are immutable, so
+// every reconstruction tier runs it.
+//
+// An item without the facts passes: items stored before the field existed, and
+// review-escalation items whose Reason carries no binding, have none.
+func (tx *ReadTx) gateReviewDiminishingItem(ctx context.Context, item domain.AttentionItem) error {
+	facts := item.ReviewDiminishing
+	if facts == nil {
+		return nil
+	}
+	binding, err := reviewDiminishingBinding(item.Reason)
+	if err != nil {
+		return fmt.Errorf("reason binding: %w", err)
+	}
+	// The binding must be this item's own: the item the bound round mints, on
+	// the bound run and head. Otherwise a card could show another run's cause
+	// or audit while every comparison below still held.
+	ownSubject := item.Subject.Type == domain.SubjectRun &&
+		item.Subject.ID == domain.SubjectID(binding.RunID) && item.Subject.RunID != nil &&
+		*item.Subject.RunID == binding.RunID
+	if item.Type != domain.AttentionReviewDiminishing || binding.ItemID != item.ID ||
+		binding.ItemID != ReviewDiminishingItemID(binding.RunID, binding.Round) ||
+		!ownSubject || item.PRHeadSHA != binding.HeadSHA {
+		return domain.ErrParentKeyMismatch
+	}
+	if facts.Cause != binding.Cause {
+		return fmt.Errorf("card cause %q, reason binds %q: %w",
+			facts.Cause, binding.Cause, domain.ErrParentKeyMismatch)
+	}
+	drift := facts.DriftAudit
+	if drift == nil {
+		return nil
+	}
+	audit, err := tx.GetDriftAudit(ctx, drift.AuditDigest)
+	if err != nil {
+		// A missing audit is a broken binding, not a missing item: a caller
+		// reads ErrNotFound from an item load as "no such item".
+		if errors.Is(err, ErrNotFound) {
+			return fmt.Errorf("drift audit: %s: %w", err.Error(), domain.ErrParentKeyMismatch)
+		}
+		return fmt.Errorf("drift audit: %w", err)
+	}
+	if audit.RunID != binding.RunID || audit.Round != binding.Round ||
+		audit.Verdict != drift.Verdict || audit.Confidence != drift.Confidence ||
+		audit.Explanation != drift.Explanation ||
+		!slices.Equal(audit.Reversals, drift.Reversals) {
+		return fmt.Errorf("drift audit %q: %w", drift.AuditDigest, domain.ErrParentKeyMismatch)
+	}
+	if drift.SimplificationOnContinue {
+		return ErrReviewDiminishingSimplificationUnproven
+	}
+	return nil
 }
 
 type ReviewDiminishingDecision struct {
@@ -589,7 +628,7 @@ func (tx *ReadTx) reviewConvergenceStateAtDecision(
 // decision stored under one re-evaluates to the same cause.
 func EvaluateReviewConvergence(
 	state ReviewConvergenceState, current domain.ReviewRecord,
-) (ReviewDiminishingCause, bool, error) {
+) (domain.ReviewDiminishingCause, bool, error) {
 	currentIndex := -1
 	for index, record := range state.Records {
 		if record.Round == current.Round {
@@ -613,7 +652,7 @@ func EvaluateReviewConvergence(
 		for _, decision := range state.Decisions {
 			if decision.Binding.Round == priorRound && decision.Command != nil &&
 				decision.Command.Action == domain.ActionApplyThenFinish {
-				return ReviewDiminishingFinalFindings, true, nil
+				return domain.ReviewDiminishingFinalFindings, true, nil
 			}
 		}
 	}
@@ -715,7 +754,7 @@ func EvaluateReviewConvergence(
 			return "", false, err
 		}
 		if _, recurring := fixed[fingerprint]; recurring {
-			return ReviewDiminishingFixedRecurrence, true, nil
+			return domain.ReviewDiminishingFixedRecurrence, true, nil
 		}
 	}
 
@@ -728,7 +767,7 @@ func EvaluateReviewConvergence(
 		streak++
 	}
 	if streak >= state.Policy.LowValueStreakBeforeAttention {
-		return ReviewDiminishingLowValue, true, nil
+		return domain.ReviewDiminishingLowValue, true, nil
 	}
 	if state.Policy.DriftGrowthStreakBeforeAttention > 0 {
 		growth := 0
@@ -746,7 +785,7 @@ func EvaluateReviewConvergence(
 			growth++
 		}
 		if growth >= state.Policy.DriftGrowthStreakBeforeAttention {
-			return ReviewDiminishingGrowthWithoutBlockers, true, nil
+			return domain.ReviewDiminishingGrowthWithoutBlockers, true, nil
 		}
 	}
 	return "", false, nil

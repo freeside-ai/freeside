@@ -77,8 +77,9 @@ func (tx *ReadTx) validateDispositionSupersessionScope(
 // continue_under_policy command on the reversing round's diminishing-returns
 // item, at the item version it was issued against.
 //
-// It does not check that the item parked on a drift audit: that cause arrives
-// with #1667. Nothing writes a record before #1051.
+// It does not check that the item parked on a drift audit: that check arrives
+// with #1051, the first unit in which such a decision can load. Nothing writes
+// a record before then.
 func (tx *ReadTx) validateDispositionSupersessionAuthority(
 	ctx context.Context, supersession domain.FindingDispositionSupersession,
 ) error {

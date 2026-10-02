@@ -2251,6 +2251,46 @@ func (r DriftAuditRoute) valid() bool {
 	}
 }
 
+// ReviewDiminishingCause is why a review loop stopped on a
+// review_diminishing_returns item (plan §7 Review Drift). The first four are
+// deterministic: convergence evaluation returns them. drift_audit is the
+// audit's: a stuck verdict, or an over_hardened verdict that did not route to
+// the automatic simplification round. The zero value is invalid by design.
+type ReviewDiminishingCause string
+
+const (
+	ReviewDiminishingLowValue        ReviewDiminishingCause = "low_value_streak"
+	ReviewDiminishingFixedRecurrence ReviewDiminishingCause = "fixed_recurrence"
+	ReviewDiminishingFinalFindings   ReviewDiminishingCause = "final_review_findings"
+	// ReviewDiminishingGrowthWithoutBlockers is the deterministic drift floor:
+	// the cumulative diff kept growing while no round ingested a credible
+	// critical or high finding.
+	ReviewDiminishingGrowthWithoutBlockers ReviewDiminishingCause = "growth_without_blockers"
+	ReviewDiminishingDriftAudit            ReviewDiminishingCause = "drift_audit"
+)
+
+// AllReviewDiminishingCauses lists every valid ReviewDiminishingCause.
+var AllReviewDiminishingCauses = []ReviewDiminishingCause{
+	ReviewDiminishingLowValue,
+	ReviewDiminishingFixedRecurrence,
+	ReviewDiminishingFinalFindings,
+	ReviewDiminishingGrowthWithoutBlockers,
+	ReviewDiminishingDriftAudit,
+}
+
+func (c ReviewDiminishingCause) valid() bool {
+	switch c {
+	case ReviewDiminishingLowValue,
+		ReviewDiminishingFixedRecurrence,
+		ReviewDiminishingFinalFindings,
+		ReviewDiminishingGrowthWithoutBlockers,
+		ReviewDiminishingDriftAudit:
+		return true
+	default:
+		return false
+	}
+}
+
 // DispositionSupersessionAuthorityKind names who ordered a drift reversal
 // (plan §7 Review Drift): the automatic route for the run's one simplification
 // round, or a human continue_under_policy command. It fixes whether the

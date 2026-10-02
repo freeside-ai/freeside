@@ -221,6 +221,13 @@ func BindTerminal(task Task, item domain.AttentionItem) (domain.AttentionItem, e
 	return item, item.Validate()
 }
 
+// terminalDigestItem is the terminal commitment's view of an item: every
+// AttentionItem field except review_diminishing.
+type terminalDigestItem struct {
+	domain.AttentionItem
+	ReviewDiminishing *struct{} `json:"review_diminishing,omitempty"`
+}
+
 func TerminalDigest(task Task, item domain.AttentionItem) (domain.Digest, error) {
 	// Task identity is derived from the run and labels are mutable presentation.
 	// Neither changes the publication facts this commitment authenticates.
@@ -239,10 +246,15 @@ func TerminalDigest(task Task, item domain.AttentionItem) (domain.Digest, error)
 	// The terminal digest binds derived publication facts, not the instant at
 	// which a recovery pass first persisted the item.
 	item.CreatedAt = nil
+	// A terminal item is ready_for_final_review or publish_blocked and can
+	// never carry review-diminishing facts, so the commitment leaves the key
+	// out instead of gaining a null: an item bound before the field existed
+	// keeps its digest. The shadowing field wins over the embedded item's and
+	// is always omitted; every other key keeps its place.
 	payload, err := json.Marshal(struct {
-		Task Task                 `json:"task"`
-		Item domain.AttentionItem `json:"item"`
-	}{Task: task, Item: item})
+		Task Task               `json:"task"`
+		Item terminalDigestItem `json:"item"`
+	}{Task: task, Item: terminalDigestItem{AttentionItem: item}})
 	if err != nil {
 		return "", fmt.Errorf("encode terminal binding: %w", err)
 	}

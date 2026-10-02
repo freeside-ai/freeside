@@ -232,6 +232,7 @@ var (
 	ErrDriftAuditInconsistent             = errors.New("drift audit fields are internally inconsistent")
 	ErrDriftAuditDigestMismatch           = errors.New("drift audit digest does not match its canonical content")
 	ErrInvalidSupersessionAuthorityKind   = errors.New("invalid disposition-supersession authority kind")
+	ErrInvalidReviewDiminishingCause      = errors.New("invalid review-diminishing cause")
 	ErrDispositionSupersessionInvalid     = errors.New("disposition supersession fields are internally inconsistent")
 	ErrPublicationAuthoringInconsistent   = errors.New("publication authoring fields are internally inconsistent")
 	ErrPublicationAuthoringDigestMismatch = errors.New("publication authoring digest does not match its canonical content")

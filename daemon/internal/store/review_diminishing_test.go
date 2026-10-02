@@ -261,10 +261,15 @@ WHERE id = ?`, decision.Item.ID); err != nil {
 			binding.PolicyDigest = "sha256:stale-policy"
 		})},
 		{name: "fabricated cause", tamper: tamperDiminishingBinding(func(binding *store.ReviewDiminishingBinding) {
-			binding.Cause = store.ReviewDiminishingLowValue
+			binding.Cause = domain.ReviewDiminishingLowValue
 		})},
 		{name: "fabricated growth cause", tamper: tamperDiminishingBinding(func(binding *store.ReviewDiminishingBinding) {
-			binding.Cause = store.ReviewDiminishingGrowthWithoutBlockers
+			binding.Cause = domain.ReviewDiminishingGrowthWithoutBlockers
+		})},
+		// Convergence evaluation never returns drift_audit, so a decision
+		// bound to it fails closed until the load re-proves the audit (#1051).
+		{name: "drift audit cause", tamper: tamperDiminishingBinding(func(binding *store.ReviewDiminishingBinding) {
+			binding.Cause = domain.ReviewDiminishingDriftAudit
 		})},
 		{name: "wrong version", tamper: func(t *testing.T, db *sql.DB, decision store.ReviewDiminishingDecision) {
 			t.Helper()
@@ -643,7 +648,7 @@ func seedReviewDiminishingDecisionWith(
 		FindingIDs:         append([]domain.FindingID(nil), record.FindingIDs...),
 		AdjudicationDigest: artifact.Digest, FindingBatchDigest: artifact.FindingBatchDigest,
 		PolicyDigest: policy.Digest, ContinueWhile: store.ReviewContinueWhileNewMaterialFindings,
-		LowValueStreakBeforeAttention: 2, Cause: store.ReviewDiminishingFixedRecurrence,
+		LowValueStreakBeforeAttention: 2, Cause: domain.ReviewDiminishingFixedRecurrence,
 		HardRoundLimit: hardRoundLimit,
 	}
 	reason, err := store.ReviewDiminishingReason(binding)
@@ -778,7 +783,7 @@ func TestReviewDiminishingReasonSummarizesGrowthWithoutBlockers(t *testing.T) {
 		AdjudicationDigest: "sha256:adjudication", FindingBatchDigest: "sha256:batch",
 		PolicyDigest: "sha256:policy", ContinueWhile: store.ReviewContinueWhileNewMaterialFindings,
 		LowValueStreakBeforeAttention: 2, HardRoundLimit: 25,
-		Cause: store.ReviewDiminishingGrowthWithoutBlockers,
+		Cause: domain.ReviewDiminishingGrowthWithoutBlockers,
 	})
 	if err != nil {
 		t.Fatal(err)

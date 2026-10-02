@@ -89,6 +89,100 @@ import Testing
                 == "invalid review_dispute binding")
     }
 
+    @Test(arguments: Components.Schemas.ReviewDiminishingCause.allCases)
+    func diminishingFixturesCoverEveryStopCause(cause: Components.Schemas.ReviewDiminishingCause) {
+        let item = AttentionFixtures.reviewDiminishing(cause: cause).item
+
+        #expect(item.review_diminishing?.value1.cause == cause)
+        #expect((item.review_diminishing?.value1.drift_audit != nil) == (cause == .drift_audit))
+        #expect(MockContractValidation.itemValidityBreach(item) == nil)
+    }
+
+    @Test(arguments: Components.Schemas.DriftVerdict.allCases)
+    func diminishingFixturesCoverEveryDriftVerdict(verdict: Components.Schemas.DriftVerdict) throws {
+        let item = AttentionFixtures.reviewDiminishing(cause: .drift_audit, verdict: verdict).item
+        let drift = try #require(item.review_diminishing?.value1.drift_audit?.value1)
+
+        #expect(drift.verdict == verdict)
+        #expect(drift.reversals.isEmpty == (verdict != .over_hardened))
+        #expect(!drift.simplification_on_continue)
+        #expect(MockContractValidation.itemValidityBreach(item) == nil)
+    }
+
+    @Test func reviewDiminishingFactsDecodeFromNullOrAbsent() throws {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        var wire = try #require(
+            JSONSerialization.jsonObject(
+                with: encoder.encode(AttentionFixtures.reviewDiminishing(cause: .fixed_recurrence).item))
+                as? [String: Any])
+        let facts = try #require(wire["review_diminishing"] as? [String: Any])
+        #expect(facts["cause"] as? String == "fixed_recurrence")
+
+        // An item stored before the facts existed, or raised by a review
+        // escalation, arrives with the key null; an older daemon omits it.
+        // Both decode to no facts.
+        for value in [NSNull() as Any?, nil] {
+            wire["review_diminishing"] = value
+            let decoded = try decoder.decode(
+                Components.Schemas.AttentionItem.self,
+                from: JSONSerialization.data(withJSONObject: wire))
+            #expect(decoded.review_diminishing == nil)
+            #expect(MockContractValidation.itemValidityBreach(decoded) == nil)
+        }
+    }
+
+    @Test func validationMirrorsReviewDiminishingFactRules() {
+        typealias Facts = Components.Schemas.DriftAuditFacts
+        func breach(
+            _ verdict: Components.Schemas.DriftVerdict = .over_hardened, _ mutate: (inout Facts) -> Void
+        ) -> String? {
+            var item = AttentionFixtures.reviewDiminishing(cause: .drift_audit, verdict: verdict).item
+            if var drift = item.review_diminishing?.value1.drift_audit?.value1 {
+                mutate(&drift)
+                item.review_diminishing?.value1.drift_audit = .init(value1: drift)
+            }
+            return MockContractValidation.itemValidityBreach(item)
+        }
+
+        var wrongType = AttentionFixtures.fixture(type: .spec_approval).item
+        wrongType.review_diminishing =
+            AttentionFixtures.fixture(type: .review_diminishing_returns).item.review_diminishing
+        #expect(
+            MockContractValidation.itemValidityBreach(wrongType)
+                == "review_diminishing facts on a different item type")
+
+        let pairing = "drift_audit facts must accompany exactly the drift_audit cause"
+        var missingDrift = AttentionFixtures.reviewDiminishing(cause: .drift_audit).item
+        missingDrift.review_diminishing?.value1.drift_audit = nil
+        #expect(MockContractValidation.itemValidityBreach(missingDrift) == pairing)
+        var strayDrift = AttentionFixtures.reviewDiminishing(cause: .drift_audit).item
+        strayDrift.review_diminishing?.value1.cause = .growth_without_blockers
+        #expect(MockContractValidation.itemValidityBreach(strayDrift) == pairing)
+
+        #expect(breach { $0.explanation = " " } == "blank drift_audit explanation")
+
+        let cardinality = "drift_audit reversals must accompany exactly the over_hardened verdict"
+        #expect(breach { $0.reversals = [] } == cardinality)
+        for verdict in [Components.Schemas.DriftVerdict.converged, .stuck] {
+            #expect(
+                breach(verdict) {
+                    $0.reversals = [.init(finding_id: "finding-1", undo: "Undo it.", rationale: "Not needed.")]
+                } == cardinality)
+            #expect(
+                breach(verdict) { $0.simplification_on_continue = true }
+                    == "simplification_on_continue without the over_hardened verdict")
+        }
+        #expect(breach { $0.simplification_on_continue = true } == nil)
+
+        #expect(breach { $0.reversals.reverse() } == "invalid drift_audit reversals")
+        #expect(breach { $0.reversals[1].finding_id = $0.reversals[0].finding_id } == "invalid drift_audit reversals")
+        #expect(breach { $0.reversals[0].undo = "" } == "invalid drift_audit reversals")
+        #expect(breach { $0.reversals[0].rationale = " " } == "invalid drift_audit reversals")
+    }
+
     @Test func validationMirrorsCardFactTypeGatesAndCrossChecks() {
         var wrongCostType = AttentionFixtures.fixture(type: .spec_approval).item
         wrongCostType.billable_cost_so_far =
