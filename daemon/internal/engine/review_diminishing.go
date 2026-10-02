@@ -8,9 +8,14 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
+// reviewDiminishingRoute is a decided review_diminishing_returns item's
+// order for its round. cause is the stop cause the item's Reason binds, and
+// command the decision; both are set exactly when item is.
 type reviewDiminishingRoute struct {
-	action domain.Action
-	item   *domain.AttentionItem
+	action  domain.Action
+	item    *domain.AttentionItem
+	cause   domain.ReviewDiminishingCause
+	command *domain.Command
 }
 
 func productionReviewDiminishingItemID(runID domain.RunID, round int) domain.ItemID {
@@ -40,6 +45,26 @@ func (w *productionPublicationWorkflow) reconcileReviewDiminishing(
 	if !stop {
 		return reviewDiminishingRoute{}, productionReviewPending, false, nil
 	}
+	if err := w.parkReviewDiminishing(ctx, task, record, artifact, convergence,
+		domain.ReviewDiminishingFacts{Cause: cause}); err != nil {
+		return reviewDiminishingRoute{}, productionReviewPending, true, err
+	}
+	return reviewDiminishingRoute{}, productionReviewPending, true, nil
+}
+
+// parkReviewDiminishing raises the round's one review_diminishing_returns
+// item. Every stop cause shares the item identity, so a round parks once and
+// a replay re-puts the same item. facts is the typed card payload (plan §7
+// Review Drift); its cause is the one the item's Reason binds.
+func (w *productionPublicationWorkflow) parkReviewDiminishing(
+	ctx context.Context,
+	task productionPublicationTask,
+	record domain.ReviewRecord,
+	artifact domain.FindingAdjudication,
+	convergence store.ReviewConvergenceState,
+	facts domain.ReviewDiminishingFacts,
+) error {
+	itemID := productionReviewDiminishingItemID(task.RunID, record.Round)
 	binding := store.ReviewDiminishingBinding{
 		ItemID: itemID, RunID: task.RunID, Round: record.Round, HeadSHA: record.HeadSHA,
 		FindingIDs:         append([]domain.FindingID(nil), record.FindingIDs...),
@@ -47,28 +72,28 @@ func (w *productionPublicationWorkflow) reconcileReviewDiminishing(
 		PolicyDigest: convergence.Policy.Digest, ContinueWhile: convergence.Policy.ContinueWhile,
 		LowValueStreakBeforeAttention: convergence.Policy.LowValueStreakBeforeAttention,
 		HardRoundLimit:                convergence.Policy.HardRoundLimit,
-		Cause:                         cause,
+		Cause:                         facts.Cause,
 	}
 	reason, err := store.ReviewDiminishingReason(binding)
 	if err != nil {
-		return reviewDiminishingRoute{}, productionReviewPending, true, err
+		return err
 	}
 	runID := task.RunID
 	createdAt := w.attentionCreatedAt()
 	summaryClaims, err := w.previousRemediationSummaryClaims(ctx, task.RunID, record.Round)
 	if err != nil {
-		return reviewDiminishingRoute{}, productionReviewPending, true, err
+		return err
 	}
 	cost, err := billableCostSoFar(ctx, w.store, task.RunID)
 	if err != nil {
-		return reviewDiminishingRoute{}, productionReviewPending, true, err
+		return err
 	}
 	subject := domain.Subject{
 		Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID,
 	}
 	names, err := displayNames(ctx, w.store, task.ProjectID, subject)
 	if err != nil {
-		return reviewDiminishingRoute{}, productionReviewPending, true, err
+		return err
 	}
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: itemID, ProjectID: task.ProjectID,
@@ -79,18 +104,16 @@ func (w *productionPublicationWorkflow) reconcileReviewDiminishing(
 			record.Round, convergence.Policy.HardRoundLimit),
 		AgentClaims: summaryClaims,
 		PRHeadSHA:   record.HeadSHA, YieldHistory: &convergence.History,
+		ReviewDiminishing: &facts,
 		BillableCostSoFar: cost,
 		DisplayNames:      names,
 		ItemVersion:       1, InterruptionClass: domain.InterruptionPlannedGate,
 		CreatedAt: &createdAt, Status: domain.StatusOpen,
 	}, w.approvedRecipes)
 	if err != nil {
-		return reviewDiminishingRoute{}, productionReviewPending, true, err
+		return err
 	}
-	if err := w.attention.PutItem(ctx, item); err != nil {
-		return reviewDiminishingRoute{}, productionReviewPending, true, err
-	}
-	return reviewDiminishingRoute{}, productionReviewPending, true, nil
+	return w.attention.PutItem(ctx, item)
 }
 
 func (w *productionPublicationWorkflow) previousRemediationSummaryClaims(
@@ -146,6 +169,7 @@ func (w *productionPublicationWorkflow) reconcileExistingReviewDiminishing(
 			item := existing.Item
 			return reviewDiminishingRoute{
 				action: existing.Command.Action, item: &item,
+				cause: existing.Binding.Cause, command: existing.Command,
 			}, productionReviewPending, false, true, nil
 		}
 		return reviewDiminishingRoute{}, productionReviewPending, true, true,

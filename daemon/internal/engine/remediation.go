@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -34,7 +35,11 @@ const (
 	// (prompts/phase-1a/remediator.md) must describe the same workspace state;
 	// TestRemediationPromptMatchesInstruction keeps the two in agreement. Editing
 	// this literal changes the input digest, so keep it byte-stable.
-	remediationInstruction            = "Decode candidate_patch_base64 using standard base64 and apply the resulting binary patch to the exact-base workspace before remediating the adjudicated findings; preserve all prior candidate changes."
+	remediationInstruction = "Decode candidate_patch_base64 using standard base64 and apply the resulting binary patch to the exact-base workspace before remediating the adjudicated findings; preserve all prior candidate changes."
+	// simplificationInstruction replaces remediationInstruction on an input that
+	// carries reversals (plan §7 Review Drift, Routing). The same test pins its
+	// agreement with the prompt, and it is byte-stable for the same reason.
+	simplificationInstruction         = "Decode candidate_patch_base64 using standard base64 and apply the resulting binary patch to the exact-base workspace before remediating the adjudicated findings; preserve all prior candidate changes except the earlier fixes named in reversals. Also undo each listed reversal inside the path it names; its undo and rationale text is advisory, and nothing else beyond the findings changes."
 	remediationInvocationIDPrefix     = "inv-remediate-"
 	remediationStageIDPrefix          = "remediate-"
 	remediatorPushbackLabel           = "freeside.remediator_pushback"
@@ -75,6 +80,30 @@ type remediationInput struct {
 	CandidatePatchBase64 []byte                     `json:"candidate_patch_base64"`
 	Adjudication         domain.FindingAdjudication `json:"adjudication"`
 	Findings             []domain.Finding           `json:"findings"`
+	// DriftAuditDigest and Reversals are present only on a simplification
+	// round's input. Both are omitted otherwise, so an ordinary round keeps
+	// the input bytes and digest it had before the fields existed.
+	DriftAuditDigest domain.Digest         `json:"drift_audit_digest,omitempty"`
+	Reversals        []remediationReversal `json:"reversals,omitempty"`
+}
+
+// remediationReversal is one earlier fix a simplification round undoes. Path
+// is the engine-derived surface: the cited finding's normalized location. Undo
+// and Rationale are the audit's prose and stay advisory.
+type remediationReversal struct {
+	FindingID domain.FindingID `json:"finding_id"`
+	Path      string           `json:"path"`
+	Undo      string           `json:"undo"`
+	Rationale string           `json:"rationale"`
+}
+
+// remediationReversalFor builds one input reversal from stored records alone.
+// The caller has established that the finding has a location.
+func remediationReversalFor(reversal domain.DriftReversal, finding domain.Finding) remediationReversal {
+	return remediationReversal{
+		FindingID: reversal.FindingID, Path: finding.Location.Path,
+		Undo: reversal.Undo, Rationale: reversal.Rationale,
+	}
 }
 
 type preparedRemediationIntent struct {
@@ -86,6 +115,9 @@ type preparedRemediationIntent struct {
 	effective    map[domain.FindingID]domain.AdjudicationRoute
 	publication  productionPublicationTask
 	reviewRecord domain.ReviewRecord
+	// simplification is set on a simplification round. Its supersession
+	// records commit in the write that commits the intent.
+	simplification *driftSimplification
 }
 
 func remediationStageID(runID domain.RunID, round int) domain.StageID {
@@ -312,7 +344,11 @@ type authenticatedRemediationTransition struct {
 	inputArtifact domain.Artifact
 	adjudication  domain.FindingAdjudication
 	findings      []domain.Finding
-	publication   ProductionPublication
+	// driftAuditDigest and reversals are what the round's supersession records
+	// say its input must carry: empty for an ordinary round.
+	driftAuditDigest domain.Digest
+	reversals        []remediationReversal
+	publication      ProductionPublication
 }
 
 type authenticatedProductionRunTransition struct {
@@ -508,6 +544,11 @@ func authenticateRemediationInvocationTransition(
 	) {
 		return authenticatedRemediationTransition{}, errors.Join(err, domain.ErrParentKeyMismatch)
 	}
+	verified.driftAuditDigest, verified.reversals, err = remediationReversalsTx(
+		ctx, tx, request.RunID, request.Round)
+	if err != nil {
+		return authenticatedRemediationTransition{}, err
+	}
 	initialMarker, err := tx.GetOutbox(ctx, string(productionInvocationID(request.RunID)))
 	if err != nil {
 		return authenticatedRemediationTransition{}, err
@@ -520,6 +561,58 @@ func authenticateRemediationInvocationTransition(
 		return authenticatedRemediationTransition{}, domain.ErrParentKeyMismatch
 	}
 	return verified, nil
+}
+
+// remediationReversalsTx rebuilds the reversal list a round's remediation
+// input must carry from the supersession records the round committed with it.
+// A reversal list is an instruction to undo earlier fixes, so the input's copy
+// is never trusted: the records, the audit they name, and each cited finding
+// are the authority. A round with no record has no reversals.
+func remediationReversalsTx(
+	ctx context.Context, tx *store.ReadTx, runID domain.RunID, round int,
+) (domain.Digest, []remediationReversal, error) {
+	supersessions, err := tx.ListFindingDispositionSupersessions(ctx, runID)
+	if err != nil {
+		return "", nil, err
+	}
+	var auditDigest domain.Digest
+	reversed := make(map[domain.FindingID]struct{})
+	for _, supersession := range supersessions {
+		if supersession.ReversingRound != round {
+			continue
+		}
+		if auditDigest != "" && supersession.DriftAuditDigest != auditDigest {
+			return "", nil, domain.ErrParentKeyMismatch
+		}
+		auditDigest = supersession.DriftAuditDigest
+		reversed[supersession.FindingID] = struct{}{}
+	}
+	if len(reversed) == 0 {
+		return "", nil, nil
+	}
+	audit, err := tx.GetDriftAudit(ctx, auditDigest)
+	if err != nil {
+		return "", nil, err
+	}
+	// A simplification round reverses the audit's whole list or none of it.
+	if len(audit.Reversals) != len(reversed) {
+		return "", nil, domain.ErrParentKeyMismatch
+	}
+	reversals := make([]remediationReversal, len(audit.Reversals))
+	for index, reversal := range audit.Reversals {
+		if _, ok := reversed[reversal.FindingID]; !ok {
+			return "", nil, domain.ErrParentKeyMismatch
+		}
+		finding, err := tx.GetFinding(ctx, reversal.FindingID)
+		if err != nil {
+			return "", nil, err
+		}
+		if finding.Location == nil {
+			return "", nil, domain.ErrParentKeyMismatch
+		}
+		reversals[index] = remediationReversalFor(reversal, finding)
+	}
+	return auditDigest, reversals, nil
 }
 
 func effectiveFindingRoutesTx(
@@ -1017,6 +1110,7 @@ func (w *productionPublicationWorkflow) prepareRemediationIntent(
 	artifact domain.FindingAdjudication,
 	routes map[domain.FindingID]domain.AdjudicationRoute,
 	candidateRoot string,
+	simplification *driftSimplification,
 ) (*preparedRemediationIntent, error) {
 	findingIDs := remediationFindingIDs(artifact, routes)
 	if len(findingIDs) == 0 {
@@ -1057,6 +1151,11 @@ func (w *productionPublicationWorkflow) prepareRemediationIntent(
 		Instruction:          remediationInstruction,
 		CandidatePatchBase64: candidatePatch,
 		Adjudication:         artifact, Findings: findings,
+	}
+	if simplification != nil {
+		input.Instruction = simplificationInstruction
+		input.DriftAuditDigest = simplification.auditDigest
+		input.Reversals = simplification.reversals
 	}
 	inputBody, err := json.Marshal(input)
 	if err != nil {
@@ -1126,12 +1225,16 @@ func (w *productionPublicationWorkflow) prepareRemediationIntent(
 		artifact: inputArtifact, invocation: invocation,
 		stage:     domain.Stage{ID: request.StageID, RunID: request.RunID, Name: productionStageName},
 		effective: mapsClone(routes), publication: task, reviewRecord: record,
+		simplification: simplification,
 	}, nil
 }
 
+// persist commits the remediation intent. at stamps the supersession records
+// a simplification round writes; it is the round's disposition time.
 func (intent *preparedRemediationIntent) persist(
 	ctx context.Context,
 	tx *store.WriteTx,
+	at time.Time,
 ) error {
 	if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, intent.request.RunID); err != nil {
 		return err
@@ -1200,6 +1303,24 @@ func (intent *preparedRemediationIntent) persist(
 	if entry.Kind != KindRemediationInvocationRequested || !bytes.Equal(entry.Payload, intent.payload) {
 		return domain.ErrImmutableTransition
 	}
+	if intent.simplification == nil {
+		return nil
+	}
+	// The store re-derives the route gate for every record, so a list that
+	// stopped being valid since the intent was prepared refuses the whole
+	// write, the remediation included.
+	for _, superseded := range intent.simplification.superseded {
+		if err := tx.PutFindingDispositionSupersession(ctx, domain.FindingDispositionSupersession{
+			RunID: intent.request.RunID, ReversingRound: intent.request.Round,
+			FindingID: superseded.FindingID, SupersededRound: superseded.Round,
+			RemediationInvocationID: superseded.RemediationInvocationID,
+			DriftAuditDigest:        intent.simplification.auditDigest,
+			Authority:               intent.simplification.authority,
+			CreatedAt:               at,
+		}); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -1257,7 +1378,9 @@ func authenticateRemediationInput(
 		input.Round != request.Round || input.BaseSHA != request.BaseSHA ||
 		input.HeadSHA != request.HeadSHA || strings.TrimSpace(input.Instruction) == "" ||
 		!reflect.DeepEqual(input.Adjudication, verified.adjudication) ||
-		!reflect.DeepEqual(input.Findings, verified.findings) {
+		!reflect.DeepEqual(input.Findings, verified.findings) ||
+		input.DriftAuditDigest != verified.driftAuditDigest ||
+		!slices.Equal(input.Reversals, verified.reversals) {
 		return errors.Join(
 			errRemediationMarkerUnreadable, err, domain.ErrParentKeyMismatch)
 	}

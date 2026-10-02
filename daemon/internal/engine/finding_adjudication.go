@@ -189,7 +189,7 @@ func (w *productionPublicationWorkflow) reconcileFindingAdjudicationWithDissent(
 		if err != nil {
 			return productionReviewPending, err
 		}
-		return w.executeFindingAdjudication(ctx, task, record, artifact, candidateRoot)
+		return w.executeFindingAdjudication(ctx, task, record, artifact, baseRoot, candidateRoot)
 	case !errors.Is(err, store.ErrNotFound):
 		return productionReviewPending, err
 	}
@@ -326,7 +326,7 @@ func (w *productionPublicationWorkflow) reconcileFindingAdjudicationWithDissent(
 		DurableTransitionFindingAdjudication, DurableTransitionAfter); err != nil {
 		return productionReviewPending, err
 	}
-	return w.executeFindingAdjudication(ctx, task, record, artifact, candidateRoot)
+	return w.executeFindingAdjudication(ctx, task, record, artifact, baseRoot, candidateRoot)
 }
 
 const findingAdjudicationResultVersion = "freeside.finding-adjudication-result/v1"
@@ -1517,7 +1517,7 @@ func findingRoutesFromDecision(
 
 func (w *productionPublicationWorkflow) executeFindingAdjudication(
 	ctx context.Context, task productionPublicationTask, record domain.ReviewRecord,
-	artifact domain.FindingAdjudication, candidateRoot string,
+	artifact domain.FindingAdjudication, baseRoot, candidateRoot string,
 ) (productionReviewGateState, error) {
 	itemID := productionFindingAdjudicationItemID(task.RunID, record.Round, artifact.Revision)
 	var item *domain.AttentionItem
@@ -1658,8 +1658,19 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 		if dispatched {
 			return productionReviewPending, nil
 		}
+		// The audit runs here, after the dispatched check: a round whose
+		// remediation is queued already acted on its verdict, and a round
+		// dispatched before the audit existed must not park under it.
+		simplification, driftParked, driftErr := w.reconcileDriftAudit(
+			ctx, task, record, artifact, routes, diminishing, baseRoot, candidateRoot)
+		if driftErr != nil {
+			return productionReviewPending, driftErr
+		}
+		if driftParked {
+			return productionReviewPending, nil
+		}
 		remediation, err = w.prepareRemediationIntent(
-			ctx, task, record, artifact, routes, candidateRoot)
+			ctx, task, record, artifact, routes, candidateRoot, simplification)
 		if errors.Is(err, ErrRemediationInputUndeliverable) {
 			// A deterministic pre-invocation preparation refusal (for example a
 			// remediation input larger than the deliverable limit) can never
@@ -1689,7 +1700,7 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 	}
 	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
 		if remediation != nil {
-			if err := remediation.persist(ctx, tx); err != nil {
+			if err := remediation.persist(ctx, tx, dispositionAt); err != nil {
 				return err
 			}
 		}

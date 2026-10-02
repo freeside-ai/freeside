@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	mrand "math/rand"
 	"os"
 	"path/filepath"
@@ -101,7 +102,35 @@ func newFindingAdjudicationFixtureWithNote(
 	t *testing.T, severity domain.FindingSeverity, location *domain.FindingLocation,
 	materiality, confidence, note string,
 ) *findingAdjudicationFixture {
+	return newFindingAdjudicationFixtureWithOptions(
+		t, severity, location, materiality, confidence, findingAdjudicationFixtureOptions{note: note})
+}
+
+// findingAdjudicationFixtureOptions varies the fixture for tests that need
+// more than the default round: extra resolved-policy keys, real commit
+// identities for a git-backed candidate, or another finding identity. The zero
+// value of each field keeps the default.
+type findingAdjudicationFixtureOptions struct {
+	note             string
+	policy           map[string]string
+	baseSHA, headSHA string
+	findingID        domain.FindingID
+}
+
+func newFindingAdjudicationFixtureWithOptions(
+	t *testing.T, severity domain.FindingSeverity, location *domain.FindingLocation,
+	materiality, confidence string, options findingAdjudicationFixtureOptions,
+) *findingAdjudicationFixture {
 	t.Helper()
+	note := options.note
+	baseSHA, headSHA := strings.Repeat("1", 40), strings.Repeat("2", 40)
+	if options.baseSHA != "" {
+		baseSHA, headSHA = options.baseSHA, options.headSHA
+	}
+	findingID := domain.FindingID("finding-a")
+	if options.findingID != "" {
+		findingID = options.findingID
+	}
 	ctx := t.Context()
 	dir := t.TempDir()
 	st := storetest.Open(t, filepath.Join(dir, "freeside.db"), store.Options{})
@@ -113,7 +142,7 @@ func newFindingAdjudicationFixtureWithNote(
 	artifacts := &findingAdjudicationArtifactStore{bodies: map[domain.Digest][]byte{
 		specDigest: specification, instructionDigest: instructions,
 	}}
-	policy, err := domain.NewResolvedPolicy(runID, []domain.PolicyKey{
+	policyKeys := []domain.PolicyKey{
 		{Key: "paths", Value: "daemon/**", Provenance: domain.KeyProvenance{
 			Source: domain.ProvenancePreset, Digest: adjudicationDigest("a"),
 		}},
@@ -123,7 +152,15 @@ func newFindingAdjudicationFixtureWithNote(
 		{Key: findingMaterialityThresholdKey, Value: "high", Provenance: domain.KeyProvenance{
 			Source: domain.ProvenancePreset, Digest: adjudicationDigest("c"),
 		}},
-	})
+	}
+	for _, key := range slices.Sorted(maps.Keys(options.policy)) {
+		policyKeys = append(policyKeys, domain.PolicyKey{
+			Key: key, Value: options.policy[key], Provenance: domain.KeyProvenance{
+				Source: domain.ProvenancePreset, Digest: adjudicationDigest("d"),
+			},
+		})
+	}
+	policy, err := domain.NewResolvedPolicy(runID, policyKeys)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +170,7 @@ func newFindingAdjudicationFixtureWithNote(
 	}
 	createdAt := time.Date(2026, 8, 24, 3, 0, 0, 0, time.UTC)
 	finding := domain.Finding{
-		ID: "finding-a", RunID: runID, Source: "codex_local", Severity: severity,
+		ID: findingID, RunID: runID, Source: "codex_local", Severity: severity,
 		Location: location, Message: "review finding", RawText: "review finding",
 		CreatedAt: createdAt,
 	}
@@ -142,7 +179,7 @@ func newFindingAdjudicationFixtureWithNote(
 		Provider: "codex", ModelConfiguration: "test",
 		ConfigurationDigest: adjudicationDigest("e"),
 		InstructionDigest:   instructionDigest,
-		CostOwner:           "test", BaseSHA: strings.Repeat("1", 40), HeadSHA: strings.Repeat("2", 40),
+		CostOwner:           "test", BaseSHA: baseSHA, HeadSHA: headSHA,
 		CompletedAt: createdAt, CompletionEvidence: adjudicationDigest("9"),
 		Outcome: domain.ReviewFindings, FindingIDs: []domain.FindingID{finding.ID},
 	})
@@ -201,6 +238,7 @@ func newFindingAdjudicationFixtureWithNote(
 		Binding:   inference.Binding{Provider: "fake", Model: "test", Driver: driver},
 		Sites: []inference.Site{
 			inference.ClassifierSite(budget), inference.AdjudicatorSite(budget),
+			inference.DriftAuditorSite(budget),
 		},
 		Advisory: advisoryStore, Now: func() time.Time { return now },
 	})
@@ -1810,7 +1848,7 @@ func TestFindingAdjudicationRoutesDiminishingReviewActions(t *testing.T) {
 			}
 
 			state, err := f.workflow.executeFindingAdjudication(
-				f.ctx, f.task, record, artifact, f.headRoot)
+				f.ctx, f.task, record, artifact, f.baseRoot, f.headRoot)
 			if err != nil || state != productionReviewPending {
 				t.Fatalf("initial diminishing gate = %d, %v", state, err)
 			}
@@ -1856,7 +1894,7 @@ func TestFindingAdjudicationRoutesDiminishingReviewActions(t *testing.T) {
 			}
 
 			state, err = f.workflow.executeFindingAdjudication(
-				f.ctx, f.task, record, artifact, f.headRoot)
+				f.ctx, f.task, record, artifact, f.baseRoot, f.headRoot)
 			wantState := productionReviewContinue
 			if action == domain.ActionFinishNow {
 				wantState = productionReviewPassed
@@ -1936,7 +1974,7 @@ func assertFinalReviewFindingsCanFinish(
 		t.Fatal(err)
 	}
 	state, err := f.workflow.executeFindingAdjudication(
-		f.ctx, f.task, record, artifact, f.headRoot)
+		f.ctx, f.task, record, artifact, f.baseRoot, f.headRoot)
 	if err != nil || state != productionReviewPending {
 		t.Fatalf("final findings gate = %d, %v", state, err)
 	}
@@ -1961,7 +1999,7 @@ func assertFinalReviewFindingsCanFinish(
 		t.Fatal(err)
 	}
 	state, err = f.workflow.executeFindingAdjudication(
-		f.ctx, f.task, record, artifact, f.headRoot)
+		f.ctx, f.task, record, artifact, f.baseRoot, f.headRoot)
 	if err != nil || state != productionReviewPassed {
 		t.Fatalf("finish final findings = %d, %v", state, err)
 	}
