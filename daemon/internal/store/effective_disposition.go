@@ -42,6 +42,18 @@ func (tx *ReadTx) EffectiveFindingDispositions(
 	if err != nil {
 		return nil, fmt.Errorf("effective finding dispositions %q: %w", runID, err)
 	}
+	return resolveEffectiveDispositions(dispositions, supersessions, throughRound), nil
+}
+
+// resolveEffectiveDispositions is the one resolution rule, shared by the
+// reader above, the recurrence rule, and the route gate. It is pure: the
+// caller has already authenticated the rows and records it passes, and rows or
+// records after throughRound are ignored.
+func resolveEffectiveDispositions(
+	dispositions []domain.ReviewDispositionRecord,
+	supersessions []domain.FindingDispositionSupersession,
+	throughRound int,
+) []EffectiveFindingDisposition {
 	latest := make(map[domain.FindingID]domain.ReviewDispositionRecord)
 	for _, disposition := range dispositions {
 		if disposition.Round > throughRound {
@@ -66,5 +78,5 @@ func (tx *ReadTx) EffectiveFindingDispositions(
 	slices.SortFunc(out, func(a, b EffectiveFindingDisposition) int {
 		return strings.Compare(string(a.Stored.FindingID), string(b.Stored.FindingID))
 	})
-	return out, nil
+	return out
 }

@@ -20,7 +20,7 @@ ON CONFLICT (run_id, round) DO NOTHING`
 // run's. Every reversal must name a finding that one of the run's review
 // records lists at or before the audited round, so the answer never changes as
 // later rounds are recorded. Whether a named finding's fix may be reversed is
-// the route gate's check (#1051), not this one.
+// the route gate's check (DriftAuditRouteGate), not this one.
 func (tx *ReadTx) validateDriftAuditBinding(ctx context.Context, audit domain.DriftAudit) error {
 	record, err := tx.reviewRecordForRound(ctx, audit.RunID, audit.Round)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -267,7 +268,8 @@ WHERE id = ?`, decision.Item.ID); err != nil {
 			binding.Cause = domain.ReviewDiminishingGrowthWithoutBlockers
 		})},
 		// Convergence evaluation never returns drift_audit, so a decision
-		// bound to it fails closed until the load re-proves the audit (#1051).
+		// bound to it loads only on a round no deterministic cause stopped and
+		// that carries an audit. This round stopped on fixed_recurrence.
 		{name: "drift audit cause", tamper: tamperDiminishingBinding(func(binding *store.ReviewDiminishingBinding) {
 			binding.Cause = domain.ReviewDiminishingDriftAudit
 		})},
@@ -536,9 +538,61 @@ func seedReviewDiminishingDecisionWith(
 	withDiffMetrics bool,
 ) (*store.Store, store.ReviewDiminishingDecision) {
 	t.Helper()
+	st, decision, _ := seedDiminishingDecision(
+		t, path, runID, at, action, hardRoundLimit, withDiffMetrics, nil)
+	return st, decision
+}
+
+// driftSeed describes the drift-parked variant of the seeded run: round 2's
+// findings are both new, so no deterministic cause stops it, its audit reverses
+// round 1's fixed finding-a, and its item parks on drift_audit.
+type driftSeed struct {
+	// verdict defaults to over_hardened. Only that verdict carries reversals.
+	verdict domain.DriftVerdict
+	// extraReversals are reversed after finding-a.
+	extraReversals []domain.FindingID
+	// severity is finding-a's. Unset reads as high at the route gate.
+	severity domain.FindingSeverity
+	// policyKeys are added to the run's resolved policy.
+	policyKeys map[string]string
+	// hardRoundLimit defaults to 25.
+	hardRoundLimit int
+	// simplification stamps the item with the audit's card facts, promising a
+	// simplification round on continue.
+	simplification bool
+}
+
+func seedDriftDiminishingDecision(
+	t *testing.T, path string, runID domain.RunID, at time.Time, action domain.Action, seed driftSeed,
+) (*store.Store, store.ReviewDiminishingDecision, domain.DriftAudit) {
+	t.Helper()
+	if seed.verdict == "" {
+		seed.verdict = domain.DriftVerdictOverHardened
+	}
+	if seed.hardRoundLimit == 0 {
+		seed.hardRoundLimit = 25
+	}
+	st, decision, audit := seedDiminishingDecision(
+		t, path, runID, at, action, seed.hardRoundLimit, false, &seed)
+	return st, decision, *audit
+}
+
+// seedDiminishingDecision is the shared seed. A nil drift parks round 2 on
+// fixed_recurrence and writes no audit.
+func seedDiminishingDecision(
+	t *testing.T,
+	path string,
+	runID domain.RunID,
+	at time.Time,
+	action domain.Action,
+	hardRoundLimit int,
+	withDiffMetrics bool,
+	drift *driftSeed,
+) (*store.Store, store.ReviewDiminishingDecision, *domain.DriftAudit) {
+	t.Helper()
 	ctx := context.Background()
 	st := storetest.Open(t, path, store.Options{})
-	policy, err := domain.NewResolvedPolicy(runID, []domain.PolicyKey{
+	policyKeys := []domain.PolicyKey{
 		{
 			Key: "paths", Value: "daemon/**", Provenance: domain.KeyProvenance{
 				Source: domain.ProvenancePreset,
@@ -566,7 +620,20 @@ func seedReviewDiminishingDecisionWith(
 				Digest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
 			},
 		},
-	})
+	}
+	var extraKeys map[string]string
+	if drift != nil {
+		extraKeys = drift.policyKeys
+	}
+	for _, key := range slices.Sorted(maps.Keys(extraKeys)) {
+		policyKeys = append(policyKeys, domain.PolicyKey{
+			Key: key, Value: extraKeys[key], Provenance: domain.KeyProvenance{
+				Source: domain.ProvenancePreset,
+				Digest: domain.Digest("sha256:" + strings.Repeat("e", 64)),
+			},
+		})
+	}
+	policy, err := domain.NewResolvedPolicy(runID, policyKeys)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -575,8 +642,13 @@ func seedReviewDiminishingDecisionWith(
 		adjudicationFinding("finding-b", runID, "daemon/a.go", at.Add(time.Minute)),
 		adjudicationFinding("finding-c", runID, "daemon/c.go", at.Add(time.Minute)),
 	}
-	findings[1].Message = findings[0].Message
-	findings[1].RawText = findings[0].RawText
+	if drift == nil {
+		// finding-b recurs the fixed finding-a.
+		findings[1].Message = findings[0].Message
+		findings[1].RawText = findings[0].RawText
+	} else {
+		findings[0].Severity = drift.severity
+	}
 	reviewFindings := [][]domain.Finding{{findings[0]}, {findings[1], findings[2]}}
 	records := make([]domain.ReviewRecord, len(reviewFindings))
 	artifacts := make([]domain.FindingAdjudication, len(reviewFindings))
@@ -600,6 +672,24 @@ func seedReviewDiminishingDecisionWith(
 	}
 	record := records[len(records)-1]
 	artifact := artifacts[len(artifacts)-1]
+	var audit *domain.DriftAudit
+	cause := domain.ReviewDiminishingFixedRecurrence
+	var facts *domain.ReviewDiminishingFacts
+	if drift != nil {
+		var reversed []domain.FindingID
+		if drift.verdict == domain.DriftVerdictOverHardened {
+			reversed = append([]domain.FindingID{findings[0].ID}, drift.extraReversals...)
+		}
+		input := driftAuditInputFor(runID, record.Round, drift.verdict, reversed...)
+		input.ResolvedPolicyDigest = policy.Digest
+		built := newDriftAudit(t, input)
+		audit, cause = &built, domain.ReviewDiminishingDriftAudit
+		if drift.simplification {
+			stamped := driftFactsOf(built)
+			stamped.DriftAudit.SimplificationOnContinue = true
+			facts = &stamped
+		}
+	}
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutRun(ctx, domain.Run{
 			ID: runID, ProjectID: "project-1", SpecDigest: adjSpecDigest, PolicyDigest: policy.Digest,
@@ -624,13 +714,19 @@ func seedReviewDiminishingDecisionWith(
 				return err
 			}
 		}
-		return tx.PutFindingDisposition(ctx, domain.ReviewDispositionRecord{
+		if err := tx.PutFindingDisposition(ctx, domain.ReviewDispositionRecord{
 			FindingID: findings[0].ID, RunID: runID, Round: records[0].Round,
 			Disposition:             domain.ReviewDispositionFixed,
 			Reason:                  "absent from the independent remediation review",
 			RemediationInvocationID: records[1].InvocationID,
 			CreatedAt:               records[1].CompletedAt,
-		})
+		}); err != nil {
+			return err
+		}
+		if audit != nil {
+			return tx.PutDriftAudit(ctx, *audit)
+		}
+		return nil
 	}); err != nil {
 		t.Fatalf("seed diminishing review: %v", err)
 	}
@@ -648,7 +744,7 @@ func seedReviewDiminishingDecisionWith(
 		FindingIDs:         append([]domain.FindingID(nil), record.FindingIDs...),
 		AdjudicationDigest: artifact.Digest, FindingBatchDigest: artifact.FindingBatchDigest,
 		PolicyDigest: policy.Digest, ContinueWhile: store.ReviewContinueWhileNewMaterialFindings,
-		LowValueStreakBeforeAttention: 2, Cause: domain.ReviewDiminishingFixedRecurrence,
+		LowValueStreakBeforeAttention: 2, Cause: cause,
 		HardRoundLimit: hardRoundLimit,
 	}
 	reason, err := store.ReviewDiminishingReason(binding)
@@ -660,7 +756,7 @@ func seedReviewDiminishingDecisionWith(
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
 		Type:    domain.AttentionReviewDiminishing, Priority: domain.PriorityNormal, Reason: reason,
 		RequestedDecision: store.ReviewDiminishingRequestedActions(record.Round, hardRoundLimit),
-		PRHeadSHA:         record.HeadSHA, YieldHistory: &history, ItemVersion: 1,
+		PRHeadSHA:         record.HeadSHA, YieldHistory: &history, ReviewDiminishing: facts, ItemVersion: 1,
 		InterruptionClass: domain.InterruptionPlannedGate, CreatedAt: &at, Status: domain.StatusOpen,
 	}, nil)
 	if err != nil {
@@ -673,7 +769,7 @@ func seedReviewDiminishingDecisionWith(
 		}); err != nil {
 			t.Fatalf("seed open diminishing item: %v", err)
 		}
-		return st, store.ReviewDiminishingDecision{Item: item, Binding: binding}
+		return st, store.ReviewDiminishingDecision{Item: item, Binding: binding}, audit
 	}
 	command, err := domain.NewCommand(domain.CommandInput{
 		CommandID: "command-" + string(action), DeviceID: "device-1",
@@ -701,7 +797,7 @@ func seedReviewDiminishingDecisionWith(
 	}); err != nil {
 		t.Fatalf("seed diminishing decision: %v", err)
 	}
-	return st, store.ReviewDiminishingDecision{Item: concluded, Command: &command, Binding: binding}
+	return st, store.ReviewDiminishingDecision{Item: concluded, Command: &command, Binding: binding}, audit
 }
 
 func assertDiminishingFinish(

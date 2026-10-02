@@ -27,10 +27,10 @@ const supersessionOtherRun = domain.RunID("run-supersession-other")
 // supersessionFixture is a store holding one valid supersession's parents and
 // the record itself, not yet written.
 //
-// The main run is seedReviewDiminishingDecision's: round 1 lists finding-a,
-// whose fixed disposition names round 2's review as its remediation, and
-// round 2's item is concluded by the given action. Round 2's audit is
-// over_hardened and reverses finding-a.
+// The main run is seedDriftDiminishingDecision's: round 1 lists finding-a,
+// whose fixed disposition names round 2's review as its remediation. Round 2's
+// audit is over_hardened and reverses finding-a, and round 2's item parks on
+// that audit and is concluded by the given action.
 //
 // The other run has three rounds. Round 1 lists a fixed, a kept (fixed but
 // never reversed), a declined, and a deferred finding. Round 2's audit is
@@ -52,10 +52,7 @@ func seedSupersession(
 ) supersessionFixture {
 	t.Helper()
 	ctx := context.Background()
-	st, decision := seedReviewDiminishingDecision(t, path, runID, supersessionAt, action)
-	input := driftAuditInputFor(runID, decision.Binding.Round, domain.DriftVerdictOverHardened, "finding-a")
-	input.ResolvedPolicyDigest = decision.Binding.PolicyDigest
-	audit := newDriftAudit(t, input)
+	st, decision, audit := seedDriftDiminishingDecision(t, path, runID, supersessionAt, action, driftSeed{simplification: true})
 
 	other := supersessionOtherRun
 	otherFindings := []domain.Finding{
@@ -104,9 +101,6 @@ func seedSupersession(
 	otherConverged := newDriftAudit(t, driftAuditInputFor(other, 3, domain.DriftVerdictConverged))
 
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
-		if err := tx.PutDriftAudit(ctx, audit); err != nil {
-			return err
-		}
 		if err := tx.PutRun(ctx, domain.Run{
 			ID: other, ProjectID: "project-1", SpecDigest: adjSpecDigest, PolicyDigest: adjPolicyDigest,
 		}); err != nil {
@@ -362,7 +356,7 @@ func TestDispositionSupersessionWriteRefusals(t *testing.T) {
 			main(func(r *record) {
 				r.Authority = domain.DispositionSupersessionAuthority{Kind: domain.DispositionSupersessionAutoRoute}
 			}),
-			store.ErrSupersessionAutoRouteUnproven, "",
+			store.ErrSupersessionRouteUnproven, "",
 		},
 		{
 			"unknown item",
@@ -591,7 +585,7 @@ SET body = json_set(body, '$.created_at', '2026-10-01T17:00:00Z')`)},
 			}),
 		},
 		{
-			name: "coherent record claiming the automatic route", want: store.ErrSupersessionAutoRouteUnproven,
+			name: "coherent record claiming the automatic route", want: store.ErrSupersessionRouteUnproven,
 			tamper: rewrite(func(r *domain.FindingDispositionSupersession) {
 				r.Authority = domain.DispositionSupersessionAuthority{Kind: domain.DispositionSupersessionAutoRoute}
 			}),
