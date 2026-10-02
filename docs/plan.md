@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 76
+revision: 77
 status: active
-updated: 2026-09-30
+updated: 2026-10-02
 ---
 
 # Freeside
@@ -1710,9 +1710,55 @@ never a changed selection.
 What a probe can report is a pinned-CLI empirical contract. The Codex app-server
 probe is expected to report account and plan facts, subject to the
 refresh-safety spike Section [10](#10-operations-and-onboarding) gates it on. The pinned Claude CLI offers a
-token digest plus an auth check; plan, quota, and expiry are not observable
-through it, so the Claude probe's realistic floor is integrity plus
-authentication, not account state.
+token digest plus an auth check. Whether its stream-json control protocol also
+answers a usage request under Freeside's setup-token credential, as current
+Agent SDK builds do for an interactive login, is an open question that a
+Claude usage spike settles (revision 77); until it does, the Claude probe's
+proven floor is integrity plus authentication, not account state.
+
+**Usage observation (revision 77).** A usage observation records what a
+provider reports about a subscription allowance. It is one record per usage
+pool carrying the plan where known. A pool names exactly one of its
+enrollments as its collector: only that enrollment collects for the pool,
+the pool's window readings come from it alone, and its last collection
+attempt's status and time are the pool's refresh status. The collector
+defaults to the pool's first enrollment and changes only by an explicit
+operator reassignment. Collection never fails over on its own: a collector
+whose answer is unsupported or whose refreshes fail shows that status, with
+readings kept or absent under the stale and failed rules of Section [10](#10-operations-and-onboarding),
+and never switches to another enrollment silently (the no-silent-fallback
+rule of Section [4](#4-the-attention-model)). Beside the collector's status, each enrollment on the
+pool may record the provider's availability answer under its own credential
+(supported, unsupported, or failed), because that is what tells the operator
+which enrollment could be assigned as collector. Beneath those, one reading
+per provider window (a five-hour window, a weekly window, or a model-scoped
+window where the provider limits one model separately) carries the used
+share or the quantity and unit the provider reports, the reset time and
+window length when given, and its own observation time. A pool whose
+collector reports unsupported, or whose refreshes never got an answer, holds
+the statuses and no window readings, never a synthetic window. The record
+attaches to the usage pool, not the identity, because the
+provider meters the pool: two enrollments on one subscription observe one
+allowance, and no display may add them up or show a pooled share across
+pools of different size. Five readings stay distinct and never share a
+"remaining" or "reset" field: a credential's expiry (when authentication may
+stop working, an enrollment-generation fact), a usage reset (when one window
+renews), a billing renewal (a subscription event, where the provider exposes
+one), a reset credit (a provider-issued action that can restore allowance,
+shown to the operator and never redeemed by Freeside on its own), and run
+consumption (what one invocation drew, Section [8](#8-observability-and-optimization-telemetry)). Unknown stays unknown.
+Collection and refresh are operations (Section [10](#10-operations-and-onboarding)); delivery to the clients
+follows Section [5.14](#514-client-synchronization-and-conversations).
+
+A usage observation is observation under this subsection's exclusion list.
+It informs the account usage view and the facts shown beside the agent
+choices in the clients, and it may inform a proposal; the operator's recorded
+lineup line or task line is what admits an agent and its credential. No
+reading selects, reorders, or withholds an agent, and admission never reads
+one. A selection whose pool a reading shows as exhausted still admits; when
+the provider then refuses the run, that attempt fails as a provider quota
+failure and recovers through the alternate-agent retry card (Section [4](#4-the-attention-model))
+with the latest reading shown beside it, never through a silent switch.
 
 ### 5.5 The CI Trust Boundary
 
@@ -3465,6 +3511,11 @@ the same revision, epoch, and read-transaction guarantees below as run data.
   affected resource.
 - A periodic revision heartbeat detects lost invalidations.
 - Push and WebSocket improve latency only; correctness does not depend on them.
+- A usage observation and its refresh status are client-visible state
+  (revision 77). They reach the clients through this revision and heartbeat
+  path on their own, never waiting for unrelated task activity, and the manual
+  refresh is an ordinary client command. How an observation append advances
+  the revision is the #1145 contract decision, which this clause depends on.
 
 #### Devices, Commands, and Caches
 
@@ -4886,6 +4937,18 @@ comprehension defects. Both feed the Section [9](#9-comprehension) measurements.
 logging runs alongside Phase 1A. Usage is observed telemetry, never asserted
 quota state.
 
+Subscription allowance is a fourth quantity, distinct from the three a run
+records (revision 77). Billable cost is what a run cost in money, reported
+usage is what the provider's usage payload said that run consumed, and quota
+consumed is that run's draw against a limit in the provider's unit. An
+allowance observation is none of these: it is the provider's statement, per
+usage pool and window, of how much of a subscription's allowance is used and
+when the window resets, observed at a time Freeside records (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency),
+usage observation). It includes usage consumed outside Freeside, which the run
+records never see, and once its reset time passes it reads as stale, not
+replenished, until a fresh observation lands (Section [10](#10-operations-and-onboarding)). Telemetry joins
+the two by pool and time; it never derives one from the other.
+
 Routing policy sits above the harness. Task class, quality, latency, usage, and
 cost inform it, all drawn from these records. The provider balancing I do by
 hand today, including usage-limit-driven switching, is attention work: until
@@ -5067,6 +5130,34 @@ Probe results are observation (Section [5.4](#54-credential-modes-egress-profile
 `system_health` items and proposals, feed the operator-facing profile
 projection's display fields, and nothing else reads them. It runs on a schedule
 and files `system_health` items.
+
+**Usage collection rules (revision 77).** The account probe also collects
+usage observations (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation) where the provider
+exposes them to the enrollment's credential. Each provider's collection path
+is a pinned-build empirical contract that its usage spike settles before its
+collector ships, and a provider that cannot be observed with the supported
+credential reports `unsupported`, never a guess. Collection runs on the
+doctor's schedule, after a run reports a provider rate-limit event, on an
+operator's manual refresh from `freesided auth doctor` or a client, and once
+after a window's expected reset. Reassigning a pool's collector is likewise an
+auth command and a client control on the account usage view: an explicit
+operator action, recorded like the refresh, and the only way the collector
+changes (the contract unit names the command). A reading keeps its own observation time; past
+its reset time or its refresh age it shows as stale with that time, never as
+replenished. A refresh that fails or is throttled keeps the last readings and
+their times, backs off before the next attempt, and reports the failure as
+the pool's refresh status beside the readings; it never collects through
+another enrollment instead, because the pool's collector changes only by
+operator reassignment (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation).
+Concurrent refresh requests for one pool join one in-flight collection. A
+full response from the collector replaces the pool's window set: a window the
+response no longer reports is dropped, not kept as stale. A partial update, such as a provider
+event that names one window, updates that window's reading and freshness and
+leaves the others untouched. A reading collected under an enrollment generation that has
+since been replaced is discarded, never attributed to the successor.
+Collection never redeems a reset credit, never refreshes a token, and never
+writes the auth store: it runs against the access-only snapshot under the same
+lease rule as the account probe.
 
 **`freesided auth` subcommand rules.** `auth doctor` ships with the
 account-probe unit (#868), gated on the #866 spike like the probe itself, never
@@ -5655,9 +5746,9 @@ close of wave 4 (this section's coordination table).
 
 #### 1B.1: Decision, Operational, and Provider Closure
 
-1B.1 spans waves 7 through 9 of this section's coordination table, the way 1B.0
+1B.1 spans waves 7 through 10 of this section's coordination table, the way 1B.0
 spanned waves 3 through 6. Each wave proves one outcome and ends with its own
-audit. The internal exit is evaluated once all three have closed.
+audit. The internal exit is evaluated once all four have closed.
 
 - **The decision surface closes (wave 7).** This wave delivers the revision-40
   attention-presentation contracts, their daemon fact producers, and client
@@ -5674,6 +5765,12 @@ audit. The internal exit is evaluated once all three have closed.
 - **Providers close (wave 9).** This wave delivers one agent vocabulary across
   execution, review, and daemon judgment (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); the Codex execution
   driver and its enrollment cutover; and pi specification.
+- **Subscription operations close (wave 10).** This wave delivers
+  subscription usage visibility (Sections [5.4](#54-credential-modes-egress-profiles-and-concurrency), [8](#8-observability-and-optimization-telemetry), and [10](#10-operations-and-onboarding)): usage
+  observations per pool and window, their collection and refresh, the account
+  usage view on Mac and iPhone, and the same facts beside the agent choices
+  the wave-9 task lines introduced, so the operator sees which identity has
+  allowance and chooses it explicitly (revision 77).
 
 #### 1B.2: The Initiative View
 
@@ -5746,10 +5843,11 @@ Contracts and fakes coordinate implementation. CI keeps lanes honest.
 | **4 (1B.0): the review stage** | Serial | The spine rescopes #406/#407 into review cores and execution remainders, then lands the review-selection contract core, the review ward-topology slice, #405 only if review needs a project-derived image, and #427 (landed PR-anchored under the then-open Section [7](#7-review-policy) fork, resolved pre-publication in revision 28; the implementation re-anchor #527 landed in PR #530). Its close stands the minimal loop; real-backlog use begins. |
 | **5 (1B.0): loop depth** | Parallel lanes | Specifier and daemon research fetching with the spec-approval gate; label-initiator intake; the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) classifier and diagnostic sites; the provenance-gated EvidencePublisher (first slice: the Section [7](#7-review-policy) disposition history at publication, #525); the runs list and run timeline; the `max_parallel_executions` experiment. The contract track drains the Section [6](#6-verification) state algebra, then the effect-registry retrofit of `run_proposal`. The supervision core consumes the revision-27 Section [5.2](#52-the-daemon-and-its-supervisor) contract, pulled forward by owner fiat: #454's daemon side and the app-side LaunchAgent and menu-bar unit. |
 | **6 (1B.0): convergence and yield** | Integrated | Convergence policy and the Section [7](#7-review-policy) finding-adjudication routing (#697; the spine assigns its contract splits at wave planning); the Claude shadow arm with second adjudication and sampled classification accuracy; automatic re-review of remediation heads as a standing integration test; yield history on ready-for-final-review; the full chain on the real backlog. iOS on-device install (Section [10](#10-operations-and-onboarding)). 1B.0 exit. |
-| **7 (1B.1): the decision surface** | Parallel lanes | The decision surface closes and reads from the phone. Contract-first, one serialized chain whose positions the spine assigns at planning: the revision-40 attention-presentation cluster (the Section [4](#4-the-attention-model) recommendation shape and Section [9](#9-comprehension) typed minimum card facts, #917, which must retire `adjudicate` or reassign it to an executable `review_dispute` transaction before client adoption; decision-surface identity, #942; per-type card facts, #724; adjudication finding context, #892; per-invocation cost observations, #901), then transaction closure for the remaining Phase 1 pending actions (#918, #919, #920, #921) and the retirement of `choose_alternate_profile` (#936), then Section [5.15](#515-evidence-and-images) evidence metadata (#922), pairing identity facts (#923), readiness rendering (#982), and the Section [8](#8-observability-and-optimization-telemetry)/9 comprehension-telemetry contracts the wave-10 exit evaluation reads (#924, the first unit to slip to wave 8 if review bandwidth binds). Beside the chain: the daemon fact producers, client adoption (the provisional Swift `ActionOutcome` and mock server converge with the daemon's `discuss` and spec-approval `request_changes`), and the Section [9](#9-comprehension) summary layer (#723, stage-agent-sourced, no daemon-inference call). The adjudication-size contract (#961) is placed here or in wave 9 at planning. Deferral drain: the attention-presentation and card-fact clusters only. Exit proof: every rendered Phase 1 action executes on Mac and iPhone; no action stays pending, disabled, or decorative; every card is self-contained at its Section [9](#9-comprehension) altitude; facts stay distinct from claims. |
+| **7 (1B.1): the decision surface** | Parallel lanes | The decision surface closes and reads from the phone. Contract-first, one serialized chain whose positions the spine assigns at planning: the revision-40 attention-presentation cluster (the Section [4](#4-the-attention-model) recommendation shape and Section [9](#9-comprehension) typed minimum card facts, #917, which must retire `adjudicate` or reassign it to an executable `review_dispute` transaction before client adoption; decision-surface identity, #942; per-type card facts, #724; adjudication finding context, #892; per-invocation cost observations, #901), then transaction closure for the remaining Phase 1 pending actions (#918, #919, #920, #921) and the retirement of `choose_alternate_profile` (#936), then Section [5.15](#515-evidence-and-images) evidence metadata (#922), pairing identity facts (#923), readiness rendering (#982), and the Section [8](#8-observability-and-optimization-telemetry)/9 comprehension-telemetry contracts the wave-11 exit evaluation reads (#924, the first unit to slip to wave 8 if review bandwidth binds). Beside the chain: the daemon fact producers, client adoption (the provisional Swift `ActionOutcome` and mock server converge with the daemon's `discuss` and spec-approval `request_changes`), and the Section [9](#9-comprehension) summary layer (#723, stage-agent-sourced, no daemon-inference call). The adjudication-size contract (#961) is placed here or in wave 9 at planning. Deferral drain: the attention-presentation and card-fact clusters only. Exit proof: every rendered Phase 1 action executes on Mac and iPhone; no action stays pending, disabled, or decorative; every card is self-contained at its Section [9](#9-comprehension) altitude; facts stay distinct from claims. |
 | **8 (1B.1): operational closure** | Parallel lanes | Freeside runs unattended, says when it is stuck, and lets published-PR activity back in. The `effect_proposal` card, arriving with the source-issue closure proposal (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) and reused by human-gated follow-up filing (Section [5.17](#517-follow-up-issue-filing)); the doctor credential-integrity probe (Section [10](#10-operations-and-onboarding)); the stall heartbeat (Section [5.12](#512-workflow-definition-initiators-and-artifacts)); the external daemon-liveness probe (Section [5.2](#52-the-daemon-and-its-supervisor), #510); the held-work item (#766); the review drift audit (Section [7](#7-review-policy); the #1048 contract, then #1049–#1053, floor before model site); the standing stopped-operation indicator (#980); device listing and revocation (#981); the clean-machine onboarding proof (#428); and the egress floor's first capabilities above it (Sections [5.4](#54-credential-modes-egress-profiles-and-concurrency), [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, `kind:contract` because `EgressProfile` is a domain enum carried in the admission record, then (b) the policy-gated project-image rebuild in the reusable builder, `starts-after` (a) because its gate reads the registry set (a) declares; both build on merged #302 and #334. Ward container limits (#1597, revision 72) launch every ward container with a declared CPU cap and memory limit and measure real peak memory, so wave 9's memory budget reserves against recorded sizes; it has no open prerequisite and is startable at wave start. Re-entry after a ready-item invalidation (#502; the spine splits its contract half at planning) and external review ingestion on published PRs (#524) share the re-entry trigger shape and land together. Deferral drain: the operational and re-entry clusters, plus #1597. Exit proof: a clean machine reaches an unattended real run; daemon death, crash loops, stalls, held work, a stopped state, a review loop that grows past its specification, and external review each alert without terminal patrol or manual polling. |
-| **9 (1B.1): provider diversity** | Parallel lanes; split-eligible | One agent vocabulary and a second real provider. The agent-vocabulary contract chain, positions assigned at planning: review admission and provenance (#898), the cross-lane failure model (#899), judgment roles in the lineup (#900, decided in revision 65: every agent activity is a lineup role), the role-name lineup keys and wardless admission class that decision needs (#1421, `starts-after` #900), then agent and run facts in the clients (#979). The Codex tail: the adapter registration (#406, `starts-after` the merged admitted-agent contract #894), ward's second vendor topology (#407), the continuation compatibility digest (#873), then #397 by explicit owner decision on shadow evidence (none existed at the wave-6 exit because the shadow configuration was never approved for a project, #1001; #397 `starts-after` #898 and #869 `starts-after` #899 are recorded under the ambiguity rule for wave-9 planning to confirm), then the StageDriver binding (#408, `merges-after` #873; Section [7](#7-review-policy) keeps #397 ahead of it so that Codex-implements plus Codex-reviews does not become the default pairing); the alternate-provider retry card (#869, `starts-after` #406 and #408). The ward front with no open prerequisite, startable at wave start or earlier by fiat: the Codex probe refresh-safety spike (#866). Guided enrollment with the two-step cutover (#867) `starts-after` #1421, because `freesided auth adopt` emits the first real lineup and must not emit stage-named keys (owner decision, revision 65); until then #867 no longer starts early by fiat. The doctor account probe (#868) `starts-after` #406 and #866. The pi adapter, enrollment, and specification agent (#895) `starts-after` #897 and #867, specification only, with its pre-adoption gates run against the pinned build. The capacity cluster (revisions 72 and 73), its contract units placed in the same chain at planning: the shared-identity writer lease (#1585), per-pool execution limits (#1596, `starts-after` #1585), the host memory budget and machine-capacity hold (#1598, `starts-after` #898 and #1597), and task lines (#1600, `starts-after` #1421). #1585's prerequisite has merged, so it may start before the wave by fiat once the spine gives it a chain position. Beside the chain: the budget command (#1595, `starts-after` #1598), the task-line change command (#1601, `starts-after` #1600), the hold wording in the clients (#1599, `starts-after` #1596 and #1598), and the New Task agent picker (#1602, `starts-after` #1600 and #979). The spine splits this wave into 9a (contracts) and 9b (adapters) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because a wave tracker is titled `Wave N: <Name>`. Deferral drain: the agent, provider, and capacity clusters. Exit proof: a real unattended Codex run and a pi specification; provider switching explicit in the lineup and visible in the clients; correct cost and independence records (#901); quota and capacity failures recover through the retry card, never a silent fallback. 1B.1 exit evaluation. |
-| **10 (1B.2): the initiative view** | Integrated | Many work units become one picture. Typed relationship kinds in the Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection) capture records (#884, `exclusive-with` every open contract unit), the frontier projection, and the deterministic initiative view rendering the dependency graph (#885). 1B exit evaluation against recorded comprehension and operational evidence. |
+| **9 (1B.1): provider diversity** | Parallel lanes; split-eligible | One agent vocabulary and a second real provider. The agent-vocabulary contract chain, positions assigned at planning: review admission and provenance (#898), the cross-lane failure model (#899), judgment roles in the lineup (#900, decided in revision 65: every agent activity is a lineup role), the role-name lineup keys and wardless admission class that decision needs (#1421, `starts-after` #900), then agent and run facts in the clients (#979). The Codex tail: the adapter registration (#406, `starts-after` the merged admitted-agent contract #894), ward's second vendor topology (#407), the continuation compatibility digest (#873), then #397 by explicit owner decision on shadow evidence (none existed at the wave-6 exit because the shadow configuration was never approved for a project, #1001; #397 `starts-after` #898 and #869 `starts-after` #899 are recorded under the ambiguity rule for wave-9 planning to confirm), then the StageDriver binding (#408, `merges-after` #873; Section [7](#7-review-policy) keeps #397 ahead of it so that Codex-implements plus Codex-reviews does not become the default pairing); the alternate-provider retry card (#869, `starts-after` #406 and #408). The ward front with no open prerequisite, startable at wave start or earlier by fiat: the Codex probe refresh-safety spike (#866). Guided enrollment with the two-step cutover (#867) `starts-after` #1421, because `freesided auth adopt` emits the first real lineup and must not emit stage-named keys (owner decision, revision 65); until then #867 no longer starts early by fiat. The doctor account probe (#868) `starts-after` #406 and #866. The pi adapter, enrollment, and specification agent (#895) `starts-after` #897 and #867, specification only, with its pre-adoption gates run against the pinned build. The capacity cluster (revisions 72 and 73), its contract units placed in the same chain at planning: the shared-identity writer lease (#1585), per-pool execution limits (#1596, `starts-after` #1585), the host memory budget and machine-capacity hold (#1598, `starts-after` #898 and #1597), and task lines (#1600, `starts-after` #1421). #1585's prerequisite has merged, so it may start before the wave by fiat once the spine gives it a chain position. Beside the chain: the budget command (#1595, `starts-after` #1598), the task-line change command (#1601, `starts-after` #1600), the hold wording in the clients (#1599, `starts-after` #1596 and #1598), and the New Task agent picker (#1602, `starts-after` #1600 and #979). The spine splits this wave into 9a (contracts) and 9b (adapters) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because a wave tracker is titled `Wave N: <Name>`. Deferral drain: the agent, provider, and capacity clusters. Exit proof: a real unattended Codex run and a pi specification; provider switching explicit in the lineup and visible in the clients; correct cost and independence records (#901); quota and capacity failures recover through the retry card, never a silent fallback. |
+| **10 (1B.1): subscription operations** | Parallel lanes | The operator sees each subscription's allowance and chooses where work runs. Contract-first, positions in the serialized chain assigned at planning: the usage-observation record keyed by usage pool and provider window (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation), `starts-after` the per-pool record (#1596), with the sync-visibility question (#1145) resolved before the client projection adopts its freshness contract; then the client contract for the account usage view, for reassigning a pool's collector, and for changing a waiting task's line from a client (the client half that #1601 leaves to its own contract unit). Beside the chain: the Codex and Claude usage spikes (the Codex spike `starts-after` #866, whose refresh-safety scope is unchanged; the Claude spike proves what the pinned CLI answers under the setup-token credential), the collectors those spikes prove, the refresh lifecycle (Section [10](#10-operations-and-onboarding)), the daemon's operator-facing projection, the Mac and iPhone account usage view, and the usage facts beside the agent choices of #1602, #1601, and #869's alternate-agent retry card (wave 10 owns that projection: the reading cannot sit beside the card until the observation record exists, and #869 ships the card without it). Quota, expiry, and capacity failures keep #869's retry card; no usage-specific failure surface is added. Deferral drain: the subscription-usage cluster. Exit proof: on Mac and iPhone the operator inspects a real pool's windows, reset times, and freshness; chooses an agent on that pool for new work; changes a waiting task's role; and reads the recorded admission showing the chosen identity ran, with a stale reading shown as stale and an unsupported provider shown as unsupported. 1B.1 exit evaluation. |
+| **11 (1B.2): the initiative view** | Integrated | Many work units become one picture. Typed relationship kinds in the Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection) capture records (#884, `exclusive-with` every open contract unit), the frontier projection, and the deterministic initiative view rendering the dependency graph (#885). 1B exit evaluation against recorded comprehension and operational evidence. |
 
 Wave 5's row stays as built: it shipped the specifier with daemon fetching
 only. The researcher (revision 76, #1656 to #1658) is Phase 1B work that no
@@ -5764,7 +5862,7 @@ a fork when the repository is not pushable is a plain publication feature,
 deferred to #1042. The phone-decidability exit holds once no rendered action
 stays pending.
 
-The deferral drain is bounded per row. Waves 7 through 9 each drain the clusters
+The deferral drain is bounded per row. Waves 7 through 10 each drain the clusters
 named in their row and nothing else. A deferral outside them stays in the queue.
 The long tail, including the `kind:fix` items on production paths that no 1B
 exit proof depends on, does not drain in 1B. It binds to Phase 2's hardening or
@@ -5841,8 +5939,9 @@ Expand beyond the first constrained path:
 ### Phase 3: Comprehension and Interaction
 
 Add ACP interactive attachment, best-effort resume, material plan-change gates,
-briefings, usage display, evidence-informed routing, WIP views, and mature
-`auto_start` behavior. The initiative view moved to 1B.2 (revision 25).
+briefings, evidence-informed routing, WIP views, and mature `auto_start`
+behavior. The initiative view moved to 1B.2 (revision 25), and basic usage
+display to 1B.1 (revision 77); routing that acts on usage stays here.
 
 ### Phase 4: Generalization
 
@@ -5894,71 +5993,82 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 76 ("A Researcher Does the Specifier's Web Search"):
+Revision 77 ("Subscription Usage Visibility Before the 1B.1 Exit"):
 
-1. **The specification stage gains a researcher role.** The specifier writes
-   research questions, the researcher searches the web and refines, and the
-   daemon stores its report and reinvokes the specifier with it (Section
-   [5.4](#54-credential-modes-egress-profiles-and-concurrency), research for the specifier). The specifier still has no web access,
-   and the daemon fetcher stays for allowlisted sources. The researcher joins
-   the closed role list as a ward role (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)).
-   Rejected: search in the daemon fetcher (every refinement reinvokes the
-   whole specifier, up to its iteration bound, which is slow and costly on a
-   large model); and `provider_web_read` for the specifier (the stage most
-   exposed to injection would hold open web access beside its credential and
-   the task).
-2. **The researcher runs under `provider_only` with search as its only
-   tool.** The #1620 spike showed that the pinned Claude CLI's search runs on
-   the provider's servers and its page fetch runs inside the ward, so
-   search needs no wider profile and fetching would. The cost is that the
-   researcher cannot read a full page. Rejected: `provider_web_read` for the
-   researcher (a wider profile for a gain no run has yet shown to be
-   needed); and an API key under `api_key_isolated` calling a server-side
-   fetch tool (untested, and a second credential type for one role).
-3. **The researcher sees only the research questions.** No task text,
-   repository, task files, or owner answers reach it, and the daemon bounds
-   and secret-scans the questions. The questions remain a channel an
-   injected specifier can write into (Section [14](#14-risks)). Rejected: giving the
-   researcher the task for better search (the whole task would then sit in
-   a ward that reads the open web).
-4. **Only the lineup picks the researcher's agent.** A task line doesn't
-   cover it, because no task has needed its own researcher agent, and the
-   alternate-agent card never selects it, because its failures block no
-   stage. The plan names no model; the researcher has its own lineup line so
-   it can run a cheaper agent than the specifier. The baseline lineup's
-   line for it is #1426's to add, and the decision note records the owner's
-   pick.
-5. **Research is limited and charged to the task.** Policy limits research
-   requests per specification run, searches per request, and report size. A
-   request adds no specifier iteration of its own. The search limit is
-   checked after a launch ends, because the count the daemon trusts is the
-   harness's per-model usage record, which exists only then. A launch over
-   the limit has its report discarded, and the searches it made stay spent
-   and charged to the task. The stage's active-time budget is the only
-   thing that stops a running launch.
-6. **The researcher has its own launch, and its failure fails safe.** The
-   research launch is a second, narrower launch in the specification stage:
-   an empty workspace, the questions in, the report out. It is a stage
-   launch, not a third shape. A failed request, a missing line, or a failed admission reaches the
-   specifier as a typed result and does not block the stage; the last two,
-   and a quota, expiry, or capacity failure, also raise a `system_health`
-   item. Rejected: blocking the stage
-   (a search outage would stop specifications that can go on without it,
-   and the owner sees the failed request at spec approval either way).
-7. **A report records an observation time, not a retrieval time.** Neither
-   Claude CLI web tool records when a page was retrieved (#1620), so each
-   finding carries the time the harness received its search result.
-8. **The specifier's launch withholds web tools.** The #1620 spike showed
-   the Claude CLI's search working from a writer launch under
-   `provider_only`, so the profile alone does not keep the specifier off the
-   web. The specification launch now requires it, proved per adapter build
-   (#1657). Whether the implementation and review launches keep that search
-   is left open as #1659.
+1. **Basic usage visibility moves from Phase 3 into 1B.1.** The operator sees,
+   per identity and usage pool, how much of each allowance window is used,
+   when it resets, and when that was observed, and chooses an agent on that
+   pool explicitly (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation; Section [11](#11-roadmap-build-order-and-coordination), wave 10).
+   Rejected: leaving it in Phase 3 (the operator balances accounts by hand
+   today with no reading at all, and Phase 3's evidence-informed routing
+   needs these observations before it can act on them); and automatic
+   balancing now (an unproven reading driving a switch is the silent fallback
+   Section [4](#4-the-attention-model) forbids).
+2. **A usage observation attaches to the usage pool and keeps five readings
+   distinct.** A pool names one of its enrollments as its collector (the
+   first by default, changed only by explicit operator reassignment, never
+   by silent failover); the collector alone supplies the pool's window
+   readings and refresh status, each enrollment may record its own
+   availability answer, and one reading per provider window sits beneath
+   them, so an unsupported provider needs no synthetic window and two
+   enrollments never alternate one status or one window set.
+   Credential expiry, usage reset,
+   billing renewal, reset credit, and run consumption never share a
+   "remaining" or "reset" field, and unknown stays unknown (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)). Rejected: keying by identity (two
+   enrollments on one subscription would show one allowance twice); and one
+   "resets at" field (a credential that expires tomorrow and a window that
+   renews in an hour would be indistinguishable); and reconciling
+   per-enrollment snapshots when two enrollments on one pool both collect (a
+   merge rule no spike has evidence for, and the source of window flicker).
+3. **Observation stays observation.** A reading informs the account usage
+   view, the facts beside the agent choices, and proposals; the operator's
+   recorded lineup line or task line is what admits an agent, and admission
+   never reads a usage observation. A selection whose pool a reading shows
+   as exhausted still admits; the provider's own refusal fails that attempt
+   as a quota failure and recovers through #869's retry card with the
+   reading shown beside it; no usage-specific failure surface is added.
+4. **Allowance is a fourth telemetry quantity** beside billable cost,
+   reported usage, and quota consumed, joined by pool and time and never
+   derived from them (Section [8](#8-observability-and-optimization-telemetry)). It counts usage consumed outside Freeside.
+5. **Collection and refresh rules** (Section [10](#10-operations-and-onboarding)): each provider's path is a
+   pinned-build empirical contract settled by its usage spike; an unobservable
+   provider reports `unsupported`; a reading past its reset shows as stale,
+   never replenished; failed or throttled refreshes keep the last reading and
+   back off and never collect through another enrollment instead; concurrent
+   refreshes join; a full response from the collector replaces the window
+   set and drops windows it no longer reports; partial updates touch only
+   the window they name; a replaced generation's reading is discarded; collection never
+   redeems a credit, refreshes a token, or writes the auth store.
+6. **Usage state is client-visible on its own** (Section [5.14](#514-client-synchronization-and-conversations)), reaching
+   clients through the revision and heartbeat path without waiting for task
+   activity; how an append advances the revision is #1145's decision.
+7. **A new wave 10, Subscription Operations, lands before the 1B.1 exit, and
+   the initiative view moves to wave 11.** Revision 74 rejected a new wave
+   because it "renumbers the table for one cluster"; what changed is that
+   this is not one deferral cluster but a feature across four lanes with its
+   own contract chain, two spike gates, and an exit proof, none of which was
+   in the queue when revision 74 was decided. Rejected: folding it into wave
+   9 (already split-eligible on chain length, and its collectors wait on
+   wave-9 units #979, #406, and #866); and the initiative-view wave (shares
+   nothing with this work). Cost accepted: the 1B.1 exit and 1B.2 slip one
+   wave. The owner reads repeated manual account moves as the signal routing
+   should absorb (revision 73's note), and chose observation before
+   automation because reliable readings are its prerequisite.
+8. **The Claude probe floor is an open question, not a settled limit.** T3
+   Code (`fd7ee2c3`) reads Claude usage through the Agent SDK's usage control
+   request on an idle query and from streamed rate-limit events, and reads
+   Codex usage through the app-server's `account/rateLimits/read` and its
+   `updated` notification; CLIProxyAPI (`2044a01`) observes both providers'
+   rate-limit headers and events passively, keeps each as a replaced snapshot,
+   and reaches the providers' direct usage endpoints only through its own
+   token store, which Freeside does not have. Unproven for Freeside: the
+   setup-token credential, the pinned CLI builds, and the access-only
+   snapshot. Two usage spikes settle it; #866 keeps its refresh-safety scope.
 
-(Owner decision of 2026-09-29, #1614. Items 2 to 6 are the issue's
-recommended answers, decided by the owner through this revision's review;
-[decision note](../devlog/2026-09-30-1830-researcher-role.md). Implementation
-is filed as #1656, #1657, and #1658, and the open question as #1659.)
+(Owner decision of 2026-10-02;
+[decision note](../devlog/2026-10-02-1819-subscription-usage-visibility.md).
+Implementation units go under a Subscription Usage Visibility feature tracker;
+selection units stay under #1616.)
 
 ## 14. Risks
 
@@ -5974,7 +6084,7 @@ is filed as #1656, #1657, and #1658, and the open question as #1659.)
 | **Workspace-handoff uncertainty** | Resolved by the workspace-handoff spike: the strong class is declared and conformance-gated (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)); the same-VM fallback is refuted by execution, never implemented or declared. |
 | **Codex cloud review as a load-bearing dependency** | Realized 2026-07-31: the live-run trigger falsification (#427) showed no App-visible trigger path. The dependency is removed. Review is Freeside-invoked (Section [7](#7-review-policy)), and native review is best-effort extra evidence. |
 | Host capacity | Several accounts' limits can add up to more containers than one machine holds. Give every ward container a CPU cap and a declared memory size, and bound their memory by each instance's declared budget, so a launch that doesn't fit waits under a visible hold instead of exhausting memory; waiting launches go oldest task first, and a size that can never fit fails at once (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity). Residual: the budget can't see load outside Freeside or another instance's containers, so the operator declares it with room for interactive use and keeps the budgets of every instance on one host within what the host holds. |
-| Single-provider execution capacity | Claude usage limits can stall real work. Schedule the 1B Codex execution driver as a hedge (Section [11](#11-roadmap-build-order-and-coordination)). Keep selection explicit as a lineup line or a task line, never silent (a lineup may name the switch per failure class, Section [4](#4-the-attention-model); a task line may pick another agent for one task, Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted Agents). Usage remains observed telemetry (Section [8](#8-observability-and-optimization-telemetry)). |
+| Single-provider execution capacity | Claude usage limits can stall real work. Schedule the 1B Codex execution driver as a hedge (Section [11](#11-roadmap-build-order-and-coordination)). Keep selection explicit as a lineup line or a task line, never silent (a lineup may name the switch per failure class, Section [4](#4-the-attention-model); a task line may pick another agent for one task, Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted Agents). Usage remains observed telemetry (Section [8](#8-observability-and-optimization-telemetry)); from revision 77 an allowance observation shows the stall coming (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation), and the operator's explicit choice stays the only switch. |
 | Classifier mislabeling | Preserve immutable raw findings; require second adjudication for the safety case; enforce ceilings. |
 | Subscription-terms drift | Keep it as an explicit operating risk. |
 | Apple container immaturity | Prove actual runner capabilities and retain honest fallback classes. |
