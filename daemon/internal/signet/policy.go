@@ -35,9 +35,11 @@ var allowedActionsByType = map[domain.AttentionType]map[domain.Action]struct{}{
 	domain.AttentionAgentQuestion: actionSet(
 		domain.ActionAnswerAndRetry, domain.ActionAnswerWithoutRetry, domain.ActionStop,
 	),
+	// open_pr on a hold is conditional: validateRequestedActions admits it only
+	// when the item carries the pull request it would open.
 	domain.AttentionPublishBlocked: actionSet(
 		domain.ActionRerunTrustEvaluation,
-		domain.ActionInspectTrustFailure, domain.ActionStop,
+		domain.ActionInspectTrustFailure, domain.ActionOpenPR, domain.ActionStop,
 	),
 	domain.AttentionReadyForFinalReview: actionSet(
 		domain.ActionOpenPR, domain.ActionReturnToAgent, domain.ActionMarkSeen,
@@ -74,22 +76,28 @@ func actionSet(actions ...domain.Action) map[domain.Action]struct{} {
 // validateRequestedActions rejects an item whose offered actions are not a
 // subset of the plan-defined set for its type. Every actionable type must
 // offer at least one decision; blocked is the sole read-only type and must
-// offer none.
-func validateRequestedActions(itemType domain.AttentionType, requested []domain.Action) error {
-	allowed, known := allowedActionsByType[itemType]
+// offer none. open_pr is navigation to the item's pull request, so an item
+// with no reference cannot offer it: a ready item always carries one (domain
+// validation), a publish_blocked item only once its run has published.
+func validateRequestedActions(item domain.AttentionItem) error {
+	allowed, known := allowedActionsByType[item.Type]
 	if !known {
-		return fmt.Errorf("attention type %q: %w", itemType, domain.ErrUnknownAttentionType)
+		return fmt.Errorf("attention type %q: %w", item.Type, domain.ErrUnknownAttentionType)
 	}
-	if len(requested) == 0 {
-		if itemType == domain.AttentionBlocked {
+	if len(item.RequestedDecision) == 0 {
+		if item.Type == domain.AttentionBlocked {
 			return nil
 		}
-		return fmt.Errorf("attention type %q: %w", itemType, domain.ErrNoActions)
+		return fmt.Errorf("attention type %q: %w", item.Type, domain.ErrNoActions)
 	}
-	for _, action := range requested {
+	for _, action := range item.RequestedDecision {
 		if _, ok := allowed[action]; !ok {
 			return fmt.Errorf("action %q is not allowed for attention type %q: %w",
-				action, itemType, ErrActionNotAllowedForType)
+				action, item.Type, ErrActionNotAllowedForType)
+		}
+		if action == domain.ActionOpenPR && item.PRReference == nil {
+			return fmt.Errorf("action %q needs a pr reference on attention type %q: %w",
+				action, item.Type, ErrActionNotAllowedForType)
 		}
 	}
 	return nil

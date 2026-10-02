@@ -9957,7 +9957,7 @@ public enum Components {
             public var artifact_digests: [Components.Schemas.Digest]
             /// - Remark: Generated from `#/components/schemas/AttentionItem/pr_head_sha`.
             public var pr_head_sha: Swift.String
-            /// The published pull request behind a ready_for_final_review item (plan §4; mirrors domain.AttentionItem.PRReference). Required and non-null exactly on that item type; null on every other type. Daemon-derived from the trusted publication coordinates, never client-set.
+            /// The published pull request behind the item (plan §4; mirrors domain.AttentionItem.PRReference). Required and non-null on ready_for_final_review. Optional on publish_blocked: non-null once the held run's pull request exists, null on a hold that predates publication. An open publish_blocked item may go from null to a reference once; a set reference never changes or returns to null. Null on every other type. A publish_blocked item offers open_pr in requested_decision only while it carries a reference, and open_pr stays navigation there as on a ready item. Daemon-derived from the trusted publication coordinates, never client-set.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/AttentionItem/pr_reference`.
@@ -9978,7 +9978,7 @@ public enum Components {
                     try self.value1.encode(to: encoder)
                 }
             }
-            /// The published pull request behind a ready_for_final_review item (plan §4; mirrors domain.AttentionItem.PRReference). Required and non-null exactly on that item type; null on every other type. Daemon-derived from the trusted publication coordinates, never client-set.
+            /// The published pull request behind the item (plan §4; mirrors domain.AttentionItem.PRReference). Required and non-null on ready_for_final_review. Optional on publish_blocked: non-null once the held run's pull request exists, null on a hold that predates publication. An open publish_blocked item may go from null to a reference once; a set reference never changes or returns to null. Null on every other type. A publish_blocked item offers open_pr in requested_decision only while it carries a reference, and open_pr stays navigation there as on a ready item. Daemon-derived from the trusted publication coordinates, never client-set.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/AttentionItem/pr_reference`.
@@ -10603,7 +10603,7 @@ public enum Components {
             ///   - agent_claims:
             ///   - artifact_digests: The approval binding set: the canonical (sorted, deduplicated) union of every digest rendered in evidence_snapshot and agent_claims, plus the adjudication_digest rendered in a finding_adjudication binding. Derived and enforced by the daemon (domain.NewAttentionItem / Validate), never client-supplied, so an item cannot display one digest while binding another (the stale-approval class, plan §3.1; §4 "approvals bind to digests").
             ///   - pr_head_sha:
-            ///   - pr_reference: The published pull request behind a ready_for_final_review item (plan §4; mirrors domain.AttentionItem.PRReference). Required and non-null exactly on that item type; null on every other type. Daemon-derived from the trusted publication coordinates, never client-set.
+            ///   - pr_reference: The published pull request behind the item (plan §4; mirrors domain.AttentionItem.PRReference). Required and non-null on ready_for_final_review. Optional on publish_blocked: non-null once the held run's pull request exists, null on a hold that predates publication. An open publish_blocked item may go from null to a reference once; a set reference never changes or returns to null. Null on every other type. A publish_blocked item offers open_pr in requested_decision only while it carries a reference, and open_pr stays navigation there as on a ready item. Daemon-derived from the trusted publication coordinates, never client-set.
             ///   - readiness: The daemon-evaluated readiness class and exact evaluation-set digest for this ready_for_final_review item (plan §6; mirrors domain.AttentionItem.Readiness). Production-created ready items always carry it; null is tolerated for legacy persisted items and fake-mode items that did not run Section 6 verification. It is fixed at creation and never client-set.
             ///   - readiness_detail: The evaluation behind readiness for this ready_for_final_review item (plan §6; mirrors domain.AttentionItem.ReadinessDetail): the bound head and base and every requirement's state, proof recipe, or waiver identity and granting authority. Production-created ready items always carry it beside readiness; null is tolerated for legacy persisted items and fake-mode items, and it never appears without readiness. It is fixed at creation and never client-set.
             ///   - yield_history: The daemon-derived per-round review yield for this ready_for_final_review or review_diminishing_returns item (mirrors domain.AttentionItem.YieldHistory). Production-created ready items always carry it; null is tolerated for legacy persisted items, fake-mode items, and diminishing items created before their producer lands. It is fixed at creation and never client-set.

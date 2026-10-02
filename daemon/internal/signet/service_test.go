@@ -637,6 +637,42 @@ func TestSubmitNonConcludingAction(t *testing.T) {
 	}
 }
 
+// TestHeldItemOffersOpenPROnlyWithItsPullRequest: a publish_blocked item may
+// offer open_pr once it carries the pull request the action opens, and the
+// action stays navigation there as on a ready item. Without the reference the
+// item boundary refuses the offer before anything is written.
+func TestHeldItemOffersOpenPROnlyWithItsPullRequest(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	hold := publicationBlockedFixture(t, f.item)
+	hold.RequestedDecision = []domain.Action{domain.ActionInspectTrustFailure, domain.ActionOpenPR}
+
+	before := f.revision(t)
+	if err := f.service.PutItem(ctx, hold); !errors.Is(err, signet.ErrActionNotAllowedForType) {
+		t.Fatalf("PutItem without a reference = %v, want ErrActionNotAllowedForType", err)
+	}
+	if after := f.revision(t); after != before {
+		t.Fatalf("rejected hold consumed revision %d, want unchanged %d", after, before)
+	}
+
+	hold.PRReference = &domain.PRReference{Repo: "owner/repo", Number: 123}
+	if err := f.service.PutItem(ctx, hold); err != nil {
+		t.Fatalf("PutItem with a reference: %v", err)
+	}
+	f.item = hold
+	if _, err := f.service.Submit(ctx, f.command("cmd-hold-nav", domain.ActionOpenPR)); err != nil {
+		t.Fatalf("Submit open_pr: %v", err)
+	}
+	item, snap := f.itemSnapshot(t)
+	if item.Status != domain.StatusOpen || item.ItemVersion != 1 || snap.EntityVersion != 1 {
+		t.Errorf("hold after open_pr: status %q v%d entity_version %d, want open v1 at 1",
+			item.Status, item.ItemVersion, snap.EntityVersion)
+	}
+	if item.DecidedAt != nil {
+		t.Errorf("open_pr stamped decided_at %v on a hold, want nil", item.DecidedAt)
+	}
+}
+
 // TestSubmitRejectsInvalidAndUnknown: malformed input fails before any
 // transaction, an unknown item wraps the store's not-found, and an action the
 // item never offered passes the store's gate error through.

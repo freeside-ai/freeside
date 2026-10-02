@@ -429,9 +429,10 @@ type ReadinessInvalidation struct {
 }
 
 // PRReference is the structured identity of the published pull request a
-// ready_for_final_review item links to. The repository is GitHub's canonical
-// owner/name coordinate; clients may render it or compose its browser URL
-// without parsing presentation prose.
+// ready_for_final_review item links to, or of the pull request a held run has
+// already published when a publish_blocked item carries one. The repository
+// is GitHub's canonical owner/name coordinate; clients may render it or
+// compose its browser URL without parsing presentation prose.
 type PRReference struct {
 	Repo   string `json:"repo"`
 	Number int    `json:"number"`
@@ -505,9 +506,12 @@ type AttentionItem struct {
 	// changes.
 	ArtifactDigests []Digest `json:"artifact_digests"`
 	PRHeadSHA       string   `json:"pr_head_sha"`
-	// PRReference identifies the published pull request behind a
-	// ready_for_final_review item. It is required exactly on that type and
-	// renders explicit null on every other item.
+	// PRReference identifies the published pull request behind the item. It is
+	// required on ready_for_final_review, optional on publish_blocked (a hold on
+	// a run whose pull request already exists), and rejected on every other
+	// type, where it renders explicit null. A publish_blocked item may gain it
+	// once while open; a set reference never changes or goes away
+	// (ValidateAttentionItemTransition).
 	PRReference *PRReference `json:"pr_reference"`
 	// Readiness preserves the daemon-evaluated ready class and exact
 	// evaluation-set digest on ready_for_final_review items. Production creators
@@ -860,7 +864,7 @@ func (i AttentionItem) Validate() error {
 				i.ID, i.Type, ErrPRReferenceInconsistent)
 		}
 	} else {
-		if i.Type != AttentionReadyForFinalReview {
+		if i.Type != AttentionReadyForFinalReview && i.Type != AttentionPublishBlocked {
 			return fmt.Errorf("item %s type %q carries a pr reference: %w",
 				i.ID, i.Type, ErrPRReferenceInconsistent)
 		}

@@ -437,6 +437,22 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The hold on a run whose pull request already exists: the present render
+	// of pr_reference on publish_blocked, beside the explicit null above.
+	publishBlockedPRReferenceItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-publish-blocked-pr", ProjectID: "proj-1", Subject: subject,
+		Type: domain.AttentionPublishBlocked, Priority: domain.PriorityHigh,
+		Reason:            "current trust state blocked the publication update",
+		RequestedDecision: []domain.Action{domain.ActionInspectTrustFailure, domain.ActionOpenPR},
+		PublishBlock:      &domain.PublishBlockFacts{TrustRule: &trustRule},
+		PRReference:       &domain.PRReference{Repo: "owner/repo", Number: 123},
+		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
+		CreatedAt: &ts, Status: domain.StatusOpen,
+	}, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	reviewDisputeItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "item-review-dispute", ProjectID: "proj-1", Subject: subject,
 		Type: domain.AttentionReviewDispute, Priority: domain.PriorityHigh,
@@ -1619,6 +1635,7 @@ func TestGolden(t *testing.T) {
 		{"attention_item_blocked", blockedItem},
 		{"attention_item_execution_failure", executionFailureItem},
 		{"attention_item_publish_blocked", publishBlockedItem},
+		{"attention_item_publish_blocked_pr_reference", publishBlockedPRReferenceItem},
 		{"attention_item_review_dispute", reviewDisputeItem},
 		{"attention_item_spec_revision", specRevisionItem},
 		{"attention_item_agent_question", agentQuestionItem},

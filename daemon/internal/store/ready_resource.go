@@ -28,14 +28,30 @@ const (
 	getReadyItemPRBindingSQL = `SELECT item_id, run_id, producing_invocation_id, publication_invocation_id,
 		publication_identity, repository_id, pr_number, body, recorded_at
 		FROM ready_item_pr_bindings WHERE item_id = ?`
+	insertHeldItemPRBindingSQL = `INSERT INTO held_item_pr_bindings
+		(item_id, run_id, producing_invocation_id, publication_invocation_id, publication_identity,
+		 repository_id, pr_number, body, recorded_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT DO NOTHING`
+	selectHeldItemPRBindingBodySQL = `SELECT body
+		FROM held_item_pr_bindings WHERE item_id = ?`
+	getHeldItemPRBindingSQL = `SELECT item_id, run_id, producing_invocation_id, publication_invocation_id,
+		publication_identity, repository_id, pr_number, body, recorded_at
+		FROM held_item_pr_bindings WHERE item_id = ?`
 )
 
 const readyPublicationIntentKind = "publish.publication"
 
+// putAttentionItemPRReference anchors the item's pull request coordinates the
+// first time a version carries them: at creation for a ready item, and for a
+// publish_blocked item either at creation or on the one later version that
+// attaches them. putImmutable makes the anchor write-once, so a later version
+// naming another pull request is an immutable conflict.
 func (tx *WriteTx) putAttentionItemPRReference(
 	ctx context.Context, item domain.AttentionItem,
 ) error {
-	if item.Type != domain.AttentionReadyForFinalReview || item.PRReference == nil {
+	if item.PRReference == nil ||
+		(item.Type != domain.AttentionReadyForFinalReview && item.Type != domain.AttentionPublishBlocked) {
 		return nil
 	}
 	body, err := encode(*item.PRReference)
@@ -151,6 +167,103 @@ func (tx *ReadTx) GetReadyItemPRBinding(ctx context.Context, itemID domain.ItemI
 	return binding, nil
 }
 
+// RecordHeldItemPRBinding records the exact pull request behind a
+// publish_blocked item whose run already published. A replay of the same
+// value converges modulo its stamped instant; a different resource for the
+// same item is an immutable conflict.
+func (tx *InternalTx) RecordHeldItemPRBinding(ctx context.Context, binding domain.HeldItemPRBinding) error {
+	if err := tx.validateHeldItemPRBinding(ctx, binding); err != nil {
+		return fmt.Errorf("put held item pr binding %s: %w", binding.ItemID, err)
+	}
+	body, err := encode(binding)
+	if err != nil {
+		return fmt.Errorf("put held item pr binding: %w", err)
+	}
+	if err := tx.putImmutable(ctx, insertHeldItemPRBindingSQL,
+		[]any{
+			binding.ItemID, binding.RunID, binding.ProducingInvocationID,
+			binding.PublicationInvocationID, binding.PublicationIdentity,
+			binding.RepositoryID, binding.PRNumber,
+			body, formatTime(binding.RecordedAt),
+		},
+		selectHeldItemPRBindingBodySQL, []any{binding.ItemID}, body); err != nil {
+		return fmt.Errorf("put held item pr binding %s: %w", binding.ItemID, err)
+	}
+	return nil
+}
+
+// GetHeldItemPRBinding reconstructs the held resource and re-anchors it to the
+// item, run, and publication records it claims to describe. Stored
+// coordinates are data, never authority to point reconciliation at another
+// pull request.
+func (tx *ReadTx) GetHeldItemPRBinding(ctx context.Context, itemID domain.ItemID) (domain.HeldItemPRBinding, error) {
+	ctx, err := publicationReadContext(ctx, "held/"+string(itemID))
+	if err != nil {
+		return domain.HeldItemPRBinding{}, err
+	}
+	var (
+		storedItemID, storedRunID, producingInvocationID, publicationInvocationID string
+		publicationIdentity, recordedAt                                           string
+		repositoryID, prNumber                                                    int64
+		body                                                                      []byte
+	)
+	if err := tx.tx.QueryRowContext(ctx, getHeldItemPRBindingSQL, itemID).Scan(
+		&storedItemID, &storedRunID, &producingInvocationID, &publicationInvocationID,
+		&publicationIdentity,
+		&repositoryID, &prNumber, &body, &recordedAt,
+	); err != nil {
+		return domain.HeldItemPRBinding{}, fmt.Errorf("get held item pr binding %s: %w", itemID, notFoundOr(err))
+	}
+	binding, err := decode[domain.HeldItemPRBinding](body)
+	if err != nil {
+		return domain.HeldItemPRBinding{}, fmt.Errorf("get held item pr binding %s: %w", itemID, err)
+	}
+	if binding.ItemID != domain.ItemID(storedItemID) || binding.RunID != domain.RunID(storedRunID) ||
+		binding.ProducingInvocationID != domain.InvocationID(producingInvocationID) ||
+		binding.PublicationInvocationID != domain.InvocationID(publicationInvocationID) ||
+		binding.PublicationIdentity != domain.Digest(publicationIdentity) ||
+		binding.RepositoryID != repositoryID || int64(binding.PRNumber) != prNumber ||
+		formatTime(binding.RecordedAt) != recordedAt || binding.ItemID != itemID {
+		return domain.HeldItemPRBinding{}, fmt.Errorf("get held item pr binding %s: %w", itemID, errRowInconsistent)
+	}
+	if err := tx.validateHeldItemPRBinding(ctx, binding); err != nil {
+		// The row exists, so a record its proof needs that is missing makes
+		// the binding corrupt. Reporting that as ErrNotFound would let a
+		// caller read a corrupt binding as an absent one.
+		if errors.Is(err, ErrNotFound) {
+			return domain.HeldItemPRBinding{}, fmt.Errorf(
+				"get held item pr binding %s: %w: %s", itemID, errRowInconsistent, err.Error())
+		}
+		return domain.HeldItemPRBinding{}, fmt.Errorf("get held item pr binding %s: %w", itemID, err)
+	}
+	return binding, nil
+}
+
+// validateHeldItemPRBinding authenticates a held binding on write and on
+// every read. The item must be a publish_blocked item of the binding's run
+// and head that carries the binding's pull request, and the run's publication
+// records must prove those coordinates exactly as they prove a ready binding.
+func (tx *ReadTx) validateHeldItemPRBinding(
+	ctx context.Context, binding domain.HeldItemPRBinding,
+) error {
+	item, err := tx.GetAttentionItemRecord(ctx, binding.ItemID)
+	if err != nil {
+		return fmt.Errorf("item: %w", err)
+	}
+	// The record tier above skips the anchor gate, so compare the body's
+	// reference to the store-owned anchor here: the binding must describe the
+	// pull request the item is anchored to, not one a synced body names.
+	anchored, err := tx.getAttentionItemPRReference(ctx, item.ID)
+	if err != nil {
+		return fmt.Errorf("item pr reference: %w", err)
+	}
+	if item.PRReference == nil || *item.PRReference != anchored ||
+		anchored.Repo != binding.Repo || anchored.Number != binding.PRNumber {
+		return errRowInconsistent
+	}
+	return tx.validateItemPRBindingAgainst(ctx, item, domain.ReadyItemPRBinding(binding), domain.AttentionPublishBlocked)
+}
+
 func (tx *ReadTx) validateReadyItemPRBinding(
 	ctx context.Context, binding domain.ReadyItemPRBinding,
 ) error {
@@ -168,10 +281,29 @@ func (tx *ReadTx) validateReadyItemPRBinding(
 func (tx *ReadTx) validateReadyItemPRBindingAgainst(
 	ctx context.Context, item domain.AttentionItem, binding domain.ReadyItemPRBinding,
 ) error {
+	return tx.validateItemPRBindingAgainst(ctx, item, binding, domain.AttentionReadyForFinalReview)
+}
+
+// validateItemPRBindingAgainst is the publication proof a ready binding and a
+// held binding share: the item is of itemType on the binding's run and head,
+// and the producing admission, producing export, dispatched publication
+// intent, and recorded outcome (or, for an in-place re-entry, its authority)
+// all agree with the binding's coordinates.
+//
+// A successor cycle's ready item has one derivable identity, so a ready
+// binding must name it. A held binding has no such check: one publication can
+// have several hold items (a rerun of trust evaluation holds under its own
+// item ID on the same publication invocation), so the item's run, head, and
+// anchored pull request tie a hold to its cycle instead.
+func (tx *ReadTx) validateItemPRBindingAgainst(
+	ctx context.Context, item domain.AttentionItem, binding domain.ReadyItemPRBinding,
+	itemType domain.AttentionType,
+) error {
+	ready := itemType == domain.AttentionReadyForFinalReview
 	if item.ID != binding.ItemID {
 		return errRowInconsistent
 	}
-	if item.Type != domain.AttentionReadyForFinalReview || item.ProjectID == "" ||
+	if item.Type != itemType || item.ProjectID == "" ||
 		item.Subject.Type != domain.SubjectRun || item.Subject.RunID == nil ||
 		*item.Subject.RunID != binding.RunID || item.Subject.ID != domain.SubjectID(binding.RunID) ||
 		item.PRHeadSHA != binding.HeadSHA {
@@ -189,7 +321,7 @@ func (tx *ReadTx) validateReadyItemPRBindingAgainst(
 		return err
 	}
 	if inPlace {
-		return tx.validateReenteredReadyItemPRBinding(ctx, item, binding)
+		return tx.validateReenteredItemPRBinding(ctx, item, binding, ready)
 	}
 	admission, err := tx.GetExecutionAdmissionRecord(ctx, binding.ProducingInvocationID)
 	if err != nil {
@@ -247,7 +379,7 @@ func (tx *ReadTx) validateReadyItemPRBindingAgainst(
 	}
 	if intent.Successor != nil {
 		successor, err := tx.GetPublicationSuccessor(ctx, binding.RunID, binding.PublicationInvocationID)
-		if err != nil || successor.ReadyItemID() != item.ID {
+		if err != nil || (ready && successor.ReadyItemID() != item.ID) {
 			return domain.ErrParentKeyMismatch
 		}
 		target, err := tx.PublicationSuccessorTarget(ctx, binding.RunID, binding.PublicationInvocationID)
@@ -277,17 +409,17 @@ func (tx *ReadTx) reenteredInPlace(ctx context.Context, binding domain.ReadyItem
 	return false, err
 }
 
-// validateReenteredReadyItemPRBinding proves an in-place re-entered cycle's
+// validateReenteredItemPRBinding proves an in-place re-entered cycle's
 // binding by its authority instead of an export and outcome it never had: the
 // cycle pushed nothing, so its head is the one the authority re-entered for
 // and every resource coordinate is its predecessor's. The authority's gate
 // authenticated that predecessor binding, so by induction those coordinates
 // are the last actually published ancestor's.
-func (tx *ReadTx) validateReenteredReadyItemPRBinding(
-	ctx context.Context, item domain.AttentionItem, binding domain.ReadyItemPRBinding,
+func (tx *ReadTx) validateReenteredItemPRBinding(
+	ctx context.Context, item domain.AttentionItem, binding domain.ReadyItemPRBinding, ready bool,
 ) error {
 	authority, err := tx.sealedPublicationSuccessor(ctx, binding.RunID, binding.PublicationInvocationID)
-	if err != nil || authority.Reentry == nil || authority.ReadyItemID() != item.ID ||
+	if err != nil || authority.Reentry == nil || (ready && authority.ReadyItemID() != item.ID) ||
 		authority.Reentry.HeadSHA != binding.HeadSHA {
 		return errors.Join(err, domain.ErrParentKeyMismatch)
 	}

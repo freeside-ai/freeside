@@ -50,8 +50,10 @@ public enum AttentionFixtures {
             .accept_recommended_route, .choose_alternative_route, .discuss, .stop,
         ],
         .ready_for_final_review: [.open_pr, .return_to_agent, .mark_seen, .dismiss, .stop],
+        // open_pr is conditional: signet accepts it on a hold only when the
+        // item carries its pull request reference.
         .publish_blocked: [
-            .rerun_trust_evaluation, .inspect_trust_failure, .stop,
+            .rerun_trust_evaluation, .inspect_trust_failure, .open_pr, .stop,
         ],
         .task_proposal: [.start, .start_with_changes, .decline, .snooze],
         .effect_proposal: [.approve, .approve_with_changes, .decline, .snooze],
@@ -488,6 +490,18 @@ public enum AttentionFixtures {
         return snapshot
     }
 
+    /// A hold raised after the run's pull request already existed: the item
+    /// carries that pull request's reference and offers viewing it beside
+    /// inspecting the trust failure. The default inbox keeps the hold opened
+    /// before publication; tests and screenshots opt into this one.
+    public static func publishBlockedAfterPublication() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = fixture(type: .publish_blocked)
+        snapshot.item.id = "item-publish_blocked-after-publication"
+        snapshot.item.pr_reference = .init(value1: .init(repo: "owner/repo", number: 123))
+        snapshot.item.requested_decision = [.inspect_trust_failure, .open_pr]
+        return snapshot
+    }
+
     /// The bytes behind the default inbox's attachment digests, for the
     /// mock's digest-addressed read path (plan §4: cards render image
     /// attachments directly from the artifact store by digest). Every
@@ -592,9 +606,12 @@ public enum AttentionFixtures {
             interruption = .exceptional
         }
 
-        guard let actions = phase1ActionSets[type] else {
+        guard let allowed = phase1ActionSets[type] else {
             preconditionFailure("phase1ActionSets is total over phase1Types")
         }
+        // The default hold was opened before publication, so it carries no
+        // pull request reference and cannot offer open_pr.
+        let actions = type == .publish_blocked ? allowed.filter { $0 != .open_pr } : allowed
 
         // Every card keeps its referenced screenshot claim; cards whose type
         // carries §9's summary layer also get an inline text claim, whose

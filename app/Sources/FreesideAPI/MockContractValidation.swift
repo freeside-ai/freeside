@@ -300,8 +300,8 @@ enum MockContractValidation {
             return "zero decided_at"
         }
         if let reference = item.pr_reference?.value1 {
-            if item._type != .ready_for_final_review {
-                return "pr_reference on a non-ready_for_final_review item"
+            if item._type != .ready_for_final_review && item._type != .publish_blocked {
+                return "pr_reference on an item that is neither ready_for_final_review nor publish_blocked"
             }
             let parts = reference.repo.split(separator: "/", omittingEmptySubsequences: false)
             if parts.count != 2 || parts.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) {
@@ -987,7 +987,8 @@ enum MockContractValidation {
     /// Mirrors signet's validateRequestedActions over the authoritative
     /// per-type table (phase1ActionSets matches the merged policy):
     /// blocked is read-only and must offer the empty set (#96); every
-    /// other type must offer at least one action from its allowed set.
+    /// other type must offer at least one action from its allowed set, and
+    /// open_pr only beside a pull request reference.
     static func itemPolicyBreach(
         _ item: Components.Schemas.AttentionItem
     ) -> String? {
@@ -1002,6 +1003,11 @@ enum MockContractValidation {
         // blocked item fails here, exactly as signet rejects it.
         if let stray = item.requested_decision.first(where: { !allowed.contains($0) }) {
             return "action \(stray.rawValue) is not allowed for \(item._type.rawValue)"
+        }
+        // open_pr navigates to the item's pull request, so signet rejects it
+        // on an item that carries none (a hold opened before publication).
+        if item.requested_decision.contains(.open_pr), item.pr_reference?.value1 == nil {
+            return "action open_pr is not allowed for \(item._type.rawValue) without a pr_reference"
         }
         return nil
     }

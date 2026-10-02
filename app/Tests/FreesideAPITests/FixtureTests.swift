@@ -38,7 +38,7 @@ import Testing
         .execution_failure: [.retry, .retry_with_capabilities, .discuss, .stop],
         .agent_question: [.answer_and_retry, .answer_without_retry, .stop],
         .publish_blocked: [
-            .rerun_trust_evaluation, .inspect_trust_failure, .stop,
+            .rerun_trust_evaluation, .inspect_trust_failure, .open_pr, .stop,
         ],
         .ready_for_final_review: [.open_pr, .return_to_agent, .mark_seen, .dismiss, .stop],
         .task_proposal: [.start, .start_with_changes, .decline, .snooze],
@@ -289,12 +289,30 @@ import Testing
         #expect(AttentionFixtures.effectProposalFacts(for: AttentionFixtures.fixture(type: .task_proposal)) == nil)
     }
 
+    @Test func holdAfterPublicationCarriesItsPullRequestAndOffersOpeningIt() {
+        let unpublished = AttentionFixtures.fixture(type: .publish_blocked).item
+        #expect(unpublished.pr_reference == nil)
+        #expect(!unpublished.requested_decision.contains(.open_pr))
+
+        let published = AttentionFixtures.publishBlockedAfterPublication().item
+        #expect(published.id != unpublished.id)
+        #expect(published.pr_reference?.value1.repo == "owner/repo")
+        #expect(published.pr_reference?.value1.number == 123)
+        #expect(published.requested_decision == [.inspect_trust_failure, .open_pr])
+        #expect(!AttentionFixtures.defaultInbox().contains { $0.item.id == published.id })
+    }
+
     @Test(arguments: AttentionFixtures.phase1Types)
     func fixtureIsValidAndOffersExactlyItsActionSet(
         type: Components.Schemas.AttentionType
     ) {
         let item = AttentionFixtures.fixture(type: type).item
-        #expect(item.requested_decision == AttentionFixtures.phase1ActionSets[type])
+        // The default hold predates publication: it carries no pull request
+        // reference, so it offers its set without the conditional open_pr.
+        let offered = AttentionFixtures.phase1ActionSets[type]?.filter {
+            type != .publish_blocked || $0 != .open_pr
+        }
+        #expect(item.requested_decision == offered)
         #expect(item.status == .open)
         #expect(item.created_at == AttentionFixtures.createdInstant)
         // artifact_digests is the daemon-derived canonical binding set:

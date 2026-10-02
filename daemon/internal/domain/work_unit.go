@@ -363,6 +363,25 @@ func (b ReadyItemPRBinding) Validate() error {
 	return nil
 }
 
+// HeldItemPRBinding is the daemon-recorded resource identity behind one
+// publish_blocked item whose run already published its pull request. A held
+// run has no ready item, so without this record active-resource
+// reconciliation could not find the pull request and it could merge or close
+// unobserved. It carries ReadyItemPRBinding's coordinates and is proven
+// against the same publication records, but it is a distinct type with its
+// own table: a ready binding means "this ready item published" to its
+// readers, and a hold and the ready item that later replaces it belong to the
+// same publication, which the ready table admits once.
+type HeldItemPRBinding ReadyItemPRBinding
+
+// Validate reports whether the held resource binding is well-formed.
+func (b HeldItemPRBinding) Validate() error {
+	if err := ReadyItemPRBinding(b).Validate(); err != nil {
+		return fmt.Errorf("held item pr binding: %w", err)
+	}
+	return nil
+}
+
 // Validate reports whether the binding is well-formed.
 func (b WorkUnitPRBinding) Validate() error {
 	if b.UnitID == "" {

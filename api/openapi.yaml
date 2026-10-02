@@ -4635,11 +4635,17 @@ components:
           allOf:
             - $ref: "#/components/schemas/PRReference"
           description: >
-            The published pull request behind a ready_for_final_review item
-            (plan §4; mirrors domain.AttentionItem.PRReference). Required and
-            non-null exactly on that item type; null on every other type.
-            Daemon-derived from the trusted publication coordinates, never
-            client-set.
+            The published pull request behind the item (plan §4; mirrors
+            domain.AttentionItem.PRReference). Required and non-null on
+            ready_for_final_review. Optional on publish_blocked: non-null
+            once the held run's pull request exists, null on a hold that
+            predates publication. An open publish_blocked item may go from
+            null to a reference once; a set reference never changes or
+            returns to null. Null on every other type. A publish_blocked
+            item offers open_pr in requested_decision only while it carries
+            a reference, and open_pr stays navigation there as on a ready
+            item. Daemon-derived from the trusted publication coordinates,
+            never client-set.
         readiness:
           nullable: true
           allOf:

@@ -20,6 +20,18 @@ import Testing
         }
     }
 
+    @Test func holdAfterPublicationKeepsBothNavigationActionsVisible() {
+        // Both actions are reviewing-class and only one fills the reviewing
+        // slot, so the other must stay visible as a principal action.
+        let requested = AttentionFixtures.publishBlockedAfterPublication().item.requested_decision
+        let ranking = DecisionActionRanking(requested: requested)
+        #expect(ranking.reviewing == .inspect_trust_failure)
+        #expect(ranking.principal == [.open_pr])
+        #expect(ranking.overflow.isEmpty)
+        #expect(ranking.unavailable.isEmpty)
+        #expect(!ranking.notDecidableHere)
+    }
+
     @Test func servedSurfaceIsAuthoritativeOverTheLocalFilter() {
         // The daemon-served surface offers only two of the three requested
         // actions, so the third is unavailable even though it is not `.pending`.

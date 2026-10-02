@@ -176,6 +176,60 @@ func TestValidateAttentionItemFixedBindings(t *testing.T) {
 	})
 }
 
+// TestValidateAttentionItemPRReferenceAttachesOnce pins the one permitted
+// reference change: an open publish_blocked item gains its pull request once.
+// A set reference never changes or goes away, and no other type or status may
+// attach one.
+func TestValidateAttentionItemPRReferenceAttachesOnce(t *testing.T) {
+	reference := &domain.PRReference{Repo: "owner/repo", Number: 123}
+	hold := func(version int, status domain.ItemStatus, ref *domain.PRReference) domain.AttentionItem {
+		in := validItemInput(domain.AttentionPublishBlocked)
+		in.ItemVersion = version
+		in.Status = status
+		in.PRReference = ref
+		return mustItem(t, in)
+	}
+
+	t.Run("open hold gains its reference", func(t *testing.T) {
+		old := hold(1, domain.StatusOpen, nil)
+		if err := domain.ValidateAttentionItemTransition(old, hold(2, domain.StatusOpen, reference)); err != nil {
+			t.Fatalf("none to set on an open hold = %v, want accepted", err)
+		}
+	})
+	t.Run("set reference survives later versions", func(t *testing.T) {
+		old := hold(2, domain.StatusOpen, reference)
+		if err := domain.ValidateAttentionItemTransition(old, hold(3, domain.StatusResolved, reference)); err != nil {
+			t.Fatalf("unchanged reference = %v, want accepted", err)
+		}
+	})
+
+	rejected := []struct {
+		name         string
+		old, updated domain.AttentionItem
+	}{
+		{
+			"set reference changes", hold(1, domain.StatusOpen, reference),
+			hold(2, domain.StatusOpen, &domain.PRReference{Repo: "owner/repo", Number: 124}),
+		},
+		{"set reference is removed", hold(1, domain.StatusOpen, reference), hold(2, domain.StatusOpen, nil)},
+		{
+			"reference arrives with the resolution", hold(1, domain.StatusOpen, nil),
+			hold(2, domain.StatusResolved, reference),
+		},
+		{
+			"reference arrives after the resolution", hold(1, domain.StatusResolved, nil),
+			hold(2, domain.StatusResolved, reference),
+		},
+	}
+	for _, tt := range rejected {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := domain.ValidateAttentionItemTransition(tt.old, tt.updated); !errors.Is(err, domain.ErrImmutableTransition) {
+				t.Fatalf("ValidateAttentionItemTransition() = %v, want ErrImmutableTransition", err)
+			}
+		})
+	}
+}
+
 // TestValidateAttentionItemStaleWrite covers item_version monotonicity: a changed
 // body that does not advance the version is a stale transition.
 func TestValidateAttentionItemStaleWrite(t *testing.T) {
