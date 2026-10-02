@@ -548,8 +548,8 @@ daemon, then name the identities and cost owners the flags carried:
 ```sh
 freesided auth adopt \
   -db /path/to/freeside.db \
-  -auth-identity claude-main -cost-owner <owner> -claude-account <subscription-account> \
-  -review-auth-identity codex-primary -review-cost-owner <review-owner> \
+  -auth-identity claude-main -cost-owner <cost-owner> -claude-account <subscription-account> \
+  -review-auth-identity codex-primary -review-cost-owner <review-cost-owner> \
   -auth-store-root /path/to/freeside/review-inputs -review-model <review-model> \
   -exporter-image <digest-pinned-exporter-image> \
   -prompt-package <file> -specification-prompt-package <file> \
@@ -566,6 +566,41 @@ patch, commit it in the checkout, and start the daemon with that commit. The
 report lists each identity as `adopted`, `reused`, or `unadoptable`; running
 the command again changes nothing. The review and shadow review configuration
 digests are the ones the flags produced, so existing approvals stand.
+
+The real-run harness runs this command on every start and checks the emitted
+tree against the configured commit; its sequence, and where to keep the
+checkout, are in
+[Enroll The Identities And Check The Agent Tree](../docs/production-walkthrough.md#enroll-the-identities-and-check-the-agent-tree).
+
+#### Name The Cost Owner And The Account
+
+**A cost owner is a label for a bill.** Name it `<scope>-<product>-<letter>`,
+for example `personal-claude-a`, `personal-chatgpt-a`, or `team-claude-a`.
+
+- **Keep it opaque.** No name, email, or account identifier. `auth list`
+  prints the label in full and an adoption error quotes it, and that output
+  gets pasted into issues.
+- **Use the letter for a second subscription.** One operator can hold several
+  subscriptions to the same product; each is its own bill and gets its own
+  label.
+- **Choose it once per state root.** No command changes a stored cost owner:
+  `auth add` and `auth adopt` accept the stored label or refuse. A fresh state
+  root starts without one. The label isn't part of the agent tree, so one
+  committed tree serves roots with different labels.
+
+**`-claude-account` is an attestation.** It says which subscription account
+the Claude setup token belongs to, and the daemon can't check it. Give the
+account's login email.
+
+- **It stays local.** The value is stored in the state database as the
+  identity's account binding. `auth list` shows only its last four characters,
+  and it enters no tree, API response, or published text.
+- **It binds once.** A second identity can't claim the same account, and an
+  identity can't be rebound to another.
+- **There is no `-codex-account`.** A Codex subscription login names its own
+  account, and adoption reads it from the credential store. A Claude setup
+  token names none, so the Claude binding is only as good as the attestation:
+  a wrong value records that identity's usage against the wrong account.
 
 Adoption enables an identity that was stored disabled, in the same write that
 first enrolls it, and reports it `enabled`. A `reused` identity keeps its
