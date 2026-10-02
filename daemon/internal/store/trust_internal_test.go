@@ -483,6 +483,62 @@ func TestTrustProfileStaleEncodingRowFailsClosed(t *testing.T) {
 	}
 }
 
+// The domain trust_profile golden as it stood before the external_reviewers
+// allowlist existed, compacted: the body and digest a build without the field
+// stored for that profile.
+const (
+	preAllowlistProfileDigest = "sha256:bed60edca142c75b455ddd75668afdd452cfb5bfe6dfe5bf847815cb816ec436"
+	preAllowlistProfileBody   = `{"repo":"freeside-ai/demo","repository_id":123456789,"pr_execution":"audited_same_repo","candidate_automation_changes":"block","pr_github_token_permissions":"read_only","allow_oidc":false,"allow_environment_secrets":false,"allow_secret_bearing_pr_jobs":false,"allow_self_hosted_ci":false,"allow_pull_request_target":false,"allow_reusable_workflows":false,"allow_package_publishing":false,"allow_artifact_consumers":false,"commit_plan":"single_commit","message_ruleset":"github/1","workflow_audit_digest":"sha256:workflow-audit","review":{"mode":"freeside_invoked","config_digest":"sha256:review-config"},"protected_paths":{"extra_automation_control_patterns":["ci/*.sh","deploy/**"],"extra_reviewer_instruction_patterns":null,"extra_git_metadata_patterns":null,"extra_verification_control_patterns":["Makefile"],"extra_prompts_and_policy_patterns":["policy/**","prompts/**"],"extra_egress_and_trust_patterns":null,"extra_materiality_rules_patterns":["docs/plan.md"]},"profile_digest":"sha256:bed60edca142c75b455ddd75668afdd452cfb5bfe6dfe5bf847815cb816ec436"}`
+)
+
+// TestTrustProfilePreAllowlistRowReconstructs: the allowlist joined the
+// profile without an encoding bump, so a row recorded before it existed must
+// still read, under its approved digest, as a profile that admits nobody. A
+// failure here means every onboarded repository needs re-approval.
+func TestTrustProfilePreAllowlistRowReconstructs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openRaw(t)
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if err := seedEpoch(ctx, db); err != nil {
+		t.Fatalf("seedEpoch: %v", err)
+	}
+	s := &Store{db: db}
+
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO trust_profiles (profile_digest, repo, recorded_at, body) VALUES (?, ?, ?, ?)`,
+		preAllowlistProfileDigest, "freeside-ai/demo",
+		formatTime(time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)), preAllowlistProfileBody); err != nil {
+		t.Fatalf("insert pre-allowlist row: %v", err)
+	}
+
+	var profile domain.AutomationTrustProfile
+	if err := s.Read(ctx, func(tx *ReadTx) error {
+		var err error
+		profile, err = tx.GetTrustProfile(ctx, domain.Digest(preAllowlistProfileDigest))
+		return err
+	}); err != nil {
+		t.Fatalf("pre-allowlist profile read: %v", err)
+	}
+	if profile.ExternalReviewers != nil {
+		t.Fatalf("pre-allowlist profile carries reviewers %#v", profile.ExternalReviewers)
+	}
+	if _, ok := profile.ExternalReviewAuthorityFor(domain.ExternalReviewForgeGitHub, 41, "codex[bot]"); ok {
+		t.Fatal("pre-allowlist profile admitted an external reviewer")
+	}
+	// The stored bytes are also what this build would write for the profile,
+	// so a replayed record converges instead of conflicting.
+	body, err := encode(profile)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if string(body) != preAllowlistProfileBody {
+		t.Fatalf("re-encoded body diverged from the stored row:\n got %s\nwant %s", body, preAllowlistProfileBody)
+	}
+}
+
 // TestTrustRowsInconsistentColumnsFailClosed: a row whose extracted key
 // columns disagree with a valid body is corrupt, not trusted data — the
 // scanner cross-check rejects it even though the body itself validates.

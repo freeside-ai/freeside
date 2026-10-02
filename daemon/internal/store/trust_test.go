@@ -149,6 +149,59 @@ func TestTrustProfileRoundTrip(t *testing.T) {
 	}
 }
 
+// TestTrustProfileExternalReviewersRoundTrip: a profile with an allowlist
+// stores and reads back with its entries, so the admission a later read
+// re-derives is the one the owner approved.
+func TestTrustProfileExternalReviewersRoundTrip(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t, store.Options{})
+	base := trustProfileFixture(t)
+	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo:                       base.Repo,
+		RepositoryID:               base.RepositoryID,
+		PRExecution:                base.PRExecution,
+		CandidateAutomationChanges: base.CandidateAutomationChanges,
+		PRGitHubTokenPermissions:   base.PRGitHubTokenPermissions,
+		CommitPlan:                 base.CommitPlan,
+		MessageRuleset:             base.MessageRuleset,
+		WorkflowAuditDigest:        base.WorkflowAuditDigest,
+		Review:                     base.Review,
+		ProtectedPaths:             base.ProtectedPaths,
+		ExternalReviewers: []domain.ExternalReviewer{{
+			Forge: domain.ExternalReviewForgeGitHub, AccountID: 41, Login: "codex[bot]",
+			Authority: domain.ExternalReviewDriveRound,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("profile with allowlist: %v", err)
+	}
+	recordedAt := time.Date(2026, 10, 2, 11, 0, 0, 0, time.UTC)
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := tx.RecordTrustProfile(ctx, profile, recordedAt); err != nil {
+			return err
+		}
+		return tx.RecordTrustProfile(ctx, profile, recordedAt)
+	}); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		got, err := tx.GetTrustProfile(ctx, profile.ProfileDigest)
+		if err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(got, profile) {
+			t.Errorf("round-trip mismatch:\ngot  %+v\nwant %+v", got, profile)
+		}
+		if _, ok := got.ExternalReviewAuthorityFor(domain.ExternalReviewForgeGitHub, 41, "codex[bot]"); !ok {
+			t.Error("stored allowlist no longer admits its reviewer")
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+}
+
 func TestInspectLatestTrustProfilesReturnsOneCurrentProfilePerRepo(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

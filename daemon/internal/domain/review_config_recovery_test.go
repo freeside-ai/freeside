@@ -178,6 +178,19 @@ func TestReviewConfigurationOnlySupersession(t *testing.T) {
 	if ok, err := domain.ReviewConfigurationOnlySupersession(superseded, widened); err != nil || ok {
 		t.Fatalf("trust-widening supersession = %v, %v; want false", ok, err)
 	}
+	// Admitting an external reviewer is a trust change, never a
+	// review-configuration-only one: the allowlist is in the digest the
+	// overlay recomputes.
+	admitting := testTrustProfileWithReviewConfig(t, "sha256:config-new",
+		func(in *domain.AutomationTrustProfileInput) {
+			in.ExternalReviewers = []domain.ExternalReviewer{{
+				Forge: domain.ExternalReviewForgeGitHub, AccountID: 41, Login: "codex[bot]",
+				Authority: domain.ExternalReviewDriveRound,
+			}}
+		})
+	if ok, err := domain.ReviewConfigurationOnlySupersession(superseded, admitting); err != nil || ok {
+		t.Fatalf("reviewer-admitting supersession = %v, %v; want false", ok, err)
+	}
 
 	// A tampered body cannot pass under its stale digest: the comparison
 	// re-validates both content addresses before deciding by overlay.

@@ -1,12 +1,15 @@
 package domain
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"path"
 	"slices"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
@@ -30,6 +33,16 @@ import (
 // ProtectedPathConfig. Rows from a prior version fail Validate's digest
 // recompute and are re-recorded by a human, never migrated (§5.5 drift
 // recovery).
+//
+// The external_reviewers allowlist is the one field added without a bump.
+// It is omitted from the canonical form when empty, so a profile without
+// one encodes to the bytes it had before the field existed and keeps its
+// approved digest; an empty allowlist admits nobody, which is what every
+// such profile already meant. No two builds can disagree about a profile
+// with entries, because no build before this field could hold one: an older
+// build decoding such a body drops the unknown field, recomputes a
+// different digest, and fails closed. A field whose absence would not mean
+// "exactly as before" still needs a new version.
 const trustProfileEncodingVersion = "freeside-trust-profile/v6"
 
 // ProtectedPathConfig is the repository-specific widening of the protected
@@ -147,6 +160,96 @@ func (r ReviewSettings) Validate() error {
 	return nil
 }
 
+// ExternalReviewer is one allowlist entry: a reviewer outside Freeside whose
+// activity on a published pull request the owner admits (plan §5.19). The
+// account ID is the identity, as repository_id is for the repository: a login
+// can be renamed and later reused by someone else. The login is recorded as
+// well, in the forge's own spelling, so the owner approves a name they can
+// read and a rename admits nobody until they record a new profile.
+type ExternalReviewer struct {
+	Forge     ExternalReviewForge     `json:"forge"`
+	AccountID int64                   `json:"account_id"`
+	Login     string                  `json:"login"`
+	Authority ExternalReviewAuthority `json:"authority"`
+}
+
+// Validate reports whether the entry is well-formed.
+func (r ExternalReviewer) Validate() error {
+	if !r.Forge.valid() {
+		return fmt.Errorf("external reviewer forge %q: %w", r.Forge, ErrInvalidExternalReviewForge)
+	}
+	if r.AccountID <= 0 {
+		return fmt.Errorf("external reviewer account_id %d: %w", r.AccountID, ErrNonPositive)
+	}
+	if err := validateExternalReviewerLogin(r.Login); err != nil {
+		return err
+	}
+	if !r.Authority.valid() {
+		return fmt.Errorf("external reviewer %q authority %q: %w", r.Login, r.Authority, ErrInvalidExternalReviewAuthority)
+	}
+	return nil
+}
+
+func validateExternalReviewerLogin(login string) error {
+	if login == "" {
+		return fmt.Errorf("external reviewer login: %w", ErrEmptyField)
+	}
+	if !utf8.ValidString(login) {
+		return fmt.Errorf("external reviewer login: %w", ErrExternalReviewerLoginInvalid)
+	}
+	for _, r := range login {
+		if unicode.IsSpace(r) || unicode.IsControl(r) {
+			return fmt.Errorf("external reviewer login %q: %w", login, ErrExternalReviewerLoginInvalid)
+		}
+	}
+	return nil
+}
+
+func compareExternalReviewerIdentity(a, b ExternalReviewer) int {
+	return cmp.Or(cmp.Compare(a.Forge, b.Forge), cmp.Compare(a.AccountID, b.AccountID))
+}
+
+// canonicalExternalReviewers returns a detached copy sorted by forge then
+// account ID with exact duplicates dropped; an empty list collapses to nil so
+// "no allowlist" has one representation. Two entries for one account that
+// differ in login or authority both survive, for Validate to reject: which
+// one the owner meant is not this function's call.
+func canonicalExternalReviewers(in []ExternalReviewer) []ExternalReviewer {
+	if len(in) == 0 {
+		return nil
+	}
+	out := slices.Clone(in)
+	slices.SortFunc(out, func(a, b ExternalReviewer) int {
+		return cmp.Or(
+			compareExternalReviewerIdentity(a, b),
+			cmp.Compare(a.Login, b.Login),
+			cmp.Compare(a.Authority, b.Authority),
+		)
+	})
+	return slices.Compact(out)
+}
+
+// validateExternalReviewers reports whether the allowlist is well-formed and
+// canonical: strictly ascending by forge then account ID, so one account has
+// one entry and the stored body is a deterministic function of the content.
+func validateExternalReviewers(list []ExternalReviewer) error {
+	// A non-nil empty list is the nil content in a different in-memory
+	// shape; one representation per content, as for the pattern lists.
+	if list != nil && len(list) == 0 {
+		return fmt.Errorf("external_reviewers: empty list must be nil: %w", ErrExternalReviewersNotCanonical)
+	}
+	for i, r := range list {
+		if err := r.Validate(); err != nil {
+			return fmt.Errorf("external_reviewers[%d]: %w", i, err)
+		}
+		if i > 0 && compareExternalReviewerIdentity(list[i-1], r) >= 0 {
+			return fmt.Errorf("external_reviewers[%d] %s:%d after %s:%d: %w",
+				i, r.Forge, r.AccountID, list[i-1].Forge, list[i-1].AccountID, ErrExternalReviewersNotCanonical)
+		}
+	}
+	return nil
+}
+
 // AutomationTrustProfile is the machine-readable per-repository trust profile
 // (plan §5.5): the human-approved posture of the repository's automation
 // authority. The daemon binds runs and publication to ProfileDigest; drift
@@ -174,7 +277,11 @@ type AutomationTrustProfile struct {
 	WorkflowAuditDigest        Digest                 `json:"workflow_audit_digest"`
 	Review                     ReviewSettings         `json:"review"`
 	ProtectedPaths             ProtectedPathConfig    `json:"protected_paths"`
-	ProfileDigest              Digest                 `json:"profile_digest"`
+	// ExternalReviewers is omitted when empty so a profile without an
+	// allowlist keeps the stored body and digest it had before the field
+	// existed (see trustProfileEncodingVersion).
+	ExternalReviewers []ExternalReviewer `json:"external_reviewers,omitempty"`
+	ProfileDigest     Digest             `json:"profile_digest"`
 }
 
 // AutomationTrustProfileInput carries the caller-supplied fields of an
@@ -200,10 +307,12 @@ type AutomationTrustProfileInput struct {
 	WorkflowAuditDigest        Digest
 	Review                     ReviewSettings
 	ProtectedPaths             ProtectedPathConfig
+	ExternalReviewers          []ExternalReviewer
 }
 
 // NewAutomationTrustProfile builds a validated profile whose protected-path
-// lists are canonical and whose ProfileDigest is computed from the content,
+// lists and external-reviewer allowlist are canonical and whose ProfileDigest
+// is computed from the content,
 // so both are authentic by construction. Deserialization and literal paths
 // that bypass this constructor are caught by Validate's recompute.
 func NewAutomationTrustProfile(in AutomationTrustProfileInput) (AutomationTrustProfile, error) {
@@ -226,6 +335,7 @@ func NewAutomationTrustProfile(in AutomationTrustProfileInput) (AutomationTrustP
 		WorkflowAuditDigest:        in.WorkflowAuditDigest,
 		Review:                     in.Review,
 		ProtectedPaths:             in.ProtectedPaths.canonicalize(),
+		ExternalReviewers:          canonicalExternalReviewers(in.ExternalReviewers),
 	}
 	digest, err := p.ComputeDigest()
 	if err != nil {
@@ -261,14 +371,15 @@ type canonicalTrustProfile struct {
 	WorkflowAuditDigest        Digest                 `json:"workflow_audit_digest"`
 	Review                     ReviewSettings         `json:"review"`
 	ProtectedPaths             ProtectedPathConfig    `json:"protected_paths"`
+	ExternalReviewers          []ExternalReviewer     `json:"external_reviewers,omitempty"`
 }
 
 // ComputeDigest returns the content address of the profile: a sha256 over its
 // versioned canonical serialization, every field except ProfileDigest itself.
-// It canonicalizes the protected paths defensively so it is a true content
-// address for any input; a value that also passes Validate is already
-// canonical, so its stored body carries exactly the content these bytes
-// address.
+// It canonicalizes the protected paths and the allowlist defensively so it is
+// a true content address for any input; a value that also passes Validate is
+// already canonical, so its stored body carries exactly the content these
+// bytes address.
 func (p AutomationTrustProfile) ComputeDigest() (Digest, error) {
 	body, err := json.Marshal(canonicalTrustProfile{
 		Version:                    trustProfileEncodingVersion,
@@ -290,6 +401,7 @@ func (p AutomationTrustProfile) ComputeDigest() (Digest, error) {
 		WorkflowAuditDigest:        p.WorkflowAuditDigest,
 		Review:                     p.Review,
 		ProtectedPaths:             p.ProtectedPaths.canonicalize(),
+		ExternalReviewers:          canonicalExternalReviewers(p.ExternalReviewers),
 	})
 	if err != nil {
 		return "", fmt.Errorf("trust profile digest: %w", err)
@@ -336,6 +448,9 @@ func (p AutomationTrustProfile) Validate() error {
 	if err := p.ProtectedPaths.Validate(); err != nil {
 		return fmt.Errorf("trust profile %s: %w", p.Repo, err)
 	}
+	if err := validateExternalReviewers(p.ExternalReviewers); err != nil {
+		return fmt.Errorf("trust profile %s: %w", p.Repo, err)
+	}
 	if p.ProfileDigest == "" {
 		return fmt.Errorf("trust profile profile_digest: %w", ErrEmptyField)
 	}
@@ -347,6 +462,21 @@ func (p AutomationTrustProfile) Validate() error {
 		return fmt.Errorf("trust profile %s digest %q, content resolves to %q: %w", p.Repo, p.ProfileDigest, computed, ErrProfileDigestMismatch)
 	}
 	return nil
+}
+
+// ExternalReviewAuthorityFor reports the authority the profile grants an
+// external reviewer. It matches only when forge, account ID, and login all
+// equal one entry, so a renamed login and a reused login both get nothing.
+// The profile must already have passed Validate.
+func (p AutomationTrustProfile) ExternalReviewAuthorityFor(
+	forge ExternalReviewForge, accountID int64, login string,
+) (ExternalReviewAuthority, bool) {
+	for _, r := range p.ExternalReviewers {
+		if r.Forge == forge && r.AccountID == accountID && r.Login == login {
+			return r.Authority, true
+		}
+	}
+	return "", false
 }
 
 // WorkflowAudit is one audited snapshot of a repository's effective

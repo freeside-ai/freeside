@@ -761,7 +761,7 @@ func TestGolden(t *testing.T) {
 
 	// The protected-path extras are passed unsorted with a duplicate to
 	// exercise NewAutomationTrustProfile's canonicalization.
-	trustProfile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+	trustProfileInput := domain.AutomationTrustProfileInput{
 		Repo:                       "freeside-ai/demo",
 		RepositoryID:               123456789,
 		PRExecution:                domain.PRExecutionAuditedSameRepo,
@@ -779,7 +779,21 @@ func TestGolden(t *testing.T) {
 			ExtraPromptsAndPolicyPatterns:    []string{"prompts/**", "policy/**", "prompts/**"},
 			ExtraMaterialityRulesPatterns:    []string{"docs/plan.md"},
 		},
-	})
+	}
+	trustProfile, err := domain.NewAutomationTrustProfile(trustProfileInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The allowlist is passed unsorted with a duplicate, for the same
+	// reason; the fixture is otherwise the profile above, so the two goldens
+	// differ only in the member and the digest.
+	reviewersInput := trustProfileInput
+	reviewersInput.ExternalReviewers = []domain.ExternalReviewer{
+		{Forge: domain.ExternalReviewForgeGitHub, AccountID: 900, Login: "maintainer", Authority: domain.ExternalReviewDriveRound},
+		{Forge: domain.ExternalReviewForgeGitHub, AccountID: 41, Login: "codex[bot]", Authority: domain.ExternalReviewDriveRound},
+		{Forge: domain.ExternalReviewForgeGitHub, AccountID: 900, Login: "maintainer", Authority: domain.ExternalReviewDriveRound},
+	}
+	trustProfileExternalReviewers, err := domain.NewAutomationTrustProfile(reviewersInput)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1697,6 +1711,7 @@ func TestGolden(t *testing.T) {
 		{"policy_key", policyKey},
 		{"key_provenance", policyKey.Provenance},
 		{"trust_profile", trustProfile},
+		{"trust_profile_external_reviewers", trustProfileExternalReviewers},
 		{"workflow_audit", workflowAudit},
 		{"candidate_authorization", authorization},
 		{"candidate_authorization_blocked", blockedAuthorization},

@@ -1392,6 +1392,49 @@ func (m ReviewMode) valid() bool {
 	}
 }
 
+// ExternalReviewForge names the code host an external reviewer's account
+// lives on (plan §5.19). It scopes the account ID: an ID is unique only
+// within one forge.
+type ExternalReviewForge string
+
+const (
+	ExternalReviewForgeGitHub ExternalReviewForge = "github"
+)
+
+// AllExternalReviewForges lists every valid ExternalReviewForge.
+var AllExternalReviewForges = []ExternalReviewForge{ExternalReviewForgeGitHub}
+
+func (f ExternalReviewForge) valid() bool {
+	switch f {
+	case ExternalReviewForgeGitHub:
+		return true
+	default:
+		return false
+	}
+}
+
+// ExternalReviewAuthority is what the owner lets an allowlisted external
+// reviewer do (plan §5.19). drive_round is the only member: that reviewer's
+// findings may start a review round. An unlisted identity drives nothing, so
+// there is no weaker member for it.
+type ExternalReviewAuthority string
+
+const (
+	ExternalReviewDriveRound ExternalReviewAuthority = "drive_round"
+)
+
+// AllExternalReviewAuthorities lists every valid ExternalReviewAuthority.
+var AllExternalReviewAuthorities = []ExternalReviewAuthority{ExternalReviewDriveRound}
+
+func (a ExternalReviewAuthority) valid() bool {
+	switch a {
+	case ExternalReviewDriveRound:
+		return true
+	default:
+		return false
+	}
+}
+
 // ReviewOutcome is the result of one completed, exact-base/head review pass.
 // The zero value is invalid by design.
 type ReviewOutcome string
