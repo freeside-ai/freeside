@@ -86,8 +86,10 @@ retained-session attachment performs no submission. Sessions predating the
 identity field keep their legacy composition checks.
 Do not upload the directory: acquisition material and operator inputs are private.
 
-Before startup, the verifier seeds the two required auth identities. After
-publication, it opens the existing database read-only, checks the recorded
+Before startup, the verifier seeds the two required auth identities, and the
+harness enrolls them and checks the agent tree
+([Enroll The Identities And Check The Agent Tree](#enroll-the-identities-and-check-the-agent-tree)).
+After publication, it opens the existing database read-only, checks the recorded
 identities, and rechecks policy, evidence and the exact published head. It does
 not migrate the database or create missing backup keys or artifact directories.
 Both a successful exit and the explicit verification success marker are required.
@@ -114,6 +116,108 @@ invocation IDs, endpoint, and the published head that final verification checked
 Later actions can change the run, so the earlier verification does not prove a
 later head. Health from the default service on port 7331 does not prove this run
 is still available at its paired endpoint.
+
+## Enroll The Identities And Check The Agent Tree
+
+The daemon selects every identity through the admitted-agent tree
+([Select Agents Through The Lineup](../daemon/README.md#select-agents-through-the-lineup)),
+and a fresh state root holds no enrollment for the tree to name. The harness
+closes that gap on every start, after it acquires the rig and before
+preflight:
+
+1. **Record.** It records the two identities named by
+   `FREESIDE_REAL_RUN_AUTH_IDENTITY` and
+   `FREESIDE_REAL_RUN_REVIEW_AUTH_IDENTITY` on the state root.
+2. **Adopt.** It runs `freesided auth adopt` on that root and prints one line
+   per client, `auth adopt: claude_code adopted` and
+   `auth adopt: codex_cli adopted`. A root that was already adopted prints
+   `reused` and changes nothing.
+3. **Check.** It compares the tree adoption emitted with the tree at
+   `FREESIDE_REAL_RUN_AGENT_TREE_COMMIT` in `FREESIDE_REAL_RUN_AGENT_TREE`:
+   the mode and content of every file under `policy/agents` and
+   `policy/fragments`, and of `policy/lineup` and `policy/agents.lock`. On a
+   match the run goes on to preflight.
+
+The harness never writes to the agent-tree checkout. It applies the patch only
+in a scratch repository inside the session directory.
+
+### The Stop On A Tree Mismatch
+
+When the trees differ, or the checkout doesn't hold the configured commit, the
+harness exits with status 2 before preflight and prints:
+
+```text
+run-real-work: the agent tree at <commit> in <agent-tree-checkout> is not the tree auth adopt emitted
+run-real-work: review and commit <session>/agent-tree.patch in that checkout, set FREESIDE_REAL_RUN_AGENT_TREE_COMMIT to the new commit, and rerun; the harness changed nothing in the checkout
+```
+
+Nothing was submitted. The identities stay adopted on that state root, so the
+rerun reports `reused`. The session also keeps the adoption report in
+`auth-adopt.json` and adoption's and git's errors in `auth-adopt.log`. Both
+name the identities, and the log can quote a cost owner, so keep them out of
+shared logs like the rest of the session directory.
+
+When adoption itself fails or writes no patch, the harness exits with status 1
+and names those two files instead.
+
+### The First Start
+
+The first start always stops this way, because no commit holds the tree yet:
+
+1. Create the agent-tree checkout (below) and point
+   `FREESIDE_REAL_RUN_AGENT_TREE` at it. Set
+   `FREESIDE_REAL_RUN_AGENT_TREE_COMMIT` to that checkout's current commit.
+2. Choose the cost owners and the account
+   ([Name The Cost Owner And The Account](../daemon/README.md#name-the-cost-owner-and-the-account))
+   and the three dated inputs, and start the harness. It stops with the
+   message above.
+3. Read the patch, then commit it in the checkout:
+
+   ```sh
+   git -C <agent-tree-checkout> apply --index <session>/agent-tree.patch
+   git -C <agent-tree-checkout> commit -m "Adopt the baseline agent tree"
+   git -C <agent-tree-checkout> rev-parse HEAD
+   ```
+
+4. Set `FREESIDE_REAL_RUN_AGENT_TREE_COMMIT` to the printed commit and start
+   the harness again.
+
+Later fresh state roots reuse that commit. The emitted tree depends on the
+identity ids, the route names, the review model, the three prompt packages,
+and the three dated inputs. It doesn't depend on the state root, the cost
+owners, or the account.
+
+Keep `FREESIDE_REAL_RUN_TERMS_BASIS_DATE`, `FREESIDE_REAL_RUN_PRICING_REVISION`,
+and `FREESIDE_REAL_RUN_OFFER_NOT_AFTER` at the values the commit was adopted
+with. `auth adopt` defaults each to the current date, so the harness requires
+all three; a changed value is a different tree and stops the run.
+
+The patch creates every file, so it doesn't apply over an existing tree. To
+replace a committed tree (a renewed offer, a new review model, a changed
+prompt package), remove the old one in the same commit:
+
+```sh
+git -C <agent-tree-checkout> rm -r -q policy/agents policy/fragments policy/lineup policy/agents.lock
+git -C <agent-tree-checkout> apply --index <session>/agent-tree.patch
+```
+
+### Where The Agent Tree Lives
+
+Keep the tree in its own local repository, separate from any Freeside working
+checkout, for example:
+
+```sh
+git init <agent-tree-checkout>
+git -C <agent-tree-checkout> commit --allow-empty -m "Start the agent tree"
+```
+
+- **The commit must stay.** The daemon reads the tree from an exact commit
+  through git. A working branch is rebased, force-pushed, and deleted after
+  merge, and a commit that only such a branch held can be pruned.
+- **The tree names your identities.** A commit on a working branch travels
+  with the next push. A separate repository is pushed only when you choose to.
+- **A tree change is its own review.** It changes which agent each role runs,
+  independent of any code change.
 
 ## Replace A Retained Runtime
 

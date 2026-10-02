@@ -75,8 +75,13 @@
 #                                    the patch it wrote, when the emitted tree
 #                                    is not the tree at this commit. It never
 #                                    writes to the checkout.
+#                                    docs/production-walkthrough.md, "Enroll
+#                                    The Identities And Check The Agent Tree",
+#                                    has the first start and the stop text.
 #   FREESIDE_REAL_RUN_COST_OWNER     auth adopt's -cost-owner for the writer
-#                                    identity, for example <cost-owner>
+#                                    identity, for example <cost-owner>;
+#                                    daemon/README.md, "Name The Cost Owner
+#                                    And The Account", has the naming pattern
 #   FREESIDE_REAL_RUN_REVIEW_COST_OWNER auth adopt's -review-cost-owner for the
 #                                    reviewer identity
 #   FREESIDE_REAL_RUN_CLAUDE_ACCOUNT auth adopt's -claude-account, for example
