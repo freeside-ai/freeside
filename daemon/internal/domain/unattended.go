@@ -84,3 +84,95 @@ func (t UnattendedOperationTransition) Validate() error {
 	}
 	return nil
 }
+
+// UnattendedOperationGate is the verdict of the one gate on new unattended
+// work (§5.7), as data: what closes it, not only whether it is closed. The
+// admission predicate and the sync projection both read this value, so a
+// client can never be told admission is open while the daemon refuses it.
+type UnattendedOperationGate struct {
+	// OperatorStop is the latest transition when it is "stopped"; nil when
+	// the log is empty or the latest decision resumed.
+	OperatorStop *UnattendedOperationTransition
+	// Blocking lists, in item-id order, every open system_health item that
+	// closes the gate. The notice an operator stop raises is one of them: it
+	// is a blocking item in its own right until resume resolves it.
+	Blocking []UnattendedBlockingItem
+}
+
+// UnattendedBlockingItem is one open system_health item that closes the gate,
+// with the reason it does.
+type UnattendedBlockingItem struct {
+	Item AttentionItem
+	// Err is the refusal the gate returns for this item: it wraps
+	// ErrBlockingSystemHealth unless the supersession condition could not be
+	// evaluated at all, which blocks without claiming the diagnostic stands.
+	Err error
+}
+
+// Err is the admission predicate over the verdict: nil when the gate is
+// open, otherwise the operator stop before the first blocking item.
+func (g UnattendedOperationGate) Err() error {
+	if g.OperatorStop != nil {
+		return ErrUnattendedOperationStopped
+	}
+	if len(g.Blocking) > 0 {
+		return g.Blocking[0].Err
+	}
+	return nil
+}
+
+// UnattendedAdmission is the synced verdict of the unattended-operation gate:
+// whether the daemon admits new unattended work. The zero value is invalid.
+type UnattendedAdmission string
+
+const (
+	// UnattendedAdmissionOpen: nothing closes the gate.
+	UnattendedAdmissionOpen UnattendedAdmission = "open"
+	// UnattendedAdmissionStopped: at least one stop is in force.
+	UnattendedAdmissionStopped UnattendedAdmission = "stopped"
+)
+
+// AllUnattendedAdmissions is the single registration point for
+// unattended-admission verdicts.
+var AllUnattendedAdmissions = []UnattendedAdmission{
+	UnattendedAdmissionOpen,
+	UnattendedAdmissionStopped,
+}
+
+func (a UnattendedAdmission) valid() bool {
+	switch a {
+	case UnattendedAdmissionOpen, UnattendedAdmissionStopped:
+		return true
+	default:
+		return false
+	}
+}
+
+// UnattendedStopKind names why the gate is closed, so a client words an
+// operator's decision differently from a finding the daemon raised itself.
+// The zero value is invalid.
+type UnattendedStopKind string
+
+const (
+	// UnattendedStopOperator: an accepted stop_unattended is in force and
+	// only resume_unattended lifts it.
+	UnattendedStopOperator UnattendedStopKind = "operator_stop"
+	// UnattendedStopBlockingSystemHealth: an open blocking system_health
+	// item no validated configuration supersedes (plan §4).
+	UnattendedStopBlockingSystemHealth UnattendedStopKind = "blocking_system_health"
+)
+
+// AllUnattendedStopKinds is the single registration point for stop kinds.
+var AllUnattendedStopKinds = []UnattendedStopKind{
+	UnattendedStopOperator,
+	UnattendedStopBlockingSystemHealth,
+}
+
+func (k UnattendedStopKind) valid() bool {
+	switch k {
+	case UnattendedStopOperator, UnattendedStopBlockingSystemHealth:
+		return true
+	default:
+		return false
+	}
+}

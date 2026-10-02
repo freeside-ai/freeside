@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -378,6 +379,86 @@ func TestBlockingSystemHealthRefusesUnattendedAdmission(t *testing.T) {
 		putItem(t, s, resolved)
 		if err := recordAdmission(t, s, f.admission); err != nil {
 			t.Fatalf("admission after the diagnostic cleared: %v", err)
+		}
+	})
+}
+
+// TestUnattendedOperationGateVerdicts pins the gate as data: the verdict names
+// what closes admission, and its predicate is what the admission gate
+// returns, so the sync projection and the refusal cannot disagree.
+func TestUnattendedOperationGateVerdicts(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := unattendedAdmissionFixture(t)
+	gateOf := func(t *testing.T, s *store.Store) domain.UnattendedOperationGate {
+		t.Helper()
+		var gate domain.UnattendedOperationGate
+		var required error
+		if err := s.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			if gate, err = tx.UnattendedOperationGate(ctx); err != nil {
+				return err
+			}
+			required = tx.RequireUnattendedOperationOpen(ctx)
+			return nil
+		}); err != nil {
+			t.Fatalf("UnattendedOperationGate: %v", err)
+		}
+		if fmt.Sprint(required) != fmt.Sprint(gate.Err()) {
+			t.Fatalf("predicate = %v, verdict = %v; they must agree", required, gate.Err())
+		}
+		return gate
+	}
+
+	t.Run("open", func(t *testing.T) {
+		s := openWithFixture(t, f, unattendedOptions())
+		putItem(t, s, healthItem(t, "advisory", domain.HealthPostureAdvisory, nil))
+		putItem(t, s, healthItem(t, "superseded", domain.HealthPostureBlocking, &domain.BlockingSupersession{
+			Kind: domain.SupersessionBackupEncryptionWaiver, RepositoryID: 424242,
+		}))
+		gate := gateOf(t, s)
+		if gate.OperatorStop != nil || len(gate.Blocking) != 0 || gate.Err() != nil {
+			t.Fatalf("gate = %+v, want open", gate)
+		}
+	})
+
+	t.Run("operator stop", func(t *testing.T) {
+		s := openWithFixture(t, f, unattendedOptions())
+		recordTransition(t, s, stoppedAt(admissionEpoch, "cmd-stop"))
+		gate := gateOf(t, s)
+		if gate.OperatorStop == nil || *gate.OperatorStop.CommandID != "cmd-stop" ||
+			!gate.OperatorStop.OccurredAt.Equal(admissionEpoch) {
+			t.Fatalf("operator stop = %+v, want the cmd-stop transition", gate.OperatorStop)
+		}
+		if len(gate.Blocking) != 0 {
+			t.Fatalf("blocking = %+v, want none", gate.Blocking)
+		}
+		if !errors.Is(gate.Err(), domain.ErrUnattendedOperationStopped) {
+			t.Fatalf("verdict = %v, want %v", gate.Err(), domain.ErrUnattendedOperationStopped)
+		}
+
+		recordTransition(t, s, resumedAt(admissionEpoch.Add(time.Hour), "cmd-resume"))
+		if gate := gateOf(t, s); gate.OperatorStop != nil || gate.Err() != nil {
+			t.Fatalf("gate after resume = %+v, want open", gate)
+		}
+	})
+
+	t.Run("blocking items", func(t *testing.T) {
+		s := openWithFixture(t, f, unattendedOptions())
+		putItem(t, s, healthItem(t, "health-b", domain.HealthPostureBlocking, nil))
+		putItem(t, s, healthItem(t, "health-a", domain.HealthPostureBlocking, nil))
+		putItem(t, s, healthItem(t, "advisory", domain.HealthPostureAdvisory, nil))
+		gate := gateOf(t, s)
+		if gate.OperatorStop != nil {
+			t.Fatalf("operator stop = %+v, want none", gate.OperatorStop)
+		}
+		// Every blocking item is named, not only the first the predicate
+		// refuses on.
+		if len(gate.Blocking) != 2 || gate.Blocking[0].Item.ID != "health-a" || gate.Blocking[1].Item.ID != "health-b" {
+			t.Fatalf("blocking = %+v, want health-a then health-b", gate.Blocking)
+		}
+		if !errors.Is(gate.Err(), domain.ErrBlockingSystemHealth) {
+			t.Fatalf("verdict = %v, want %v", gate.Err(), domain.ErrBlockingSystemHealth)
 		}
 	})
 }
