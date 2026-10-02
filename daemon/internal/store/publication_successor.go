@@ -91,14 +91,9 @@ func (tx *ReadTx) GetPublicationSuccessor(ctx context.Context, runID domain.RunI
 			return cached, nil
 		}
 	}
-	entry, err := tx.GetOutbox(ctx, key)
+	successor, err := tx.sealedPublicationSuccessor(ctx, runID, publication)
 	if err != nil {
-		return domain.PublicationSuccessor{}, err
-	}
-	successor, err := domain.DecodePublicationSuccessor(entry.Payload)
-	if err != nil || entry.Kind != domain.PublicationSuccessorKind || entry.IdempotencyKey != successor.Key() ||
-		!entry.Dispatched() || successor.PublicationID() != publication || successor.RunID != runID {
-		return successor, errors.Join(err, domain.ErrParentKeyMismatch)
+		return successor, err
 	}
 	err = tx.validatePublicationSuccessor(ctx, successor)
 	if err == nil && tx.publicationSuccessorReads != nil {
@@ -107,12 +102,37 @@ func (tx *ReadTx) GetPublicationSuccessor(ctx context.Context, runID domain.RunI
 	return successor, err
 }
 
+// sealedPublicationSuccessor decodes the stored record and checks it against
+// its own key. It runs no gate, so its result is not yet an authority.
+func (tx *ReadTx) sealedPublicationSuccessor(ctx context.Context, runID domain.RunID, publication domain.InvocationID) (domain.PublicationSuccessor, error) {
+	entry, err := tx.GetOutbox(ctx, "publication-successor/"+url.PathEscape(string(runID))+"/"+string(publication))
+	if err != nil {
+		return domain.PublicationSuccessor{}, err
+	}
+	successor, err := domain.DecodePublicationSuccessor(entry.Payload)
+	if err != nil || entry.Kind != domain.PublicationSuccessorKind || entry.IdempotencyKey != successor.Key() ||
+		!entry.Dispatched() || successor.PublicationID() != publication || successor.RunID != runID {
+		return successor, errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	return successor, nil
+}
+
 func (tx *ReadTx) validatePublicationSuccessor(ctx context.Context, successor domain.PublicationSuccessor) error {
 	if err := successor.Validate(); err != nil {
 		return err
 	}
-	if successor.EffectiveOrigin() == domain.PublicationSuccessorRemediation {
+	switch successor.EffectiveOrigin() {
+	case domain.PublicationSuccessorReadinessInvalidation:
+		return tx.validateReentrySuccessor(ctx, successor)
+	case domain.PublicationSuccessorRemediation:
+		if err := tx.requireUninvalidatedPredecessor(ctx, successor); err != nil {
+			return err
+		}
 		return tx.validateContinuationSuccessor(ctx, successor)
+	case domain.PublicationSuccessorFeedback:
+	}
+	if err := tx.requireUninvalidatedPredecessor(ctx, successor); err != nil {
+		return err
 	}
 	returned, ready, found, err := tx.FeedbackPublicationParent(ctx, successor.FeedbackInvocationID)
 	if err != nil || !found || returned.RunID != successor.RunID || returned.CommandID != successor.CommandID ||
@@ -127,6 +147,84 @@ func (tx *ReadTx) validatePublicationSuccessor(ctx context.Context, successor do
 	if err != nil || prior.RunID != successor.RunID || prior.HeadSHA != ready.HeadSHA ||
 		prior.Round+1 != successor.ReviewRound {
 		return errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	return nil
+}
+
+// validateReentrySuccessor re-derives every coordinate of a re-entry authority
+// from the superseded item's daemon-recorded invalidation fact, its
+// authenticated binding, and the review pass that earned it. For head_changed
+// the head is a forge observation of commits no Freeside invocation produced,
+// so the record's own coordinates are never trusted: a decoded or
+// caller-supplied record must restate exactly what current state proves
+// (devlog/2026-10-02-0222-readiness-reentry-authority.md).
+func (tx *ReadTx) validateReentrySuccessor(ctx context.Context, successor domain.PublicationSuccessor) error {
+	_, err := tx.reentryPredecessorBinding(ctx, successor)
+	return err
+}
+
+// reentryPredecessorBinding is the re-entry gate. It returns the predecessor
+// binding it authenticated so the re-entered binding's gate can compare
+// against it without authenticating the whole ancestry a second time: two
+// reads per level would double the cost with every consecutive re-entry.
+func (tx *ReadTx) reentryPredecessorBinding(ctx context.Context, successor domain.PublicationSuccessor) (domain.ReadyItemPRBinding, error) {
+	none := domain.ReadyItemPRBinding{}
+	if err := successor.Validate(); err != nil {
+		return none, err
+	}
+	reentry := successor.Reentry
+	if reentry == nil {
+		return none, domain.ErrParentKeyMismatch
+	}
+	// The fact alone proves a superseded ready_for_final_review item: the
+	// item's own validation admits it on nothing else. The binding gate below
+	// ties that item to the binding's run.
+	item, err := tx.GetAttentionItemRecord(ctx, successor.PredecessorItemID)
+	if err != nil || item.ReadinessInvalidation == nil || item.ReadinessInvalidation.Reason != reentry.Reason {
+		return none, errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	fact := *item.ReadinessInvalidation
+	ready, err := tx.GetReadyItemPRBinding(ctx, item.ID)
+	if err != nil || ready.RunID != successor.RunID {
+		return none, errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	prior, err := tx.GetReviewRecord(ctx, successor.PriorReviewInvocationID)
+	if err != nil || prior.RunID != successor.RunID || prior.HeadSHA != ready.HeadSHA ||
+		prior.Round+1 != successor.ReviewRound {
+		return none, errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	wantBase, wantHead := "", ""
+	switch reentry.Reason {
+	case domain.ReadinessInvalidationBaseAdvanced:
+		wantBase, wantHead = fact.Observed, ready.HeadSHA
+	case domain.ReadinessInvalidationHeadChanged:
+		if fact.Bound != ready.HeadSHA {
+			return none, domain.ErrParentKeyMismatch
+		}
+		wantBase, wantHead = prior.BaseSHA, fact.Observed
+	case domain.ReadinessInvalidationRetargeted, domain.ReadinessInvalidationIdentityChanged:
+		return none, domain.ErrParentKeyMismatch
+	}
+	if wantBase == "" || wantHead == "" || reentry.BaseSHA != wantBase || reentry.HeadSHA != wantHead {
+		return none, domain.ErrParentKeyMismatch
+	}
+	return ready, nil
+}
+
+// requireUninvalidatedPredecessor keeps an invalidated ready item from
+// counting as the current ready item for any authority but re-entry. A cycle
+// that stopped before publication has no item row, which is not an
+// invalidation.
+func (tx *ReadTx) requireUninvalidatedPredecessor(ctx context.Context, successor domain.PublicationSuccessor) error {
+	item, err := tx.GetAttentionItemRecord(ctx, successor.PredecessorItemID)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if item.ReadinessInvalidation != nil {
+		return domain.ErrParentKeyMismatch
 	}
 	return nil
 }
@@ -222,12 +320,18 @@ func (tx *ReadTx) PublishedProductionReadyItemID(ctx context.Context, runID doma
 	return ready.ItemID, nil
 }
 
+// reentryPublicationPrefix is the publication ID shape of a commandless
+// successor (domain.PublicationSuccessor.PublicationID).
+const reentryPublicationPrefix = "publish-reentry-"
+
 func (tx *ReadTx) PublicationSuccessorForReadyItem(ctx context.Context, runID domain.RunID, itemID domain.ItemID) (domain.PublicationSuccessor, error) {
 	var publication domain.InvocationID
 	if command, ok := strings.CutPrefix(string(itemID), "production-ready-feedback-"); ok {
 		publication = domain.InvocationID("publish-feedback-" + command)
 	} else if command, ok := strings.CutPrefix(string(itemID), "production-ready-continuation-"); ok {
 		publication = domain.InvocationID("publish-continuation-" + command)
+	} else if key, ok := strings.CutPrefix(string(itemID), "production-ready-reentry-"); ok {
+		publication = domain.InvocationID(reentryPublicationPrefix + key)
 	} else {
 		return domain.PublicationSuccessor{}, domain.ErrParentKeyMismatch
 	}
@@ -331,6 +435,11 @@ func (tx *ReadTx) AuthenticateSuccessorProducer(ctx context.Context, successor d
 	if err := tx.validatePublicationSuccessor(ctx, successor); err != nil {
 		return err
 	}
+	// A re-entry or continuation authority has no feedback invocation; an
+	// empty producer must not match that empty field.
+	if producer == "" {
+		return domain.ErrParentKeyMismatch
+	}
 	if producer == successor.FeedbackInvocationID {
 		return tx.validatePublicationSuccessor(ctx, successor)
 	}
@@ -385,7 +494,10 @@ func (tx *ReadTx) AuthenticateSuccessorProducer(ctx context.Context, successor d
 }
 
 // PublicationSuccessorTarget derives branch and PR coordinates from the
-// predecessor's authenticated outcome, never from an agent or client.
+// predecessor's authenticated outcome, never from an agent or client. The PR
+// number, branch and identity come from the last ancestor that published; the
+// expected old head is the head now on the PR, which after a re-entry is the
+// authority's head, not the head that ancestor pushed.
 func (tx *ReadTx) PublicationSuccessorTarget(ctx context.Context, runID domain.RunID, publication domain.InvocationID) (publicationrecord.SuccessorTarget, error) {
 	successor, err := tx.GetPublicationSuccessor(ctx, runID, publication)
 	if err != nil {
@@ -400,13 +512,25 @@ func (tx *ReadTx) PublicationSuccessorTarget(ctx context.Context, runID domain.R
 		return publicationrecord.SuccessorTarget{}, err
 	}
 	outcome, err := publicationrecord.DecodeOutcome(entry.Payload)
+	// A binding re-earned in place inherits its ancestor's publication
+	// identity, so the outcome under that identity records the ancestor's
+	// head, not this one's. The binding's own gate already proved its head
+	// against its authority.
+	inPlace, inPlaceErr := tx.reenteredInPlace(ctx, ready)
+	if inPlaceErr != nil {
+		return publicationrecord.SuccessorTarget{}, inPlaceErr
+	}
 	if err != nil || entry.Kind != publicationrecord.IntentKindOutcome || outcome.Identity != ready.PublicationIdentity ||
-		outcome.HeadSHA != ready.HeadSHA || outcome.PRNumber != ready.PRNumber || outcome.Repo != ready.Repo || outcome.BaseRef != ready.BaseRef {
+		(!inPlace && outcome.HeadSHA != ready.HeadSHA) ||
+		outcome.PRNumber != ready.PRNumber || outcome.Repo != ready.Repo || outcome.BaseRef != ready.BaseRef {
 		return publicationrecord.SuccessorTarget{}, errors.Join(err, domain.ErrParentKeyMismatch)
 	}
 	target := publicationrecord.SuccessorTarget{
 		ItemID: ready.ItemID, Identity: ready.PublicationIdentity, HeadSHA: ready.HeadSHA,
 		PRNumber: ready.PRNumber, Branch: outcome.Branch,
+	}
+	if successor.Reentry != nil {
+		target.HeadSHA = successor.Reentry.HeadSHA
 	}
 	return target, target.Validate(ready.BaseRef)
 }

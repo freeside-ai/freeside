@@ -298,6 +298,15 @@ type WorkUnitPRBinding struct {
 // published ready item, including runs with no optional work-unit declaration,
 // so active-resource reconciliation can resume from durable state after a
 // restart without deriving coordinates from presentation text.
+//
+// A cycle that re-earns readiness in place after a readiness invalidation
+// (PublicationSuccessorReadinessInvalidation) published nothing of its own.
+// Its binding names the re-entry authority as its publication, carries the
+// head that authority re-entered for, and inherits every other coordinate,
+// ProducingInvocationID and PublicationIdentity included, from the last
+// ancestor that published. So ProducingInvocationID names the invocation that
+// opened the pull request, which after a head_changed re-entry did not
+// produce HeadSHA.
 type ReadyItemPRBinding struct {
 	ItemID                  ItemID       `json:"item_id"`
 	RunID                   RunID        `json:"run_id"`
