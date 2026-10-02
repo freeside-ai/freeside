@@ -49,6 +49,9 @@ func (tx *WriteTx) RecordPublicationSuccessor(ctx context.Context, successor dom
 		if err == nil && failure.Round >= successor.ReviewRound {
 			return domain.ErrParentKeyMismatch
 		}
+		if err := tx.requireCurrentExternalReviewAdmission(ctx, successor); err != nil {
+			return err
+		}
 	}
 	return tx.MarkOutboxDispatched(ctx, successor.Key())
 }
@@ -151,6 +154,49 @@ func (tx *ReadTx) validatePublicationSuccessor(ctx context.Context, successor do
 	return nil
 }
 
+// requireCurrentExternalReviewAdmission is the seal-time half of external
+// review admission. The gate proves the profile an external_review authority
+// names admits its reviewer; a new cycle additionally needs that profile to
+// be the repository's active one, so removing a reviewer stops new cycles. It
+// runs only when the record is first sealed: a sealed cycle keeps reading
+// under the profile it named, and its replay converges.
+func (tx *ReadTx) requireCurrentExternalReviewAdmission(ctx context.Context, successor domain.PublicationSuccessor) error {
+	if successor.EffectiveOrigin() != domain.PublicationSuccessorExternalReview {
+		return nil
+	}
+	// The gate admits any superseded, uninvalidated ready item, which is also
+	// what an operator's feedback return leaves behind. Only the run's
+	// current ready item may start a cycle, or a second successor of one item
+	// would branch the chain and make every later read of it fail.
+	chain, err := tx.PublicationSuccessorChain(ctx, successor.RunID)
+	if err != nil {
+		return err
+	}
+	current := domain.ProductionReadyItemID(successor.RunID)
+	for _, sealed := range chain {
+		// One finding starts one cycle. A cycle that re-earned readiness in
+		// place leaves the finding on the published head, where it would
+		// otherwise pass the gate again without limit.
+		if sealed.ExternalFindingID == successor.ExternalFindingID {
+			return domain.ErrParentKeyMismatch
+		}
+		current = sealed.ReadyItemID()
+	}
+	if current != successor.PredecessorItemID {
+		return domain.ErrParentKeyMismatch
+	}
+	ready, err := tx.GetReadyItemPRBinding(ctx, successor.PredecessorItemID)
+	if err != nil {
+		return err
+	}
+	active, err := tx.LatestTrustProfile(ctx, ready.Repo)
+	if err != nil || active.ProfileDigest != successor.AdmittingProfileDigest {
+		return fmt.Errorf("seal external review re-entry under trust profile %s: %w",
+			successor.AdmittingProfileDigest, errors.Join(err, domain.ErrExternalReviewNotAdmitted))
+	}
+	return nil
+}
+
 // validateReentrySuccessor re-derives every coordinate of a re-entry authority
 // from the superseded item's daemon-recorded invalidation fact, its
 // authenticated binding, and the review pass that earned it. For head_changed
@@ -176,14 +222,30 @@ func (tx *ReadTx) reentryPredecessorBinding(ctx context.Context, successor domai
 	if reentry == nil {
 		return none, domain.ErrParentKeyMismatch
 	}
-	// The fact alone proves a superseded ready_for_final_review item: the
-	// item's own validation admits it on nothing else. The binding gate below
-	// ties that item to the binding's run.
 	item, err := tx.GetAttentionItemRecord(ctx, successor.PredecessorItemID)
-	if err != nil || item.ReadinessInvalidation == nil || item.ReadinessInvalidation.Reason != reentry.Reason {
+	if err != nil {
 		return none, errors.Join(err, domain.ErrParentKeyMismatch)
 	}
-	fact := *item.ReadinessInvalidation
+	external := successor.EffectiveOrigin() == domain.PublicationSuccessorExternalReview
+	var fact domain.ReadinessInvalidation
+	if external {
+		// Nothing invalidated this item, so no fact proves its state: it must
+		// itself be a ready_for_final_review item, superseded in the
+		// transaction that seals this authority and not by an invalidation,
+		// which has its own origin.
+		if item.Type != domain.AttentionReadyForFinalReview || item.Status != domain.StatusSuperseded ||
+			item.ReadinessInvalidation != nil {
+			return none, domain.ErrParentKeyMismatch
+		}
+	} else {
+		// The fact alone proves a superseded ready_for_final_review item: the
+		// item's own validation admits it on nothing else. The binding gate
+		// below ties that item to the binding's run.
+		if item.ReadinessInvalidation == nil || item.ReadinessInvalidation.Reason != reentry.Reason {
+			return none, domain.ErrParentKeyMismatch
+		}
+		fact = *item.ReadinessInvalidation
+	}
 	ready, err := tx.GetReadyItemPRBinding(ctx, item.ID)
 	if err != nil || ready.RunID != successor.RunID {
 		return none, errors.Join(err, domain.ErrParentKeyMismatch)
@@ -192,6 +254,25 @@ func (tx *ReadTx) reentryPredecessorBinding(ctx context.Context, successor domai
 	if err != nil || prior.RunID != successor.RunID || prior.HeadSHA != ready.HeadSHA ||
 		prior.Round+1 != successor.ReviewRound {
 		return none, errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	if external {
+		if err := tx.requireAdmittedExternalFinding(ctx, successor, ready); err != nil {
+			return none, err
+		}
+		// This origin admits remediation, which rebuilds the candidate and
+		// replaces the published head, so the head must be one Freeside
+		// pushed. A review-only cycle on someone else's commits would need an
+		// authority that says so; until one exists the finding drives nothing.
+		foreign, err := tx.publishedHeadIsForeign(ctx, ready)
+		if err != nil || foreign {
+			return none, errors.Join(err, domain.ErrParentKeyMismatch)
+		}
+		// The pull request did not move: the cycle reviews the published
+		// head against the base its last review used.
+		if prior.BaseSHA == "" || reentry.BaseSHA != prior.BaseSHA || reentry.HeadSHA != ready.HeadSHA {
+			return none, domain.ErrParentKeyMismatch
+		}
+		return ready, nil
 	}
 	wantBase, wantHead := "", ""
 	switch reentry.Reason {
@@ -209,6 +290,63 @@ func (tx *ReadTx) reentryPredecessorBinding(ctx context.Context, successor domai
 		return none, domain.ErrParentKeyMismatch
 	}
 	return ready, nil
+}
+
+// requireAdmittedExternalFinding proves the finding and profile an
+// external_review authority names instead of trusting that it names them: the
+// finding is an external one on this run and on the published head, and the
+// named profile, re-read and re-validated, is for the bound repository and
+// lists the finding's reviewer with drive_round authority. The named profile
+// is checked here, not the active one, so the authority reads the same after
+// the owner edits the allowlist; sealing separately requires it to be active.
+func (tx *ReadTx) requireAdmittedExternalFinding(
+	ctx context.Context, successor domain.PublicationSuccessor, ready domain.ReadyItemPRBinding,
+) error {
+	finding, err := tx.GetFinding(ctx, successor.ExternalFindingID)
+	if err != nil || finding.External == nil || finding.RunID != successor.RunID ||
+		finding.External.HeadSHA != ready.HeadSHA {
+		return errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	profile, err := tx.GetTrustProfile(ctx, successor.AdmittingProfileDigest)
+	if err != nil {
+		return errors.Join(err, domain.ErrExternalReviewNotAdmitted)
+	}
+	return externalFindingAdmittedBy(finding, profile, ready)
+}
+
+// publishedHeadIsForeign reports whether the head on an authenticated ready
+// binding came from a head_changed re-entry, that is, from commits no Freeside
+// invocation produced. An in-place binding inherits its head from the
+// authority it re-entered under: head_changed observed a foreign one,
+// external_review was itself refused on one by this check, and base_advanced
+// kept its predecessor's, so only that link is followed further. The walk
+// reads rows without re-running their gates: authenticating the binding it
+// starts from already authenticated every ancestor, and a gated read per
+// level would make the cost grow with every consecutive re-entry.
+func (tx *ReadTx) publishedHeadIsForeign(ctx context.Context, ready domain.ReadyItemPRBinding) (bool, error) {
+	publication := ready.PublicationInvocationID
+	for {
+		inPlace, err := tx.reenteredInPlace(ctx, domain.ReadyItemPRBinding{PublicationInvocationID: publication})
+		if err != nil || !inPlace {
+			return false, err
+		}
+		authority, err := tx.sealedPublicationSuccessor(ctx, ready.RunID, publication)
+		if err != nil || authority.Reentry == nil {
+			return false, errors.Join(err, domain.ErrParentKeyMismatch)
+		}
+		if authority.EffectiveOrigin() == domain.PublicationSuccessorExternalReview {
+			return false, nil
+		}
+		if authority.Reentry.Reason != domain.ReadinessInvalidationBaseAdvanced {
+			return true, nil
+		}
+		var parent string
+		if err := tx.tx.QueryRowContext(ctx, `SELECT publication_invocation_id FROM ready_item_pr_bindings
+			WHERE item_id = ? AND run_id = ?`, authority.PredecessorItemID, ready.RunID).Scan(&parent); err != nil {
+			return false, errors.Join(notFoundOr(err), domain.ErrParentKeyMismatch)
+		}
+		publication = domain.InvocationID(parent)
+	}
 }
 
 // requireUninvalidatedPredecessor keeps an invalidated ready item from
