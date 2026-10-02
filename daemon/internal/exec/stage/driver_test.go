@@ -51,7 +51,7 @@ var testCredentialMountPolicy = CredentialMountPolicy{
 }
 
 type testVolumeLookup interface {
-	AuthStoreVolume(context.Context, domain.AuthIdentityID) (string, error)
+	AuthStoreVolume(context.Context, domain.AuthIdentityID, domain.InvocationID) (string, error)
 }
 
 type testProvider struct {
@@ -179,7 +179,7 @@ func (p testProvider) HandoffSpec(
 	volume := testAuthVol
 	if p.volumes != nil {
 		var err error
-		volume, err = p.volumes.AuthStoreVolume(ctx, spec.AuthIdentityID)
+		volume, err = p.volumes.AuthStoreVolume(ctx, spec.AuthIdentityID, in.InvocationID)
 		if err != nil {
 			return ward.HandoffSpec{}, err
 		}
@@ -401,7 +401,7 @@ type stubVolumes struct {
 	err    error
 }
 
-func (v stubVolumes) AuthStoreVolume(context.Context, domain.AuthIdentityID) (string, error) {
+func (v stubVolumes) AuthStoreVolume(context.Context, domain.AuthIdentityID, domain.InvocationID) (string, error) {
 	return v.volume, v.err
 }
 
@@ -414,7 +414,7 @@ type secondLookupRefusingVolumes struct {
 }
 
 func (v *secondLookupRefusingVolumes) AuthStoreVolume(
-	context.Context, domain.AuthIdentityID,
+	context.Context, domain.AuthIdentityID, domain.InvocationID,
 ) (string, error) {
 	v.mu.Lock()
 	v.calls++

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -68,6 +67,11 @@ func realRunBackupFiles(dbPath string, final bool) (*store.LocalBackupFiles, err
 // input: a new identity starts at the declared limit, and an existing one
 // keeps the limit the operator recorded with `freesided set-identity-limit`,
 // so relaunching the harness never resets a raised limit.
+// realRunIdentities records an identity the store lacks, in the flag-era
+// shape `freesided auth adopt` then enrolls, and otherwise only checks the
+// fixed bindings. A recorded identity is the operator's: adoption binds its
+// account and cost owner and a limit change is theirs too, so rewriting it
+// from the run inputs would undo them.
 func realRunIdentities(ctx context.Context, st *store.Store, final bool, identities ...domain.AuthIdentity) error {
 	if !final {
 		return st.WriteInternal(ctx, func(tx *store.InternalTx) error {
@@ -75,7 +79,10 @@ func realRunIdentities(ctx context.Context, st *store.Store, final bool, identit
 				stored, err := tx.GetAuthIdentity(ctx, identity.ID)
 				switch {
 				case err == nil:
-					identity.MaxParallelExecutions = stored.MaxParallelExecutions
+					if !stored.SameFixedBindings(identity) {
+						return fmt.Errorf("recorded auth identity %s differs from the run inputs", identity.ID)
+					}
+					continue
 				case !errors.Is(err, store.ErrNotFound):
 					return err
 				}
@@ -92,8 +99,7 @@ func realRunIdentities(ctx context.Context, st *store.Store, final bool, identit
 			if err != nil {
 				return err
 			}
-			expected.MaxParallelExecutions = actual.MaxParallelExecutions
-			if !reflect.DeepEqual(actual, expected) {
+			if !actual.SameFixedBindings(expected) {
 				return fmt.Errorf("recorded auth identity %s differs from the run inputs", expected.ID)
 			}
 		}
@@ -315,15 +321,16 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	// The identity binding the ward gate compares the writable mount
-	// against. It is an operator precondition in production; the harness
-	// records it so a fresh state root is runnable.
+	// The flag-era identities a fresh state root starts from. The daemon
+	// selects through the lineup, so a fresh root is runnable once the
+	// operator adopts them (freesided auth adopt) and commits the tree patch;
+	// preflight's agent_selection check names that step until then.
 	identity := domain.AuthIdentity{
-		ID: env.authIdentityID, Provider: "claude", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+		ID: env.authIdentityID, Provider: "claude", AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: env.authVolume, RefreshStrategy: domain.RefreshOnDemand},
 	}
 	reviewIdentity := domain.AuthIdentity{
-		ID: env.reviewAuthIdentityID, Provider: "openai", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+		ID: env.reviewAuthIdentityID, Provider: "openai", AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: env.reviewAuthSnapshot, RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true},
 	}
 	if reviewIdentity.ID == identity.ID {

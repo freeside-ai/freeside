@@ -21,6 +21,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
+	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -77,8 +79,11 @@ type claudeDriverConfig struct {
 	RepositoryID                   int64
 	BaseRef                        string
 	BaseSHA                        string
-	AuthIdentityID                 domain.AuthIdentityID
-	AllowedPaths                   []string
+	// AgentTreeCheckout and AgentTreeCommit name the admitted-agent tree: a
+	// local checkout and the exact commit whose policy/ tree admission reads.
+	// Every identity the daemon runs under comes from that tree's lineup.
+	AgentTreeCheckout, AgentTreeCommit string
+	AllowedPaths                       []string
 	// RunConformance executes the store-backed full ward suite against this
 	// exact runtime/image/configuration before the engine can admit work.
 	RunConformance bool
@@ -90,20 +95,26 @@ type claudeDriverConfig struct {
 	ReviewImage                 string
 	ReviewInputRoot             string
 	ReviewAuthMode              ward.CodexAuthMode
-	ReviewAuthIdentityID        domain.AuthIdentityID
 	ReviewAuthSnapshot          string
 	ReviewInstructions          string
 	ReviewModel                 string
 	ReviewReasoningEffort       string
-	ReviewCostOwner             string
 	ReviewWorkspaceSizeMB       int64
 	ShadowReviewImage           string
 	ShadowReviewAuthSnapshot    string
 	ShadowReviewModel           string
 	ShadowReviewReasoningEffort string
-	ShadowReviewCostOwner       string
 	ShadowReviewWorkspaceSizeMB int64
 	ShadowReviewRate            float64
+
+	// The review identities and cost owners are resolved from the reviewer
+	// and shadow reviewer lineup lines (resolveReviewSelection), never set by
+	// a flag. They feed the review sources and the approved configuration
+	// digests, which is why they stay beside the review fields.
+	ReviewAuthIdentityID       domain.AuthIdentityID
+	ReviewCostOwner            string
+	ShadowReviewAuthIdentityID domain.AuthIdentityID
+	ShadowReviewCostOwner      string
 }
 
 var errBackendConformanceUnavailable = errors.New("exact passing backend conformance proof is unavailable")
@@ -134,8 +145,10 @@ func (c claudeDriverConfig) validate() error {
 		return fmt.Errorf("-base-ref is not a valid transport branch")
 	case publish.ValidateCommitSHA(c.BaseSHA) != nil:
 		return fmt.Errorf("-base-sha must be a full lowercase commit SHA")
-	case c.AuthIdentityID == "":
-		return fmt.Errorf("-auth-identity is required in claude driver mode")
+	case c.AgentTreeCheckout == "" || c.AgentTreeCommit == "":
+		return fmt.Errorf("-agent-tree and -agent-tree-commit are required in claude driver mode")
+	case !filepath.IsAbs(c.AgentTreeCheckout) || filepath.Clean(c.AgentTreeCheckout) != c.AgentTreeCheckout:
+		return fmt.Errorf("-agent-tree must be a clean absolute path")
 	case !engine.ExplicitAllowedPaths(c.AllowedPaths):
 		// The importer's declared-path scope is a containment control (§5.6,
 		// §5.8), so unattended work states it explicitly; inheriting a
@@ -150,9 +163,9 @@ func (c claudeDriverConfig) validate() error {
 	case c.StateRoot == "" || c.CredentialsDir == "":
 		return fmt.Errorf("-publication-state-dir and -publication-credentials-dir are required in claude driver mode")
 	case c.OperatingMode == domain.ModeUnattended &&
-		(c.ReviewImage == "" || c.ReviewInputRoot == "" || c.ReviewAuthIdentityID == "" ||
+		(c.ReviewImage == "" || c.ReviewInputRoot == "" ||
 			c.ReviewAuthSnapshot == "" || c.ReviewInstructions == "" || c.ReviewModel == "" ||
-			c.ReviewReasoningEffort == "" || c.ReviewCostOwner == "" || c.ReviewWorkspaceSizeMB <= 0):
+			c.ReviewReasoningEffort == "" || c.ReviewWorkspaceSizeMB <= 0):
 		return fmt.Errorf("codex review configuration is required in claude driver mode")
 	case c.OperatingMode == domain.ModeUnattended && domain.ImageRef(c.ReviewImage).Validate() != nil:
 		return fmt.Errorf("-review-image must be digest-pinned")
@@ -169,11 +182,11 @@ func (c claudeDriverConfig) validate() error {
 		return fmt.Errorf("shadow review requires unattended mode")
 	case c.ShadowReviewImage == "" &&
 		(c.ShadowReviewAuthSnapshot != "" || c.ShadowReviewModel != "" ||
-			c.ShadowReviewReasoningEffort != "" || c.ShadowReviewCostOwner != ""):
+			c.ShadowReviewReasoningEffort != ""):
 		return fmt.Errorf("-shadow-review-image is required when shadow review fields are set")
 	case c.ShadowReviewImage != "" &&
 		(c.ShadowReviewAuthSnapshot == "" || c.ShadowReviewModel == "" ||
-			c.ShadowReviewReasoningEffort == "" || c.ShadowReviewCostOwner == "" ||
+			c.ShadowReviewReasoningEffort == "" ||
 			c.ShadowReviewWorkspaceSizeMB <= 0 || math.IsNaN(c.ShadowReviewRate) ||
 			math.IsInf(c.ShadowReviewRate, 0) || c.ShadowReviewRate < 0 || c.ShadowReviewRate > 1):
 		return fmt.Errorf("complete shadow review configuration is required when enabled")
@@ -201,6 +214,42 @@ func admissionFloor(mode domain.OperatingMode) []exec.Capability {
 		return unattendedAdmissionFloor
 	}
 	return nil
+}
+
+// agentExpiryMargin is how far past an attempt's deadline an expiring
+// credential must last (§5.4 step 4): slack for the teardown that still holds
+// the store after the handoff budget ends.
+const agentExpiryMargin = 5 * time.Minute
+
+// loadAgentSelection reads the admitted-agent tree at the operator's exact
+// commit and returns the selection that admits ward stages through its
+// lineup. The tree is read once: a later commit takes effect at the next
+// start, so every admission of one daemon run cites one revision. The caller
+// sets the attempt budget and the gate once the backend is composed.
+func loadAgentSelection(ctx context.Context, cfg claudeDriverConfig) (*engine.AgentSelection, error) {
+	scratch, err := os.MkdirTemp("", "freesided-agent-tree-")
+	if err != nil {
+		return nil, fmt.Errorf("agent tree scratch: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(scratch) }()
+	files, err := agenttree.ReadCommit(ctx, cfg.AgentTreeCheckout, scratch, cfg.AgentTreeCommit)
+	if err != nil {
+		return nil, fmt.Errorf("read agent tree: %w", err)
+	}
+	tree, err := agenttree.Parse(files)
+	if err != nil {
+		return nil, fmt.Errorf("parse agent tree at %s: %w", cfg.AgentTreeCommit, err)
+	}
+	revision, err := agenttree.Revision(files)
+	if err != nil {
+		return nil, fmt.Errorf("agent tree revision at %s: %w", cfg.AgentTreeCommit, err)
+	}
+	egress := slices.Clone(cfg.ProviderEndpoints)
+	slices.Sort(egress)
+	return &engine.AgentSelection{
+		Tree: tree, LineupRevision: revision, Launch: agentbaseline.RoleLaunch,
+		EffectiveEgress: egress, ExpiryMargin: agentExpiryMargin,
+	}, nil
 }
 
 // ingestPromptPackage stores the prompt package's bytes and returns their
@@ -1291,16 +1340,19 @@ type claudeComposition struct {
 	reviewConfigurationDigest       domain.Digest
 	shadowReviewConfigurationDigest domain.Digest
 	shadowReviewCostOwner           string
-	shadowReviewRate                float64
-	reviewHostInstructions          engine.ReviewHostInstructions
-	containerBin                    string
-	env                             engine.AdmissionEnvironment
-	specificationPromptPackage      domain.Digest
-	remediationPromptPackage        domain.Digest
-	derive                          engine.AdmissionDerivation
-	runConformance                  func(context.Context) error
-	closer                          sessionCloser
-	janitor                         *janitorSession
+	// selectionFailure names the writer role that failed its startup
+	// admission check; while set, the admission gate holds every attempt.
+	selectionFailure           *roleAdmissionError
+	shadowReviewRate           float64
+	reviewHostInstructions     engine.ReviewHostInstructions
+	containerBin               string
+	env                        engine.AdmissionEnvironment
+	specificationPromptPackage domain.Digest
+	remediationPromptPackage   domain.Digest
+	derive                     engine.AdmissionDerivation
+	runConformance             func(context.Context) error
+	closer                     sessionCloser
+	janitor                    *janitorSession
 	// observeBaseTip is the base-advance watch's conditional ref read
 	// through the publish reconciler (§5.11 conditional requests; §5.16
 	// base_advance_watch consumer).
@@ -1389,6 +1441,16 @@ func composeClaudeDriver(
 	logger *slog.Logger,
 ) (_ *claudeComposition, err error) {
 	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+	agents, err := loadAgentSelection(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	utcNow := func() time.Time { return time.Now().UTC() }
+	// The review identities come from the lineup before anything reads them:
+	// the approved configuration digests below take them as inputs.
+	if cfg, err = resolveReviewSelection(ctx, st, agents.Tree, cfg, utcNow()); err != nil {
 		return nil, err
 	}
 	reviewConfigurationDigest, err := requireApprovedReviewConfiguration(ctx, st, cfg)
@@ -1533,10 +1595,12 @@ func composeClaudeDriver(
 		shadowReviewSource, err = ward.NewClaudeReviewSource(ward.CodexReviewSourceConfig{
 			Lifecycle: shadowLifecycle, Review: shadowConfig, Journal: adapters.Journal,
 			WorkspaceSizeMB: cfg.ShadowReviewWorkspaceSizeMB,
-			AuthMode:        ward.CodexAuthSetupToken, AuthIdentityID: cfg.AuthIdentityID,
+			AuthMode:        ward.CodexAuthSetupToken, AuthIdentityID: cfg.ShadowReviewAuthIdentityID,
 			AuthSnapshot: cfg.ShadowReviewAuthSnapshot, InstructionArtifacts: blobs,
 			ConfigurationDigest: shadowReviewDigests.runtime,
-			CostOwner:           cfg.ShadowReviewCostOwner, Now: func() time.Time { return time.Now().UTC() },
+			CostOwner:           cfg.ShadowReviewCostOwner, Now: utcNow,
+			Admit: reviewAdmission(
+				st, agents.Tree, domain.RoleShadowReviewer, cfg.ShadowReviewAuthIdentityID, utcNow),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("compose Claude shadow review source: %w", err)
@@ -1574,7 +1638,8 @@ func composeClaudeDriver(
 			AuthIdentityID: cfg.ReviewAuthIdentityID, AuthSnapshot: cfg.ReviewAuthSnapshot,
 			InstructionArtifacts: blobs,
 			ConfigurationDigest:  reviewConfigurationDigest,
-			CostOwner:            cfg.ReviewCostOwner, Now: func() time.Time { return time.Now().UTC() },
+			CostOwner:            cfg.ReviewCostOwner, Now: utcNow,
+			Admit: reviewAdmission(st, agents.Tree, domain.RoleReviewer, cfg.ReviewAuthIdentityID, utcNow),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("compose Codex review source: %w", err)
@@ -1639,7 +1704,14 @@ func composeClaudeDriver(
 		return nil, fmt.Errorf("compose claude driver: %w", driverErr)
 	}
 
-	identity := cfg.AuthIdentityID
+	// Selection activates only when every writer role passes admission for the
+	// prompt this daemon runs it on; until then the gate holds every attempt.
+	agents.AttemptBudget = backend.HandoffTimeout()
+	selectionFailure := checkWriterRoles(ctx, st, *agents, map[domain.RoleName]domain.Digest{
+		domain.RoleSpecifier: specificationPromptPackage, domain.RoleImplementer: promptPackage,
+		domain.RoleRemediator: remediationPromptPackage,
+	}, cfg.OperatingMode, utcNow())
+	agents.Gate = agentSelectionGate(st, selectionFailure)
 	env := engine.AdmissionEnvironment{
 		OperatingMode:             cfg.OperatingMode,
 		CredentialMode:            domain.CredentialSubscriptionContained,
@@ -1656,10 +1728,11 @@ func composeClaudeDriver(
 		// Base and Workspace are per-attempt and supplied by derive below;
 		// the static values here would be wrong the moment a second task
 		// is submitted.
-		AuthIdentityID: &identity,
+		Agents: agents,
 	}
 	composition := &claudeComposition{
 		driver: driver, backend: backend, authority: authority,
+		selectionFailure: selectionFailure,
 		observeBaseTip: func(obsCtx context.Context, watch domain.ScheduleBaseWatch) (string, error) {
 			obs, err := reconciler.ReconcileRef(obsCtx, watch.Repo, watch.BaseRef)
 			if err != nil {
@@ -1851,7 +1924,7 @@ func shadowReviewConfigurationDigests(cfg claudeDriverConfig) (shadowReviewDiges
 		ApprovedImage:     cfg.ShadowReviewImage, ObserverImage: cfg.ExporterImage,
 		Model: cfg.ShadowReviewModel, ReasoningEffort: cfg.ShadowReviewReasoningEffort,
 	}, cfg.ShadowReviewWorkspaceSizeMB, ward.CodexAuthSetupToken,
-		cfg.AuthIdentityID, cfg.ShadowReviewCostOwner)
+		cfg.ShadowReviewAuthIdentityID, cfg.ShadowReviewCostOwner)
 	if err != nil {
 		return shadowReviewDigests{}, fmt.Errorf(
 			"digest Claude shadow review runtime configuration: %w", err,
@@ -2000,7 +2073,12 @@ func runClaudeConformance(
 	if err != nil {
 		return err
 	}
-	return suite.Full(ctx)
+	if err := suite.Full(ctx); err != nil {
+		return err
+	}
+	// Only a passed ward suite reaches here, so an adapter record never
+	// outlives the runner proof it rests on.
+	return recordBaselineAdapterConformance(ctx, st, time.Now().UTC())
 }
 
 // claudeAdmissionDerivation supplies the per-attempt workspace, and the

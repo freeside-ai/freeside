@@ -305,7 +305,7 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 	if rec.Lease != nil || rec.ReadHold != nil {
 		// Both references name the spec's claimed identity (checked above).
 		id := hs.AuthStoreLease.AuthIdentityID
-		boundVolume, verr := b.cfg.AuthStoreLeaser.AuthStoreVolume(ctx, id)
+		boundVolume, verr := b.cfg.AuthStoreLeaser.AuthStoreVolume(ctx, id, hs.AuthStoreLease.Holder)
 		if verr != nil {
 			return nil, fmt.Errorf("re-gate auth-store volume for identity %q: %w", id, verr)
 		}

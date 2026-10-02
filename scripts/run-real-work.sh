@@ -54,17 +54,26 @@
 #   FREESIDE_REAL_RUN_REVIEW_INPUT_ROOT private root containing the review
 #                                    credential and instruction snapshots
 #   FREESIDE_REAL_RUN_REVIEW_AUTH_MODE subscription or api_key
-#   FREESIDE_REAL_RUN_REVIEW_AUTH_IDENTITY Codex reviewer auth identity id
 #   FREESIDE_REAL_RUN_REVIEW_AUTH_SNAPSHOT Codex auth snapshot under the input root
 #   FREESIDE_REAL_RUN_REVIEW_INSTRUCTIONS operator-host rules under the input root;
 #                                    trusted-base repository AGENTS.md files are
 #                                    discovered and composed separately
 #   FREESIDE_REAL_RUN_REVIEW_MODEL   explicit Codex reviewer model
 #   FREESIDE_REAL_RUN_REVIEW_REASONING explicit reviewer reasoning effort
-#   FREESIDE_REAL_RUN_REVIEW_COST_OWNER account charged for review
 #   FREESIDE_REAL_RUN_SEED_ROOT      daemon-owned exact-base checkout root
-#   FREESIDE_REAL_RUN_AUTH_IDENTITY  provider auth identity id
-#   FREESIDE_REAL_RUN_AUTH_VOLUME    that identity's credential volume
+#   FREESIDE_REAL_RUN_AUTH_IDENTITY  writer auth identity id, recorded on a
+#                                    fresh state root for auth adopt to enroll
+#   FREESIDE_REAL_RUN_REVIEW_AUTH_IDENTITY Codex reviewer auth identity id,
+#                                    recorded the same way
+#   FREESIDE_REAL_RUN_AGENT_TREE     absolute path of the checkout whose policy/
+#                                    holds the admitted-agent tree; its lineup
+#                                    selects every identity the run uses
+#   FREESIDE_REAL_RUN_AGENT_TREE_COMMIT exact 40-character commit of that
+#                                    checkout the tree is read at (freesided
+#                                    auth adopt emits the patch to commit)
+#   FREESIDE_REAL_RUN_AUTH_VOLUME    the writer roles' credential volume, which
+#                                    preflight probes and checks against the
+#                                    lineup's enrollment
 #   FREESIDE_REAL_RUN_REPO           managed owner/name repository
 #   FREESIDE_REAL_RUN_REPOSITORY_ID  canonical numeric repository id
 #   FREESIDE_REAL_RUN_BASE_REF       short base branch name (for example main)
@@ -239,11 +248,12 @@ required=(
   FREESIDE_REAL_RUN_STATE_ROOT FREESIDE_REAL_RUN_LISTEN
   FREESIDE_REAL_RUN_AGENT_IMAGE FREESIDE_WARD_EXPORTER_IMAGE
   FREESIDE_REAL_RUN_REVIEW_IMAGE FREESIDE_REAL_RUN_REVIEW_INPUT_ROOT
-  FREESIDE_REAL_RUN_REVIEW_AUTH_MODE FREESIDE_REAL_RUN_REVIEW_AUTH_IDENTITY
+  FREESIDE_REAL_RUN_REVIEW_AUTH_MODE
   FREESIDE_REAL_RUN_REVIEW_AUTH_SNAPSHOT FREESIDE_REAL_RUN_REVIEW_INSTRUCTIONS
   FREESIDE_REAL_RUN_REVIEW_MODEL FREESIDE_REAL_RUN_REVIEW_REASONING
-  FREESIDE_REAL_RUN_REVIEW_COST_OWNER
-  FREESIDE_REAL_RUN_SEED_ROOT FREESIDE_REAL_RUN_AUTH_IDENTITY FREESIDE_REAL_RUN_AUTH_VOLUME
+  FREESIDE_REAL_RUN_AGENT_TREE FREESIDE_REAL_RUN_AGENT_TREE_COMMIT
+  FREESIDE_REAL_RUN_AUTH_IDENTITY FREESIDE_REAL_RUN_REVIEW_AUTH_IDENTITY
+  FREESIDE_REAL_RUN_SEED_ROOT FREESIDE_REAL_RUN_AUTH_VOLUME
   FREESIDE_REAL_RUN_REPO FREESIDE_REAL_RUN_REPOSITORY_ID FREESIDE_REAL_RUN_BASE_REF
   FREESIDE_REAL_RUN_BASE_SHA FREESIDE_REAL_RUN_REPOSITORY_CHECKOUT
   FREESIDE_REAL_RUN_PROMPT_PACKAGE
@@ -686,16 +696,15 @@ preflight_args=(
 	-base-ref "$FREESIDE_REAL_RUN_BASE_REF"
 	-base-sha "$FREESIDE_REAL_RUN_BASE_SHA"
 	-approved-recipe "$FREESIDE_REAL_RUN_APPROVED_RECIPE"
-	-auth-identity "$FREESIDE_REAL_RUN_AUTH_IDENTITY"
+	-agent-tree "$FREESIDE_REAL_RUN_AGENT_TREE"
+	-agent-tree-commit "$FREESIDE_REAL_RUN_AGENT_TREE_COMMIT"
 	-auth-volume "$FREESIDE_REAL_RUN_AUTH_VOLUME"
 	-review-input-root "$FREESIDE_REAL_RUN_REVIEW_INPUT_ROOT"
 	-review-auth-mode "$FREESIDE_REAL_RUN_REVIEW_AUTH_MODE"
-	-review-auth-identity "$FREESIDE_REAL_RUN_REVIEW_AUTH_IDENTITY"
 	-review-auth-snapshot "$FREESIDE_REAL_RUN_REVIEW_AUTH_SNAPSHOT"
 	-review-instructions "$FREESIDE_REAL_RUN_REVIEW_INSTRUCTIONS"
 	-review-model "$FREESIDE_REAL_RUN_REVIEW_MODEL"
 	-review-reasoning-effort "$FREESIDE_REAL_RUN_REVIEW_REASONING"
-	-review-cost-owner "$FREESIDE_REAL_RUN_REVIEW_COST_OWNER"
 	-publication-state-dir "$FREESIDE_REAL_RUN_APP_STATE"
 	-publication-credentials-dir "$FREESIDE_REAL_RUN_APP_CREDS"
 	-allowed-paths "$FREESIDE_REAL_RUN_ALLOWED_PATHS"
@@ -757,7 +766,8 @@ if [[ -n "$retained_session" ]]; then
   : >"$workdir/runtime-upgrade-started"
 fi
 
-# Provision the auth identities before the new binary's composition check.
+# Record the auth identities a fresh state root lacks before the new binary's
+# composition check; recorded identities are checked, never rewritten.
 # Scrub all invocation variables so seeding cannot verify a previous run.
 echo "recording the auth identity binding" >&2
 env -u FREESIDE_REAL_RUN_RUN_ID -u FREESIDE_REAL_RUN_INVOCATION \
@@ -948,12 +958,10 @@ fi
   -review-image "$FREESIDE_REAL_RUN_REVIEW_IMAGE" \
   -review-input-root "$FREESIDE_REAL_RUN_REVIEW_INPUT_ROOT" \
   -review-auth-mode "$FREESIDE_REAL_RUN_REVIEW_AUTH_MODE" \
-  -review-auth-identity "$FREESIDE_REAL_RUN_REVIEW_AUTH_IDENTITY" \
   -review-auth-snapshot "$FREESIDE_REAL_RUN_REVIEW_AUTH_SNAPSHOT" \
   -review-instructions "$FREESIDE_REAL_RUN_REVIEW_INSTRUCTIONS" \
   -review-model "$FREESIDE_REAL_RUN_REVIEW_MODEL" \
   -review-reasoning-effort "$FREESIDE_REAL_RUN_REVIEW_REASONING" \
-  -review-cost-owner "$FREESIDE_REAL_RUN_REVIEW_COST_OWNER" \
   -seed-root "$FREESIDE_REAL_RUN_SEED_ROOT" \
   -state-dir "$FREESIDE_REAL_RUN_STATE_ROOT" \
   -rig-token-file "$rig_acquisition" \
@@ -965,7 +973,8 @@ fi
   -repository-id "$FREESIDE_REAL_RUN_REPOSITORY_ID" \
   -base-ref "$FREESIDE_REAL_RUN_BASE_REF" \
   -base-sha "$FREESIDE_REAL_RUN_BASE_SHA" \
-  -auth-identity "$FREESIDE_REAL_RUN_AUTH_IDENTITY" \
+  -agent-tree "$FREESIDE_REAL_RUN_AGENT_TREE" \
+  -agent-tree-commit "$FREESIDE_REAL_RUN_AGENT_TREE_COMMIT" \
   -approved-recipe "$FREESIDE_REAL_RUN_APPROVED_RECIPE" \
   -writer-stop-timeout "$writer_stop_timeout" \
   -operating-mode unattended \

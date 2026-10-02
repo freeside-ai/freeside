@@ -36,10 +36,13 @@ type AuthStoreLeaser interface {
 	// refresh transaction re-gates the lease requirement, refresh strategy,
 	// and read-only snapshot support instead of trusting launch configuration.
 	GetIdentity(ctx context.Context, id domain.AuthIdentityID) (domain.AuthIdentity, error)
-	// AuthStoreVolume returns the immutable trusted volume binding for this
-	// identity. Handoff compares it with the one writable credential mount
-	// before opening a mutation window.
-	AuthStoreVolume(ctx context.Context, id domain.AuthIdentityID) (string, error)
+	// AuthStoreVolume returns the trusted volume binding for the store the
+	// holder mounts under this identity. Handoff compares it with the one
+	// writable credential mount before opening a mutation window. A holder
+	// admitted with an agent binding (§5.4) mounts the enrollment generation
+	// it was admitted against; every other holder reads the identity's
+	// interim binding.
+	AuthStoreVolume(ctx context.Context, id domain.AuthIdentityID, holder domain.InvocationID) (string, error)
 	// Acquire takes or converges on the identity's lease for holder, with
 	// the given window. A live lease held by anyone else refuses; re-acquire
 	// by the same holder returns the existing lease unchanged, without

@@ -224,22 +224,22 @@ func main() {
 	baseRef := flags.String("base-ref", "", "managed repository base branch")
 	baseSHA := flags.String("base-sha", "", "exact 40-character base commit tasks run against")
 	allowedPaths := flags.String("allowed-paths", "", "comma-separated candidate path allowlist (required in claude driver mode)")
-	authIdentity := flags.String("auth-identity", "", "provider auth identity tasks run under")
 	reviewImage := flags.String("review-image", "", "digest-pinned Codex review image")
 	reviewInputRoot := flags.String("review-input-root", "", "private root containing Codex review auth and instruction snapshots")
 	reviewAuthMode := flags.String("review-auth-mode", "", "Codex review auth mode: subscription or api_key")
-	reviewAuthIdentity := flags.String("review-auth-identity", "", "Codex review auth identity")
+	agentTree := flags.String("agent-tree", "",
+		"local checkout holding the admitted-agent tree under policy/; its lineup selects the agent and identity every role runs under (required in claude driver mode)")
+	agentTreeCommit := flags.String("agent-tree-commit", "",
+		"exact commit of -agent-tree whose tree is read; the working tree is never read")
 	reviewAuthSnapshot := flags.String("review-auth-snapshot", "", "Codex auth.json snapshot under review-input-root")
 	reviewInstructions := flags.String("review-instructions", "", "operator-host Codex instruction source snapshotted with explicit absence")
 	reviewModel := flags.String("review-model", "", "pinned Codex review model configuration")
 	reviewReasoningEffort := flags.String("review-reasoning-effort", "", "Codex review reasoning effort")
-	reviewCostOwner := flags.String("review-cost-owner", "", "account charged for Codex review")
 	reviewWorkspaceSize := flags.Int64("review-workspace-size-mb", 8192, "Codex review workspace volume size")
 	shadowReviewImage := flags.String("shadow-review-image", "", "digest-pinned Claude shadow review image (enables the shadow arm)")
 	shadowReviewAuthSnapshot := flags.String("shadow-review-auth-snapshot", "", "Claude setup-token snapshot under review-input-root")
 	shadowReviewModel := flags.String("shadow-review-model", "", "pinned Claude shadow review model")
 	shadowReviewReasoningEffort := flags.String("shadow-review-reasoning-effort", "", "Claude shadow review reasoning effort")
-	shadowReviewCostOwner := flags.String("shadow-review-cost-owner", "", "account charged for Claude shadow review")
 	shadowReviewWorkspaceSize := flags.Int64("shadow-review-workspace-size-mb", 8192, "Claude shadow review workspace volume size")
 	shadowReviewRate := flags.Float64("shadow-review-rate", 0.2, "fallback Claude shadow review sampling rate in [0,1]")
 	runConformance := flags.Bool("run-conformance", false,
@@ -428,22 +428,20 @@ func main() {
 			VendorInstructions:             *vendorInstructions,
 			Repo:                           *repo, RepositoryID: id,
 			BaseRef: *baseRef, BaseSHA: *baseSHA,
-			AuthIdentityID: domain.AuthIdentityID(*authIdentity),
+			AgentTreeCheckout: *agentTree, AgentTreeCommit: *agentTreeCommit,
 			AllowedPaths:   engine.SplitNonEmpty(*allowedPaths),
 			RunConformance: *runConformance,
 			StateRoot:      *publicationStateDir, CredentialsDir: *publicationCredentialsDir,
 			OperatingMode: mode,
 			ReviewImage:   *reviewImage, ReviewInputRoot: *reviewInputRoot,
-			ReviewAuthMode:       codexAuthMode,
-			ReviewAuthIdentityID: domain.AuthIdentityID(*reviewAuthIdentity),
-			ReviewAuthSnapshot:   *reviewAuthSnapshot, ReviewInstructions: *reviewInstructions,
+			ReviewAuthMode:     codexAuthMode,
+			ReviewAuthSnapshot: *reviewAuthSnapshot, ReviewInstructions: *reviewInstructions,
 			ReviewModel: *reviewModel, ReviewReasoningEffort: *reviewReasoningEffort,
-			ReviewCostOwner: *reviewCostOwner, ReviewWorkspaceSizeMB: *reviewWorkspaceSize,
+			ReviewWorkspaceSizeMB:       *reviewWorkspaceSize,
 			ShadowReviewImage:           *shadowReviewImage,
 			ShadowReviewAuthSnapshot:    *shadowReviewAuthSnapshot,
 			ShadowReviewModel:           *shadowReviewModel,
 			ShadowReviewReasoningEffort: *shadowReviewReasoningEffort,
-			ShadowReviewCostOwner:       *shadowReviewCostOwner,
 			ShadowReviewWorkspaceSizeMB: *shadowReviewWorkspaceSize,
 			ShadowReviewRate:            *shadowReviewRate,
 		}
@@ -933,6 +931,14 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	} else if cfg.Claude != nil {
 		claudeWiring, err = composeClaudeDriver(ctx, st, blobs, *cfg.Claude, cfg.Logger)
 		if err != nil {
+			// A review role the lineup cannot fill stops startup: the review
+			// sources cannot be composed without its identity. Leave the
+			// item naming the role for the next start that gets far enough
+			// to serve it.
+			var roleFailure *roleAdmissionError
+			if errors.As(err, &roleFailure) {
+				err = errors.Join(err, reportRoleFailure(ctx, st, roleFailure, startupNow(cfg.now)))
+			}
 			return nil, err
 		}
 		logEffectiveReviewConfiguration(cfg.Logger, claudeWiring.reviewConfigurationDigest)
@@ -1150,6 +1156,11 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		workflow, err = engine.New(st, attention, stageDriver, engineOptions...)
 		if err != nil {
 			return nil, err
+		}
+		// Before any loop admits: report why selection is not active, if it
+		// is not.
+		if err := activateAgentSelection(ctx, st, claudeWiring.selectionFailure, startupNow(cfg.now)); err != nil {
+			return nil, fmt.Errorf("activate agent selection: %w", err)
 		}
 		claudeWiring.driver.SetRecoveryLauncher(workflow.ResumeTaskInvocation)
 		for _, source := range []exec.ReviewSource{claudeWiring.reviewSource, claudeWiring.shadowReviewSource} {

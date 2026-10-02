@@ -454,7 +454,7 @@ its stage instead of waiting. Raise the limit only after #1585 lets writer
 executions share an identity.
 
 The real-run harness (`scripts/run-real-work.sh`) records the writer identity
-at 1 on first launch and keeps a recorded limit on later launches. After a
+at 1 on a fresh state root and never rewrites a recorded identity. After a
 raise, watch the daemon log and the paired clients for auth, rate-limit, or
 credential failures. On any such failure, set the limit back to the last value
 that ran cleanly, or to 1. The
@@ -519,12 +519,95 @@ freesided auth add \
 
 The token is not checked against the provider: `claude auth status` reports
 only local state, so a bad or revoked token fails closed at its first use.
-A provider probe is tracked in #1647. The identity also records the
-volume in the interim facts the daemon reads today, so start the daemon and
-preflight with the same `-auth-identity` and `-auth-volume`. `auth add` cannot
-enroll a Claude identity whose volume already exists; adopting an existing
-volume is part of the #867 cutover, which also retires `enroll-codex` in
-favour of `auth add`.
+A provider probe is tracked in #1647. `auth add` cannot enroll a Claude
+identity whose volume already exists; `auth adopt` (below) enrolls an identity
+over the volume it already holds. An enrollment runs nothing until an agent in
+the admitted-agent tree names it and a lineup line selects that agent.
+
+### Select Agents Through The Lineup
+
+The daemon reads every identity it runs under from the admitted-agent tree
+([`policy/README.md`](../policy/README.md)): each ward role's lineup line
+selects an agent, and the agent names the enrollment whose identity, cost
+owner, and credential store the role uses. `-driver claude` and `preflight`
+require the tree as a checkout and an exact commit:
+
+```sh
+  -agent-tree /absolute/path/to/checkout \
+  -agent-tree-commit <40-character-commit>
+```
+
+The tree is read from that commit through git, never from the working tree,
+so an uncommitted edit selects nothing. The flags `-auth-identity`,
+`-review-auth-identity`, `-review-cost-owner`, and `-shadow-review-cost-owner`
+are gone from the daemon and from `preflight`; the model and effort flags stay.
+
+`freesided auth adopt` moves an instance that ran on those flags. Stop the
+daemon, then name the identities and cost owners the flags carried:
+
+```sh
+freesided auth adopt \
+  -db /path/to/freeside.db \
+  -auth-identity claude-main -cost-owner <owner> -claude-account <subscription-account> \
+  -review-auth-identity codex-primary -review-cost-owner <review-owner> \
+  -auth-store-root /path/to/freeside/review-inputs -review-model <review-model> \
+  -exporter-image <digest-pinned-exporter-image> \
+  -prompt-package <file> -specification-prompt-package <file> \
+  -remediation-prompt-package <file> \
+  -approved-recipe sha256:<approved-verify-recipe-digest> \
+  -patch /path/outside/any/checkout/baseline.patch
+```
+
+It enrolls each identity over the store it already holds, writes no
+credential, and emits a patch that adds the baseline tree: both agents, a
+lineup line for `specifier`, `implementer`, `remediator`, and `reviewer`, and
+a `shadow_reviewer` line when `-shadow-review-cost-owner` is given. Review the
+patch, commit it in the checkout, and start the daemon with that commit. The
+report lists each identity as `adopted`, `reused`, or `unadoptable`; running
+the command again changes nothing. An adopted identity reported `disabled`
+stays disabled, and its lines do not resolve until it is enabled (#1639). The
+review and shadow review configuration digests are the ones the flags
+produced, so existing approvals stand.
+
+An `unadoptable` identity (its store names no account, or its account is bound
+to another identity) gets no enrollment. To retire it, name it:
+`-retire-unadoptable <identity>` disables it and records a Stop for each open
+task it owns, listed as `stopped_tasks` in the report. The flag is refused for
+an identity the same run adopts, so a forgotten argument (for example
+`-claude-account`) retires nothing unless the identity is named. Enroll a
+replacement with `auth add` and select it in the tree.
+
+A reviewer that authenticates with an API key (`-review-auth-mode api_key`)
+cannot be adopted yet: an enrollment has no API-key auth method (#1677). Its
+store reports `unadoptable`, the patch carries no `reviewer` line, and an
+unattended daemon on that tree stops at startup. Do not retire that identity;
+stay on the previous release until #1677 lands, or review with a subscription
+login.
+
+At start the daemon checks every role its configuration asks work from:
+
+- **A writer role that fails admission** (no line, a line naming another
+  agent digest or prompt, no conformance record, an expired credential) holds
+  all admission. The daemon keeps running and raises one `system_health` item
+  naming the role. Fix the tree or the enrollment and restart.
+- **A reviewer or shadow reviewer line that does not resolve** stops startup,
+  because no review source can be composed without its identity. The item is
+  recorded before the daemon exits. Each review also rechecks its line first.
+- **A retired identity that still owns an open task** (disabled, no
+  enrollment, and a task whose newest admission is a flag-era one under it
+  has no completed, stopped, or abandoned decision) holds all admission. The
+  daemon raises one item naming the identity and the tasks, and stops nothing
+  itself: an identity nobody adopted yet looks the same. Adopt it, or retire
+  it with `-retire-unadoptable`. The daemon confirms the cancellations after
+  its next start; restart it once more to clear the item, which holds
+  unattended admission while it is open.
+
+`preflight` resolves the same lines but does not run the writer roles' full
+admission check (prompt digest, launch coverage, expiry), because it takes no
+prompt package. The daemon's startup check is the authority.
+
+Work admitted before the cutover under an identity that was adopted finishes
+under that admission: it is never resolved against the tree.
 
 ### List Agent Credentials
 
@@ -586,9 +669,10 @@ remove the temporary input copy after success; preserve the rotated live store
 at the printed path. A retry after verification safely rechecks and projects
 that same store even if the temporary input has already been removed.
 
-Restart the daemon with `-review-auth-mode subscription`,
-`-review-auth-identity codex-primary`, `-review-input-root` set to the durable
-review-input root, and `-review-auth-snapshot` set to the live store path.
+Restart the daemon with `-review-auth-mode subscription`, `-review-input-root`
+set to the durable review-input root, and `-review-auth-snapshot` set to the
+live store path. The `reviewer` lineup line selects the identity (see
+[Select Agents Through The Lineup](#select-agents-through-the-lineup)).
 Initial enrollment and recovery both leave the identity blocked until the
 operator inspects the displayed digest, fence, and expiry and accepts the
 item's `Resolve re-enrollment` action. That command-backed decision, not this

@@ -4054,3 +4054,57 @@ func TestCodexReviewWorkspaceBindingSurvivesCleanupThenReconcileRemovesIt(t *tes
 		t.Fatalf("reconcile left the workspace binding: %v", err)
 	}
 }
+
+// TestCodexReviewSourceAdmitRefusalRecordsNothing: the lineup recheck runs
+// before the request is recorded, so a refused review leaves no request, no
+// workspace, and no credential-bearing launch behind.
+func TestCodexReviewSourceAdmitRefusalRecordsNothing(t *testing.T) {
+	ctx := t.Context()
+	fx := newHandoffFixture(t)
+	seedSpec := fx.seed(t)
+	backend := fx.codexReviewLifecycle(t)
+	cfg, requestSpec := testCodexReview(t)
+	journal := &fakeCodexReviewJournal{}
+	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
+	refusal := errors.New("the reviewer line no longer resolves")
+	sourceConfig.Admit = func(context.Context) error { return refusal }
+	source, err := NewCodexReviewSource(sourceConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := domain.InvocationID("review-admit-refused")
+	request := exec.ReviewRequest{
+		RunID: "run-admit-refused", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
+		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Instructions: requestSpec.InstructionBinding, RequestedAt: codexReviewEpoch,
+	}
+	var failure *exec.ReviewSourceFailure
+	err = source.RequestReview(ctx, id, request)
+	if !errors.As(err, &failure) || failure.Class != domain.ReviewFailureConfiguration ||
+		!errors.Is(err, refusal) {
+		t.Fatalf("refused review = %v, want a configuration failure wrapping the refusal", err)
+	}
+	if _, err := journal.GetCodexReviewRequest(ctx, string(id)); !errors.Is(err, exec.ErrUnknownInvocation) {
+		t.Fatalf("a refused review recorded its request: %v", err)
+	}
+	if journal.intent != nil {
+		t.Fatal("a refused review began a credential-bearing launch")
+	}
+
+	// A request recorded before the line stopped resolving relaunches from
+	// Inspect, which must refuse the same way.
+	if err := journal.PutCodexReviewRequest(ctx, string(id), request); err != nil {
+		t.Fatal(err)
+	}
+	failure = nil
+	_, err = source.Inspect(ctx, id)
+	if !errors.As(err, &failure) || failure.Class != domain.ReviewFailureConfiguration ||
+		!errors.Is(err, refusal) {
+		t.Fatalf("refused relaunch = %v, want a configuration failure wrapping the refusal", err)
+	}
+	if journal.intent != nil {
+		t.Fatal("a refused relaunch began a credential-bearing launch")
+	}
+}

@@ -479,7 +479,8 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 				"spec claims the auth-store mutation lease for identity %q but no leaser is configured",
 				hs.AuthStoreLease.AuthIdentityID)
 		}
-		boundVolume, verr := b.cfg.AuthStoreLeaser.AuthStoreVolume(ctx, hs.AuthStoreLease.AuthIdentityID)
+		boundVolume, verr := b.cfg.AuthStoreLeaser.AuthStoreVolume(
+			ctx, hs.AuthStoreLease.AuthIdentityID, hs.AuthStoreLease.Holder)
 		if verr != nil {
 			return nil, fmt.Errorf("read auth-store volume for identity %q: %w",
 				hs.AuthStoreLease.AuthIdentityID, verr)

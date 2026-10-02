@@ -213,14 +213,14 @@ func TestClaudeDriverConfigRequiresExplicitBindings(t *testing.T) {
 		VendorInstructions:             "/Users/operator/CLAUDE.md",
 		Repo:                           "freeside-ai/candidate", RepositoryID: 42,
 		BaseRef: "main", BaseSHA: strings.Repeat("d", 40),
-		AuthIdentityID: "auth-claude-owner",
-		AllowedPaths:   []string{"daemon/**", "docs/**"},
-		StateRoot:      "/var/freeside/app", CredentialsDir: "/var/freeside/creds",
+		AgentTreeCheckout: "/var/freeside/policy-checkout", AgentTreeCommit: strings.Repeat("e", 40),
+		AllowedPaths: []string{"daemon/**", "docs/**"},
+		StateRoot:    "/var/freeside/app", CredentialsDir: "/var/freeside/creds",
 		ReviewImage:     "ghcr.io/x/codex@sha256:" + strings.Repeat("c", 64),
 		ReviewInputRoot: "/var/freeside/review-inputs", ReviewAuthMode: ward.CodexAuthSubscription,
-		ReviewAuthIdentityID: "auth-codex-owner", ReviewAuthSnapshot: "/var/freeside/review-inputs/auth.json",
+		ReviewAuthSnapshot: "/var/freeside/review-inputs/auth.json",
 		ReviewInstructions: "/var/freeside/review-inputs/AGENTS.md", ReviewModel: "gpt-codex",
-		ReviewReasoningEffort: "high", ReviewCostOwner: "subscription:owner",
+		ReviewReasoningEffort: "high",
 		ReviewWorkspaceSizeMB: 8192,
 		OperatingMode:         domain.ModeUnattended,
 	}
@@ -250,20 +250,22 @@ func TestClaudeDriverConfigRequiresExplicitBindings(t *testing.T) {
 		"base sha shape": func(c *claudeDriverConfig) {
 			c.BaseSHA = strings.Repeat("D", 40)
 		},
-		"auth identity": func(c *claudeDriverConfig) { c.AuthIdentityID = "" },
-		"review image":  func(c *claudeDriverConfig) { c.ReviewImage = "" },
+		// The lineup names every identity, so the tree it is read from is a
+		// required binding.
+		"agent tree":        func(c *claudeDriverConfig) { c.AgentTreeCheckout = "" },
+		"agent tree commit": func(c *claudeDriverConfig) { c.AgentTreeCommit = "" },
+		"agent tree shape":  func(c *claudeDriverConfig) { c.AgentTreeCheckout = "relative/checkout" },
+		"review image":      func(c *claudeDriverConfig) { c.ReviewImage = "" },
 		"review image pin": func(c *claudeDriverConfig) {
 			c.ReviewImage = "ghcr.io/x/codex:latest"
 		},
 		"review input root":       func(c *claudeDriverConfig) { c.ReviewInputRoot = "" },
 		"review input root shape": func(c *claudeDriverConfig) { c.ReviewInputRoot = "relative" },
-		"review auth identity":    func(c *claudeDriverConfig) { c.ReviewAuthIdentityID = "" },
 		"review auth mode":        func(c *claudeDriverConfig) { c.ReviewAuthMode = "" },
 		"review auth snapshot":    func(c *claudeDriverConfig) { c.ReviewAuthSnapshot = "" },
 		"review instructions":     func(c *claudeDriverConfig) { c.ReviewInstructions = "" },
 		"review model":            func(c *claudeDriverConfig) { c.ReviewModel = "" },
 		"review reasoning":        func(c *claudeDriverConfig) { c.ReviewReasoningEffort = "" },
-		"review cost owner":       func(c *claudeDriverConfig) { c.ReviewCostOwner = "" },
 		"review workspace size":   func(c *claudeDriverConfig) { c.ReviewWorkspaceSizeMB = 0 },
 		"credentials dir":         func(c *claudeDriverConfig) { c.CredentialsDir = "" },
 		"allowed paths":           func(c *claudeDriverConfig) { c.AllowedPaths = nil },
@@ -299,7 +301,8 @@ func TestClaudeDriverConfigAttendedModeDoesNotRequireProductionReview(t *testing
 		RepositoryID:                   42,
 		BaseRef:                        "main",
 		BaseSHA:                        strings.Repeat("d", 40),
-		AuthIdentityID:                 "auth-claude-owner",
+		AgentTreeCheckout:              "/var/freeside/policy-checkout",
+		AgentTreeCommit:                strings.Repeat("e", 40),
 		AllowedPaths:                   []string{"daemon/**", "docs/**"},
 		StateRoot:                      "/var/freeside/app",
 		CredentialsDir:                 "/var/freeside/creds",
@@ -323,7 +326,8 @@ func TestClaudeShadowReviewConfigurationIsExplicitAndDigestBound(t *testing.T) {
 		VendorInstructions:             "/Users/operator/CLAUDE.md",
 		Repo:                           "freeside-ai/candidate", RepositoryID: 42,
 		BaseRef: "main", BaseSHA: strings.Repeat("d", 40),
-		AuthIdentityID: "auth-claude-owner", AllowedPaths: []string{"daemon/**"},
+		ShadowReviewAuthIdentityID: "auth-claude-owner", AllowedPaths: []string{"daemon/**"},
+		AgentTreeCheckout: "/var/freeside/policy-checkout", AgentTreeCommit: strings.Repeat("e", 40),
 		StateRoot: "/var/freeside/app", CredentialsDir: "/var/freeside/creds",
 		OperatingMode:   domain.ModeUnattended,
 		ReviewImage:     "ghcr.io/x/codex@sha256:" + strings.Repeat("c", 64),
@@ -355,7 +359,7 @@ func TestClaudeShadowReviewConfigurationIsExplicitAndDigestBound(t *testing.T) {
 		},
 		"model":      func(c *claudeDriverConfig) { c.ShadowReviewModel = "claude-sonnet" },
 		"reasoning":  func(c *claudeDriverConfig) { c.ShadowReviewReasoningEffort = "medium" },
-		"identity":   func(c *claudeDriverConfig) { c.AuthIdentityID = "auth-other-owner" },
+		"identity":   func(c *claudeDriverConfig) { c.ShadowReviewAuthIdentityID = "auth-other-owner" },
 		"cost owner": func(c *claudeDriverConfig) { c.ShadowReviewCostOwner = "subscription:other" },
 		"workspace":  func(c *claudeDriverConfig) { c.ShadowReviewWorkspaceSizeMB++ },
 		"rate":       func(c *claudeDriverConfig) { c.ShadowReviewRate = 0.3 },
@@ -376,13 +380,12 @@ func TestClaudeShadowReviewConfigurationIsExplicitAndDigestBound(t *testing.T) {
 		})
 	}
 	for name, mutate := range map[string]func(*claudeDriverConfig){
-		"image":      func(c *claudeDriverConfig) { c.ShadowReviewImage = "" },
-		"snapshot":   func(c *claudeDriverConfig) { c.ShadowReviewAuthSnapshot = "" },
-		"model":      func(c *claudeDriverConfig) { c.ShadowReviewModel = "" },
-		"reasoning":  func(c *claudeDriverConfig) { c.ShadowReviewReasoningEffort = "" },
-		"cost owner": func(c *claudeDriverConfig) { c.ShadowReviewCostOwner = "" },
-		"workspace":  func(c *claudeDriverConfig) { c.ShadowReviewWorkspaceSizeMB = 0 },
-		"rate":       func(c *claudeDriverConfig) { c.ShadowReviewRate = 1.1 },
+		"image":     func(c *claudeDriverConfig) { c.ShadowReviewImage = "" },
+		"snapshot":  func(c *claudeDriverConfig) { c.ShadowReviewAuthSnapshot = "" },
+		"model":     func(c *claudeDriverConfig) { c.ShadowReviewModel = "" },
+		"reasoning": func(c *claudeDriverConfig) { c.ShadowReviewReasoningEffort = "" },
+		"workspace": func(c *claudeDriverConfig) { c.ShadowReviewWorkspaceSizeMB = 0 },
+		"rate":      func(c *claudeDriverConfig) { c.ShadowReviewRate = 1.1 },
 	} {
 		t.Run(name, func(t *testing.T) {
 			invalid := cfg
@@ -401,7 +404,7 @@ func TestClaudeShadowReviewConfigurationUsesSeparateExactApproval(t *testing.T) 
 	cfg := claudeDriverConfig{
 		OperatingMode: domain.ModeUnattended, Repo: "example/repo", RepositoryID: 44,
 		ExporterImage:   "ghcr.io/x/exporter@sha256:" + strings.Repeat("b", 64),
-		ReviewInputRoot: "/var/freeside/review-inputs", AuthIdentityID: "auth-claude-owner",
+		ReviewInputRoot: "/var/freeside/review-inputs", ShadowReviewAuthIdentityID: "auth-claude-owner",
 		ShadowReviewImage: "ghcr.io/x/claude@sha256:" + strings.Repeat("e", 64),
 		ShadowReviewModel: "claude-opus", ShadowReviewReasoningEffort: "high",
 		ShadowReviewCostOwner: "subscription:shadow", ShadowReviewWorkspaceSizeMB: 4096,

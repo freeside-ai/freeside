@@ -478,7 +478,7 @@ func (p claudeProvider) HandoffSpec(
 		return ward.HandoffSpec{}, fmt.Errorf(
 			"%w: native effort %q carries a CLI delimiter", ErrUnsupportedStart, spec.NativeEffort)
 	}
-	volume, err := p.volumes.AuthStoreVolume(ctx, spec.AuthIdentityID)
+	volume, err := p.volumes.AuthStoreVolume(ctx, spec.AuthIdentityID, id)
 	if err != nil {
 		return ward.HandoffSpec{}, fmt.Errorf("resolve auth store volume: %w", err)
 	}

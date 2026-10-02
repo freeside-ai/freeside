@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -26,6 +27,9 @@ type fakeLeaser struct {
 	volume   string
 	identity domain.AuthIdentity
 	holders  []domain.InvocationID
+	// volumeHolders records the holder each volume lookup named: the store
+	// resolves the mounted generation from it.
+	volumeHolders []domain.InvocationID
 	// releaseCtxErr records the context state Release observed, so tests can
 	// prove the release ran detached from an already-cancelled run context.
 	releaseCtxErr error
@@ -163,8 +167,9 @@ func (l *fakeLeaser) recordCall(s string) {
 }
 
 func (l *fakeLeaser) AuthStoreVolume(
-	_ context.Context, id domain.AuthIdentityID,
+	_ context.Context, id domain.AuthIdentityID, holder domain.InvocationID,
 ) (string, error) {
+	l.volumeHolders = append(l.volumeHolders, holder)
 	l.recordCall("identity-volume " + string(id))
 	if l.onVolume != nil {
 		return l.onVolume(id)
@@ -367,6 +372,10 @@ func TestHandoffLeasedWrongBoundVolumeRefused(t *testing.T) {
 		if call != "identity-volume identity-fixture" {
 			t.Errorf("call %q happened after the binding refusal", call)
 		}
+	}
+	if !slices.Equal(l.volumeHolders, []domain.InvocationID{hs.AuthStoreLease.Holder}) {
+		t.Errorf("volume looked up for holders %v, want the lease claim's holder %q",
+			l.volumeHolders, hs.AuthStoreLease.Holder)
 	}
 }
 

@@ -677,9 +677,13 @@ func unattendedDispatchRefusal(err error) bool {
 }
 
 func invocationDispatchHold(err error) bool {
+	// A role whose agent does not pass admission holds its own invocation:
+	// the verdict reads the store and the selection gate, both of which can
+	// change, and another role's work may still be admissible.
 	return errors.Is(err, exec.ErrInputUnavailable) ||
 		errors.Is(err, store.ErrTaskCancellationFenced) ||
-		errors.Is(err, domain.ErrIdentityParallelismExhausted)
+		errors.Is(err, domain.ErrIdentityParallelismExhausted) ||
+		errors.Is(err, ErrAgentNotAdmissible)
 }
 
 // MutableAdmissionPolicyRefusal identifies a fail-closed current-policy

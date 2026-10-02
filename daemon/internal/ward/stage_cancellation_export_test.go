@@ -67,9 +67,9 @@ func NewStageCancellationTestFixture(t *testing.T) *StageCancellationTestFixture
 func (f *StageCancellationTestFixture) Base() domain.BaseRevision { return testBaseRevision() }
 
 func (f *StageCancellationTestFixture) AuthStoreVolume(
-	ctx context.Context, id domain.AuthIdentityID,
+	ctx context.Context, id domain.AuthIdentityID, holder domain.InvocationID,
 ) (string, error) {
-	return f.leaser.AuthStoreVolume(ctx, id)
+	return f.leaser.AuthStoreVolume(ctx, id, holder)
 }
 
 func (f *StageCancellationTestFixture) FetchBase(

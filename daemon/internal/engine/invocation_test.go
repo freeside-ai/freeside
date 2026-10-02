@@ -81,6 +81,15 @@ func TestUnattendedDispatchRefusalIsAHold(t *testing.T) {
 	if invocationDispatchHold(store.ErrBackendNotConformant) {
 		t.Fatal("global conformance refusal was classified as invocation-specific")
 	}
+	// A role whose agent is not admissible holds its own invocation in
+	// either mode; unclassified, the refusal would stop the workflow loop.
+	refused := fmt.Errorf("admit: %w", ErrAgentNotAdmissible)
+	if !invocationDispatchHold(refused) {
+		t.Fatal("an inadmissible agent was not classified as an invocation-specific hold")
+	}
+	if reason, ok := dispatchHoldReason(refused); !ok || reason != domain.HoldAdmissionPolicyRefused {
+		t.Fatalf("inadmissible agent hold reason = %q, %t", reason, ok)
+	}
 }
 
 func TestMutableAdmissionPolicyRefusalIsAHold(t *testing.T) {

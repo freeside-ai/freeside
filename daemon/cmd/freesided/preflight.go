@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -108,12 +109,13 @@ type compositionManifest struct {
 	ReviewInstructionsDigest        domain.Digest          `json:"review_instructions_digest,omitempty"`
 	BuildEgressDigest               domain.Digest          `json:"build_egress_configuration_digest"`
 	AllowedPaths                    []string               `json:"allowed_paths"`
-	ClaudeAuthIdentity              domain.AuthIdentityID  `json:"claude_auth_identity"`
-	ClaudeAuthVolume                string                 `json:"claude_auth_volume"`
-	CodexAuthIdentity               domain.AuthIdentityID  `json:"codex_auth_identity"`
-	Identity                        compositionIdentity    `json:"identity"`
-	Images                          []compositionImage     `json:"images"`
-	Checks                          []compositionCheck     `json:"checks"`
+	// AgentLineupRevision is the content address of the admitted-agent tree
+	// the roles were resolved against; it pins every identity the run uses.
+	AgentLineupRevision domain.Digest       `json:"agent_lineup_revision,omitempty"`
+	ClaudeAuthVolume    string              `json:"claude_auth_volume"`
+	Identity            compositionIdentity `json:"identity"`
+	Images              []compositionImage  `json:"images"`
+	Checks              []compositionCheck  `json:"checks"`
 }
 
 type preflightConfig struct {
@@ -132,35 +134,36 @@ type preflightConfig struct {
 	BaseRef                     string
 	BaseSHA                     string
 	ApprovedRecipe              domain.Digest
-	AuthIdentityID              domain.AuthIdentityID
+	AgentTreeCheckout           string
+	AgentTreeCommit             string
 	AuthVolume                  string
 	ReviewInputRoot             string
 	ReviewAuthMode              ward.CodexAuthMode
-	ReviewAuthIdentityID        domain.AuthIdentityID
 	ReviewAuthSnapshot          string
 	ReviewInstructions          string
 	PublicationStateDir         string
 	PublicationCredentialsDir   string
 	ReviewModel                 string
 	ReviewReasoningEffort       string
-	ReviewCostOwner             string
 	ReviewWorkspaceSizeMB       int64
 	ShadowReviewImage           string
 	ShadowReviewAuthSnapshot    string
 	ShadowReviewModel           string
 	ShadowReviewReasoningEffort string
-	ShadowReviewCostOwner       string
 	ShadowReviewWorkspaceSizeMB int64
 	ShadowReviewRate            float64
-	TaskPath                    string
-	PolicyPath                  string
-	PublicationPath             string
-	WorkUnitPath                string
-	ProjectID                   domain.ProjectID
-	BuildProxy                  string
-	LaunchAgentLabel            string
-	AllowedPaths                []string
-	PublicationAuthor           engine.ProductionCommitAuthor
+	// Agents is what the lineup resolved; zero until the rig names the
+	// database the roles are resolved against.
+	Agents            preflightAgentSelection
+	TaskPath          string
+	PolicyPath        string
+	PublicationPath   string
+	WorkUnitPath      string
+	ProjectID         domain.ProjectID
+	BuildProxy        string
+	LaunchAgentLabel  string
+	AllowedPaths      []string
+	PublicationAuthor engine.ProductionCommitAuthor
 }
 
 type databaseInspection struct {
@@ -195,6 +198,20 @@ type codexCredentialInspection struct {
 	Error        error
 }
 
+// preflightAgentSelection is what the roles the production composition uses
+// resolve to: the writer identity and the volume its current generation
+// mounts, and the review identities and cost owners the approved review
+// configuration digests take as inputs.
+type preflightAgentSelection struct {
+	LineupRevision             domain.Digest
+	AuthIdentityID             domain.AuthIdentityID
+	AuthVolume                 string
+	ReviewAuthIdentityID       domain.AuthIdentityID
+	ReviewCostOwner            string
+	ShadowReviewAuthIdentityID domain.AuthIdentityID
+	ShadowReviewCostOwner      string
+}
+
 type repositoryAuthorityInspection struct {
 	BaseError      error
 	AuthorityError error
@@ -202,6 +219,7 @@ type repositoryAuthorityInspection struct {
 
 type preflightEnvironment interface {
 	AuthenticateRig(string, string) (daemonlock.RigManifest, error)
+	ResolveAgentSelection(context.Context, preflightConfig, time.Time) (preflightAgentSelection, error)
 	InspectDatabase(context.Context, preflightConfig, domain.Digest) databaseInspection
 	InspectImage(context.Context, string, string, []string, string) imageInspection
 	InspectCodexCredential(context.Context, preflightConfig, time.Time, bool) codexCredentialInspection
@@ -262,16 +280,31 @@ func runPreflightCommandWithEnvironment(
 	identity, identityErr := inspectCompositionIdentity(cfg)
 	manifest.Identity = identity
 	cfg.PublicationAuthor = identity.CommitAuthor
+	// The lineup names every identity, and the review configuration digests
+	// take the review identities as inputs, so the roles resolve first. That
+	// needs the database the rig names.
+	agentsErr := errors.New("rig database path was unavailable")
+	if rigErr == nil {
+		resolveCfg := cfg
+		resolveCfg.DBPath = manifest.Rig.Resources.DatabasePath
+		if cfg.Agents, agentsErr = environment.ResolveAgentSelection(ctx, resolveCfg, now); agentsErr != nil {
+			cfg.Agents = preflightAgentSelection{}
+		}
+		manifest.AgentLineupRevision = cfg.Agents.LineupRevision
+	}
 	reviewDigest, reviewDigestErr := reviewConfigurationDigest(cfg)
+	shadowReviewDigest, shadowReviewDigestErr := preflightShadowReviewConfigurationDigest(cfg)
+	if agentsErr != nil {
+		reviewDigestErr, shadowReviewDigestErr = agentsErr, agentsErr
+	}
 	if reviewDigestErr == nil {
 		manifest.ReviewConfigurationDigest = reviewDigest
 	}
-	shadowReviewDigest, shadowReviewDigestErr := preflightShadowReviewConfigurationDigest(cfg)
 	if shadowReviewDigestErr == nil {
 		manifest.ShadowReviewConfigurationDigest = shadowReviewDigest
 	}
 	evaluateComposition(ctx, &manifest, cfg, environment, now, rigErr, identityErr,
-		reviewDigestErr, shadowReviewDigestErr)
+		agentsErr, reviewDigestErr, shadowReviewDigestErr)
 	if cfg.Judgments != (judgmentConfig{}) {
 		_, digest, err := composeJudgments(cfg.Judgments, cfg.ReviewInputRoot)
 		if err != nil {
@@ -319,24 +352,22 @@ func parsePreflightConfig(args []string, stderr io.Writer) (preflightConfig, err
 		cfg.ApprovedRecipe = domain.Digest(raw)
 		return nil
 	})
-	flags.StringVar((*string)(&cfg.AuthIdentityID), "auth-identity", "", "Claude auth identity id (required)")
-	flags.StringVar(&cfg.AuthVolume, "auth-volume", "", "Claude credential volume (required)")
+	flags.StringVar(&cfg.AgentTreeCheckout, "agent-tree", "", "local checkout holding the admitted-agent tree under policy/ (required)")
+	flags.StringVar(&cfg.AgentTreeCommit, "agent-tree-commit", "", "exact commit of -agent-tree whose tree is read (required)")
+	flags.StringVar(&cfg.AuthVolume, "auth-volume", "", "Claude credential volume the writer roles' enrollment mounts (required)")
 	flags.StringVar(&cfg.ReviewInputRoot, "review-input-root", "", "private review input root (required)")
 	flags.StringVar((*string)(&cfg.ReviewAuthMode), "review-auth-mode", "", "review auth mode (required)")
-	flags.StringVar((*string)(&cfg.ReviewAuthIdentityID), "review-auth-identity", "", "review auth identity id (required)")
 	flags.StringVar(&cfg.ReviewAuthSnapshot, "review-auth-snapshot", "", "review auth snapshot under input root (required)")
 	flags.StringVar(&cfg.ReviewInstructions, "review-instructions", "", "review host instructions file (required)")
 	flags.StringVar(&cfg.PublicationStateDir, "publication-state-dir", "", "publication state directory (required)")
 	flags.StringVar(&cfg.PublicationCredentialsDir, "publication-credentials-dir", "", "publication credentials directory (required)")
 	flags.StringVar(&cfg.ReviewModel, "review-model", "", "pinned review model (required)")
 	flags.StringVar(&cfg.ReviewReasoningEffort, "review-reasoning-effort", "", "review reasoning effort (required)")
-	flags.StringVar(&cfg.ReviewCostOwner, "review-cost-owner", "", "review cost owner (required)")
 	flags.Int64Var(&cfg.ReviewWorkspaceSizeMB, "review-workspace-size-mb", 8192, "review workspace size")
 	flags.StringVar(&cfg.ShadowReviewImage, "shadow-review-image", "", "digest-pinned Claude shadow reviewer image (optional)")
 	flags.StringVar(&cfg.ShadowReviewAuthSnapshot, "shadow-review-auth-snapshot", "", "Claude setup-token snapshot under review-input-root")
 	flags.StringVar(&cfg.ShadowReviewModel, "shadow-review-model", "", "pinned Claude shadow review model")
 	flags.StringVar(&cfg.ShadowReviewReasoningEffort, "shadow-review-reasoning-effort", "", "Claude shadow review reasoning effort")
-	flags.StringVar(&cfg.ShadowReviewCostOwner, "shadow-review-cost-owner", "", "Claude shadow review cost owner")
 	flags.Int64Var(&cfg.ShadowReviewWorkspaceSizeMB, "shadow-review-workspace-size-mb", 8192, "Claude shadow review workspace size")
 	flags.Float64Var(&cfg.ShadowReviewRate, "shadow-review-rate", 0.2, "fallback Claude shadow review rate in [0,1]")
 	flags.StringVar(&cfg.TaskPath, "task", "", "task source file (required)")
@@ -359,26 +390,26 @@ func parsePreflightConfig(args []string, stderr io.Writer) (preflightConfig, err
 	if cfg.RigTokenFile == "" || cfg.ServerURL == "" || cfg.AgentImage == "" ||
 		cfg.ExporterImage == "" || cfg.ReviewImage == "" || cfg.Repo == "" || cfg.RepositoryCheckout == "" ||
 		cfg.RepositoryID <= 0 || cfg.BaseRef == "" || cfg.BaseSHA == "" ||
-		cfg.ApprovedRecipe == "" || cfg.AuthIdentityID == "" || cfg.AuthVolume == "" || cfg.ReviewInputRoot == "" ||
-		cfg.ReviewAuthMode == "" || cfg.ReviewAuthIdentityID == "" ||
+		cfg.ApprovedRecipe == "" || cfg.AgentTreeCheckout == "" || cfg.AgentTreeCommit == "" ||
+		cfg.AuthVolume == "" || cfg.ReviewInputRoot == "" || cfg.ReviewAuthMode == "" ||
 		cfg.ReviewAuthSnapshot == "" || cfg.ReviewInstructions == "" || len(cfg.AllowedPaths) == 0 ||
 		cfg.PublicationStateDir == "" || cfg.PublicationCredentialsDir == "" ||
 		cfg.ReviewModel == "" ||
-		cfg.ReviewReasoningEffort == "" || cfg.ReviewCostOwner == "" ||
+		cfg.ReviewReasoningEffort == "" ||
 		cfg.ReviewWorkspaceSizeMB <= 0 || cfg.TaskPath == "" || cfg.PolicyPath == "" ||
 		cfg.PublicationPath == "" || cfg.ProjectID == "" {
 		return preflightConfig{}, errors.New("all production composition flags except -work-unit and -build-proxy are required")
 	}
 	if cfg.ShadowReviewImage != "" &&
 		(cfg.ShadowReviewAuthSnapshot == "" || cfg.ShadowReviewModel == "" ||
-			cfg.ShadowReviewReasoningEffort == "" || cfg.ShadowReviewCostOwner == "" ||
+			cfg.ShadowReviewReasoningEffort == "" ||
 			cfg.ShadowReviewWorkspaceSizeMB <= 0 || math.IsNaN(cfg.ShadowReviewRate) ||
 			math.IsInf(cfg.ShadowReviewRate, 0) || cfg.ShadowReviewRate < 0 || cfg.ShadowReviewRate > 1) {
 		return preflightConfig{}, errors.New("all shadow review flags are required when -shadow-review-image enables the arm")
 	}
 	if cfg.ShadowReviewImage == "" &&
 		(cfg.ShadowReviewAuthSnapshot != "" || cfg.ShadowReviewModel != "" ||
-			cfg.ShadowReviewReasoningEffort != "" || cfg.ShadowReviewCostOwner != "") {
+			cfg.ShadowReviewReasoningEffort != "") {
 		return preflightConfig{}, errors.New("-shadow-review-image is required when shadow review fields are set")
 	}
 	return cfg, nil
@@ -387,7 +418,7 @@ func parsePreflightConfig(args []string, stderr io.Writer) (preflightConfig, err
 func newCompositionManifest(cfg preflightConfig, daemonBuild string, now time.Time) compositionManifest {
 	names := []string{
 		"rig_manifest", "state_database", "topic_key", "daemon_build",
-		"listener_server_url", "daemon_conflict", "repository_base", "trust_profile",
+		"listener_server_url", "daemon_conflict", "repository_base", "trust_profile", "agent_selection",
 		"review_configuration", "shadow_review_configuration", "source_implementation_identity", "review_instructions", "seed_root",
 		"publication_authority",
 		"exporter_image", "implementer_image", "reviewer_image", "claude_credentials",
@@ -418,10 +449,9 @@ func newCompositionManifest(cfg preflightConfig, daemonBuild string, now time.Ti
 		Version: compositionManifestVersion, Status: compositionPassed,
 		DaemonBuild: daemonBuild, ServerURL: cfg.ServerURL,
 		Repository: cfg.Repo, RepositoryID: cfg.RepositoryID, BaseRef: cfg.BaseRef, BaseSHA: cfg.BaseSHA,
-		BuildEgressDigest:  domain.Digest(contentaddr.Sum([]byte(cfg.BuildProxy))),
-		AllowedPaths:       slices.Clone(cfg.AllowedPaths),
-		ClaudeAuthIdentity: cfg.AuthIdentityID, ClaudeAuthVolume: cfg.AuthVolume,
-		CodexAuthIdentity: cfg.ReviewAuthIdentityID,
+		BuildEgressDigest: domain.Digest(contentaddr.Sum([]byte(cfg.BuildProxy))),
+		AllowedPaths:      slices.Clone(cfg.AllowedPaths),
+		ClaudeAuthVolume:  cfg.AuthVolume,
 		Images:            images,
 		Checks:            checks,
 	}
@@ -433,7 +463,7 @@ func evaluateComposition(
 	cfg preflightConfig,
 	environment preflightEnvironment,
 	now time.Time,
-	rigErr, identityErr, reviewDigestErr, shadowReviewDigestErr error,
+	rigErr, identityErr, agentsErr, reviewDigestErr, shadowReviewDigestErr error,
 ) {
 	var database databaseInspection
 	daemonIdle := false
@@ -454,12 +484,25 @@ func evaluateComposition(
 
 	if cfg.DBPath == "" {
 		for _, check := range []string{
-			"state_database", "topic_key", "daemon_conflict", "trust_profile",
+			"state_database", "topic_key", "daemon_conflict", "trust_profile", "agent_selection",
 			"review_configuration", "shadow_review_configuration", "claude_credentials",
 		} {
 			notRunCheck(manifest, check, "rig database path was unavailable")
 		}
 	} else {
+		var roleFailure *roleAdmissionError
+		switch {
+		case errors.As(agentsErr, &roleFailure):
+			failCheck(manifest, "agent_selection",
+				fmt.Sprintf("role %s has no lineup line that resolves against the store", roleFailure.Role),
+				"run freesided auth adopt, commit its tree patch, and pass that commit as -agent-tree-commit")
+		case agentsErr != nil:
+			failCheck(manifest, "agent_selection", "the admitted-agent tree or the store it resolves against could not be read",
+				"pass the checkout and exact commit that hold policy/ as -agent-tree and -agent-tree-commit")
+		default:
+			passCheck(manifest, "agent_selection", fmt.Sprintf(
+				"lineup revision %s resolves every role this composition uses", cfg.Agents.LineupRevision))
+		}
 		database = environment.InspectDatabase(ctx, cfg, manifest.ReviewConfigurationDigest)
 		if database.OpenError != nil {
 			failCheck(manifest, "state_database", "database is absent, unreadable, or not at this binary's schema", "restore or migrate the production database with the supported daemon")
@@ -1050,7 +1093,7 @@ func reviewConfigurationDigest(cfg preflightConfig) (domain.Digest, error) {
 		ObserverImage: cfg.ExporterImage, Model: cfg.ReviewModel,
 		ReasoningEffort:          cfg.ReviewReasoningEffort,
 		AccessTokenLifetimeFloor: time.Hour, AccessTokenRefreshThreshold: 2 * time.Hour,
-	}, cfg.ReviewWorkspaceSizeMB, cfg.ReviewAuthMode, cfg.ReviewAuthIdentityID, cfg.ReviewCostOwner)
+	}, cfg.ReviewWorkspaceSizeMB, cfg.ReviewAuthMode, cfg.Agents.ReviewAuthIdentityID, cfg.Agents.ReviewCostOwner)
 }
 
 func preflightShadowReviewConfigurationDigest(cfg preflightConfig) (domain.Digest, error) {
@@ -1063,7 +1106,7 @@ func preflightShadowReviewConfigurationDigest(cfg preflightConfig) (domain.Diges
 		ApprovedImage:     cfg.ShadowReviewImage, ObserverImage: cfg.ExporterImage,
 		Model: cfg.ShadowReviewModel, ReasoningEffort: cfg.ShadowReviewReasoningEffort,
 	}, cfg.ShadowReviewWorkspaceSizeMB, ward.CodexAuthSetupToken,
-		cfg.AuthIdentityID, cfg.ShadowReviewCostOwner)
+		cfg.Agents.ShadowReviewAuthIdentityID, cfg.Agents.ShadowReviewCostOwner)
 	if err != nil {
 		return "", err
 	}
@@ -1157,6 +1200,72 @@ func preflightUIDMatches(stat *syscall.Stat_t, euid int) bool {
 	return stat != nil && euid >= 0 && uint64(stat.Uid) == uint64(euid)
 }
 
+// ResolveAgentSelection reads the admitted-agent tree at its exact commit and
+// resolves, against the rig's database, every role the production composition
+// uses: the three writer roles, the reviewer, and the shadow reviewer while
+// its image enables the arm.
+func (productionPreflightEnvironment) ResolveAgentSelection(
+	ctx context.Context, cfg preflightConfig, now time.Time,
+) (preflightAgentSelection, error) {
+	agents, err := loadAgentSelection(ctx, claudeDriverConfig{
+		AgentTreeCheckout: cfg.AgentTreeCheckout, AgentTreeCommit: cfg.AgentTreeCommit,
+	})
+	if err != nil {
+		return preflightAgentSelection{}, err
+	}
+	lock, err := daemonlock.Acquire(cfg.DBPath)
+	if err != nil {
+		return preflightAgentSelection{}, err
+	}
+	defer lock.Close() //nolint:errcheck // the resolution result is reported independently
+	st, err := store.OpenReadOnly(ctx, cfg.DBPath, store.Options{
+		ApprovedRecipes: map[domain.Digest]bool{cfg.ApprovedRecipe: true},
+	})
+	if err != nil {
+		return preflightAgentSelection{}, err
+	}
+	defer st.Close() //nolint:errcheck // the resolution result is reported independently
+	return resolvePreflightAgents(ctx, st, agents.Tree, agents.LineupRevision, cfg.ShadowReviewImage != "", now)
+}
+
+// resolvePreflightAgents resolves the composition's roles. The writer roles
+// must share one credential volume, because preflight probes exactly one.
+// A writer role is resolved, not admitted: preflight takes no prompt package,
+// operating mode, or attempt budget, so the prompt digest, launch coverage,
+// attended mark, expiry, and egress steps run only in the daemon's startup
+// check, which holds admission when one fails.
+func resolvePreflightAgents(
+	ctx context.Context, st *store.Store, tree agenttree.Tree, revision domain.Digest, shadow bool, now time.Time,
+) (preflightAgentSelection, error) {
+	selection := preflightAgentSelection{LineupRevision: revision}
+	for _, role := range []domain.RoleName{domain.RoleImplementer, domain.RoleSpecifier, domain.RoleRemediator} {
+		agent, err := engine.ResolveRole(ctx, st, tree, role)
+		if err != nil {
+			return preflightAgentSelection{}, &roleAdmissionError{Role: role, Err: err}
+		}
+		if selection.AuthVolume == "" {
+			selection.AuthIdentityID, selection.AuthVolume = agent.Identity.ID, agent.Generation.AuthStoreVolume
+		}
+		if agent.Generation.AuthStoreVolume != selection.AuthVolume {
+			return preflightAgentSelection{}, &roleAdmissionError{Role: role, Err: errors.New(
+				"it mounts another credential volume than the implementer; preflight probes one writer volume")}
+		}
+	}
+	reviewer, err := reviewRoleAgent(ctx, st, tree, domain.RoleReviewer, now)
+	if err != nil {
+		return preflightAgentSelection{}, err
+	}
+	selection.ReviewAuthIdentityID, selection.ReviewCostOwner = reviewer.Identity.ID, reviewer.Identity.CostOwner
+	if shadow {
+		agent, err := reviewRoleAgent(ctx, st, tree, domain.RoleShadowReviewer, now)
+		if err != nil {
+			return preflightAgentSelection{}, err
+		}
+		selection.ShadowReviewAuthIdentityID, selection.ShadowReviewCostOwner = agent.Identity.ID, agent.Identity.CostOwner
+	}
+	return selection, nil
+}
+
 func (productionPreflightEnvironment) InspectDatabase(
 	ctx context.Context, cfg preflightConfig, reviewDigest domain.Digest,
 ) databaseInspection {
@@ -1214,16 +1323,19 @@ func (productionPreflightEnvironment) InspectDatabase(
 			return nil
 		}
 		inspection.ShadowReviewAuthorized = true
-		identity, err := tx.GetAuthIdentity(ctx, cfg.AuthIdentityID)
-		if err != nil || identity.Provider != "claude" || identity.Interim.AuthStoreVolume != cfg.AuthVolume ||
+		// The writer mounts its admitted generation's volume, so -auth-volume
+		// is checked against the generation the lineup resolves, not against
+		// the identity's interim binding.
+		identity, err := tx.GetAuthIdentity(ctx, cfg.Agents.AuthIdentityID)
+		if err != nil || identity.Provider != "claude" || cfg.Agents.AuthVolume != cfg.AuthVolume ||
 			!identity.AuthStoreMutationLease {
 			inspection.CredentialError = errors.Join(err, errors.New("identity cannot support the leased Claude auth store"))
 		}
 		if cfg.ReviewAuthMode == ward.CodexAuthSubscription {
-			reviewIdentity, err := tx.GetAuthIdentity(ctx, cfg.ReviewAuthIdentityID)
+			reviewIdentity, err := tx.GetAuthIdentity(ctx, cfg.Agents.ReviewAuthIdentityID)
 			inspection.ReviewAuthStoreVolume = reviewIdentity.Interim.AuthStoreVolume
 			inspection.ReviewRefreshStrategy = reviewIdentity.Interim.RefreshStrategy
-			if err != nil || reviewIdentity.ID != cfg.ReviewAuthIdentityID ||
+			if err != nil || reviewIdentity.ID != cfg.Agents.ReviewAuthIdentityID ||
 				reviewIdentity.Provider != "openai" || !reviewIdentity.AuthStoreMutationLease ||
 				!reviewIdentity.Interim.SupportsReadOnlyAuthSnapshot {
 				inspection.ReviewCredentialError = errors.Join(
@@ -1244,7 +1356,7 @@ func (productionPreflightEnvironment) InspectDatabase(
 		if err != nil {
 			inspection.ReviewReenrollmentError = err
 		} else if needs, err := adapters.AuthState.NeedsCodexAuthReenrollment(
-			ctx, cfg.ReviewAuthIdentityID,
+			ctx, cfg.Agents.ReviewAuthIdentityID,
 		); err != nil || needs {
 			inspection.ReviewReenrollmentError = errors.Join(
 				err, errors.New("codex auth identity has an active re-enrollment hold"),
@@ -1302,7 +1414,7 @@ func (productionPreflightEnvironment) InspectCodexCredential(
 ) codexCredentialInspection {
 	resolvedPath, expiresAt, err := ward.InspectCodexAuthReadiness(
 		cfg.ReviewInputRoot, cfg.ReviewAuthSnapshot, cfg.ReviewAuthMode,
-		cfg.ReviewAuthIdentityID, now,
+		cfg.Agents.ReviewAuthIdentityID, now,
 		ward.CodexAuthProductionLifetimeFloor, ward.CodexAuthProductionRefreshThreshold, refreshOnDemand,
 	)
 	return codexCredentialInspection{

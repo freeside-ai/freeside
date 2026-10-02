@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -40,8 +41,10 @@ func TestRealRunIdentitiesKeepRecordedLimit(t *testing.T) {
 	if got := limit(); got != 1 {
 		t.Fatalf("new identity limit = %d, want the declared 1", got)
 	}
+	// The operator's changes since: a raised limit, and what adoption binds.
 	raised := declared
 	raised.MaxParallelExecutions = 4
+	raised.Enabled, raised.CostOwner, raised.AccountBinding = true, "operator", "acct-fixture"
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordAuthIdentity(ctx, raised, time.Now().UTC())
 	}); err != nil {
@@ -52,6 +55,15 @@ func TestRealRunIdentitiesKeepRecordedLimit(t *testing.T) {
 	}
 	if got := limit(); got != 4 {
 		t.Fatalf("relaunch limit = %d, want the recorded 4", got)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		identity, err := tx.GetAuthIdentity(ctx, declared.ID)
+		if err == nil && identity != raised {
+			err = fmt.Errorf("relaunch rewrote the recorded identity: %+v", identity)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
 	}
 	if err := realRunIdentities(ctx, st, true, declared); err != nil {
 		t.Fatalf("final pass with a raised limit: %v", err)

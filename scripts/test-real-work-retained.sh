@@ -66,12 +66,12 @@ for completion in (None, {}, {"pr_number": 8, "merge_commit_sha": "expected-merg
 for state in ("ready", "retained"):
     refuses(lambda: module.check_remote(dict(checkpoint, state=state), merged))
 
-fields = "repository repository_id base_ref base_sha profile_digest review_configuration_digest allowed_paths claude_auth_identity claude_auth_volume codex_auth_identity images identity build_egress_configuration_digest".split()
+fields = "repository repository_id base_ref base_sha profile_digest review_configuration_digest allowed_paths claude_auth_volume images identity build_egress_configuration_digest".split()
 original = dict.fromkeys(fields, "unchanged")
 module.compare_composition(original, dict(original, daemon_build="new", rig="new"))
 for field in fields:
     refuses(lambda: module.compare_composition(original, dict(original, **{field: "changed"})))
-for field in ("shadow_review_configuration_digest", "review_instructions_present",
+for field in ("agent_lineup_revision", "shadow_review_configuration_digest", "review_instructions_present",
               "review_instructions_digest", "judgment_configuration_digest"):
     refuses(lambda: module.compare_composition(original, dict(original, **{field: "changed"})))
 
