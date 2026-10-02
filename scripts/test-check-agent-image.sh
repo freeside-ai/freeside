@@ -420,6 +420,22 @@ PYRIG
 	esac
 	exit 0
 fi
+if [ "${1:-} ${2:-}" = "auth adopt" ]; then
+	printf '%s\n' 'auth-adopt' >>"${STUB_DIR:?}/lifecycle.log"
+	if [ "${GO_STUB_ADOPT_MODE:-ok}" = fail ]; then
+		# The real command quotes the cost owner on a mismatch.
+		echo "auth identity implementer has cost owner \"other\", not \"${FREESIDE_REAL_RUN_COST_OWNER:?}\"" >&2
+		exit 1
+	fi
+	patch=""
+	while [ $# -gt 0 ]; do
+		[ "$1" != -patch ] || patch=$2
+		shift
+	done
+	printf '%s\n' 'diff --git a/policy/lineup b/policy/lineup' >"${patch:?}"
+	printf '%s\n' '{"identities":[{"auth_identity_id":"implementer","harness_client":"claude_code","status":"adopted"},{"auth_identity_id":"reviewer","harness_client":"codex_cli","status":"adopted"}]}'
+	exit 0
+fi
 if [ "${1:-}" = preflight ]; then
 	printf '%s\n' 'preflight' >>"${STUB_DIR:?}/lifecycle.log"
 	printf '%s\n' "$@" >"${STUB_DIR:?}/preflight.args"
@@ -631,6 +647,14 @@ for arg in "$@"; do
 		printf '%s\n' 0123456789ab
 		exit 0
 		;;
+	ls-tree)
+		# Both listings are empty, so the agent-tree comparison matches unless
+		# the case asks the checkout's side to differ.
+		if [ "${GIT_STUB_AGENT_TREE_MODE:-match}" = differ ] && [[ "$*" == *policy-checkout* ]]; then
+			printf '%s\n' '100644 blob ba9876543210	policy/lineup'
+		fi
+		exit 0
+		;;
 	esac
 done
 exit 0
@@ -763,6 +787,12 @@ RETRY_STUB
     FREESIDE_REAL_RUN_AUTH_IDENTITY=implementer \
     FREESIDE_REAL_RUN_AGENT_TREE="$CASE_DIR/policy-checkout" \
     FREESIDE_REAL_RUN_AGENT_TREE_COMMIT=0123456789012345678901234567890123456789 \
+    FREESIDE_REAL_RUN_COST_OWNER=cost-owner-sentinel \
+    FREESIDE_REAL_RUN_REVIEW_COST_OWNER=review-cost-owner-sentinel \
+    FREESIDE_REAL_RUN_CLAUDE_ACCOUNT=account-sentinel@example.test \
+    FREESIDE_REAL_RUN_TERMS_BASIS_DATE=2026-01-02 \
+    FREESIDE_REAL_RUN_PRICING_REVISION=2026-01 \
+    FREESIDE_REAL_RUN_OFFER_NOT_AFTER=2027-01-02T00:00:00Z \
     FREESIDE_REAL_RUN_AUTH_VOLUME=auth-volume \
     FREESIDE_REAL_RUN_REPO=freeside-ai/freeside \
     FREESIDE_REAL_RUN_REPOSITORY_ID=1 \
@@ -1393,9 +1423,34 @@ run_real_work
 assert_rc 1
 composition_lifecycle=$(tr '\n' ' ' <"$CASE_DIR/lifecycle.log")
 case "$composition_lifecycle" in
-*"rig-hold identity-seed preflight submit "*) pass=$((pass + 1)) ;;
+*"rig-hold identity-seed auth-adopt preflight submit "*) pass=$((pass + 1)) ;;
 *) report_failure "composition lifecycle was out of order: $composition_lifecycle" ;;
 esac
+assert_contains "auth adopt: claude_code adopted"
+assert_contains "auth adopt: codex_cli adopted"
+# The adoption inputs reach auth adopt and nothing the harness keeps or prints.
+assert_lacks sentinel
+if grep -rlE 'cost-owner-sentinel|account-sentinel' "$CASE_DIR" >/dev/null; then
+	report_failure "an adoption input was written under the session: $(grep -rlE 'cost-owner-sentinel|account-sentinel' "$CASE_DIR" | tr '\n' ' ')"
+else
+	pass=$((pass + 1))
+fi
+
+begin_case "44a an agent tree that differs stops before preflight and names the patch"
+GIT_STUB_AGENT_TREE_MODE=differ run_real_work
+assert_rc 2
+assert_contains "is not the tree auth adopt emitted"
+assert_contains "review and commit $CASE_DIR/real-work-session."
+assert_contains "/agent-tree.patch in that checkout"
+assert_not_exists "$CASE_DIR/preflight.called"
+assert_not_exists "$CASE_DIR/policy-checkout"
+
+begin_case "44b a failed adoption stops before preflight without echoing its log"
+GO_STUB_ADOPT_MODE=fail run_real_work
+assert_rc 1
+assert_contains "freesided auth adopt failed"
+assert_lacks sentinel
+assert_not_exists "$CASE_DIR/preflight.called"
 
 begin_case "45 the persisted composition includes explicit not-run evidence"
 run_real_work
@@ -1454,7 +1509,7 @@ else
 fi
 rig_lifecycle=$(tr '\n' ' ' <"$CASE_DIR/lifecycle.log")
 case "$rig_lifecycle" in
-*"rig-hold identity-seed preflight submit daemon-start final-verify walkthrough daemon-stop rig-cleanup rig-release restore "*)
+*"rig-hold identity-seed auth-adopt preflight submit daemon-start final-verify walkthrough daemon-stop rig-cleanup rig-release restore "*)
 	pass=$((pass + 1)) ;;
 *) report_failure "rig lifecycle was out of order: $rig_lifecycle" ;;
 esac
