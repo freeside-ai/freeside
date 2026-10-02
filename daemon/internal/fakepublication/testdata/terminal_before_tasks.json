@@ -95,7 +95,8 @@
       "status": ""
     },
     "BeforeTasks": "sha256:51b85ac1c5fca6841488c274981fd046fd7223b2dccc61e2137425d14a8636d6",
-    "BeforePRReference": "sha256:e6bfd2ef9a7321f51b51d14b892d6d1cbc140ff60ecb628eff5574da4d9160b8"
+    "BeforePRReference": "sha256:e6bfd2ef9a7321f51b51d14b892d6d1cbc140ff60ecb628eff5574da4d9160b8",
+    "Current": "sha256:19d57f95d8f18f3e0a8664f79ec7a7cee012a659fd935172e513fba074de4cea"
   },
   {
     "Task": {
@@ -199,7 +200,8 @@
       "status": ""
     },
     "BeforeTasks": "sha256:9a6fc4645b0a98e65de40946316bbe6c5631cb36e5a66300e9d064a4adb68ff3",
-    "BeforePRReference": "sha256:3a1d89a6bab66e2edba76d202c31a483873374a6a14523b6b23fbcc630dbec23"
+    "BeforePRReference": "sha256:3a1d89a6bab66e2edba76d202c31a483873374a6a14523b6b23fbcc630dbec23",
+    "Current": "sha256:928a0cc8a2b21e1e2199917690ebc69c32741eb0e726752c69808a49be9d4985"
   },
   {
     "Task": {
@@ -306,6 +308,7 @@
       "status": ""
     },
     "BeforeTasks": "sha256:49eb5e74cfa953c6a7ed101e5a917cda3625402857d4e3fcbc14627b943e12d5",
-    "BeforePRReference": "sha256:b2476b1a543cb11236e946010a3c13758d5d5310fe74f1f369c7e57985a2acb0"
+    "BeforePRReference": "sha256:b2476b1a543cb11236e946010a3c13758d5d5310fe74f1f369c7e57985a2acb0",
+    "Current": "sha256:abfb778f26b056df9dcf51fcd388c9dbef9a4aeb5ea703d40f2c37abbe7397cc"
   }
 ]

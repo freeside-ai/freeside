@@ -18,6 +18,10 @@ func TestTerminalDigestsMatchFrozenPreTaskEncodings(t *testing.T) {
 		Item              json.RawMessage
 		BeforeTasks       domain.Digest
 		BeforePRReference domain.Digest
+		// Current pins TerminalDigest itself. A bound terminal item stores
+		// this digest in its reason, so a later AttentionItem field must
+		// leave it unchanged for an item that does not carry the field.
+		Current domain.Digest
 	}
 	if err := json.Unmarshal(body, &vectors); err != nil {
 		t.Fatal(err)
@@ -49,6 +53,13 @@ func TestTerminalDigestsMatchFrozenPreTaskEncodings(t *testing.T) {
 		}
 		if before != vector.BeforeTasks || old != vector.BeforePRReference {
 			t.Fatalf("vector %d: pre-task=%s want %s; v1=%s want %s", i, before, vector.BeforeTasks, old, vector.BeforePRReference)
+		}
+		current, err := TerminalDigest(vector.Task, item)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if current != vector.Current {
+			t.Fatalf("vector %d: current=%s want %s", i, current, vector.Current)
 		}
 	}
 }
