@@ -14,7 +14,34 @@ import Testing
     ) async {
         let store = await makeStore(server: MockServer())
         let model = DecisionModel(store: store, itemID: "item-\(type.rawValue)")
-        #expect(model.offeredActions == AttentionFixtures.phase1ActionSets[type])
+        // The default hold carries no pull request, so it cannot offer the
+        // conditional open_pr.
+        let offered = AttentionFixtures.phase1ActionSets[type]?.filter {
+            type != .publish_blocked || $0 != .open_pr
+        }
+        #expect(model.offeredActions == offered)
+    }
+
+    @Test func holdAfterPublicationOpensItsPullRequestAndStaysOpen() async {
+        let hold = AttentionFixtures.publishBlockedAfterPublication()
+        let store = await makeStore(server: MockServer(items: [hold]))
+        var openedURLs: [URL] = []
+        let model = DecisionModel(
+            store: store,
+            itemID: hold.item.id,
+            openURL: {
+                openedURLs.append($0)
+                return true
+            })
+        await model.validate()
+        #expect(model.offeredActions == [.inspect_trust_failure, .open_pr])
+
+        await model.submit(.open_pr)
+
+        #expect(openedURLs == [URL(string: "https://github.com/owner/repo/pull/123")!])
+        #expect(model.appliedRecord?.action == .open_pr)
+        #expect(model.snapshot?.item.status == .open)
+        #expect(model.actionsEnabled)
     }
 
     @Test func viewPRUsesTheFixtureReferenceAndRecordsTheNavigation() async {

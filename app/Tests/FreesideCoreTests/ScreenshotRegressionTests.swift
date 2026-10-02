@@ -1035,6 +1035,27 @@
                                     detailWidth: 1_200))))
                 }
 
+                if snapshot.item._type == .publish_blocked {
+                    // A hold raised after its run's pull request existed
+                    // (#1643): the card offers viewing that pull request
+                    // beside inspecting the trust failure.
+                    let published = AttentionFixtures.publishBlockedAfterPublication().item
+                    surfaces.append(
+                        Surface(
+                            name: "decision-publish_blocked-after-publication",
+                            view: AnyView(
+                                detail.screenshotCard(published, at: dynamicTypeSize))))
+                    surfaces.append(
+                        Surface(
+                            name: "decision-publish_blocked-after-publication-phone",
+                            width: 390,
+                            view: AnyView(
+                                detail.screenshotCard(
+                                    published,
+                                    at: dynamicTypeSize,
+                                    compactLayout: true))))
+                }
+
                 if snapshot.item._type == .review_diminishing_returns {
                     surfaces.append(
                         Surface(

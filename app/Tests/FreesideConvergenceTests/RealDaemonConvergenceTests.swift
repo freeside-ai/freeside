@@ -707,7 +707,15 @@ struct RealDaemonConvergenceTests {
         // constructs neither, so exercising that cell would test malformed-card
         // rejection before the action policy. The daemon integration test covers
         // its full offer, acceptance, allocation, and replay path instead.
-        let constructibleAllowed = allowed.filter { $0 != .retry_with_capabilities }
+        //
+        // open_pr on a hold is conditional on the item's pull request
+        // reference, which this seed route cannot attach. The daemon's
+        // TestOpenPRNeedsAPRReference (signet policy_test.go) covers that
+        // cell with and without the reference.
+        func constructible(_ action: Components.Schemas.Action) -> Bool {
+            action != .retry_with_capabilities && !(type == .publish_blocked && action == .open_pr)
+        }
+        let constructibleAllowed = allowed.filter(constructible)
 
         // The whole allowed set reaches the post-policy boundary (blocked: the
         // empty set). Task proposals then fail with the specialized-admission
@@ -732,7 +740,7 @@ struct RealDaemonConvergenceTests {
         // classification: allowed → accepted; otherwise → the typed
         // ErrActionNotAllowedForType 400. Removing an action from either side
         // alone flips exactly these cells.
-        for action in AttentionFixtures.phase1Actions where action != .retry_with_capabilities {
+        for action in AttentionFixtures.phase1Actions where constructible(action) {
             let outcome = try await control.seedItemOutcome(
                 id: ConvergenceHarness.uniqueItemID("pol-\(type.rawValue)-\(action.rawValue)"),
                 type: type, actions: [action])

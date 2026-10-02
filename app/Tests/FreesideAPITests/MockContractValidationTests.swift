@@ -390,7 +390,17 @@ import Testing
         wrongType.pr_reference = fixture.pr_reference
         #expect(
             MockContractValidation.itemValidityBreach(wrongType)
-                == "pr_reference on a non-ready_for_final_review item")
+                == "pr_reference on an item that is neither ready_for_final_review nor publish_blocked")
+
+        // A hold may carry the reference or not: it is optional there.
+        var hold = AttentionFixtures.fixture(type: .publish_blocked).item
+        #expect(MockContractValidation.itemValidityBreach(hold) == nil)
+        hold.pr_reference = fixture.pr_reference
+        #expect(MockContractValidation.itemValidityBreach(hold) == nil)
+        hold.pr_reference?.value1.number = 0
+        #expect(
+            MockContractValidation.itemValidityBreach(hold)
+                == "non-positive pr_reference number")
 
         var invalidRepo = fixture
         invalidRepo.pr_reference?.value1.repo = "owner/../repo"
@@ -1091,6 +1101,19 @@ import Testing
         #expect(
             MockContractValidation.itemPolicyBreach(blockedWithAction)
                 == "action stop is not allowed for blocked")
+    }
+
+    @Test func holdOffersOpenPROnlyWithItsPullRequest() {
+        let published = AttentionFixtures.publishBlockedAfterPublication().item
+        #expect(MockContractValidation.itemValidityBreach(published) == nil)
+        #expect(MockContractValidation.itemPolicyBreach(published) == nil)
+
+        var unpublished = AttentionFixtures.fixture(type: .publish_blocked).item
+        #expect(MockContractValidation.itemPolicyBreach(unpublished) == nil)
+        unpublished.requested_decision = [.inspect_trust_failure, .open_pr]
+        #expect(
+            MockContractValidation.itemPolicyBreach(unpublished)
+                == "action open_pr is not allowed for publish_blocked without a pr_reference")
     }
 
     @Test func nonBlockedMustOfferAnAllowedAction() {
