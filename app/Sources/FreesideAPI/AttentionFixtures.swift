@@ -129,10 +129,14 @@ public enum AttentionFixtures {
     /// A review_diminishing_returns item that parked on `cause`. The base
     /// fixture carries low_value_streak; this names any other cause.
     /// `verdict` shapes the drift facts and matters only under drift_audit,
-    /// the one cause that carries them.
+    /// the one cause that carries them. `simplificationOnContinue` and
+    /// `longReversalList` matter only under the over_hardened verdict, the
+    /// one verdict that carries reversals; each variant has its own item id.
     public static func reviewDiminishing(
         cause: Components.Schemas.ReviewDiminishingCause,
-        verdict: Components.Schemas.DriftVerdict = .over_hardened
+        verdict: Components.Schemas.DriftVerdict = .over_hardened,
+        simplificationOnContinue: Bool = false,
+        longReversalList: Bool = false
     ) -> Components.Schemas.AttentionItemSnapshot {
         var snapshot = fixture(type: .review_diminishing_returns)
         guard cause == .drift_audit else {
@@ -140,14 +144,21 @@ public enum AttentionFixtures {
             snapshot.item.review_diminishing = .init(value1: .init(cause: cause))
             return snapshot
         }
-        snapshot.item.id = "item-review-diminishing-drift-\(verdict.rawValue)"
+        let overHardened = verdict == .over_hardened
+        snapshot.item.id =
+            "item-review-diminishing-drift-\(verdict.rawValue)"
+            + (overHardened && simplificationOnContinue ? "-simplify" : "")
+            + (overHardened && longReversalList ? "-long" : "")
         let explanation: String
         var reversals: [Components.Schemas.DriftReversal] = []
         switch verdict {
         case .converged:
             explanation = "The change implements the approved specification without excess hardening."
         case .over_hardened:
-            explanation = "Two review fixes add defenses the approved specification does not need."
+            explanation =
+                longReversalList
+                ? "Eight review fixes add defenses the approved specification does not need."
+                : "Two review fixes add defenses the approved specification does not need."
             reversals = [
                 .init(
                     finding_id: "finding-1", undo: "Remove the retry wrapper around the config load.",
@@ -156,6 +167,30 @@ public enum AttentionFixtures {
                     finding_id: "finding-2", undo: "Drop the nil guard on the injected clock.",
                     rationale: "Every caller constructs the clock; the guard is unreachable."),
             ]
+            if longReversalList {
+                // Single-digit ids keep the list ascending in string order,
+                // which validation requires: finding-10 sorts before finding-2.
+                reversals += [
+                    .init(
+                        finding_id: "finding-3", undo: "Remove the fallback to a default region.",
+                        rationale: "The specification requires an explicit region."),
+                    .init(
+                        finding_id: "finding-4", undo: "Drop the second checksum pass after the write.",
+                        rationale: "The store already verifies the digest on write."),
+                    .init(
+                        finding_id: "finding-5", undo: "Remove the lock around the read-only cache.",
+                        rationale: "The cache is built once before any reader starts."),
+                    .init(
+                        finding_id: "finding-6", undo: "Delete the legacy header parser.",
+                        rationale: "No supported client sends the legacy header."),
+                    .init(
+                        finding_id: "finding-7", undo: "Drop the timeout on the in-process call.",
+                        rationale: "The call cannot block; it reads a value already in memory."),
+                    .init(
+                        finding_id: "finding-8", undo: "Remove the empty-list guard before the sort.",
+                        rationale: "Sorting an empty list is already a no-op."),
+                ]
+            }
         case .stuck:
             explanation = "Three rounds of fixes have not moved the change toward the approved specification."
         }
@@ -166,7 +201,7 @@ public enum AttentionFixtures {
                     value1: .init(
                         audit_digest: "sha256:drift-audit-\(verdict.rawValue)", verdict: verdict,
                         confidence: .high, explanation: explanation, reversals: reversals,
-                        simplification_on_continue: false))))
+                        simplification_on_continue: overHardened && simplificationOnContinue))))
         return snapshot
     }
 

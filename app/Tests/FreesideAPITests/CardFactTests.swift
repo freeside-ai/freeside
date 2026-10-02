@@ -109,6 +109,38 @@ import Testing
         #expect(MockContractValidation.itemValidityBreach(item) == nil)
     }
 
+    /// The over_hardened variants the card renders: the simplification
+    /// promise and a list long enough to collapse. Each is its own item, so
+    /// a screenshot surface named by id cannot collide with another.
+    @Test func overHardenedFixtureVariantsAreValidAndDistinct() throws {
+        let variants = [
+            AttentionFixtures.reviewDiminishing(cause: .drift_audit).item,
+            AttentionFixtures.reviewDiminishing(cause: .drift_audit, simplificationOnContinue: true)
+                .item,
+            AttentionFixtures.reviewDiminishing(cause: .drift_audit, longReversalList: true).item,
+        ]
+        let drifts = try variants.map { try #require($0.review_diminishing?.value1.drift_audit?.value1) }
+
+        #expect(Set(variants.map(\.id)).count == variants.count)
+        #expect(drifts.map(\.simplification_on_continue) == [false, true, false])
+        #expect(drifts.map(\.reversals.count) == [2, 2, 8])
+        for item in variants {
+            #expect(MockContractValidation.itemValidityBreach(item) == nil)
+        }
+    }
+
+    /// Only over_hardened carries reversals, so the two variant flags leave
+    /// every other verdict's facts and item id alone instead of building a
+    /// fixture validation would reject.
+    @Test(arguments: [Components.Schemas.DriftVerdict.converged, .stuck])
+    func variantFlagsLeaveOtherVerdictsUnchanged(verdict: Components.Schemas.DriftVerdict) {
+        #expect(
+            AttentionFixtures.reviewDiminishing(
+                cause: .drift_audit, verdict: verdict, simplificationOnContinue: true,
+                longReversalList: true)
+                == AttentionFixtures.reviewDiminishing(cause: .drift_audit, verdict: verdict))
+    }
+
     @Test func reviewDiminishingFactsDecodeFromNullOrAbsent() throws {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
