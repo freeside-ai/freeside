@@ -1076,7 +1076,11 @@ store's route gate becomes the round's remediation under
 reversal list with engine-derived paths, and the same write records one
 disposition-supersession record per reversed fix. Every other `over_hardened`
 verdict parks, and the item says whether `continue_under_policy` would run
-the simplification round. Configure all four flags together:
+the simplification round. The drift replay
+(`internal/integration/drift_replay_test.go`) re-runs recorded audits of real
+over-hardened pull requests through this site and the route gate, and
+`FREESIDE_DRIFT_REPLAY_LIVE_TEST=1` audits them again with the live provider.
+Configure all four flags together:
 
 ```text
 -judgment-claude-bin /absolute/path/to/claude
