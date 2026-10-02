@@ -786,6 +786,10 @@ struct DecisionDetailView: View {
                     presentation: presentation,
                     showsBars: graphics.diminishingYield != nil)
             }
+        case .stopCause:
+            if let presentation = DecisionStopCausePresentation(item) {
+                DecisionStopCauseModuleView(presentation: presentation)
+            }
         case .findingFacts:
             // The labeled proposal and the daemon-fact register lead the §9
             // finding_adjudication card (docs/plan.md §9, #984), so this

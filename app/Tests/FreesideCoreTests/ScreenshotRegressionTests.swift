@@ -1046,6 +1046,59 @@
                                     at: dynamicTypeSize,
                                     compactLayout: true))))
 
+                    // The drift-audit shapes of the card (#1052): the
+                    // over_hardened verdict with and without the daemon's
+                    // promise to simplify on continue, the stuck verdict, and
+                    // a reversal list long enough to collapse, each at phone
+                    // width and at a Mac width.
+                    let driftVariants = [
+                        ("over_hardened", AttentionFixtures.reviewDiminishing(cause: .drift_audit)),
+                        (
+                            "over_hardened-simplify",
+                            AttentionFixtures.reviewDiminishing(
+                                cause: .drift_audit, simplificationOnContinue: true)
+                        ),
+                        (
+                            "stuck",
+                            AttentionFixtures.reviewDiminishing(cause: .drift_audit, verdict: .stuck)
+                        ),
+                        (
+                            "long-reversals",
+                            AttentionFixtures.reviewDiminishing(
+                                cause: .drift_audit, longReversalList: true)
+                        ),
+                    ]
+                    for (variant, drift) in driftVariants {
+                        surfaces.append(
+                            Surface(
+                                name: "decision-review_diminishing_returns-drift-\(variant)-phone",
+                                width: 390,
+                                view: AnyView(
+                                    detail.screenshotCard(
+                                        drift.item,
+                                        at: dynamicTypeSize,
+                                        compactLayout: true))))
+                        surfaces.append(
+                            Surface(
+                                name: "decision-review_diminishing_returns-drift-\(variant)-1200",
+                                width: 1_200,
+                                view: AnyView(
+                                    detail.screenshotCard(
+                                        drift.item,
+                                        at: dynamicTypeSize,
+                                        detailWidth: 1_200))))
+                    }
+                    surfaces.append(
+                        Surface(
+                            name: "decision-review_diminishing_returns-drift-over_hardened-phone-dark",
+                            width: 390,
+                            colorScheme: .dark,
+                            view: AnyView(
+                                detail.screenshotCard(
+                                    driftVariants[0].1.item,
+                                    at: dynamicTypeSize,
+                                    compactLayout: true))))
+
                     let preferencesSuite = "FreesideScreenshotDiminishingPreferences"
                     guard let preferencesDefaults = UserDefaults(suiteName: preferencesSuite) else {
                         throw ScreenshotError.preferencesUnavailable

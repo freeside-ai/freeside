@@ -48,8 +48,8 @@ import Testing
         #expect(
             Set(DecisionCardComposition.sharedModuleSet) == [
                 .facts, .agentQuestion, .specRevision, .specification, .factBlock, .findingFacts,
-                .recommendation, .checklist, .stageRail, .comparison, .yieldChart, .summary,
-                .claims, .evidence, .details,
+                .recommendation, .stopCause, .checklist, .stageRail, .comparison, .yieldChart,
+                .summary, .claims, .evidence, .details,
             ])
     }
 
@@ -122,8 +122,8 @@ import Testing
             ])
         #expect(
             DecisionCardComposition.forType(.review_diminishing_returns).modules == [
-                .recommendation, .yieldChart, .facts, .factBlock, .summary, .claims, .evidence,
-                .details,
+                .recommendation, .stopCause, .yieldChart, .facts, .factBlock, .summary, .claims,
+                .evidence, .details,
             ])
         #expect(
             !DecisionCardComposition.forType(.review_dispute).modules.contains(.recommendation))
@@ -585,6 +585,33 @@ import Testing
         var item = AttentionFixtures.fixture(type: .spec_approval).item
         #expect(!composition.rendersContext(for: item))
         item.agent_claims.removeAll { $0.label == AgentClaimLabels.summary }
+        #expect(composition.rendersContext(for: item))
+    }
+
+    /// Plan §7 "Routing": the diminishing-returns card leads with the verdict
+    /// and the reversal list, so the stop cause renders above the actions.
+    @Test func theStopCauseLeadsTheDiminishingCardAboveItsActions() throws {
+        let composition = DecisionCardComposition.forType(.review_diminishing_returns)
+        let stopCause = try #require(composition.modules.firstIndex(of: .stopCause))
+
+        #expect(stopCause < composition.actionInsertionIndex)
+        #expect(stopCause < (try #require(composition.modules.firstIndex(of: .yieldChart))))
+        #expect(composition.actionInsertionIndex == composition.modules.firstIndex(of: .factBlock))
+    }
+
+    /// The daemon writes this item's reason as a summary line plus a
+    /// `Binding: {…}` JSON line. With typed facts the card states the cause
+    /// from them and prints no Context; an item without facts has no other
+    /// statement of its cause and keeps it.
+    @Test func aDiminishingCardWithTypedFactsDropsTheBindingReason() {
+        let composition = DecisionCardComposition.forType(.review_diminishing_returns)
+        var item = AttentionFixtures.fixture(type: .review_diminishing_returns).item
+        item.reason =
+            "Review yield has remained low under the resolved policy.\n"
+            + #"Binding: {"run_id":"run-1","round":3}"#
+        #expect(!composition.rendersContext(for: item))
+
+        item.review_diminishing = nil
         #expect(composition.rendersContext(for: item))
     }
 
