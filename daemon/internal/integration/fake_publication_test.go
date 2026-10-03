@@ -429,6 +429,13 @@ type integrationTransport struct {
 	fail                   bool
 	conflict               bool
 	successorUpdateFailure error
+	// The remote side of the pull request branches and the re-entry fetch
+	// accounting (reentry_transport_test.go).
+	headsDir      string
+	headFetches   int
+	headFetchHook func(call int)
+	merges        int
+	mergeMessage  string
 }
 
 func (tr *integrationTransport) RetainWorktree(
@@ -608,6 +615,7 @@ func (tr *integrationTransport) PushHead(
 			"publication ref moved: %w", publish.ErrPublicationConflict,
 		)
 	}
+	tr.publishHead(sealed.dir, identity.BranchName(), gated.SourceHeadSHA())
 	return publish.PushResult{Created: !refConflict}, nil
 }
 

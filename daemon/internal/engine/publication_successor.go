@@ -144,6 +144,12 @@ func authenticateTaskSuccessor(ctx context.Context, tx *store.ReadTx, task produ
 	if err != nil || !reflect.DeepEqual(successor, *task.Successor) {
 		return errors.Join(err, domain.ErrParentKeyMismatch)
 	}
+	if task.reentersInPlace() {
+		// No producer stands behind a re-entered cycle. The store sealed its
+		// authority against the predecessor item's binding and the review
+		// that covered it, and the read above re-ran that gate.
+		return nil
+	}
 	if task.ProducingInvocationID == successor.FeedbackInvocationID {
 		entry, err := tx.GetOutbox(ctx, string(task.ProducingInvocationID))
 		if err != nil {

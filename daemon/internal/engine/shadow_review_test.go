@@ -128,6 +128,18 @@ func (retainingShadowTransport) PushHead(
 	return publish.PushResult{}, errors.New("unexpected push")
 }
 
+func (retainingShadowTransport) FetchHead(
+	context.Context, PublicationCheckout, string, string,
+) (publish.HeadFetch, error) {
+	return publish.HeadFetch{}, errors.New("unexpected head fetch")
+}
+
+func (retainingShadowTransport) ProspectiveMerge(
+	context.Context, PublicationCheckout, string,
+) (string, error) {
+	return "", errors.New("unexpected prospective merge")
+}
+
 func TestShadowReviewRecordsClassifiesSamplesAndBlocksReady(t *testing.T) {
 	ctx := t.Context()
 	dir := t.TempDir()
