@@ -130,6 +130,30 @@ func agentBoundAdmission(t *testing.T, generation domain.EnrollmentGeneration) d
 	return admission
 }
 
+// legacyIdentityAdmission is the pre-cutover shape for the same attempt: an
+// identity and no agent binding.
+func legacyIdentityAdmission(t *testing.T) domain.ExecutionAdmission {
+	t.Helper()
+	identityID := domain.AuthIdentityID("auth-1")
+	legacy, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
+		InvocationID: "inv-1", RunID: "run-1", StageID: "stage-1", AttemptID: "attempt-1",
+		Backend:        "fresh_vm_read_only_volume_handoff",
+		Capabilities:   domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		OperatingMode:  domain.ModeAttendedDev,
+		CredentialMode: domain.CredentialSubscriptionContained,
+		EgressProfile:  domain.EgressProviderOnly,
+		ImageRef:       domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32)),
+		SpecDigest:     agentSpecDigest, PolicyDigest: agentPolicyDigest, InputDigest: agentInputDigest,
+		Base:      domain.BaseRevision{Repo: "owner/repo", RepositoryID: 424242, BaseRef: "refs/heads/main", BaseSHA: "deadbeef"},
+		Workspace: "ws-1", AuthIdentityID: &identityID,
+		AdmittedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("NewExecutionAdmission: %v", err)
+	}
+	return legacy
+}
+
 // TestAgentBoundAdmissionRoundTrips is the acceptance fixture: the new
 // encoding round-trips through the store with its binding re-gated against
 // the enrollment records it names.
@@ -261,23 +285,7 @@ func TestLegacyAdmissionKeepsItsRecord(t *testing.T) {
 	s := openAgentAdmissionStore(t)
 	generation := seedAgentClosure(t, s)
 	_ = generation
-	identityID := domain.AuthIdentityID("auth-1")
-	legacy, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
-		InvocationID: "inv-1", RunID: "run-1", StageID: "stage-1", AttemptID: "attempt-1",
-		Backend:        "fresh_vm_read_only_volume_handoff",
-		Capabilities:   domain.NewCapabilitySnapshot(domain.CapPostExitExport),
-		OperatingMode:  domain.ModeAttendedDev,
-		CredentialMode: domain.CredentialSubscriptionContained,
-		EgressProfile:  domain.EgressProviderOnly,
-		ImageRef:       domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32)),
-		SpecDigest:     agentSpecDigest, PolicyDigest: agentPolicyDigest, InputDigest: agentInputDigest,
-		Base:      domain.BaseRevision{Repo: "owner/repo", RepositoryID: 424242, BaseRef: "refs/heads/main", BaseSHA: "deadbeef"},
-		Workspace: "ws-1", AuthIdentityID: &identityID,
-		AdmittedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	legacy := legacyIdentityAdmission(t)
 	if err := s.Write(ctx, func(tx *WriteTx) error {
 		return tx.RecordExecutionAdmission(ctx, legacy)
 	}); err != nil {
@@ -302,6 +310,123 @@ func TestLegacyAdmissionKeepsItsRecord(t *testing.T) {
 	}
 	if agentDigest != nil || enrollmentID != nil {
 		t.Fatalf("legacy admission carries agent columns: %v, %v", agentDigest, enrollmentID)
+	}
+}
+
+// TestMarkedGenerationRefusesNewAdmission is the admitting transaction's half
+// of rule 4. The admission is built directly for the marked generation, the
+// way a caller that skipped role resolution would: it carries no marked or
+// unmarked claim, and the store reads the mark rows itself.
+func TestMarkedGenerationRefusesNewAdmission(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for _, finding := range domain.AllCredentialIntegrityFindings {
+		t.Run(string(finding), func(t *testing.T) {
+			s := openAgentAdmissionStore(t)
+			generation := seedAgentClosure(t, s)
+			mark := recordIntegrityMark(t, s, integrityMarkFor(generation, finding))
+			admission := agentBoundAdmission(t, generation)
+			err := s.Write(ctx, func(tx *WriteTx) error {
+				return tx.RecordExecutionAdmission(ctx, admission)
+			})
+			assertMarkedRefusal(t, err, mark)
+			if err := s.Read(ctx, func(tx *ReadTx) error {
+				_, err := tx.GetExecutionAdmission(ctx, admission.InvocationID)
+				return err
+			}); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("refused admission read = %v, want %v", err, ErrNotFound)
+			}
+		})
+	}
+
+	// The admitting transaction reads the same rows the gate does, so an
+	// unreadable mark fails it closed instead of admitting past the row.
+	t.Run("an unreadable mark row", func(t *testing.T) {
+		s := openAgentAdmissionStore(t)
+		generation := seedAgentClosure(t, s)
+		recordIntegrityMark(t, s, integrityMarkFor(generation, domain.CredentialIntegrityTruncation))
+		if _, err := s.db.ExecContext(ctx,
+			`UPDATE generation_integrity_marks SET observed_at = '2026-01-02T04:00:00Z'`); err != nil {
+			t.Fatalf("tamper: %v", err)
+		}
+		admission := agentBoundAdmission(t, generation)
+		err := s.Write(ctx, func(tx *WriteTx) error {
+			return tx.RecordExecutionAdmission(ctx, admission)
+		})
+		if !errors.Is(err, errRowInconsistent) {
+			t.Fatalf("record past a tampered mark row = %v, want %v", err, errRowInconsistent)
+		}
+	})
+
+	// Re-enrollment clears the refusal: generation 2 has no mark, while an
+	// admission naming generation 1 is still refused.
+	t.Run("the re-enrolled generation admits", func(t *testing.T) {
+		s := openAgentAdmissionStore(t)
+		first := seedAgentClosure(t, s)
+		mark := recordIntegrityMark(t, s, integrityMarkFor(first, domain.CredentialIntegrityTruncation))
+		second := appendSecondGeneration(t, s)
+		err := s.Write(ctx, func(tx *WriteTx) error {
+			return tx.RecordExecutionAdmission(ctx, agentBoundAdmission(t, first))
+		})
+		assertMarkedRefusal(t, err, mark)
+		if err := s.Write(ctx, func(tx *WriteTx) error {
+			return tx.RecordExecutionAdmission(ctx, agentBoundAdmission(t, second))
+		}); err != nil {
+			t.Fatalf("record admission on the re-enrolled generation: %v", err)
+		}
+	})
+
+	t.Run("a legacy admission names no generation", func(t *testing.T) {
+		s := openAgentAdmissionStore(t)
+		generation := seedAgentClosure(t, s)
+		recordIntegrityMark(t, s, integrityMarkFor(generation, domain.CredentialIntegrityTruncation))
+		legacy := legacyIdentityAdmission(t)
+		if err := s.Write(ctx, func(tx *WriteTx) error {
+			return tx.RecordExecutionAdmission(ctx, legacy)
+		}); err != nil {
+			t.Fatalf("record legacy admission beside a marked generation: %v", err)
+		}
+	})
+}
+
+// TestLaterMarkKeepsRecordedAdmissionReadable pins the boundary the mark
+// stops at: it refuses what starts next, and never makes an admission
+// recorded before it unreadable (the RequireBackendConformant rule).
+func TestLaterMarkKeepsRecordedAdmissionReadable(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openAgentAdmissionStore(t)
+	generation := seedAgentClosure(t, s)
+	admission := agentBoundAdmission(t, generation)
+	record := func() error {
+		return s.Write(ctx, func(tx *WriteTx) error {
+			return tx.RecordExecutionAdmission(ctx, admission)
+		})
+	}
+	if err := record(); err != nil {
+		t.Fatalf("record admission: %v", err)
+	}
+	recordIntegrityMark(t, s, integrityMarkFor(generation, domain.CredentialIntegrityCorruption))
+
+	var (
+		got    domain.ExecutionAdmission
+		listed []domain.ExecutionAdmission
+	)
+	if err := s.Read(ctx, func(tx *ReadTx) error {
+		var err error
+		if got, err = tx.GetExecutionAdmission(ctx, admission.InvocationID); err != nil {
+			return err
+		}
+		listed, err = tx.ListRunExecutionAdmissions(ctx, admission.RunID)
+		return err
+	}); err != nil {
+		t.Fatalf("read an admission recorded before the mark: %v", err)
+	}
+	if got.ID != admission.ID || len(listed) != 1 || listed[0].ID != admission.ID {
+		t.Fatalf("read admission %q, listed %d", got.ID, len(listed))
+	}
+	if err := record(); err != nil {
+		t.Fatalf("byte-identical replay after the mark: %v", err)
 	}
 }
 

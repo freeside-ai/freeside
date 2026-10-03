@@ -72,8 +72,10 @@ type WardlessAdmissionInput struct {
 	PromptDigest Digest
 	Enrollment   ClientEnrollment
 	// Generation is the enrollment's current generation. Whether it is
-	// current, retired, revoked, or marked by the integrity probe is the
-	// store's fact; this class checks the binding and the expiry window.
+	// current, retired, or revoked is the store's fact, and so is whether the
+	// integrity probe marked it: the caller reads that in the same
+	// transaction through the store's RequireGenerationUnmarked. This class
+	// checks the binding and the expiry window.
 	Generation   EnrollmentGeneration
 	Deadline     time.Time
 	ExpiryMargin time.Duration

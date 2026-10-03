@@ -666,3 +666,142 @@ func TestCutoverLeavesLegacyAdmissionsAndBindsQueuedRuns(t *testing.T) {
 		t.Fatalf("queued run volume = %q, %v; want %q", volume, err, agentTestGenerationVolume)
 	}
 }
+
+// TestLineupAdmissionRefusesAMarkedGeneration is §5.4 admission rule 4's
+// integrity half (issue #1624): a current generation the credential-integrity
+// probe marked is not credentialed, the refusal is typed through every
+// resolution path, and re-enrollment's new generation clears it.
+func TestLineupAdmissionRefusesAMarkedGeneration(t *testing.T) {
+	ctx := context.Background()
+	for _, finding := range domain.AllCredentialIntegrityFindings {
+		t.Run(string(finding), func(t *testing.T) {
+			f := newAgentAdmissionFixture(t)
+			mark := domain.GenerationIntegrityMark{
+				EnrollmentID: f.enrollment.ID, Ordinal: f.generation.Ordinal,
+				Finding: finding, ObservedAt: agentTestAt.Add(-30 * time.Second),
+			}
+			if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+				_, err := tx.RecordGenerationIntegrityMark(ctx, mark)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			assertRefusal := func(path string, err error) {
+				t.Helper()
+				if !errors.Is(err, ErrAgentNotAdmissible) || !errors.Is(err, domain.ErrGenerationIntegrityMarked) {
+					t.Fatalf("%s = %v, want %v and %v",
+						path, err, ErrAgentNotAdmissible, domain.ErrGenerationIntegrityMarked)
+				}
+				var marked *domain.GenerationIntegrityMarkedError
+				if !errors.As(err, &marked) || marked.Mark != mark {
+					t.Fatalf("%s refusal mark = %+v, want %+v", path, marked, mark)
+				}
+				// The startup role check prints this error as its hold reason.
+				for _, want := range []string{string(f.enrollment.ID), "generation 1", string(finding)} {
+					if !strings.Contains(err.Error(), want) {
+						t.Fatalf("%s refusal %q does not name %q", path, err, want)
+					}
+				}
+			}
+			_, err := ResolveRole(ctx, f.store, f.selection.Tree, domain.RoleImplementer)
+			assertRefusal("ResolveRole", err)
+			_, err = f.selection.CheckRole(ctx, f.store, domain.RoleImplementer,
+				agentTestPrompts[domain.RoleImplementer].Digest, domain.ModeAttendedDev, agentTestAt)
+			assertRefusal("CheckRole", err)
+			_, admitted, err := f.engine.admitAttempt(ctx, f.binding, f.stage, f.binding.invocation.ID)
+			if admitted {
+				t.Fatal("an attempt was admitted on a marked generation")
+			}
+			assertRefusal("admitAttempt", err)
+
+			// Re-enrollment appends generation 2, which carries no mark.
+			var next domain.EnrollmentGeneration
+			if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+				if err := tx.ReleaseAuthStoreMutationLease(
+					ctx, f.identity.ID, "inv-adopt", f.generation.LeaseFence, agentTestAt.Add(-25*time.Second)); err != nil {
+					return err
+				}
+				lease, err := tx.AcquireAuthStoreMutationLeaseBound(ctx, f.identity.ID, "inv-reenroll",
+					&domain.LeaseGenerationBinding{
+						EnrollmentID: f.enrollment.ID, Generation: f.generation.Ordinal,
+						AuthStoreVolume:     agentTestGenerationVolume,
+						StoreManifestDigest: f.generation.StoreManifestDigest,
+					}, agentTestAt.Add(-20*time.Second), agentTestAt.Add(10*time.Minute))
+				if err != nil {
+					return err
+				}
+				next, err = tx.AppendEnrollmentGeneration(ctx, domain.EnrollmentGeneration{
+					EnrollmentID: f.enrollment.ID, AuthStoreVolume: agentTestGenerationVolume,
+					StoreManifestDigest: f.generation.StoreManifestDigest, LeaseFence: lease.Fence,
+					AccountBinding: f.identity.AccountBinding, RecordedAt: agentTestAt.Add(-10 * time.Second),
+				}, agentTestAt.Add(-10*time.Second))
+				return err
+			}); err != nil {
+				t.Fatalf("re-enroll: %v", err)
+			}
+			if _, err := ResolveRole(ctx, f.store, f.selection.Tree, domain.RoleImplementer); err != nil {
+				t.Fatalf("ResolveRole after re-enrollment: %v", err)
+			}
+			admission, admitted, err := f.engine.admitAttempt(ctx, f.binding, f.stage, f.binding.invocation.ID)
+			if err != nil || !admitted {
+				t.Fatalf("admitAttempt after re-enrollment = %t, %v", admitted, err)
+			}
+			if admission.AgentBinding == nil || admission.AgentBinding.EnrollmentGeneration != next.Ordinal ||
+				next.Ordinal != f.generation.Ordinal+1 {
+				t.Fatalf("admitted binding = %+v, want generation %d", admission.AgentBinding, f.generation.Ordinal+1)
+			}
+			f.record(t, admission)
+			// Generation 1's mark is history: still there, still refusing.
+			err = f.store.Read(ctx, func(tx *store.ReadTx) error {
+				return tx.RequireGenerationUnmarked(ctx, f.enrollment.ID, f.generation.Ordinal)
+			})
+			var marked *domain.GenerationIntegrityMarkedError
+			if !errors.As(err, &marked) || marked.Mark != mark {
+				t.Fatalf("generation 1 after re-enrollment = %v, want mark %+v", err, mark)
+			}
+		})
+	}
+}
+
+// TestMarkAfterResolutionHoldsTheInvocation covers the race the admitting
+// transaction's check exists for: role resolution read an unmarked
+// generation, and the mark landed before the admission was recorded. The
+// store's refusal arrives without ErrAgentNotAdmissible, and it must hold
+// the invocation as the read-side refusal does, not fail the reconcile pass.
+func TestMarkAfterResolutionHoldsTheInvocation(t *testing.T) {
+	ctx := context.Background()
+	f := newAgentAdmissionFixture(t)
+	admission, admitted, err := f.engine.admitAttempt(ctx, f.binding, f.stage, f.binding.invocation.ID)
+	if err != nil || !admitted {
+		t.Fatalf("admitAttempt = %t, %v", admitted, err)
+	}
+	if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		_, err := tx.RecordGenerationIntegrityMark(ctx, domain.GenerationIntegrityMark{
+			EnrollmentID: f.enrollment.ID, Ordinal: f.generation.Ordinal,
+			Finding: domain.CredentialIntegrityCorruption, ObservedAt: agentTestAt,
+		})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	run, stage := f.run, f.stage
+	stage.Attempts = []domain.Attempt{{
+		ID: admission.AttemptID, StageID: stage.ID, Number: 1, InvocationID: admission.InvocationID,
+	}}
+	run.Stages = []domain.Stage{stage}
+	err = f.store.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, run); err != nil {
+			return err
+		}
+		return tx.RecordExecutionAdmission(ctx, admission)
+	})
+	if !errors.Is(err, domain.ErrGenerationIntegrityMarked) || errors.Is(err, ErrAgentNotAdmissible) {
+		t.Fatalf("record after the mark = %v, want the store's %v alone", err, domain.ErrGenerationIntegrityMarked)
+	}
+	if !invocationDispatchHold(err) {
+		t.Fatal("the store's marked-generation refusal does not hold the invocation")
+	}
+	if reason, ok := dispatchHoldReason(err); !ok || reason != domain.HoldAdmissionPolicyRefused {
+		t.Fatalf("hold reason = %q, %t, want %q", reason, ok, domain.HoldAdmissionPolicyRefused)
+	}
+}
