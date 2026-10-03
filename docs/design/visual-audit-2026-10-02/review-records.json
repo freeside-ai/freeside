@@ -1,0 +1,268 @@
+{
+  "v1": {
+    "10": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "This makes sense. Earlier feedback applies to actual UI.",
+      "updated": "2026-10-02T16:56:26.854Z"
+    },
+    "11": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "I kind of like this, but not sure about hiding so much.",
+      "updated": "2026-10-02T16:57:45.774Z"
+    },
+    "12": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "This seems sensible, but I'll need to see a more complete version to judge.",
+      "updated": "2026-10-02T16:58:58.876Z"
+    },
+    "13": {
+      "vote": "Reject",
+      "platform": "Both",
+      "note": "I don't even understand what's being proposed here.",
+      "updated": "2026-10-02T16:59:42.618Z"
+    },
+    "14": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "Worth keeping in mind these conversations, particularly agent responses, can be looooooong. Like the general direction, though.",
+      "updated": "2026-10-02T17:00:46.443Z"
+    },
+    "15": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "Looks like it's already been filled in, should definitely be modified to be clearer.",
+      "updated": "2026-10-02T17:02:10.987Z"
+    },
+    "16": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "Like human readable, don't want to lose anything critical or change functionality.",
+      "updated": "2026-10-02T17:02:47.449Z"
+    },
+    "17": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "This example is bad and while it seems like there could be an issue you're comparing the pairing page to something completely different and I am unsure of what you're proposing.",
+      "updated": "2026-10-02T17:03:56.867Z"
+    },
+    "18": {
+      "vote": "Keep",
+      "platform": "Both",
+      "note": "This seems VERY sensible.",
+      "updated": "2026-10-02T17:04:26.696Z"
+    },
+    "01": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "I don't mind removing the sorting explanation completely, but I don't like the changes to fo;teromg. etc. I like moving the open count next to inbox and removing the counts from the other items, though.",
+      "updated": "2026-10-02T16:42:02.034Z"
+    },
+    "02": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "I mostly like the change, but I'm not sure about moving urgency label and time to the left instead of keeping them right aligned.",
+      "updated": "2026-10-02T16:43:59.127Z"
+    },
+    "03": {
+      "vote": "Keep",
+      "platform": "Both",
+      "note": "This is a good change- I am not sure how we might need to refine the design a bit but on the whole this is definitely the direction I want to go information presentation-wise.",
+      "updated": "2026-10-02T16:44:47.950Z"
+    },
+    "04": {
+      "vote": "Keep",
+      "platform": "Both",
+      "note": "Again, I like this direction.",
+      "updated": "2026-10-02T16:45:21.089Z"
+    },
+    "05": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "In a way I'd be fine moving the \"written by an agent, not checked by the daemon\" text behind a tooltip on \"UNVERIFIED\" on mac and idonno on mobile- it just doesn't need to be seen every time- people should learn what unverified means.",
+      "updated": "2026-10-02T16:47:35.968Z"
+    },
+    "06": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "This somewhat a good direction, but I don't yet love is- use of side carrot to open up additional context I am undecided on and I kinda want to keep review at yield visible.",
+      "updated": "2026-10-02T16:50:23.341Z"
+    },
+    "07": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "I like clarity of UI, but not sure about hiding key options so much. I would say this doesn't work well enough.",
+      "updated": "2026-10-02T16:51:56.276Z"
+    },
+    "08": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "On the whole I don't know how I feel about the dashed inset used in any of these UIs. Agree here that making this more readable is useful. I AM NOT INTERESTED IN CHANGING BACKEND FUNCTIONALITY HERE (or really anywhere in this process), I JUST WANT TO FIX UI/UX USING AVAILABLE PIECES.",
+      "updated": "2026-10-02T16:53:56.461Z"
+    },
+    "09": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "This is mostly good, assuming it's just using the available pieces. THIS APPLIES TO EVERYTHING BUT DON'T KNOW ABOUT SIDE BY SIDE BUTTONS, I THINK I PREFER STACKED, AT LEAST FOR IOS. MAYBE SOME SIDE BY SIDE WHEN SPACE AVAILABLE ON MACOS.",
+      "updated": "2026-10-02T16:55:36.564Z"
+    }
+  },
+  "v2": {
+    "10": {
+      "vote": "Reject",
+      "platform": "Both",
+      "note": "That's less readable.",
+      "updated": "2026-10-02T19:03:32.939Z"
+    },
+    "11": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "Idea seems good, but visual approach is not distinguished enough from anything else- took me a while to even find the difference.",
+      "updated": "2026-10-02T19:04:26.724Z"
+    },
+    "12": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "I don't understand what is being proposed here- I can't find the difference.",
+      "updated": "2026-10-02T19:07:19.798Z"
+    },
+    "14": {
+      "vote": "Keep",
+      "platform": "Both",
+      "note": "",
+      "updated": "2026-10-02T19:08:17.580Z"
+    },
+    "15": {
+      "vote": "Keep",
+      "platform": "Both",
+      "note": "",
+      "updated": "2026-10-02T19:08:59.168Z"
+    },
+    "18": {
+      "vote": "Keep",
+      "platform": "Both",
+      "note": "",
+      "updated": "2026-10-02T19:11:03.821Z"
+    },
+    "01": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "Mostly good, not sure if I like bolded text or not or if primary text should use a serif instead",
+      "updated": "2026-10-02T18:50:19.841Z"
+    },
+    "02": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "Again, think I prefer serif maybe, probably unbolded.",
+      "updated": "2026-10-02T18:51:20.336Z"
+    },
+    "03": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "Like this, want options to be more clearly separate options. Also don't love how section headings are balanced with sections without boxes, but do think removal of boxes is probably for the best.",
+      "updated": "2026-10-02T18:53:40.234Z"
+    },
+    "04": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "As previously indicated, like the less framing but don't think design is quite there. Feels too squished and not separated enough between sections. Also don't know that we necessarily need to label context, but unsure about that one.",
+      "updated": "2026-10-02T18:54:46.546Z"
+    },
+    "05": {
+      "vote": "Keep",
+      "platform": "Both",
+      "note": "",
+      "updated": "2026-10-02T18:56:15.096Z"
+    },
+    "06": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "I think this can be worked further to improve a bit more. This keeps closer to base, but doesn't go far enough to optimize for usability I don't think.",
+      "updated": "2026-10-02T18:57:49.630Z"
+    },
+    "07": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "I like this general approach, but as earlier mentioned don't think options are clearly visually indicated as a choice between different things.",
+      "updated": "2026-10-02T18:58:54.593Z"
+    },
+    "08": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "Like direction, don't think it went far enough to make it understandable because I still don't really get what I need to decide here.",
+      "updated": "2026-10-02T19:00:05.713Z"
+    },
+    "09": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "Incorrectly still has  \"written by agent, not checked by daemon\". On this one and many others I'm not actually sure what the context is providing here! Not sure \"why\" as the label here makes sense. Generally not loving how understandable is, how it puts (or doesn't) the key info first, or the design. Needs more work.",
+      "updated": "2026-10-02T19:02:48.533Z"
+    }
+  },
+  "v3": {
+    "01": {
+      "vote": "Keep",
+      "platform": "Both",
+      "note": "Prefer serif.",
+      "updated": "2026-10-02T21:09:00.070Z"
+    },
+    "02": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "Revised proposal is much better, but is context adding anything?",
+      "updated": "2026-10-02T21:10:16.681Z"
+    },
+    "03": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "I DO NOT like the change of the section title styling. I am also not sure we really need to unfold the checklist on passing, though might be useful on failure? Also the source of agent summary is probably not information that needs to always be visible. And just in general not sure eye is lead from one useful place to another all that well.",
+      "updated": "2026-10-02T21:16:10.150Z"
+    },
+    "04": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "Seriously, hate the new style of section heading. It's awful. Typically don't need \"evidence\" so prominent. Again not sure about order stuff is shown for best understandability.",
+      "updated": "2026-10-02T21:18:08.832Z"
+    },
+    "05": {
+      "vote": "Adjust",
+      "platform": "Both",
+      "note": "Context seems useless here (and many other places). However I find this proposed change somehow less understandable than the original. I agree change would be good, but this ain't it. Findings should be more cleanly distinguished as separate items, and want to focus on what we'd be approving, etc, and how to approve it, etc.",
+      "updated": "2026-10-02T21:21:28.257Z"
+    },
+    "06": {
+      "vote": "Keep",
+      "platform": "Both",
+      "note": "In general this seems good.",
+      "updated": "2026-10-02T21:22:33.011Z"
+    }
+  },
+  "v4": {
+    "01": {
+      "vote": "Keep",
+      "platform": "Both",
+      "note": "",
+      "updated": "2026-10-03T02:51:04.903Z"
+    },
+    "02": {
+      "vote": "Keep",
+      "platform": "Both",
+      "note": "",
+      "updated": "2026-10-03T02:51:26.861Z"
+    },
+    "03": {
+      "vote": "Keep",
+      "platform": "Both",
+      "note": "",
+      "updated": "2026-10-03T02:51:53.076Z"
+    },
+    "04": {
+      "vote": "Keep",
+      "platform": "Both",
+      "note": "",
+      "updated": "2026-10-03T02:54:01.846Z"
+    }
+  }
+}
