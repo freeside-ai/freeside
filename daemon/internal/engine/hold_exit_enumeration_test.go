@@ -53,6 +53,7 @@ var holdlessPauseExits = map[string]string{
 	"operator_feedback_retry.go:Engine.enqueueOperatorFeedbackRetry":    cancellationInProgress,
 	"production_publication.go:RecordProductionExecutionExport":         cancellationInProgress,
 	"publication_continuation.go:Engine.enqueuePublicationContinuation": cancellationInProgress,
+	"readiness_reentry.go:StartReadinessReentry":                        cancellationInProgress,
 	"specification.go:Engine.enqueueSpecRevision":                       cancellationInProgress,
 	"specification.go:Engine.startApprovedImplementation":               cancellationInProgress,
 	"specification_discussion.go:Engine.enqueueSpecDiscussion":          cancellationInProgress,

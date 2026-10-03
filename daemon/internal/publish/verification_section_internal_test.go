@@ -125,6 +125,41 @@ func TestVerificationCandidateRefusesUnboundEvidence(t *testing.T) {
 	}
 }
 
+// TestVerificationCandidateRefusesMergeEvidence pins that a report whose
+// recipe ran against a prospective merge never reaches the section that
+// words its commands as run at the head. The report is otherwise fully
+// bound (bytes, artifact digest, head, base, recipe, outcome), so the
+// evaluated commit is the only reason left to refuse it.
+func TestVerificationCandidateRefusesMergeEvidence(t *testing.T) {
+	t.Parallel()
+	rebind := func(evaluated string) (Candidate, domain.CandidateAuthorization) {
+		c, auth := verificationFixture(t)
+		rep, err := verify.ParseReport(c.VerificationReport)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rep.EvaluatedSHA = evaluated
+		raw, err := json.MarshalIndent(rep, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.VerificationReport = append(raw, '\n')
+		c.Artifacts[0].Digest = domain.Digest(contentaddr.Sum(c.VerificationReport))
+		return c, auth
+	}
+	c, auth := rebind("")
+	if _, _, err := validateVerificationCandidate(c, auth); err != nil {
+		t.Fatalf("rebound head report refused: %v", err)
+	}
+	c, auth = rebind(strings.Repeat("d", 40))
+	if _, _, err := validateVerificationCandidate(c, auth); !errors.Is(err, ErrUnauthorizedPublication) {
+		t.Fatalf("merge evidence: got %v, want unauthorized", err)
+	}
+	if _, _, err := candidateVerificationReport(c); !errors.Is(err, ErrUnauthorizedPublication) {
+		t.Fatalf("merge evidence at the report gate: got %v, want unauthorized", err)
+	}
+}
+
 func TestVerificationSectionBounds(t *testing.T) {
 	t.Parallel()
 	c, auth := verificationFixture(t)

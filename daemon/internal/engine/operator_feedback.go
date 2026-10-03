@@ -784,7 +784,10 @@ func (e *Engine) enqueueImplementationFeedback(
 				return err
 			}
 			decoded, err := decodeProductionPublicationTask(entry)
-			if err != nil || !entry.Dispatched() || decoded.HeadSHA != item.PRHeadSHA {
+			// A re-entered ready item never offers this action, and its task
+			// carries no replay for the lines below to read.
+			if err != nil || !entry.Dispatched() || decoded.HeadSHA != item.PRHeadSHA ||
+				decoded.reentersInPlace() {
 				return errors.Join(err, domain.ErrParentKeyMismatch)
 			}
 			task = &decoded

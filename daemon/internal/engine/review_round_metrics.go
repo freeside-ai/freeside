@@ -23,6 +23,13 @@ func (w *productionPublicationWorkflow) reviewRoundDiffMetrics(
 	reviewWorkspace string,
 	record domain.ReviewRecord,
 ) (*domain.ReviewRoundDiffMetrics, error) {
+	if task.reentersInPlace() {
+		// The round reviewed commits Freeside did not produce, possibly a
+		// prospective merge the record does not name. Counting the record's
+		// base to its head would not describe what was reviewed, so the
+		// round keeps the gap an uncountable round already has.
+		return nil, nil
+	}
 	var previous *domain.ReviewRecord
 	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		latest, err := tx.LatestReviewRecord(ctx, task.RunID)

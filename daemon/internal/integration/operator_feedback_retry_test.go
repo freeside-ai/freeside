@@ -828,6 +828,7 @@ func (tr *integrationTransport) UpdateHead(_ context.Context, checkout engine.Pu
 			tr.forge.prs[i].HeadSHA = update.SourceHeadSHA()
 		}
 	}
+	tr.publishHead(sealed.dir, update.Branch(), update.SourceHeadSHA())
 	if tr.successorUpdateFailure != nil {
 		err := tr.successorUpdateFailure
 		tr.successorUpdateFailure = nil

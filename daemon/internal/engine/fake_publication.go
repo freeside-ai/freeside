@@ -72,10 +72,18 @@ type PublicationCheckout interface {
 // publish lane's sealed git transport. PushHead takes a publish.GatedHead
 // rather than a bare identity: only Publisher's post-gate callback can
 // produce one, so the seam itself cannot express an ungated push (#288).
+//
+// FetchHead and ProspectiveMerge serve a re-entered cycle (issue #502), which
+// evaluates a head already on the pull request instead of an export it can
+// replay: FetchHead brings that exact commit into the checkout from the
+// pull request's branch, and ProspectiveMerge builds the local, never-pushed
+// merge of it into the checkout's base.
 type PublicationTransport interface {
 	FetchBase(ctx context.Context, repo, baseRef, baseSHA, dir string) (PublicationCheckout, error)
 	RetainWorktree(ctx context.Context, checkout PublicationCheckout, dest, headSHA string) error
 	PushHead(ctx context.Context, checkout PublicationCheckout, gated publish.GatedHead) (publish.PushResult, error)
+	FetchHead(ctx context.Context, checkout PublicationCheckout, branch, headSHA string) (publish.HeadFetch, error)
+	ProspectiveMerge(ctx context.Context, checkout PublicationCheckout, headSHA string) (string, error)
 }
 
 // GitPublicationTransport adapts publish.Transport's sealed Checkout to the
@@ -143,6 +151,30 @@ func (t *GitPublicationTransport) PushHead(
 		return publish.PushResult{}, ErrForeignPublicationCheckout
 	}
 	return t.transport.PushHead(ctx, sealed.checkout, gated)
+}
+
+// FetchHead forwards to the sealed transport, which re-gates the checkout and
+// proves the branch holds the requested commit before reporting it.
+func (t *GitPublicationTransport) FetchHead(
+	ctx context.Context, checkout PublicationCheckout, branch, headSHA string,
+) (publish.HeadFetch, error) {
+	sealed, ok := checkout.(gitPublicationCheckout)
+	if !ok || sealed.owner != t {
+		return publish.HeadFetch{}, ErrForeignPublicationCheckout
+	}
+	return t.transport.FetchHead(ctx, sealed.checkout, branch, headSHA)
+}
+
+// ProspectiveMerge forwards to the sealed transport. The merge it builds
+// stays in the checkout: this adapter offers no way to push it.
+func (t *GitPublicationTransport) ProspectiveMerge(
+	ctx context.Context, checkout PublicationCheckout, headSHA string,
+) (string, error) {
+	sealed, ok := checkout.(gitPublicationCheckout)
+	if !ok || sealed.owner != t {
+		return "", ErrForeignPublicationCheckout
+	}
+	return t.transport.ProspectiveMerge(ctx, sealed.checkout, headSHA)
 }
 
 // UpdateHead is a separate capability-bearing successor effect. Ordinary

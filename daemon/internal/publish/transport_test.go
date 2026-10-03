@@ -20,7 +20,7 @@ func (s staticTokenSource) Token(context.Context, string) (InstallationToken, er
 
 // TestTransportArgvGolden pins the exact argument vectors the
 // transport hands to git: the hardened config prefix and the fixed
-// fetch and push shapes. Any drift here changes the lane's protocol
+// fetch, push, and merge shapes. Any drift here changes the lane's protocol
 // policy or ref discipline and must be a reviewed change.
 func TestTransportArgvGolden(t *testing.T) {
 	t.Parallel()
@@ -28,6 +28,8 @@ func TestTransportArgvGolden(t *testing.T) {
 		HardenedConfig []string `json:"hardened_config"`
 		Fetch          []string `json:"fetch"`
 		Push           []string `json:"push"`
+		FetchHead      []string `json:"fetch_head"`
+		MergeTree      []string `json:"merge_tree"`
 	}{
 		HardenedConfig: transportConfig("https"),
 		Fetch:          fetchArgs("https://github.com/freeasinbird/example.git", "main"),
@@ -35,6 +37,11 @@ func TestTransportArgvGolden(t *testing.T) {
 			"https://github.com/freeasinbird/example.git",
 			"0123456789abcdef0123456789abcdef01234567",
 			"feat/meaningful-task",
+		),
+		FetchHead: fetchHeadArgs("https://github.com/freeasinbird/example.git", "feat/meaningful-task"),
+		MergeTree: mergeTreeArgs(
+			"89abcdef0123456789abcdef0123456789abcdef",
+			"0123456789abcdef0123456789abcdef01234567",
 		),
 	}
 	b, err := json.MarshalIndent(fixture, "", "  ")
