@@ -726,7 +726,11 @@ struct DecisionDetailView: View {
                     $0.text != nil && $0.label != AgentClaimLabels.summary
                         && !AgentClaimLabels.isApprovalMaterial($0.label)
                 }
-                if !actionClaims.isEmpty {
+                // A card that leads with its claim draws it in the card, so
+                // a copy here would print the claim twice.
+                if !actionClaims.isEmpty,
+                    !DecisionCardComposition.forType(item._type).leadsWithItsClaim
+                {
                     let register = unverified(
                         item, rendersInteractiveControls: rendersInteractiveControls)
                     cardSection("Agent claims", unverified: register) {
@@ -846,7 +850,7 @@ struct DecisionDetailView: View {
                         item, rendersInteractiveControls: rendersInteractiveControls))
             }
         case .claims:
-            #if os(iOS)
+            if drawsClaimsInCard(composition, at: moduleIndex) {
                 claims(
                     composition.claims(
                         from: item.agent_claims,
@@ -856,7 +860,7 @@ struct DecisionDetailView: View {
                     prominent: composition.claimsAreProminent(at: moduleIndex),
                     unverified: unverified(
                         item, rendersInteractiveControls: rendersInteractiveControls))
-            #endif
+            }
         case .evidence:
             #if os(macOS)
                 if composition.reviewingActionInsertionIndex != nil {
@@ -910,6 +914,19 @@ struct DecisionDetailView: View {
                     rendersInteractiveControls: rendersInteractiveControls)
             #endif
         }
+    }
+
+    /// macOS lists claims in the action region and the inspector, so a
+    /// claims module draws in the card there only where the claim is the
+    /// card's own lead (D08). iOS has neither place and draws every module.
+    private func drawsClaimsInCard(
+        _ composition: DecisionCardComposition, at moduleIndex: Int
+    ) -> Bool {
+        #if os(macOS)
+            composition.leadsWithItsClaim && composition.claimsAreProminent(at: moduleIndex)
+        #else
+            true
+        #endif
     }
 
     @ViewBuilder
@@ -1692,8 +1709,13 @@ struct DecisionDetailView: View {
             // bindings. A second copy of the same rows made an open inspector
             // repeat the card beside it.
             VStack(alignment: .leading, spacing: 12) {
+                let cardLeadClaims = DecisionCardComposition.forType(item._type)
+                    .cardLeadClaims(
+                        from: item.agent_claims,
+                        prominentClaimIndex: graphics.prominentClaimIndex)
                 let attachmentClaims = item.agent_claims.filter {
                     $0.text == nil && !AgentClaimLabels.isApprovalMaterial($0.label)
+                        && !cardLeadClaims.contains($0)
                 }
                 if !attachmentClaims.isEmpty {
                     let register = unverified(

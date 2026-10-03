@@ -128,6 +128,21 @@ public enum AttentionFixtures {
         return snapshot
     }
 
+    /// A dispute whose disputed-finding claim arrived as an attachment with
+    /// no inline text, so the card has to lead with the attachment's own
+    /// state rather than with prose.
+    public static func disputeWithoutInlineText() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = fixture(type: .review_dispute)
+        snapshot.item.id = "item-dispute-no-inline-text"
+        snapshot.item.agent_claims = snapshot.item.agent_claims.map { claim in
+            guard claim.label != "freeside.summary" else { return claim }
+            var claim = claim
+            claim.text = nil
+            return claim
+        }
+        return snapshot
+    }
+
     /// A question that stopped on two decisions, each with a long question,
     /// a long blocker, and tradeoffs that run to several lines, so the card's
     /// wrapping and the order of repeated decisions have something to show.

@@ -118,9 +118,12 @@ import Testing
                 .recommendation, .stageRail, .facts, .claims, .factBlock, .summary, .claims,
                 .evidence, .details,
             ])
+        // Plan §9 revision 78 (visual audit D08): the supplied claim leads
+        // beside the positions, ahead of the daemon's facts about the run.
         #expect(
             DecisionCardComposition.forType(.review_dispute).modules == [
-                .comparison, .factBlock, .facts, .summary, .claims, .evidence, .details,
+                .comparison, .claims, .factBlock, .facts, .summary, .claims, .evidence,
+                .details,
             ])
         #expect(
             DecisionCardComposition.forType(.review_diminishing_returns).modules == [
@@ -166,9 +169,12 @@ import Testing
             execution.claims(
                 from: executionClaims, at: 6, prominentClaimIndex: nil
             ).map(\.label) == ["screenshot"])
-        // The dispute card's claims render below its actions, so they never
-        // count as prominent.
-        #expect(!DecisionCardComposition.forType(.review_dispute).claimsAreProminent(at: 4))
+        // Revision 78 (D08): a dispute leads with its claim, so its first
+        // claims module is prominent and the supporting one below the
+        // actions is not.
+        let dispute = DecisionCardComposition.forType(.review_dispute)
+        #expect(dispute.claimsAreProminent(at: 1))
+        #expect(!dispute.claimsAreProminent(at: 5))
     }
 
     @Test(arguments: AttentionFixtures.phase1Types)
@@ -285,20 +291,95 @@ import Testing
         #expect(DecisionCardComposition.reasonPlacement(for: type) == expected)
     }
 
-    /// Visual audit D06 and D07: the question card bounds only its options
-    /// and the final review only the daemon's checklist, so both separate
-    /// their agent sections by spacing; every other type keeps the dashed
-    /// card around agent prose.
+    /// Visual audit D06 to D08: the question card bounds only its options,
+    /// the final review only the daemon's checklist, and the dispute reads
+    /// its claim as prose, so all three separate their agent sections by
+    /// spacing; every other type keeps the dashed card around agent prose.
     @Test(arguments: Components.Schemas.AttentionType.allCases)
     func agentSectionsAreSpacedOnlyOnTheApprovedCards(
         type: Components.Schemas.AttentionType
     ) {
         let spaced: [Components.Schemas.AttentionType] = [
-            .agent_question, .ready_for_final_review,
+            .agent_question, .ready_for_final_review, .review_dispute,
         ]
         #expect(
             DecisionCardComposition.agentSectionFrame(for: type)
                 == (spaced.contains(type) ? .spaced : .dashedCard))
+    }
+
+    /// Visual audit D08: the dispute leads with the claim the snapshot
+    /// supplies, and a supporting attachment stays below the actions.
+    @Test func disputeLeadsWithItsReadableClaim() {
+        let item = AttentionFixtures.fixture(type: .review_dispute).item
+        let composition = DecisionCardComposition.forType(.review_dispute)
+
+        #expect(
+            composition.claims(from: item.agent_claims, at: 1, prominentClaimIndex: nil)
+                .map(\.label) == ["Shadow finding review-fixture"])
+        #expect(
+            composition.claims(from: item.agent_claims, at: 5, prominentClaimIndex: nil)
+                .map(\.label) == ["screenshot"])
+        #expect(
+            composition.cardLeadClaims(from: item.agent_claims, prominentClaimIndex: nil)
+                .map(\.label) == ["Shadow finding review-fixture"])
+    }
+
+    /// Claims that arrived without inline text still lead, as their
+    /// attachments: nothing marks one of them as the disputed finding, so
+    /// none is held back, the lead is never empty while the snapshot has a
+    /// claim, and nothing lists those claims a second time.
+    @Test func disputeWithoutInlineTextLeadsWithTheAttachment() {
+        let item = AttentionFixtures.disputeWithoutInlineText().item
+        let composition = DecisionCardComposition.forType(.review_dispute)
+
+        let lead = composition.claims(from: item.agent_claims, at: 1, prominentClaimIndex: nil)
+        #expect(lead.map(\.label) == ["screenshot", "Shadow finding review-fixture"])
+        #expect(lead.allSatisfy { $0.text == nil })
+        #expect(
+            composition.claims(from: item.agent_claims, at: 5, prominentClaimIndex: nil).isEmpty)
+        #expect(
+            composition.cardLeadClaims(from: item.agent_claims, prominentClaimIndex: nil) == lead)
+        // The summary keeps its own layer either way.
+        #expect(composition.summaries(from: item.agent_claims).count == 1)
+    }
+
+    /// With no claim the snapshot has no dissent to show, so neither claims
+    /// module has anything to draw and no placeholder stands in for one.
+    @Test func disputeWithoutAClaimDrawsNoClaimsSection() {
+        var item = AttentionFixtures.fixture(type: .review_dispute).item
+        item.agent_claims.removeAll { $0.label != AgentClaimLabels.summary }
+        let composition = DecisionCardComposition.forType(.review_dispute)
+
+        #expect(
+            composition.claims(from: item.agent_claims, at: 1, prominentClaimIndex: nil).isEmpty)
+        #expect(
+            composition.claims(from: item.agent_claims, at: 5, prominentClaimIndex: nil).isEmpty)
+        #expect(
+            composition.cardLeadClaims(from: item.agent_claims, prominentClaimIndex: nil).isEmpty)
+    }
+
+    /// Only the dispute's claim is its own lead content. A failure card's
+    /// attachment claims stay supporting context when none is readable, and
+    /// no other card draws a claim in the card that its platform lists
+    /// elsewhere.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func onlyTheDisputeLeadsWithItsClaim(type: Components.Schemas.AttentionType) {
+        let composition = DecisionCardComposition.forType(type)
+        #expect(composition.leadsWithItsClaim == (type == .review_dispute))
+
+        var attachment = AttentionFixtures.fixture(type: .execution_failure).item.agent_claims[0]
+        attachment.label = "screenshot"
+        attachment.text = nil
+        if type != .review_dispute {
+            #expect(
+                composition.cardLeadClaims(from: [attachment], prominentClaimIndex: nil).isEmpty)
+        }
+        if type == .execution_failure {
+            #expect(composition.claims(from: [attachment], at: 3, prominentClaimIndex: nil).isEmpty)
+            #expect(
+                composition.claims(from: [attachment], at: 6, prominentClaimIndex: nil)
+                    == [attachment])
+        }
     }
 
     /// Visual audit D07: View PR is the final review's filled button, and a
