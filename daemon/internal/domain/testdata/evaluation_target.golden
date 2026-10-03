@@ -1,0 +1,9 @@
+{
+  "candidate_head": "head-sha",
+  "base": {
+    "repo": "freeside-ai/freeside",
+    "repository_id": 1,
+    "base_ref": "refs/heads/main",
+    "base_sha": "base-sha"
+  }
+}

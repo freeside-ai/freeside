@@ -320,18 +320,42 @@ func (r RequirementResolution) Validate() error {
 
 // CheckProof proves one applicable requirement passed. Base is required
 // exactly when the resolution declares that its evidence depends on base.
+//
+// MergeSHA is set when the evidence was gathered on the prospective merge of
+// CandidateHead into Base (a base-advance re-entry) instead of on the head's
+// own tree. It is omitted when empty, here and in the digest body, against the
+// explicit-null convention: every proof stored before the field existed must
+// keep its bytes and its digest.
 type CheckProof struct {
 	Digest                      Digest        `json:"digest"`
 	RequirementResolutionDigest Digest        `json:"requirement_resolution_digest"`
 	CandidateHead               string        `json:"candidate_head"`
 	Base                        *BaseRevision `json:"base"`
+	MergeSHA                    string        `json:"merge_sha,omitempty"`
 	RecipeDigest                Digest        `json:"recipe_digest"`
 }
 
 func NewCheckProof(resolution RequirementResolution, candidateHead string, base *BaseRevision, recipe Digest) (CheckProof, error) {
+	return newCheckProof(resolution, candidateHead, base, "", recipe)
+}
+
+// NewProspectiveMergeCheckProof proves a base-dependent requirement passed on
+// the prospective merge of the head into base. The merge's base must be the
+// proof's base, so one proof cannot name a merge into some other commit.
+func NewProspectiveMergeCheckProof(resolution RequirementResolution, merge ProspectiveMergeIdentity, base BaseRevision, recipe Digest) (CheckProof, error) {
+	if err := merge.Validate(); err != nil {
+		return CheckProof{}, err
+	}
+	if merge.BaseSHA != base.BaseSHA {
+		return CheckProof{}, fmt.Errorf("check proof merge base: %w", ErrParentKeyMismatch)
+	}
+	return newCheckProof(resolution, merge.HeadSHA, &base, merge.MergeSHA, recipe)
+}
+
+func newCheckProof(resolution RequirementResolution, candidateHead string, base *BaseRevision, mergeSHA string, recipe Digest) (CheckProof, error) {
 	p := CheckProof{
 		RequirementResolutionDigest: resolution.Digest, CandidateHead: candidateHead,
-		Base: clonePtr(base), RecipeDigest: recipe,
+		Base: clonePtr(base), MergeSHA: mergeSHA, RecipeDigest: recipe,
 	}
 	digest, err := p.computeDigest()
 	if err != nil {
@@ -350,8 +374,9 @@ func (p CheckProof) computeDigest() (Digest, error) {
 		RequirementResolutionDigest Digest        `json:"requirement_resolution_digest"`
 		CandidateHead               string        `json:"candidate_head"`
 		Base                        *BaseRevision `json:"base"`
+		MergeSHA                    string        `json:"merge_sha,omitempty"`
 		RecipeDigest                Digest        `json:"recipe_digest"`
-	}{checkProofEncodingVersion, p.RequirementResolutionDigest, p.CandidateHead, p.Base, p.RecipeDigest})
+	}{checkProofEncodingVersion, p.RequirementResolutionDigest, p.CandidateHead, p.Base, p.MergeSHA, p.RecipeDigest})
 	if err != nil {
 		return "", err
 	}
@@ -365,6 +390,15 @@ func (p CheckProof) Validate() error {
 	if p.Base != nil {
 		if err := p.Base.Validate(); err != nil {
 			return fmt.Errorf("check proof base: %w", err)
+		}
+	}
+	if p.MergeSHA != "" {
+		if p.Base == nil {
+			return fmt.Errorf("check proof merge without base: %w", ErrEmptyField)
+		}
+		merge := ProspectiveMergeIdentity{BaseSHA: p.Base.BaseSHA, HeadSHA: p.CandidateHead, MergeSHA: p.MergeSHA}
+		if err := merge.Validate(); err != nil {
+			return fmt.Errorf("check proof merge: %w", err)
 		}
 	}
 	digest, err := p.computeDigest()
@@ -958,17 +992,32 @@ type DegradedWaiverGate func(RequirementResolution, ValidatedDegradedWaiver) err
 // passed proof must bind exactly this head, and every base-dependent proof
 // exactly this base, so individually valid evidence gathered against another
 // candidate can never combine into readiness for this one.
+//
+// MergeSHA is set when the target is a base-advance re-entry's prospective
+// merge of the head into the base. Base-dependent proofs must then name the
+// same merge, and a proof that names a merge never covers a target without
+// one: evidence from the merged tree and evidence from the head's own tree
+// are different evidence. A proof that does not depend on base carries no
+// merge and still covers the head. Omitted when empty, so an evaluation set
+// recorded before the field existed keeps its digest.
 type EvaluationTarget struct {
 	CandidateHead string        `json:"candidate_head"`
 	Base          *BaseRevision `json:"base"`
+	MergeSHA      string        `json:"merge_sha,omitempty"`
 }
 
 func (t EvaluationTarget) covers(resolution RequirementResolution, proof CheckProof) error {
 	if proof.CandidateHead != t.CandidateHead {
 		return fmt.Errorf("check %q candidate head: %w", resolution.RequirementKey, ErrEvaluationTargetMismatch)
 	}
-	if resolution.BaseDependent && (t.Base == nil || *proof.Base != *t.Base) {
+	if !resolution.BaseDependent {
+		return nil
+	}
+	if t.Base == nil || *proof.Base != *t.Base {
 		return fmt.Errorf("check %q base: %w", resolution.RequirementKey, ErrEvaluationTargetMismatch)
+	}
+	if proof.MergeSHA != t.MergeSHA {
+		return fmt.Errorf("check %q prospective merge: %w", resolution.RequirementKey, ErrEvaluationTargetMismatch)
 	}
 	return nil
 }
@@ -979,6 +1028,9 @@ func (t EvaluationTarget) covers(resolution RequirementResolution, proof CheckPr
 func EvaluateReadiness(target EvaluationTarget, resolutions []RequirementResolution, recorded []CheckState, gate DegradedWaiverGate) (ReadinessVerdict, error) {
 	if target.CandidateHead == "" {
 		return ReadinessVerdict{}, fmt.Errorf("evaluation target head: %w", ErrEmptyField)
+	}
+	if target.MergeSHA != "" && target.Base == nil {
+		return ReadinessVerdict{}, fmt.Errorf("evaluation target merge without base: %w", ErrEmptyField)
 	}
 	if len(resolutions) == 0 {
 		return ReadinessVerdict{}, ErrRequirementSetEmpty
