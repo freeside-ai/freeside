@@ -722,6 +722,22 @@ func TestOmittedCommentBodyAndDraftFlagFailLoud(t *testing.T) {
 			t.Fatalf("error = %v", err)
 		}
 	})
+	t.Run("omitted comment authorAssociation", func(t *testing.T) {
+		runner := loadFixtureRunner(t)
+		deleteFixtureNodeField(t, runner, "IssueComments:935:", []string{"data", "repository", "issue", "comments", "nodes"}, "authorAssociation")
+		c := &collector{config: fixtureConfig(""), runner: runner}
+		if _, err := c.fetchIssueComments(context.Background(), 935); err == nil || !strings.Contains(err.Error(), "missing authorAssociation") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+	t.Run("null comment authorAssociation", func(t *testing.T) {
+		runner := loadFixtureRunner(t)
+		setFixtureNodeField(t, runner, "IssueComments:935:", []string{"data", "repository", "issue", "comments", "nodes"}, "authorAssociation", nil)
+		c := &collector{config: fixtureConfig(""), runner: runner}
+		if _, err := c.fetchIssueComments(context.Background(), 935); err == nil || !strings.Contains(err.Error(), "missing authorAssociation") {
+			t.Fatalf("error = %v", err)
+		}
+	})
 	t.Run("omitted open PR isDraft", func(t *testing.T) {
 		runner := loadFixtureRunner(t)
 		deleteFixtureNodeField(t, runner, "OpenPullRequests::", []string{"data", "repository", "pullRequests", "nodes"}, "isDraft")
@@ -1002,6 +1018,20 @@ func TestFixtureCollectionDrainsPaginationAndIsDeterministic(t *testing.T) {
 		if !strings.HasPrefix(trimmed, "query ") || strings.Contains(strings.ToLower(trimmed), "mutation") {
 			t.Fatalf("fixture runner received non-query document: %s", query)
 		}
+	}
+}
+
+func TestMergedPullRequestModeDoesNotJudgeMarkerAuthors(t *testing.T) {
+	// Only the contracts report weighs a marker's author. This mode keeps
+	// its evidence and exit code whoever posted the marker.
+	runner := loadFixtureRunner(t)
+	setFixtureNodeField(t, runner, "IssueComments:935:", []string{"data", "repository", "issue", "comments", "nodes"}, "authorAssociation", "NONE")
+	snapshot, err := Collect(context.Background(), fixtureConfig(""), runner, fixedClock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.MarkerComments) != 1 || len(snapshot.Ambiguities) != 0 {
+		t.Fatalf("markers=%d ambiguities=%#v", len(snapshot.MarkerComments), snapshot.Ambiguities)
 	}
 }
 

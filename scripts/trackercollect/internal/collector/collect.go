@@ -113,6 +113,8 @@ type graphComment struct {
 	CreatedAt   string `json:"createdAt"`
 	UpdatedAt   string `json:"updatedAt"`
 	bodyPresent bool
+	// AuthorAssociation is the forge's CommentAuthorAssociation value.
+	AuthorAssociation string `json:"authorAssociation"`
 }
 
 func (issue *graphIssue) UnmarshalJSON(data []byte) error {
@@ -1312,6 +1314,9 @@ func (c *collector) fetchIssueComments(ctx context.Context, number int) ([]graph
 			if !comment.bodyPresent {
 				return nil, fmt.Errorf("issue #%d comment %d is missing body", number, comment.DatabaseID)
 			}
+			if comment.AuthorAssociation == "" {
+				return nil, fmt.Errorf("issue #%d comment %d is missing authorAssociation", number, comment.DatabaseID)
+			}
 			result = append(result, comment)
 		}
 		next, more, err := c.nextCursor(fmt.Sprintf("issue #%d comments", number), page, pageInfo)
@@ -1329,7 +1334,7 @@ func (c *collector) fetchIssueComments(ctx context.Context, number int) ([]graph
 func (c *collector) parseMarkerComment(issueNumber int, comment graphComment, openPRs []OpenPullRequest) (MarkerComment, bool) {
 	body := comment.Body
 	marker := MarkerComment{
-		IssueNumber: issueNumber, Body: body, CreatedAt: comment.CreatedAt,
+		IssueNumber: issueNumber, Body: body, CreatedAt: comment.CreatedAt, AuthorAssociation: comment.AuthorAssociation,
 		Stamp: ForgeStamp{NodeID: comment.ID, DatabaseID: comment.DatabaseID, UpdatedAt: comment.UpdatedAt, BodySHA256: bodyHash(body)},
 	}
 	evidence := markdownEvidence(body)

@@ -117,7 +117,8 @@
       "nodes": [{
         "id": "IC_1", "databaseId": 9001,
         "body": "<!-- freeside-work-claim:v1 -->\nClaim: work",
-        "createdAt": "2026-08-25T08:00:00Z", "updatedAt": "2026-08-25T08:00:00Z"
+        "createdAt": "2026-08-25T08:00:00Z", "updatedAt": "2026-08-25T08:00:00Z",
+        "authorAssociation": "MEMBER"
       }],
       "pageInfo": {"hasNextPage": false, "endCursor": null}
     }}}}

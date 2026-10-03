@@ -67,6 +67,8 @@ widen the scheduling door to owner-approved ad hoc trackers.
 - Follow-up: #1712 (migration protocol for concurrent contract units). The
   pilot avoids pairs that both add a migration, so the protocol waits for
   the first pair that needs it.
+- Follow-up: #1729 (the wave skills and the work-unit issue form still
+  describe the repo-wide regime; they were outside this unit's scope).
 
 ## Choices Made in Implementation (Agent)
 
@@ -112,6 +114,18 @@ widen the scheduling door to owner-approved ad hoc trackers.
    `stale-label`) and people repair it. Chose a read-only report over
    automatic repair: a repair driven by an incomplete read could clear a
    label on a claimed unit.
+
+9. **A PR closes the unit by the forge's closing-issue list or by the close
+   keyword in its body.** The forge lists no closing issue for a PR based on
+   a branch other than the default one, so the list alone reads every
+   stacked PR's claim as expired once it is 48 hours old. Chose to read the
+   body over reporting such a PR as ambiguous: the protocol's own test is
+   whether the PR carries the keyword.
+10. **The report did not reuse the merged-PR mode's tracker builder.** The
+    plan named `buildContainingTrackers`. It fetches every unit of each
+    containing tracker and words its ambiguities for a merged unit, so the
+    report reads tracker Units sections from the open-issue inventory it
+    already holds.
 11. **A scope edit removes the edited unit's independence records.** PR
     review found that the record named a base commit and nothing tied it to
     the issue bodies, so a later scope edit left a false record standing and
@@ -127,6 +141,79 @@ widen the scheduling door to owner-approved ad hoc trackers.
     and leaving the text as it was, because a stale record opens
     concurrency on missing evidence.
 
+## Refute-First Pass on the Occupancy Report
+
+The report trusts fields decoded from the forge, so an independent reviewer
+tried to make it misreport before the tool was committed. An under-read of an
+active claim is the error that matters: it could lead someone to clear a
+label or start a conflicting contract.
+
+Confirmed and fixed:
+
+- **A stacked PR read as `expired`.** Item 9 above.
+- **A marker comment with CRLF line endings was skipped with no ambiguity.**
+  GitHub stores text typed in its web editor that way: 574 of 1,526 comments
+  sampled from a public repository carry CRLF, though none of this
+  repository's do yet. The parser now reads them. The fix is in the shared
+  parser, so the merged-PR mode also finds CRLF markers and tracker entries
+  it used to drop.
+- **The ordering key named the PR-backed claim over an earlier live one.**
+  It is now the earliest unreleased, unexpired claim.
+- **A closing issue was matched by number**, so a PR closing a same-numbered
+  issue in another repository read as a legacy claim. It is matched by node
+  ID.
+- **A milestone without a title decoded as unmilestoned.** It now fails loud.
+- **`contracts.json` carried counts over incomplete evidence.** They are
+  null when any ambiguity exists.
+- **A marker from outside the trust boundary was counted.** PR review
+  found this after the pass above. The repository is public, so any account
+  can comment on a contract issue. An outsider's claim or reservation read
+  as occupancy, and an outsider's release naming a real claim's comment ID
+  read that claim as released: the under-read. The claim protocol trusts
+  collaborator comments and gives no other marker a stated standing, so the
+  report counts a marker only when the forge gives its author association
+  as `OWNER`, `MEMBER`, or `COLLABORATOR`, and reports any other as an
+  ambiguity with no verdict. Chose (agent) an ambiguity over dropping the
+  marker silently, because the report shouldn't decide who may claim. The
+  manual claim gate and the merged-PR mode still read a marker from any
+  author; whether markers count only from collaborators is the owner's
+  decision. Follow-up: #1738.
+- **A close keyword quoted in inline code read as closing.** PR review
+  found it: a PR body that says to write `Closes #N` kept the unit active.
+  The body reader now blanks a code span that opens and closes on one line.
+  It leaves a span that crosses a line break alone, because masking those
+  would let a stray backtick on another line hide a real keyword, the
+  under-read.
+- **Four rule changes passed the tests** (the canonical-repository match, a
+  legacy PR beside an expired claim, a release against a PR-backed claim, a
+  malformed tracker entry). Each now fails a test.
+
+Disproved by a check: a nil label page reaching the report (the decoder
+rejects it first); the dropped `parse-collision` ambiguities hiding evidence
+the report uses (only Scope parsing raises them); a change to the merged-PR
+mode's artifacts on its fixture (byte-identical before and after).
+PR review added one: an under-read of a legacy `Claim #N` commit, which the
+report never fetches. None of the PRs open on 2026-10-03 carried one, and
+the protocol allows no new claim commit, so no open PR can claim that way.
+
+Allowed by decision:
+
+- **A marker in a non-canonical form is not a marker.** One on the same line
+  as its `Claim:`, inside a list item, or after an unclosed HTML comment adds
+  no ambiguity. The protocol defines one form, and a claimant verifies its
+  own saved comment.
+- **Comment times sort as strings.** The forge emits UTC with a `Z` suffix.
+- **A PR that arrives after its claim's 48 hours still backs the claim**
+  (agent). The protocol calls that lease dead, but the forge keeps no record
+  of when a PR gained its close keyword, and #1709's acceptance defines
+  `expired` by the absence of a closing PR. The unit is active either way;
+  only its ordering key differs, and only after a re-claim that skipped the
+  new comment the protocol requires.
+- **An open PR that closes the unit counts whoever opened it** (agent).
+  The author check covers marker comments only. An outsider's PR can only
+  add occupancy, never hide a claim, and it is visible in the PR list; the
+  protocol's legacy clause names no author. #1738 carries the question.
+
 ## Revisit When
 
 - The pilot pair merges: compare blocked time, review wait, owner review
@@ -135,6 +222,9 @@ widen the scheduling door to owner-approved ad hoc trackers.
 - A scope edit to an assessed unit leaves its independence record
   standing: that is the signal to add a mechanical staleness check to
   `trackercollect contracts`.
+- A GitHub App or bot account starts posting claims: the forge may give it
+  an association outside the trusted three, and the report would read each
+  of its claims as ambiguous. None posts claims today.
 - A lease whose PR closed unmerged inside its 48 hours shows up as a false
   `missing-label`: the report reads open PRs only, so it can't see that
   release.

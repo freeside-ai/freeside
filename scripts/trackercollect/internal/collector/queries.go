@@ -95,7 +95,7 @@ const issueCommentsQuery = `query IssueComments($owner: String!, $name: String!,
     issue(number: $number) {
 	  id databaseId number updatedAt
       comments(first: $pageSize, after: $cursor) {
-        nodes { id databaseId body createdAt updatedAt }
+        nodes { id databaseId body createdAt updatedAt authorAssociation }
         pageInfo { hasNextPage endCursor }
       }
     }
