@@ -2458,3 +2458,50 @@ is filed as #1656, #1657, and #1658, and the open question as #1659.)
 [decision note](../../devlog/2026-10-02-1819-subscription-usage-visibility.md).
 Implementation units go under a Subscription Usage Visibility feature tracker;
 selection units stay under #1616.)
+
+## Revision 78 ("Decision-First Presentation on Four Card Types")
+
+1. **Section [9](../plan.md#9-comprehension) now matches the visual hierarchy the owner approved.** The
+   approved design contradicted Section [9](../plan.md#9-comprehension) in five places, so the client work
+   could not start until the plan said what it builds. The changes cover
+   `agent_question`, `ready_for_final_review`, `review_dispute`, and
+   `finding_adjudication` only; every other item type keeps its presentation.
+   The trust rules, the daemon contract, and the action set are unchanged.
+   Rejected: building the approved cards against the old text (the plan
+   would contradict the shipped cards, and no one could tell a deliberate
+   test change from a regression); and restyling every item type (the owner
+   reviewed these four cards, not the rest).
+2. **Routine coordinates may fold below the decision.** On the four card
+   types, verdicts, exceptions, and decision restrictions stay ahead of the
+   actions, and run, round, and binding identifiers may fold into a named
+   disclosure. No stale, degraded, waived, capability, consequence, or
+   commit-plan warning folds, and a mixed group is split, never folded whole
+   (Section [9](../plan.md#9-comprehension), Layering).
+3. **A finding card shows its message, proposed route, and producer label
+   together.** The rationale and the binding and containment facts sit in
+   that card's own disclosure, and Accept all dispositions states that it
+   applies every proposed route in the bound batch. The daemon and model
+   registers stay distinct, and no per-finding approval is added. Section [7](../plan.md#7-review-policy)
+   keeps the required parts of an adjudication and leaves their placement to
+   Section [9](../plan.md#9-comprehension). This answers #1141's governing-record question: the owner chose
+   to show the finding message, so Section [9](../plan.md#9-comprehension) is the record that changes.
+   #1107 row 01's budget is unchanged: the action region stays within 520pt
+   of the card top at a 560pt card and `.large`. If the approved card cannot
+   meet it with realistic messages, the measurements go to the owner through
+   #1141; no agent raises the budget.
+4. **View PR follows the verdict and the summary on the final-review card.**
+   It comes ahead of review history, evidence, and bindings when the client
+   supports it. It stays navigation and never resolves the item.
+5. **A summary's invocation ID may sit in source details.** On the four card
+   types the producer or Unverified label stays beside the prose, and the
+   invocation ID and original rendering stay reachable beside the claim
+   (Section [9](../plan.md#9-comprehension), Summary Provenance).
+6. **A dispute with one claim leads with that claim.** The snapshot sometimes
+   carries only one position. The card then shows that claim with its
+   Unverified label and no second position, and shows both when both exist.
+   It never implies an argument the snapshot lacks.
+
+(Owner decision of 2026-10-02, decisions D03 and D06 to D09 of the
+[visual audit handoff](../design/visual-audit-2026-10-02/README.md);
+[decision note](../../devlog/2026-10-02-2249-presentation-hierarchy-rules.md).
+The client work is #1732 and #1033.)
