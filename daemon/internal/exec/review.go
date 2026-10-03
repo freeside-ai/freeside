@@ -102,6 +102,12 @@ type ReviewRequestSupersessionVerifier interface {
 }
 
 // ReviewRequest is what a review source needs to review one exact candidate.
+//
+// HeadSHA is always the head the forge shows, and the review record binds it.
+// EvaluatedSHA is set only on a base-advance re-entry: it names the unpushed
+// merge of HeadSHA into BaseSHA, and the source then reviews that commit. The
+// workspace holds it, and the reviewed diff runs from BaseSHA to it. Empty
+// means the workspace holds HeadSHA itself.
 type ReviewRequest struct {
 	RunID        domain.RunID               `json:"run_id"`
 	Round        int                        `json:"round"`
@@ -110,6 +116,7 @@ type ReviewRequest struct {
 	BaseRef      string                     `json:"base_ref"`
 	BaseSHA      string                     `json:"base_sha"`
 	HeadSHA      string                     `json:"head_sha"`
+	EvaluatedSHA string                     `json:"evaluated_sha,omitempty"`
 	Workspace    string                     `json:"workspace"`
 	Verification ReviewVerificationEvidence `json:"verification"`
 	Instructions ReviewInstructionBinding   `json:"instructions"`
@@ -182,7 +189,24 @@ func (r ReviewRequest) Validate() error {
 	case r.RequestedAt.Location() != time.UTC:
 		return fmt.Errorf("review request requested_at: %w", domain.ErrTimestampNotUTC)
 	}
+	if r.EvaluatedSHA != "" {
+		merge := domain.ProspectiveMergeIdentity{
+			BaseSHA: r.BaseSHA, HeadSHA: r.HeadSHA, MergeSHA: r.EvaluatedSHA,
+		}
+		if err := merge.Validate(); err != nil {
+			return fmt.Errorf("review request evaluated_sha: %w", err)
+		}
+	}
 	return errors.Join(r.Verification.Validate(), r.Instructions.Validate())
+}
+
+// WorkspaceSHA is the commit the review workspace must hold: the evaluated
+// commit when the request names one, the head otherwise.
+func (r ReviewRequest) WorkspaceSHA() string {
+	if r.EvaluatedSHA != "" {
+		return r.EvaluatedSHA
+	}
+	return r.HeadSHA
 }
 
 // AuthorityDigest binds the reviewer to every request field that can change
@@ -201,13 +225,15 @@ func (r ReviewRequest) AuthorityDigest() (domain.Digest, error) {
 		BaseRef      string                     `json:"base_ref"`
 		BaseSHA      string                     `json:"base_sha"`
 		HeadSHA      string                     `json:"head_sha"`
+		EvaluatedSHA string                     `json:"evaluated_sha,omitempty"`
 		Workspace    string                     `json:"workspace"`
 		Verification ReviewVerificationEvidence `json:"verification"`
 		Instructions ReviewInstructionBinding   `json:"instructions"`
 	}{
-		Version: "review-request-authority-v2", RunID: r.RunID, Round: r.Round,
+		Version: "review-request-authority-v3", RunID: r.RunID, Round: r.Round,
 		Repo: r.Repo, RepositoryID: r.RepositoryID, BaseRef: r.BaseRef,
-		BaseSHA: r.BaseSHA, HeadSHA: r.HeadSHA, Workspace: r.Workspace,
+		BaseSHA: r.BaseSHA, HeadSHA: r.HeadSHA, EvaluatedSHA: r.EvaluatedSHA,
+		Workspace:    r.Workspace,
 		Verification: r.Verification, Instructions: r.Instructions,
 	})
 	if err != nil {

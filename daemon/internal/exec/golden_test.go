@@ -109,6 +109,29 @@ func TestGolden(t *testing.T) {
 		Artifacts:    []domain.Digest{"sha256:blocked"},
 		Summary:      "Which retention period applies to exported logs?",
 	}
+	_, instructions, err := exec.ComposeCodexReviewInstructions(
+		exec.ReviewHostInstructionInput{},
+		[]exec.ReviewInstructionSourceInput{{Path: "AGENTS.md", Body: []byte("base rules")}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := exec.ReviewRequest{
+		RunID: "run-1", Round: 2, Repo: "owner/repo", RepositoryID: 42,
+		BaseRef: "main", BaseSHA: "base-sha-2", HeadSHA: "head-sha-1",
+		Workspace: "/candidate", Instructions: instructions,
+		Verification: exec.ReviewVerificationEvidence{
+			Outcome:                domain.VerificationPassed,
+			RecipeDigest:           execStageDigest("7"),
+			EvidenceSnapshotDigest: execStageDigest("8"),
+			ArtifactDigests:        []domain.Digest{execStageDigest("9")},
+		},
+		RequestedAt: ts,
+	}
+	// A base-advance re-entry reviews the merge of the unchanged head into the
+	// advanced base; the head stays the one the forge shows.
+	mergeRequest := request
+	mergeRequest.EvaluatedSHA = "merge-sha-1"
 	cases := []struct {
 		name  string
 		value any
@@ -116,6 +139,8 @@ func TestGolden(t *testing.T) {
 		{"stage_result", stage},
 		{"stage_result_blocked", blocked},
 		{"review_result", review},
+		{"review_request", request},
+		{"review_request_prospective_merge", mergeRequest},
 		{"start_spec", exec.StartSpecFromAdmission(admission)},
 	}
 	for _, tc := range cases {
