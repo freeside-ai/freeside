@@ -144,6 +144,56 @@ struct DecisionCardComposition: Equatable {
         }
     }
 
+    /// Where the card shell draws the daemon-written `reason`. The reason is
+    /// drawn by the shell, not by a module, so its place is a rule of the
+    /// type rather than a position in `modules`.
+    enum ReasonPlacement: Equatable {
+        /// A labeled Context section directly under the ask.
+        case context
+        /// Unboxed and dim directly under the ask.
+        case underAsk
+        /// A closed "Recorded context" disclosure below the actions.
+        case recordedContext
+    }
+
+    /// The visual audit's decision-first cards lead with what the operator
+    /// decides on, so the reason leaves the boxed Context section: the
+    /// dispute reads it as the ask's own second line (D08), while the
+    /// question and the final review lead with their own module and keep the
+    /// recorded sentence one disclosure away (D06, D07). The switch is
+    /// exhaustive so a new type has to answer the question.
+    static func reasonPlacement(
+        for type: Components.Schemas.AttentionType
+    ) -> ReasonPlacement {
+        switch type {
+        case .review_dispute:
+            return .underAsk
+        case .agent_question, .ready_for_final_review:
+            return .recordedContext
+        case .spec_approval, .execution_failure, .review_diminishing_returns,
+            .review_contradiction, .review_configuration, .finding_adjudication,
+            .publish_blocked, .task_proposal, .effect_proposal, .system_health, .blocked:
+            return .context
+        }
+    }
+
+    /// Whether the type's `.facts` rows are routine run and binding
+    /// coordinates that fold into a closed disclosure (D06, D08). The final
+    /// review's only row is its diff, which plan §9 lists with the verdicts,
+    /// so it stays visible. The switch is exhaustive so a new type has to
+    /// answer the question.
+    static func foldsRoutineFacts(_ type: Components.Schemas.AttentionType) -> Bool {
+        switch type {
+        case .agent_question, .review_dispute:
+            return true
+        case .spec_approval, .execution_failure, .review_diminishing_returns,
+            .review_contradiction, .review_configuration, .finding_adjudication,
+            .ready_for_final_review, .publish_blocked, .task_proposal, .effect_proposal,
+            .system_health, .blocked:
+            return false
+        }
+    }
+
     static let sharedModuleSet = DecisionCardModule.allCases
 
     /// Every composition places `.facts` ahead of `actionInsertionIndex`: the
@@ -244,6 +294,50 @@ struct DecisionCardComposition: Equatable {
                 modules: [.recommendation, .facts, .factBlock, .claims, .evidence, .details],
                 actionInsertionIndex: 2,
                 reviewingActionInsertionIndex: nil)
+        }
+    }
+}
+
+/// The card's closed-by-default disclosures. The view keeps the open set as
+/// local state; a caller names the ones that start open, which is how a
+/// screenshot shows what a folded section holds.
+enum DecisionDisclosure: Hashable {
+    case runDetails
+    case recordedContext
+}
+
+/// Where each row of a card's `.facts` module renders: beside the decision,
+/// or inside the closed "Run and binding details" disclosure. Kept apart
+/// from the view so the split is testable without rendering.
+///
+/// `AttentionDisplay.cardFacts` carries coordinates only (a stage, a run, a
+/// round, an identifier), so on a type that folds them every one of its rows
+/// folds. A notice is not a coordinate: the commit-plan notice says something
+/// about the candidate the operator is deciding on, so it stays visible on
+/// every type.
+struct DecisionFactPlacement: Equatable {
+    static let foldedTitle = "Run and binding details"
+
+    let visible: [AttentionDisplay.FactRow]
+    let folded: [AttentionDisplay.FactRow]
+
+    init(
+        _ item: Components.Schemas.AttentionItem,
+        includesCommitPlan: Bool,
+        now: Date
+    ) {
+        let facts = AttentionDisplay.cardFacts(item, now: now)
+        let notices: [AttentionDisplay.FactRow] =
+            includesCommitPlan
+            ? [item.commit_plan_notice?.value1].compactMap { $0 }.map {
+                .init("Commit plan", AttentionDisplay.label($0))
+            } : []
+        if DecisionCardComposition.foldsRoutineFacts(item._type) {
+            visible = notices
+            folded = facts
+        } else {
+            visible = facts + notices
+            folded = []
         }
     }
 }
