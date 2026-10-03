@@ -140,7 +140,8 @@ struct TaskTimelineView: View {
     }
 
     /// Layer 0: what the work is and where it stands, without scrolling.
-    private func header(_ timeline: Components.Schemas.TaskTimeline?) -> some View {
+    /// Internal so a screenshot golden can draw the header on its own.
+    func header(_ timeline: Components.Schemas.TaskTimeline?) -> some View {
         let task = snapshot.task
         let position = TaskDisplay.position(
             task, runs: coordinator.runs, attentionItems: coordinator.store.orderedSnapshots, history: timeline)
@@ -153,6 +154,9 @@ struct TaskTimelineView: View {
                 monoFont: FreesideFont.mono(.title2),
                 lineLimit: 3)
             StateChip(label: lines.status, cut: TaskDisplay.statusCut(task, position: position))
+            if let hold = TaskDisplay.holdCallout(task, position: position) {
+                holdCallout(hold)
+            }
             Text(TaskTimelinePresentation.headerMetaLine(task))
                 .font(FreesideFont.monoCaption)
                 .foregroundStyle(Color.inkDim)
@@ -197,6 +201,34 @@ struct TaskTimelineView: View {
                 headerTechnicalDetails
             }
         }
+    }
+
+    /// The current hold, set apart under the status so the reason the task
+    /// waits is read before its history (visual audit D02). Every hold kind
+    /// takes this one treatment: the hold's own words, the status chip, and
+    /// the guidance sentence are what tell a capacity wait from a hold that
+    /// needs the operator. VoiceOver reads the round, then the hold.
+    private func holdCallout(_ hold: TaskDisplay.HoldCallout) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let round = hold.round {
+                Text(round)
+                    .font(FreesideFont.callout)
+            }
+            Text(hold.hold)
+                .font(FreesideFont.itemTitle)
+        }
+        .foregroundStyle(Color.ink)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.accentWash)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(Color.accentText)
+                .frame(width: 3)
+                .accessibilityHidden(true)
+        }
+        .accessibilityElement(children: .combine)
     }
 
     private func guidanceSentence(_ sentence: String) -> some View {
