@@ -106,9 +106,11 @@ import Testing
     }
 
     @Test func fourSpecializedCardsAreOnlyModuleOrderings() throws {
+        // Plan §9 revision 78 (visual audit D07): the diff joins the verdict
+        // ahead of the summary, and the review yield follows the actions.
         #expect(
             DecisionCardComposition.forType(.ready_for_final_review).modules == [
-                .recommendation, .checklist, .summary, .factBlock, .yieldChart, .facts, .claims,
+                .recommendation, .checklist, .facts, .summary, .factBlock, .yieldChart, .claims,
                 .evidence, .details,
             ])
         #expect(
@@ -116,9 +118,12 @@ import Testing
                 .recommendation, .stageRail, .facts, .claims, .factBlock, .summary, .claims,
                 .evidence, .details,
             ])
+        // Plan §9 revision 78 (visual audit D08): the supplied claim leads
+        // beside the positions, ahead of the daemon's facts about the run.
         #expect(
             DecisionCardComposition.forType(.review_dispute).modules == [
-                .comparison, .factBlock, .facts, .summary, .claims, .evidence, .details,
+                .comparison, .claims, .factBlock, .facts, .summary, .claims, .evidence,
+                .details,
             ])
         #expect(
             DecisionCardComposition.forType(.review_diminishing_returns).modules == [
@@ -128,11 +133,16 @@ import Testing
         #expect(
             !DecisionCardComposition.forType(.review_dispute).modules.contains(.recommendation))
         let ready = DecisionCardComposition.forType(.ready_for_final_review)
-        #expect(ready.actionInsertionIndex == ready.modules.firstIndex(of: .claims))
+        // Revision 78 (D07): the review yield opens on demand below the
+        // actions, and View PR follows the summary instead of closing the
+        // card.
+        #expect(ready.actionInsertionIndex == ready.modules.firstIndex(of: .yieldChart))
         #expect(try #require(ready.modules.firstIndex(of: .summary)) < ready.actionInsertionIndex)
         #expect(
             try #require(ready.modules.firstIndex(of: .evidence)) < #require(ready.modules.firstIndex(of: .details)))
-        #expect(ready.reviewingActionInsertionIndex == ready.modules.firstIndex(of: .details))
+        #expect(
+            try ready.reviewingActionInsertionIndex == #require(
+                ready.modules.firstIndex(of: .summary)) + 1)
         #expect(
             DecisionCardComposition.forType(.execution_failure)
                 .reviewingActionInsertionIndex == nil)
@@ -159,9 +169,12 @@ import Testing
             execution.claims(
                 from: executionClaims, at: 6, prominentClaimIndex: nil
             ).map(\.label) == ["screenshot"])
-        // The dispute card's claims render below its actions, so they never
-        // count as prominent.
-        #expect(!DecisionCardComposition.forType(.review_dispute).claimsAreProminent(at: 4))
+        // Revision 78 (D08): a dispute leads with its claim, so its first
+        // claims module is prominent and the supporting one below the
+        // actions is not.
+        let dispute = DecisionCardComposition.forType(.review_dispute)
+        #expect(dispute.claimsAreProminent(at: 1))
+        #expect(!dispute.claimsAreProminent(at: 5))
     }
 
     @Test(arguments: AttentionFixtures.phase1Types)
@@ -183,6 +196,280 @@ import Testing
                 #expect(summaries.count == 1)
             }
         }
+    }
+
+    /// Visual audit D03: the four audited card types explain their
+    /// unverified label on demand, and every other type keeps the sentence
+    /// under each agent-written section, so those cards stay unchanged.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func unverifiedExplanationIsOnDemandOnlyOnTheAuditedCards(
+        type: Components.Schemas.AttentionType
+    ) {
+        let audited: [Components.Schemas.AttentionType] = [
+            .agent_question, .ready_for_final_review, .review_dispute, .finding_adjudication,
+        ]
+        #expect(
+            DecisionCardComposition.unverifiedExplanation(for: type)
+                == (audited.contains(type) ? .onDemand : .sentence))
+    }
+
+    /// Visual audit D06 and D08: the question and dispute cards fold their
+    /// run and binding coordinates; every other type keeps its facts beside
+    /// the decision. Either way each fact has exactly one destination.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func everyCardFactHasOneDestination(type: Components.Schemas.AttentionType) {
+        let item = AttentionFixtures.fixture(type: type).item
+        let now = Date(timeIntervalSince1970: 0)
+        let facts = AttentionDisplay.cardFacts(item, now: now)
+        let placement = DecisionFactPlacement(item, includesCommitPlan: false, now: now)
+        let folds: [Components.Schemas.AttentionType] = [.agent_question, .review_dispute]
+
+        #expect(DecisionCardComposition.foldsRoutineFacts(type) == folds.contains(type))
+        #expect(placement.visible + placement.folded == facts)
+        #expect(placement.folded == (folds.contains(type) ? facts : []))
+    }
+
+    @Test func foldedFactsAreTheRoutineCoordinates() {
+        let now = Date(timeIntervalSince1970: 0)
+        let question = DecisionFactPlacement(
+            AttentionFixtures.fixture(type: .agent_question).item,
+            includesCommitPlan: true, now: now)
+        let dispute = DecisionFactPlacement(
+            AttentionFixtures.fixture(type: .review_dispute).item,
+            includesCommitPlan: true, now: now)
+
+        #expect(question.visible.isEmpty)
+        #expect(question.folded.map(\.label) == ["Stage", "Blocked on"])
+        #expect(dispute.visible.isEmpty)
+        #expect(
+            dispute.folded.map(\.label)
+                == ["Run", "Round", "Disputed findings", "Completion evidence"])
+    }
+
+    /// A notice is not a coordinate: it stays visible on a card that folds
+    /// its facts, and it is never drawn where a checklist already carries it.
+    @Test(arguments: [Components.Schemas.AttentionType.agent_question, .review_dispute])
+    func commitPlanNoticeNeverFolds(type: Components.Schemas.AttentionType) {
+        var item = AttentionFixtures.fixture(type: type).item
+        item.commit_plan_notice = .init(value1: .present_but_not_honored)
+        let now = Date(timeIntervalSince1970: 0)
+        let notice = AttentionDisplay.FactRow(
+            "Commit plan", AttentionDisplay.label(.present_but_not_honored))
+
+        let shown = DecisionFactPlacement(item, includesCommitPlan: true, now: now)
+        #expect(shown.visible == [notice])
+        #expect(shown.folded == AttentionDisplay.cardFacts(item, now: now))
+
+        let withChecklist = DecisionFactPlacement(item, includesCommitPlan: false, now: now)
+        #expect(withChecklist.visible.isEmpty)
+    }
+
+    /// The final review's checklist carries the commit-plan notice, so the
+    /// card asks for its facts without it, as it does here.
+    @Test func finalReviewKeepsItsDiffVisible() {
+        let item = AttentionFixtures.fixture(type: .ready_for_final_review).item
+        let placement = DecisionFactPlacement(
+            item, includesCommitPlan: false, now: Date(timeIntervalSince1970: 0))
+
+        #expect(placement.visible.map(\.label) == ["Diff"])
+        #expect(placement.folded.isEmpty)
+    }
+
+    /// Visual audit D06, D07 and D08: the three decision-first cards move
+    /// the daemon's reason out of the boxed Context section, and every other
+    /// type keeps it there.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func reasonLeavesTheContextSectionOnlyOnTheDecisionFirstCards(
+        type: Components.Schemas.AttentionType
+    ) {
+        let expected: DecisionCardComposition.ReasonPlacement =
+            switch type {
+            case .review_dispute: .underAsk
+            case .agent_question, .ready_for_final_review: .recordedContext
+            default: .context
+            }
+        #expect(DecisionCardComposition.reasonPlacement(for: type) == expected)
+    }
+
+    /// Visual audit D06 to D08: the question card bounds only its options,
+    /// the final review only the daemon's checklist, and the dispute reads
+    /// its claim as prose, so all three separate their agent sections by
+    /// spacing; every other type keeps the dashed card around agent prose.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func agentSectionsAreSpacedOnlyOnTheApprovedCards(
+        type: Components.Schemas.AttentionType
+    ) {
+        let spaced: [Components.Schemas.AttentionType] = [
+            .agent_question, .ready_for_final_review, .review_dispute,
+        ]
+        #expect(
+            DecisionCardComposition.agentSectionFrame(for: type)
+                == (spaced.contains(type) ? .spaced : .dashedCard))
+    }
+
+    /// Visual audit D08: the dispute leads with the claim the snapshot
+    /// supplies, and a supporting attachment stays below the actions.
+    @Test func disputeLeadsWithItsReadableClaim() {
+        let item = AttentionFixtures.fixture(type: .review_dispute).item
+        let composition = DecisionCardComposition.forType(.review_dispute)
+
+        #expect(
+            composition.claims(from: item.agent_claims, at: 1, prominentClaimIndex: nil)
+                .map(\.label) == ["Shadow finding review-fixture"])
+        #expect(
+            composition.claims(from: item.agent_claims, at: 5, prominentClaimIndex: nil)
+                .map(\.label) == ["screenshot"])
+        #expect(
+            composition.cardLeadClaims(from: item.agent_claims, prominentClaimIndex: nil)
+                .map(\.label) == ["Shadow finding review-fixture"])
+    }
+
+    /// Claims that arrived without inline text still lead, as their
+    /// attachments: nothing marks one of them as the disputed finding, so
+    /// none is held back, the lead is never empty while the snapshot has a
+    /// claim, and nothing lists those claims a second time.
+    @Test func disputeWithoutInlineTextLeadsWithTheAttachment() {
+        let item = AttentionFixtures.disputeWithoutInlineText().item
+        let composition = DecisionCardComposition.forType(.review_dispute)
+
+        let lead = composition.claims(from: item.agent_claims, at: 1, prominentClaimIndex: nil)
+        #expect(lead.map(\.label) == ["screenshot", "Shadow finding review-fixture"])
+        #expect(lead.allSatisfy { $0.text == nil })
+        #expect(
+            composition.claims(from: item.agent_claims, at: 5, prominentClaimIndex: nil).isEmpty)
+        #expect(
+            composition.cardLeadClaims(from: item.agent_claims, prominentClaimIndex: nil) == lead)
+        // The summary keeps its own layer either way.
+        #expect(composition.summaries(from: item.agent_claims).count == 1)
+    }
+
+    /// With no claim the snapshot has no dissent to show, so neither claims
+    /// module has anything to draw and no placeholder stands in for one.
+    @Test func disputeWithoutAClaimDrawsNoClaimsSection() {
+        var item = AttentionFixtures.fixture(type: .review_dispute).item
+        item.agent_claims.removeAll { $0.label != AgentClaimLabels.summary }
+        let composition = DecisionCardComposition.forType(.review_dispute)
+
+        #expect(
+            composition.claims(from: item.agent_claims, at: 1, prominentClaimIndex: nil).isEmpty)
+        #expect(
+            composition.claims(from: item.agent_claims, at: 5, prominentClaimIndex: nil).isEmpty)
+        #expect(
+            composition.cardLeadClaims(from: item.agent_claims, prominentClaimIndex: nil).isEmpty)
+    }
+
+    /// Only the dispute's claim is its own lead content. A failure card's
+    /// attachment claims stay supporting context when none is readable, and
+    /// no other card draws a claim in the card that its platform lists
+    /// elsewhere.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func onlyTheDisputeLeadsWithItsClaim(type: Components.Schemas.AttentionType) {
+        let composition = DecisionCardComposition.forType(type)
+        #expect(composition.leadsWithItsClaim == (type == .review_dispute))
+
+        var attachment = AttentionFixtures.fixture(type: .execution_failure).item.agent_claims[0]
+        attachment.label = "screenshot"
+        attachment.text = nil
+        if type != .review_dispute {
+            #expect(
+                composition.cardLeadClaims(from: [attachment], prominentClaimIndex: nil).isEmpty)
+        }
+        if type == .execution_failure {
+            #expect(composition.claims(from: [attachment], at: 3, prominentClaimIndex: nil).isEmpty)
+            #expect(
+                composition.claims(from: [attachment], at: 6, prominentClaimIndex: nil)
+                    == [attachment])
+        }
+    }
+
+    /// Visual audit D07: View PR is the final review's filled button, and a
+    /// card never shows two, so it yields to a recommendation block.
+    @Test func viewPRIsFilledUnlessARecommendationHoldsTheFilledButton() {
+        let requested = AttentionFixtures.fixture(type: .ready_for_final_review).item
+            .requested_decision
+        let plain = DecisionActionRanking(requested: requested)
+        #expect(plain.reviewing == .open_pr)
+        #expect(DecisionCardComposition.reviewingActionIsFilled(plain))
+
+        let recommended = DecisionActionRanking(
+            requested: requested, recommendedAction: .return_to_agent)
+        #expect(recommended.reviewing == .open_pr)
+        #expect(!DecisionCardComposition.reviewingActionIsFilled(recommended))
+    }
+
+    /// Visual audit D06: the agent's own question leads, so the shell's
+    /// generic ask is dropped only when a typed decision is there to replace
+    /// it. No card is ever left without a lead.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func askIsDroppedOnlyWhereATypedQuestionLeads(type: Components.Schemas.AttentionType) {
+        let item = AttentionFixtures.fixture(type: type).item
+        #expect(DecisionCardComposition.rendersAsk(for: item) == (type != .agent_question))
+    }
+
+    @Test func questionWithoutTypedDecisionsKeepsTheAskAndItsContext() throws {
+        let typed = AttentionFixtures.fixture(type: .agent_question).item
+        #expect(!DecisionCardComposition.rendersAsk(for: typed))
+        #expect(DecisionCardComposition.reasonPlacement(for: typed) == .recordedContext)
+
+        var untyped = typed
+        untyped.agent_question = nil
+        #expect(DecisionCardComposition.rendersAsk(for: untyped))
+        #expect(DecisionCardComposition.reasonPlacement(for: untyped) == .context)
+
+        var empty = typed
+        var facts = try #require(empty.agent_question?.value1)
+        facts.decisions = []
+        empty.agent_question = .init(value1: facts)
+        #expect(DecisionCardComposition.rendersAsk(for: empty))
+        #expect(DecisionCardComposition.reasonPlacement(for: empty) == .context)
+    }
+
+    /// Only the question's placement depends on the item; every other type
+    /// answers from its type alone.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func reasonPlacementFollowsTheTypeForATypedItem(
+        type: Components.Schemas.AttentionType
+    ) {
+        let item = AttentionFixtures.fixture(type: type).item
+        #expect(
+            DecisionCardComposition.reasonPlacement(for: item)
+                == DecisionCardComposition.reasonPlacement(for: type))
+    }
+
+    @Test func severalDecisionsKeepTheirOrderAndTheirOwnOptions() throws {
+        let item = AttentionFixtures.longQuestion().item
+        let facts = try #require(item.agent_question?.value1)
+        let presentation = try #require(AgentQuestionPresentation(item))
+
+        #expect(facts.decisions.count == 2)
+        #expect(presentation.decisions.map(\.question) == facts.decisions.map(\.question))
+        #expect(
+            presentation.decisions.map { $0.options.map(\.label) }
+                == facts.decisions.map { $0.options.map(\.label) })
+        #expect(
+            presentation.decisions.map { $0.options.map(\.tradeoffs) }
+                == facts.decisions.map { $0.options.map(\.tradeoffs) })
+        // One recommended option per decision, the one the agent named.
+        #expect(
+            presentation.decisions.map { $0.options.filter(\.recommended).map(\.label) }
+                == facts.decisions.map { [$0.recommendation] })
+        #expect(!DecisionCardComposition.rendersAsk(for: item))
+    }
+
+    /// A spaced claim folds its identifiers; every one of them stays one
+    /// disclosure away, exact.
+    @Test func foldedClaimSourceKeepsEveryIdentifier() throws {
+        let item = AttentionFixtures.fixture(type: .agent_question).item
+        let claim = try #require(item.agent_claims.first { $0.text != nil })
+        let text = try #require(claim.text)
+
+        let rows = DecisionDetailView.claimSourceRows(claim, text: text)
+        #expect(
+            rows.map(\.label) == ["Label", "Media type", "Agent invocation", "Claim digest"])
+        #expect(rows.first?.value == claim.label)
+        #expect(rows[1].value == text.media_type.rawValue)
+        #expect(rows[2].value == "inv-agent-agent_question")
+        #expect(rows.last?.value == claim.digest)
     }
 
     @Test func reservedSummariesNeverRenderAsGenericClaims() throws {
