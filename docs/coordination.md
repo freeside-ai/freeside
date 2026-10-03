@@ -185,6 +185,32 @@ session; the session verifies the external state and records the audit
 diff in the ordinary close-keyword PR, adding a decision note only when
 the outcome hits a Decision notes trigger or the mandatory-note list.
 
+### Contract Occupancy Label
+
+An open `kind:contract` issue carries `coord:contract-active` exactly while
+it holds an active work claim. Label filters can't evaluate claim comments
+or PR-backed claims, so the label lets a claimant, the spine, and the owner
+see the contract cap's occupancy in one issue list.
+
+- **It mirrors claim state and decides nothing.** The label is never a
+  claim, an authorization, or a relationship. The claim gate reads claim
+  comments and PRs as above; a label that disagrees with them is wrong, and
+  the claim state stands. It isn't a scheduling status either: milestone
+  presence stays the only one (Deferral Escalation).
+- **Add it on winning arbitration.** The claimant adds the label in the same
+  operation that creates the branch (step 5).
+- **Remove it when the claim ends without a merge.** Whoever posts the
+  release, records the expiry, or closes the PR unmerged removes the label in
+  that operation. A merge closes the issue, so no removal is needed.
+- **A planning reservation never carries it.** A reservation blocks like a
+  claim on a contract unit but doesn't count toward the cap.
+- **Drift is reported, then repaired by hand.**
+  `scripts/trackercollect contracts` (its README) computes each open contract
+  unit's claim state and reports `missing-label` for an active claim without
+  the label and `stale-label` for the label without one. It never writes to
+  the forge. The spine repairs a finding under AGENTS.md's Forge Edits, after
+  re-reading the claim state it rests on.
+
 ## Session Start
 
 1. Read docs/plan.md front matter (revision), resolve wave state through the
@@ -222,6 +248,11 @@ the outcome hits a Decision notes trigger or the mandatory-note list.
      an active claim already equals the cap (the contract conflict set and
      cap arbitration under Claiming). A `starts-after` edge between contract
      units is an ordinary prerequisite, resolved in step 4.
+     `scripts/trackercollect contracts` may collect this evidence (each open
+     contract unit's claim state, the trackers listing it, and the active
+     count against the cap); it is optional and replaces none of the claim
+     reads, and an `AMBIGUOUS` entry in its report means the count is not
+     established.
 4. Resolve every typed relationship before starting:
    - verify each `starts-after` prerequisite's PR is merged;
    - record each `merges-after` prerequisite for the handoff and integration
