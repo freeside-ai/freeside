@@ -24,6 +24,8 @@ const (
 	ReviewCaseFailedOutcome        = "failed_outcome_after_restart"
 	ReviewCaseStaleHead            = "superseded_head"
 	ReviewCaseRequestAuthority     = "request_authority"
+	ReviewCaseEvaluatedMerge       = "evaluated_merge"
+	ReviewCaseEvaluatedWorkspace   = "evaluated_merge_workspace_at_head"
 )
 
 var reviewCases = map[string]struct{}{
@@ -33,6 +35,7 @@ var reviewCases = map[string]struct{}{
 	ReviewCaseStatusVocabulary: {}, ReviewCaseStaleHead: {},
 	ReviewCaseFailedOutcome:    {},
 	ReviewCaseRequestAuthority: {},
+	ReviewCaseEvaluatedMerge:   {}, ReviewCaseEvaluatedWorkspace: {},
 }
 
 // RunReviewSourceContract runs the reusable ReviewSource contract against one
@@ -259,17 +262,73 @@ func RunReviewSourceContract(t *testing.T, factory ReviewSourceFactory) {
 		}
 		return h.AuthorityRejectionComplete(t, id)
 	})
+
+	// A request that names an evaluated commit is reviewed in a workspace at
+	// that commit, and its result still binds the head the forge shows. The
+	// evaluated commit is never the identity a caller verifies against.
+	runCase(t, ReviewCaseEvaluatedMerge, divergences, func(t *testing.T) error {
+		h, id, request := prepareReviewScenario(t, factory, Scenario{
+			Outcome: OutcomeComplete, EvaluatedMerge: true,
+		})
+		if request.EvaluatedSHA == "" || request.WorkspaceSHA() != request.EvaluatedSHA {
+			return fmt.Errorf("harness prepared no evaluated commit: %#v", request)
+		}
+		source := h.Source()
+		if err := source.RequestReview(t.Context(), id, request); err != nil {
+			return fmt.Errorf("request review of an evaluated commit: %w", err)
+		}
+		h.Finish(t, id)
+		result, err := source.Poll(t.Context(), id)
+		if err != nil || result.BaseSHA != request.BaseSHA || result.HeadSHA != request.HeadSHA {
+			return wrongValue("Poll evaluated-commit review", result, err, "a result bound to the request's base and head")
+		}
+		if err := source.Verify(t.Context(), id, request.BaseSHA, request.HeadSHA); err != nil {
+			return fmt.Errorf("verify current head: %w", err)
+		}
+		if err := source.Verify(t.Context(), id, request.BaseSHA, request.EvaluatedSHA); !errors.Is(err, exec.ErrStaleHead) {
+			return wrongError("Verify the evaluated commit as the head", "ErrStaleHead", err)
+		}
+		return nil
+	})
+
+	// A workspace still at the head is not the candidate the request names, so
+	// the source refuses to review it and commits no result.
+	runCase(t, ReviewCaseEvaluatedWorkspace, divergences, func(t *testing.T) error {
+		h, id, request := prepareReviewScenario(t, factory, Scenario{
+			Outcome: OutcomeComplete, EvaluatedMerge: true, WorkspaceAtHead: true,
+		})
+		if request.EvaluatedSHA == "" {
+			return fmt.Errorf("harness prepared no evaluated commit: %#v", request)
+		}
+		source := h.Source()
+		err := source.RequestReview(t.Context(), id, request)
+		var failure *exec.ReviewSourceFailure
+		if !errors.As(err, &failure) || failure.Class != domain.ReviewFailureContradiction {
+			return wrongError("RequestReview with the workspace at the head", "a contradiction ReviewSourceFailure", err)
+		}
+		if result, err := source.Poll(t.Context(), id); err == nil {
+			return wrongValue("Poll after a refused workspace", result, err, "no result")
+		}
+		return nil
+	})
 }
 
 func newReviewScenario(
 	t *testing.T, factory ReviewSourceFactory, outcome Outcome,
 ) (ReviewSourceHarness, domain.InvocationID, exec.ReviewRequest) {
 	t.Helper()
-	if !outcome.valid() {
-		t.Fatalf("unknown review contract outcome %q", outcome)
+	return prepareReviewScenario(t, factory, Scenario{Outcome: outcome})
+}
+
+func prepareReviewScenario(
+	t *testing.T, factory ReviewSourceFactory, scenario Scenario,
+) (ReviewSourceHarness, domain.InvocationID, exec.ReviewRequest) {
+	t.Helper()
+	if !scenario.Outcome.valid() {
+		t.Fatalf("unknown review contract outcome %q", scenario.Outcome)
 	}
 	h := factory.New(t)
 	id := domain.InvocationID("contract-review-invocation")
-	request := h.Prepare(t, id, Scenario{Outcome: outcome})
+	request := h.Prepare(t, id, scenario)
 	return h, id, request
 }

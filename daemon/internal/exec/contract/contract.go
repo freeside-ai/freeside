@@ -43,6 +43,12 @@ func (o Outcome) valid() bool {
 type Scenario struct {
 	Outcome    Outcome
 	Transcript []byte
+	// EvaluatedMerge asks a review harness for a request that names an
+	// evaluated commit, and for a workspace that holds it. WorkspaceAtHead
+	// leaves that workspace at the request's head instead, the state a source
+	// must refuse. A stage harness ignores both.
+	EvaluatedMerge  bool
+	WorkspaceAtHead bool
 }
 
 // KnownDivergence admits one already-filed implementation mismatch. The case

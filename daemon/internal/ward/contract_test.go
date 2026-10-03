@@ -63,13 +63,22 @@ func (h *reviewSourceContractHarness) Prepare(
 	h.journal = journal
 	h.config = sourceConfig
 	h.source = source
-	return exec.ReviewRequest{
+	reviewRequest := exec.ReviewRequest{
 		RunID: "contract-run", Round: 1, Repo: "freeside-ai/candidate", RepositoryID: 42,
 		BaseRef: "refs/heads/main", BaseSHA: strings.Repeat("a", 40),
 		HeadSHA: testCodexReviewHead, Workspace: t.TempDir(),
 		Verification: testReviewVerificationEvidence(), Instructions: launch.InstructionBinding,
 		RequestedAt: codexReviewEpoch.Add(-time.Minute),
 	}
+	if scenario.EvaluatedMerge {
+		reviewRequest.EvaluatedSHA = testCodexReviewEvaluated
+		// The fixture volume holds the head; the runtime observes whatever
+		// commit the volume holds, so only a re-seeded volume is at the merge.
+		if !scenario.WorkspaceAtHead {
+			runtime.volBase[launch.WorkspaceVolume] = testCodexReviewEvaluated
+		}
+	}
+	return reviewRequest
 }
 
 func (h *reviewSourceContractHarness) AuthorityRejectionComplete(

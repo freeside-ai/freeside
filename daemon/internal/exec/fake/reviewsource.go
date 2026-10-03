@@ -48,6 +48,12 @@ type ReviewScript struct {
 	// InvocationID. A stale-head scenario scripts a Result.HeadSHA that
 	// differs from the head the test expects, so Verify fails.
 	Result exec.ReviewResult `json:"result"`
+	// WorkspaceSHA is the commit the scripted workspace holds. Empty means
+	// whatever commit the request asks for; a set value that differs from the
+	// request's WorkspaceSHA is refused at RequestReview, as a real source
+	// refuses a workspace that does not hold the candidate it was asked to
+	// review.
+	WorkspaceSHA string `json:"workspace_sha,omitempty"`
 }
 
 // reviewSession is the transient per-invocation progress: the provider
@@ -174,6 +180,13 @@ func (s *ReviewSource) RequestReview(_ context.Context, id domain.InvocationID, 
 	script, ok := s.scripts[id]
 	if !ok {
 		return fmt.Errorf("fake review source request %s: %w", id, ErrUnscripted)
+	}
+	if script.WorkspaceSHA != "" && script.WorkspaceSHA != req.WorkspaceSHA() {
+		return &exec.ReviewSourceFailure{
+			Class: domain.ReviewFailureContradiction,
+			Err: fmt.Errorf("fake review source request %s: workspace holds %q, request reviews %q",
+				id, script.WorkspaceSHA, req.WorkspaceSHA()),
+		}
 	}
 	s.sessions[id] = &reviewSession{
 		script:   script,
