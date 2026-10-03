@@ -87,20 +87,23 @@ func TestLiveCodexReviewSandboxWorkspaceAccess(t *testing.T) {
 		t.Fatalf("private-workspace sandbox access failed: %v", probeErr)
 	}
 	for _, tc := range []struct {
-		name, workspace, base, head string
-		wantSuccess                 bool
+		name, workspace, base, head, evaluated string
+		wantSuccess                            bool
 	}{
-		{"bound diff", "/workspace/project", base.BaseSHA, head.BaseSHA, true},
-		{"wrong cwd", "/workspace", base.BaseSHA, head.BaseSHA, false},
-		{"absent workspace", "/absent", base.BaseSHA, head.BaseSHA, false},
-		{"absent base", "/workspace/project", strings.Repeat("f", 40), head.BaseSHA, false},
-		{"absent head", "/workspace/project", base.BaseSHA, strings.Repeat("f", 40), false},
-		{"wrong bound head", "/workspace/project", base.BaseSHA, base.BaseSHA, false},
+		{"bound diff", "/workspace/project", base.BaseSHA, head.BaseSHA, "", true},
+		{"wrong cwd", "/workspace", base.BaseSHA, head.BaseSHA, "", false},
+		{"absent workspace", "/absent", base.BaseSHA, head.BaseSHA, "", false},
+		{"absent base", "/workspace/project", strings.Repeat("f", 40), head.BaseSHA, "", false},
+		{"absent head", "/workspace/project", base.BaseSHA, strings.Repeat("f", 40), "", false},
+		{"wrong bound head", "/workspace/project", base.BaseSHA, base.BaseSHA, "", false},
+		// The volume holds the head, so a request for an evaluated commit it
+		// does not hold is refused even though every named object exists.
+		{"evaluated commit not checked out", "/workspace/project", base.BaseSHA, head.BaseSHA, base.BaseSHA, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out, err := osexec.CommandContext(ctx, bin, "run", "--rm", "--name", id+"-gate", //nolint:gosec // resolved CLI, pinned image, fixture-owned volume
 				"--network", "none", "--volume", binding.Volume+":/workspace/project:ro", image,
-				"sh", "-c", codexReviewAccessCommand(tc.workspace, tc.base, tc.head)).CombinedOutput()
+				"sh", "-c", codexReviewAccessCommand(tc.workspace, tc.base, tc.head, tc.evaluated)).CombinedOutput()
 			if (err == nil) != tc.wantSuccess {
 				t.Fatalf("sandbox access gate: %v\n%s", err, out)
 			}
