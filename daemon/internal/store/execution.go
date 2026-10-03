@@ -179,6 +179,18 @@ func (tx *WriteTx) RecordExecutionAdmission(ctx context.Context, admission domai
 		}
 		return nil
 	}
+	// The credential-integrity half of §5.4 admission rule 4 runs only on
+	// this new-record path, never in scanExecutionAdmission's re-gate
+	// (RequireGenerationUnmarked): a generation the probe marked admits
+	// nothing new, while the exact replay returned above and every recorded
+	// admission stay readable. The stored mark rows are read here, in the
+	// admitting transaction, because the admission carries no unmarked claim
+	// to trust. A legacy admission names no generation and is unaffected.
+	if binding := admission.AgentBinding; binding != nil {
+		if err := tx.RequireGenerationUnmarked(ctx, binding.EnrollmentID, binding.EnrollmentGeneration); err != nil {
+			return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
+		}
+	}
 	// A new admission carries the daemon's current configured name, so it
 	// follows a rename; a rebinding to another repository id fails here,
 	// before any work is admitted.

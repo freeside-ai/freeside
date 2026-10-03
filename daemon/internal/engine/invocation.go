@@ -680,10 +680,16 @@ func invocationDispatchHold(err error) bool {
 	// A role whose agent does not pass admission holds its own invocation:
 	// the verdict reads the store and the selection gate, both of which can
 	// change, and another role's work may still be admissible.
+	//
+	// A marked generation is that same verdict reached in the admitting
+	// transaction: the mark landed after role resolution read the store, so
+	// the refusal arrives from the store without ErrAgentNotAdmissible. It
+	// holds like the read-side refusal, and re-enrollment clears it.
 	return errors.Is(err, exec.ErrInputUnavailable) ||
 		errors.Is(err, store.ErrTaskCancellationFenced) ||
 		errors.Is(err, domain.ErrIdentityParallelismExhausted) ||
-		errors.Is(err, ErrAgentNotAdmissible)
+		errors.Is(err, ErrAgentNotAdmissible) ||
+		errors.Is(err, domain.ErrGenerationIntegrityMarked)
 }
 
 // MutableAdmissionPolicyRefusal identifies a fail-closed current-policy
