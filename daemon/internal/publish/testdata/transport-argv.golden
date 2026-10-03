@@ -41,5 +41,20 @@
     "--force-with-lease=refs/heads/feat/meaningful-task:",
     "https://github.com/freeasinbird/example.git",
     "0123456789abcdef0123456789abcdef01234567:refs/heads/feat/meaningful-task"
+  ],
+  "fetch_head": [
+    "fetch",
+    "--no-tags",
+    "https://github.com/freeasinbird/example.git",
+    "+refs/heads/feat/meaningful-task:refs/freeside/head"
+  ],
+  "merge_tree": [
+    "merge-tree",
+    "--write-tree",
+    "-z",
+    "--name-only",
+    "--no-messages",
+    "89abcdef0123456789abcdef0123456789abcdef",
+    "0123456789abcdef0123456789abcdef01234567"
   ]
 }
