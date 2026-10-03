@@ -82,9 +82,7 @@ func TestVerificationReadinessMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatal(err)
 	}
-	if got := rawVersion(t, db); got != 86 {
-		t.Fatalf("schema version = %d, want 86", got)
-	}
+	assertAtHead(t, db)
 	for _, table := range []string{"requirement_resolutions", "check_proofs", "degraded_waivers", "waiver_lifecycle_events"} {
 		assertTableExists(t, db, table, true)
 	}

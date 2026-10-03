@@ -26,9 +26,7 @@ func TestEffectProposalPolicyApprovalsMigrationCreatesTable(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatal(err)
 	}
-	if got := rawVersion(t, db); got != 86 {
-		t.Fatalf("schema version = %d, want 86", got)
-	}
+	assertAtHead(t, db)
 	assertTableExists(t, db, "effect_proposal_policy_approvals", true)
 
 	conn, err := db.Conn(ctx)

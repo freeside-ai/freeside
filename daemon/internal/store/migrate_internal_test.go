@@ -44,6 +44,31 @@ func rawVersion(t *testing.T, db *sql.DB) int {
 	return version
 }
 
+func assertAtHead(t *testing.T, db *sql.DB) {
+	t.Helper()
+	want, err := CurrentSchemaVersion()
+	if err != nil {
+		t.Fatalf("current schema version: %v", err)
+	}
+	if got := rawVersion(t, db); got != want {
+		t.Fatalf("schema version = %d, want %d", got, want)
+	}
+}
+
+func TestCurrentSchemaVersion(t *testing.T) {
+	t.Parallel()
+	got, err := CurrentSchemaVersion()
+	if err != nil {
+		t.Fatalf("current schema version: %v", err)
+	}
+	// This is the single schema-head pin to bump when adding a migration.
+	// Other numeric assertions cover historical boundaries or synthetic fixtures.
+	const want = 86
+	if got != want {
+		t.Fatalf("current schema version = %d, want %d", got, want)
+	}
+}
+
 // TestFailingMigrationRollsBack is acceptance fixture 3: a deliberately
 // failing migration leaves the database at the prior version, with none of
 // the failed file's earlier statements applied.
