@@ -2381,3 +2381,80 @@ by the owner through this revision's review;
 recommended answers, decided by the owner through this revision's review;
 [decision note](../../devlog/2026-09-30-1830-researcher-role.md). Implementation
 is filed as #1656, #1657, and #1658, and the open question as #1659.)
+
+## Revision 77 ("Subscription Usage Visibility Before the 1B.1 Exit")
+
+1. **Basic usage visibility moves from Phase 3 into 1B.1.** The operator sees,
+   per identity and usage pool, how much of each allowance window is used,
+   when it resets, and when that was observed, and chooses an agent on that
+   pool explicitly (Section [5.4](../plan.md#54-credential-modes-egress-profiles-and-concurrency), usage observation; Section [11](../plan.md#11-roadmap-build-order-and-coordination), wave 10).
+   Rejected: leaving it in Phase 3 (the operator balances accounts by hand
+   today with no reading at all, and Phase 3's evidence-informed routing
+   needs these observations before it can act on them); and automatic
+   balancing now (an unproven reading driving a switch is the silent fallback
+   Section [4](../plan.md#4-the-attention-model) forbids).
+2. **A usage observation attaches to the usage pool and keeps five readings
+   distinct.** A pool names one of its enrollments as its collector (the
+   first by default, changed only by explicit operator reassignment, never
+   by silent failover); the collector alone supplies the pool's window
+   readings and refresh status, each enrollment may record its own
+   availability answer, and one reading per provider window sits beneath
+   them, so an unsupported provider needs no synthetic window and two
+   enrollments never alternate one status or one window set.
+   Credential expiry, usage reset,
+   billing renewal, reset credit, and run consumption never share a
+   "remaining" or "reset" field, and unknown stays unknown (Section [5.4](../plan.md#54-credential-modes-egress-profiles-and-concurrency)). Rejected: keying by identity (two
+   enrollments on one subscription would show one allowance twice); and one
+   "resets at" field (a credential that expires tomorrow and a window that
+   renews in an hour would be indistinguishable); and reconciling
+   per-enrollment snapshots when two enrollments on one pool both collect (a
+   merge rule no spike has evidence for, and the source of window flicker).
+3. **Observation stays observation.** A reading informs the account usage
+   view, the facts beside the agent choices, and proposals; the operator's
+   recorded lineup line or task line is what admits an agent, and admission
+   never reads a usage observation. A selection whose pool a reading shows
+   as exhausted still admits; the provider's own refusal fails that attempt
+   as a quota failure and recovers through #869's retry card with the
+   reading shown beside it; no usage-specific failure surface is added.
+4. **Allowance is a fourth telemetry quantity** beside billable cost,
+   reported usage, and quota consumed, joined by pool and time and never
+   derived from them (Section [8](../plan.md#8-observability-and-optimization-telemetry)). It counts usage consumed outside Freeside.
+5. **Collection and refresh rules** (Section [10](../plan.md#10-operations-and-onboarding)): each provider's path is a
+   pinned-build empirical contract settled by its usage spike; an unobservable
+   provider reports `unsupported`; a reading past its reset shows as stale,
+   never replenished; failed or throttled refreshes keep the last reading and
+   back off and never collect through another enrollment instead; concurrent
+   refreshes join; a full response from the collector replaces the window
+   set and drops windows it no longer reports; partial updates touch only
+   the window they name; a replaced generation's reading is discarded; collection never
+   redeems a credit, refreshes a token, or writes the auth store.
+6. **Usage state is client-visible on its own** (Section [5.14](../plan.md#514-client-synchronization-and-conversations)), reaching
+   clients through the revision and heartbeat path without waiting for task
+   activity; how an append advances the revision is #1145's decision.
+7. **A new wave 10, Subscription Operations, lands before the 1B.1 exit, and
+   the initiative view moves to wave 11.** Revision 74 rejected a new wave
+   because it "renumbers the table for one cluster"; what changed is that
+   this is not one deferral cluster but a feature across four lanes with its
+   own contract chain, two spike gates, and an exit proof, none of which was
+   in the queue when revision 74 was decided. Rejected: folding it into wave
+   9 (already split-eligible on chain length, and its collectors wait on
+   wave-9 units #979, #406, and #866); and the initiative-view wave (shares
+   nothing with this work). Cost accepted: the 1B.1 exit and 1B.2 slip one
+   wave. The owner reads repeated manual account moves as the signal routing
+   should absorb (revision 73's note), and chose observation before
+   automation because reliable readings are its prerequisite.
+8. **The Claude probe floor is an open question, not a settled limit.** T3
+   Code (`fd7ee2c3`) reads Claude usage through the Agent SDK's usage control
+   request on an idle query and from streamed rate-limit events, and reads
+   Codex usage through the app-server's `account/rateLimits/read` and its
+   `updated` notification; CLIProxyAPI (`2044a01`) observes both providers'
+   rate-limit headers and events passively, keeps each as a replaced snapshot,
+   and reaches the providers' direct usage endpoints only through its own
+   token store, which Freeside does not have. Unproven for Freeside: the
+   setup-token credential, the pinned CLI builds, and the access-only
+   snapshot. Two usage spikes settle it; #866 keeps its refresh-safety scope.
+
+(Owner decision of 2026-10-02;
+[decision note](../../devlog/2026-10-02-1819-subscription-usage-visibility.md).
+Implementation units go under a Subscription Usage Visibility feature tracker;
+selection units stay under #1616.)

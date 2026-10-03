@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 77
+revision: 78
 status: active
 updated: 2026-10-02
 ---
@@ -4657,9 +4657,10 @@ a futile re-review of the unchanged head. Wave 6 replaced the earlier
 clean-only publication check with this derivation, which the #525 readiness
 derivation carries to the forge.
 
-Human-facing adjudication always leads with a recommended route and why. Then
-come assumptions, repository-rule citations, viable alternatives with their
-consequences, and a small set of gating questions. A bare "what should I do?"
+Human-facing adjudication always carries a recommended route and why, then
+assumptions, repository-rule citations, viable alternatives with their
+consequences, and a small set of gating questions. Section [9](#9-comprehension) sets where the
+card shows each (revision 78). A bare "what should I do?"
 interruption is defective. The recommendation is a labeled model proposal.
 Bindings, containment verdicts, and cited instruction text are daemon facts in a
 separate register (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)).
@@ -4975,9 +4976,10 @@ below governs which layers each type carries:
    recommendation renders as a card fact. An `agent_judgment` recommendation
    renders as a labeled proposal. A `project_policy` recommendation renders
    citing its exact policy key and digest. A card that carries a recommendation
-   leads with it and its reason, ahead of secondary actions and evidence. The
-   recommendation-led composition specified for `finding_adjudication` below
-   generalizes to every type that carries a recommendation.
+   leads with it and its reason, ahead of secondary actions and evidence.
+   `finding_adjudication` is the one exception (revision 78): its finding
+   cards lead, and the item's recommendation sits with the batch action below
+   them (the per-item-type table).
 2. **The summary**: what happened, why, and what remains open, with uncertainty
    preserved. It is absorbable in seconds. It is a labeled agent claim and is
    present only where the card concerns agent work. A purely mechanical card
@@ -4986,6 +4988,22 @@ below governs which layers each type carries:
    precedes any long-form agent text.
 4. **Drill-down**: full artifacts, full specifications and diffs, and
    transcript pointers (Section [8](#8-observability-and-optimization-telemetry)).
+
+**Decision-first order on four card types (revision 78).** On
+`agent_question`, `ready_for_final_review`, `review_dispute`, and
+`finding_adjudication`, the layer 1 facts split into two groups:
+
+- **Verdicts, exceptions, and decision restrictions stay visible ahead of the
+  actions.** A stale or base-advanced state, a degraded or waived result, a
+  missing decision capability, an action's consequence, and a commit-plan
+  notice never fold into a disclosure.
+- **Routine technical coordinates may fold into a named disclosure, which may
+  sit below the actions.** These are the run, round, and binding identifiers
+  and digests that locate the decision without changing it.
+
+A group that mixes the two is split, never folded whole. Every folded fact
+stays reachable from the card by pointer, keyboard, touch, and VoiceOver.
+Every other item type keeps all its layer 1 facts ahead of its actions.
 
 A client renders only the requested decisions it can faithfully collect and
 execute. An action outside the client's capability is omitted from the action
@@ -5014,12 +5032,12 @@ Actions and lifecycle live in Section [4](#4-the-attention-model); presentation 
 | --- | --- | --- |
 | `spec_approval` | The ask and a plan-altitude summary: intent, then key questions and decisions. A revision leads with the diff-from-last-reviewed summary and claimed addressals mapped to prior comments. For a task bound to an issue: that approving posts to the issue, with the public plan or a note that only the daemon's notice will post. | Full specification and full diff. |
 | `review_diminishing_returns` | Daemon facts: rounds, finding-rate trend, diff growth, cost so far; the drift verdict and reversal list when the item carries one. Agent claim: what remains. | Per-finding list. |
-| `review_dispute` | The disputed finding with both positions side by side. Dissent is the content; it is never summarized away. | Code context and the full thread. |
-| `finding_adjudication` | The recommended route and why, as a labeled proposal; the finding and the daemon's binding and containment facts in a separate register. | Assumptions, cited repository instructions, alternatives with consequences, gating questions, then the full artifact and code context. |
+| `review_dispute` | The disputed finding with both positions side by side when the snapshot carries both. Dissent is the content; it is never summarized away. When the snapshot carries one claim (revision 78), the card leads with that claim and its Unverified label and shows no second position. It never implies an argument the snapshot lacks, and Approve keeps its Section [4](#4-the-attention-model) meaning. | Code context and the full thread. |
+| `finding_adjudication` | One card per finding (revision 78). Each card shows together the finding's exact message, its proposed route, and the route's producer label; the message and the route keep their separate daemon and model registers. Below the cards, the batch action Accept all dispositions carries the item's recommendation in its source register and states its scope: every proposed route in the bound batch. | In each finding card's own disclosure: that finding's rationale and its binding and containment facts, then its assumptions, cited repository instructions, alternatives with consequences, and gating questions. Every rationale and fact stays reachable there. Then the full artifact and code context. |
 | `execution_failure` | Daemon facts: failure class and failing step. Labeled diagnostic claim: probable cause. | Log excerpt and transcript pointer. |
 | `agent_question` | The question as a labeled agent claim, self-contained: what is blocked and any enumerated options. Answering never requires the transcript. | The agent's supporting context. |
 | `publish_blocked` | The trust rule that failed (daemon fact). | The failing artifact or scan detail. |
-| `ready_for_final_review` | The ask, a labeled change summary, and daemon verification verdicts with diff stats. | Digested review history, then the evidence packet, and the PR link last (navigation, not resolution). |
+| `ready_for_final_review` | The ask, a labeled change summary, and daemon verification verdicts with diff stats. Then View PR, when the client supports it (revision 78). View PR is navigation: it never resolves the item, and capability filtering still decides whether it renders. | Digested review history, then the evidence packet and the routine bindings. |
 | `task_proposal` | One line per candidate: intent plus expected cost and scope facts. | Full proposal artifact; “start with changes” shows the revised-digest diff. |
 | `effect_proposal` | The requested effect as a daemon fact from the validated artifact (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)): kind, daemon-resolved target, and bounded parameters. Agent cost, safety, and scope assertions are labeled claims, never merged into the fact line. | Full proposal artifact; “approve with changes” shows the revised-digest diff. |
 | `system_health` | The diagnostic fact and the unattended capability it impairs. | Doctor output. |
@@ -5042,7 +5060,11 @@ question or a proposal's intent line. It renders as a labeled claim, never as
 unlabeled authoritative text.
 
 In Phase 1 the summarizer is the stage agent whose work the card concerns,
-labeled with its `producer_invocation_id`. An independent invocation would
+labeled with its `producer_invocation_id`. On the four card types that take
+the decision-first order under Layering (revision 78), a summary's or leading
+claim's invocation ID and original rendering may sit in source details beside
+it, reachable by pointer, keyboard, touch, and VoiceOver; the producer or
+Unverified label stays next to the prose. An independent invocation would
 still be `producer_class: agent`. So independence buys no trust-class upgrade,
 only resistance to self-serving framing. Composition bounds that risk instead.
 A summary may not assert a verifiable fact except by citing the daemon fact or
@@ -5993,82 +6015,52 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 77 ("Subscription Usage Visibility Before the 1B.1 Exit"):
+Revision 78 ("Decision-First Presentation on Four Card Types"):
 
-1. **Basic usage visibility moves from Phase 3 into 1B.1.** The operator sees,
-   per identity and usage pool, how much of each allowance window is used,
-   when it resets, and when that was observed, and chooses an agent on that
-   pool explicitly (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation; Section [11](#11-roadmap-build-order-and-coordination), wave 10).
-   Rejected: leaving it in Phase 3 (the operator balances accounts by hand
-   today with no reading at all, and Phase 3's evidence-informed routing
-   needs these observations before it can act on them); and automatic
-   balancing now (an unproven reading driving a switch is the silent fallback
-   Section [4](#4-the-attention-model) forbids).
-2. **A usage observation attaches to the usage pool and keeps five readings
-   distinct.** A pool names one of its enrollments as its collector (the
-   first by default, changed only by explicit operator reassignment, never
-   by silent failover); the collector alone supplies the pool's window
-   readings and refresh status, each enrollment may record its own
-   availability answer, and one reading per provider window sits beneath
-   them, so an unsupported provider needs no synthetic window and two
-   enrollments never alternate one status or one window set.
-   Credential expiry, usage reset,
-   billing renewal, reset credit, and run consumption never share a
-   "remaining" or "reset" field, and unknown stays unknown (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)). Rejected: keying by identity (two
-   enrollments on one subscription would show one allowance twice); and one
-   "resets at" field (a credential that expires tomorrow and a window that
-   renews in an hour would be indistinguishable); and reconciling
-   per-enrollment snapshots when two enrollments on one pool both collect (a
-   merge rule no spike has evidence for, and the source of window flicker).
-3. **Observation stays observation.** A reading informs the account usage
-   view, the facts beside the agent choices, and proposals; the operator's
-   recorded lineup line or task line is what admits an agent, and admission
-   never reads a usage observation. A selection whose pool a reading shows
-   as exhausted still admits; the provider's own refusal fails that attempt
-   as a quota failure and recovers through #869's retry card with the
-   reading shown beside it; no usage-specific failure surface is added.
-4. **Allowance is a fourth telemetry quantity** beside billable cost,
-   reported usage, and quota consumed, joined by pool and time and never
-   derived from them (Section [8](#8-observability-and-optimization-telemetry)). It counts usage consumed outside Freeside.
-5. **Collection and refresh rules** (Section [10](#10-operations-and-onboarding)): each provider's path is a
-   pinned-build empirical contract settled by its usage spike; an unobservable
-   provider reports `unsupported`; a reading past its reset shows as stale,
-   never replenished; failed or throttled refreshes keep the last reading and
-   back off and never collect through another enrollment instead; concurrent
-   refreshes join; a full response from the collector replaces the window
-   set and drops windows it no longer reports; partial updates touch only
-   the window they name; a replaced generation's reading is discarded; collection never
-   redeems a credit, refreshes a token, or writes the auth store.
-6. **Usage state is client-visible on its own** (Section [5.14](#514-client-synchronization-and-conversations)), reaching
-   clients through the revision and heartbeat path without waiting for task
-   activity; how an append advances the revision is #1145's decision.
-7. **A new wave 10, Subscription Operations, lands before the 1B.1 exit, and
-   the initiative view moves to wave 11.** Revision 74 rejected a new wave
-   because it "renumbers the table for one cluster"; what changed is that
-   this is not one deferral cluster but a feature across four lanes with its
-   own contract chain, two spike gates, and an exit proof, none of which was
-   in the queue when revision 74 was decided. Rejected: folding it into wave
-   9 (already split-eligible on chain length, and its collectors wait on
-   wave-9 units #979, #406, and #866); and the initiative-view wave (shares
-   nothing with this work). Cost accepted: the 1B.1 exit and 1B.2 slip one
-   wave. The owner reads repeated manual account moves as the signal routing
-   should absorb (revision 73's note), and chose observation before
-   automation because reliable readings are its prerequisite.
-8. **The Claude probe floor is an open question, not a settled limit.** T3
-   Code (`fd7ee2c3`) reads Claude usage through the Agent SDK's usage control
-   request on an idle query and from streamed rate-limit events, and reads
-   Codex usage through the app-server's `account/rateLimits/read` and its
-   `updated` notification; CLIProxyAPI (`2044a01`) observes both providers'
-   rate-limit headers and events passively, keeps each as a replaced snapshot,
-   and reaches the providers' direct usage endpoints only through its own
-   token store, which Freeside does not have. Unproven for Freeside: the
-   setup-token credential, the pinned CLI builds, and the access-only
-   snapshot. Two usage spikes settle it; #866 keeps its refresh-safety scope.
+1. **Section [9](#9-comprehension) now matches the visual hierarchy the owner approved.** The
+   approved design contradicted Section [9](#9-comprehension) in five places, so the client work
+   could not start until the plan said what it builds. The changes cover
+   `agent_question`, `ready_for_final_review`, `review_dispute`, and
+   `finding_adjudication` only; every other item type keeps its presentation.
+   The trust rules, the daemon contract, and the action set are unchanged.
+   Rejected: building the approved cards against the old text (the plan
+   would contradict the shipped cards, and no one could tell a deliberate
+   test change from a regression); and restyling every item type (the owner
+   reviewed these four cards, not the rest).
+2. **Routine coordinates may fold below the decision.** On the four card
+   types, verdicts, exceptions, and decision restrictions stay ahead of the
+   actions, and run, round, and binding identifiers may fold into a named
+   disclosure. No stale, degraded, waived, capability, consequence, or
+   commit-plan warning folds, and a mixed group is split, never folded whole
+   (Section [9](#9-comprehension), Layering).
+3. **A finding card shows its message, proposed route, and producer label
+   together.** The rationale and the binding and containment facts sit in
+   that card's own disclosure, and Accept all dispositions states that it
+   applies every proposed route in the bound batch. The daemon and model
+   registers stay distinct, and no per-finding approval is added. Section [7](#7-review-policy)
+   keeps the required parts of an adjudication and leaves their placement to
+   Section [9](#9-comprehension). This answers #1141's governing-record question: the owner chose
+   to show the finding message, so Section [9](#9-comprehension) is the record that changes.
+   #1107 row 01's budget is unchanged: the action region stays within 520pt
+   of the card top at a 560pt card and `.large`. If the approved card cannot
+   meet it with realistic messages, the measurements go to the owner through
+   #1141; no agent raises the budget.
+4. **View PR follows the verdict and the summary on the final-review card.**
+   It comes ahead of review history, evidence, and bindings when the client
+   supports it. It stays navigation and never resolves the item.
+5. **A summary's invocation ID may sit in source details.** On the four card
+   types the producer or Unverified label stays beside the prose, and the
+   invocation ID and original rendering stay reachable beside the claim
+   (Section [9](#9-comprehension), Summary Provenance).
+6. **A dispute with one claim leads with that claim.** The snapshot sometimes
+   carries only one position. The card then shows that claim with its
+   Unverified label and no second position, and shows both when both exist.
+   It never implies an argument the snapshot lacks.
 
-(Owner decision of 2026-10-02;
-[decision note](../devlog/2026-10-02-1819-subscription-usage-visibility.md).
-Implementation units go under a Subscription Usage Visibility feature tracker;
-selection units stay under #1616.)
+(Owner decision of 2026-10-02, decisions D03 and D06 to D09 of the
+[visual audit handoff](design/visual-audit-2026-10-02/README.md);
+[decision note](../devlog/2026-10-02-2249-presentation-hierarchy-rules.md).
+The client work is #1732 and #1033.)
 
 ## 14. Risks
 
