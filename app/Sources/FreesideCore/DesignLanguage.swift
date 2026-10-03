@@ -453,6 +453,66 @@ struct KeywordLabel: View {
     }
 }
 
+/// The keyword label for agent prose the daemon has not checked: the label,
+/// the visible "(unverified)" register, and an info button that explains the
+/// register on demand (visual audit D03). The register stays in the label so
+/// agent prose never reads as a fact; only the sentence explaining it moves
+/// behind the button.
+///
+/// The button opens a popover and does nothing else, so it can sit beside a
+/// decision without triggering one, and it is a real `Button` so the keyboard
+/// and VoiceOver reach it without hover. `rendersInteractiveControls` false
+/// draws the same glyph without the button, for a surface rendered offscreen.
+struct UnverifiedLabel: View {
+    static let explanation = "Written by the agent, not checked by the daemon."
+
+    let text: String
+    var rendersInteractiveControls = true
+
+    @State private var showsExplanation = false
+
+    var body: some View {
+        // The last baseline, so a label that wraps keeps the button after its
+        // final word rather than beside its first line.
+        HStack(alignment: .lastTextBaseline, spacing: 6) {
+            KeywordLabel(text: "\(text) (unverified)")
+            if rendersInteractiveControls {
+                Button {
+                    showsExplanation = true
+                } label: {
+                    glyph
+                        // A touch target larger than the glyph, without
+                        // growing the label's line.
+                        .padding(12)
+                        .contentShape(Rectangle())
+                        .padding(-12)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("About unverified content")
+                .popover(isPresented: $showsExplanation) {
+                    Text(Self.explanation)
+                        .font(FreesideFont.callout)
+                        .foregroundStyle(Color.ink)
+                        .frame(maxWidth: 280, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(12)
+                        // A phone keeps the popover anchored to the label
+                        // rather than promoting one sentence to a sheet.
+                        .presentationCompactAdaptation(.popover)
+                }
+            } else {
+                glyph.accessibilityHidden(true)
+            }
+        }
+    }
+
+    private var glyph: some View {
+        Image(systemName: "info.circle")
+            .font(FreesideFont.keyword)
+            .foregroundStyle(Color.inkDim)
+    }
+}
+
 /// The one folded section: a disclosure whose label is a keyword plus an
 /// optional trailing mono summary (a count or the newest time), so a closed
 /// section still says what it holds. The caller owns `isExpanded`, which is

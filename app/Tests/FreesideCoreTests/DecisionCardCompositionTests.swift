@@ -185,6 +185,21 @@ import Testing
         }
     }
 
+    /// Visual audit D03: the four audited card types explain their
+    /// unverified label on demand, and every other type keeps the sentence
+    /// under each agent-written section, so those cards stay unchanged.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func unverifiedExplanationIsOnDemandOnlyOnTheAuditedCards(
+        type: Components.Schemas.AttentionType
+    ) {
+        let audited: [Components.Schemas.AttentionType] = [
+            .agent_question, .ready_for_final_review, .review_dispute, .finding_adjudication,
+        ]
+        #expect(
+            DecisionCardComposition.unverifiedExplanation(for: type)
+                == (audited.contains(type) ? .onDemand : .sentence))
+    }
+
     @Test func reservedSummariesNeverRenderAsGenericClaims() throws {
         let item = AttentionFixtures.fixture(type: .ready_for_final_review).item
         let composition = DecisionCardComposition.forType(.ready_for_final_review)

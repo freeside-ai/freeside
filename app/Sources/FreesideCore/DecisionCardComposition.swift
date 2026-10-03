@@ -117,6 +117,33 @@ struct DecisionCardComposition: Equatable {
         return !Self.reasonIsAgentSummary(item._type) || summaries(from: item.agent_claims).isEmpty
     }
 
+    /// How a card explains its unverified register. Every agent-written
+    /// section keeps a visible "(unverified)" label either way; the choice is
+    /// only where the sentence explaining the label lives.
+    enum UnverifiedExplanation: Equatable {
+        /// The sentence repeats under each agent-written section's title.
+        case sentence
+        /// The label carries an info button that opens the sentence.
+        case onDemand
+    }
+
+    /// The visual audit's D03 moves the explanation on demand on the four
+    /// card types the audit approved it for; every other type keeps the
+    /// repeated sentence. The switch is exhaustive so a new type has to
+    /// answer the question.
+    static func unverifiedExplanation(
+        for type: Components.Schemas.AttentionType
+    ) -> UnverifiedExplanation {
+        switch type {
+        case .agent_question, .ready_for_final_review, .review_dispute, .finding_adjudication:
+            return .onDemand
+        case .spec_approval, .execution_failure, .review_diminishing_returns,
+            .review_contradiction, .review_configuration, .publish_blocked, .task_proposal,
+            .effect_proposal, .system_health, .blocked:
+            return .sentence
+        }
+    }
+
     static let sharedModuleSet = DecisionCardModule.allCases
 
     /// Every composition places `.facts` ahead of `actionInsertionIndex`: the
