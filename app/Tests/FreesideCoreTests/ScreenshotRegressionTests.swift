@@ -689,13 +689,14 @@
                 if [.agent_question, .review_dispute, .ready_for_final_review].contains(
                     snapshot.item._type)
                 {
-                    // The decision-first cards fold their run coordinates and
-                    // the recorded reason; this pins what the folds hold.
+                    // The decision-first cards fold their run coordinates,
+                    // the recorded reason, and the final review's yield; this
+                    // pins what the folds hold.
                     let openDetail = DecisionDetailView(
                         store: store,
                         itemID: snapshot.item.id,
                         expandedDisclosures: Set(
-                            [.runDetails, .recordedContext]
+                            [.runDetails, .recordedContext, .reviewYield]
                                 + snapshot.item.agent_claims.map { .claimSource($0) }),
                         graphics: graphics,
                         loadsAttachments: false,

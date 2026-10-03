@@ -106,9 +106,11 @@ import Testing
     }
 
     @Test func fourSpecializedCardsAreOnlyModuleOrderings() throws {
+        // Plan §9 revision 78 (visual audit D07): the diff joins the verdict
+        // ahead of the summary, and the review yield follows the actions.
         #expect(
             DecisionCardComposition.forType(.ready_for_final_review).modules == [
-                .recommendation, .checklist, .summary, .factBlock, .yieldChart, .facts, .claims,
+                .recommendation, .checklist, .facts, .summary, .factBlock, .yieldChart, .claims,
                 .evidence, .details,
             ])
         #expect(
@@ -128,11 +130,16 @@ import Testing
         #expect(
             !DecisionCardComposition.forType(.review_dispute).modules.contains(.recommendation))
         let ready = DecisionCardComposition.forType(.ready_for_final_review)
-        #expect(ready.actionInsertionIndex == ready.modules.firstIndex(of: .claims))
+        // Revision 78 (D07): the review yield opens on demand below the
+        // actions, and View PR follows the summary instead of closing the
+        // card.
+        #expect(ready.actionInsertionIndex == ready.modules.firstIndex(of: .yieldChart))
         #expect(try #require(ready.modules.firstIndex(of: .summary)) < ready.actionInsertionIndex)
         #expect(
             try #require(ready.modules.firstIndex(of: .evidence)) < #require(ready.modules.firstIndex(of: .details)))
-        #expect(ready.reviewingActionInsertionIndex == ready.modules.firstIndex(of: .details))
+        #expect(
+            try ready.reviewingActionInsertionIndex == #require(
+                ready.modules.firstIndex(of: .summary)) + 1)
         #expect(
             DecisionCardComposition.forType(.execution_failure)
                 .reviewingActionInsertionIndex == nil)
@@ -278,17 +285,35 @@ import Testing
         #expect(DecisionCardComposition.reasonPlacement(for: type) == expected)
     }
 
-    /// Visual audit D06: the question card separates its agent sections by
-    /// spacing and bounds only its options; every other type keeps the
-    /// dashed card around agent prose.
+    /// Visual audit D06 and D07: the question card bounds only its options
+    /// and the final review only the daemon's checklist, so both separate
+    /// their agent sections by spacing; every other type keeps the dashed
+    /// card around agent prose.
     @Test(arguments: Components.Schemas.AttentionType.allCases)
     func agentSectionsAreSpacedOnlyOnTheApprovedCards(
         type: Components.Schemas.AttentionType
     ) {
-        let spaced: [Components.Schemas.AttentionType] = [.agent_question]
+        let spaced: [Components.Schemas.AttentionType] = [
+            .agent_question, .ready_for_final_review,
+        ]
         #expect(
             DecisionCardComposition.agentSectionFrame(for: type)
                 == (spaced.contains(type) ? .spaced : .dashedCard))
+    }
+
+    /// Visual audit D07: View PR is the final review's filled button, and a
+    /// card never shows two, so it yields to a recommendation block.
+    @Test func viewPRIsFilledUnlessARecommendationHoldsTheFilledButton() {
+        let requested = AttentionFixtures.fixture(type: .ready_for_final_review).item
+            .requested_decision
+        let plain = DecisionActionRanking(requested: requested)
+        #expect(plain.reviewing == .open_pr)
+        #expect(DecisionCardComposition.reviewingActionIsFilled(plain))
+
+        let recommended = DecisionActionRanking(
+            requested: requested, recommendedAction: .return_to_agent)
+        #expect(recommended.reviewing == .open_pr)
+        #expect(!DecisionCardComposition.reviewingActionIsFilled(recommended))
     }
 
     /// Visual audit D06: the agent's own question leads, so the shell's
