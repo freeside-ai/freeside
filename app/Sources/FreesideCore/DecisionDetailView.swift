@@ -816,7 +816,9 @@ struct DecisionDetailView: View {
             if let presentation = graphics.diminishingYield ?? DecisionYieldPresentation(item) {
                 DecisionYieldChartModuleView(
                     presentation: presentation,
-                    showsBars: graphics.diminishingYield != nil)
+                    showsBars: graphics.diminishingYield != nil,
+                    isExpanded: item._type == .ready_for_final_review
+                        ? disclosure(.reviewYield) : nil)
             }
         case .stopCause:
             if let presentation = DecisionStopCausePresentation(item) {
@@ -966,10 +968,6 @@ struct DecisionDetailView: View {
             ForEach(Array(claims.enumerated()), id: \.offset) { _, claim in
                 if let text = claim.text {
                     let presentation = DecisionSummaryPresentation(text)
-                    Text("Source: agent invocation `\(Self.producerInvocationID(claim))`")
-                        .font(FreesideFont.caption)
-                        .foregroundStyle(Color.inkDim)
-                        .textSelection(.enabled)
                     if presentation.isExcerpt {
                         Text("Report excerpt (incomplete)").font(FreesideFont.caption)
                     }
@@ -3226,8 +3224,13 @@ struct DecisionDetailView: View {
 
     @ViewBuilder
     private func reviewingAction(_ item: Components.Schemas.AttentionItem) -> some View {
-        if let reviewing = actionRanking(item).reviewing {
-            actionButton(reviewing, item: item, tone: .secondary)
+        let ranking = actionRanking(item)
+        if let reviewing = ranking.reviewing {
+            actionButton(
+                reviewing,
+                item: item,
+                tone: DecisionCardComposition.reviewingActionIsFilled(ranking)
+                    ? .primary : .secondary)
         }
     }
 

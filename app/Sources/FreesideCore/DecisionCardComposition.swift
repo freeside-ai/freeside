@@ -159,18 +159,18 @@ struct DecisionCardComposition: Equatable {
     /// The visual audit keeps a bounded card for an independent item or
     /// option and separates ordinary sections by spacing, on the surfaces it
     /// approved only. The question card (D06) draws its options as the
-    /// bounded panels, so its agent sections drop their own card. The switch
-    /// is exhaustive so a new type has to answer the question.
+    /// bounded panels, and the final review (D07) keeps its one card for the
+    /// daemon's checklist, so their agent sections drop their own. The
+    /// switch is exhaustive so a new type has to answer the question.
     static func agentSectionFrame(
         for type: Components.Schemas.AttentionType
     ) -> AgentSectionFrame {
         switch type {
-        case .agent_question:
+        case .agent_question, .ready_for_final_review:
             return .spaced
         case .spec_approval, .execution_failure, .review_diminishing_returns, .review_dispute,
             .review_contradiction, .review_configuration, .finding_adjudication,
-            .ready_for_final_review, .publish_blocked, .task_proposal, .effect_proposal,
-            .system_health, .blocked:
+            .publish_blocked, .task_proposal, .effect_proposal, .system_health, .blocked:
             return .dashedCard
         }
     }
@@ -229,6 +229,13 @@ struct DecisionCardComposition: Equatable {
         return reasonPlacement(for: item._type)
     }
 
+    /// Whether a card's own reviewing action draws filled. View PR is the
+    /// final review's supported next step (D07), so it takes the card's one
+    /// filled button unless a recommendation block already holds it.
+    static func reviewingActionIsFilled(_ ranking: DecisionActionRanking) -> Bool {
+        ranking.recommended == nil
+    }
+
     /// Whether the type's `.facts` rows are routine run and binding
     /// coordinates that fold into a closed disclosure (D06, D08). The final
     /// review's only row is its diff, which plan §9 lists with the verdicts,
@@ -257,15 +264,18 @@ struct DecisionCardComposition: Equatable {
     static func forType(_ type: Components.Schemas.AttentionType) -> Self {
         switch type {
         case .ready_for_final_review:
-            // The verdict leads, then the review's shape; the diff's base and
-            // head are audit coordinates, so they sit last before the actions.
+            // Plan §9 (revision 78, audit D07): the verdict and the diff it
+            // was reached on lead, then the change summary, then View PR, so
+            // the supported next step follows what it rests on. Returning the
+            // work sits below any fact block; the review's round-by-round
+            // yield is history, so it follows the actions.
             return .init(
                 modules: [
-                    .recommendation, .checklist, .summary, .factBlock, .yieldChart, .facts,
+                    .recommendation, .checklist, .facts, .summary, .factBlock, .yieldChart,
                     .claims, .evidence, .details,
                 ],
-                actionInsertionIndex: 6,
-                reviewingActionInsertionIndex: 8)
+                actionInsertionIndex: 5,
+                reviewingActionInsertionIndex: 4)
         case .execution_failure:
             return .init(
                 modules: [
@@ -356,6 +366,7 @@ struct DecisionCardComposition: Equatable {
 enum DecisionDisclosure: Hashable {
     case runDetails
     case recordedContext
+    case reviewYield
     /// One claim's source identifiers. Neither a label nor a digest is
     /// unique on its own, and two claims that share both are the same bytes
     /// under the same name, so opening them together loses nothing.
@@ -939,47 +950,72 @@ struct DecisionYieldChartModuleView: View {
     @ScaledMetric(relativeTo: .caption) private var legendSwatch: CGFloat = 8
     let presentation: DecisionYieldPresentation
     var showsBars = true
+    /// When set, the rounds fold into a "Review yield" disclosure in place
+    /// of the module card: the final review reads its verdict first and the
+    /// rounds that led to it on demand (D07).
+    var isExpanded: Binding<Bool>? = nil
 
     var body: some View {
-        DecisionModuleContainer(title: "Review yield") {
-            ForEach(presentation.rounds) { round in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(round.text)
-                        .font(FreesideFont.monoCaption)
-                    if showsBars {
-                        GeometryReader { geometry in
-                            let total = max(
-                                presentation.rounds.map(\.total).max() ?? 1,
-                                1)
-                            HStack(spacing: 0) {
-                                Rectangle()
-                                    .fill(Color.accentBorder)
-                                    .frame(
-                                        width: geometry.size.width
-                                            * CGFloat(round.newFindings) / CGFloat(total))
-                                Rectangle()
-                                    .fill(Color.waxText)
-                                    .frame(
-                                        width: geometry.size.width
-                                            * CGFloat(round.recurringFindings) / CGFloat(total))
-                            }
-                        }
-                        .frame(height: 8)
-                        .clipShape(Capsule())
-                    }
+        if let isExpanded {
+            KeywordDisclosure(keyword: Self.title, isExpanded: isExpanded) {
+                VStack(alignment: .leading, spacing: 8) {
+                    rounds
                 }
+                .font(FreesideFont.callout)
+                .foregroundStyle(Color.ink)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 8)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text(presentation.summary))
             }
-            // The bars carry two fills with no other key; the legend names
-            // them where they render.
-            if showsBars {
-                HStack(spacing: 12) {
-                    legendToken(color: .accentBorder, text: "new")
-                    legendToken(color: .waxText, text: "recurring")
+        } else {
+            DecisionModuleContainer(title: Self.title) {
+                rounds
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(presentation.summary))
+        }
+    }
+
+    private static let title = "Review yield"
+
+    @ViewBuilder
+    private var rounds: some View {
+        ForEach(presentation.rounds) { round in
+            VStack(alignment: .leading, spacing: 4) {
+                Text(round.text)
+                    .font(FreesideFont.monoCaption)
+                if showsBars {
+                    GeometryReader { geometry in
+                        let total = max(
+                            presentation.rounds.map(\.total).max() ?? 1,
+                            1)
+                        HStack(spacing: 0) {
+                            Rectangle()
+                                .fill(Color.accentBorder)
+                                .frame(
+                                    width: geometry.size.width
+                                        * CGFloat(round.newFindings) / CGFloat(total))
+                            Rectangle()
+                                .fill(Color.waxText)
+                                .frame(
+                                    width: geometry.size.width
+                                        * CGFloat(round.recurringFindings) / CGFloat(total))
+                        }
+                    }
+                    .frame(height: 8)
+                    .clipShape(Capsule())
                 }
             }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(presentation.summary))
+        // The bars carry two fills with no other key; the legend names
+        // them where they render.
+        if showsBars {
+            HStack(spacing: 12) {
+                legendToken(color: .accentBorder, text: "new")
+                legendToken(color: .waxText, text: "recurring")
+            }
+        }
     }
 
     private func legendToken(color: Color, text: String) -> some View {
