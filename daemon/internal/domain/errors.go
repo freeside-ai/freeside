@@ -317,6 +317,14 @@ var (
 		"enrollment generation expiry is inconsistent with its auth method")
 	ErrGenerationExpiryInsufficient = errors.New(
 		"enrollment generation token expiry does not cover the attempt deadline plus margin")
+	// ErrGenerationIntegrityMarked classifies the refusal of work that would
+	// start on a generation the credential-integrity probe marked (§5.4
+	// admission rule 4, issue #1624); GenerationIntegrityMarkedError is its
+	// concrete form.
+	ErrGenerationIntegrityMarked = errors.New(
+		"enrollment generation is marked by the credential-integrity probe")
+	ErrInvalidCredentialIntegrityFinding = errors.New(
+		"invalid credential-integrity finding")
 	ErrAgentEncodingVersion = errors.New(
 		"agent document carries an unsupported encoding version")
 	ErrAgentDigestMismatch = errors.New(

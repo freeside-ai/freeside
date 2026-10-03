@@ -206,6 +206,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["RefreshStrategy"] = append(valids["RefreshStrategy"], v.valid)
 	}
 	invalids["RefreshStrategy"] = RefreshStrategy("").valid
+	for _, v := range AllCredentialIntegrityFindings {
+		valids["CredentialIntegrityFinding"] = append(valids["CredentialIntegrityFinding"], v.valid)
+	}
+	invalids["CredentialIntegrityFinding"] = CredentialIntegrityFinding("").valid
 	for _, v := range AllHarnessClientKinds {
 		valids["HarnessClientKind"] = append(valids["HarnessClientKind"], v.valid)
 	}

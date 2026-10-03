@@ -973,6 +973,13 @@ func TestGolden(t *testing.T) {
 		AccountBinding:      identity.AccountBinding,
 		RecordedAt:          ts,
 	}
+	// The credential-integrity probe's mark on that generation (issue #1624):
+	// a record beside the generation, so the generation's own golden above
+	// stays as it was.
+	generationIntegrityMark := domain.GenerationIntegrityMark{
+		EnrollmentID: enrollment.ID, Ordinal: enrollmentGeneration.Ordinal,
+		Finding: domain.CredentialIntegrityTruncation, ObservedAt: ts,
+	}
 	boundLease := mutationLease
 	boundLease.GenerationBinding = &domain.LeaseGenerationBinding{
 		EnrollmentID: enrollment.ID, Generation: enrollmentGeneration.Ordinal,
@@ -1750,6 +1757,7 @@ func TestGolden(t *testing.T) {
 		{"auth_store_read_hold", readHold},
 		{"client_enrollment", enrollment},
 		{"enrollment_generation", enrollmentGeneration},
+		{"generation_integrity_mark", generationIntegrityMark},
 		{"route_fragment", goldenRoute},
 		{"adapter_fragment", goldenAdapter},
 		{"offer_fragment", goldenOffer},
