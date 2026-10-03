@@ -1456,6 +1456,79 @@
                     }
                 }
             }
+            // The task timeline's hold callout (visual audit D02) in the
+            // header it belongs to: a capacity wait beside its no-action
+            // sentence, a hold the operator has to clear, and a hold under a
+            // cancellation fence, whose Stop state takes its own row.
+            let holdCalloutNames = ["Capacity", "Input unavailable", "Stop requested beside capacity"]
+            let holdCalloutHeaders = try holdCalloutNames.map { name in
+                let fixture = HoldPresentationFixtures.make(name)
+                var task = approvalFixture.task
+                task.task = fixture.task
+                let cache = InMemoryCacheStore()
+                try cache.save(
+                    .init(
+                        cursors: .init(
+                            syncEpoch: "hold-epoch", lastFullSnapshotRevision: task.as_of_revision,
+                            highestObservedServerRevision: task.as_of_revision),
+                        attentionItems: fixture.items, runs: fixture.runs, tasks: [task],
+                        taskTimelines: [fixture.history].compactMap { $0 }))
+                let coordinator = SyncCoordinator(
+                    client: APIClientFactory.mock(server: MockServer()), cache: cache)
+                return (
+                    name,
+                    AnyView(
+                        TaskTimelineView(coordinator: coordinator, snapshot: task, onOpenRun: { _ in })
+                            .header(fixture.history))
+                )
+            }
+            for width in [CGFloat(820), CGFloat(390)] {
+                for scheme in [ColorScheme.light, .dark] {
+                    surfaces.append(
+                        Surface(
+                            name: "task-hold-callout-\(Int(width))-\(scheme)",
+                            width: width, colorScheme: scheme, nativeAppearance: true,
+                            view: AnyView(
+                                VStack(alignment: .leading, spacing: 28) {
+                                    ForEach(holdCalloutHeaders, id: \.0) { _, header in
+                                        header
+                                    }
+                                }
+                                .padding(24)
+                                .foregroundStyle(Color.ink)
+                                .background(Color.ground))))
+                }
+            }
+            // Bounded conversation messages (visual audit D04): a short
+            // message, long prose, code-like lines, and a long message with
+            // an attachment, each cut to six lines, then all in full. The
+            // widths are the decision card's conversation column and a phone.
+            let longConversation = AttentionFixtures.longConversation()
+            let longMessageIDs: Set<String> = [
+                AttentionFixtures.longPlainMessageID, AttentionFixtures.longCodeMessageID,
+                AttentionFixtures.longAttachmentMessageID,
+            ]
+            for (state, expanded) in [("collapsed", Set<String>()), ("expanded", longMessageIDs)] {
+                for width in [CGFloat(560), CGFloat(390)] {
+                    for scheme in [ColorScheme.light, .dark] {
+                        surfaces.append(
+                            Surface(
+                                name: "conversation-long-\(state)-\(Int(width))-\(scheme)",
+                                width: width, colorScheme: scheme, nativeAppearance: true,
+                                view: AnyView(
+                                    ConversationView(
+                                        snapshot: longConversation,
+                                        attachments: store.attachments,
+                                        loadsAttachments: false,
+                                        now: screenshotNow,
+                                        rendersInteractiveControls: false,
+                                        initiallyExpandedMessageIDs: expanded
+                                    )
+                                    .padding(16)
+                                    .background(Color.ground))))
+                    }
+                }
+            }
             var failedImplementation = approvalFixture.runs[0]
             failedImplementation.run.outcome = .failed
             failedImplementation.run.lifecycle = .finished

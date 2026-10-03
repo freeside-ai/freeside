@@ -1,12 +1,68 @@
 import FreesideAPI
 import SwiftUI
 
+/// Bounded conversation messages (visual audit D04).
+enum ConversationPresentation {
+    /// The lines a collapsed long body shows.
+    static let collapsedLineLimit = 6
+
+    /// The expanded set after the control under one message is pressed:
+    /// only that message changes.
+    static func toggling(_ messageID: String, in expanded: Set<String>) -> Set<String> {
+        expanded.symmetricDifference([messageID])
+    }
+}
+
+/// Offers its content the height of its probe, so a `ViewThatFits` inside
+/// can ask whether the whole message fits the collapsed line limit. The
+/// answer comes from the layout pass itself, at the real width and text
+/// size, with no measured state to arrive a frame late; a body is bounded
+/// exactly when the limit would cut it, so the control never reveals
+/// nothing. The content keeps whatever height it then needs.
+private struct ProbeBoundedLayout: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        subviews[1].sizeThatFits(bounded(width: proposal.width, subviews))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews[0].place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: nil))
+        subviews[1].place(at: bounds.origin, proposal: bounded(width: bounds.width, subviews))
+    }
+
+    private func bounded(width: CGFloat?, _ subviews: Subviews) -> ProposedViewSize {
+        let probe = subviews[0].sizeThatFits(ProposedViewSize(width: width, height: nil))
+        return ProposedViewSize(width: width, height: probe.height)
+    }
+}
+
 struct ConversationView: View {
     let snapshot: Components.Schemas.ConversationSnapshot
     let attachments: AttachmentLoader
     let loadsAttachments: Bool
     var now = Date.now
     var rendersInteractiveControls = true
+    /// The long messages shown in full, by message id, so a reorder or an
+    /// appended message never moves the state to another message. It lasts
+    /// while the conversation stays on screen and is never saved.
+    @State private var expandedMessageIDs: Set<String>
+
+    /// `initiallyExpandedMessageIDs` lets a screenshot golden draw the
+    /// expanded state; the app always starts with every long body bounded.
+    init(
+        snapshot: Components.Schemas.ConversationSnapshot,
+        attachments: AttachmentLoader,
+        loadsAttachments: Bool,
+        now: Date = .now,
+        rendersInteractiveControls: Bool = true,
+        initiallyExpandedMessageIDs: Set<String> = []
+    ) {
+        self.snapshot = snapshot
+        self.attachments = attachments
+        self.loadsAttachments = loadsAttachments
+        self.now = now
+        self.rendersInteractiveControls = rendersInteractiveControls
+        _expandedMessageIDs = State(initialValue: initiallyExpandedMessageIDs)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -26,11 +82,7 @@ struct ConversationView: View {
                             .font(FreesideFont.caption)
                             .foregroundStyle(Color.inkDim)
                     }
-                    Text(message.body)
-                        .font(FreesideFont.callout)
-                        .foregroundStyle(Color.ink)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
+                    messageBody(message)
                     ForEach(Array(message.attachments.enumerated()), id: \.offset) { index, digest in
                         DecisionDetailView.AttachmentRow(
                             label: "Attachment \(index + 1)",
@@ -73,6 +125,39 @@ struct ConversationView: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .freesideCard()
+    }
+
+    /// The body in full when it fits the collapsed line limit, otherwise
+    /// bounded with the control that expands it in place.
+    private func messageBody(_ message: Components.Schemas.Message) -> some View {
+        let isExpanded = expandedMessageIDs.contains(message.id)
+        return ProbeBoundedLayout {
+            bodyText(message, bounded: true)
+                .hidden()
+                .accessibilityHidden(true)
+            ViewThatFits(in: .vertical) {
+                bodyText(message, bounded: false)
+                VStack(alignment: .leading, spacing: 6) {
+                    bodyText(message, bounded: !isExpanded)
+                    Button(isExpanded ? "Show less" : "Read full message") {
+                        expandedMessageIDs = ConversationPresentation.toggling(
+                            message.id, in: expandedMessageIDs)
+                    }
+                    .buttonStyle(FreesideActionButtonStyle(tone: .tertiary))
+                }
+            }
+        }
+    }
+
+    /// Always the whole body: the line limit bounds what is drawn, never
+    /// the text, so selection and copy are not handed a shortened string.
+    private func bodyText(_ message: Components.Schemas.Message, bounded: Bool) -> some View {
+        Text(message.body)
+            .font(FreesideFont.callout)
+            .foregroundStyle(Color.ink)
+            .lineLimit(bounded ? ConversationPresentation.collapsedLineLimit : nil)
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
     }
 
     private func authorLabel(_ author: Components.Schemas.Author) -> String {

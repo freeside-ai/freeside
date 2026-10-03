@@ -131,6 +131,65 @@ import Testing
         #expect(fixture.position?.status == "Execution Lost")
         #expect(fixture.position?.guidance == "Open task details.")
     }
+
+    @Test func calloutStatesTheRowsRoundAndHoldAndNothingElse() {
+        for name in HoldPresentationFixtures.groups.joined() {
+            for loaded in [true, false] {
+                var fixture = HoldPresentationFixtures.make(name)
+                if !loaded { fixture.runs = [] }
+                let lines = TaskDisplay.rowLines(fixture.task, position: fixture.position)
+                let callout = TaskDisplay.holdCallout(fixture.task, position: fixture.position)
+                let rowHolds = lines.facts.filter {
+                    $0.hasPrefix("Hold: ") || $0.hasPrefix("Last recorded hold: ")
+                }
+                #expect(rowHolds == [callout?.hold].compactMap { $0 }, "\(name), loaded: \(loaded)")
+                if let callout {
+                    // The callout repeats the row's facts and adds none.
+                    let calloutLines = [callout.round, callout.hold].compactMap { $0 }
+                    #expect(calloutLines == lines.facts, "\(name), loaded: \(loaded)")
+                }
+            }
+        }
+        #expect(TaskDisplay.holdCallout(TaskProgressFixtures.make("No position").task, position: nil) == nil)
+    }
+
+    @Test func calloutWordingKeepsEachHoldKindDistinct() throws {
+        let holds: [String: String?] = [
+            "Capacity": "Hold: Waiting for agent capacity",
+            "Capacity without run": "Hold: Waiting for agent capacity",
+            "Approval beside capacity": "Hold: Waiting for agent capacity",
+            "Input unavailable": "Hold: Required input unavailable",
+            "Configuration unavailable": "Hold: Current policy prevents execution",
+            "Unattended operation stopped": "Hold: Unattended operation stopped",
+            "Stop requested beside capacity": "Last recorded hold: Waiting for agent capacity",
+            "Stop failed beside capacity": "Last recorded hold: Waiting for agent capacity",
+            // A stopped or finished task's hold is history, not where it stands.
+            "Stopped beside capacity": nil,
+            "Historical capacity": nil,
+            "Missing cause": nil,
+            "Failed beside capacity": nil,
+        ]
+        #expect(Set(holds.keys) == Set(HoldPresentationFixtures.groups.joined()))
+        for (name, hold) in holds {
+            let fixture = HoldPresentationFixtures.make(name)
+            let callout = TaskDisplay.holdCallout(fixture.task, position: fixture.position)
+            #expect(callout?.hold == hold, "\(name)")
+            if let callout {
+                #expect(callout.round == fixture.position?.heading?.round, "\(name)")
+            }
+        }
+        // The callout is the same for a capacity wait and a hold the operator
+        // must clear; the guidance beside it is what says no action is needed.
+        let capacity = try #require(HoldPresentationFixtures.make("Capacity").position)
+        #expect(capacity.guidance.contains("no action is needed for this wait"))
+        #expect(HoldPresentationFixtures.make("Input unavailable").position?.guidance == "Open task details.")
+        // A hold the loaded run reports reaches the callout even when the
+        // task position carries none.
+        let verification = TaskProgressFixtures.make("Verification")
+        #expect(
+            TaskDisplay.holdCallout(verification.task, position: verification.position)?.hold
+                == "Hold: Verification findings block publication")
+    }
 }
 
 enum HoldPresentationFixtures {

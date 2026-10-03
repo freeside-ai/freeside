@@ -335,10 +335,7 @@ enum TaskDisplay {
             }
             phaseLine = phases.joined(separator: " · ")
             if let round = position.heading?.round { facts.append(round) }
-            if let hold = position.hold, !position.historical {
-                let prefix = suppressesGuidanceForCancellation(task) ? "Last recorded hold" : "Hold"
-                facts.append("\(prefix): \(hold)")
-            }
+            if let hold = holdCallout(task, position: position) { facts.append(hold.hold) }
         }
         if task.cancellation?.value1.state == .confirmed, task.lifecycle == .finished {
             facts.append("Stop Confirmation Recorded")
@@ -346,6 +343,23 @@ enum TaskDisplay {
         return RowLines(
             status: position?.status ?? rowStatus(task), phases: phaseLine, facts: facts,
             guidance: position?.guidance ?? Position.defaultGuidance)
+    }
+
+    /// The task's current hold as the task row and the task timeline's
+    /// callout both state it, so the two cannot drift apart.
+    struct HoldCallout: Equatable {
+        let round: String?
+        /// "Hold: …", or "Last recorded hold: …" under a cancellation fence.
+        let hold: String
+    }
+
+    /// Nil when the row shows no hold: no position, no recorded hold, or a
+    /// historical position, whose hold is a past fact and not where the
+    /// task stands.
+    static func holdCallout(_ task: Components.Schemas.Task, position: Position?) -> HoldCallout? {
+        guard let position, let hold = position.hold, !position.historical else { return nil }
+        let prefix = suppressesGuidanceForCancellation(task) ? "Last recorded hold" : "Hold"
+        return HoldCallout(round: position.heading?.round, hold: "\(prefix): \(hold)")
     }
 
     private static func phasePosition(

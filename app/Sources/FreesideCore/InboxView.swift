@@ -10,16 +10,19 @@ import SwiftUI
 
 /// The attention inbox, scoped to open work by default.
 struct InboxView: View {
-    static func orderingCaption(for scope: InboxStore.Scope) -> String {
-        let open =
-            "Newest first; overdue leads. Priority breaks ties within the past hour, past day, and older."
-        let resolved =
-            "Newest decision first, using creation time when no decision time is available."
-        switch scope {
-        case .open: return open
-        case .resolved: return resolved
-        case .all: return "Open items first. \(open) Resolved items follow. \(resolved)"
-        }
+    /// The count shown beside Inbox: the number the Open segment carried
+    /// before the scope control lost its counts, so it follows the project
+    /// filter as the list does. Absent until the inbox has loaded, when a
+    /// zero would read as an empty inbox.
+    static func openCount(in store: InboxStore) -> Int? {
+        store.loadState == .loaded ? store.count(in: .open) : nil
+    }
+
+    /// The iPhone navigation title, which carries the open count because
+    /// the tab bar has no room for it; macOS shows it in the section
+    /// switcher instead.
+    static func phoneNavigationTitle(openCount: Int?) -> String {
+        openCount.map { "Inbox · \($0)" } ?? "Inbox"
     }
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -77,10 +80,6 @@ struct InboxView: View {
             case .loaded:
                 VStack(spacing: 0) {
                     scopeBar
-                        .padding(.horizontal)
-                        .padding(.bottom, 8)
-
-                    orderingCaption
                         .padding(.horizontal)
                         .padding(.bottom, 8)
 
@@ -168,7 +167,11 @@ struct InboxView: View {
                 }
             }
         }
-        .navigationTitle("Inbox")
+        #if os(iOS)
+            .navigationTitle(Self.phoneNavigationTitle(openCount: Self.openCount(in: store)))
+        #else
+            .navigationTitle("Inbox")
+        #endif
         .task {
             Self.applyLaunchFilters(
                 to: store, scope: launchScope, projectID: launchProjectID)
@@ -215,7 +218,7 @@ struct InboxView: View {
         FreesideSegmentedControl(
             accessibilityLabel: "Scope",
             segments: InboxStore.Scope.allCases.map {
-                .init(value: $0, label: $0.label, count: store.count(in: $0))
+                .init(value: $0, label: $0.label)
             },
             selection: scopeSelection)
     }
@@ -301,37 +304,19 @@ struct InboxView: View {
         #endif
     }
 
-    private var orderingCaption: some View {
-        Text(Self.orderingCaption(for: store.scope))
-            .font(FreesideFont.caption)
-            .foregroundStyle(Color.inkDim)
-            // macOS drops the vertical fixedSize: inside a List it makes the
-            // sidebar column report its full content height as the minimum,
-            // pinning the window tall. iOS keeps it so the multiline caption
-            // takes its intrinsic height instead of truncating when the
-            // surrounding stack is vertically compressed.
-            #if os(iOS)
-                .fixedSize(horizontal: false, vertical: true)
-            #endif
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
     /// The sidebar chrome as the operator sees it on macOS: the section
-    /// switcher, the scope control and urgent chip, the ordering caption,
-    /// the project trigger (its label standing in for the Menu, which
+    /// switcher with the open count, the scope control and urgent chip, the
+    /// project trigger (its label standing in for the Menu, which
     /// ImageRenderer cannot open), and the first rows on the sidebar ground.
     func screenshotSidebar(now: Date) -> some View {
         VStack(spacing: 0) {
             FreesideSegmentedControl(
                 accessibilityLabel: "Section",
-                segments: FreesideRootView.sectionSegments,
+                segments: FreesideRootView.sectionSegments(openCount: Self.openCount(in: store)),
                 selection: .constant(.inbox)
             )
             .padding()
             scopeBar
-                .padding(.horizontal)
-                .padding(.bottom, 8)
-            orderingCaption
                 .padding(.horizontal)
                 .padding(.bottom, 8)
             FreesideMenuTriggerLabel(title: store.projectID ?? "All projects")
@@ -351,12 +336,11 @@ struct InboxView: View {
         .background(Color.sidebarGround)
     }
 
-    /// The project-owned caption and rows without List and Picker, whose
-    /// AppKit-backed controls ImageRenderer cannot draw off-screen.
+    /// The rows without List, whose AppKit-backed control ImageRenderer
+    /// cannot draw off-screen.
     @ViewBuilder
     func screenshotContent(now: Date) -> some View {
         VStack(spacing: 8) {
-            orderingCaption
             ForEach(Array(store.rows.prefix(5)), id: \.item.id) { snapshot in
                 InboxRowView(
                     item: snapshot.item,
@@ -418,9 +402,12 @@ struct InboxRowView: View {
                         rowBadges
                     }
                 }
+                // The summary says what needs attention, so it takes the
+                // serif face and the main ink; the type name above it is the
+                // quiet line (visual audit D01).
                 Text(AttentionDisplay.rowSummary(item))
-                    .font(FreesideFont.subheadline)
-                    .foregroundStyle(Color.inkDim)
+                    .font(FreesideFont.serif(.subheadline))
+                    .foregroundStyle(Color.ink)
                     .lineLimit(2)
                 HStack(spacing: 6) {
                     contextSegment(context.project)
@@ -457,8 +444,8 @@ struct InboxRowView: View {
 
     private var rowTitle: some View {
         Text(AttentionDisplay.title(item._type))
-            .font(FreesideFont.itemTitle)
-            .foregroundStyle(Color.ink)
+            .font(FreesideFont.caption)
+            .foregroundStyle(Color.inkDim)
     }
 
     private var rowBadges: some View {

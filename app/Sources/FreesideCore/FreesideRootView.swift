@@ -2,11 +2,16 @@ import FreesideAPI
 import SwiftUI
 
 public struct FreesideRootView: View {
-    /// The macOS sidebar's section switcher; iOS keeps its tab bar.
-    static let sectionSegments: [FreesideSegmentedControl<LaunchInputs.Screen>.Segment] = [
-        .init(value: .inbox, label: "Inbox"),
-        .init(value: .tasks, label: "Tasks"),
-    ]
+    /// The macOS sidebar's section switcher; iOS keeps its tab bar. The
+    /// Inbox segment carries the open count the scope control used to show.
+    static func sectionSegments(
+        openCount: Int?
+    ) -> [FreesideSegmentedControl<LaunchInputs.Screen>.Segment] {
+        [
+            .init(value: .inbox, label: "Inbox", count: openCount),
+            .init(value: .tasks, label: "Tasks"),
+        ]
+    }
 
     @Environment(\.dynamicTypeSize) private var systemDynamicTypeSize
     @Environment(\.scenePhase) private var scenePhase
@@ -292,7 +297,8 @@ public struct FreesideRootView: View {
                 VStack(spacing: 0) {
                     FreesideSegmentedControl(
                         accessibilityLabel: "Section",
-                        segments: Self.sectionSegments,
+                        segments: Self.sectionSegments(
+                            openCount: InboxView.openCount(in: coordinator.store)),
                         selection: selectedTab
                     )
                     .padding()
