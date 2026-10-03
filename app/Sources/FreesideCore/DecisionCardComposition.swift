@@ -36,6 +36,13 @@ struct DecisionCardComposition: Equatable {
     let modules: [DecisionCardModule]
     let actionInsertionIndex: Int
     let reviewingActionInsertionIndex: Int?
+    /// Whether the agent's claim is this card's own lead content rather
+    /// than support for another module. Such a card draws its leading claims
+    /// module in the card on every platform, and leads with its claims even
+    /// when none carries inline text, so the lead is never empty while a
+    /// claim exists. Elsewhere a claim without text stays supporting
+    /// context.
+    var leadsWithItsClaim = false
 
     /// A claim module leads when it renders above the action region: that is
     /// the whole meaning of prominence here, so it is read from
@@ -63,11 +70,27 @@ struct DecisionCardComposition: Equatable {
             // (plan §9). This is the split the macOS action region already
             // applies, where text claims sit above the actions and attachment
             // claims move to the inspector.
+            if leadsWithItsClaim, !claims.contains(where: { $0.text != nil }) {
+                return leads ? claims : []
+            }
             return claims.filter { ($0.text != nil) == leads }
         }
         return claims.enumerated().compactMap { index, claim in
             leads == (index == prominentClaimIndex) ? claim : nil
         }
+    }
+
+    /// The claims a card that leads with its claim draws in the card itself,
+    /// which every other place a platform lists claims has to leave out so
+    /// the claim renders once. Empty for a card that does not lead with one.
+    func cardLeadClaims(
+        from claims: [Components.Schemas.AgentClaim],
+        prominentClaimIndex: Int?
+    ) -> [Components.Schemas.AgentClaim] {
+        guard leadsWithItsClaim, let lead = modules.firstIndex(of: .claims),
+            claimsAreProminent(at: lead)
+        else { return [] }
+        return self.claims(from: claims, at: lead, prominentClaimIndex: prominentClaimIndex)
     }
 
     func summaries(
@@ -159,16 +182,17 @@ struct DecisionCardComposition: Equatable {
     /// The visual audit keeps a bounded card for an independent item or
     /// option and separates ordinary sections by spacing, on the surfaces it
     /// approved only. The question card (D06) draws its options as the
-    /// bounded panels, and the final review (D07) keeps its one card for the
-    /// daemon's checklist, so their agent sections drop their own. The
+    /// bounded panels, the final review (D07) keeps its one card for the
+    /// daemon's checklist, and the dispute (D08) reads its claim as prose
+    /// beside the actions, so their agent sections drop their own card. The
     /// switch is exhaustive so a new type has to answer the question.
     static func agentSectionFrame(
         for type: Components.Schemas.AttentionType
     ) -> AgentSectionFrame {
         switch type {
-        case .agent_question, .ready_for_final_review:
+        case .agent_question, .ready_for_final_review, .review_dispute:
             return .spaced
-        case .spec_approval, .execution_failure, .review_diminishing_returns, .review_dispute,
+        case .spec_approval, .execution_failure, .review_diminishing_returns,
             .review_contradiction, .review_configuration, .finding_adjudication,
             .publish_blocked, .task_proposal, .effect_proposal, .system_health, .blocked:
             return .dashedCard
@@ -285,12 +309,19 @@ struct DecisionCardComposition: Equatable {
                 actionInsertionIndex: 4,
                 reviewingActionInsertionIndex: nil)
         case .review_dispute:
+            // Plan §9 (revision 78, audit D08): both positions lead when the
+            // snapshot carries both; when it carries one claim, that claim
+            // leads in their place. Either way the dissent sits beside the
+            // actions, ahead of the daemon's facts about the run. Supporting
+            // claims stay below with the summary.
             return .init(
                 modules: [
-                    .comparison, .factBlock, .facts, .summary, .claims, .evidence, .details,
+                    .comparison, .claims, .factBlock, .facts, .summary, .claims, .evidence,
+                    .details,
                 ],
-                actionInsertionIndex: 3,
-                reviewingActionInsertionIndex: nil)
+                actionInsertionIndex: 4,
+                reviewingActionInsertionIndex: nil,
+                leadsWithItsClaim: true)
         case .review_diminishing_returns:
             // Plan §7 "Routing": the card leads with the verdict and the
             // reversal list, so the stop cause sits ahead of the yield chart
