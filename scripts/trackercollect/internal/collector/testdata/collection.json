@@ -54,7 +54,12 @@
         "id": "I_100", "databaseId": 100, "number": 100,
         "title": "Ad hoc tracking", "state": "OPEN",
         "updatedAt": "2026-08-25T09:30:00Z",
-        "body": "## Status\nPending\n\n## Units\n- [ ] #935"
+        "body": "## Status\nPending\n\n## Units\n- [ ] #935",
+        "labels": {
+          "nodes": [{"name": "tracker"}],
+          "pageInfo": {"hasNextPage": false, "endCursor": null}
+        },
+        "milestone": null
       }],
       "pageInfo": {"hasNextPage": false, "endCursor": null}
     }}}
@@ -112,7 +117,8 @@
       "nodes": [{
         "id": "IC_1", "databaseId": 9001,
         "body": "<!-- freeside-work-claim:v1 -->\nClaim: work",
-        "createdAt": "2026-08-25T08:00:00Z", "updatedAt": "2026-08-25T08:00:00Z"
+        "createdAt": "2026-08-25T08:00:00Z", "updatedAt": "2026-08-25T08:00:00Z",
+        "authorAssociation": "MEMBER"
       }],
       "pageInfo": {"hasNextPage": false, "endCursor": null}
     }}}}

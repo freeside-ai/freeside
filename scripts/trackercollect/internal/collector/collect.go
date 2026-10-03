@@ -46,9 +46,20 @@ type graphIssue struct {
 	Timeline   *struct {
 		Nodes *[]graphClosedEvent `json:"nodes"`
 	} `json:"timelineItems"`
-	titlePresent bool
-	statePresent bool
-	bodyPresent  bool
+	// Labels and Milestone are requested only by the open-issue inventory;
+	// validateOpenIssueClassification holds that query to them.
+	Labels    *graphConnection[graphLabel] `json:"labels"`
+	Milestone *struct {
+		Title string `json:"title"`
+	} `json:"milestone"`
+	titlePresent     bool
+	statePresent     bool
+	bodyPresent      bool
+	milestonePresent bool
+}
+
+type graphLabel struct {
+	Name string `json:"name"`
 }
 
 type graphClosedEvent struct {
@@ -102,6 +113,8 @@ type graphComment struct {
 	CreatedAt   string `json:"createdAt"`
 	UpdatedAt   string `json:"updatedAt"`
 	bodyPresent bool
+	// AuthorAssociation is the forge's CommentAuthorAssociation value.
+	AuthorAssociation string `json:"authorAssociation"`
 }
 
 func (issue *graphIssue) UnmarshalJSON(data []byte) error {
@@ -118,6 +131,7 @@ func (issue *graphIssue) UnmarshalJSON(data []byte) error {
 	issue.titlePresent = validStringField(fields, "title")
 	issue.statePresent = validStringField(fields, "state")
 	issue.bodyPresent = validStringField(fields, "body")
+	_, issue.milestonePresent = fields["milestone"]
 	return nil
 }
 
@@ -548,6 +562,45 @@ func validateIssue(issue graphIssue) error {
 	return nil
 }
 
+// validateOpenIssueClassification requires the label connection and the
+// milestone key on an open-inventory node. A null milestone is a real answer
+// (unmilestoned); an omitted one would read every issue as unmilestoned, and
+// an omitted label connection would read every issue as unlabelled.
+func validateOpenIssueClassification(issue graphIssue) error {
+	subject := fmt.Sprintf("issue #%d labels", issue.Number)
+	labels, info, err := requireConnection(subject, issue.Labels)
+	if err != nil {
+		return err
+	}
+	if info.HasNextPage == nil {
+		return fmt.Errorf("%s pageInfo is missing hasNextPage", subject)
+	}
+	for _, label := range labels {
+		if label.Name == "" {
+			return fmt.Errorf("%s contain a label without a name", subject)
+		}
+	}
+	if !issue.milestonePresent {
+		return fmt.Errorf("issue #%d is missing the milestone field", issue.Number)
+	}
+	if issue.Milestone != nil && issue.Milestone.Title == "" {
+		return fmt.Errorf("issue #%d has a milestone without a title", issue.Number)
+	}
+	return nil
+}
+
+func (issue graphIssue) hasLabel(name string) bool {
+	if issue.Labels == nil || issue.Labels.Nodes == nil {
+		return false
+	}
+	for _, label := range *issue.Labels.Nodes {
+		if label.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func validatePullRequest(pr graphPullRequest, requireDraft bool) error {
 	if err := validateForgeObject(fmt.Sprintf("pull request #%d", pr.Number), pr.ID, pr.DatabaseID, pr.Number, pr.UpdatedAt); err != nil {
 		return err
@@ -788,6 +841,9 @@ func (c *collector) fetchOpenIssues(ctx context.Context) ([]graphIssue, error) {
 		}
 		for _, issue := range nodes {
 			if err := validateIssue(issue); err != nil {
+				return nil, err
+			}
+			if err := validateOpenIssueClassification(issue); err != nil {
 				return nil, err
 			}
 			result = append(result, issue)
@@ -1258,6 +1314,9 @@ func (c *collector) fetchIssueComments(ctx context.Context, number int) ([]graph
 			if !comment.bodyPresent {
 				return nil, fmt.Errorf("issue #%d comment %d is missing body", number, comment.DatabaseID)
 			}
+			if comment.AuthorAssociation == "" {
+				return nil, fmt.Errorf("issue #%d comment %d is missing authorAssociation", number, comment.DatabaseID)
+			}
 			result = append(result, comment)
 		}
 		next, more, err := c.nextCursor(fmt.Sprintf("issue #%d comments", number), page, pageInfo)
@@ -1275,7 +1334,7 @@ func (c *collector) fetchIssueComments(ctx context.Context, number int) ([]graph
 func (c *collector) parseMarkerComment(issueNumber int, comment graphComment, openPRs []OpenPullRequest) (MarkerComment, bool) {
 	body := comment.Body
 	marker := MarkerComment{
-		IssueNumber: issueNumber, Body: body, CreatedAt: comment.CreatedAt,
+		IssueNumber: issueNumber, Body: body, CreatedAt: comment.CreatedAt, AuthorAssociation: comment.AuthorAssociation,
 		Stamp: ForgeStamp{NodeID: comment.ID, DatabaseID: comment.DatabaseID, UpdatedAt: comment.UpdatedAt, BodySHA256: bodyHash(body)},
 	}
 	evidence := markdownEvidence(body)

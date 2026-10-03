@@ -163,6 +163,9 @@ type MarkerComment struct {
 	MatchedOpenPullRequests []int      `json:"matched_open_pull_requests"`
 	Stamp                   ForgeStamp `json:"stamp"`
 	CreatedAt               string     `json:"created_at"`
+	// AuthorAssociation is read by the contracts report alone and is left
+	// out of the merged-PR snapshot, whose shape it would otherwise change.
+	AuthorAssociation string `json:"-"`
 }
 
 type Ambiguity struct {

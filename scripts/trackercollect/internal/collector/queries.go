@@ -41,7 +41,11 @@ const openTrackersQuery = `query OpenTrackers($owner: String!, $name: String!, $
 const openIssuesQuery = `query OpenIssues($owner: String!, $name: String!, $pageSize: Int!, $cursor: String) {
   repository(owner: $owner, name: $name) {
     issues(first: $pageSize, after: $cursor, states: OPEN, orderBy: {field: CREATED_AT, direction: ASC}) {
-      nodes { id databaseId number title state updatedAt body }
+      nodes {
+        id databaseId number title state updatedAt body
+        labels(first: 100) { nodes { name } pageInfo { hasNextPage endCursor } }
+        milestone { title }
+      }
       pageInfo { hasNextPage endCursor }
     }
   }
@@ -91,7 +95,7 @@ const issueCommentsQuery = `query IssueComments($owner: String!, $name: String!,
     issue(number: $number) {
 	  id databaseId number updatedAt
       comments(first: $pageSize, after: $cursor) {
-        nodes { id databaseId body createdAt updatedAt }
+        nodes { id databaseId body createdAt updatedAt authorAssociation }
         pageInfo { hasNextPage endCursor }
       }
     }

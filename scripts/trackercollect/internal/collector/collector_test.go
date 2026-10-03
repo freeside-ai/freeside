@@ -619,12 +619,90 @@ func TestMarkerParsingRequiresExactMarkerAndRejectsCollisions(t *testing.T) {
 	}
 }
 
+func TestCarriageReturnLineEndingsParseLikeLineFeeds(t *testing.T) {
+	crlf := func(text string) string { return strings.ReplaceAll(text, "\n", "\r\n") }
+	c := &collector{config: fixtureConfig("")}
+	canonical := "freeside-ai/freeside"
+	prs := []OpenPullRequest{{Number: 400, HeadRef: "feat/work", HeadRepository: RepositoryIdentity{State: "present", NameWithOwner: &canonical}}}
+	claim, keep := c.parseMarkerComment(1, graphComment{DatabaseID: 1, Body: crlf(claimMarker + "\nClaim: feat/work\n")}, prs)
+	if !keep || claim.Kind != "claim" || claim.Branch != "feat/work" || len(claim.MatchedOpenPullRequests) != 1 {
+		t.Fatalf("claim = %#v", claim)
+	}
+	release, keep := c.parseMarkerComment(1, graphComment{DatabaseID: 2, Body: crlf(releaseMarker + "\nRelease: feat/work\nReleases-claim: 1")}, nil)
+	if !keep || release.Kind != "release" || release.ReleasesClaimID != 1 {
+		t.Fatalf("release = %#v", release)
+	}
+	reservation, keep := c.parseMarkerComment(1, graphComment{DatabaseID: 3, Body: crlf("Planning.\n\n" + reservationMarker + "\nPlan: #1\n")}, nil)
+	if !keep || reservation.Kind != "planning-reservation" || reservation.PlanIssueNumber != 1 {
+		t.Fatalf("reservation = %#v", reservation)
+	}
+	if len(c.ambiguities) != 0 {
+		t.Fatalf("ambiguities = %#v", c.ambiguities)
+	}
+	if _, keep := c.parseMarkerComment(1, graphComment{Body: crlf("```\n" + claimMarker + "\nClaim: feat/work\n```")}, nil); keep {
+		t.Fatal("fenced CRLF marker was retained")
+	}
+
+	body := crlf("## Status\nActive\n\n## Units\n- [ ] #17\n- [x] #18 Titled\n\n## Notes\n- [ ] #19")
+	units := extractSections(body, "Units")
+	if len(units) != 1 {
+		t.Fatalf("Units sections = %d", len(units))
+	}
+	entries, invalid := parseCheckboxEntries(units[0])
+	if len(invalid) != 0 || len(entries) != 2 || entries[0].UnitNumber != 17 || entries[1].UnitNumber != 18 || !entries[1].Checked {
+		t.Fatalf("entries=%#v invalid=%v", entries, invalid)
+	}
+	if lines := extractScopeLines(crlf("Intro\nScope: scripts/\nMore")); len(lines) != 1 || lines[0] != "Scope: scripts/" {
+		t.Fatalf("scope lines = %q", lines)
+	}
+}
+
 func TestOmittedConnectionFailsLoud(t *testing.T) {
 	runner := loadFixtureRunner(t)
 	runner.responses["OpenIssues::"] = json.RawMessage(`{"data":{"repository":{}}}`)
 	if _, err := Collect(context.Background(), fixtureConfig(""), runner, fixedClock); err == nil || !strings.Contains(err.Error(), "connection") {
 		t.Fatalf("error = %v, want missing connection", err)
 	}
+}
+
+func TestOmittedOpenIssueLabelsAndMilestoneFailLoud(t *testing.T) {
+	path := []string{"data", "repository", "issues", "nodes"}
+	t.Run("omitted labels connection", func(t *testing.T) {
+		runner := loadFixtureRunner(t)
+		deleteFixtureNodeField(t, runner, "OpenIssues::", path, "labels")
+		if _, err := Collect(context.Background(), fixtureConfig(""), runner, fixedClock); err == nil || !strings.Contains(err.Error(), "issue #100 labels connection") {
+			t.Fatalf("error = %v, want missing labels connection", err)
+		}
+	})
+	t.Run("labels without pageInfo", func(t *testing.T) {
+		runner := loadFixtureRunner(t)
+		setFixtureNodeField(t, runner, "OpenIssues::", path, "labels", map[string]any{"nodes": []any{}})
+		if _, err := Collect(context.Background(), fixtureConfig(""), runner, fixedClock); err == nil || !strings.Contains(err.Error(), "issue #100 labels connection") {
+			t.Fatalf("error = %v, want missing labels pageInfo", err)
+		}
+	})
+	t.Run("omitted milestone", func(t *testing.T) {
+		runner := loadFixtureRunner(t)
+		deleteFixtureNodeField(t, runner, "OpenIssues::", path, "milestone")
+		if _, err := Collect(context.Background(), fixtureConfig(""), runner, fixedClock); err == nil || !strings.Contains(err.Error(), "missing the milestone field") {
+			t.Fatalf("error = %v, want missing milestone", err)
+		}
+	})
+	t.Run("milestone without a title", func(t *testing.T) {
+		runner := loadFixtureRunner(t)
+		setFixtureNodeField(t, runner, "OpenIssues::", path, "milestone", map[string]any{})
+		if _, err := Collect(context.Background(), fixtureConfig(""), runner, fixedClock); err == nil || !strings.Contains(err.Error(), "milestone without a title") {
+			t.Fatalf("error = %v, want untitled milestone", err)
+		}
+	})
+	t.Run("null milestone is unmilestoned", func(t *testing.T) {
+		runner := loadFixtureRunner(t)
+		c := &collector{config: fixtureConfig(""), runner: runner}
+		issues, err := c.fetchOpenIssues(context.Background())
+		if err != nil || len(issues) != 1 || issues[0].Milestone != nil || !issues[0].hasLabel("tracker") {
+			t.Fatalf("issues=%#v error=%v", issues, err)
+		}
+	})
 }
 
 func TestOmittedCommentBodyAndDraftFlagFailLoud(t *testing.T) {
@@ -641,6 +719,22 @@ func TestOmittedCommentBodyAndDraftFlagFailLoud(t *testing.T) {
 		setFixtureNodeField(t, runner, "IssueComments:935:", []string{"data", "repository", "issue", "comments", "nodes"}, "body", nil)
 		c := &collector{config: fixtureConfig(""), runner: runner}
 		if _, err := c.fetchIssueComments(context.Background(), 935); err == nil || !strings.Contains(err.Error(), "missing body") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+	t.Run("omitted comment authorAssociation", func(t *testing.T) {
+		runner := loadFixtureRunner(t)
+		deleteFixtureNodeField(t, runner, "IssueComments:935:", []string{"data", "repository", "issue", "comments", "nodes"}, "authorAssociation")
+		c := &collector{config: fixtureConfig(""), runner: runner}
+		if _, err := c.fetchIssueComments(context.Background(), 935); err == nil || !strings.Contains(err.Error(), "missing authorAssociation") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+	t.Run("null comment authorAssociation", func(t *testing.T) {
+		runner := loadFixtureRunner(t)
+		setFixtureNodeField(t, runner, "IssueComments:935:", []string{"data", "repository", "issue", "comments", "nodes"}, "authorAssociation", nil)
+		c := &collector{config: fixtureConfig(""), runner: runner}
+		if _, err := c.fetchIssueComments(context.Background(), 935); err == nil || !strings.Contains(err.Error(), "missing authorAssociation") {
 			t.Fatalf("error = %v", err)
 		}
 	})
@@ -924,6 +1018,20 @@ func TestFixtureCollectionDrainsPaginationAndIsDeterministic(t *testing.T) {
 		if !strings.HasPrefix(trimmed, "query ") || strings.Contains(strings.ToLower(trimmed), "mutation") {
 			t.Fatalf("fixture runner received non-query document: %s", query)
 		}
+	}
+}
+
+func TestMergedPullRequestModeDoesNotJudgeMarkerAuthors(t *testing.T) {
+	// Only the contracts report weighs a marker's author. This mode keeps
+	// its evidence and exit code whoever posted the marker.
+	runner := loadFixtureRunner(t)
+	setFixtureNodeField(t, runner, "IssueComments:935:", []string{"data", "repository", "issue", "comments", "nodes"}, "authorAssociation", "NONE")
+	snapshot, err := Collect(context.Background(), fixtureConfig(""), runner, fixedClock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.MarkerComments) != 1 || len(snapshot.Ambiguities) != 0 {
+		t.Fatalf("markers=%d ambiguities=%#v", len(snapshot.MarkerComments), snapshot.Ambiguities)
 	}
 }
 

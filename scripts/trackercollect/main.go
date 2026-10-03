@@ -4,13 +4,52 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
 	"github.com/freeside-ai/freeside/scripts/trackercollect/internal/collector"
 )
 
+const contractsUsage = "usage: trackercollect contracts --repo HOST/OWNER/NAME --out DIRECTORY [--cap N]"
+
+// runContracts handles the contracts subcommand. A usage error is a hard
+// failure (exit 1): exit 2 is reserved for ambiguous evidence.
+func runContracts(args []string) int {
+	flags := flag.NewFlagSet("contracts", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var repo string
+	var out string
+	var limit int
+	flags.StringVar(&repo, "repo", "", "repository as HOST/OWNER/NAME")
+	flags.StringVar(&out, "out", "", "output directory")
+	flags.IntVar(&limit, "cap", collector.DefaultContractCap, "concurrent contract implementation cap")
+	parseErr := flags.Parse(args)
+	ref, err := collector.ParseRepository(repo)
+	if parseErr != nil || err != nil || out == "" || limit <= 0 || flags.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, contractsUsage)
+		if parseErr != nil {
+			fmt.Fprintf(os.Stderr, "flags: %v\n", parseErr)
+		} else if err != nil {
+			fmt.Fprintf(os.Stderr, "repository: %v\n", err)
+		}
+		return 1
+	}
+	code, err := collector.RunContracts(context.Background(), collector.ContractsConfig{
+		Repository: ref,
+		OutputDir:  out,
+		Cap:        limit,
+	}, collector.NewGHRunner(ref.Host), time.Now)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "trackercollect: %v\n", err)
+	}
+	return code
+}
+
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "contracts" {
+		os.Exit(runContracts(os.Args[2:]))
+	}
 	var repo string
 	var out string
 	var pr int

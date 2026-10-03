@@ -29,7 +29,7 @@ code identifiers, package names, or API vocabulary, which stay functional
 | publish | GitHub App auth, deterministic identities, reconciliation, EvidencePublisher | daemon/internal/publish | §5.5, §5.9, §5.11, §5.15 |
 | ward | Runner backends, workspace-handoff gate, conformance, operating modes | daemon/internal/ward | §5.7 |
 | saddle | SwiftUI clients (pipeline-exempt) | app/ | §5.14, §11 |
-| spine | A ROLE, not a territory: serialized shared-contract changes (domain, migrations, interfaces, api/) and Wave 2 integration (workflow engine) | daemon/internal/domain, daemon/internal/store, daemon/internal/exec, daemon/internal/engine, daemon/migrations/, api/ | §11 |
+| spine | A ROLE, not a territory: shared-contract changes in the assessed contract order (domain, migrations, interfaces, api/) and Wave 2 integration (workflow engine) | daemon/internal/domain, daemon/internal/store, daemon/internal/exec, daemon/internal/engine, daemon/migrations/, api/ | §11 |
 
 ## Work-Unit Issues
 
@@ -49,7 +49,8 @@ One issue per issue-backed work unit, created from the work-unit template:
 - Dependencies: `starts-after`, `merges-after`, `stacked-on`, and
   `exclusive-with` (see Relationship Types), never untyped issue refs. Record
   an unknown or materially ambiguous relationship as `starts-after` until the
-  spine resolves it.
+  spine resolves it. A contract unit's field also carries the spine's
+  contract assessments (see Relationship Types).
 
 Labels: `lane:*` for ownership area, `kind:*` for type, and `tracker` for an
 issue that tracks other issues. Milestones carry the phase (1A, 1B). Each
@@ -91,11 +92,30 @@ wins. A conflicting claim either predates a contender's recheck and is seen
 there, or is posted later and sees the first claim on its own recheck; the
 total order prevents livelock without making exclusivity transitive.
 
+A contract unit's conflict set is wider, and its claim also arbitrates the
+cap (AGENTS.md, Contract Changes):
+
+- **Unassessed contract units join the set.** The set adds every other open
+  `kind:contract` unit with which the unit has no recorded independence
+  assessment (Relationship Types). An unassessed pair conflicts exactly as a
+  declared `exclusive-with` pair does, for claims and for planning
+  reservations; a pair recorded as independent on both issues does not.
+- **The cap is arbitrated like a conflict.** Before posting, count the
+  contract units with an active claim; when the count already equals the
+  cap, pick another unit. After posting, recount across every open contract
+  unit and order the active contract claims by the same key. Claims past the
+  cap, latest first, lose: each releases and stops. Planning reservations do
+  not count.
+
+In the steps below, "the direct exclusivity set" of a contract unit means
+this wider set, and step 3 includes the cap recount.
+
 To claim a unit:
 
 1. Confirm the issue is authorized (scheduled or fiat-assigned). Page every
    open work-unit issue body to find forward and reverse `exclusive-with`
-   declarations, then fully page comments and claiming PRs for the current
+   declarations and, for a contract unit, the contract assessments, then
+   fully page comments and claiming PRs for the current
    issue and every directly related unit. If any member has an active planning
    reservation, stop until it is replaced by a current plan or an explicit
    release marker. If any has a conflicting active claim, pick another unit.
@@ -165,6 +185,32 @@ session; the session verifies the external state and records the audit
 diff in the ordinary close-keyword PR, adding a decision note only when
 the outcome hits a Decision notes trigger or the mandatory-note list.
 
+### Contract Occupancy Label
+
+An open `kind:contract` issue carries `coord:contract-active` exactly while
+it holds an active work claim. Label filters can't evaluate claim comments
+or PR-backed claims, so the label lets a claimant, the spine, and the owner
+see the contract cap's occupancy in one issue list.
+
+- **It mirrors claim state and decides nothing.** The label is never a
+  claim, an authorization, or a relationship. The claim gate reads claim
+  comments and PRs as above; a label that disagrees with them is wrong, and
+  the claim state stands. It isn't a scheduling status either: milestone
+  presence stays the only one (Deferral Escalation).
+- **Add it on winning arbitration.** The claimant adds the label in the same
+  operation that creates the branch (step 5).
+- **Remove it when the claim ends without a merge.** Whoever posts the
+  release, records the expiry, or closes the PR unmerged removes the label in
+  that operation. A merge closes the issue, so no removal is needed.
+- **A planning reservation never carries it.** A reservation blocks like a
+  claim on a contract unit but doesn't count toward the cap.
+- **Drift is reported, then repaired by hand.**
+  `scripts/trackercollect contracts` (its README) computes each open contract
+  unit's claim state and reports `missing-label` for an active claim without
+  the label and `stale-label` for the label without one. It never writes to
+  the forge. The spine repairs a finding under AGENTS.md's Forge Edits, after
+  re-reading the claim state it rests on.
+
 ## Session Start
 
 1. Read docs/plan.md front matter (revision), resolve wave state through the
@@ -193,14 +239,20 @@ the outcome hits a Decision notes trigger or the mandatory-note list.
      current tracker; in inter-wave state, no current tracker (fiat may still
      proceed; scheduled self-selection may not);
    - open `kind:contract` issues, ignoring a `deferral` issue until it is
-     scheduled or has an active claim, then excluding the unit you are claiming
-     and any unit whose `starts-after` chain includes it (a
-     `starts-after` chain of contract units keeps at most one
-     claimable at a time, so downstream chain members may stay filed
-     without blocking their chain head): among the remainder, if one
-     touches your Affected interfaces/contracts, block on it; when claiming a
-     `kind:contract` unit, block on every other remaining open contract unit
-     (contract work is serialized).
+     scheduled or has an active claim: for work that is not itself a contract
+     unit, if one touches your Affected interfaces/contracts, block on it.
+     When claiming a `kind:contract` unit, the spine's recorded assessments
+     decide instead: among the other open contract units that hold an active
+     claim or planning reservation, block on any that has no recorded
+     independence assessment with your unit, and block when the number with
+     an active claim already equals the cap (the contract conflict set and
+     cap arbitration under Claiming). A `starts-after` edge between contract
+     units is an ordinary prerequisite, resolved in step 4.
+     `scripts/trackercollect contracts` may collect this evidence (each open
+     contract unit's claim state, the trackers listing it, and the active
+     count against the cap); it is optional and replaces none of the claim
+     reads, and an `AMBIGUOUS` entry in its report means the count is not
+     established.
 4. Resolve every typed relationship before starting:
    - verify each `starts-after` prerequisite's PR is merged;
    - record each `merges-after` prerequisite for the handoff and integration
@@ -296,7 +348,11 @@ Plan: #N
 ```
 
 The reservation blocks any implementation claim or scheduled pickup for that
-issue and every direct `exclusive-with` partner. It does not authorize either
+issue and every direct `exclusive-with` partner. On a contract unit it has
+the same reach as a claim: it also blocks the contract units with no recorded
+independence assessment against it (the contract conflict set under
+Claiming), and it blocks no contract unit assessed as independent. It never
+counts toward the contract cap. It does not authorize either
 stage and is not a work claim. Verify the saved reservation and recheck the
 conflict set before editing the contract. If a competing claim or reservation
 appears, release this reservation and coordinate before continuing. On a
@@ -524,6 +580,59 @@ never creates a relationship or authorizes work.
   Example: wave 5 unit #680 was `exclusive-with` #448 and #492 while their
   declared paths overlapped on the Codex review sources.
 
+**Contract assessments.** The `kind:contract` label implies no relationship
+between two contract units. The spine's recorded assessment decides whether
+they may be active together (AGENTS.md, Contract Changes). The record sits in
+both units' Dependencies fields. Each side names the other unit, the
+assessor and date, the issue state or base commit assessed, the verdict, and
+the rationale:
+
+```text
+- Contract assessment, #1600 (spine, 2026-10-05, at `8d834525`): independent.
+  This unit reads nothing #1600 adds, and neither unit adds a migration.
+```
+
+- **A verdict other than independent is the typed relationship it yields,**
+  with the assessment as its rationale: `exclusive-with` for a conflict,
+  `starts-after` for a dependency, `merges-after` for an integration order.
+  An independent pair may also carry `merges-after` when the spine fixes
+  its integration order. A `merges-after` edge alone is not an independence
+  record.
+- **A pair without the record on both issues is unassessed.** It serializes:
+  claims and planning reservations treat it as conflicting, and the spine
+  records it as `starts-after` when it places a unit in the assessed
+  contract order.
+- **Recording independence only relaxes,** so the spine may write it while
+  an endpoint is claimed; a claimant that sees an assessment change between
+  reads repeats its relationship, claim, and reservation reads. The spine
+  withdrawing an independence record whose units are unchanged, or
+  replacing it with a conflict, restricts and follows the `exclusive-with`
+  edit protocol above.
+- **A scope edit withdraws the unit's independence records.** Before saving
+  an edit to a contract unit's Objective, Scope / declared paths, or
+  Affected interfaces/contracts field, check its Dependencies field for
+  independence records. Whoever makes the edit removes every one of them
+  from that issue in the same edit and names the removal in a comment on
+  both issues, so the spine learns of it. A planner, whose stage allows no
+  new comment, names it in its implementation-plan comment or release edit
+  on the assigned issue instead. Each pair is then unassessed and
+  serializes until the spine reassesses it and records the result on both
+  issues again. An edit that touches none of those three fields (a
+  Dependencies change, a tracker projection, the record itself) removes
+  nothing.
+- **That removal is immediate.** It does not wait under the `exclusive-with`
+  edit protocol: the edit has already made the record false, and waiting
+  would leave a false record standing. A verdict the spine withdraws on
+  unchanged scope is still true until withdrawn, which is why that
+  withdrawal waits.
+- **Check the partner's claim state after the removal.** When the partner
+  unit holds an active claim or planning reservation, the edited unit does
+  no work on the changed scope until the spine reassesses, and the editor
+  says so where it names the removal. The removal alone does not stop the
+  partner's work in flight; the spine decides.
+- **The spine reassesses** when a record is removed this way or a recorded
+  assumption changes.
+
 Unknown or materially ambiguous relationships serialize as `starts-after`
 until the spine resolves and records the intended type. Coupled work still
 forms one unit, an explicit relationship chain, or a declared stack; worktree
@@ -557,9 +666,10 @@ own additions to that format.
   - `merges-after` draws as the format's dotted `-.->` edge, because it never
     blocks start.
   - `stacked-on` draws as a labeled arrow, `A -- stacked-on --> B`.
-  - `exclusive-with` isn't drawn. The `contract` class already implies the
-    repo-wide regime among contract units. A non-contract pair gets an
-    **Exclusive:** bullet under Status while both units are open.
+  - `exclusive-with` isn't drawn. A pair that declares it, contract or not,
+    gets an **Exclusive:** bullet under Status while both units are open.
+    The `contract` class marks the classification and implies no relation,
+    and a contract assessment that records independence isn't drawn.
   - When the diagram carries a dotted or `stacked-on` edge, an **Edges:**
     bullet under Status says what each means, because the verbatim legend
     covers only `starts-after`.
@@ -575,7 +685,8 @@ own additions to that format.
   child still based there, or merged with no child yet or with its existing
   child retargeted to the default branch; a base closed unmerged has to
   reopen or have its relationship repaired. The projection leaves out
-  volatile claim and active `exclusive-with` occupancy: as the format says,
+  volatile claim and active `exclusive-with` occupancy, unassessed contract
+  pairs, and the contract cap: as the format says,
   a claim or an open PR doesn't remove a unit, only its merge does, so every
   session queries those live before claiming or starting. Write each entry
   as `#N (lane)`, the lane without its `lane:` prefix, adding `contract` for

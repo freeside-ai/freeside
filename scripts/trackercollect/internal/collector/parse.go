@@ -139,7 +139,10 @@ func markdownEvidence(body string) string {
 			inFence, fenceCharacter, fenceLength = false, 0, 0
 		}
 	}
-	return maskHTMLComments(result.String())
+	// GitHub stores text typed in its web editor with CRLF line endings. The
+	// line patterns end at "\n", so a carriage return before it becomes a
+	// space: the evidence keeps the body's length, which callers index by.
+	return strings.ReplaceAll(maskHTMLComments(result.String()), "\r\n", " \n")
 }
 
 func maskHTMLComments(body string) string {
