@@ -65,16 +65,21 @@ are the only sources of active work state; a note records why, never status.
   relations, stable named work streams, and an integration
   spine/shared-contract domain. Current demonstrated width is four fronts,
   further bounded by each wave tracker, live claims, conflicting changes, review
-  bandwidth, and spine integration capacity.
+  bandwidth, and spine integration capacity. Within that width, at most two
+  contract implementations are active at once (Contract Changes).
 - **Evidence basis:** Waves 3–6 and issue/PR history show recurring
   lane-scoped fronts; PR #801 established the typed relations; Wave 6 tracker
   #835 runs a repo-wide-exclusive contract chain alongside independent
-  fronts and identifies review bandwidth as the binding constraint.
+  fronts and identifies review bandwidth as the binding constraint. Wave 8's
+  seven-link chain serialized links that record no code dependence, so #1709
+  (owner decision, 2026-10-02) narrowed contract serialization to assessed
+  conflicts under a cap of two.
 - **Detailed mechanics:** [`docs/coordination.md`](docs/coordination.md).
 - **Reassess when:** A planned wave needs more than four fronts;
   review or integration queueing persists at four or fewer; work repeatedly
-  crosses lane boundaries; or shared-contract serialization or the spine role
-  materially changes.
+  crosses lane boundaries; owner review hours per merged contract rise while
+  elapsed time from claim to merge does not fall; or shared-contract
+  serialization or the spine role materially changes.
 
 ## Work-Unit Stages
 
@@ -102,9 +107,10 @@ gates in this file.
   planning finish line; the only write allowed then is the recovery-only
   partial-state report that procedure requires, which is neither planning
   output nor authority to continue. While active, the reservation blocks
-  implementation of the issue and its direct `exclusive-with` partners; it is
-  not a claim or an authorization door. No claim, branch, PR, code, or
-  implementation change is allowed.
+  implementation of the issue and its direct `exclusive-with` partners and,
+  on a contract unit, of the contract units a claim there would block
+  (Contract Changes); it is not a claim or an authorization door. No claim,
+  branch, PR, code, or implementation change is allowed.
 - **Required input:** The assigned issue and freshly resolved default-branch
   state; when changing Dependencies, the complete containing-tracker discovery
   and current projection inputs that `docs/coordination.md` requires. Apply
@@ -715,12 +721,13 @@ One issue per issue-backed work unit, created from the work-unit template;
 its Dependencies field takes only the typed relationships `starts-after`,
 `merges-after`, `stacked-on`, and `exclusive-with`, and an unknown or
 materially ambiguous relationship is recorded as `starts-after` until the
-spine resolves it. The template's fields, the labels and milestones, the §11
-three-state wave resolver (open issues carrying the `tracker` label and a
-milestone), and the definition of **scheduled** (a milestone plus a listing
-on the current tracking issue, set together by the spine) are in
-docs/coordination.md §Work-Unit Issues. Every tracker's shape is in
-[`docs/tracker-format.md`](docs/tracker-format.md), with Freeside's
+spine resolves it. A contract unit's field also carries the spine's contract
+assessments (Contract Changes). The template's fields, the labels and
+milestones, the §11 three-state wave resolver (open issues carrying the
+`tracker` label and a milestone), and the definition of **scheduled** (a
+milestone plus a listing on the current tracking issue, set together by the
+spine) are in docs/coordination.md §Work-Unit Issues. Every tracker's shape
+is in [`docs/tracker-format.md`](docs/tracker-format.md), with Freeside's
 additions under Tracking Issues in docs/coordination.md. Fiat (`Plan #N`,
 `Handle #N`) is independent of wave state; the scheduling door exists only
 in active-wave state.
@@ -798,7 +805,9 @@ condition is inert until something else tells you to go look.
   - `exclusive-with`: a declaration on either unit forbids both from being
     active concurrently. Before starting, check the current unit's
     declarations and reverse declarations in every open work-unit issue, then
-    run the cross-unit claim arbitration.
+    run the cross-unit claim arbitration. Between two contract units the
+    relation comes only from the spine's recorded contract assessment
+    (Contract Changes); the `kind:contract` label implies none.
   - Adding an `exclusive-with` declaration: the editor checks both endpoints
     and must not edit while any claim or foreign planning reservation is
     active; a planner may retain only its own unexpired
@@ -827,30 +836,81 @@ condition is inert until something else tells you to go look.
   subject to the other coordination gates. Expected textual merge conflicts
   alone do not require waiting for another PR to merge. Follow Shared-Path
   Coordination in `docs/coordination.md`.
-- **Contract work serializes.** Before you start, whatever shape the work
-  takes, check open `kind:contract` issues: one touching the shared-package
-  surfaces your work will change blocks you. An issue-backed unit names those
-  surfaces in its Affected interfaces/contracts field; a direct assignment
-  derives them from its declared scope. Claiming a `kind:contract` unit
-  additionally blocks on every other open contract unit, excluding the one you
-  are claiming and any whose `starts-after` chain includes it, so a
-  `starts-after` contract chain keeps its head claimable. A
+- **Contract work serializes where it conflicts or is unassessed.** Before
+  you start, whatever shape the work takes, check open `kind:contract`
+  issues. For work that is not itself a contract unit, one touching the
+  shared-package surfaces your work will change blocks you. An issue-backed
+  unit names those surfaces in its Affected interfaces/contracts field; a
+  direct assignment derives them from its declared scope. A
   `deferral`-labelled contract unit counts only once it is scheduled or
-  actively claimed.
+  actively claimed. Between contract units the spine's recorded assessment
+  decides, not surface overlap. Claiming a `kind:contract` unit checks every
+  other open contract unit that holds an active claim or planning
+  reservation:
+  - Any of them that lacks a recorded independence assessment with your unit
+    blocks you (Contract Changes). An unassessed pair is treated as
+    conflicting, so missing evidence never opens concurrency.
+  - The cap blocks you when the number of contract units with an active claim
+    already equals it. After posting your claim, recount: when active
+    contract claims exceed the cap, the latest by `created_at`, then numeric
+    comment ID, releases and stops.
 
 ### Contract Changes
 
 Shared packages (domain types, migrations, the
 StageDriver/ReviewSource/RunnerBackend interfaces, the API schema) change only
-through `kind:contract` units: spine-owned, in their own PR, under a standing
-`exclusive-with` regime against every other contract unit, and merged before
-dependents start. A contract PR carries its required generated consumers and
+through `kind:contract` units: spine-owned, in their own PR, and merged before
+dependents start. `kind:contract` is a classification that invokes this
+contract review and verification; it implies no relationship to any other
+unit. A contract PR carries its required generated consumers and
 mechanical adapters (the cross-component one-work-unit rule under Monorepo
 Scope Discipline); only downstream feature work waits for the merge. Lane work
 never edits shared packages in passing: needing a contract change means filing
 the contract issue, linking it as a dependency, and blocking or switching
 units.
 
+Contract units serialize by assessed conflict, not by label:
+
+- **The spine assesses each pair.** For two contract units, the spine
+  compares intended behavior, affected invariants, consumers, persistence,
+  generated artifacts, and recovery paths. Different files or a clean merge
+  do not prove independence.
+- **Both issues' Dependencies fields carry the record.** A contract
+  assessment names the other unit, the verdict, the rationale, and the issue
+  state or base commit it was assessed against. A conflict is recorded as
+  `exclusive-with`, a dependency as `starts-after`, and an integration order
+  as `merges-after`; a pair with none of these is recorded as independent.
+  The record's form is in `docs/coordination.md` (Relationship Types).
+- **A scope edit withdraws the record.** Before saving an edit to a
+  contract unit's Objective, Scope, or Affected interfaces/contracts, check
+  its Dependencies field for independence records. Whoever makes the edit
+  removes them from that issue in the same edit, at once, and names the
+  removal on both issues. The pair is then unassessed until the spine
+  reassesses and records the result on both issues again; while the partner
+  unit is claimed or reserved, the edited unit does no work on the changed
+  scope until then. The planner's case, and why this removal does not wait
+  as the spine's own withdrawal does, are in `docs/coordination.md`
+  (Relationship Types). The spine also reassesses when a recorded
+  assumption changes.
+- **An unassessed pair stays serialized.** Two contract units may be active
+  together only when both issues record them as independent. Without that
+  record the pair is treated as conflicting, and the spine records an
+  unknown interaction as `starts-after`, the same fallback every unknown
+  relationship takes.
+- **At most two contract implementations are active at once,** within the
+  four-front width. The cap is this number; the spine raises it to three, by
+  changing it here in a reviewed PR, only when all of these hold: a third
+  contract unlocks a cluster nothing active unlocks; a contract PR waits
+  under a day for owner review at two; and all three units are pairwise
+  assessed on their issues. Planning reservations do not count toward it.
+- **A planning reservation has the same reach as a claim.** A reservation on
+  a contract unit blocks claims on the units a claim there would block, and
+  no others.
+- **The authorization doors are unchanged.** Scheduling and fiat remain the
+  only two; an assessment or a free cap slot never authorizes work.
+
 Before a `kind:contract` deferral is scheduled or assigned by fiat, the spine
-inserts it into the serialized contract `starts-after` chain; with no valid
-position it stays dormant. Fiat never bypasses contract ordering.
+gives it a place in the assessed contract order: it records the unit's
+assessment against every scheduled or active contract unit, with
+`starts-after` for any pair it has not assessed. With no valid position the
+unit stays dormant. Fiat never bypasses contract ordering.
