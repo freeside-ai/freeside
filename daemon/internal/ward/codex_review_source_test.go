@@ -100,7 +100,7 @@ func TestCodexProductionReviewPromptAppliesPrecisionFirstAdmissionBar(t *testing
 			t.Fatalf("production review prompt omitted %q:\n%s", want, prompt)
 		}
 	}
-	if codexProductionReviewPromptVersion != "codex-production-review-prompt-v5" {
+	if codexProductionReviewPromptVersion != "codex-production-review-prompt-v6" {
 		t.Fatalf("prompt protocol = %q", codexProductionReviewPromptVersion)
 	}
 }
@@ -180,7 +180,7 @@ func TestCodexProductionReviewPromptPreservesPriorEvidenceCapacity(t *testing.T)
 		t.Fatalf("420-artifact production review prompt = %d bytes, limit %d",
 			len(prompt), maxCodexReviewPromptBytes)
 	}
-	command := codexReviewCommand("/workspace/project", "gpt-5.2-codex", "high", prompt, "base", "head")
+	command := codexReviewCommand("/workspace/project", "gpt-5.2-codex", "high", prompt, "base", "head", "")
 	if got := command[len(command)-1]; got != prompt {
 		t.Fatal("production review prompt was not preserved as its own command argument")
 	}
@@ -1765,6 +1765,22 @@ func TestCodexReviewSourceInspectAbortsInvocationForInvalidPersistedRequest(t *t
 			name: "invalid decoded request",
 			reject: func(journal *fakeCodexReviewJournal, id domain.InvocationID, request exec.ReviewRequest) {
 				request.HeadSHA = ""
+				journal.requests[string(id)] = request
+			},
+		},
+		// A row rewritten to name the head or the base as the evaluated commit
+		// would pass a head review off as a review of the merge.
+		{
+			name: "decoded evaluated commit is the head",
+			reject: func(journal *fakeCodexReviewJournal, id domain.InvocationID, request exec.ReviewRequest) {
+				request.EvaluatedSHA = request.HeadSHA
+				journal.requests[string(id)] = request
+			},
+		},
+		{
+			name: "decoded evaluated commit is the base",
+			reject: func(journal *fakeCodexReviewJournal, id domain.InvocationID, request exec.ReviewRequest) {
+				request.EvaluatedSHA = request.BaseSHA
 				journal.requests[string(id)] = request
 			},
 		},

@@ -264,6 +264,163 @@ func TestBaseAdvanceChangesProofAndEvaluationIdentity(t *testing.T) {
 	}
 }
 
+// TestProspectiveMergeProofCoversOnlyItsMerge is the §6 re-gate for a
+// base-advance re-entry: evidence gathered on the merge of the head into the
+// new base is evidence for that base with that merge, and for nothing else.
+func TestProspectiveMergeProofCoversOnlyItsMerge(t *testing.T) {
+	t.Parallel()
+	verification := readinessResolution(t, "verification", domain.CheckClassCleanVerification, domain.RequirementRequired, true)
+	headOnly := readinessResolution(t, "policy", domain.CheckClassRepoChangePolicy, domain.RequirementRequired, false)
+	passed := func(r domain.RequirementResolution, proof domain.CheckProof, err error) domain.CheckState {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		state, err := domain.NewPassedCheckState(r, proof)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return state
+	}
+	merge := domain.ProspectiveMergeIdentity{BaseSHA: "base-new", HeadSHA: "head", MergeSHA: "merge"}
+	onMerge := func(m domain.ProspectiveMergeIdentity) domain.CheckState {
+		proof, err := domain.NewProspectiveMergeCheckProof(verification, m, *readinessBase(m.BaseSHA), "sha256:recipe")
+		return passed(verification, proof, err)
+	}
+	onHead := func(baseSHA string) domain.CheckState {
+		proof, err := domain.NewCheckProof(verification, "head", readinessBase(baseSHA), "sha256:recipe")
+		return passed(verification, proof, err)
+	}
+	mergeTarget := domain.EvaluationTarget{CandidateHead: "head", Base: readinessBase("base-new"), MergeSHA: "merge"}
+	headTarget := readinessTarget(readinessBase("base-new"))
+	otherMerge := merge
+	otherMerge.MergeSHA = "another-merge"
+
+	for _, test := range []struct {
+		name    string
+		target  domain.EvaluationTarget
+		state   domain.CheckState
+		wantErr error
+	}{
+		{name: "the merge it names", target: mergeTarget, state: onMerge(merge)},
+		{name: "proof bound to the old base", target: mergeTarget, state: onHead("base-old"), wantErr: domain.ErrEvaluationTargetMismatch},
+		{name: "merge proof against the bare head", target: headTarget, state: onMerge(merge), wantErr: domain.ErrEvaluationTargetMismatch},
+		{name: "head proof against a merge target", target: mergeTarget, state: onHead("base-new"), wantErr: domain.ErrEvaluationTargetMismatch},
+		{name: "another merge of the same parents", target: mergeTarget, state: onMerge(otherMerge), wantErr: domain.ErrEvaluationTargetMismatch},
+		{
+			name:    "merge target without a base",
+			target:  domain.EvaluationTarget{CandidateHead: "head", MergeSHA: "merge"},
+			state:   onMerge(merge),
+			wantErr: domain.ErrEmptyField,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			verdict, err := domain.EvaluateReadiness(test.target, []domain.RequirementResolution{verification}, []domain.CheckState{test.state}, nil)
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("EvaluateReadiness() error = %v, want %v", err, test.wantErr)
+			}
+			if test.wantErr == nil && verdict.Class != domain.ReadinessReadyClean {
+				t.Fatalf("class = %q, want ready_clean", verdict.Class)
+			}
+		})
+	}
+
+	// Evidence that depends on the head alone names no merge and still covers
+	// the head of a merge target.
+	headProof, err := domain.NewCheckProof(headOnly, "head", nil, "sha256:policy")
+	if _, err := domain.EvaluateReadiness(mergeTarget, []domain.RequirementResolution{headOnly},
+		[]domain.CheckState{passed(headOnly, headProof, err)}, nil); err != nil {
+		t.Fatalf("head-only proof against a merge target: %v", err)
+	}
+
+	// The merge is part of the proof's and the evaluation's identity.
+	mergeState, headState := onMerge(merge), onHead("base-new")
+	if mergeState.Applicable.Proof.Digest == headState.Applicable.Proof.Digest {
+		t.Fatal("prospective merge did not change the proof digest")
+	}
+	mergeVerdict, err := domain.EvaluateReadiness(mergeTarget, []domain.RequirementResolution{verification}, []domain.CheckState{mergeState}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	headVerdict, err := domain.EvaluateReadiness(headTarget, []domain.RequirementResolution{verification}, []domain.CheckState{headState}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mergeVerdict.EvaluationSetDigest == headVerdict.EvaluationSetDigest {
+		t.Fatal("prospective merge did not change the evaluation digest")
+	}
+}
+
+// TestCheckProofRejectsUnboundMerge enumerates the ways a proof could name a
+// merge it is not bound to.
+func TestCheckProofRejectsUnboundMerge(t *testing.T) {
+	t.Parallel()
+	verification := readinessResolution(t, "verification", domain.CheckClassCleanVerification, domain.RequirementRequired, true)
+	headOnly := readinessResolution(t, "policy", domain.CheckClassRepoChangePolicy, domain.RequirementRequired, false)
+	merge := domain.ProspectiveMergeIdentity{BaseSHA: "base-new", HeadSHA: "head", MergeSHA: "merge"}
+	base := *readinessBase("base-new")
+
+	if _, err := domain.NewProspectiveMergeCheckProof(verification, merge, *readinessBase("base-old"), "sha256:recipe"); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("merge into another base error = %v, want ErrParentKeyMismatch", err)
+	}
+	if _, err := domain.NewProspectiveMergeCheckProof(headOnly, merge, base, "sha256:recipe"); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("merge proof for a head-only requirement error = %v, want ErrParentKeyMismatch", err)
+	}
+	for name, mutate := range map[string]func(*domain.ProspectiveMergeIdentity){
+		"no merge":      func(m *domain.ProspectiveMergeIdentity) { m.MergeSHA = "" },
+		"merge is head": func(m *domain.ProspectiveMergeIdentity) { m.MergeSHA = m.HeadSHA },
+		"merge is base": func(m *domain.ProspectiveMergeIdentity) { m.MergeSHA = m.BaseSHA },
+		"head is base":  func(m *domain.ProspectiveMergeIdentity) { m.HeadSHA = m.BaseSHA },
+	} {
+		invalid := merge
+		mutate(&invalid)
+		if _, err := domain.NewProspectiveMergeCheckProof(verification, invalid, base, "sha256:recipe"); err == nil {
+			t.Fatalf("%s: malformed merge identity accepted", name)
+		}
+	}
+
+	proof, err := domain.NewProspectiveMergeCheckProof(verification, merge, base, "sha256:recipe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded domain.CheckProof
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if err := decoded.Validate(); err != nil || decoded.MergeSHA != merge.MergeSHA {
+		t.Fatalf("round trip = %#v, %v", decoded, err)
+	}
+	// A decoded proof cannot gain, lose, or change its merge and keep its
+	// digest, and cannot carry one that repeats its own head or base.
+	for name, mutate := range map[string]func(*domain.CheckProof){
+		"merge dropped":   func(p *domain.CheckProof) { p.MergeSHA = "" },
+		"merge replaced":  func(p *domain.CheckProof) { p.MergeSHA = "another-merge" },
+		"merge is head":   func(p *domain.CheckProof) { p.MergeSHA = p.CandidateHead },
+		"merge is base":   func(p *domain.CheckProof) { p.MergeSHA = p.Base.BaseSHA },
+		"base dropped":    func(p *domain.CheckProof) { p.Base = nil },
+		"head equal base": func(p *domain.CheckProof) { p.CandidateHead = p.Base.BaseSHA },
+	} {
+		tampered := decoded
+		mutate(&tampered)
+		if err := tampered.Validate(); err == nil {
+			t.Fatalf("%s: tampered proof validated", name)
+		}
+	}
+	headProof, err := domain.NewCheckProof(headOnly, "head", nil, "sha256:policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	headProof.MergeSHA = "merge"
+	if err := headProof.Validate(); !errors.Is(err, domain.ErrEmptyField) {
+		t.Fatalf("merge without base error = %v, want ErrEmptyField", err)
+	}
+}
+
 // TestEvaluateReadinessRejectsUnboundTargets enumerates the target-binding
 // axes: an empty requirement set, an unnamed target, and evidence whose head
 // or base does not cover the evaluated candidate all fail closed instead of

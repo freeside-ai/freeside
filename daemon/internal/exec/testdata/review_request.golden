@@ -1,0 +1,30 @@
+{
+  "run_id": "run-1",
+  "round": 2,
+  "repo": "owner/repo",
+  "repository_id": 42,
+  "base_ref": "main",
+  "base_sha": "base-sha-2",
+  "head_sha": "head-sha-1",
+  "workspace": "/candidate",
+  "verification": {
+    "outcome": "passed",
+    "recipe_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+    "evidence_snapshot_digest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+    "artifact_digests": [
+      "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+    ]
+  },
+  "instructions": {
+    "composition_version": "codex_explicit_bundle_v2",
+    "host_digest": null,
+    "repository_sources": [
+      {
+        "path": "AGENTS.md",
+        "digest": "sha256:376f3cf3299e1246ce58089a0c2384d42b970d57f11da484b27a0679c3fdd438"
+      }
+    ],
+    "result_digest": "sha256:a855fe3204635dd12a957283b519ab642f553e665ed9129e9fe2e274ae65d211"
+  },
+  "requested_at": "2026-01-02T03:04:05Z"
+}

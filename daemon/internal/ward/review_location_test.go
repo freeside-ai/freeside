@@ -85,8 +85,8 @@ func TestReviewLocationProtocolChangesConfiguration(t *testing.T) {
 		previous string
 		current  string
 	}{
-		{codexReviewProvider{}, request.AuthMode, "codex-production-review-prompt-v4", "codex-production-review-prompt-v5"},
-		{claudeReviewProvider{}, CodexAuthSetupToken, "claude-production-review-prompt-v2", "claude-production-review-prompt-v3"},
+		{codexReviewProvider{}, request.AuthMode, "codex-production-review-prompt-v5", "codex-production-review-prompt-v6"},
+		{claudeReviewProvider{}, CodexAuthSetupToken, "claude-production-review-prompt-v3", "claude-production-review-prompt-v4"},
 	} {
 		t.Run(tc.provider.providerLabel(), func(t *testing.T) {
 			envelope, err := newCodexReviewConfigurationEnvelope(

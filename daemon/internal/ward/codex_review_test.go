@@ -474,6 +474,7 @@ var codexReviewEpoch = time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 
 const (
 	testCodexReviewHead       = "0123456789abcdef0123456789abcdef01234567"
+	testCodexReviewEvaluated  = "fedcba9876543210fedcba9876543210fedcba98"
 	testCodexReviewTreeDigest = "1111111111111111111111111111111111111111111111111111111111111111"
 )
 

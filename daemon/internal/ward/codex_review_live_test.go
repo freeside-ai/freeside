@@ -447,7 +447,7 @@ func TestLiveCodexReviewSnapshotPreambleFailsClosedWhenImageShadowsCredential(t 
 	// path, then hand off to the unmodified production command. No snapshot volume
 	// is mounted because the abort is triggered by the pre-existing target, not by
 	// the link source; this isolates the prologue's fail-closed property.
-	prod := codexReviewCommand("/workspace/project", "gpt-5.2-codex", "high", "unused", "base", "head")
+	prod := codexReviewCommand("/workspace/project", "gpt-5.2-codex", "high", "unused", "base", "head", "")
 	command := "mkdir -p " + shellQuote(CodexHomeTarget) + "; " +
 		"printf 'image-shadow' > " + shellQuote(CodexAuthFileTarget) + "; " + prod[2]
 

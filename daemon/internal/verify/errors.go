@@ -29,6 +29,11 @@ var (
 	// trusted base, and the base-commit recipe source reads from it, so
 	// a tree-ish that is not the named commit fails closed.
 	ErrBaseMismatch = errors.New("checkout does not hold the enforced base commit")
+	// ErrEvaluatedMismatch rejects an evaluated commit that is not the
+	// merge of the candidate head into the enforced base: the report
+	// claims its tree's result for that head on that base, so any other
+	// commit fails closed before any command runs.
+	ErrEvaluatedMismatch = errors.New("evaluated commit is not the merge of the head into the base")
 	// ErrWorkspaceMismatch rejects a materialized workspace whose bytes
 	// are not exactly the head tree's: a conversion or stray file means
 	// the recipe would verify content other than the bound head.

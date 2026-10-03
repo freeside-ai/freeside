@@ -25,7 +25,7 @@ import (
 
 var ErrCodexReviewOutcomeNotFound = errors.New("codex review outcome not found")
 
-const codexProductionReviewPromptVersion = "codex-production-review-prompt-v5"
+const codexProductionReviewPromptVersion = "codex-production-review-prompt-v6"
 
 // ProductionReviewPromptIdentity is the name and content digest a lineup line
 // records for the reviewer and shadow reviewer prompt. The prompt is built in
@@ -345,7 +345,7 @@ func (s *CodexReviewSource) startRequestedReview(
 		}
 	}
 	candidate := domain.BaseRevision{
-		Repo: req.Repo, RepositoryID: req.RepositoryID, BaseRef: req.BaseRef, BaseSHA: req.HeadSHA,
+		Repo: req.Repo, RepositoryID: req.RepositoryID, BaseRef: req.BaseRef, BaseSHA: req.WorkspaceSHA(),
 	}
 	workspace, err := s.cfg.Journal.GetCodexReviewWorkspaceBinding(ctx, string(id))
 	if errors.Is(err, ErrCodexReviewWorkspaceNotFound) ||
@@ -382,7 +382,8 @@ func (s *CodexReviewSource) startRequestedReview(
 	launch, err := s.cfg.Lifecycle.codexReview(ctx, s.cfg.Review, CodexReviewLaunchSpec{
 		RunID: string(id), WorkflowRunID: req.RunID, Image: s.cfg.Review.ApprovedImage,
 		WorkspaceSourceRunID: string(id), WorkspaceVolume: workspace.Volume,
-		ExpectedHead: req.HeadSHA, ExpectedBase: expectedBase, Prompt: s.reviewProvider().reviewPrompt(req),
+		ExpectedHead: req.HeadSHA, ExpectedBase: expectedBase, ExpectedEvaluated: req.EvaluatedSHA,
+		Prompt:   s.reviewProvider().reviewPrompt(req),
 		Boundary: CodexReviewFreshStart, AuthMode: s.cfg.AuthMode,
 		AuthIdentityID: s.cfg.AuthIdentityID, AuthSnapshot: s.cfg.AuthSnapshot,
 		Instructions: instructions, InstructionFile: instructionFile,
@@ -693,12 +694,30 @@ func codexReviewLaunchCleanupFailure(launchErr, cleanupErr error) error {
 	}
 }
 
+// codexProductionReviewPrompt tells the reviewer which commit it is reading.
+// A request that names an evaluated commit is a base-advance re-entry: the
+// workspace holds the unpushed merge of the unchanged head into the advanced
+// base, so the prompt names that merge and says the head the forge shows has
+// not moved. Without one the text is the head-against-base prompt, unchanged.
 func codexProductionReviewPrompt(req exec.ReviewRequest) string {
 	evidence, _ := json.Marshal(req.Verification)
-	return fmt.Sprintf(`Review the exact candidate at head %s against base %s. The preceding verification evidence is %s.
+	candidate := fmt.Sprintf(
+		"Review the exact candidate at head %s against base %s. The preceding verification evidence is %s.",
+		req.HeadSHA, req.BaseSHA, evidence)
+	introduced := "The head-versus-base change introduced it."
+	if req.EvaluatedSHA != "" {
+		candidate = fmt.Sprintf(
+			"Review the prospective merge %s: pull request head %s merged into base %s. "+
+				"The base advanced after that head was pushed. The merge was built locally and never pushed, "+
+				"so the pull request's head is still %s; your workspace holds the merge, and the reviewed diff "+
+				"runs from the base to the merge. The preceding verification evidence is %s.",
+			req.EvaluatedSHA, req.HeadSHA, req.BaseSHA, req.HeadSHA, evidence)
+		introduced = "The change from the base to the prospective merge introduced it."
+	}
+	return fmt.Sprintf(`%s
 
 Apply a precision-first admission test focused on correctness, security, data loss, and regressions. Admit a finding only when all of these are true:
-- The head-versus-base change introduced it.
+- %s
 - It has a demonstrable failure path.
 - It is discrete and actionable.
 - It is not speculative, pre-existing, or merely stylistic.
@@ -719,7 +738,7 @@ Use severity P3. Locate it with whole_file:true on the changed file that most cl
 %s
 
 Return every finding that meets this bar through the required JSON schema. An empty findings array means that nothing met the admission bar; it does not claim the candidate is flawless.`,
-		req.HeadSHA, req.BaseSHA, evidence, codexProductionReviewRules)
+		candidate, introduced, codexProductionReviewRules)
 }
 
 func (s *CodexReviewSource) Inspect(
@@ -1159,6 +1178,14 @@ func newCodexReviewConfigurationEnvelope(
 	}
 	endpoints := slices.Clone(cfg.ProviderEndpoints)
 	slices.Sort(endpoints)
+	// The approval covers both command shapes: the head review every launch
+	// uses today and the prospective-merge review, whose access check differs.
+	// Hashing only one would let an edit to the other keep its approval.
+	template := func(evaluated string) []string {
+		return provider.reviewCommand(
+			cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, "<runtime-review-prompt>",
+			"<bound-base-sha>", "<bound-head-sha>", evaluated)
+	}
 	return codexReviewConfigurationEnvelope{
 		Version: provider.configurationVersion(), Topology: provider.topologyVersion(),
 		ApprovedImage: cfg.ApprovedImage, ObserverImage: cfg.ObserverImage,
@@ -1167,11 +1194,8 @@ func newCodexReviewConfigurationEnvelope(
 		AccessTokenLifetimeFloor:    int64(cfg.AccessTokenLifetimeFloor),
 		AccessTokenRefreshThreshold: int64(codexAuthRefreshThreshold(cfg)), AuthMode: authMode,
 		AuthIdentityID: authIdentityID, CostOwner: costOwner,
-		CommandTemplateDigest: digestStrings(provider.reviewCommand(
-			cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, "<runtime-review-prompt>",
-			"<bound-base-sha>", "<bound-head-sha>",
-		)),
-		PromptProtocol: provider.promptProtocol(),
+		CommandTemplateDigest: digestStrings(append(template(""), template("<bound-evaluated-sha>")...)),
+		PromptProtocol:        provider.promptProtocol(),
 	}, nil
 }
 

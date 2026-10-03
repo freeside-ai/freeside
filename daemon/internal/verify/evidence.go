@@ -73,8 +73,13 @@ type Step struct {
 // digest) are a deterministic function of what was verified and what
 // happened.
 type Report struct {
-	HeadSHA      string        `json:"head_sha"`
-	BaseSHA      string        `json:"base_sha"`
+	HeadSHA string `json:"head_sha"`
+	BaseSHA string `json:"base_sha"`
+	// EvaluatedSHA is the prospective merge of HeadSHA into BaseSHA
+	// whose tree the recipe ran against. It is omitted when the head's
+	// own tree was verified, so a report written before the field
+	// existed still parses and keeps its artifact digest.
+	EvaluatedSHA string        `json:"evaluated_sha,omitempty"`
 	RecipePath   string        `json:"recipe_path"`
 	RecipeDigest domain.Digest `json:"recipe_digest"`
 	Outcome      Outcome       `json:"outcome"`
@@ -96,6 +101,9 @@ func ParseReport(raw []byte) (Report, error) {
 	}
 	if !rep.Outcome.valid() || rep.HeadSHA == "" || rep.RecipeDigest == "" {
 		return Report{}, fmt.Errorf("verification report lacks a valid outcome, head, or recipe")
+	}
+	if rep.EvaluatedSHA != "" && (rep.BaseSHA == "" || rep.EvaluatedSHA == rep.HeadSHA || rep.EvaluatedSHA == rep.BaseSHA) {
+		return Report{}, fmt.Errorf("verification report's evaluated commit is not a merge of its head into its base")
 	}
 	for _, step := range rep.Steps {
 		if len(step.Argv) == 0 || step.Argv[0] == "" {

@@ -2,6 +2,7 @@ package exec
 
 import (
 	"bytes"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -162,6 +163,7 @@ func TestReviewRequestAuthorityBindsRepositoryAndInstructions(t *testing.T) {
 	mutations := []func(*ReviewRequest){
 		func(r *ReviewRequest) { r.Repo = "other/repo" },
 		func(r *ReviewRequest) { r.BaseSHA = strings.Repeat("e", 40) },
+		func(r *ReviewRequest) { r.EvaluatedSHA = strings.Repeat("9", 40) },
 		func(r *ReviewRequest) {
 			r.Instructions.RepositorySources[0].Digest = domain.Digest("sha256:" + strings.Repeat("f", 64))
 		},
@@ -179,6 +181,47 @@ func TestReviewRequestAuthorityBindsRepositoryAndInstructions(t *testing.T) {
 		}
 		if got == want {
 			t.Fatalf("mutation %d did not change request authority", i)
+		}
+	}
+}
+
+func TestReviewRequestEvaluatedCommit(t *testing.T) {
+	_, instructions, err := ComposeCodexReviewInstructions(ReviewHostInstructionInput{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, head, merge := strings.Repeat("a", 40), strings.Repeat("b", 40), strings.Repeat("c", 40)
+	request := ReviewRequest{
+		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42,
+		BaseRef: "main", BaseSHA: base, HeadSHA: head,
+		Workspace: "/candidate", Instructions: instructions,
+		Verification: ReviewVerificationEvidence{
+			Outcome:                domain.VerificationPassed,
+			RecipeDigest:           domain.Digest("sha256:" + strings.Repeat("c", 64)),
+			EvidenceSnapshotDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
+		},
+		RequestedAt: time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC),
+	}
+	if got := request.WorkspaceSHA(); got != head {
+		t.Fatalf("WorkspaceSHA without an evaluated commit = %q, want the head", got)
+	}
+	request.EvaluatedSHA = merge
+	if err := request.Validate(); err != nil {
+		t.Fatalf("request naming a distinct evaluated commit: %v", err)
+	}
+	if got := request.WorkspaceSHA(); got != merge {
+		t.Fatalf("WorkspaceSHA with an evaluated commit = %q, want it", got)
+	}
+	// An evaluated commit equal to either parent is not their merge, so the
+	// request and its authority digest both fail closed.
+	for name, evaluated := range map[string]string{"head": head, "base": base} {
+		refused := request
+		refused.EvaluatedSHA = evaluated
+		if err := refused.Validate(); !errors.Is(err, domain.ErrProspectiveMergeIdentityInconsistent) {
+			t.Fatalf("evaluated commit equal to the %s: %v, want ErrProspectiveMergeIdentityInconsistent", name, err)
+		}
+		if _, err := refused.AuthorityDigest(); err == nil {
+			t.Fatalf("evaluated commit equal to the %s produced an authority digest", name)
 		}
 	}
 }

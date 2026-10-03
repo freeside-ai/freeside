@@ -92,11 +92,20 @@ func (h *fakeReviewContractHarness) Prepare(
 	t.Helper()
 	h.scenario = scenario
 	request := reviewRequest("contract-head")
+	workspace := ""
+	if scenario.EvaluatedMerge {
+		request.EvaluatedSHA = "contract-merge"
+		workspace = request.EvaluatedSHA
+	}
+	if scenario.WorkspaceAtHead {
+		workspace = request.HeadSHA
+	}
 	h.source.Script(id, fake.ReviewScript{
 		PendingInspects: 1,
 		PendingPolls:    1,
 		Outcome:         fakeOutcome(t, scenario.Outcome),
 		Result:          exec.ReviewResult{HeadSHA: request.HeadSHA},
+		WorkspaceSHA:    workspace,
 	})
 	return request
 }

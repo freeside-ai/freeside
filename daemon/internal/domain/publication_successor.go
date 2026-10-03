@@ -246,6 +246,23 @@ func (s PublicationSuccessor) AllowsRemediation(r RemediationInvocationIntent) b
 		r.Round == s.ReviewRound-1 && r.ReviewInvocationID == s.PriorReviewInvocationID)
 }
 
+// AllowsProspectiveMerge reports whether this authority's cycle may evaluate
+// the given prospective merge in place of its head. Only a base-advance
+// re-entry may: its head was built on the old base, so the head's own tree
+// says nothing about the new one. A head change brings a head that already
+// answers for itself, and an external review re-enters on a pull request that
+// did not move. The merge must be of exactly the base and head the authority
+// names. The authority does not record the merge commit, which can only be
+// built after it is sealed; the verifier checks the commit's parents.
+func (s PublicationSuccessor) AllowsProspectiveMerge(m ProspectiveMergeIdentity) bool {
+	if s.Validate() != nil || m.Validate() != nil {
+		return false
+	}
+	return s.Version == PublicationReentryVersion &&
+		s.Reentry.Reason == ReadinessInvalidationBaseAdvanced &&
+		m.BaseSHA == s.Reentry.BaseSHA && m.HeadSHA == s.Reentry.HeadSHA
+}
+
 func DecodePublicationSuccessor(body []byte) (PublicationSuccessor, error) {
 	var s PublicationSuccessor
 	if err := strictjson.Decode(body, &s, strictjson.RejectInvalidUTF8, strictjson.Limit(1<<20)); err != nil {

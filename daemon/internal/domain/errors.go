@@ -447,3 +447,7 @@ var (
 	ErrComprehensionDefectTooLarge         = errors.New("comprehension defect reason exceeds the inline size cap")
 	ErrCommandDecisionEvidenceInconsistent = errors.New("command decision evidence recommendation action and source must be present together")
 )
+
+// ErrProspectiveMergeIdentityInconsistent marks a prospective-merge identity
+// whose base, head, and merge are not three distinct commits.
+var ErrProspectiveMergeIdentityInconsistent = errors.New("prospective merge identity does not name three distinct commits")

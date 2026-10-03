@@ -1872,6 +1872,15 @@ func TestReadinessGoldenContracts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The same requirement proved on the prospective merge of the head into
+	// the base (a base-advance re-entry). The plain proof above must keep its
+	// bytes: it stands for every proof stored before merge_sha existed.
+	mergeIdentity := domain.ProspectiveMergeIdentity{BaseSHA: base.BaseSHA, HeadSHA: "head-sha", MergeSHA: "merge-sha"}
+	mergeProof, err := domain.NewProspectiveMergeCheckProof(proofResolution, mergeIdentity, base, "sha256:review-config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mergeTarget := domain.EvaluationTarget{CandidateHead: "head-sha", Base: &base, MergeSHA: mergeIdentity.MergeSHA}
 	// The card-facing detail (issue #982) projected from the same target,
 	// verdict, and states as the verdict itself: clean from the passed review
 	// alone, degraded from the review beside the waived policy failure.
@@ -1927,6 +1936,9 @@ func TestReadinessGoldenContracts(t *testing.T) {
 	}{
 		{"requirement_resolution", resolution},
 		{"check_proof", proof},
+		{"check_proof_prospective_merge", mergeProof},
+		{"evaluation_target", target},
+		{"evaluation_target_prospective_merge", mergeTarget},
 		{"waiver_lifecycle_event", lifecycle},
 		{"validated_degraded_waiver", waiver},
 		{"check_state", state},

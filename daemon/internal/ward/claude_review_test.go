@@ -177,7 +177,7 @@ func TestClaudeReviewProviderConstants(t *testing.T) {
 		{"completionEvidenceVersion", p.completionEvidenceVersion(), "claude-review-completion-v1"},
 		{"resultEvidenceVersion", p.resultEvidenceVersion(), "claude-review-result-v1"},
 		{"configurationVersion", p.configurationVersion(), "claude-review-configuration-v1"},
-		{"promptProtocol", p.promptProtocol(), "claude-production-review-prompt-v3"},
+		{"promptProtocol", p.promptProtocol(), "claude-production-review-prompt-v4"},
 		{"reviewContainerSuffix", p.reviewContainerSuffix(), "-claude"},
 		{"homeTarget", p.homeTarget(), claudeReviewHome},
 		{"configHomeTarget", p.configHomeTarget(), claudeReviewConfigTarget},
@@ -329,7 +329,7 @@ func TestClaudeReviewCommandShape(t *testing.T) {
 	}
 	// The findings schema is the shared provider-neutral literal, identical to the
 	// Codex command's.
-	if !strings.Contains(codexReviewCommand("/w", "m", "e", "p", "base", "head")[2], reviewFindingsJSONSchema) {
+	if !strings.Contains(codexReviewCommand("/w", "m", "e", "p", "base", "head", "")[2], reviewFindingsJSONSchema) {
 		t.Error("Codex and Claude do not share the findings schema literal")
 	}
 }

@@ -4247,6 +4247,14 @@ current base alongside the requirement-set digest. So a base advance
 structurally mismatches base-dependent proofs and forces reruns. The re-gate
 never restores readiness from evidence bound to a prior base.
 
+A base-advance re-entry keeps the candidate head, which was built on the old
+base. Its base-dependent proofs therefore bind three commits: the new base, the
+unchanged candidate head, and the prospective merge of that head into that
+base. The daemon builds the merge locally and never pushes it, so the head the
+forge shows stays the candidate head. For a base-dependent requirement, a proof
+that names a merge satisfies only a target that names the same merge, and a
+proof that names none never satisfies a target that names one.
+
 Waivers exist only inside Failed and NotRun. They apply only to required checks
 in registered waiver-eligible classes. Each one names the waived dimension and
 the granting authority. The closed set of granting authorities contains
@@ -4319,6 +4327,11 @@ head or an advanced base invalidates the pass and requires re-review.
 Integration evidence follows the same rule: a base advance also invalidates
 verification and check evidence bound to the prior base, and readiness
 recomputes under the Section [6](#6-verification) re-gate before any ready state is restored.
+
+A base-advance re-entry reviews the prospective merge of the unchanged head
+into the new base (Section [6](#6-verification)), not the head against a base it was not built
+on. The pass still binds the head the forge shows and the new base, and its
+request records the merge it evaluated.
 
 The pass runs with fresh context independent of the implementing invocation, in
 a read-only workspace, with no publication credentials. It receives repository
