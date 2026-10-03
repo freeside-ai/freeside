@@ -1,0 +1,183 @@
+{
+  "prototype_base": "1d6cdfb14138a61e28c7ec39090b9c60cda66461",
+  "planning_base": "8d834525ebbc8e732a541bced9421215a2de23f4",
+  "references": [
+    {
+      "file": "evidence/v2-after-mac-long-conversation.webp",
+      "round": "v2",
+      "image_key": "after-mac-long-conversation",
+      "sha256": "658ce2eb96d66421e58dce88f2090d246a7fa2d4634934cd0908387afad20d49",
+      "mime_type": "image/webp"
+    },
+    {
+      "file": "evidence/v2-after-ios-long-conversation.webp",
+      "round": "v2",
+      "image_key": "after-ios-long-conversation",
+      "sha256": "e596c2f51abc1ccccea1a66385798be93f54c401bc84bc0577d9f3545ddb69f9",
+      "mime_type": "image/webp"
+    },
+    {
+      "file": "evidence/v2-after-mac-long-conversation-lower.webp",
+      "round": "v2",
+      "image_key": "after-mac-long-conversation-lower",
+      "sha256": "f131fcaf3b873647a3150db686f2a1033410eb6514e0a2a0822f086fc82e9dd7",
+      "mime_type": "image/webp"
+    },
+    {
+      "file": "evidence/v2-after-ios-long-conversation-lower.webp",
+      "round": "v2",
+      "image_key": "after-ios-long-conversation-lower",
+      "sha256": "0615db2bae4c89c895d70511ef624ca9e98c649efe42ae8db672da9e4a290907",
+      "mime_type": "image/webp"
+    },
+    {
+      "file": "evidence/v2-after-mac-new-task.webp",
+      "round": "v2",
+      "image_key": "after-mac-new-task",
+      "sha256": "9638ff5cf14a5438a639b104a1633c3593fce34d6d74de6fbbbe56cce2d4e8b7",
+      "mime_type": "image/webp"
+    },
+    {
+      "file": "evidence/v2-after-ios-new-task.webp",
+      "round": "v2",
+      "image_key": "after-ios-new-task",
+      "sha256": "c86d516c36fb0eb039056569a64e70800f1486321bdfabd0476873edee4f7634",
+      "mime_type": "image/webp"
+    },
+    {
+      "file": "evidence/v2-after-ios-unverified-explanation.webp",
+      "round": "v2",
+      "image_key": "after-ios-unverified-explanation",
+      "sha256": "7e15d72155b39958128651f8209edff5e891297baaf24857b714a33a0754215b",
+      "mime_type": "image/webp"
+    },
+    {
+      "file": "evidence/v3-after-mac-typography.webp",
+      "round": "v3",
+      "image_key": "after-mac-typography",
+      "sha256": "bf0ece1302a64383579731b8ec9d7889961c2404915099c4bb12b2645442c368",
+      "mime_type": "image/webp"
+    },
+    {
+      "file": "evidence/v3-after-ios-typography.webp",
+      "round": "v3",
+      "image_key": "after-ios-typography",
+      "sha256": "0ad2b3b17feff8dcaf037eebc295ee4ab7b6f4d2d82f0d5198cddf1c5224b9c7",
+      "mime_type": "image/webp"
+    },
+    {
+      "file": "evidence/v3-after-mac-task.webp",
+      "round": "v3",
+      "image_key": "after-mac-task",
+      "sha256": "a6064e1fc9d4fd6910122b9a84572006149e8cd2dd774a6a9c4deba6a34c2b3d",
+      "mime_type": "image/webp"
+    },
+    {
+      "file": "evidence/v3-after-ios-task.webp",
+      "round": "v3",
+      "image_key": "after-ios-task",
+      "sha256": "5c23c60178975a7ce33dfd7d6a63efa8711a0cd19513afaaa740d1b15d8725cb",
+      "mime_type": "image/webp"
+    },
+    {
+      "file": "evidence/v3-after-mac-tasks.webp",
+      "round": "v3",
+      "image_key": "after-mac-tasks",
+      "sha256": "27dde6c66c62a84f3c3109efe0df898876a3b3b490e88a919e007359eb6e220a",
+      "mime_type": "image/webp"
+    },
+    {
+      "file": "evidence/v3-after-ios-tasks.webp",
+      "round": "v3",
+      "image_key": "after-ios-tasks",
+      "sha256": "583f6708f742b71cead522656076e865336526dc5710f069e9c27ca989045437",
+      "mime_type": "image/webp"
+    },
+    {
+      "file": "evidence/v4-after-mac-agent-question.webp",
+      "round": "v4",
+      "image_key": "after-mac-agent-question",
+      "sha256": "1779dfac2e01ad8ddcd1c95ac8c850ace012f4440d92fc569b4f1be6176380d8",
+      "mime_type": "image/webp"
+    },
+    {
+      "file": "evidence/v4-after-mac-ready-for-final-review.webp",
+      "round": "v4",
+      "image_key": "after-mac-ready-for-final-review",
+      "sha256": "3cc13645800b7b0da8c3a7bd48bf270bdb0414e8e97f416ebe451a576f82ad35",
+      "mime_type": "image/webp"
+    },
+    {
+      "file": "evidence/v4-after-mac-review-dispute.webp",
+      "round": "v4",
+      "image_key": "after-mac-review-dispute",
+      "sha256": "e92578644954a3a7a319c4c5ea171655a4fa1c8ef05a6ecd6c0e47f35804cc34",
+      "mime_type": "image/webp"
+    },
+    {
+      "file": "evidence/v4-after-mac-finding-adjudication.webp",
+      "round": "v4",
+      "image_key": "after-mac-finding-adjudication",
+      "sha256": "663b81c2a080aa76ad0e94c86e93387470e86df9fee479b966f057a5ee9077c5",
+      "mime_type": "image/webp"
+    },
+    {
+      "file": "evidence/v4-after-ios-agent-question.webp",
+      "round": "v4",
+      "image_key": "after-ios-agent-question",
+      "sha256": "0d0552cb23750c477819454bda9eb6b297ff0242f5c0dab3395f8fc55324760c",
+      "mime_type": "image/webp"
+    },
+    {
+      "file": "evidence/v4-after-ios-ready-for-final-review.webp",
+      "round": "v4",
+      "image_key": "after-ios-ready-for-final-review",
+      "sha256": "c4440179480a44c6026fa829701b6a233d7f1c05ac91ca6b73378aa324001877",
+      "mime_type": "image/webp"
+    },
+    {
+      "file": "evidence/v4-after-ios-review-dispute.webp",
+      "round": "v4",
+      "image_key": "after-ios-review-dispute",
+      "sha256": "aedb59d0a990f0f4ca48fe731485099cacb9b9bee74c4ccd6d39b739ac9e8657",
+      "mime_type": "image/webp"
+    },
+    {
+      "file": "evidence/v4-after-ios-finding-adjudication.webp",
+      "round": "v4",
+      "image_key": "after-ios-finding-adjudication",
+      "sha256": "55e42fa446a6da2f604cbedc00126f9add28df8343929ac1640b1779486b264c",
+      "mime_type": "image/webp"
+    },
+    {
+      "file": "evidence/v4-after-mac-finding-expanded.webp",
+      "round": "v4",
+      "image_key": "after-mac-finding-expanded",
+      "sha256": "520ad5af9df42c49b9923db073a3d0151d40cf28fd096870717b6d81f8969ee6",
+      "mime_type": "image/webp"
+    }
+  ],
+  "review_sources": [
+    {
+      "round": "v1",
+      "filename": "Freeside Visual Audit Reviewed.html",
+      "sha256": "ae783ce566040daa0f9c0716da1cc4efe474ac42b98bbb92956937ab5a661bf1"
+    },
+    {
+      "round": "v2",
+      "filename": "Freeside Visual Audit V2 Reviewed-2.html",
+      "sha256": "0785d6915cf83378bc52725191f419876738aee26dc269a5e7d0ed0624e25955"
+    },
+    {
+      "round": "v3",
+      "filename": "Freeside Visual Audit V3 Reviewed.html",
+      "sha256": "14638b8c66d996ce15ddfafe88c2ef626d8ef37a5f451ec8d92cca6d9774a9e7"
+    },
+    {
+      "round": "v4",
+      "filename": "Freeside Visual Audit V4 Reviewed.html",
+      "sha256": "23cd73a24f3e8ddc21644609251608b89cb2594ba56f3d0d70376de01d043b98"
+    }
+  ],
+  "review_records_sha256": "2532bf9cfb1481fa0e5453f978d153806c52025d444bd4b39d6a860f1e4e1cd4"
+}
