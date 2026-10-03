@@ -627,6 +627,46 @@ func TestOmittedConnectionFailsLoud(t *testing.T) {
 	}
 }
 
+func TestOmittedOpenIssueLabelsAndMilestoneFailLoud(t *testing.T) {
+	path := []string{"data", "repository", "issues", "nodes"}
+	t.Run("omitted labels connection", func(t *testing.T) {
+		runner := loadFixtureRunner(t)
+		deleteFixtureNodeField(t, runner, "OpenIssues::", path, "labels")
+		if _, err := Collect(context.Background(), fixtureConfig(""), runner, fixedClock); err == nil || !strings.Contains(err.Error(), "issue #100 labels connection") {
+			t.Fatalf("error = %v, want missing labels connection", err)
+		}
+	})
+	t.Run("labels without pageInfo", func(t *testing.T) {
+		runner := loadFixtureRunner(t)
+		setFixtureNodeField(t, runner, "OpenIssues::", path, "labels", map[string]any{"nodes": []any{}})
+		if _, err := Collect(context.Background(), fixtureConfig(""), runner, fixedClock); err == nil || !strings.Contains(err.Error(), "issue #100 labels connection") {
+			t.Fatalf("error = %v, want missing labels pageInfo", err)
+		}
+	})
+	t.Run("omitted milestone", func(t *testing.T) {
+		runner := loadFixtureRunner(t)
+		deleteFixtureNodeField(t, runner, "OpenIssues::", path, "milestone")
+		if _, err := Collect(context.Background(), fixtureConfig(""), runner, fixedClock); err == nil || !strings.Contains(err.Error(), "missing the milestone field") {
+			t.Fatalf("error = %v, want missing milestone", err)
+		}
+	})
+	t.Run("milestone without a title", func(t *testing.T) {
+		runner := loadFixtureRunner(t)
+		setFixtureNodeField(t, runner, "OpenIssues::", path, "milestone", map[string]any{})
+		if _, err := Collect(context.Background(), fixtureConfig(""), runner, fixedClock); err == nil || !strings.Contains(err.Error(), "milestone without a title") {
+			t.Fatalf("error = %v, want untitled milestone", err)
+		}
+	})
+	t.Run("null milestone is unmilestoned", func(t *testing.T) {
+		runner := loadFixtureRunner(t)
+		c := &collector{config: fixtureConfig(""), runner: runner}
+		issues, err := c.fetchOpenIssues(context.Background())
+		if err != nil || len(issues) != 1 || issues[0].Milestone != nil || !issues[0].hasLabel("tracker") {
+			t.Fatalf("issues=%#v error=%v", issues, err)
+		}
+	})
+}
+
 func TestOmittedCommentBodyAndDraftFlagFailLoud(t *testing.T) {
 	t.Run("omitted comment body", func(t *testing.T) {
 		runner := loadFixtureRunner(t)
