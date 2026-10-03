@@ -144,6 +144,46 @@ struct DecisionCardComposition: Equatable {
         }
     }
 
+    /// How a card frames its agent-written sections. The unverified label
+    /// names the register in both; the frame is only how the section is set
+    /// apart from its neighbors.
+    enum AgentSectionFrame: Equatable {
+        /// A dashed card around the section, with every claim's source
+        /// identifiers printed beside its text.
+        case dashedCard
+        /// No card: the label and the agent's prose, set apart by spacing,
+        /// with the source identifiers one disclosure away.
+        case spaced
+    }
+
+    /// The visual audit keeps a bounded card for an independent item or
+    /// option and separates ordinary sections by spacing, on the surfaces it
+    /// approved only. The question card (D06) draws its options as the
+    /// bounded panels, so its agent sections drop their own card. The switch
+    /// is exhaustive so a new type has to answer the question.
+    static func agentSectionFrame(
+        for type: Components.Schemas.AttentionType
+    ) -> AgentSectionFrame {
+        switch type {
+        case .agent_question:
+            return .spaced
+        case .spec_approval, .execution_failure, .review_diminishing_returns, .review_dispute,
+            .review_contradiction, .review_configuration, .finding_adjudication,
+            .ready_for_final_review, .publish_blocked, .task_proposal, .effect_proposal,
+            .system_health, .blocked:
+            return .dashedCard
+        }
+    }
+
+    /// Whether the shell draws its generic ask for `item`. A question card
+    /// leads with the agent's own question (D06), so the ask would only
+    /// delay it; an item that carries no typed decision draws no lead and
+    /// keeps the ask, so a card is never left without one.
+    static func rendersAsk(for item: Components.Schemas.AttentionItem) -> Bool {
+        guard let question = AgentQuestionPresentation(item) else { return true }
+        return question.decisions.isEmpty
+    }
+
     /// Where the card shell draws the daemon-written `reason`. The reason is
     /// drawn by the shell, not by a module, so its place is a rule of the
     /// type rather than a position in `modules`.
@@ -175,6 +215,18 @@ struct DecisionCardComposition: Equatable {
             .publish_blocked, .task_proposal, .effect_proposal, .system_health, .blocked:
             return .context
         }
+    }
+
+    /// Where the shell draws the reason of this `item`. A question that
+    /// carries no typed decision draws no lead and keeps the generic ask
+    /// (`rendersAsk(for:)`), so its reason stays in the Context section under
+    /// that ask rather than folding away from a card with nothing else to
+    /// read first.
+    static func reasonPlacement(
+        for item: Components.Schemas.AttentionItem
+    ) -> ReasonPlacement {
+        if item._type == .agent_question, rendersAsk(for: item) { return .context }
+        return reasonPlacement(for: item._type)
     }
 
     /// Whether the type's `.facts` rows are routine run and binding
@@ -304,6 +356,14 @@ struct DecisionCardComposition: Equatable {
 enum DecisionDisclosure: Hashable {
     case runDetails
     case recordedContext
+    /// One claim's source identifiers. Neither a label nor a digest is
+    /// unique on its own, and two claims that share both are the same bytes
+    /// under the same name, so opening them together loses nothing.
+    case claimSource(label: String, digest: String)
+
+    static func claimSource(_ claim: Components.Schemas.AgentClaim) -> Self {
+        .claimSource(label: claim.label, digest: claim.digest)
+    }
 }
 
 /// Where each row of a card's `.facts` module renders: beside the decision,

@@ -694,7 +694,9 @@
                     let openDetail = DecisionDetailView(
                         store: store,
                         itemID: snapshot.item.id,
-                        expandedDisclosures: [.runDetails, .recordedContext],
+                        expandedDisclosures: Set(
+                            [.runDetails, .recordedContext]
+                                + snapshot.item.agent_claims.map { .claimSource($0) }),
                         graphics: graphics,
                         loadsAttachments: false,
                         showsValidationProgress: false,
@@ -704,6 +706,41 @@
                             name: "decision-\(snapshot.item._type.rawValue)-disclosures-open",
                             view: AnyView(
                                 openDetail.screenshotCard(snapshot.item, at: dynamicTypeSize))))
+                }
+
+                if snapshot.item._type == .agent_question {
+                    // Visual audit D06: the question card on both platforms
+                    // and themes, and a long question with more than one
+                    // decision. Its inspector is appended last, below.
+                    let name = "decision-\(snapshot.item._type.rawValue)"
+                    for (suffix, width, scheme) in [
+                        ("phone", CGFloat(390), ColorScheme.light),
+                        ("dark", canvasWidth, ColorScheme.dark),
+                        ("phone-dark", CGFloat(390), ColorScheme.dark),
+                    ] {
+                        surfaces.append(
+                            Surface(
+                                name: "\(name)-\(suffix)",
+                                width: width,
+                                colorScheme: scheme,
+                                view: AnyView(
+                                    detail.screenshotCard(
+                                        snapshot.item,
+                                        at: dynamicTypeSize,
+                                        compactLayout: width < canvasWidth))))
+                    }
+                    let long = AttentionFixtures.longQuestion().item
+                    for (suffix, width) in [("long", canvasWidth), ("long-phone", CGFloat(390))] {
+                        surfaces.append(
+                            Surface(
+                                name: "\(name)-\(suffix)",
+                                width: width,
+                                view: AnyView(
+                                    detail.screenshotCard(
+                                        long,
+                                        at: dynamicTypeSize,
+                                        compactLayout: width < canvasWidth))))
+                    }
                 }
 
                 if snapshot.item._type == .execution_failure {
@@ -2403,6 +2440,54 @@
 
             surfaces.append(contentsOf: try taskStopSurfaces())
             surfaces.append(contentsOf: taskStyleSurfaces())
+
+            // Visual audit D06: a question that enumerates no options keeps
+            // the generic ask with its Context section under it.
+            if var untyped = inbox.first(where: { $0.item._type == .agent_question })?.item {
+                untyped.agent_question = nil
+                let detail = DecisionDetailView(
+                    store: store,
+                    itemID: untyped.id,
+                    loadsAttachments: false,
+                    showsValidationProgress: false,
+                    now: screenshotNow)
+                surfaces.append(
+                    Surface(
+                        name: "decision-agent_question-untyped-phone",
+                        width: 390,
+                        view: AnyView(
+                            detail.screenshotCard(
+                                untyped, at: dynamicTypeSize, compactLayout: true))))
+            }
+
+            // The question card's inspector (visual audit D06), which keeps
+            // its layout and changes only its label. It renders after every
+            // other surface: a glyph's antialiasing depends on what was
+            // rasterized before it (#1698), and drawing this one ahead of
+            // the final-review inspector moved one of that surface's pixels.
+            if let question = inbox.first(where: { $0.item._type == .agent_question })?.item {
+                let suite = "FreesideScreenshotQuestionInspectorPreferences"
+                guard let defaults = UserDefaults(suiteName: suite) else {
+                    throw ScreenshotError.preferencesUnavailable
+                }
+                defaults.removePersistentDomain(forName: suite)
+                let preferences = DecisionSectionPreferences(defaults: defaults)
+                preferences.claimsExpanded = true
+                preferences.evidenceExpanded = true
+                preferences.detailsExpanded = true
+                let inspector = DecisionDetailView(
+                    store: store,
+                    itemID: question.id,
+                    loadsAttachments: false,
+                    showsValidationProgress: false,
+                    sectionPreferences: preferences)
+                surfaces.append(
+                    Surface(
+                        name: "decision-agent_question-inspector",
+                        width: 360,
+                        view: AnyView(
+                            inspector.screenshotInspector(question, at: dynamicTypeSize))))
+            }
             return surfaces
         }
 

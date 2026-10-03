@@ -278,6 +278,94 @@ import Testing
         #expect(DecisionCardComposition.reasonPlacement(for: type) == expected)
     }
 
+    /// Visual audit D06: the question card separates its agent sections by
+    /// spacing and bounds only its options; every other type keeps the
+    /// dashed card around agent prose.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func agentSectionsAreSpacedOnlyOnTheApprovedCards(
+        type: Components.Schemas.AttentionType
+    ) {
+        let spaced: [Components.Schemas.AttentionType] = [.agent_question]
+        #expect(
+            DecisionCardComposition.agentSectionFrame(for: type)
+                == (spaced.contains(type) ? .spaced : .dashedCard))
+    }
+
+    /// Visual audit D06: the agent's own question leads, so the shell's
+    /// generic ask is dropped only when a typed decision is there to replace
+    /// it. No card is ever left without a lead.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func askIsDroppedOnlyWhereATypedQuestionLeads(type: Components.Schemas.AttentionType) {
+        let item = AttentionFixtures.fixture(type: type).item
+        #expect(DecisionCardComposition.rendersAsk(for: item) == (type != .agent_question))
+    }
+
+    @Test func questionWithoutTypedDecisionsKeepsTheAskAndItsContext() throws {
+        let typed = AttentionFixtures.fixture(type: .agent_question).item
+        #expect(!DecisionCardComposition.rendersAsk(for: typed))
+        #expect(DecisionCardComposition.reasonPlacement(for: typed) == .recordedContext)
+
+        var untyped = typed
+        untyped.agent_question = nil
+        #expect(DecisionCardComposition.rendersAsk(for: untyped))
+        #expect(DecisionCardComposition.reasonPlacement(for: untyped) == .context)
+
+        var empty = typed
+        var facts = try #require(empty.agent_question?.value1)
+        facts.decisions = []
+        empty.agent_question = .init(value1: facts)
+        #expect(DecisionCardComposition.rendersAsk(for: empty))
+        #expect(DecisionCardComposition.reasonPlacement(for: empty) == .context)
+    }
+
+    /// Only the question's placement depends on the item; every other type
+    /// answers from its type alone.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func reasonPlacementFollowsTheTypeForATypedItem(
+        type: Components.Schemas.AttentionType
+    ) {
+        let item = AttentionFixtures.fixture(type: type).item
+        #expect(
+            DecisionCardComposition.reasonPlacement(for: item)
+                == DecisionCardComposition.reasonPlacement(for: type))
+    }
+
+    @Test func severalDecisionsKeepTheirOrderAndTheirOwnOptions() throws {
+        let item = AttentionFixtures.longQuestion().item
+        let facts = try #require(item.agent_question?.value1)
+        let presentation = try #require(AgentQuestionPresentation(item))
+
+        #expect(facts.decisions.count == 2)
+        #expect(presentation.decisions.map(\.question) == facts.decisions.map(\.question))
+        #expect(
+            presentation.decisions.map { $0.options.map(\.label) }
+                == facts.decisions.map { $0.options.map(\.label) })
+        #expect(
+            presentation.decisions.map { $0.options.map(\.tradeoffs) }
+                == facts.decisions.map { $0.options.map(\.tradeoffs) })
+        // One recommended option per decision, the one the agent named.
+        #expect(
+            presentation.decisions.map { $0.options.filter(\.recommended).map(\.label) }
+                == facts.decisions.map { [$0.recommendation] })
+        #expect(!DecisionCardComposition.rendersAsk(for: item))
+    }
+
+    /// A spaced claim folds its identifiers; every one of them stays one
+    /// disclosure away, exact.
+    @Test func foldedClaimSourceKeepsEveryIdentifier() throws {
+        let item = AttentionFixtures.fixture(type: .agent_question).item
+        let claim = try #require(item.agent_claims.first { $0.text != nil })
+        let text = try #require(claim.text)
+
+        let rows = DecisionDetailView.claimSourceRows(claim, text: text)
+        #expect(
+            rows.map(\.label) == ["Label", "Media type", "Agent invocation", "Claim digest"])
+        #expect(rows.first?.value == claim.label)
+        #expect(rows[1].value == text.media_type.rawValue)
+        #expect(rows[2].value == "inv-agent-agent_question")
+        #expect(rows.last?.value == claim.digest)
+    }
+
     @Test func reservedSummariesNeverRenderAsGenericClaims() throws {
         let item = AttentionFixtures.fixture(type: .ready_for_final_review).item
         let composition = DecisionCardComposition.forType(.ready_for_final_review)

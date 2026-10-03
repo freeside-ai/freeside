@@ -128,6 +128,62 @@ public enum AttentionFixtures {
         return snapshot
     }
 
+    /// A question that stopped on two decisions, each with a long question,
+    /// a long blocker, and tradeoffs that run to several lines, so the card's
+    /// wrapping and the order of repeated decisions have something to show.
+    public static func longQuestion() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = fixture(type: .agent_question)
+        snapshot.item.id = "item-long-question"
+        snapshot.item.agent_question = .init(
+            value1: .init(
+                stage: .implementation, invocation_id: "inv-long-question",
+                kind: .init(value1: .owner_decision),
+                decisions: [
+                    .init(
+                        question:
+                            "Should the importer rewrite existing rows in place during the migration, or write the new shape beside the old one and switch readers over once every row has been copied?",
+                        why_blocking:
+                            "The two approaches need different schemas, so the implementer cannot start the store change until one is chosen, and the choice decides whether a failed migration can be resumed.",
+                        options: [
+                            .init(
+                                label: "Rewrite rows in place",
+                                tradeoffs:
+                                    "One table and no second copy of the data, so the migration is short and the store stays small. A crash partway through leaves rows in both shapes, and every reader has to understand both until the migration is rerun to completion."
+                            ),
+                            .init(
+                                label: "Copy to a new table, then switch readers",
+                                tradeoffs:
+                                    "Readers only ever see one shape, and an interrupted copy can restart from the last copied row. The store briefly holds two copies of every row, and the switch needs a second release to drop the old table."
+                            ),
+                        ],
+                        recommendation: "Copy to a new table, then switch readers"),
+                    .init(
+                        question:
+                            "Should clients that still send the old request shape be rejected, or accepted and translated for one release?",
+                        why_blocking:
+                            "The API handler and its tests differ for each answer, and the implementer will not pick a compatibility policy on its own.",
+                        options: [
+                            .init(
+                                label: "Reject the old shape",
+                                tradeoffs:
+                                    "The handler stays small and the contract has one shape. Any client that has not updated fails until it does."
+                            ),
+                            .init(
+                                label: "Translate for one release",
+                                tradeoffs:
+                                    "Older clients keep working while they update. The translation is extra code that has to be removed again, with its own tests."
+                            ),
+                            .init(
+                                label: "Translate indefinitely",
+                                tradeoffs:
+                                    "No client ever breaks. The daemon carries both shapes and their tests for as long as the old one is accepted."
+                            ),
+                        ],
+                        recommendation: "Translate for one release"),
+                ]))
+        return snapshot
+    }
+
     /// A review_diminishing_returns item that parked on `cause`. The base
     /// fixture carries low_value_streak; this names any other cause.
     /// `verdict` shapes the drift facts and matters only under drift_audit,
