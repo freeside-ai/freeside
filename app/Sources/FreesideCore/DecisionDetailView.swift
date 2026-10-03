@@ -86,6 +86,7 @@ struct DecisionDetailView: View {
     @State private var expandedFindings: Set<String>
     @State private var expandedSummaryReports: Set<DecisionSummaryIdentity> = []
     @State private var summaryRevealRequest: SummaryRevealRequest?
+    @State private var expandedDisclosures: Set<DecisionDisclosure>
     private let expandsSummaryReports: Bool
     private let attachments: AttachmentLoader
     private let graphics: DecisionGraphicPresentations
@@ -105,6 +106,7 @@ struct DecisionDetailView: View {
         detailsExpanded: Bool = false,
         expandedFindings: Set<String> = [],
         expandsSummaryReports: Bool = false,
+        expandedDisclosures: Set<DecisionDisclosure> = [],
         detailsRevealRequest: TechnicalDetailsRevealRequest? = nil,
         onConsumeDetailsRevealRequest: @escaping (UUID) -> Void = { _ in },
         graphics: DecisionGraphicPresentations = .init(),
@@ -127,6 +129,7 @@ struct DecisionDetailView: View {
                     detailsExpandedOverride: revealsTechnicalDetails ? true : nil))
         _inspectorPresented = State(initialValue: revealsTechnicalDetails)
         _expandedFindings = State(initialValue: expandedFindings)
+        _expandedDisclosures = State(initialValue: expandedDisclosures)
         attachments = store.attachments
         self.itemID = itemID
         self.expandsSummaryReports = expandsSummaryReports
@@ -525,8 +528,17 @@ struct DecisionDetailView: View {
             // because the daemon writes it as a sentence fragment. A type
             // whose reason is the agent's summary shows it once, under the
             // unverified claim label, and gets no Context section (#1098).
-            if composition.rendersContext(for: item) {
+            // A decision-first type moves it: see `reasonPlacement(for:)`.
+            let reasonPlacement =
+                composition.rendersContext(for: item)
+                ? DecisionCardComposition.reasonPlacement(for: item._type) : nil
+            switch reasonPlacement {
+            case .context:
                 context(item)
+            case .underAsk:
+                reasonUnderAsk(item)
+            case .recordedContext, nil:
+                EmptyView()
             }
 
             if let conversation = model.conversation {
@@ -606,12 +618,18 @@ struct DecisionDetailView: View {
                         }
                         .frame(maxWidth: 560, alignment: .topLeading)
 
-                        actionRegion(
-                            item,
-                            stackedLayout: accessibilityLayout || compactLayout,
-                            includesReviewing: composition.reviewingActionInsertionIndex == nil,
-                            rendersInteractiveControls: rendersInteractiveControls
-                        )
+                        VStack(alignment: .leading, spacing: 16) {
+                            actionRegion(
+                                item,
+                                stackedLayout: accessibilityLayout || compactLayout,
+                                includesReviewing: composition.reviewingActionInsertionIndex
+                                    == nil,
+                                rendersInteractiveControls: rendersInteractiveControls
+                            )
+                            if reasonPlacement == .recordedContext {
+                                recordedContext(item)
+                            }
+                        }
                         .frame(width: 360, alignment: .topLeading)
                     }
                 } else {
@@ -639,6 +657,9 @@ struct DecisionDetailView: View {
                             } action: { frame in
                                 actionRegionFrameChanged?(frame)
                             }
+                            if reasonPlacement == .recordedContext {
+                                recordedContext(item)
+                            }
                         }
                         if index + 1 == composition.reviewingActionInsertionIndex {
                             reviewingAction(item)
@@ -663,6 +684,9 @@ struct DecisionDetailView: View {
                             item,
                             stackedLayout: accessibilityLayout || compactLayout,
                             includesReviewing: composition.reviewingActionInsertionIndex == nil)
+                        if reasonPlacement == .recordedContext {
+                            recordedContext(item)
+                        }
                     }
                     if index + 1 == composition.reviewingActionInsertionIndex {
                         reviewingAction(item)
@@ -1033,26 +1057,83 @@ struct DecisionDetailView: View {
         }
     }
 
+    /// The reason as the ask's own second line: the same daemon sentence the
+    /// Context section carries, without the box and its label.
+    @ViewBuilder
+    private func reasonUnderAsk(_ item: Components.Schemas.AttentionItem) -> some View {
+        if !item.reason.isEmpty {
+            Text(item.reason)
+                .font(FreesideFont.callout)
+                .foregroundStyle(Color.inkDim)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// The reason one disclosure away, below the actions, on a card whose
+    /// lead already says what the operator is deciding.
+    @ViewBuilder
+    private func recordedContext(_ item: Components.Schemas.AttentionItem) -> some View {
+        if !item.reason.isEmpty {
+            KeywordDisclosure(
+                keyword: "Recorded context", isExpanded: disclosure(.recordedContext)
+            ) {
+                Text(item.reason)
+                    .font(FreesideFont.callout)
+                    .foregroundStyle(Color.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 8)
+            }
+        }
+    }
+
+    private func disclosure(_ disclosure: DecisionDisclosure) -> Binding<Bool> {
+        Binding(
+            get: { expandedDisclosures.contains(disclosure) },
+            set: { expanded in
+                if expanded {
+                    expandedDisclosures.insert(disclosure)
+                } else {
+                    expandedDisclosures.remove(disclosure)
+                }
+            })
+    }
+
     /// The Section 9 card facts for this item type, read from its typed fact
     /// fields (#724). Rendered from the `.facts` module, which every
     /// composition places ahead of its action region; a type whose lead is its
     /// own module contributes no rows and the section disappears rather than
-    /// rendering an empty container.
+    /// rendering an empty container. `DecisionFactPlacement` decides which
+    /// rows stay beside the decision and which fold.
     @ViewBuilder
     private func factsSection(
         _ item: Components.Schemas.AttentionItem,
         includesCommitPlan: Bool
     ) -> some View {
-        let facts = AttentionDisplay.cardFacts(item, now: now)
-        let notice = includesCommitPlan ? item.commit_plan_notice?.value1 : nil
-        if !facts.isEmpty || notice != nil {
+        let placement = DecisionFactPlacement(
+            item, includesCommitPlan: includesCommitPlan, now: now)
+        if !placement.visible.isEmpty {
             cardSection("Facts") {
-                ForEach(facts) { fact in
+                ForEach(placement.visible) { fact in
                     factRow(fact.label, value: fact.value, monospaced: fact.monospaced)
                 }
-                if let notice {
-                    factRow("Commit plan", value: AttentionDisplay.label(notice))
+            }
+        }
+        if !placement.folded.isEmpty {
+            KeywordDisclosure(
+                keyword: DecisionFactPlacement.foldedTitle, isExpanded: disclosure(.runDetails)
+            ) {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(placement.folded) { fact in
+                        factRow(fact.label, value: fact.value, monospaced: fact.monospaced)
+                    }
                 }
+                .font(FreesideFont.callout)
+                .foregroundStyle(Color.ink)
+                // A stacked row hugs its text, and a disclosure centers
+                // content narrower than itself.
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 8)
             }
         }
     }

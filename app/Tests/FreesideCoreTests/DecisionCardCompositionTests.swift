@@ -200,6 +200,84 @@ import Testing
                 == (audited.contains(type) ? .onDemand : .sentence))
     }
 
+    /// Visual audit D06 and D08: the question and dispute cards fold their
+    /// run and binding coordinates; every other type keeps its facts beside
+    /// the decision. Either way each fact has exactly one destination.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func everyCardFactHasOneDestination(type: Components.Schemas.AttentionType) {
+        let item = AttentionFixtures.fixture(type: type).item
+        let now = Date(timeIntervalSince1970: 0)
+        let facts = AttentionDisplay.cardFacts(item, now: now)
+        let placement = DecisionFactPlacement(item, includesCommitPlan: false, now: now)
+        let folds: [Components.Schemas.AttentionType] = [.agent_question, .review_dispute]
+
+        #expect(DecisionCardComposition.foldsRoutineFacts(type) == folds.contains(type))
+        #expect(placement.visible + placement.folded == facts)
+        #expect(placement.folded == (folds.contains(type) ? facts : []))
+    }
+
+    @Test func foldedFactsAreTheRoutineCoordinates() {
+        let now = Date(timeIntervalSince1970: 0)
+        let question = DecisionFactPlacement(
+            AttentionFixtures.fixture(type: .agent_question).item,
+            includesCommitPlan: true, now: now)
+        let dispute = DecisionFactPlacement(
+            AttentionFixtures.fixture(type: .review_dispute).item,
+            includesCommitPlan: true, now: now)
+
+        #expect(question.visible.isEmpty)
+        #expect(question.folded.map(\.label) == ["Stage", "Blocked on"])
+        #expect(dispute.visible.isEmpty)
+        #expect(
+            dispute.folded.map(\.label)
+                == ["Run", "Round", "Disputed findings", "Completion evidence"])
+    }
+
+    /// A notice is not a coordinate: it stays visible on a card that folds
+    /// its facts, and it is never drawn where a checklist already carries it.
+    @Test(arguments: [Components.Schemas.AttentionType.agent_question, .review_dispute])
+    func commitPlanNoticeNeverFolds(type: Components.Schemas.AttentionType) {
+        var item = AttentionFixtures.fixture(type: type).item
+        item.commit_plan_notice = .init(value1: .present_but_not_honored)
+        let now = Date(timeIntervalSince1970: 0)
+        let notice = AttentionDisplay.FactRow(
+            "Commit plan", AttentionDisplay.label(.present_but_not_honored))
+
+        let shown = DecisionFactPlacement(item, includesCommitPlan: true, now: now)
+        #expect(shown.visible == [notice])
+        #expect(shown.folded == AttentionDisplay.cardFacts(item, now: now))
+
+        let withChecklist = DecisionFactPlacement(item, includesCommitPlan: false, now: now)
+        #expect(withChecklist.visible.isEmpty)
+    }
+
+    /// The final review's checklist carries the commit-plan notice, so the
+    /// card asks for its facts without it, as it does here.
+    @Test func finalReviewKeepsItsDiffVisible() {
+        let item = AttentionFixtures.fixture(type: .ready_for_final_review).item
+        let placement = DecisionFactPlacement(
+            item, includesCommitPlan: false, now: Date(timeIntervalSince1970: 0))
+
+        #expect(placement.visible.map(\.label) == ["Diff"])
+        #expect(placement.folded.isEmpty)
+    }
+
+    /// Visual audit D06, D07 and D08: the three decision-first cards move
+    /// the daemon's reason out of the boxed Context section, and every other
+    /// type keeps it there.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func reasonLeavesTheContextSectionOnlyOnTheDecisionFirstCards(
+        type: Components.Schemas.AttentionType
+    ) {
+        let expected: DecisionCardComposition.ReasonPlacement =
+            switch type {
+            case .review_dispute: .underAsk
+            case .agent_question, .ready_for_final_review: .recordedContext
+            default: .context
+            }
+        #expect(DecisionCardComposition.reasonPlacement(for: type) == expected)
+    }
+
     @Test func reservedSummariesNeverRenderAsGenericClaims() throws {
         let item = AttentionFixtures.fixture(type: .ready_for_final_review).item
         let composition = DecisionCardComposition.forType(.ready_for_final_review)

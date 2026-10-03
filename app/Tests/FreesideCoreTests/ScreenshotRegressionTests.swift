@@ -686,6 +686,26 @@
                                 proposalFacts: proposalFacts,
                                 effectProposalFacts: effectProposalFacts))))
 
+                if [.agent_question, .review_dispute, .ready_for_final_review].contains(
+                    snapshot.item._type)
+                {
+                    // The decision-first cards fold their run coordinates and
+                    // the recorded reason; this pins what the folds hold.
+                    let openDetail = DecisionDetailView(
+                        store: store,
+                        itemID: snapshot.item.id,
+                        expandedDisclosures: [.runDetails, .recordedContext],
+                        graphics: graphics,
+                        loadsAttachments: false,
+                        showsValidationProgress: false,
+                        now: screenshotNow)
+                    surfaces.append(
+                        Surface(
+                            name: "decision-\(snapshot.item._type.rawValue)-disclosures-open",
+                            view: AnyView(
+                                openDetail.screenshotCard(snapshot.item, at: dynamicTypeSize))))
+                }
+
                 if snapshot.item._type == .execution_failure {
                     surfaces.append(
                         Surface(
