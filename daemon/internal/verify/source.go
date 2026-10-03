@@ -22,6 +22,36 @@ func verifyBase(ctx context.Context, g *gitRunner, baseSHA string) error {
 	return nil
 }
 
+// verifyEvaluated enforces the prospective-merge binding: the evaluated
+// commit must resolve to exactly itself and have exactly two parents,
+// the enforced base first and the candidate head second. That refuses a
+// commit that merges something else, a merge into another base, and one
+// with a third parent whose content neither the base nor the head
+// carries. It binds the commit's ancestry, not its tree: that the tree is
+// what merging the two produces rests on the daemon having built the
+// commit, which is the caller's to guarantee.
+func verifyEvaluated(ctx context.Context, g *gitRunner, evaluatedSHA, baseSHA, headSHA string) error {
+	out, err := g.run(ctx, nil, "rev-parse", "--verify", evaluatedSHA+"^{commit}")
+	if err != nil {
+		return fmt.Errorf("evaluated %s is not a commit in the checkout: %w: %w", evaluatedSHA, ErrEvaluatedMismatch, err)
+	}
+	if got := strings.TrimSpace(string(out)); got != evaluatedSHA {
+		return fmt.Errorf("evaluated %s resolved to %s: %w", evaluatedSHA, got, ErrEvaluatedMismatch)
+	}
+	// rev-parse <commit>^@ prints every parent in order, one per line,
+	// and nothing for a root commit.
+	out, err = g.run(ctx, nil, "rev-parse", evaluatedSHA+"^@")
+	if err != nil {
+		return fmt.Errorf("read parents of evaluated %s: %w: %w", evaluatedSHA, ErrEvaluatedMismatch, err)
+	}
+	parents := strings.Fields(string(out))
+	if len(parents) != 2 || parents[0] != baseSHA || parents[1] != headSHA {
+		return fmt.Errorf("evaluated %s has parents %v, want base %s then head %s: %w",
+			evaluatedSHA, parents, baseSHA, headSHA, ErrEvaluatedMismatch)
+	}
+	return nil
+}
+
 // loadTrustedRecipeBytes resolves the trusted recipe bytes from the
 // declared source (§5.8). The config source returns the approved bytes
 // as snapshotted by the caller; the base-commit source reads the recipe

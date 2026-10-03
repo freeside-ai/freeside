@@ -1,0 +1,30 @@
+{
+  "head_sha": "d744c9596d470047dc5ed995452d48b7b8669184",
+  "base_sha": "1f033edf19d10e636059beda9868f2830b74389e",
+  "evaluated_sha": "c3b005f39ed2cf950c57f7398cee6bc31bcc63d0",
+  "recipe_path": ".freeside/verify.json",
+  "recipe_digest": "sha256:6bd9a67592b457f08cbafd0e16a71041dd1967aaa613b5f2e37cd6ae86ef49fd",
+  "outcome": "passed",
+  "steps": [
+    {
+      "argv": [
+        "go",
+        "test",
+        "./..."
+      ],
+      "exit_code": 0,
+      "output_truncated": false
+    },
+    {
+      "argv": [
+        "go",
+        "vet",
+        "./..."
+      ],
+      "exit_code": 0,
+      "output_truncated": false
+    }
+  ],
+  "findings": [],
+  "transcript_truncated": false
+}

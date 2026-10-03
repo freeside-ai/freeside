@@ -36,6 +36,14 @@ type Options struct {
 	// Result.CommitSHA, supplied from the daemon's own records.
 	// Required, 40 lowercase hex.
 	HeadSHA string
+	// EvaluatedSHA, when set, is the commit whose tree is materialized
+	// and inspected instead of HeadSHA's: the prospective merge of
+	// HeadSHA into BaseSHA that a base-advance re-entry verifies. It
+	// must be a merge commit with exactly the parents BaseSHA then
+	// HeadSHA. The evidence still binds HeadSHA, the head the forge
+	// shows; the report records all three. Empty verifies HeadSHA's own
+	// tree. 40 lowercase hex when set.
+	EvaluatedSHA string
 	// BaseSHA is the enforced base the candidate was imported onto; the
 	// base-commit recipe source reads the recipe at exactly this commit.
 	// Required, 40 lowercase hex.
@@ -129,6 +137,14 @@ func (o Options) validate() error {
 	if !pathfold.ValidSHA1Hex(o.BaseSHA) {
 		return fmt.Errorf("base SHA %q is not 40 lowercase hex: %w", o.BaseSHA, ErrInvalidOptions)
 	}
+	if o.EvaluatedSHA != "" {
+		if !pathfold.ValidSHA1Hex(o.EvaluatedSHA) {
+			return fmt.Errorf("evaluated SHA %q is not 40 lowercase hex: %w", o.EvaluatedSHA, ErrInvalidOptions)
+		}
+		if o.EvaluatedSHA == o.HeadSHA || o.EvaluatedSHA == o.BaseSHA {
+			return fmt.Errorf("evaluated SHA %s repeats the head or the base: %w", o.EvaluatedSHA, ErrInvalidOptions)
+		}
+	}
 	if o.InvocationID == "" {
 		return fmt.Errorf("invocation id is empty: %w", ErrInvalidOptions)
 	}
@@ -153,6 +169,16 @@ func (o Options) validate() error {
 		}
 	}
 	return nil
+}
+
+// treeSHA is the commit whose tree the verification materializes and
+// inspects: the evaluated prospective merge when one is named, the
+// candidate head otherwise.
+func (o Options) treeSHA() string {
+	if o.EvaluatedSHA != "" {
+		return o.EvaluatedSHA
+	}
+	return o.HeadSHA
 }
 
 // validRecipePath keeps the daemon-supplied recipe path inside the

@@ -18,7 +18,10 @@ import (
 // with a typed error and no Result; findings are risk flags for the
 // publication gate, never errors.
 type Result struct {
-	HeadSHA      string        `json:"head_sha"`
+	HeadSHA string `json:"head_sha"`
+	// EvaluatedSHA is the prospective merge whose tree was verified in
+	// place of the head's; empty when the head's own tree was.
+	EvaluatedSHA string        `json:"evaluated_sha,omitempty"`
 	RecipeDigest domain.Digest `json:"recipe_digest"`
 	Outcome      Outcome       `json:"outcome"`
 	Steps        []Step        `json:"steps"`
@@ -61,6 +64,14 @@ func Verify(ctx context.Context, checkoutDir string, opts Options) (Result, erro
 	if err := verifyBase(ctx, g, opts.BaseSHA); err != nil {
 		return Result{}, err
 	}
+	// An evaluated commit stands in for the head's tree only as the
+	// merge of exactly this head into exactly this base.
+	if opts.EvaluatedSHA != "" {
+		if err := verifyEvaluated(ctx, g, opts.EvaluatedSHA, opts.BaseSHA, opts.HeadSHA); err != nil {
+			return Result{}, err
+		}
+	}
+	treeSHA := opts.treeSHA()
 	trusted, err := loadTrustedRecipeBytes(ctx, g, opts.RecipeSource, opts.BaseSHA, opts.RecipePath, opts.Policy.MaxRecipeBytes)
 	if err != nil {
 		return Result{}, err
@@ -77,11 +88,11 @@ func Verify(ctx context.Context, checkoutDir string, opts Options) (Result, erro
 	// to that target would go unflagged. Resolving symlink chains in the
 	// tree is disproportionate for a trusted recipe, so the recipe must
 	// name a regular file directly.
-	if err := g.rejectSymlinkEntrypoints(ctx, opts.HeadSHA, commandPaths); err != nil {
+	if err := g.rejectSymlinkEntrypoints(ctx, treeSHA, commandPaths); err != nil {
 		return Result{}, err
 	}
 	findings := flagControlPaths(opts.Changes, opts.Policy.ExtraVerificationControlPatterns, commandPaths, opts.RecipePath)
-	divergence, err := recipeDivergence(ctx, g, opts.RecipeSource, opts.HeadSHA, opts.RecipePath, trusted, opts.Policy.MaxRecipeBytes)
+	divergence, err := recipeDivergence(ctx, g, opts.RecipeSource, treeSHA, opts.RecipePath, trusted, opts.Policy.MaxRecipeBytes)
 	if err != nil {
 		return Result{}, err
 	}
@@ -96,6 +107,7 @@ func Verify(ctx context.Context, checkoutDir string, opts Options) (Result, erro
 	rep := Report{
 		HeadSHA:             opts.HeadSHA,
 		BaseSHA:             opts.BaseSHA,
+		EvaluatedSHA:        opts.EvaluatedSHA,
 		RecipePath:          opts.RecipePath,
 		RecipeDigest:        recipeDigest,
 		Outcome:             outcome,
@@ -109,6 +121,7 @@ func Verify(ctx context.Context, checkoutDir string, opts Options) (Result, erro
 	}
 	return Result{
 		HeadSHA:             opts.HeadSHA,
+		EvaluatedSHA:        opts.EvaluatedSHA,
 		RecipeDigest:        recipeDigest,
 		Outcome:             outcome,
 		Steps:               steps,
@@ -188,7 +201,7 @@ func runRecipe(ctx context.Context, g *gitRunner, opts Options, recipe Recipe, s
 	outcome := OutcomePassed
 	for i, argv := range recipe.Commands {
 		workspace := filepath.Join(scratch, fmt.Sprintf("workspace-%d", i))
-		if err := g.materialize(ctx, opts.HeadSHA, workspace); err != nil {
+		if err := g.materialize(ctx, opts.treeSHA(), workspace); err != nil {
 			return nil, nil, "", err
 		}
 		res, err := runStep(ctx, opts, workspace, argv)
