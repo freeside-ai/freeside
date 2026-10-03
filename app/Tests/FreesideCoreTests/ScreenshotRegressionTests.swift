@@ -1499,6 +1499,36 @@
                                 .background(Color.ground))))
                 }
             }
+            // Bounded conversation messages (visual audit D04): a short
+            // message, long prose, code-like lines, and a long message with
+            // an attachment, each cut to six lines, then all in full. The
+            // widths are the decision card's conversation column and a phone.
+            let longConversation = AttentionFixtures.longConversation()
+            let longMessageIDs: Set<String> = [
+                AttentionFixtures.longPlainMessageID, AttentionFixtures.longCodeMessageID,
+                AttentionFixtures.longAttachmentMessageID,
+            ]
+            for (state, expanded) in [("collapsed", Set<String>()), ("expanded", longMessageIDs)] {
+                for width in [CGFloat(560), CGFloat(390)] {
+                    for scheme in [ColorScheme.light, .dark] {
+                        surfaces.append(
+                            Surface(
+                                name: "conversation-long-\(state)-\(Int(width))-\(scheme)",
+                                width: width, colorScheme: scheme, nativeAppearance: true,
+                                view: AnyView(
+                                    ConversationView(
+                                        snapshot: longConversation,
+                                        attachments: store.attachments,
+                                        loadsAttachments: false,
+                                        now: screenshotNow,
+                                        rendersInteractiveControls: false,
+                                        initiallyExpandedMessageIDs: expanded
+                                    )
+                                    .padding(16)
+                                    .background(Color.ground))))
+                    }
+                }
+            }
             var failedImplementation = approvalFixture.runs[0]
             failedImplementation.run.outcome = .failed
             failedImplementation.run.lifecycle = .finished

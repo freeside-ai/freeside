@@ -358,6 +358,71 @@ public enum AttentionFixtures {
         ]
     }
 
+    /// The message ids of `longConversation()`, for the views and tests
+    /// that expand one by id.
+    public static let longPlainMessageID = "msg-agent-long-plain"
+    public static let longCodeMessageID = "msg-agent-long-code"
+    public static let longAttachmentMessageID = "msg-user-long-attachment"
+
+    /// A thread whose bodies exercise bounded messages: a short one, long
+    /// prose in paragraphs, many short code-like lines, and a long message
+    /// carrying an attachment. Kept apart from `defaultConversations()`,
+    /// which MockServer serves and the sync and cache tests compare
+    /// against, so the default mock data does not change.
+    public static func longConversation() -> Components.Schemas.ConversationSnapshot {
+        let id = "conv-long-fixture"
+        let prose = [
+            "Yes. The revision keeps the order and narrows the rollback step. First, migrate the stored rows "
+                + "while the old API shape remains available. Then enable the updated reader after the migration "
+                + "has completed. This keeps older clients working during the transition.",
+            "The rollback path keeps the original rows until the compatibility checks pass. If the new reader "
+                + "fails, disable it and restore the prior read path before changing stored data again. The "
+                + "specification now names that checkpoint explicitly.",
+            "Two details still need your review: whether the compatibility window should last one release, and "
+                + "whether the migration should pause between projects. These are choices in the specification, "
+                + "not changes I have executed. The existing validation steps and rollback evidence remain part "
+                + "of the proposed work.",
+        ].joined(separator: "\n\n")
+        let code = [
+            "$ freeside migrate --plan", "step 1  copy rows to tasks_v2", "step 2  verify row counts",
+            "step 3  enable the v2 reader", "step 4  run compatibility checks", "step 5  pause between projects",
+            "step 6  drop the v1 reader", "step 7  keep tasks_v1 for one release", "rollback: disable the v2 reader",
+        ].joined(separator: "\n")
+        let request =
+            "The attached log is from the last dry run. Please check the three places where the row counts "
+            + "disagree before the reader is enabled: the first is in the oldest project, where archived tasks "
+            + "were never backfilled; the second is the project that was renamed mid-migration; and the third "
+            + "looks like a duplicate import rather than a real difference. If any of them is a real loss, the "
+            + "plan should stop at step 2 and say so in the specification instead of continuing to the reader. "
+            + "I would rather approve a slower plan than discover a missing row after the old reader is gone, "
+            + "so say plainly which of the three you could not explain and what evidence would settle it."
+        func message(
+            _ messageID: String, _ sequence: Int, _ author: Components.Schemas.Author, _ body: String,
+            attachments: [String] = []
+        ) -> Components.Schemas.Message {
+            .init(
+                id: messageID, conversation_id: id, sequence: sequence, author: author, body: body,
+                attachments: attachments, created_at: createdInstant.addingTimeInterval(Double(sequence) * 60))
+        }
+        return .init(
+            as_of_revision: 1,
+            entity_version: 1,
+            conversation: .init(
+                id: id,
+                status: .idle,
+                messages: [
+                    message(
+                        "msg-user-long-fixture", 1, .user,
+                        "Can the revised spec preserve the existing migration order?"),
+                    message(longPlainMessageID, 2, .agent, prose),
+                    message(longCodeMessageID, 3, .agent, code),
+                    message(
+                        longAttachmentMessageID, 4, .user, request,
+                        attachments: ["sha256:" + String(repeating: "c", count: 64)]),
+                ]
+            ))
+    }
+
     /// The evaluation behind the ready fixture's clean verdict, matching the
     /// daemon's golden: the production set's two required checks passed
     /// against the published head and the admitted base.
