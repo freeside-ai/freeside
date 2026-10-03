@@ -619,6 +619,44 @@ func TestMarkerParsingRequiresExactMarkerAndRejectsCollisions(t *testing.T) {
 	}
 }
 
+func TestCarriageReturnLineEndingsParseLikeLineFeeds(t *testing.T) {
+	crlf := func(text string) string { return strings.ReplaceAll(text, "\n", "\r\n") }
+	c := &collector{config: fixtureConfig("")}
+	canonical := "freeside-ai/freeside"
+	prs := []OpenPullRequest{{Number: 400, HeadRef: "feat/work", HeadRepository: RepositoryIdentity{State: "present", NameWithOwner: &canonical}}}
+	claim, keep := c.parseMarkerComment(1, graphComment{DatabaseID: 1, Body: crlf(claimMarker + "\nClaim: feat/work\n")}, prs)
+	if !keep || claim.Kind != "claim" || claim.Branch != "feat/work" || len(claim.MatchedOpenPullRequests) != 1 {
+		t.Fatalf("claim = %#v", claim)
+	}
+	release, keep := c.parseMarkerComment(1, graphComment{DatabaseID: 2, Body: crlf(releaseMarker + "\nRelease: feat/work\nReleases-claim: 1")}, nil)
+	if !keep || release.Kind != "release" || release.ReleasesClaimID != 1 {
+		t.Fatalf("release = %#v", release)
+	}
+	reservation, keep := c.parseMarkerComment(1, graphComment{DatabaseID: 3, Body: crlf("Planning.\n\n" + reservationMarker + "\nPlan: #1\n")}, nil)
+	if !keep || reservation.Kind != "planning-reservation" || reservation.PlanIssueNumber != 1 {
+		t.Fatalf("reservation = %#v", reservation)
+	}
+	if len(c.ambiguities) != 0 {
+		t.Fatalf("ambiguities = %#v", c.ambiguities)
+	}
+	if _, keep := c.parseMarkerComment(1, graphComment{Body: crlf("```\n" + claimMarker + "\nClaim: feat/work\n```")}, nil); keep {
+		t.Fatal("fenced CRLF marker was retained")
+	}
+
+	body := crlf("## Status\nActive\n\n## Units\n- [ ] #17\n- [x] #18 Titled\n\n## Notes\n- [ ] #19")
+	units := extractSections(body, "Units")
+	if len(units) != 1 {
+		t.Fatalf("Units sections = %d", len(units))
+	}
+	entries, invalid := parseCheckboxEntries(units[0])
+	if len(invalid) != 0 || len(entries) != 2 || entries[0].UnitNumber != 17 || entries[1].UnitNumber != 18 || !entries[1].Checked {
+		t.Fatalf("entries=%#v invalid=%v", entries, invalid)
+	}
+	if lines := extractScopeLines(crlf("Intro\nScope: scripts/\nMore")); len(lines) != 1 || lines[0] != "Scope: scripts/" {
+		t.Fatalf("scope lines = %q", lines)
+	}
+}
+
 func TestOmittedConnectionFailsLoud(t *testing.T) {
 	runner := loadFixtureRunner(t)
 	runner.responses["OpenIssues::"] = json.RawMessage(`{"data":{"repository":{}}}`)
