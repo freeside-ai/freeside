@@ -6488,17 +6488,27 @@ func (w *productionPublicationWorkflow) readyItemWithRecipes(
 	if err != nil {
 		return domain.AttentionItem{}, err
 	}
+	actions := []domain.Action{
+		domain.ActionOpenPR, domain.ActionReturnToAgent, domain.ActionMarkSeen,
+		domain.ActionDismiss, domain.ActionStop,
+	}
+	if task.reentersInPlace() {
+		// A re-entered cycle imported nothing, so it holds no candidate to
+		// hand back to the implementation agent (issue #502). The action is
+		// withheld rather than refused later: accepting a decision supersedes
+		// the item, which would spend the re-earned readiness on nothing.
+		actions = []domain.Action{
+			domain.ActionOpenPR, domain.ActionMarkSeen, domain.ActionDismiss, domain.ActionStop,
+		}
+	}
 	return domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: task.readyItemID(), ProjectID: task.ProjectID,
 		Subject: subject,
 		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
 		Reason: fmt.Sprintf("Published %s#%d and completed production verification.",
 			checkpoint.Authorization.Repo, published.PRNumber),
-		RequestedDecision: []domain.Action{
-			domain.ActionOpenPR, domain.ActionReturnToAgent, domain.ActionMarkSeen,
-			domain.ActionDismiss, domain.ActionStop,
-		},
-		EvidenceSnapshot: checkpoint.Artifacts,
+		RequestedDecision: actions,
+		EvidenceSnapshot:  checkpoint.Artifacts,
 		AgentClaims: normalizeSummaryClaims(
 			checkpoint.Imported.Claims, task.ProducingInvocationID),
 		PRHeadSHA: checkpoint.Imported.CommitSHA,
