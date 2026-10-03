@@ -2315,3 +2315,69 @@ decisions of 2026-09-23 made in this revision's review;
 (Owner-assigned #1441. The rule is the issue plan's recommendation, decided
 by the owner through this revision's review;
 [decision note](../../devlog/2026-09-30-1530-filing-recovery-rule.md).)
+
+## Revision 76 ("A Researcher Does the Specifier's Web Search")
+
+1. **The specification stage gains a researcher role.** The specifier writes
+   research questions, the researcher searches the web and refines, and the
+   daemon stores its report and reinvokes the specifier with it (Section
+   [5.4](../plan.md#54-credential-modes-egress-profiles-and-concurrency), research for the specifier). The specifier still has no web access,
+   and the daemon fetcher stays for allowlisted sources. The researcher joins
+   the closed role list as a ward role (Section [5.13](../plan.md#513-deterministic-components-judgment-calls-and-the-effect-registry)).
+   Rejected: search in the daemon fetcher (every refinement reinvokes the
+   whole specifier, up to its iteration bound, which is slow and costly on a
+   large model); and `provider_web_read` for the specifier (the stage most
+   exposed to injection would hold open web access beside its credential and
+   the task).
+2. **The researcher runs under `provider_only` with search as its only
+   tool.** The #1620 spike showed that the pinned Claude CLI's search runs on
+   the provider's servers and its page fetch runs inside the ward, so
+   search needs no wider profile and fetching would. The cost is that the
+   researcher cannot read a full page. Rejected: `provider_web_read` for the
+   researcher (a wider profile for a gain no run has yet shown to be
+   needed); and an API key under `api_key_isolated` calling a server-side
+   fetch tool (untested, and a second credential type for one role).
+3. **The researcher sees only the research questions.** No task text,
+   repository, task files, or owner answers reach it, and the daemon bounds
+   and secret-scans the questions. The questions remain a channel an
+   injected specifier can write into (Section [14](../plan.md#14-risks)). Rejected: giving the
+   researcher the task for better search (the whole task would then sit in
+   a ward that reads the open web).
+4. **Only the lineup picks the researcher's agent.** A task line doesn't
+   cover it, because no task has needed its own researcher agent, and the
+   alternate-agent card never selects it, because its failures block no
+   stage. The plan names no model; the researcher has its own lineup line so
+   it can run a cheaper agent than the specifier. The baseline lineup's
+   line for it is #1426's to add, and the decision note records the owner's
+   pick.
+5. **Research is limited and charged to the task.** Policy limits research
+   requests per specification run, searches per request, and report size. A
+   request adds no specifier iteration of its own. The search limit is
+   checked after a launch ends, because the count the daemon trusts is the
+   harness's per-model usage record, which exists only then. A launch over
+   the limit has its report discarded, and the searches it made stay spent
+   and charged to the task. The stage's active-time budget is the only
+   thing that stops a running launch.
+6. **The researcher has its own launch, and its failure fails safe.** The
+   research launch is a second, narrower launch in the specification stage:
+   an empty workspace, the questions in, the report out. It is a stage
+   launch, not a third shape. A failed request, a missing line, or a failed admission reaches the
+   specifier as a typed result and does not block the stage; the last two,
+   and a quota, expiry, or capacity failure, also raise a `system_health`
+   item. Rejected: blocking the stage
+   (a search outage would stop specifications that can go on without it,
+   and the owner sees the failed request at spec approval either way).
+7. **A report records an observation time, not a retrieval time.** Neither
+   Claude CLI web tool records when a page was retrieved (#1620), so each
+   finding carries the time the harness received its search result.
+8. **The specifier's launch withholds web tools.** The #1620 spike showed
+   the Claude CLI's search working from a writer launch under
+   `provider_only`, so the profile alone does not keep the specifier off the
+   web. The specification launch now requires it, proved per adapter build
+   (#1657). Whether the implementation and review launches keep that search
+   is left open as #1659.
+
+(Owner decision of 2026-09-29, #1614. Items 2 to 6 are the issue's
+recommended answers, decided by the owner through this revision's review;
+[decision note](../../devlog/2026-09-30-1830-researcher-role.md). Implementation
+is filed as #1656, #1657, and #1658, and the open question as #1659.)

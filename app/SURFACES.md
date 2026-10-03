@@ -31,7 +31,7 @@ Mac and iOS match on every line unless a line says otherwise.
   shell; five additional types compose card-specific orderings from the shared
   graphic module set.
 - **Not yet:** conversation attachments, the evidence
-  packet viewer, proposal batches, the
+  packet viewer, proposal batches, the account usage view, the
   initiative view, push notifications.
 - **Open:** twelve placement questions, listed at the end.
 
@@ -54,7 +54,8 @@ Mac and iOS match on every line unless a line says otherwise.
 | Proposal batch | Not yet | Several proposals decided one by one in one place. Plan §4. |
 | Initiative view | Not yet | Phase 1B.2. Plan §5.18, §11. |
 | Project detail, past-work history, schedules page, consent grants | Later | Explicitly after 1B. Plan §11. |
-| Usage, briefings, WIP views, ACP attachment | Later | Phase 3. |
+| Account usage | Not yet | Phase 1B.1, wave 10 (plan §5.4 usage observation, §10, §11): each identity's usage pool and plan, every window's used share, local reset time and countdown, observation time and refresh status, a manual refresh, collector reassignment, and the same facts beside the agent choices in New Task, the task-line change control, and the alternate-agent retry card. |
+| Briefings, WIP views, ACP attachment | Later | Phase 3. |
 | Widgets, App Intents, Live Activities | Later | Phase 4. |
 | Settings editor | Never | Configuration changes arrive as approval cards, not forms. Plan §11. |
 
