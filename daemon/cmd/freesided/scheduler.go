@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/scheduler"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -639,6 +640,12 @@ func baseAdvanceRegistration(st *store.Store, observe baseTipObserver, capture m
 						item.Status = domain.StatusSuperseded
 						item.ItemVersion++
 						if err := tx.PutAttentionItem(ctx, item); err != nil {
+							return err
+						}
+						// The run re-earns readiness against the advanced base
+						// in the same transaction, so no restart finds the item
+						// superseded with no cycle behind it (issue #502).
+						if _, err := engine.StartReadinessReentry(ctx, tx, item); err != nil {
 							return err
 						}
 						return concludePublicationSchedules(ctx, tx, item.ID, ev.FiredAt)
