@@ -442,6 +442,15 @@ and its guarantees.
   paths. Read the whole change set it prints: the audit cannot see intent,
   so an in-scope reversion still passes. Record the resolved base SHA, the
   audit command, and the verdict in the PR's Verification section.
+- "After any base advance" says what is stale, not that every tip gets a
+  re-run. A handed-off PR that is waiting to merge is stale from the advance
+  on. Revalidate it once, against the exact tip it will merge onto, when it
+  is selected for integration; it never merges on stale evidence.
+- When the advance landed another contract unit, a contract PR's
+  revalidation also regenerates its generated consumers and re-runs
+  `scripts/check.sh` for its components against the new tip. Two contract
+  units that merge cleanly as text can still disagree, and with two active
+  at once the second to merge always meets this case.
 
 <!-- agents-md:managed:branches -->
 
