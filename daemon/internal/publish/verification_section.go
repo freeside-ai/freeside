@@ -49,6 +49,16 @@ func candidateVerificationReport(c Candidate) (verify.Report, *domain.Artifact, 
 	if c.RecipeDigest == nil || rep.HeadSHA != c.HeadSHA || rep.RecipeDigest != *c.RecipeDigest {
 		return verify.Report{}, nil, fmt.Errorf("verification report does not describe candidate: %w", ErrUnauthorizedPublication)
 	}
+	// A report that names an evaluated commit ran its recipe against the
+	// prospective merge of the head into its base, not the head's own tree.
+	// The section this gate feeds says its commands ran at the head, and the
+	// binding above compares head and recipe only, so merge evidence is
+	// refused here instead of being published as head evidence.
+	if rep.EvaluatedSHA != "" {
+		return verify.Report{}, nil, fmt.Errorf(
+			"verification report evaluated a prospective merge, not the candidate head: %w", ErrUnauthorizedPublication,
+		)
+	}
 	return rep, artifact, nil
 }
 
