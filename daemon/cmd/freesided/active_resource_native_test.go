@@ -412,18 +412,32 @@ func TestActiveResourceNativeCommitFailureEvictsCache(t *testing.T) {
 	}
 }
 
-// dropNativeReviewObservations deletes the native-review table through a second
-// connection to the store's file, so a subsequent native append fails while the
-// other tables stay intact.
+// dropNativeReviewObservations deletes the native-review table, so a
+// subsequent native append fails while the other tables stay intact.
 func dropNativeReviewObservations(t *testing.T, dbPath string) {
+	t.Helper()
+	dropStoreTable(t, dbPath, "native_review_observations")
+}
+
+// dropStoreTable deletes one table, so a later statement against it fails
+// while the others stay intact.
+func dropStoreTable(t *testing.T, dbPath, table string) {
+	t.Helper()
+	execStoreSQL(t, dbPath, "DROP TABLE "+table)
+}
+
+// execStoreSQL runs one statement through a second connection to the store's
+// file. Tests use it to damage the store, and to repair it, behind the
+// reconciler's back.
+func execStoreSQL(t *testing.T, dbPath, statement string) {
 	t.Helper()
 	db, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatalf("open store db: %v", err)
 	}
 	defer func() { _ = db.Close() }()
-	if _, err := db.Exec("DROP TABLE native_review_observations"); err != nil {
-		t.Fatalf("drop native table: %v", err)
+	if _, err := db.Exec(statement); err != nil {
+		t.Fatalf("%s: %v", statement, err)
 	}
 }
 

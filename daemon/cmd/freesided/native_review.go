@@ -116,23 +116,7 @@ func nativeFinding(c publish.PullReviewComment, runID domain.RunID) domain.Findi
 	// so a legacy filename can carry invalid UTF-8 with no adversary); sanitize
 	// it on the same trust boundary as the body before it reaches the store.
 	path := boundedNativeText(c.Path)
-	// A pathed comment maps to a structured location: a line-bearing comment to
-	// the range [start, line] (a multi-line comment supplies StartLine; a
-	// single-line one collapses to [line, line]), a file-level comment (no line)
-	// to the whole-file location (0,0). A comment with no path is a review-level
-	// observation and carries a nil location (§7 fails closed on it downstream).
-	var location *domain.FindingLocation
-	if path != "" {
-		loc := domain.FindingLocation{Path: path}
-		if c.Line > 0 {
-			start := c.Line
-			if c.StartLine > 0 {
-				start = c.StartLine
-			}
-			loc.StartLine, loc.EndLine = start, c.Line
-		}
-		location = &loc
-	}
+	location := reviewCommentLocation(path, c.StartLine, c.Line)
 	return domain.Finding{
 		ID:        domain.FindingID(fmt.Sprintf("native-comment-%d", c.ID)),
 		RunID:     runID,
@@ -143,6 +127,27 @@ func nativeFinding(c publish.PullReviewComment, runID domain.RunID) domain.Findi
 		RawText:   body,
 		CreatedAt: c.CreatedAt.UTC(),
 	}
+}
+
+// reviewCommentLocation maps an inline review comment's path and range to a
+// structured location: a line-bearing comment to the range [start, line] (a
+// multi-line comment supplies startLine; a single-line one collapses to
+// [line, line]), a file-level comment (no line) to the whole-file location
+// (0,0). A comment with no path is a review-level observation and carries a
+// nil location (§7 fails closed on it downstream).
+func reviewCommentLocation(path string, startLine, line int) *domain.FindingLocation {
+	if path == "" {
+		return nil
+	}
+	loc := domain.FindingLocation{Path: path}
+	if line > 0 {
+		start := line
+		if startLine > 0 {
+			start = startLine
+		}
+		loc.StartLine, loc.EndLine = start, line
+	}
+	return &loc
 }
 
 // nativeReviewBadgePrefixBytes bounds how far into a third-party review body the
