@@ -52,6 +52,18 @@ func (r repoRef) path() string { return r.owner + "/" + r.name }
 // If-None-Match so an unchanged resource answers 304 with no body.
 // The caller owns status handling and must drain and close the body.
 func (f *forge) do(ctx context.Context, method string, repo repoRef, path, etag string, body any) (*http.Response, error) {
+	req, err := f.newRequest(ctx, method, repo, path, etag, body)
+	if err != nil {
+		return nil, err
+	}
+	return f.client.Do(req)
+}
+
+// newRequest builds one authenticated request without sending it. A caller
+// that must record a durable marker between "ready to send" and "sent"
+// (follow-up filing's dispatch-started marker) builds the request first, so
+// encoding and token acquisition cannot fail after the marker is written.
+func (f *forge) newRequest(ctx context.Context, method string, repo repoRef, path, etag string, body any) (*http.Request, error) {
 	var payload []byte
 	if body != nil {
 		var err error
@@ -77,11 +89,7 @@ func (f *forge) do(ctx context.Context, method string, repo repoRef, path, etag 
 	if etag != "" {
 		req.Header.Set("If-None-Match", etag)
 	}
-	resp, err := f.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	return resp, nil
+	return req, nil
 }
 
 // refState is the decoded observation of one branch ref.
