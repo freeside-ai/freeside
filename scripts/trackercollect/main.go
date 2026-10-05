@@ -46,9 +46,47 @@ func runContracts(args []string) int {
 	return code
 }
 
+const unitUsage = "usage: trackercollect unit --repo HOST/OWNER/NAME --issue NUMBER --out DIRECTORY"
+
+// runUnit handles the unit subcommand. A usage error is a hard failure
+// (exit 1): exits 2 and 3 are reserved for what the report found.
+func runUnit(args []string) int {
+	flags := flag.NewFlagSet("unit", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var repo string
+	var out string
+	var issue int
+	flags.StringVar(&repo, "repo", "", "repository as HOST/OWNER/NAME")
+	flags.IntVar(&issue, "issue", 0, "open issue number")
+	flags.StringVar(&out, "out", "", "output directory")
+	parseErr := flags.Parse(args)
+	ref, err := collector.ParseRepository(repo)
+	if parseErr != nil || err != nil || out == "" || issue <= 0 || issue > collector.MaxGraphQLInt || flags.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, unitUsage)
+		if parseErr != nil {
+			fmt.Fprintf(os.Stderr, "flags: %v\n", parseErr)
+		} else if err != nil {
+			fmt.Fprintf(os.Stderr, "repository: %v\n", err)
+		}
+		return 1
+	}
+	code, err := collector.RunUnit(context.Background(), collector.UnitConfig{
+		Repository: ref,
+		Issue:      issue,
+		OutputDir:  out,
+	}, collector.NewGHRunner(ref.Host), time.Now)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "trackercollect: %v\n", err)
+	}
+	return code
+}
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "contracts" {
 		os.Exit(runContracts(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "unit" {
+		os.Exit(runUnit(os.Args[2:]))
 	}
 	var repo string
 	var out string

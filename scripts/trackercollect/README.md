@@ -4,7 +4,8 @@
 post-merge tracker reconciliation. It writes `snapshot.json` and `report.md`;
 it never writes to the forge and does not decide wave state, path overlap,
 startability, or mergeability. Its `contracts` subcommand reports contract
-occupancy instead; see Contract Occupancy below.
+occupancy instead, and its `unit` subcommand reports one issue's relationships
+and claim state; see Contract Occupancy and Unit Coordination Evidence below.
 
 The runtime requires Go 1.26.6 and an authenticated `gh` CLI with access to the
 target repository. Run it from this module:
@@ -123,3 +124,92 @@ Known limits:
 - A marker is read only in its canonical form: the marker alone on a line,
   outside a code block or list item. Any other form is not a marker and adds
   no `AMBIGUOUS` entry.
+
+## Unit Coordination Evidence
+
+`trackercollect unit` gathers, for one open issue, the evidence the Claiming
+reads in `docs/coordination.md` ask for. It is read-only and optional. It
+replaces none of those reads and decides nothing: whether the session may
+claim or start is the session's call under the Coordination Gates in
+`AGENTS.md`.
+
+```sh
+/tmp/trackercollect unit --repo github.com/freeside-ai/freeside --issue 1727 --out /tmp/unit-1727
+```
+
+The command writes `unit.json` and `unit.md`. Nothing is cached, so the
+second Claiming read after posting a claim is a second run. The report holds:
+
+- **Dependencies.** Each line of the issue's Dependencies section that leads
+  with `starts-after`, `merges-after`, `stacked-on`, or `exclusive-with` and
+  names at least one `#N` or `PR #N`, or that leads with `none`. An indented
+  line that leads with no relationship belongs to the line above it.
+- **`UNKNOWN relationship` entries.** Every other line of that section, word
+  for word, and a Dependencies section that is missing or repeated. From
+  every other open issue: an `exclusive-with` line with no target, and a
+  line that carries both `exclusive-with` and the issue's number without
+  declaring the pair. Either may declare a relationship the report cannot
+  type. An open issue with no Dependencies section is searched whole for a
+  line carrying both. On the issue itself, a typed line that carries
+  `exclusive-with` and a `#N` outside its declared `exclusive-with` targets,
+  and an `exclusive-with PR #N`, are entries too.
+- **The direct exclusivity set.** The issue, the issues it declares
+  `exclusive-with`, and the open issues that declare `exclusive-with` it.
+  The set is not transitive.
+- **Each member's claim state.** One state from the Contract Occupancy
+  table, by the same rules and the same marker-author rule, with every claim
+  and reservation comment's ID and `created_at` and every PR's number. Two
+  more states exist here. `not-open` is a declared partner absent from a
+  complete open-issue inventory: closed, or not an issue; its comments are
+  not read. `UNKNOWN` is a member whose state the evidence does not
+  establish; claims and reservations found for it are still listed, as
+  retained evidence, with no ordering claim.
+- **Open trackers.** Every open `tracker` issue whose Units section lists the
+  issue, with its milestone.
+
+`UNKNOWN` entries come first in the report. Each names evidence that was not
+read or not understood:
+
+- A page cap reached on the open-issue inventory, the open-PR list, a PR's
+  closing issues, or a member's comments. Partial evidence is kept.
+- A failed read of the open-PR list, a PR's closing issues, or a member's
+  comments. The `contracts` command stops on these; this one keeps going.
+- A malformed marker comment, or a marker from an author who is not an
+  owner, member, or collaborator, among a member's comments.
+- An issue with more labels than one page holds, and a tracker whose Units
+  section is missing, repeated, or holds an invalid issue number.
+- A `kind:contract` issue. Its contract conflict set and the cap are not
+  computed (AGENTS.md, Contract Changes); `trackercollect contracts` reports
+  contract occupancy.
+
+An unread comment page leaves that member `UNKNOWN`. An unread open-PR list
+or closing-issue list leaves every open member `UNKNOWN`, because any of
+them may hold a PR-backed claim. A truncated open-issue inventory leaves an
+absent partner `UNKNOWN` and may hide reverse declarations and trackers.
+With any `UNKNOWN` entry the report calls no list empty.
+
+Exit codes: 0 when every read finished and every Dependencies line was
+typed, 3 when every read finished and at least one `UNKNOWN relationship`
+exists, 2 for any other `UNKNOWN` entry (artifacts are still written), and 1
+for a hard failure with no artifacts: a usage error, a failed open-issue
+inventory read, or an issue that is closed, missing, or absent from a
+truncated inventory. Exit 2 wins over exit 3.
+
+Limits, beyond those of the claim states above:
+
+- Only the Dependencies section is read. On an issue that has one, a
+  relationship stated elsewhere in the body is not seen. A comment is never
+  read for relationships.
+- A line inside a fenced code block or an HTML comment is not read.
+- The keyword is read only as `exclusive-with`. "Exclusive with #N" on
+  another issue is not reported.
+- A relationship counts only when it leads its line. On another open issue,
+  a mid-line `exclusive-with` that names no target and does not mention this
+  issue's number is not reported.
+- Prose wrapped onto an unindented line becomes its own `UNKNOWN
+  relationship` entry.
+- A pull request is never a set member. `exclusive-with PR #N` on another
+  issue is an entry only when `N` is this issue's number.
+- Other open issues are scanned for `exclusive-with` only. The targets of
+  `starts-after`, `merges-after`, and `stacked-on` are listed, not read.
+- The contract conflict set and the cap are not computed.
