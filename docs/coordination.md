@@ -426,21 +426,46 @@ reports the post-merge results required by AGENTS.md.
 
 ## Unit Sizing
 
-A work unit's expected pull request stays around or under 1,000 changed
-lines. The budget is soft, not a gate: merged-PR review history shows
-automated-review convergence flat below roughly that size and
-multiplying above it (devlog 2026-08-18-0818-unit-size-budget.md), so a
-unit kept deliberately larger records its reason on the issue and
-proceeds.
+A work unit's expected pull request stays around or under 1,000 authored
+changed lines. The budget is soft, not a gate: merged-PR review history
+shows automated-review convergence flat below roughly that size and
+multiplying above it (devlog 2026-08-18-0818-unit-size-budget.md, which
+counted every added line; devlog 2026-10-05-1014-unit-sizing-revision.md
+narrows the count to authored lines), so a unit kept deliberately larger
+records its reason on the issue and proceeds.
 
-Estimate against the repository's known size amplifiers, not the core
-change alone; a unit touching two or more is presumed over budget:
+The budget counts authored lines because each one is a decision a
+reviewer has to weigh. One test tells authored lines from regenerated
+output:
+
+- **Authored:** someone, agent or person, decided the line, and a
+  reviewer has to weigh it.
+- **Regenerated:** a documented command reproduces the file from tracked
+  inputs. A reviewer confirms that the command reproduces it, then scans
+  the diff for change the authored lines don't explain.
+
+The estimate declares regenerated output beside the authored count and
+leaves it out of the count. That output is still verified, and a
+golden's diff is still reviewed (`daemon/README.md`):
+
+- the generated API client under
+  `app/Sources/FreesideAPI/GeneratedSources/`, with the schema mirror and
+  the contract-digest constants regenerated alongside it
+  (`bash scripts/check.sh app generate`);
+- golden files rewritten by `go test -update`
+  (`daemon/internal/golden`);
+- any other fixture a documented command rewrites. A fixture edited line
+  by line is authored and counts.
+
+Estimate the authored lines against the repository's known size
+amplifiers, not the core change alone; a unit touching two or more is
+presumed over budget:
 
 - a new migration, which also joins every migration-subset exclusion
   list;
-- store plus domain golden regeneration;
-- a sync-carried contract field, which is `kind:contract` and drags the
-  API schema plus the generated app client;
+- a sync-carried contract field, which is `kind:contract` and adds the
+  API schema edit; its generated app client is regenerated output and
+  stays out of the count;
 - new mock state, whose MockServer daemon parity lands in the first
   push.
 
@@ -450,7 +475,9 @@ unit:
 - persistence first: migration, store accessors, and goldens as one
   unit, with the behavior consuming them following;
 - contract first: a new field and the behavior using it are two units
-  even when the field alone looks trivial;
+  by default, even when the field alone looks trivial; a `kind:contract`
+  unit may instead carry its first behavioral consumer under the
+  conditions below;
 - happy path, then hardening: the working skeleton with its tests lands
   first; failure, recovery, and drift-tolerance behaviors follow as
   their own units;
@@ -459,6 +486,48 @@ unit:
   or as an intentionally declared `stacked-on` pull request on a
   non-contract base; a contract-first split's dependent always waits
   for the contract unit to merge.
+
+**A contract unit may carry its first behavioral consumer.** One unit
+then holds the contract change and the first behavior that uses it,
+when both conditions hold:
+
+- **The two can be understood and verified together.** A reviewer reads
+  the contract change and the behavior as one change, and one
+  verification run exercises both.
+- **No other contract unit is waiting for the slot.** The combined
+  unit's pull request stays open longer than the contract change alone
+  would, and an open contract pull request holds one of the cap's slots
+  until it merges (AGENTS.md, Contract Changes). Another open
+  `kind:contract` unit is a candidate when it holds no active claim and
+  it is scheduled, the wave planning in progress will schedule it, or
+  it holds a planning reservation. A candidate is waiting when this
+  unit is what would hold it back:
+  - it `starts-after` this unit;
+  - the pair is `exclusive-with`, or the spine has not assessed it as
+    independent with the consumer included; or
+  - only the cap would hold it back: its `starts-after` prerequisites
+    have merged, it conflicts with no unit that holds an active claim,
+    and the slot this unit would hold is the one it needs.
+
+  A unit that is not a candidate is not waiting, whatever tracker lists
+  it.
+
+The split stays the default. Keep it when the parts are each valuable
+alone, when the contract serves several consumers, or when splitting
+isolates design uncertainty.
+
+The combined unit owes everything a contract unit owes. It stays
+`kind:contract`, declares every component it touches, and gets contract
+review and regenerated-output verification. Every further consumer
+waits for its merge. The budget applies to it as to any other unit.
+
+Check both conditions where the unit is shaped: at wave decomposition,
+and again at planning. The Dependencies fields and
+`scripts/trackercollect contracts` supply the evidence. Folding a
+consumer into a contract unit is a spine or owner action, as executing
+a split is; planning proposes the fold in the plan comment. The fold
+edits the unit's Objective and Scope, so it withdraws the unit's
+independence records (Relationship Types).
 
 The budget applies at three checkpoints. Wave decomposition estimates
 coarsely and splits the obvious cases. The planning stage refines the
