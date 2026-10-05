@@ -79,7 +79,7 @@ struct DecisionDetailView: View {
     @State private var recommendationVisible = true
     @State private var provenanceExpanded = false
     @State private var lostResponseExpanded = false
-    @State private var alternativeSelections: [String: Components.Schemas.AdjudicationRoute] = [:]
+    @State private var alternativeSelections: [String: Components.Schemas.AdjudicationRoute]
     /// The finding rows the operator opened, by finding id. Empty by default:
     /// a finding_adjudication card leads with collapsed rows so its actions
     /// stay in the first viewport (#1107).
@@ -105,6 +105,7 @@ struct DecisionDetailView: View {
         itemID: String,
         detailsExpanded: Bool = false,
         expandedFindings: Set<String> = [],
+        alternativeSelections: [String: Components.Schemas.AdjudicationRoute] = [:],
         expandsSummaryReports: Bool = false,
         expandedDisclosures: Set<DecisionDisclosure> = [],
         detailsRevealRequest: TechnicalDetailsRevealRequest? = nil,
@@ -129,6 +130,7 @@ struct DecisionDetailView: View {
                     detailsExpandedOverride: revealsTechnicalDetails ? true : nil))
         _inspectorPresented = State(initialValue: revealsTechnicalDetails)
         _expandedFindings = State(initialValue: expandedFindings)
+        _alternativeSelections = State(initialValue: alternativeSelections)
         _expandedDisclosures = State(initialValue: expandedDisclosures)
         attachments = store.attachments
         self.itemID = itemID
@@ -829,12 +831,12 @@ struct DecisionDetailView: View {
                 DecisionStopCauseModuleView(presentation: presentation)
             }
         case .findingFacts:
-            // The labeled proposal and the daemon-fact register lead the §9
-            // finding_adjudication card (docs/plan.md §9, #984), so this
-            // module renders ahead of actionInsertionIndex on every layout;
-            // see DecisionCardComposition.forType(.finding_adjudication).
+            // The finding cards lead the §9 finding_adjudication card
+            // (docs/plan.md §9 revision 78), so this module renders ahead of
+            // actionInsertionIndex on every layout; see
+            // DecisionCardComposition.forType(.finding_adjudication).
             if let adjudication = item.finding_adjudication?.value1 {
-                findingAdjudicationLead(
+                findingCards(
                     adjudication,
                     rendersInteractiveControls: rendersInteractiveControls)
             }
@@ -1189,12 +1191,6 @@ struct DecisionDetailView: View {
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Text(changeSummary.summary))
-        }
-
-        if let adjudication = item.finding_adjudication?.value1 {
-            findingAdjudicationDetail(
-                adjudication,
-                rendersInteractiveControls: rendersInteractiveControls)
         }
 
         if let comparison = graphics.comparison, !comparison.verifiableFacts.isEmpty {
@@ -1876,130 +1872,159 @@ struct DecisionDetailView: View {
         }
     #endif
 
-    // Split across the §9 leads-with/below boundary (#984): the labeled
-    // proposal and the daemon-fact register lead (findingAdjudicationLead,
-    // rendered from the .findingFacts module ahead of actionInsertionIndex),
-    // while assumptions, cited rules, alternatives, and gating questions stay
-    // below the action region (findingAdjudicationDetail, still reached from
-    // .factBlock). Both iterate the same proposals in the same order so a
-    // multi-finding item keeps each finding's lead and detail content
-    // correspondingly ordered.
+    // One card per finding (plan §9 revision 78, visual audit D09). A card
+    // shows its finding's exact message, the proposed route, and who proposed
+    // it; everything else about that finding, the alternative-route picker
+    // included, sits in the card's own disclosure. Nothing drawn from a
+    // proposal renders outside its card, so a picker can only belong to the
+    // finding it sits under, and no content spans the action region. A held
+    // alternative shows on the face, so closing a card never hides a choice
+    // the operator can still send.
     //
-    // The lead collapses: each finding is one row (its id, the recommended
-    // route, the goal relationship, and the adjudicator's confidence) under
-    // its producer register, and the full proposal and daemon facts open in
-    // place above the action region, which two expanded findings pushed a
-    // full viewport below the fold (#1107).
+    // The registers are told apart by where content stands, not by a border
+    // each: the daemon's message under the card's heading and its
+    // coordinates under "Daemon facts", the route and the rationale each
+    // under the producer label.
     @ViewBuilder
-    private func findingAdjudicationLead(
+    private func findingCards(
         _ binding: Components.Schemas.FindingAdjudicationBinding,
         rendersInteractiveControls: Bool
     ) -> some View {
-        ForEach(binding.proposals, id: \.finding_id) { proposal in
-            let producer = AttentionDisplay.adjudicationProducerPresentation(proposal.producer)
-            DisclosureGroup(isExpanded: findingExpansion(proposal.finding_id)) {
-                VStack(alignment: .leading, spacing: 12) {
-                    factRow(
-                        "Work-unit compatibility",
-                        value: AttentionDisplay.label(proposal.compatibility?.value1))
-                    Text(proposal.rationale)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if !proposal.evidence.isEmpty {
-                        // The engine fast path also populates evidence (the
-                        // finding's own containment location, a daemon fact),
-                        // so the label follows producer.modelBacked like the
-                        // surrounding register instead of always reading
-                        // "model-derived" (#892, #984 review).
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(
-                                producer.modelBacked
-                                    ? "Evidence (model-derived)" : "Evidence (daemon-derived)"
-                            )
-                            .font(FreesideFont.sans(.callout, weight: .semibold))
-                            ForEach(Array(proposal.evidence.enumerated()), id: \.offset) {
-                                _, value in
-                                Label(value, systemImage: "circle.fill")
-                                    .labelStyle(FindingListLabelStyle())
-                            }
-                        }
+        ForEach(Array(binding.proposals.enumerated()), id: \.element.finding_id) {
+            index, proposal in
+            let card = FindingCardPresentation(proposal, number: index + 1, binding: binding)
+            VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 10) {
+                    KeywordLabel(text: card.heading)
+                    if !card.message.isEmpty {
+                        Text(card.message)
+                            .font(FreesideFont.callout)
+                            .foregroundStyle(Color.ink)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    // The finding message and location are daemon-authenticated
-                    // coordinates, so they keep their own solid register inside
-                    // the expanded row, never mixed into the model-backed
-                    // content around them (#892).
-                    cardSection("Daemon facts") {
-                        if !proposal.finding_message.isEmpty {
-                            factRow("Finding message", value: proposal.finding_message)
-                        }
-                        if let location = proposal.finding_location?.value1 {
-                            factRow(
-                                "Finding location",
-                                value: AttentionDisplay.findingLocation(location), monospaced: true)
-                        }
-                        factRow(
-                            "Binding digest", value: binding.adjudication_digest, monospaced: true)
-                        factRow("Run", value: binding.run_id)
-                        factRow("Round", value: "\(binding.round)")
-                    }
-                }
-                .font(FreesideFont.callout)
-                .foregroundStyle(Color.ink)
-                .padding(.top, 8)
-            } label: {
-                VStack(alignment: .leading, spacing: 4) {
-                    KeywordLabel(text: producer.label)
-                    Text(Self.findingSummary(proposal))
-                        .font(FreesideFont.callout)
-                        .foregroundStyle(Color.ink)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(
-                    Text(
-                        "\(producer.label). \(Self.findingSummaryAccessibilityLabel(proposal))"))
+                .accessibilityLabel(Text(card.messageAccessibilityLabel))
+                .accessibilityAddTraits(.isHeader)
+                VStack(alignment: .leading, spacing: 4) {
+                    findingProducerLabel(
+                        card, rendersInteractiveControls: rendersInteractiveControls)
+                    Text(card.route)
+                        .font(FreesideFont.itemTitle)
+                        .foregroundStyle(Color.accentText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityLabel(Text(card.routeAccessibilityLabel))
+                    if let selected = alternativeSelections[card.id] {
+                        Text(FindingCardPresentation.selectionNotice(selected))
+                            .font(FreesideFont.callout)
+                            .foregroundStyle(Color.ink)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityLabel(
+                                Text(card.selectionAccessibilityLabel(selected)))
+                    }
+                }
+                DisclosureGroup(isExpanded: findingExpansion(card.id)) {
+                    findingDetail(
+                        card,
+                        selection: alternativeSelection(for: proposal),
+                        rendersInteractiveControls: rendersInteractiveControls)
+                } label: {
+                    Text(FindingCardPresentation.disclosureTitle)
+                        .font(FreesideFont.callout)
+                        .foregroundStyle(Color.ink)
+                        .accessibilityLabel(Text(card.disclosureAccessibilityLabel))
+                }
+                .tint(.accentText)
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .freesideCard(dashed: producer.modelBacked)
+            .freesideCard()
         }
     }
 
-    /// One finding's collapsed row: the daemon's finding id, then the three
-    /// values that decide the route (the recommendation, how the finding
-    /// relates to the goal, and the adjudicator's confidence where it recorded
-    /// one). The producer register labels the row above it, so the row itself
-    /// carries no register word.
-    static func findingSummary(
-        _ proposal: Components.Schemas.FindingAdjudicationProposal
-    ) -> String {
-        var parts = [
-            proposal.finding_id,
-            AttentionDisplay.label(proposal.route),
-            AttentionDisplay.label(proposal.goal_relationship),
-        ]
-        if let confidence = proposal.confidence?.value1 {
-            parts.append(AttentionDisplay.label(confidence))
+    /// The producer label, with the explanation of "(unverified)" one button
+    /// away where the label carries the word (visual audit D03).
+    @ViewBuilder
+    private func findingProducerLabel(
+        _ card: FindingCardPresentation,
+        rendersInteractiveControls: Bool
+    ) -> some View {
+        if let keyword = card.producerUnverifiedKeyword {
+            UnverifiedLabel(
+                text: keyword, rendersInteractiveControls: rendersInteractiveControls)
+        } else {
+            KeywordLabel(text: card.producerLabel)
         }
-        return parts.joined(separator: " · ")
     }
 
-    /// The collapsed row spoken. The visible row separates four bare values
-    /// with "·", which reads as four unlabelled words, so the spoken form
-    /// names the field each one answers. The producer register joins it at
-    /// the call site, so a model-proposed route is never spoken as a fact the
-    /// daemon established.
-    static func findingSummaryAccessibilityLabel(
-        _ proposal: Components.Schemas.FindingAdjudicationProposal
-    ) -> String {
-        var parts = [
-            "Finding \(proposal.finding_id)",
-            "recommended route \(AttentionDisplay.label(proposal.route))",
-            "goal relationship \(AttentionDisplay.label(proposal.goal_relationship))",
-        ]
-        if let confidence = proposal.confidence?.value1 {
-            parts.append("confidence \(AttentionDisplay.label(confidence))")
+    private func findingDetail(
+        _ card: FindingCardPresentation,
+        selection: Binding<Components.Schemas.AdjudicationRoute?>,
+        rendersInteractiveControls: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // The label repeats here because the rationale below it is the
+            // producer's too, and an open disclosure can scroll the card's
+            // face out of view.
+            findingProducerLabel(card, rendersInteractiveControls: rendersInteractiveControls)
+            Text(card.rationale)
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(card.proposalRows) { fact in
+                factRow(fact.label, value: fact.value, monospaced: fact.monospaced)
+            }
+            if !card.evidence.isEmpty {
+                findingList(card.evidenceTitle, values: card.evidence)
+            }
+            // The finding's coordinates are daemon-authenticated, so they
+            // keep their own titled register inside the disclosure, never
+            // mixed into the producer's content around them (#892).
+            findingSection("Daemon facts") {
+                ForEach(card.daemonFacts) { fact in
+                    factRow(fact.label, value: fact.value, monospaced: fact.monospaced)
+                }
+            }
+            if !card.assumptions.isEmpty {
+                findingList("Assumptions", values: card.assumptions)
+            }
+            if !card.citedRules.isEmpty {
+                findingList("Cited repository rules", values: card.citedRules)
+            }
+            if !card.alternatives.isEmpty {
+                findingSection("Viable alternatives") {
+                    ForEach(card.alternatives, id: \.route) { alternative in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(alternative.label)
+                                .font(FreesideFont.sans(.callout, weight: .semibold))
+                            Text(alternative.consequence)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    if rendersInteractiveControls {
+                        Picker("Selected route", selection: selection) {
+                            Text("Keep recommendation")
+                                .tag(Optional<Components.Schemas.AdjudicationRoute>.none)
+                            ForEach(card.alternatives, id: \.route) { alternative in
+                                Text(alternative.label)
+                                    .tag(Optional(alternative.route))
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .accessibilityLabel(Text("Selected route, \(card.heading)"))
+                    } else {
+                        factRow("Selected route", value: "Keep recommendation")
+                    }
+                }
+            }
+            if !card.gatingQuestions.isEmpty {
+                findingList("Gating questions", values: card.gatingQuestions)
+            }
         }
-        return parts.joined(separator: ", ")
+        .font(FreesideFont.callout)
+        .foregroundStyle(Color.ink)
+        // A stacked row hugs its text, and a disclosure centers content
+        // narrower than itself.
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 10)
     }
 
     private func findingExpansion(_ findingID: String) -> Binding<Bool> {
@@ -2014,75 +2039,37 @@ struct DecisionDetailView: View {
             })
     }
 
-    @ViewBuilder
-    private func findingAdjudicationDetail(
-        _ binding: Components.Schemas.FindingAdjudicationBinding,
-        rendersInteractiveControls: Bool
+    /// A titled group inside a finding's disclosure. The card is the only
+    /// frame, so a group is a keyword and its rows.
+    private func findingSection(
+        _ title: String,
+        @ViewBuilder content: () -> some View
     ) -> some View {
-        // A single proposal's detail groups need no label: they are the only
-        // candidate. Once findingAdjudicationLead moved ahead of the action
-        // region, a multi-proposal item's detail groups (still one .factBlock
-        // pass per proposal) lost the lead section's adjacency to
-        // "Finding <id>", so a second-plus proposal repeats it here — the
-        // generic "Assumptions"/"Viable alternatives" titles otherwise give no
-        // way to tell which finding a later picker selection applies to
-        // (#984 review).
-        let identifiesEachFinding = binding.proposals.count > 1
-        ForEach(binding.proposals, id: \.finding_id) { proposal in
-            if identifiesEachFinding,
-                !proposal.assumptions.isEmpty || !proposal.cited_rules.isEmpty
-                    || !proposal.offered_alternatives.isEmpty || !proposal.open_questions.isEmpty
-            {
-                Text("Finding \(proposal.finding_id)")
-                    .font(FreesideFont.sans(.caption, weight: .semibold))
-                    .foregroundStyle(Color.inkDim)
-            }
-            if !proposal.assumptions.isEmpty {
-                findingList("Assumptions", values: proposal.assumptions)
-            }
-            if !proposal.cited_rules.isEmpty {
-                findingList("Cited repository rules", values: proposal.cited_rules)
-            }
-            if !proposal.offered_alternatives.isEmpty {
-                cardSection("Viable alternatives") {
-                    ForEach(proposal.offered_alternatives, id: \.route) { alternative in
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(AttentionDisplay.label(alternative.route))
-                                .font(FreesideFont.sans(.callout, weight: .semibold))
-                            Text(alternative.consequence)
-                        }
-                    }
-                    if rendersInteractiveControls {
-                        Picker(
-                            "Selected route",
-                            selection: alternativeSelection(for: proposal)
-                        ) {
-                            Text("Keep recommendation")
-                                .tag(Optional<Components.Schemas.AdjudicationRoute>.none)
-                            ForEach(proposal.offered_alternatives, id: \.route) { alternative in
-                                Text(AttentionDisplay.label(alternative.route))
-                                    .tag(Optional(alternative.route))
-                            }
-                        }
-                        .pickerStyle(.menu)
-                    } else {
-                        factRow("Selected route", value: "Keep recommendation")
-                    }
-                }
-            }
-            if !proposal.open_questions.isEmpty {
-                findingList("Gating questions", values: proposal.open_questions)
-            }
+        VStack(alignment: .leading, spacing: 6) {
+            KeywordLabel(text: title)
+            content()
         }
     }
 
     private func findingList(_ title: String, values: [String]) -> some View {
-        cardSection(title) {
+        findingSection(title) {
             ForEach(Array(values.enumerated()), id: \.offset) { _, value in
                 Label(value, systemImage: "circle.fill")
                     .labelStyle(FindingListLabelStyle())
             }
         }
+    }
+
+    /// What accepting covers, for an action that accepts the routes of the
+    /// findings `item` binds; nil for any other action or item.
+    private func findingAcceptanceScope(
+        _ action: Components.Schemas.Action,
+        item: Components.Schemas.AttentionItem
+    ) -> String? {
+        guard action == .accept_recommended_route,
+            let binding = item.finding_adjudication?.value1
+        else { return nil }
+        return FindingCardPresentation.acceptanceScope(findingCount: binding.proposals.count)
     }
 
     private func alternativeSelection(
@@ -2252,7 +2239,7 @@ struct DecisionDetailView: View {
                 // Success is quiet: a plain tick on a neutral wash, never
                 // green and never the accent.
                 bannerLabel(
-                    "Decision applied: \(AttentionDisplay.label(record.action))",
+                    "Decision applied: \(AttentionDisplay.label(record.action, for: model.snapshot?.item))",
                     systemImage: "checkmark",
                     tint: .inkDim, wash: .neutralWash
                 )
@@ -2304,6 +2291,10 @@ struct DecisionDetailView: View {
         let register =
             recommendation.register.isUnverifiedClaim
             ? unverified(item, rendersInteractiveControls: rendersInteractiveControls) : nil
+        // On the finding card the recommendation is the batch action's own
+        // line under the cards (plan §9 revision 78, visual audit D09): no
+        // second frame, its reason, then what accepting covers.
+        let acceptanceScope = findingAcceptanceScope(recommendation.action, item: item)
         return cardSection(
             title: Group {
                 if let register, register.explanation == .onDemand {
@@ -2315,6 +2306,7 @@ struct DecisionDetailView: View {
                 }
             },
             dashed: register != nil,
+            boxed: acceptanceScope == nil,
             border: .accentBorder,
             fill: .accentWash
         ) {
@@ -2322,9 +2314,15 @@ struct DecisionDetailView: View {
                 Text("Written by an agent, not checked by the daemon.")
                     .foregroundStyle(Color.inkDim)
             }
-            KeywordLabel(text: "Why")
+            if acceptanceScope == nil {
+                KeywordLabel(text: "Why")
+            }
             Text(recommendation.reason)
                 .fixedSize(horizontal: false, vertical: true)
+            if let acceptanceScope {
+                Text(acceptanceScope)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             actionButton(
                 recommendation.action,
                 item: item,
@@ -3203,6 +3201,18 @@ struct DecisionDetailView: View {
                 }
             }
 
+            // The recommendation block states what accepting covers. An item
+            // whose recommendation did not revalidate has no block, and
+            // offers the same action here, so the sentence comes with it.
+            if (ranking.principal + ranking.overflow).contains(.accept_recommended_route),
+                let scope = findingAcceptanceScope(.accept_recommended_route, item: item)
+            {
+                Text(scope)
+                    .font(FreesideFont.callout)
+                    .foregroundStyle(Color.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             if !ranking.principal.isEmpty {
                 // Keyed by position: requested_decision does not enforce
                 // uniqueness, and duplicate identities may not drop a button.
@@ -3284,7 +3294,7 @@ struct DecisionDetailView: View {
                     Button {
                         trigger(action, item: item)
                     } label: {
-                        actionLabel(action)
+                        actionLabel(action, item: item)
                     }
                 }
                 if !ordinary.isEmpty, !consequential.isEmpty {
@@ -3294,7 +3304,7 @@ struct DecisionDetailView: View {
                     Button(role: .destructive) {
                         trigger(action, item: item)
                     } label: {
-                        actionLabel(action)
+                        actionLabel(action, item: item)
                     }
                 }
             } label: {
@@ -3320,7 +3330,7 @@ struct DecisionDetailView: View {
             trigger(action, item: item)
         } label: {
             HStack {
-                actionLabel(action, showsIcon: showsIcon)
+                actionLabel(action, item: item, showsIcon: showsIcon)
                 if model.phase == .submitting(action) {
                     ProgressView().controlSize(.small)
                 }
@@ -3336,12 +3346,13 @@ struct DecisionDetailView: View {
     @ViewBuilder
     private func actionLabel(
         _ action: Components.Schemas.Action,
+        item: Components.Schemas.AttentionItem,
         showsIcon: Bool = true
     ) -> some View {
         if showsIcon, let systemImage = AttentionDisplay.systemImage(action) {
-            Label(AttentionDisplay.label(action), systemImage: systemImage)
+            Label(AttentionDisplay.label(action, for: item), systemImage: systemImage)
         } else {
-            Text(AttentionDisplay.label(action))
+            Text(AttentionDisplay.label(action, for: item))
         }
     }
 

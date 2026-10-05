@@ -1389,6 +1389,79 @@ import Testing
         #expect(model.snapshot?.item.status == .open)
     }
 
+    /// A selection belongs to its finding id (visual audit D09): the same
+    /// selections yield the same finding and route pairs whatever order the
+    /// cards are drawn in, so no card's choice can land on another finding.
+    @Test func findingAlternativeChoiceFollowsTheFindingNotItsPosition() {
+        var binding = AttentionFixtures.fixture(type: .finding_adjudication).item
+            .finding_adjudication!.value1
+        let selections: [String: Components.Schemas.AdjudicationRoute] = [
+            "review-finding-17": .dispute,
+            "review-finding-18": ._defer,
+        ]
+        let inOrder = DecisionDetailView.selectedAlternatives(binding, selections: selections)
+        binding.proposals.reverse()
+        let reversed = DecisionDetailView.selectedAlternatives(binding, selections: selections)
+
+        // Two different routes, so a choice that followed its position
+        // would swap them.
+        #expect(binding.proposals.map(\.finding_id) == ["review-finding-18", "review-finding-17"])
+        #expect(
+            inOrder == [
+                .init(finding_id: "review-finding-17", route: .dispute),
+                .init(finding_id: "review-finding-18", route: ._defer),
+            ])
+        #expect(reversed == Array(inOrder.reversed()))
+    }
+
+    /// "Accept all dispositions" is a label on `accept_recommended_route`:
+    /// the command binds the whole item at its current version and carries
+    /// no per-finding choice, so it can never become a partial acceptance.
+    @Test func acceptingEveryDispositionBindsTheWholeItemAndCarriesNoChoices() async throws {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-finding_adjudication")
+        await model.validate()
+        let reviewed = try #require(model.snapshot)
+
+        // The lost response leaves the minted command in the ledger, where
+        // its payload can be read.
+        await server.setBeforeRespond { operationID in
+            if operationID == "submitCommand" { throw InjectedFailure() }
+        }
+        await model.submit(.accept_recommended_route)
+
+        guard case .decision(let payload) = try #require(model.pendingCommand).payload else {
+            Issue.record("the pending command is not a decision")
+            return
+        }
+        #expect(payload.action == .accept_recommended_route)
+        #expect(payload.alternative_choices == nil)
+        #expect(payload.item_id == reviewed.item.id)
+        #expect(payload.item_version == reviewed.item.item_version)
+    }
+
+    /// A selection made against a card that was since replaced is refused
+    /// with the replacement swapped in: the choice never applies to an item
+    /// version the operator did not read.
+    @Test func findingAlternativeAgainstAReplacedItemIsRefused() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-finding_adjudication")
+        await model.validate()
+
+        await server.advance(itemID: "item-finding_adjudication")
+        await model.submitFindingAlternatives([
+            .init(finding_id: "review-finding-17", route: .dispute)
+        ])
+
+        #expect(model.phase == .superseded)
+        #expect(model.appliedRecord == nil)
+        let replacement = await server.snapshot(itemID: "item-finding_adjudication")
+        #expect(model.snapshot == replacement)
+        #expect(replacement?.item.status == .open)
+    }
+
     @Test func parameterizedTaskProposalActionsCannotUseTheUntypedSubmitPath() async {
         let server = MockServer()
         let store = await makeStore(server: server)

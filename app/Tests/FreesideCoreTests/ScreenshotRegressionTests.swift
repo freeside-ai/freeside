@@ -939,9 +939,10 @@
                 }
 
                 if snapshot.item._type == .finding_adjudication {
-                    // One finding open: its proposal and daemon facts expand in
-                    // place, above the action region, while the other finding
-                    // stays a single row (#1107).
+                    // One finding open: its reason, daemon facts, and
+                    // alternatives expand inside its own card, above the
+                    // action region, while the other finding stays closed
+                    // (#1107, visual audit D09).
                     let expandedDetail = DecisionDetailView(
                         store: store,
                         itemID: snapshot.item.id,
@@ -2621,6 +2622,65 @@
                         view: AnyView(
                             inspector.screenshotInspector(item, at: dynamicTypeSize))))
             }
+
+            // The per-finding card (visual audit D09) with messages of the
+            // length a reviewer writes, on both platforms and in both
+            // appearances, and the phone card with one finding open. Each
+            // card shows its whole message, so the card is pinned with text
+            // that wraps (#1033, #1141). Appended last for the same reason
+            // as the inspectors above.
+            let realisticFindings = AttentionFixtures.findingAdjudicationRealisticMessages().item
+            let findingsDetail = DecisionDetailView(
+                store: store,
+                itemID: realisticFindings.id,
+                loadsAttachments: false,
+                showsValidationProgress: false)
+            for (suffix, colorScheme) in [("", ColorScheme.light), ("-dark", .dark)] {
+                surfaces.append(
+                    Surface(
+                        name: "decision-finding_adjudication-realistic-messages\(suffix)",
+                        colorScheme: colorScheme,
+                        view: AnyView(
+                            findingsDetail.screenshotCard(
+                                realisticFindings, at: dynamicTypeSize))))
+                surfaces.append(
+                    Surface(
+                        name: "decision-finding_adjudication-realistic-messages-phone\(suffix)",
+                        width: 390,
+                        colorScheme: colorScheme,
+                        view: AnyView(
+                            findingsDetail.screenshotCard(
+                                realisticFindings, at: dynamicTypeSize, compactLayout: true))))
+            }
+            let expandedFindingsDetail = DecisionDetailView(
+                store: store,
+                itemID: realisticFindings.id,
+                expandedFindings: ["review-finding-17"],
+                loadsAttachments: false,
+                showsValidationProgress: false,
+                now: screenshotNow)
+            surfaces.append(
+                Surface(
+                    name: "decision-finding_adjudication-expanded-phone",
+                    width: 390,
+                    view: AnyView(
+                        expandedFindingsDetail.screenshotCard(
+                            realisticFindings, at: dynamicTypeSize, compactLayout: true))))
+            // A held alternative on a closed card: the picker is inside the
+            // disclosure, so the face is the only place the choice shows.
+            let selectedAlternativeDetail = DecisionDetailView(
+                store: store,
+                itemID: realisticFindings.id,
+                alternativeSelections: ["review-finding-17": .dispute],
+                loadsAttachments: false,
+                showsValidationProgress: false,
+                now: screenshotNow)
+            surfaces.append(
+                Surface(
+                    name: "decision-finding_adjudication-alternative-selected",
+                    view: AnyView(
+                        selectedAlternativeDetail.screenshotCard(
+                            realisticFindings, at: dynamicTypeSize))))
             return surfaces
         }
 

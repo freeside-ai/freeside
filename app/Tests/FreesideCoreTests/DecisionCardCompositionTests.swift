@@ -89,19 +89,25 @@ import Testing
         #expect(DecisionDetailView.specificationClaim(in: item)?.label == "Specification")
     }
 
-    @Test func findingAdjudicationLeadsWithTheLabeledProposalAndDaemonFacts() {
-        // §9's finding_adjudication row leads with the labeled proposal and
-        // the daemon-fact register (both carried by .findingFacts), and puts
-        // assumptions, cited rules, alternatives, and gating questions below
-        // the action region (#984); actionInsertionIndex must therefore land
-        // after .findingFacts, not after .recommendation alone.
+    @Test func findingAdjudicationLeadsWithItsFindingCards() {
+        // Plan §9 revision 78 (visual audit D09): one card per finding leads,
+        // and the item's recommendation sits with the batch action below
+        // them. Each card holds everything about its finding, so the card
+        // has no fact block: no finding content renders from another module
+        // or below the action region.
         let composition = DecisionCardComposition.forType(.finding_adjudication)
         #expect(
             composition.modules == [
-                .recommendation, .findingFacts, .facts, .factBlock, .summary, .claims,
-                .evidence, .details,
+                .findingFacts, .facts, .recommendation, .summary, .claims, .evidence, .details,
             ])
-        #expect(composition.actionInsertionIndex == composition.modules.firstIndex(of: .factBlock))
+        #expect(!composition.modules.contains(.factBlock))
+        // Unchanged from #984: the actions come after the finding cards, and
+        // there is no reviewing action.
+        #expect(composition.actionInsertionIndex == composition.modules.firstIndex(of: .summary))
+        #expect(
+            composition.modules.firstIndex(of: .findingFacts).map {
+                $0 < composition.actionInsertionIndex
+            } == true)
         #expect(composition.reviewingActionInsertionIndex == nil)
     }
 
@@ -275,8 +281,8 @@ import Testing
         #expect(placement.folded.isEmpty)
     }
 
-    /// Visual audit D06, D07 and D08: the three decision-first cards move
-    /// the daemon's reason out of the boxed Context section, and every other
+    /// Visual audit D06 to D09: the four decision-first cards move the
+    /// daemon's reason out of the boxed Context section, and every other
     /// type keeps it there.
     @Test(arguments: Components.Schemas.AttentionType.allCases)
     func reasonLeavesTheContextSectionOnlyOnTheDecisionFirstCards(
@@ -285,10 +291,23 @@ import Testing
         let expected: DecisionCardComposition.ReasonPlacement =
             switch type {
             case .review_dispute: .underAsk
-            case .agent_question, .ready_for_final_review: .recordedContext
+            case .agent_question, .ready_for_final_review, .finding_adjudication: .recordedContext
             default: .context
             }
         #expect(DecisionCardComposition.reasonPlacement(for: type) == expected)
+    }
+
+    /// The finding card's reason says what accepting does. It may fold only
+    /// while the recommendation states that outcome beside the batch
+    /// action: an action's consequence never folds (plan §9).
+    @Test func aFindingReasonFoldsOnlyWhileTheRecommendationStatesTheOutcome() {
+        let recommended = AttentionFixtures.fixture(type: .finding_adjudication).item
+        var unrecommended = recommended
+        unrecommended.recommendation = nil
+
+        #expect(DecisionRecommendationPresentation.of(recommended) != nil)
+        #expect(DecisionCardComposition.reasonPlacement(for: recommended) == .recordedContext)
+        #expect(DecisionCardComposition.reasonPlacement(for: unrecommended) == .context)
     }
 
     /// Visual audit D06 to D08: the question card bounds only its options,
@@ -957,44 +976,185 @@ import Testing
                 viewportHeight: nil))
     }
 
-    /// The collapsed finding row carries what decides the route, and drops the
-    /// confidence term the daemon did not record rather than showing an empty
-    /// one (#1107).
-    @Test func aCollapsedFindingRowNamesTheFindingAndWhatDecidesItsRoute() throws {
+    /// Visual audit D09: the card emits one container per bound proposal, in
+    /// the bound order, each keyed by its finding id and numbered by position.
+    @Test func eachBoundProposalGetsItsOwnCard() throws {
         let binding = try #require(
             AttentionFixtures.fixture(type: .finding_adjudication).item
                 .finding_adjudication?.value1)
-        var proposal = try #require(binding.proposals.first)
+        let cards = FindingCardPresentation.cards(binding)
 
-        #expect(
-            DecisionDetailView.findingSummary(proposal)
-                == "review-finding-17 · Decline the finding · Contradictory · High")
-
-        proposal.confidence = nil
-        #expect(
-            DecisionDetailView.findingSummary(proposal)
-                == "review-finding-17 · Decline the finding · Contradictory")
+        #expect(cards.map(\.id) == binding.proposals.map(\.finding_id))
+        #expect(cards.map(\.id) == ["review-finding-17", "review-finding-18"])
+        #expect(cards.map(\.heading) == ["Finding 1", "Finding 2"])
     }
 
-    /// The row's four values are separated by "·" on screen, which reads as
-    /// four bare words, so the spoken form names the field each one answers
-    /// and drops the confidence term with the value.
-    @Test func theCollapsedFindingRowIsSpokenWithItsFieldNames() throws {
+    /// Before anything is opened, a card shows the finding's exact message,
+    /// the proposed route, and who proposed it (plan §9 revision 78).
+    @Test func aFindingCardShowsItsMessageRouteAndProducerBeforeAnythingOpens() throws {
         let binding = try #require(
             AttentionFixtures.fixture(type: .finding_adjudication).item
                 .finding_adjudication?.value1)
-        var proposal = try #require(binding.proposals.first)
+        let cards = FindingCardPresentation.cards(binding)
+        let model = try #require(cards.first)
+        let engineModel = try #require(cards.last)
 
+        #expect(model.message == binding.proposals[0].finding_message)
+        #expect(model.route == "Decline the finding")
+        #expect(model.producerLabel == "Model proposal (unverified)")
+        // The word stays in the label; `UnverifiedLabel` draws it with the
+        // button that explains it (visual audit D03).
+        #expect(model.producerUnverifiedKeyword == "Model proposal")
+
+        #expect(engineModel.message == binding.proposals[1].finding_message)
+        #expect(engineModel.route == "Fix in this PR")
         #expect(
-            DecisionDetailView.findingSummaryAccessibilityLabel(proposal)
-                == "Finding review-finding-17, recommended route Decline the finding, "
-                + "goal relationship Contradictory, confidence High")
+            engineModel.producerLabel == "Model judgment with engine-authorized remediation")
+        #expect(engineModel.producerUnverifiedKeyword == nil)
+    }
 
+    /// Every other proposal and binding field has a destination inside that
+    /// finding's own disclosure, so removing the rendering below the actions
+    /// lost nothing. The daemon's coordinates sit under their own title,
+    /// apart from the producer's rationale and evidence.
+    @Test func everyOtherFindingFieldHasADestinationInItsCardsDisclosure() throws {
+        let binding = try #require(
+            AttentionFixtures.fixture(type: .finding_adjudication).item
+                .finding_adjudication?.value1)
+        let proposal = try #require(binding.proposals.first)
+        let card = try #require(FindingCardPresentation.cards(binding).first)
+
+        #expect(card.rationale == proposal.rationale)
+        #expect(
+            card.proposalRows == [
+                .init("Goal relationship", "Contradictory"),
+                .init("Work-unit compatibility", "Not assessed"),
+                .init("Confidence", "High"),
+            ])
+        #expect(card.evidenceTitle == "Evidence (model-derived)")
+        #expect(card.evidence == proposal.evidence)
+        #expect(
+            card.daemonFacts == [
+                .init("Finding", "review-finding-17", monospaced: true),
+                .init("Location", "daemon/internal/signet/service.go:214-227", monospaced: true),
+                .init("Binding digest", binding.adjudication_digest, monospaced: true),
+                .init("Run", binding.run_id, monospaced: true),
+                .init("Round", "3", monospaced: true),
+            ])
+        #expect(card.assumptions == proposal.assumptions)
+        #expect(card.citedRules == proposal.cited_rules)
+        #expect(
+            card.alternatives == [
+                .init(
+                    route: .dispute, label: AttentionDisplay.label(.dispute),
+                    consequence: "Park the run: nothing is declined, fixed, or published.")
+            ])
+        #expect(card.gatingQuestions == proposal.open_questions)
+    }
+
+    /// A finding with no location, no confidence, no alternatives, and empty
+    /// lists keeps its card and its coordinates, and carries nothing for the
+    /// view to draw an empty section from. A daemon-produced route labels its
+    /// evidence as the daemon's.
+    @Test func aFindingWithNothingOptionalStillHasItsCard() throws {
+        var binding = try #require(
+            AttentionFixtures.fixture(type: .finding_adjudication).item
+                .finding_adjudication?.value1)
+        var proposal = try #require(binding.proposals.last)
+        proposal.producer = .engine
+        proposal.finding_location = nil
         proposal.confidence = nil
+        proposal.finding_message = ""
+        proposal.evidence = []
+        proposal.assumptions = []
+        proposal.cited_rules = []
+        proposal.offered_alternatives = []
+        proposal.open_questions = []
+        binding.proposals = [proposal]
+        let card = try #require(FindingCardPresentation.cards(binding).first)
+
+        #expect(card.heading == "Finding 1")
+        #expect(card.message.isEmpty)
+        #expect(card.messageAccessibilityLabel == "Finding 1")
+        #expect(card.producerLabel == "Daemon recommendation")
+        #expect(card.producerUnverifiedKeyword == nil)
+        #expect(card.proposalRows.map(\.label) == ["Goal relationship", "Work-unit compatibility"])
+        #expect(card.evidenceTitle == "Evidence (daemon-derived)")
+        #expect(card.daemonFacts.map(\.label) == ["Finding", "Binding digest", "Run", "Round"])
+        #expect(card.evidence.isEmpty)
+        #expect(card.assumptions.isEmpty)
+        #expect(card.citedRules.isEmpty)
+        #expect(card.alternatives.isEmpty)
+        #expect(card.gatingQuestions.isEmpty)
+    }
+
+    /// The spoken card names the finding, who proposed its route, and the
+    /// route, so a model-proposed route is never heard as a daemon fact, and
+    /// each card's identically titled disclosure says whose it is.
+    @Test func aFindingCardIsSpokenWithItsFindingProducerAndRoute() throws {
+        let binding = try #require(
+            AttentionFixtures.fixture(type: .finding_adjudication).item
+                .finding_adjudication?.value1)
+        let card = try #require(FindingCardPresentation.cards(binding).first)
+
         #expect(
-            DecisionDetailView.findingSummaryAccessibilityLabel(proposal)
-                == "Finding review-finding-17, recommended route Decline the finding, "
-                + "goal relationship Contradictory")
+            card.messageAccessibilityLabel
+                == "Finding 1. Command handler retries without preserving the write-once "
+                + "command identity.")
+        #expect(
+            card.routeAccessibilityLabel
+                == "Finding 1 proposed route, Model proposal (unverified): Decline the finding")
+        #expect(card.disclosureAccessibilityLabel == "Reason and alternatives, Finding 1")
+    }
+
+    /// A held alternative is named on the card's face, where a closed
+    /// disclosure cannot hide it, and says accepting leaves it unsent.
+    @Test func aHeldAlternativeIsNamedOnItsFindingsCard() throws {
+        let binding = try #require(
+            AttentionFixtures.fixture(type: .finding_adjudication).item
+                .finding_adjudication?.value1)
+        let card = try #require(FindingCardPresentation.cards(binding).first)
+
+        #expect(
+            FindingCardPresentation.selectionNotice(.dispute)
+                == "Selected alternative: \(AttentionDisplay.label(.dispute)). "
+                + "Accepting does not send it.")
+        #expect(
+            card.selectionAccessibilityLabel(.dispute)
+                == "Finding 1. " + FindingCardPresentation.selectionNotice(.dispute))
+    }
+
+    /// The batch action says what it covers from the bound proposals: every
+    /// one of them, at any count. One finding keeps the action's own label
+    /// (the approved reference shows only the batch).
+    @Test func acceptingStatesItsScopeFromTheBoundProposals() throws {
+        let batch = AttentionFixtures.fixture(type: .finding_adjudication).item
+        let single = AttentionFixtures.findingAdjudicationFixture(route: .remediate).item
+
+        #expect(batch.finding_adjudication?.value1.proposals.count == 2)
+        #expect(
+            AttentionDisplay.label(.accept_recommended_route, for: batch)
+                == "Accept all dispositions")
+        #expect(
+            FindingCardPresentation.acceptanceScope(findingCount: 2)
+                == "Accepting covers every proposed route above: all 2 findings.")
+
+        #expect(single.finding_adjudication?.value1.proposals.count == 1)
+        #expect(
+            AttentionDisplay.label(.accept_recommended_route, for: single)
+                == "Accept recommended route")
+        #expect(
+            FindingCardPresentation.acceptanceScope(findingCount: 1)
+                == "Accepting covers the proposed route for the one finding above.")
+
+        // Only the batch acceptance is relabeled, and only where the item
+        // binds findings.
+        #expect(
+            AttentionDisplay.label(.choose_alternative_route, for: batch)
+                == AttentionDisplay.label(.choose_alternative_route))
+        #expect(
+            AttentionDisplay.label(.accept_recommended_route, for: nil)
+                == "Accept recommended route")
     }
 
     /// The card's Evidence module points at the open inspector rather than

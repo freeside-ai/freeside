@@ -223,20 +223,21 @@ struct DecisionCardComposition: Equatable {
     /// The visual audit's decision-first cards lead with what the operator
     /// decides on, so the reason leaves the boxed Context section: the
     /// dispute reads it as the ask's own second line (D08), while the
-    /// question and the final review lead with their own module and keep the
-    /// recorded sentence one disclosure away (D06, D07). The switch is
-    /// exhaustive so a new type has to answer the question.
+    /// question, the final review, and the finding cards lead with their own
+    /// module and keep the recorded sentence one disclosure away (D06, D07,
+    /// D09). The switch is exhaustive so a new type has to answer the
+    /// question.
     static func reasonPlacement(
         for type: Components.Schemas.AttentionType
     ) -> ReasonPlacement {
         switch type {
         case .review_dispute:
             return .underAsk
-        case .agent_question, .ready_for_final_review:
+        case .agent_question, .ready_for_final_review, .finding_adjudication:
             return .recordedContext
         case .spec_approval, .execution_failure, .review_diminishing_returns,
-            .review_contradiction, .review_configuration, .finding_adjudication,
-            .publish_blocked, .task_proposal, .effect_proposal, .system_health, .blocked:
+            .review_contradiction, .review_configuration, .publish_blocked, .task_proposal,
+            .effect_proposal, .system_health, .blocked:
             return .context
         }
     }
@@ -246,10 +247,24 @@ struct DecisionCardComposition: Equatable {
     /// (`rendersAsk(for:)`), so its reason stays in the Context section under
     /// that ask rather than folding away from a card with nothing else to
     /// read first.
+    ///
+    /// A finding adjudication's reason says what accepting does
+    /// (`findingAdjudicationReason` in
+    /// daemon/internal/engine/finding_adjudication.go). The recommendation
+    /// states the same outcome finding by finding beside the batch action,
+    /// so the reason may fold while that is on the card. An item whose
+    /// recommendation did not revalidate has no other statement of it, and
+    /// an action's consequence never folds (plan §9), so its reason keeps
+    /// the Context section.
     static func reasonPlacement(
         for item: Components.Schemas.AttentionItem
     ) -> ReasonPlacement {
         if item._type == .agent_question, rendersAsk(for: item) { return .context }
+        if item._type == .finding_adjudication,
+            DecisionRecommendationPresentation.of(item) == nil
+        {
+            return .context
+        }
         return reasonPlacement(for: item._type)
     }
 
@@ -334,17 +349,16 @@ struct DecisionCardComposition: Equatable {
                 actionInsertionIndex: 4,
                 reviewingActionInsertionIndex: nil)
         case .finding_adjudication:
-            // Section 9's finding_adjudication row leads with two things: the
-            // recommended route as a labeled proposal, and the finding's
-            // daemon-authenticated facts in their own register (#984). Both
-            // live in .findingFacts, so it joins .recommendation ahead of
-            // actionInsertionIndex; the remaining assumptions/cited-rules/
-            // alternatives/gating-questions content stays in .factBlock,
-            // which the §9 "Below" column covers, after the action region.
+            // Plan §9 (revision 78, audit D09): one card per finding leads,
+            // each holding everything about its finding, so no finding
+            // content renders from another module and there is no fact
+            // block. The item's recommendation sits with the batch action
+            // below the cards; a commit-plan notice, the only row .facts can
+            // carry here, still precedes both.
             return .init(
                 modules: [
-                    .recommendation, .findingFacts, .facts, .factBlock, .summary, .claims,
-                    .evidence, .details,
+                    .findingFacts, .facts, .recommendation, .summary, .claims, .evidence,
+                    .details,
                 ],
                 actionInsertionIndex: 3,
                 reviewingActionInsertionIndex: nil)
@@ -441,6 +455,158 @@ struct DecisionFactPlacement: Equatable {
             visible = facts + notices
             folded = []
         }
+    }
+}
+
+/// One finding's card on `finding_adjudication` (plan §9 revision 78, visual
+/// audit D09): what the card shows before anything is opened, and what its
+/// "Reason and alternatives" disclosure holds, in render order. Kept apart
+/// from the view so the destination of each proposal and binding field is
+/// testable without rendering.
+struct FindingCardPresentation: Equatable, Identifiable {
+    static let disclosureTitle = "Reason and alternatives"
+
+    struct Alternative: Equatable {
+        let route: Components.Schemas.AdjudicationRoute
+        let label: String
+        let consequence: String
+    }
+
+    /// The daemon's finding id. An open disclosure and an alternative
+    /// selection are both held under it, so neither follows a card's
+    /// position when the proposals reorder.
+    let id: String
+
+    // The card face.
+    let heading: String
+    /// The daemon-authenticated finding text, exactly as bound.
+    let message: String
+    let producerLabel: String
+    /// The producer label without its "(unverified)" word, where the label
+    /// carries one; `UnverifiedLabel` draws the word with its explanation.
+    let producerUnverifiedKeyword: String?
+    let route: String
+
+    // The disclosure, in render order: the proposal in its producer's
+    // register, the daemon's coordinates in theirs, then what the proposal
+    // rests on and what else the operator may choose.
+    let rationale: String
+    let proposalRows: [AttentionDisplay.FactRow]
+    let evidenceTitle: String
+    let evidence: [String]
+    let daemonFacts: [AttentionDisplay.FactRow]
+    let assumptions: [String]
+    let citedRules: [String]
+    let alternatives: [Alternative]
+    let gatingQuestions: [String]
+
+    static func cards(
+        _ binding: Components.Schemas.FindingAdjudicationBinding
+    ) -> [FindingCardPresentation] {
+        binding.proposals.enumerated().map { index, proposal in
+            FindingCardPresentation(proposal, number: index + 1, binding: binding)
+        }
+    }
+
+    init(
+        _ proposal: Components.Schemas.FindingAdjudicationProposal,
+        number: Int,
+        binding: Components.Schemas.FindingAdjudicationBinding
+    ) {
+        let producer = AttentionDisplay.adjudicationProducerPresentation(proposal.producer)
+        id = proposal.finding_id
+        heading = "Finding \(number)"
+        message = proposal.finding_message
+        producerLabel = producer.label
+        producerUnverifiedKeyword = producer.unverifiedKeyword
+        route = AttentionDisplay.label(proposal.route)
+
+        rationale = proposal.rationale
+        var proposalRows: [AttentionDisplay.FactRow] = [
+            .init("Goal relationship", AttentionDisplay.label(proposal.goal_relationship)),
+            .init(
+                "Work-unit compatibility",
+                AttentionDisplay.label(proposal.compatibility?.value1)),
+        ]
+        // An adjudicator that recorded no confidence gets no row, rather
+        // than a row with nothing in it.
+        if let confidence = proposal.confidence?.value1 {
+            proposalRows.append(.init("Confidence", AttentionDisplay.label(confidence)))
+        }
+        self.proposalRows = proposalRows
+        // The engine fast path also populates evidence (the finding's own
+        // containment location, a daemon fact), so the title follows the
+        // producer instead of always reading "model-derived" (#892, #984).
+        evidenceTitle =
+            producer.modelBacked ? "Evidence (model-derived)" : "Evidence (daemon-derived)"
+        evidence = proposal.evidence
+
+        var daemonFacts: [AttentionDisplay.FactRow] = [
+            .init("Finding", proposal.finding_id, monospaced: true)
+        ]
+        if let location = proposal.finding_location?.value1 {
+            daemonFacts.append(
+                .init("Location", AttentionDisplay.findingLocation(location), monospaced: true))
+        }
+        daemonFacts += [
+            .init("Binding digest", binding.adjudication_digest, monospaced: true),
+            .init("Run", binding.run_id, monospaced: true),
+            .init("Round", "\(binding.round)", monospaced: true),
+        ]
+        self.daemonFacts = daemonFacts
+
+        assumptions = proposal.assumptions
+        citedRules = proposal.cited_rules
+        alternatives = proposal.offered_alternatives.map {
+            .init(
+                route: $0.route, label: AttentionDisplay.label($0.route),
+                consequence: $0.consequence)
+        }
+        gatingQuestions = proposal.open_questions
+    }
+
+    /// The heading and message as one spoken element.
+    var messageAccessibilityLabel: String {
+        message.isEmpty ? heading : "\(heading). \(message)"
+    }
+
+    /// The route spoken with the finding it belongs to and who proposed it,
+    /// so a model-proposed route is never heard as a fact the daemon
+    /// established, wherever VoiceOver lands first.
+    var routeAccessibilityLabel: String {
+        "\(heading) proposed route, \(producerLabel): \(route)"
+    }
+
+    /// Every card's disclosure reads "Reason and alternatives", so the
+    /// spoken control says whose it is.
+    var disclosureAccessibilityLabel: String {
+        "\(Self.disclosureTitle), \(heading)"
+    }
+
+    /// A held alternative, said on the card's face. The picker sits inside
+    /// the disclosure, so without this a closed card would hide a choice
+    /// that "Choose selected alternative" still sends, and accepting sends
+    /// no choice at all.
+    static func selectionNotice(_ route: Components.Schemas.AdjudicationRoute) -> String {
+        "Selected alternative: \(AttentionDisplay.label(route)). Accepting does not send it."
+    }
+
+    /// The notice spoken with the finding it belongs to.
+    func selectionAccessibilityLabel(_ route: Components.Schemas.AdjudicationRoute) -> String {
+        "\(heading). \(Self.selectionNotice(route))"
+    }
+
+    /// What `accept_recommended_route` covers, said beside the action:
+    /// every proposed route the item binds, whichever cards are open and
+    /// whatever alternatives are selected. It states coverage only. What
+    /// accepting does to each finding is the daemon's to say (the
+    /// recommendation and the reason): a disputed finding parks the run
+    /// with no disposition recorded, and a parked route beside a fix gets
+    /// none either, so "applies every disposition" would be false there.
+    static func acceptanceScope(findingCount: Int) -> String {
+        findingCount == 1
+            ? "Accepting covers the proposed route for the one finding above."
+            : "Accepting covers every proposed route above: all \(findingCount) findings."
     }
 }
 

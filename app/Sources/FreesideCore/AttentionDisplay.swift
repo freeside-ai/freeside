@@ -406,6 +406,22 @@ enum AttentionDisplay {
         }
     }
 
+    /// An action's label where its item is known. On an item that binds
+    /// several findings, `accept_recommended_route` applies every proposed
+    /// route at once, so the label says so (visual audit D09); the action and
+    /// what it submits are the same either way.
+    static func label(
+        _ action: Components.Schemas.Action,
+        for item: Components.Schemas.AttentionItem?
+    ) -> String {
+        if action == .accept_recommended_route,
+            let binding = item?.finding_adjudication?.value1, binding.proposals.count > 1
+        {
+            return "Accept all dispositions"
+        }
+        return label(action)
+    }
+
     static func systemImage(_ action: Components.Schemas.Action) -> String? {
         switch action {
         case .open_pr: return "arrow.up.right.square"
@@ -994,14 +1010,17 @@ enum AttentionDisplay {
         return "\(location.path):\(location.start_line)-\(location.end_line)"
     }
 
+    /// `unverifiedKeyword` is the label without its "(unverified)" word, for
+    /// a producer whose label carries one, so a card can draw the word
+    /// through `UnverifiedLabel` with its explanation (visual audit D03).
     static func adjudicationProducerPresentation(
         _ producer: Components.Schemas.AdjudicationProducer
-    ) -> (label: String, modelBacked: Bool) {
+    ) -> (label: String, modelBacked: Bool, unverifiedKeyword: String?) {
         switch producer {
-        case .engine: return ("Daemon recommendation", false)
-        case .model: return ("Model proposal (unverified)", true)
+        case .engine: return ("Daemon recommendation", false, nil)
+        case .model: return ("Model proposal (unverified)", true, "Model proposal")
         case .engine_model:
-            return ("Model judgment with engine-authorized remediation", true)
+            return ("Model judgment with engine-authorized remediation", true, nil)
         }
     }
 
