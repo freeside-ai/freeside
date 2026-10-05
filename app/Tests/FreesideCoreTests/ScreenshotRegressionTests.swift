@@ -686,6 +686,64 @@
                                 proposalFacts: proposalFacts,
                                 effectProposalFacts: effectProposalFacts))))
 
+                if [.agent_question, .review_dispute, .ready_for_final_review].contains(
+                    snapshot.item._type)
+                {
+                    // The decision-first cards fold their run coordinates,
+                    // the recorded reason, and the final review's yield; this
+                    // pins what the folds hold.
+                    let openDetail = DecisionDetailView(
+                        store: store,
+                        itemID: snapshot.item.id,
+                        expandedDisclosures: Set(
+                            [.runDetails, .recordedContext, .reviewYield]
+                                + snapshot.item.agent_claims.map { .claimSource($0) }),
+                        graphics: graphics,
+                        loadsAttachments: false,
+                        showsValidationProgress: false,
+                        now: screenshotNow)
+                    surfaces.append(
+                        Surface(
+                            name: "decision-\(snapshot.item._type.rawValue)-disclosures-open",
+                            view: AnyView(
+                                openDetail.screenshotCard(snapshot.item, at: dynamicTypeSize))))
+                }
+
+                if snapshot.item._type == .agent_question {
+                    // Visual audit D06: the question card on both platforms
+                    // and themes, and a long question with more than one
+                    // decision. Its inspector is appended last, below.
+                    let name = "decision-\(snapshot.item._type.rawValue)"
+                    for (suffix, width, scheme) in [
+                        ("phone", CGFloat(390), ColorScheme.light),
+                        ("dark", canvasWidth, ColorScheme.dark),
+                        ("phone-dark", CGFloat(390), ColorScheme.dark),
+                    ] {
+                        surfaces.append(
+                            Surface(
+                                name: "\(name)-\(suffix)",
+                                width: width,
+                                colorScheme: scheme,
+                                view: AnyView(
+                                    detail.screenshotCard(
+                                        snapshot.item,
+                                        at: dynamicTypeSize,
+                                        compactLayout: width < canvasWidth))))
+                    }
+                    let long = AttentionFixtures.longQuestion().item
+                    for (suffix, width) in [("long", canvasWidth), ("long-phone", CGFloat(390))] {
+                        surfaces.append(
+                            Surface(
+                                name: "\(name)-\(suffix)",
+                                width: width,
+                                view: AnyView(
+                                    detail.screenshotCard(
+                                        long,
+                                        at: dynamicTypeSize,
+                                        compactLayout: width < canvasWidth))))
+                    }
+                }
+
                 if snapshot.item._type == .execution_failure {
                     surfaces.append(
                         Surface(
@@ -2456,6 +2514,113 @@
 
             surfaces.append(contentsOf: try taskStopSurfaces())
             surfaces.append(contentsOf: taskStyleSurfaces())
+
+            // Visual audit D08: the dispute card on both platforms and
+            // themes with the positions the screenshot graphics supply, then
+            // the shape production sends, which has no positions: one claim
+            // with its text, and one that arrived as an attachment. These
+            // render after the surfaces above for the reason the inspectors
+            // below do.
+            if let snapshot = inbox.first(where: { $0.item._type == .review_dispute }) {
+                let detail = DecisionDetailView(
+                    store: store,
+                    itemID: snapshot.item.id,
+                    graphics: graphicPresentations(for: snapshot.item),
+                    loadsAttachments: false,
+                    showsValidationProgress: false,
+                    now: screenshotNow)
+                let name = "decision-\(snapshot.item._type.rawValue)"
+                for (suffix, width, scheme) in [
+                    ("phone", CGFloat(390), ColorScheme.light),
+                    ("dark", canvasWidth, ColorScheme.dark),
+                    ("phone-dark", CGFloat(390), ColorScheme.dark),
+                ] {
+                    surfaces.append(
+                        Surface(
+                            name: "\(name)-\(suffix)",
+                            width: width,
+                            colorScheme: scheme,
+                            view: AnyView(
+                                detail.screenshotCard(
+                                    snapshot.item,
+                                    at: dynamicTypeSize,
+                                    compactLayout: width < canvasWidth))))
+                }
+                let oneClaimDetail = DecisionDetailView(
+                    store: store,
+                    itemID: snapshot.item.id,
+                    loadsAttachments: false,
+                    showsValidationProgress: false,
+                    now: screenshotNow)
+                for (variant, item) in [
+                    ("one-claim", snapshot.item),
+                    ("no-inline-text", AttentionFixtures.disputeWithoutInlineText().item),
+                ] {
+                    for (suffix, width) in [("", canvasWidth), ("-phone", CGFloat(390))] {
+                        surfaces.append(
+                            Surface(
+                                name: "\(name)-\(variant)\(suffix)",
+                                width: width,
+                                view: AnyView(
+                                    oneClaimDetail.screenshotCard(
+                                        item,
+                                        at: dynamicTypeSize,
+                                        compactLayout: width < canvasWidth))))
+                    }
+                }
+            }
+
+            // Visual audit D06: a question that enumerates no options keeps
+            // the generic ask with its Context section under it.
+            if var untyped = inbox.first(where: { $0.item._type == .agent_question })?.item {
+                untyped.agent_question = nil
+                let detail = DecisionDetailView(
+                    store: store,
+                    itemID: untyped.id,
+                    loadsAttachments: false,
+                    showsValidationProgress: false,
+                    now: screenshotNow)
+                surfaces.append(
+                    Surface(
+                        name: "decision-agent_question-untyped-phone",
+                        width: 390,
+                        view: AnyView(
+                            detail.screenshotCard(
+                                untyped, at: dynamicTypeSize, compactLayout: true))))
+            }
+
+            // The question and dispute cards' inspectors (visual audit D06,
+            // D08), which keep their layout and change only their label. They
+            // render after every other surface: a glyph's antialiasing
+            // depends on what was rasterized before it (#1698), and drawing
+            // one ahead of the final-review inspector moved one of that
+            // surface's pixels.
+            for type in [Components.Schemas.AttentionType.agent_question, .review_dispute] {
+                guard let item = inbox.first(where: { $0.item._type == type })?.item else {
+                    continue
+                }
+                let suite = "FreesideScreenshotCardInspectorPreferences"
+                guard let defaults = UserDefaults(suiteName: suite) else {
+                    throw ScreenshotError.preferencesUnavailable
+                }
+                defaults.removePersistentDomain(forName: suite)
+                let preferences = DecisionSectionPreferences(defaults: defaults)
+                preferences.claimsExpanded = true
+                preferences.evidenceExpanded = true
+                preferences.detailsExpanded = true
+                let inspector = DecisionDetailView(
+                    store: store,
+                    itemID: item.id,
+                    loadsAttachments: false,
+                    showsValidationProgress: false,
+                    sectionPreferences: preferences)
+                surfaces.append(
+                    Surface(
+                        name: "decision-\(type.rawValue)-inspector",
+                        width: 360,
+                        view: AnyView(
+                            inspector.screenshotInspector(item, at: dynamicTypeSize))))
+            }
             return surfaces
         }
 

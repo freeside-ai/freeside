@@ -86,6 +86,7 @@ struct DecisionDetailView: View {
     @State private var expandedFindings: Set<String>
     @State private var expandedSummaryReports: Set<DecisionSummaryIdentity> = []
     @State private var summaryRevealRequest: SummaryRevealRequest?
+    @State private var expandedDisclosures: Set<DecisionDisclosure>
     private let expandsSummaryReports: Bool
     private let attachments: AttachmentLoader
     private let graphics: DecisionGraphicPresentations
@@ -105,6 +106,7 @@ struct DecisionDetailView: View {
         detailsExpanded: Bool = false,
         expandedFindings: Set<String> = [],
         expandsSummaryReports: Bool = false,
+        expandedDisclosures: Set<DecisionDisclosure> = [],
         detailsRevealRequest: TechnicalDetailsRevealRequest? = nil,
         onConsumeDetailsRevealRequest: @escaping (UUID) -> Void = { _ in },
         graphics: DecisionGraphicPresentations = .init(),
@@ -127,6 +129,7 @@ struct DecisionDetailView: View {
                     detailsExpandedOverride: revealsTechnicalDetails ? true : nil))
         _inspectorPresented = State(initialValue: revealsTechnicalDetails)
         _expandedFindings = State(initialValue: expandedFindings)
+        _expandedDisclosures = State(initialValue: expandedDisclosures)
         attachments = store.attachments
         self.itemID = itemID
         self.expandsSummaryReports = expandsSummaryReports
@@ -516,17 +519,28 @@ struct DecisionDetailView: View {
         VStack(alignment: .leading, spacing: 16) {
             header(item, accessibilityLayout: accessibilityLayout)
             banner(accessibilityLayout: accessibilityLayout)
-            Text(AttentionDisplay.ask(item))
-                .font(FreesideFont.sectionTitle)
-                .foregroundStyle(Color.ink)
-                .fixedSize(horizontal: false, vertical: true)
+            if DecisionCardComposition.rendersAsk(for: item) {
+                Text(AttentionDisplay.ask(item))
+                    .font(FreesideFont.sectionTitle)
+                    .foregroundStyle(Color.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             // The ask and the daemon's reason are one question and its answer,
             // so nothing renders between them. The reason stays labeled
             // because the daemon writes it as a sentence fragment. A type
             // whose reason is the agent's summary shows it once, under the
             // unverified claim label, and gets no Context section (#1098).
-            if composition.rendersContext(for: item) {
+            // A decision-first type moves it: see `reasonPlacement(for:)`.
+            let reasonPlacement =
+                composition.rendersContext(for: item)
+                ? DecisionCardComposition.reasonPlacement(for: item) : nil
+            switch reasonPlacement {
+            case .context:
                 context(item)
+            case .underAsk:
+                reasonUnderAsk(item)
+            case .recordedContext, nil:
+                EmptyView()
             }
 
             if let conversation = model.conversation {
@@ -606,12 +620,18 @@ struct DecisionDetailView: View {
                         }
                         .frame(maxWidth: 560, alignment: .topLeading)
 
-                        actionRegion(
-                            item,
-                            stackedLayout: accessibilityLayout || compactLayout,
-                            includesReviewing: composition.reviewingActionInsertionIndex == nil,
-                            rendersInteractiveControls: rendersInteractiveControls
-                        )
+                        VStack(alignment: .leading, spacing: 16) {
+                            actionRegion(
+                                item,
+                                stackedLayout: accessibilityLayout || compactLayout,
+                                includesReviewing: composition.reviewingActionInsertionIndex
+                                    == nil,
+                                rendersInteractiveControls: rendersInteractiveControls
+                            )
+                            if reasonPlacement == .recordedContext {
+                                recordedContext(item)
+                            }
+                        }
                         .frame(width: 360, alignment: .topLeading)
                     }
                 } else {
@@ -639,6 +659,9 @@ struct DecisionDetailView: View {
                             } action: { frame in
                                 actionRegionFrameChanged?(frame)
                             }
+                            if reasonPlacement == .recordedContext {
+                                recordedContext(item)
+                            }
                         }
                         if index + 1 == composition.reviewingActionInsertionIndex {
                             reviewingAction(item)
@@ -663,6 +686,9 @@ struct DecisionDetailView: View {
                             item,
                             stackedLayout: accessibilityLayout || compactLayout,
                             includesReviewing: composition.reviewingActionInsertionIndex == nil)
+                        if reasonPlacement == .recordedContext {
+                            recordedContext(item)
+                        }
                     }
                     if index + 1 == composition.reviewingActionInsertionIndex {
                         reviewingAction(item)
@@ -691,17 +717,24 @@ struct DecisionDetailView: View {
                 if let recommendation = DecisionRecommendationPresentation.of(item),
                     actionRanking(item).recommended == recommendation.action
                 {
-                    recommendationBlock(recommendation, item: item)
+                    recommendationBlock(
+                        recommendation,
+                        item: item,
+                        rendersInteractiveControls: rendersInteractiveControls)
                 }
                 let actionClaims = item.agent_claims.filter {
                     $0.text != nil && $0.label != AgentClaimLabels.summary
                         && !AgentClaimLabels.isApprovalMaterial($0.label)
                 }
-                if !actionClaims.isEmpty {
-                    cardSection("Agent claims (unverified)", dashed: true) {
-                        claimRows(
-                            actionClaims,
-                            rendersInteractiveControls: rendersInteractiveControls)
+                // A card that leads with its claim draws it in the card, so
+                // a copy here would print the claim twice.
+                if !actionClaims.isEmpty,
+                    !DecisionCardComposition.forType(item._type).leadsWithItsClaim
+                {
+                    let register = unverified(
+                        item, rendersInteractiveControls: rendersInteractiveControls)
+                    cardSection("Agent claims", unverified: register) {
+                        claimRows(actionClaims, unverified: register)
                     }
                 }
                 actions(
@@ -748,7 +781,7 @@ struct DecisionDetailView: View {
                 }
             }
         case .agentQuestion:
-            agentQuestionLead(item)
+            agentQuestionLead(item, rendersInteractiveControls: rendersInteractiveControls)
         case .specRevision:
             specRevisionLead(item)
         case .specification:
@@ -760,7 +793,10 @@ struct DecisionDetailView: View {
                 if let recommendation = DecisionRecommendationPresentation.of(item),
                     actionRanking(item).recommended == recommendation.action
                 {
-                    recommendationBlock(recommendation, item: item)
+                    recommendationBlock(
+                        recommendation,
+                        item: item,
+                        rendersInteractiveControls: rendersInteractiveControls)
                 }
             #endif
         case .checklist:
@@ -784,7 +820,9 @@ struct DecisionDetailView: View {
             if let presentation = graphics.diminishingYield ?? DecisionYieldPresentation(item) {
                 DecisionYieldChartModuleView(
                     presentation: presentation,
-                    showsBars: graphics.diminishingYield != nil)
+                    showsBars: graphics.diminishingYield != nil,
+                    isExpanded: item._type == .ready_for_final_review
+                        ? disclosure(.reviewYield) : nil)
             }
         case .stopCause:
             if let presentation = DecisionStopCausePresentation(item) {
@@ -808,10 +846,11 @@ struct DecisionDetailView: View {
             } else {
                 agentSummary(
                     composition.summaries(from: item.agent_claims),
-                    rendersInteractiveControls: rendersInteractiveControls)
+                    unverified: unverified(
+                        item, rendersInteractiveControls: rendersInteractiveControls))
             }
         case .claims:
-            #if os(iOS)
+            if drawsClaimsInCard(composition, at: moduleIndex) {
                 claims(
                     composition.claims(
                         from: item.agent_claims,
@@ -819,8 +858,9 @@ struct DecisionDetailView: View {
                         prominentClaimIndex: graphics.prominentClaimIndex),
                     accessibilityLayout: accessibilityLayout,
                     prominent: composition.claimsAreProminent(at: moduleIndex),
-                    rendersInteractiveControls: rendersInteractiveControls)
-            #endif
+                    unverified: unverified(
+                        item, rendersInteractiveControls: rendersInteractiveControls))
+            }
         case .evidence:
             #if os(macOS)
                 if composition.reviewingActionInsertionIndex != nil {
@@ -876,28 +916,58 @@ struct DecisionDetailView: View {
         }
     }
 
+    /// macOS lists claims in the action region and the inspector, so a
+    /// claims module draws in the card there only where the claim is the
+    /// card's own lead (D08). iOS has neither place and draws every module.
+    private func drawsClaimsInCard(
+        _ composition: DecisionCardComposition, at moduleIndex: Int
+    ) -> Bool {
+        #if os(macOS)
+            composition.leadsWithItsClaim && composition.claimsAreProminent(at: moduleIndex)
+        #else
+            true
+        #endif
+    }
+
     @ViewBuilder
     private func agentSummary(
         _ claims: [Components.Schemas.AgentClaim],
-        rendersInteractiveControls: Bool
+        unverified: UnverifiedRegister
     ) -> some View {
         if !claims.isEmpty {
-            cardSection("Agent summary (unverified)", dashed: true) {
-                Text("Written by the agent, not checked by the daemon.")
-                    .foregroundStyle(Color.inkDim)
+            cardSection("Agent summary", unverified: unverified) {
+                unverifiedSentence(unverified)
                 ForEach(Array(claims.enumerated()), id: \.offset) { _, claim in
-                    Text("Source: agent invocation `\(producerInvocationID(claim))`")
-                        .font(FreesideFont.caption)
-                        .foregroundStyle(Color.inkDim)
-                        .textSelection(.enabled)
-                    AttachmentRow(
-                        label: "Summary",
-                        digest: claim.digest,
-                        metadata: claim.metadata,
-                        attachments: attachments,
-                        loadsAttachments: loadsAttachments,
-                        text: claim.text,
-                        rendersInteractiveControls: rendersInteractiveControls)
+                    switch unverified.frame {
+                    case .dashedCard:
+                        Text("Source: agent invocation `\(Self.producerInvocationID(claim))`")
+                            .font(FreesideFont.caption)
+                            .foregroundStyle(Color.inkDim)
+                            .textSelection(.enabled)
+                        AttachmentRow(
+                            label: "Summary",
+                            digest: claim.digest,
+                            metadata: claim.metadata,
+                            attachments: attachments,
+                            loadsAttachments: loadsAttachments,
+                            text: claim.text,
+                            rendersInteractiveControls: unverified.rendersInteractiveControls)
+                    case .spaced:
+                        if let text = claim.text {
+                            summaryText(text.content, mediaType: text.media_type)
+                        }
+                        KeywordDisclosure(
+                            keyword: "Source and original report",
+                            isExpanded: disclosure(.claimSource(claim))
+                        ) {
+                            fullSummaryReport(
+                                claim,
+                                rendersInteractiveControls: unverified.rendersInteractiveControls
+                            )
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 8)
+                        }
+                    }
                 }
             }
         }
@@ -906,19 +976,15 @@ struct DecisionDetailView: View {
     @ViewBuilder
     private func readySummary(_ item: Components.Schemas.AttentionItem, rendersInteractiveControls: Bool) -> some View {
         let claims = DecisionCardComposition.forType(item._type).summaries(from: item.agent_claims)
-        cardSection("Agent summary (unverified)", dashed: true) {
-            Text("Written by the agent, not checked by the daemon.")
-                .foregroundStyle(Color.inkDim)
+        let register = unverified(item, rendersInteractiveControls: rendersInteractiveControls)
+        cardSection("Agent summary", unverified: register) {
+            unverifiedSentence(register)
             if claims.isEmpty {
                 Text("Inline summary unavailable. Any retained report is listed with the claim attachments.")
             }
             ForEach(Array(claims.enumerated()), id: \.offset) { _, claim in
                 if let text = claim.text {
                     let presentation = DecisionSummaryPresentation(text)
-                    Text("Source: agent invocation `\(producerInvocationID(claim))`")
-                        .font(FreesideFont.caption)
-                        .foregroundStyle(Color.inkDim)
-                        .textSelection(.enabled)
                     if presentation.isExcerpt {
                         Text("Report excerpt (incomplete)").font(FreesideFont.caption)
                     }
@@ -964,7 +1030,11 @@ struct DecisionDetailView: View {
                         summaryRevealRequest = nil
                     }
                 })
-            cardSection("Full agent report (unverified)", dashed: true) {
+            cardSection(
+                "Full agent report",
+                unverified: unverified(
+                    item, rendersInteractiveControls: rendersInteractiveControls)
+            ) {
                 if rendersInteractiveControls {
                     DisclosureGroup("Complete original report", isExpanded: expanded) {
                         fullSummaryReport(claim, rendersInteractiveControls: true)
@@ -982,7 +1052,7 @@ struct DecisionDetailView: View {
         _ claim: Components.Schemas.AgentClaim, rendersInteractiveControls: Bool
     ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Source: agent invocation `\(producerInvocationID(claim))`")
+            Text("Source: agent invocation `\(Self.producerInvocationID(claim))`")
                 .font(FreesideFont.caption).textSelection(.enabled)
             AttachmentRow(
                 label: "Original report", digest: claim.digest, metadata: claim.metadata, attachments: attachments,
@@ -1003,7 +1073,7 @@ struct DecisionDetailView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func producerInvocationID(_ claim: Components.Schemas.AgentClaim) -> String {
+    private static func producerInvocationID(_ claim: Components.Schemas.AgentClaim) -> String {
         switch claim.provenance {
         case .head_bound(let provenance):
             provenance.producer_invocation_id
@@ -1022,26 +1092,83 @@ struct DecisionDetailView: View {
         }
     }
 
+    /// The reason as the ask's own second line: the same daemon sentence the
+    /// Context section carries, without the box and its label.
+    @ViewBuilder
+    private func reasonUnderAsk(_ item: Components.Schemas.AttentionItem) -> some View {
+        if !item.reason.isEmpty {
+            Text(item.reason)
+                .font(FreesideFont.callout)
+                .foregroundStyle(Color.inkDim)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// The reason one disclosure away, below the actions, on a card whose
+    /// lead already says what the operator is deciding.
+    @ViewBuilder
+    private func recordedContext(_ item: Components.Schemas.AttentionItem) -> some View {
+        if !item.reason.isEmpty {
+            KeywordDisclosure(
+                keyword: "Recorded context", isExpanded: disclosure(.recordedContext)
+            ) {
+                Text(item.reason)
+                    .font(FreesideFont.callout)
+                    .foregroundStyle(Color.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 8)
+            }
+        }
+    }
+
+    private func disclosure(_ disclosure: DecisionDisclosure) -> Binding<Bool> {
+        Binding(
+            get: { expandedDisclosures.contains(disclosure) },
+            set: { expanded in
+                if expanded {
+                    expandedDisclosures.insert(disclosure)
+                } else {
+                    expandedDisclosures.remove(disclosure)
+                }
+            })
+    }
+
     /// The Section 9 card facts for this item type, read from its typed fact
     /// fields (#724). Rendered from the `.facts` module, which every
     /// composition places ahead of its action region; a type whose lead is its
     /// own module contributes no rows and the section disappears rather than
-    /// rendering an empty container.
+    /// rendering an empty container. `DecisionFactPlacement` decides which
+    /// rows stay beside the decision and which fold.
     @ViewBuilder
     private func factsSection(
         _ item: Components.Schemas.AttentionItem,
         includesCommitPlan: Bool
     ) -> some View {
-        let facts = AttentionDisplay.cardFacts(item, now: now)
-        let notice = includesCommitPlan ? item.commit_plan_notice?.value1 : nil
-        if !facts.isEmpty || notice != nil {
+        let placement = DecisionFactPlacement(
+            item, includesCommitPlan: includesCommitPlan, now: now)
+        if !placement.visible.isEmpty {
             cardSection("Facts") {
-                ForEach(facts) { fact in
+                ForEach(placement.visible) { fact in
                     factRow(fact.label, value: fact.value, monospaced: fact.monospaced)
                 }
-                if let notice {
-                    factRow("Commit plan", value: AttentionDisplay.label(notice))
+            }
+        }
+        if !placement.folded.isEmpty {
+            KeywordDisclosure(
+                keyword: DecisionFactPlacement.foldedTitle, isExpanded: disclosure(.runDetails)
+            ) {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(placement.folded) { fact in
+                        factRow(fact.label, value: fact.value, monospaced: fact.monospaced)
+                    }
                 }
+                .font(FreesideFont.callout)
+                .foregroundStyle(Color.ink)
+                // A stacked row hugs its text, and a disclosure centers
+                // content narrower than itself.
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 8)
             }
         }
     }
@@ -1052,7 +1179,11 @@ struct DecisionDetailView: View {
         rendersInteractiveControls: Bool
     ) -> some View {
         if let changeSummary = graphics.changeSummary {
-            cardSection("Change summary (unverified)", dashed: true) {
+            cardSection(
+                "Change summary",
+                unverified: unverified(
+                    item, rendersInteractiveControls: rendersInteractiveControls)
+            ) {
                 Text(changeSummary.text)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1083,24 +1214,26 @@ struct DecisionDetailView: View {
         }
     }
 
-    /// The card's ask is the shell's question; this module carries the
-    /// decisions the agent stopped on, and each one leads with its own
-    /// question in the serif. Who stopped and what blocks the run are facts,
-    /// so they render once as fact rows rather than as a preface the operator
-    /// reads before reaching anything to answer (#1107).
+    /// The decisions the agent stopped on lead the card, each with its own
+    /// question in the serif, so the shell draws no generic ask above them
+    /// (visual audit D06). Who stopped and what blocks the run are facts, so
+    /// they render once as fact rows below rather than as a preface the
+    /// operator reads before reaching anything to answer (#1107).
     ///
     /// The daemon types the decision structure, but the question, the
     /// blocking explanation, the option labels, and the tradeoffs are all
-    /// prose from the asking invocation's Question claim, so each decision
-    /// renders in the claim register the card uses everywhere else: the
-    /// dashed border and a register label above the question. Plan §9 has
-    /// this type lead with "the question as a labeled agent claim,
-    /// self-contained: what is blocked and any enumerated options", and
-    /// without the register an operator reads agent prose in the solid
-    /// daemon-fact box. The per-option marker stays on the recommendation it
-    /// qualifies; it speaks for one option, not for the question around it.
+    /// prose from the asking invocation's Question claim. Plan §9 has this
+    /// type lead with "the question as a labeled agent claim, self-contained:
+    /// what is blocked and any enumerated options", so each decision carries
+    /// the unverified register label directly above its question; without it
+    /// an operator would read agent prose as a daemon fact. The per-option
+    /// marker stays on the recommendation it qualifies; it speaks for one
+    /// option, not for the question around it.
     @ViewBuilder
-    private func agentQuestionLead(_ item: Components.Schemas.AttentionItem) -> some View {
+    private func agentQuestionLead(
+        _ item: Components.Schemas.AttentionItem,
+        rendersInteractiveControls: Bool
+    ) -> some View {
         if let presentation = AgentQuestionPresentation(item) {
             if let scope = presentation.scopeConflict {
                 VStack(alignment: .leading, spacing: 8) {
@@ -1119,43 +1252,63 @@ struct DecisionDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .freesideCard()
             }
+            let register = unverified(
+                item, rendersInteractiveControls: rendersInteractiveControls)
             ForEach(Array(presentation.decisions.enumerated()), id: \.offset) { _, decision in
                 VStack(alignment: .leading, spacing: 8) {
-                    KeywordLabel(text: "Agent question (unverified)")
+                    sectionTitle("Agent question", unverified: register)
                     Text(decision.question)
-                        .font(FreesideFont.itemTitle)
+                        .font(FreesideFont.sectionTitle)
                         .foregroundStyle(Color.ink)
                         .fixedSize(horizontal: false, vertical: true)
                     Text(decision.whyBlocking)
                         .font(FreesideFont.callout)
                         .foregroundStyle(Color.inkDim)
                         .fixedSize(horizontal: false, vertical: true)
-                    ForEach(Array(decision.options.enumerated()), id: \.offset) { _, option in
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                Text(option.label)
-                                    .font(FreesideFont.sans(.callout, weight: .semibold))
-                                if option.recommended {
-                                    Label(
-                                        "Agent recommends (unverified)",
-                                        systemImage: "quote.bubble"
-                                    )
-                                    .font(FreesideFont.caption)
-                                    .foregroundStyle(Color.accentText)
-                                }
-                            }
-                            Text(option.tradeoffs)
-                                .font(FreesideFont.callout)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
+                    ForEach(Array(decision.options.enumerated()), id: \.offset) { index, option in
+                        agentQuestionOption(option, number: index + 1)
+                            .padding(.top, index == 0 ? 4 : 0)
                     }
                 }
-                .foregroundStyle(Color.ink)
-                .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .freesideCard(dashed: true)
             }
         }
+    }
+
+    /// One alternative the agent enumerated, bounded as its own panel so the
+    /// label, the recommendation, and the complete tradeoff read as one
+    /// option. A panel describes a choice and is not the control that makes
+    /// it: the answer still goes through the card's answer actions, so it is
+    /// one accessibility element with no tap target.
+    private func agentQuestionOption(
+        _ option: AgentQuestionPresentation.Option,
+        number: Int
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            KeywordLabel(text: "Option \(number)")
+            Text(option.label)
+                .font(FreesideFont.itemTitle)
+                .foregroundStyle(Color.ink)
+                .fixedSize(horizontal: false, vertical: true)
+            if option.recommended {
+                Label("Agent recommends (unverified)", systemImage: "quote.bubble")
+                    .font(FreesideFont.caption)
+                    .foregroundStyle(Color.accentText)
+            }
+            Text(option.tradeoffs)
+                .font(FreesideFont.callout)
+                .foregroundStyle(Color.ink)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 10)
+        .padding(.leading, 13)
+        .padding(.trailing, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.neutralWash)
+        .overlay(alignment: .leading) {
+            Rectangle().fill(Color.rule).frame(width: 3)
+        }
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder
@@ -1396,25 +1549,21 @@ struct DecisionDetailView: View {
         _ claims: [Components.Schemas.AgentClaim],
         accessibilityLayout: Bool,
         prominent: Bool,
-        rendersInteractiveControls: Bool
+        unverified: UnverifiedRegister
     ) -> some View {
         if !claims.isEmpty {
             if prominent {
-                cardSection("Agent claims (unverified)", dashed: true) {
-                    claimRows(
-                        claims,
-                        rendersInteractiveControls: rendersInteractiveControls)
+                cardSection("Agent claims", unverified: unverified) {
+                    claimRows(claims, unverified: unverified)
                 }
             } else {
                 lowerSection(
-                    "Agent claims (unverified)",
+                    "Agent claims",
                     isExpanded: claimsExpanded,
                     accessibilityLayout: accessibilityLayout,
-                    dashed: true
+                    unverified: unverified
                 ) {
-                    claimRows(
-                        claims,
-                        rendersInteractiveControls: rendersInteractiveControls)
+                    claimRows(claims, unverified: unverified)
                 }
             }
         }
@@ -1423,21 +1572,69 @@ struct DecisionDetailView: View {
     @ViewBuilder
     private func claimRows(
         _ claims: [Components.Schemas.AgentClaim],
-        rendersInteractiveControls: Bool = true
+        unverified: UnverifiedRegister
     ) -> some View {
-        Text("Written by the agent, not checked by the daemon.")
-            .foregroundStyle(Color.inkDim)
+        unverifiedSentence(unverified)
         // Position is the only stable identity: two claims may bind the same
         // artifact under different labels and neither field is unique.
         ForEach(Array(claims.enumerated()), id: \.offset) { _, claim in
-            AttachmentRow(
-                label: claim.label, digest: claim.digest,
-                metadata: claim.metadata,
-                attachments: attachments,
-                loadsAttachments: loadsAttachments,
-                text: claim.text,
-                rendersInteractiveControls: rendersInteractiveControls)
+            if unverified.frame == .spaced, let text = claim.text {
+                claimProse(
+                    claim, text: text,
+                    rendersInteractiveControls: unverified.rendersInteractiveControls)
+            } else {
+                // A claim without inline text keeps the attachment row in
+                // every frame: its loading, unavailable, and failed states
+                // and their retry are that row's own.
+                AttachmentRow(
+                    label: claim.label, digest: claim.digest,
+                    metadata: claim.metadata,
+                    attachments: attachments,
+                    loadsAttachments: loadsAttachments,
+                    text: claim.text,
+                    rendersInteractiveControls: unverified.rendersInteractiveControls)
+            }
         }
+    }
+
+    /// A text claim on a card whose agent sections are spaced: the claim's
+    /// own words lead, and the identifiers that bind them (its label, media
+    /// type, producing invocation, and digest) sit one disclosure away with
+    /// a copy control each.
+    @ViewBuilder
+    private func claimProse(
+        _ claim: Components.Schemas.AgentClaim,
+        text: Components.Schemas.ClaimText,
+        rendersInteractiveControls: Bool
+    ) -> some View {
+        summaryText(text.content, mediaType: text.media_type)
+        KeywordDisclosure(
+            keyword: "Source and supporting details",
+            isExpanded: disclosure(.claimSource(claim))
+        ) {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(
+                    Array(Self.claimSourceRows(claim, text: text).enumerated()), id: \.offset
+                ) { _, row in
+                    TechnicalDetailRow(
+                        row: row, rendersInteractiveControls: rendersInteractiveControls)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 8)
+        }
+    }
+
+    static func claimSourceRows(
+        _ claim: Components.Schemas.AgentClaim,
+        text: Components.Schemas.ClaimText
+    ) -> [AttentionDisplay.BindingRow] {
+        [
+            .init(label: "Label", value: claim.label),
+            .init(label: "Media type", value: text.media_type.rawValue),
+            .init(label: "Agent invocation", value: producerInvocationID(claim)),
+            .init(label: "Claim digest", value: claim.digest),
+        ]
     }
 
     /// The card's Evidence module while the inspector holds the same packet:
@@ -1512,18 +1709,23 @@ struct DecisionDetailView: View {
             // bindings. A second copy of the same rows made an open inspector
             // repeat the card beside it.
             VStack(alignment: .leading, spacing: 12) {
+                let cardLeadClaims = DecisionCardComposition.forType(item._type)
+                    .cardLeadClaims(
+                        from: item.agent_claims,
+                        prominentClaimIndex: graphics.prominentClaimIndex)
                 let attachmentClaims = item.agent_claims.filter {
                     $0.text == nil && !AgentClaimLabels.isApprovalMaterial($0.label)
+                        && !cardLeadClaims.contains($0)
                 }
                 if !attachmentClaims.isEmpty {
+                    let register = unverified(
+                        item, rendersInteractiveControls: rendersInteractiveControls)
                     inspectorSection(
-                        "Agent claims (unverified)",
+                        "Agent claims",
                         isExpanded: claimsExpanded,
-                        dashed: true
+                        unverified: register
                     ) {
-                        claimRows(
-                            attachmentClaims,
-                            rendersInteractiveControls: rendersInteractiveControls)
+                        claimRows(attachmentClaims, unverified: register)
                     }
                 }
                 if !item.evidence_snapshot.isEmpty {
@@ -2093,15 +2295,30 @@ struct DecisionDetailView: View {
     /// the argument above it rather than a control the reason trails.
     private func recommendationBlock(
         _ recommendation: DecisionRecommendationPresentation,
-        item: Components.Schemas.AttentionItem
+        item: Components.Schemas.AttentionItem,
+        rendersInteractiveControls: Bool
     ) -> some View {
-        cardSection(
-            recommendation.label,
-            dashed: recommendation.register.isUnverifiedClaim,
+        // The block's label names its register without the word, so a card
+        // that keeps the repeated sentence draws the label as it is and the
+        // sentence under it; on demand, the label itself says "(unverified)".
+        let register =
+            recommendation.register.isUnverifiedClaim
+            ? unverified(item, rendersInteractiveControls: rendersInteractiveControls) : nil
+        return cardSection(
+            title: Group {
+                if let register, register.explanation == .onDemand {
+                    UnverifiedLabel(
+                        text: recommendation.label,
+                        rendersInteractiveControls: register.rendersInteractiveControls)
+                } else {
+                    KeywordLabel(text: recommendation.label)
+                }
+            },
+            dashed: register != nil,
             border: .accentBorder,
             fill: .accentWash
         ) {
-            if recommendation.register.isUnverifiedClaim {
+            if register?.explanation == .sentence {
                 Text("Written by an agent, not checked by the daemon.")
                     .foregroundStyle(Color.inkDim)
             }
@@ -2166,28 +2383,118 @@ struct DecisionDetailView: View {
         return frame.maxY > 0 && frame.minY < viewportHeight
     }
 
+    /// A section's unverified register: set when an agent wrote the section's
+    /// content. The "(unverified)" label, the dashed border, and where the
+    /// explanation lives all follow from this one value rather than from the
+    /// title's text, so a section cannot claim one and draw another.
+    struct UnverifiedRegister {
+        let explanation: DecisionCardComposition.UnverifiedExplanation
+        let frame: DecisionCardComposition.AgentSectionFrame
+        let rendersInteractiveControls: Bool
+    }
+
+    private func unverified(
+        _ item: Components.Schemas.AttentionItem,
+        rendersInteractiveControls: Bool
+    ) -> UnverifiedRegister {
+        UnverifiedRegister(
+            explanation: DecisionCardComposition.unverifiedExplanation(for: item._type),
+            frame: DecisionCardComposition.agentSectionFrame(for: item._type),
+            rendersInteractiveControls: rendersInteractiveControls)
+    }
+
+    /// A title that is a disclosure's own label draws the explanation's
+    /// glyph as a mark only. The label is the control that opens the section,
+    /// so a second button inside it would hand touch and VoiceOver the
+    /// disclosure rather than the explanation; the section carries the
+    /// sentence inside instead (`foldedUnverifiedSentence`).
+    @ViewBuilder
+    private func sectionTitle(
+        _ title: String,
+        unverified: UnverifiedRegister?,
+        isDisclosureLabel: Bool = false
+    ) -> some View {
+        if let unverified {
+            switch unverified.explanation {
+            case .sentence:
+                KeywordLabel(text: "\(title) (unverified)")
+            case .onDemand:
+                UnverifiedLabel(
+                    text: title,
+                    rendersInteractiveControls: unverified.rendersInteractiveControls
+                        && !isDisclosureLabel)
+            }
+        } else {
+            KeywordLabel(text: title)
+        }
+    }
+
+    /// The explanation a section repeats under its title on a card that does
+    /// not offer it on demand.
+    @ViewBuilder
+    private func unverifiedSentence(_ unverified: UnverifiedRegister) -> some View {
+        if unverified.explanation == .sentence {
+            Text(UnverifiedLabel.explanation)
+                .foregroundStyle(Color.inkDim)
+        }
+    }
+
+    /// The explanation as the first line of a folded section on a card that
+    /// otherwise offers it on demand: opening the section is the demand.
+    @ViewBuilder
+    private func foldedUnverifiedSentence(_ unverified: UnverifiedRegister?) -> some View {
+        if unverified?.explanation == .onDemand {
+            Text(UnverifiedLabel.explanation)
+                .foregroundStyle(Color.inkDim)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private func cardSection(
         _ title: String,
-        dashed: Bool = false,
+        unverified: UnverifiedRegister? = nil,
         border: Color = .rule,
         fill: Color = .ground,
         @ViewBuilder content: () -> some View
     ) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            KeywordLabel(text: title)
+        cardSection(
+            title: sectionTitle(title, unverified: unverified),
+            dashed: unverified != nil,
+            boxed: unverified?.frame != .spaced,
+            border: border,
+            fill: fill,
+            content: content)
+    }
+
+    @ViewBuilder
+    private func cardSection(
+        title: some View,
+        dashed: Bool,
+        boxed: Bool = true,
+        border: Color = .rule,
+        fill: Color = .ground,
+        @ViewBuilder content: () -> some View
+    ) -> some View {
+        let section = VStack(alignment: .leading, spacing: 6) {
+            title
             content()
                 .font(FreesideFont.callout)
                 .foregroundStyle(Color.ink)
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8).fill(fill))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(
-                    border,
-                    style: StrokeStyle(lineWidth: 1, dash: dashed ? [4, 3] : []))
-        )
+        if boxed {
+            section
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 8).fill(fill))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(
+                            border,
+                            style: StrokeStyle(lineWidth: 1, dash: dashed ? [4, 3] : []))
+                )
+        } else {
+            section.frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     @ViewBuilder
@@ -2195,23 +2502,29 @@ struct DecisionDetailView: View {
         _ title: String,
         isExpanded: Binding<Bool>,
         accessibilityLayout: Bool,
-        dashed: Bool = false,
+        unverified: UnverifiedRegister? = nil,
         @ViewBuilder content: @escaping () -> Content
     ) -> some View {
         if accessibilityLayout {
-            DisclosureGroup(isExpanded: isExpanded) {
+            let disclosure = DisclosureGroup(isExpanded: isExpanded) {
                 VStack(alignment: .leading, spacing: 8) {
+                    foldedUnverifiedSentence(unverified)
                     content()
                 }
                 .padding(.top, 8)
             } label: {
-                KeywordLabel(text: title)
+                sectionTitle(title, unverified: unverified, isDisclosureLabel: true)
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .freesideCard(dashed: dashed)
+            if unverified?.frame == .spaced {
+                disclosure.frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                disclosure
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .freesideCard(dashed: unverified != nil)
+            }
         } else {
-            cardSection(title, dashed: dashed) {
+            cardSection(title, unverified: unverified) {
                 content()
             }
         }
@@ -2220,20 +2533,21 @@ struct DecisionDetailView: View {
     private func inspectorSection<Content: View>(
         _ title: String,
         isExpanded: Binding<Bool>,
-        dashed: Bool = false,
+        unverified: UnverifiedRegister? = nil,
         @ViewBuilder content: @escaping () -> Content
     ) -> some View {
         DisclosureGroup(isExpanded: isExpanded) {
             VStack(alignment: .leading, spacing: 8) {
+                foldedUnverifiedSentence(unverified)
                 content()
             }
             .padding(.top, 8)
         } label: {
-            KeywordLabel(text: title)
+            sectionTitle(title, unverified: unverified, isDisclosureLabel: true)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .freesideCard(dashed: dashed)
+        .freesideCard(dashed: unverified != nil)
     }
 
     private func factRow(
@@ -2932,8 +3246,13 @@ struct DecisionDetailView: View {
 
     @ViewBuilder
     private func reviewingAction(_ item: Components.Schemas.AttentionItem) -> some View {
-        if let reviewing = actionRanking(item).reviewing {
-            actionButton(reviewing, item: item, tone: .secondary)
+        let ranking = actionRanking(item)
+        if let reviewing = ranking.reviewing {
+            actionButton(
+                reviewing,
+                item: item,
+                tone: DecisionCardComposition.reviewingActionIsFilled(ranking)
+                    ? .primary : .secondary)
         }
     }
 

@@ -36,6 +36,13 @@ struct DecisionCardComposition: Equatable {
     let modules: [DecisionCardModule]
     let actionInsertionIndex: Int
     let reviewingActionInsertionIndex: Int?
+    /// Whether the agent's claim is this card's own lead content rather
+    /// than support for another module. Such a card draws its leading claims
+    /// module in the card on every platform, and leads with its claims even
+    /// when none carries inline text, so the lead is never empty while a
+    /// claim exists. Elsewhere a claim without text stays supporting
+    /// context.
+    var leadsWithItsClaim = false
 
     /// A claim module leads when it renders above the action region: that is
     /// the whole meaning of prominence here, so it is read from
@@ -63,11 +70,27 @@ struct DecisionCardComposition: Equatable {
             // (plan §9). This is the split the macOS action region already
             // applies, where text claims sit above the actions and attachment
             // claims move to the inspector.
+            if leadsWithItsClaim, !claims.contains(where: { $0.text != nil }) {
+                return leads ? claims : []
+            }
             return claims.filter { ($0.text != nil) == leads }
         }
         return claims.enumerated().compactMap { index, claim in
             leads == (index == prominentClaimIndex) ? claim : nil
         }
+    }
+
+    /// The claims a card that leads with its claim draws in the card itself,
+    /// which every other place a platform lists claims has to leave out so
+    /// the claim renders once. Empty for a card that does not lead with one.
+    func cardLeadClaims(
+        from claims: [Components.Schemas.AgentClaim],
+        prominentClaimIndex: Int?
+    ) -> [Components.Schemas.AgentClaim] {
+        guard leadsWithItsClaim, let lead = modules.firstIndex(of: .claims),
+            claimsAreProminent(at: lead)
+        else { return [] }
+        return self.claims(from: claims, at: lead, prominentClaimIndex: prominentClaimIndex)
     }
 
     func summaries(
@@ -117,6 +140,143 @@ struct DecisionCardComposition: Equatable {
         return !Self.reasonIsAgentSummary(item._type) || summaries(from: item.agent_claims).isEmpty
     }
 
+    /// How a card explains its unverified register. Every agent-written
+    /// section keeps a visible "(unverified)" label either way; the choice is
+    /// only where the sentence explaining the label lives.
+    enum UnverifiedExplanation: Equatable {
+        /// The sentence repeats under each agent-written section's title.
+        case sentence
+        /// The label carries an info button that opens the sentence.
+        case onDemand
+    }
+
+    /// The visual audit's D03 moves the explanation on demand on the four
+    /// card types the audit approved it for; every other type keeps the
+    /// repeated sentence. The switch is exhaustive so a new type has to
+    /// answer the question.
+    static func unverifiedExplanation(
+        for type: Components.Schemas.AttentionType
+    ) -> UnverifiedExplanation {
+        switch type {
+        case .agent_question, .ready_for_final_review, .review_dispute, .finding_adjudication:
+            return .onDemand
+        case .spec_approval, .execution_failure, .review_diminishing_returns,
+            .review_contradiction, .review_configuration, .publish_blocked, .task_proposal,
+            .effect_proposal, .system_health, .blocked:
+            return .sentence
+        }
+    }
+
+    /// How a card frames its agent-written sections. The unverified label
+    /// names the register in both; the frame is only how the section is set
+    /// apart from its neighbors.
+    enum AgentSectionFrame: Equatable {
+        /// A dashed card around the section, with every claim's source
+        /// identifiers printed beside its text.
+        case dashedCard
+        /// No card: the label and the agent's prose, set apart by spacing,
+        /// with the source identifiers one disclosure away.
+        case spaced
+    }
+
+    /// The visual audit keeps a bounded card for an independent item or
+    /// option and separates ordinary sections by spacing, on the surfaces it
+    /// approved only. The question card (D06) draws its options as the
+    /// bounded panels, the final review (D07) keeps its one card for the
+    /// daemon's checklist, and the dispute (D08) reads its claim as prose
+    /// beside the actions, so their agent sections drop their own card. The
+    /// switch is exhaustive so a new type has to answer the question.
+    static func agentSectionFrame(
+        for type: Components.Schemas.AttentionType
+    ) -> AgentSectionFrame {
+        switch type {
+        case .agent_question, .ready_for_final_review, .review_dispute:
+            return .spaced
+        case .spec_approval, .execution_failure, .review_diminishing_returns,
+            .review_contradiction, .review_configuration, .finding_adjudication,
+            .publish_blocked, .task_proposal, .effect_proposal, .system_health, .blocked:
+            return .dashedCard
+        }
+    }
+
+    /// Whether the shell draws its generic ask for `item`. A question card
+    /// leads with the agent's own question (D06), so the ask would only
+    /// delay it; an item that carries no typed decision draws no lead and
+    /// keeps the ask, so a card is never left without one.
+    static func rendersAsk(for item: Components.Schemas.AttentionItem) -> Bool {
+        guard let question = AgentQuestionPresentation(item) else { return true }
+        return question.decisions.isEmpty
+    }
+
+    /// Where the card shell draws the daemon-written `reason`. The reason is
+    /// drawn by the shell, not by a module, so its place is a rule of the
+    /// type rather than a position in `modules`.
+    enum ReasonPlacement: Equatable {
+        /// A labeled Context section directly under the ask.
+        case context
+        /// Unboxed and dim directly under the ask.
+        case underAsk
+        /// A closed "Recorded context" disclosure below the actions.
+        case recordedContext
+    }
+
+    /// The visual audit's decision-first cards lead with what the operator
+    /// decides on, so the reason leaves the boxed Context section: the
+    /// dispute reads it as the ask's own second line (D08), while the
+    /// question and the final review lead with their own module and keep the
+    /// recorded sentence one disclosure away (D06, D07). The switch is
+    /// exhaustive so a new type has to answer the question.
+    static func reasonPlacement(
+        for type: Components.Schemas.AttentionType
+    ) -> ReasonPlacement {
+        switch type {
+        case .review_dispute:
+            return .underAsk
+        case .agent_question, .ready_for_final_review:
+            return .recordedContext
+        case .spec_approval, .execution_failure, .review_diminishing_returns,
+            .review_contradiction, .review_configuration, .finding_adjudication,
+            .publish_blocked, .task_proposal, .effect_proposal, .system_health, .blocked:
+            return .context
+        }
+    }
+
+    /// Where the shell draws the reason of this `item`. A question that
+    /// carries no typed decision draws no lead and keeps the generic ask
+    /// (`rendersAsk(for:)`), so its reason stays in the Context section under
+    /// that ask rather than folding away from a card with nothing else to
+    /// read first.
+    static func reasonPlacement(
+        for item: Components.Schemas.AttentionItem
+    ) -> ReasonPlacement {
+        if item._type == .agent_question, rendersAsk(for: item) { return .context }
+        return reasonPlacement(for: item._type)
+    }
+
+    /// Whether a card's own reviewing action draws filled. View PR is the
+    /// final review's supported next step (D07), so it takes the card's one
+    /// filled button unless a recommendation block already holds it.
+    static func reviewingActionIsFilled(_ ranking: DecisionActionRanking) -> Bool {
+        ranking.recommended == nil
+    }
+
+    /// Whether the type's `.facts` rows are routine run and binding
+    /// coordinates that fold into a closed disclosure (D06, D08). The final
+    /// review's only row is its diff, which plan §9 lists with the verdicts,
+    /// so it stays visible. The switch is exhaustive so a new type has to
+    /// answer the question.
+    static func foldsRoutineFacts(_ type: Components.Schemas.AttentionType) -> Bool {
+        switch type {
+        case .agent_question, .review_dispute:
+            return true
+        case .spec_approval, .execution_failure, .review_diminishing_returns,
+            .review_contradiction, .review_configuration, .finding_adjudication,
+            .ready_for_final_review, .publish_blocked, .task_proposal, .effect_proposal,
+            .system_health, .blocked:
+            return false
+        }
+    }
+
     static let sharedModuleSet = DecisionCardModule.allCases
 
     /// Every composition places `.facts` ahead of `actionInsertionIndex`: the
@@ -128,15 +288,18 @@ struct DecisionCardComposition: Equatable {
     static func forType(_ type: Components.Schemas.AttentionType) -> Self {
         switch type {
         case .ready_for_final_review:
-            // The verdict leads, then the review's shape; the diff's base and
-            // head are audit coordinates, so they sit last before the actions.
+            // Plan §9 (revision 78, audit D07): the verdict and the diff it
+            // was reached on lead, then the change summary, then View PR, so
+            // the supported next step follows what it rests on. Returning the
+            // work sits below any fact block; the review's round-by-round
+            // yield is history, so it follows the actions.
             return .init(
                 modules: [
-                    .recommendation, .checklist, .summary, .factBlock, .yieldChart, .facts,
+                    .recommendation, .checklist, .facts, .summary, .factBlock, .yieldChart,
                     .claims, .evidence, .details,
                 ],
-                actionInsertionIndex: 6,
-                reviewingActionInsertionIndex: 8)
+                actionInsertionIndex: 5,
+                reviewingActionInsertionIndex: 4)
         case .execution_failure:
             return .init(
                 modules: [
@@ -146,12 +309,19 @@ struct DecisionCardComposition: Equatable {
                 actionInsertionIndex: 4,
                 reviewingActionInsertionIndex: nil)
         case .review_dispute:
+            // Plan §9 (revision 78, audit D08): both positions lead when the
+            // snapshot carries both; when it carries one claim, that claim
+            // leads in their place. Either way the dissent sits beside the
+            // actions, ahead of the daemon's facts about the run. Supporting
+            // claims stay below with the summary.
             return .init(
                 modules: [
-                    .comparison, .factBlock, .facts, .summary, .claims, .evidence, .details,
+                    .comparison, .claims, .factBlock, .facts, .summary, .claims, .evidence,
+                    .details,
                 ],
-                actionInsertionIndex: 3,
-                reviewingActionInsertionIndex: nil)
+                actionInsertionIndex: 4,
+                reviewingActionInsertionIndex: nil,
+                leadsWithItsClaim: true)
         case .review_diminishing_returns:
             // Plan §7 "Routing": the card leads with the verdict and the
             // reversal list, so the stop cause sits ahead of the yield chart
@@ -217,6 +387,59 @@ struct DecisionCardComposition: Equatable {
                 modules: [.recommendation, .facts, .factBlock, .claims, .evidence, .details],
                 actionInsertionIndex: 2,
                 reviewingActionInsertionIndex: nil)
+        }
+    }
+}
+
+/// The card's closed-by-default disclosures. The view keeps the open set as
+/// local state; a caller names the ones that start open, which is how a
+/// screenshot shows what a folded section holds.
+enum DecisionDisclosure: Hashable {
+    case runDetails
+    case recordedContext
+    case reviewYield
+    /// One claim's source identifiers. Neither a label nor a digest is
+    /// unique on its own, and two claims that share both are the same bytes
+    /// under the same name, so opening them together loses nothing.
+    case claimSource(label: String, digest: String)
+
+    static func claimSource(_ claim: Components.Schemas.AgentClaim) -> Self {
+        .claimSource(label: claim.label, digest: claim.digest)
+    }
+}
+
+/// Where each row of a card's `.facts` module renders: beside the decision,
+/// or inside the closed "Run and binding details" disclosure. Kept apart
+/// from the view so the split is testable without rendering.
+///
+/// `AttentionDisplay.cardFacts` carries coordinates only (a stage, a run, a
+/// round, an identifier), so on a type that folds them every one of its rows
+/// folds. A notice is not a coordinate: the commit-plan notice says something
+/// about the candidate the operator is deciding on, so it stays visible on
+/// every type.
+struct DecisionFactPlacement: Equatable {
+    static let foldedTitle = "Run and binding details"
+
+    let visible: [AttentionDisplay.FactRow]
+    let folded: [AttentionDisplay.FactRow]
+
+    init(
+        _ item: Components.Schemas.AttentionItem,
+        includesCommitPlan: Bool,
+        now: Date
+    ) {
+        let facts = AttentionDisplay.cardFacts(item, now: now)
+        let notices: [AttentionDisplay.FactRow] =
+            includesCommitPlan
+            ? [item.commit_plan_notice?.value1].compactMap { $0 }.map {
+                .init("Commit plan", AttentionDisplay.label($0))
+            } : []
+        if DecisionCardComposition.foldsRoutineFacts(item._type) {
+            visible = notices
+            folded = facts
+        } else {
+            visible = facts + notices
+            folded = []
         }
     }
 }
@@ -758,47 +981,72 @@ struct DecisionYieldChartModuleView: View {
     @ScaledMetric(relativeTo: .caption) private var legendSwatch: CGFloat = 8
     let presentation: DecisionYieldPresentation
     var showsBars = true
+    /// When set, the rounds fold into a "Review yield" disclosure in place
+    /// of the module card: the final review reads its verdict first and the
+    /// rounds that led to it on demand (D07).
+    var isExpanded: Binding<Bool>? = nil
 
     var body: some View {
-        DecisionModuleContainer(title: "Review yield") {
-            ForEach(presentation.rounds) { round in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(round.text)
-                        .font(FreesideFont.monoCaption)
-                    if showsBars {
-                        GeometryReader { geometry in
-                            let total = max(
-                                presentation.rounds.map(\.total).max() ?? 1,
-                                1)
-                            HStack(spacing: 0) {
-                                Rectangle()
-                                    .fill(Color.accentBorder)
-                                    .frame(
-                                        width: geometry.size.width
-                                            * CGFloat(round.newFindings) / CGFloat(total))
-                                Rectangle()
-                                    .fill(Color.waxText)
-                                    .frame(
-                                        width: geometry.size.width
-                                            * CGFloat(round.recurringFindings) / CGFloat(total))
-                            }
-                        }
-                        .frame(height: 8)
-                        .clipShape(Capsule())
-                    }
+        if let isExpanded {
+            KeywordDisclosure(keyword: Self.title, isExpanded: isExpanded) {
+                VStack(alignment: .leading, spacing: 8) {
+                    rounds
                 }
+                .font(FreesideFont.callout)
+                .foregroundStyle(Color.ink)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 8)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text(presentation.summary))
             }
-            // The bars carry two fills with no other key; the legend names
-            // them where they render.
-            if showsBars {
-                HStack(spacing: 12) {
-                    legendToken(color: .accentBorder, text: "new")
-                    legendToken(color: .waxText, text: "recurring")
+        } else {
+            DecisionModuleContainer(title: Self.title) {
+                rounds
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(presentation.summary))
+        }
+    }
+
+    private static let title = "Review yield"
+
+    @ViewBuilder
+    private var rounds: some View {
+        ForEach(presentation.rounds) { round in
+            VStack(alignment: .leading, spacing: 4) {
+                Text(round.text)
+                    .font(FreesideFont.monoCaption)
+                if showsBars {
+                    GeometryReader { geometry in
+                        let total = max(
+                            presentation.rounds.map(\.total).max() ?? 1,
+                            1)
+                        HStack(spacing: 0) {
+                            Rectangle()
+                                .fill(Color.accentBorder)
+                                .frame(
+                                    width: geometry.size.width
+                                        * CGFloat(round.newFindings) / CGFloat(total))
+                            Rectangle()
+                                .fill(Color.waxText)
+                                .frame(
+                                    width: geometry.size.width
+                                        * CGFloat(round.recurringFindings) / CGFloat(total))
+                        }
+                    }
+                    .frame(height: 8)
+                    .clipShape(Capsule())
                 }
             }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(presentation.summary))
+        // The bars carry two fills with no other key; the legend names
+        // them where they render.
+        if showsBars {
+            HStack(spacing: 12) {
+                legendToken(color: .accentBorder, text: "new")
+                legendToken(color: .waxText, text: "recurring")
+            }
+        }
     }
 
     private func legendToken(color: Color, text: String) -> some View {

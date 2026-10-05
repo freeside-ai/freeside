@@ -2426,4 +2426,164 @@ import Testing
         #expect(model.canRetryLostResponse)
         #expect(model.pendingCommand != nil)
     }
+
+    // MARK: - Command proof for the decision-first cards (#1732)
+
+    // The question, final-review, and dispute cards move and relabel their
+    // controls (visual audit D06 to D08), so each action they offer is pinned
+    // here by the command it sends: the action, the item and version it binds,
+    // and its payload. A presentation change must leave every one unchanged.
+
+    /// The decision command one submission sends, read from the store's
+    /// ledger while the request is in flight so it is the command as built,
+    /// before the daemon answers.
+    private func commandSent(
+        server: MockServer, store: InboxStore, itemID: String,
+        by submit: @escaping @MainActor () async -> Void
+    ) async throws -> Components.Schemas.DecisionPayload {
+        let reached = AsyncGate()
+        let release = AsyncGate()
+        await server.setBeforeRespond { operationID in
+            if operationID == "submitCommand" {
+                await reached.open()
+                await release.wait()
+            }
+        }
+        let submission = Task { await submit() }
+        await reached.wait()
+        let command = store.pendingCommandsByItemID[itemID]?.command
+        await release.open()
+        await submission.value
+        await server.setBeforeRespond(nil)
+        return try #require(command?.decisionPayload)
+    }
+
+    private func expectBound(
+        _ payload: Components.Schemas.DecisionPayload,
+        to reviewed: Components.Schemas.AttentionItemSnapshot,
+        action: Components.Schemas.Action,
+        message: String? = nil,
+        answerRoute: Components.Schemas.AnswerRoute? = nil
+    ) {
+        #expect(payload.action == action)
+        #expect(payload.item_id == reviewed.item.id)
+        #expect(payload.item_version == reviewed.item.item_version)
+        #expect(payload.pr_head_sha == reviewed.item.pr_head_sha)
+        #expect(payload.artifact_digests == reviewed.item.artifact_digests)
+        #expect(payload.message == message)
+        #expect(payload.answer_route?.value1 == answerRoute)
+        #expect(payload.capability_manifest_digest == nil)
+        #expect(payload.alternative_choices == nil)
+        #expect(payload.snooze_until == nil)
+    }
+
+    @Test(arguments: [
+        Components.Schemas.AttentionType.agent_question, .ready_for_final_review, .review_dispute,
+    ])
+    func decisionFirstCardsConfirmOnlyStopAndDismiss(
+        type: Components.Schemas.AttentionType
+    ) throws {
+        let item = AttentionFixtures.fixture(type: type).item
+        for action in try #require(AttentionFixtures.phase1ActionSets[type]) {
+            #expect(
+                (AttentionDisplay.confirmationConsequence(action, for: item) != nil)
+                    == [.stop, .dismiss].contains(action))
+        }
+    }
+
+    @Test func agentQuestionAnswersSendTheirBoundCommands() async throws {
+        for (action, route) in [
+            (Components.Schemas.Action.answer_and_retry, Components.Schemas.AnswerRoute?.some(.retry_implementation)),
+            (.answer_without_retry, nil),
+        ] {
+            let server = MockServer()
+            let store = await makeStore(server: server)
+            let model = DecisionModel(store: store, itemID: "item-agent_question")
+            await model.validate()
+            let reviewed = try #require(model.snapshot)
+
+            let sent = try await commandSent(server: server, store: store, itemID: reviewed.item.id) {
+                _ = await model.submitAnswer(action, message: " Store first. ", answerRoute: route)
+            }
+
+            expectBound(sent, to: reviewed, action: action, message: "Store first.", answerRoute: route)
+            #expect(model.appliedRecord?.action == action)
+        }
+    }
+
+    @Test func finalReviewActionsSendTheirBoundCommands() async throws {
+        for action in [Components.Schemas.Action.open_pr, .mark_seen] {
+            let server = MockServer()
+            let store = await makeStore(server: server)
+            let model = DecisionModel(
+                store: store, itemID: "item-ready_for_final_review", openURL: { _ in true })
+            await model.validate()
+            let reviewed = try #require(model.snapshot)
+
+            let sent = try await commandSent(server: server, store: store, itemID: reviewed.item.id) {
+                await model.submit(action)
+            }
+
+            expectBound(sent, to: reviewed, action: action)
+        }
+
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-ready_for_final_review")
+        await model.validate()
+        let reviewed = try #require(model.snapshot)
+        let sent = try await commandSent(server: server, store: store, itemID: reviewed.item.id) {
+            _ = await model.submitReturnToAgent(message: " Split the migration. ")
+        }
+        expectBound(sent, to: reviewed, action: .return_to_agent, message: "Split the migration.")
+    }
+
+    @Test func reviewDisputeActionsSendTheirBoundCommands() async throws {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-review_dispute")
+        await model.validate()
+        let reviewed = try #require(model.snapshot)
+        let discuss = try await commandSent(server: server, store: store, itemID: reviewed.item.id) {
+            _ = await model.submitDiscuss(message: " Which finding is contrived? ")
+        }
+        expectBound(discuss, to: reviewed, action: .discuss, message: "Which finding is contrived?")
+
+        let approveServer = MockServer()
+        let approveStore = await makeStore(server: approveServer)
+        let approveModel = DecisionModel(store: approveStore, itemID: "item-review_dispute")
+        await approveModel.validate()
+        let approveReviewed = try #require(approveModel.snapshot)
+        let approve = try await commandSent(
+            server: approveServer, store: approveStore, itemID: approveReviewed.item.id
+        ) {
+            await approveModel.submit(.approve)
+        }
+        expectBound(approve, to: approveReviewed, action: .approve)
+    }
+
+    /// Stop and Dismiss reach the model only through the confirmation sheet,
+    /// which submits against the snapshot the operator reviewed.
+    @Test(arguments: [
+        Components.Schemas.AttentionType.agent_question, .ready_for_final_review, .review_dispute,
+    ])
+    func confirmedActionsSendTheirBoundCommands(
+        type: Components.Schemas.AttentionType
+    ) async throws {
+        let confirmed = try #require(AttentionFixtures.phase1ActionSets[type])
+            .filter { [.stop, .dismiss].contains($0) }
+        for action in confirmed {
+            let server = MockServer()
+            let store = await makeStore(server: server)
+            let model = DecisionModel(store: store, itemID: "item-\(type.rawValue)")
+            await model.validate()
+            let reviewed = try #require(model.snapshot)
+
+            let sent = try await commandSent(server: server, store: store, itemID: reviewed.item.id) {
+                await model.submitConfirmed(action, reviewedSnapshot: reviewed)
+            }
+
+            expectBound(sent, to: reviewed, action: action)
+        }
+    }
 }
