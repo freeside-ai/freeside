@@ -14,6 +14,23 @@ import (
 // control-plane tests.
 func fixtureTrustProfile(t *testing.T) domain.AutomationTrustProfile {
 	t.Helper()
+	return fixtureTrustProfileProtecting(t, domain.ProtectedPathConfig{
+		ExtraAutomationControlPatterns:   []string{"ci/**"},
+		ExtraReviewerInstructionPatterns: []string{"REVIEW.md"},
+		ExtraGitMetadataPatterns:         []string{"sub/.gitattributes"},
+		ExtraVerificationControlPatterns: []string{".freeside/recipe.yaml"},
+		ExtraPromptsAndPolicyPatterns:    []string{"prompts/**"},
+		ExtraEgressAndTrustPatterns:      []string{"config/egress-allowlist.json"},
+		ExtraMaterialityRulesPatterns:    []string{"policy/**"},
+	})
+}
+
+// fixtureTrustProfileProtecting is the fixture profile with a caller-chosen
+// protected-path configuration.
+func fixtureTrustProfileProtecting(
+	t *testing.T, paths domain.ProtectedPathConfig,
+) domain.AutomationTrustProfile {
+	t.Helper()
 	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
 		Repo:                       "freeside-ai/demo",
 		RepositoryID:               123456789,
@@ -26,15 +43,7 @@ func fixtureTrustProfile(t *testing.T) domain.AutomationTrustProfile {
 		Review: domain.ReviewSettings{
 			Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config",
 		},
-		ProtectedPaths: domain.ProtectedPathConfig{
-			ExtraAutomationControlPatterns:   []string{"ci/**"},
-			ExtraReviewerInstructionPatterns: []string{"REVIEW.md"},
-			ExtraGitMetadataPatterns:         []string{"sub/.gitattributes"},
-			ExtraVerificationControlPatterns: []string{".freeside/recipe.yaml"},
-			ExtraPromptsAndPolicyPatterns:    []string{"prompts/**"},
-			ExtraEgressAndTrustPatterns:      []string{"config/egress-allowlist.json"},
-			ExtraMaterialityRulesPatterns:    []string{"policy/**"},
-		},
+		ProtectedPaths: paths,
 	})
 	if err != nil {
 		t.Fatalf("NewAutomationTrustProfile: %v", err)

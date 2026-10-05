@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
 
@@ -373,6 +374,51 @@ func TestImportControlPlanePaths(t *testing.T) {
 		t.Fatal("control-plane findings must not withhold the commit; the route needs it")
 	}
 	goldenResult(t, "import_control_plane_paths", res)
+}
+
+// TestImportRegistrySetDeclarationIsControlPlane shows the plan §5.4 rule that
+// the declared registry set is control-plane policy: a writer change to the
+// file that declares it draws a prompts_and_policy finding that lifts to a
+// publish-blocking control-plane finding.
+//
+// The daemon has no built-in pattern for where a project keeps that file.
+// Like every prompts-and-policy path, it is protected because the operator's
+// trust profile names it, which is the condition this test sets up.
+func TestImportRegistrySetDeclarationIsControlPlane(t *testing.T) {
+	const declaration = "policy/egress.yaml"
+	checkout, base := initBaseRepo(t, map[string]string{
+		declaration: "registry_set: [pypi.org]\n",
+	})
+	handoff := handoffFromEntries(t, []export.Entry{
+		regularEntryFor(declaration, "registry_set: [attacker.example.com, pypi.org]\n", false),
+	}, "registry_set: [attacker.example.com, pypi.org]\n")
+	clone := cloneAtBase(t, checkout)
+	opts := testImportOptions(base)
+	pol, err := opts.Policy.WithProtectedPaths(fixtureTrustProfileProtecting(t, domain.ProtectedPathConfig{
+		ExtraPromptsAndPolicyPatterns: []string{declaration},
+	}))
+	if err != nil {
+		t.Fatalf("WithProtectedPaths: %v", err)
+	}
+	opts.Policy = pol
+	res, err := Import(t.Context(), handoff, clone, opts)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if res.CommitSHA == "" {
+		t.Fatal("a control-plane finding must not withhold the commit; the route needs it")
+	}
+	if len(res.Findings) != 1 || res.Findings[0].Kind != FindingPromptsPolicyPath || res.Findings[0].Path != declaration {
+		t.Fatalf("findings = %+v, want one prompts-and-policy finding for %s", res.Findings, declaration)
+	}
+	lifted := res.Findings[0].Candidate()
+	if err := lifted.Validate(); err != nil {
+		t.Fatalf("lifted finding: %v", err)
+	}
+	if lifted.Class != domain.FindingClassControlPlane || lifted.Disposition != domain.DispositionBlocking ||
+		lifted.Category == nil || *lifted.Category != domain.ControlPlanePromptsAndPolicy {
+		t.Fatalf("lifted finding = %+v, want a blocking prompts_and_policy control-plane finding", lifted)
+	}
 }
 
 // TestImportAllowlist pins the declared-scope enforcement end to end.
