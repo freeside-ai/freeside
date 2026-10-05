@@ -1099,6 +1099,24 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The plan §5.4 initial registry set. The golden pins the canonical
+	// encoding together with the content address it resolves to and the
+	// policy value that declares it.
+	registrySet, err := domain.NewRegistrySet(initialRegistryHosts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registrySetDigest, err := registrySet.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	registrySetDeclaration := struct {
+		PolicyKey   string             `json:"policy_key"`
+		PolicyValue string             `json:"policy_value"`
+		RegistrySet domain.RegistrySet `json:"registry_set"`
+		Digest      domain.Digest      `json:"digest"`
+	}{domain.RegistrySetPolicyKey, initialRegistryPolicyValue, registrySet, registrySetDigest}
+
 	// The agent-bound (v4) variant: the §5.4 admission step 5 snapshot rides
 	// beside the existing fields, and its presence selects the new encoding
 	// version, which this golden pins through the changed content address.
@@ -1791,6 +1809,7 @@ func TestGolden(t *testing.T) {
 		{"stage_input_snapshot_codex", codexStageInput},
 		{"execution_admission", admission},
 		{"execution_admission_registry", registryAdmission},
+		{"registry_set", registrySetDeclaration},
 		{"execution_admission_waived", waivedAdmission},
 		{"execution_admission_agent", agentAdmission},
 		{"execution_admission_agent_explicit_model", claudeAdmission},
