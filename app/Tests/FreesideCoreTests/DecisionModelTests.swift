@@ -1414,6 +1414,33 @@ import Testing
         #expect(reversed == Array(inOrder.reversed()))
     }
 
+    /// "Accept all dispositions" is a label on `accept_recommended_route`:
+    /// the command binds the whole item at its current version and carries
+    /// no per-finding choice, so it can never become a partial acceptance.
+    @Test func acceptingEveryDispositionBindsTheWholeItemAndCarriesNoChoices() async throws {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-finding_adjudication")
+        await model.validate()
+        let reviewed = try #require(model.snapshot)
+
+        // The lost response leaves the minted command in the ledger, where
+        // its payload can be read.
+        await server.setBeforeRespond { operationID in
+            if operationID == "submitCommand" { throw InjectedFailure() }
+        }
+        await model.submit(.accept_recommended_route)
+
+        guard case .decision(let payload) = try #require(model.pendingCommand).payload else {
+            Issue.record("the pending command is not a decision")
+            return
+        }
+        #expect(payload.action == .accept_recommended_route)
+        #expect(payload.alternative_choices == nil)
+        #expect(payload.item_id == reviewed.item.id)
+        #expect(payload.item_version == reviewed.item.item_version)
+    }
+
     /// A selection made against a card that was since replaced is refused
     /// with the replacement swapped in: the choice never applies to an item
     /// version the operator did not read.

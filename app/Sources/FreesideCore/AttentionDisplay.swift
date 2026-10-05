@@ -406,6 +406,22 @@ enum AttentionDisplay {
         }
     }
 
+    /// An action's label where its item is known. On an item that binds
+    /// several findings, `accept_recommended_route` applies every proposed
+    /// route at once, so the label says so (visual audit D09); the action and
+    /// what it submits are the same either way.
+    static func label(
+        _ action: Components.Schemas.Action,
+        for item: Components.Schemas.AttentionItem?
+    ) -> String {
+        if action == .accept_recommended_route,
+            let binding = item?.finding_adjudication?.value1, binding.proposals.count > 1
+        {
+            return "Accept all dispositions"
+        }
+        return label(action)
+    }
+
     static func systemImage(_ action: Components.Schemas.Action) -> String? {
         switch action {
         case .open_pr: return "arrow.up.right.square"

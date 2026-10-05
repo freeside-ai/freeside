@@ -2060,6 +2060,18 @@ struct DecisionDetailView: View {
         }
     }
 
+    /// What accepting covers, for an action that accepts the routes of the
+    /// findings `item` binds; nil for any other action or item.
+    private func findingAcceptanceScope(
+        _ action: Components.Schemas.Action,
+        item: Components.Schemas.AttentionItem
+    ) -> String? {
+        guard action == .accept_recommended_route,
+            let binding = item.finding_adjudication?.value1
+        else { return nil }
+        return FindingCardPresentation.acceptanceScope(findingCount: binding.proposals.count)
+    }
+
     private func alternativeSelection(
         for proposal: Components.Schemas.FindingAdjudicationProposal
     ) -> Binding<Components.Schemas.AdjudicationRoute?> {
@@ -2227,7 +2239,7 @@ struct DecisionDetailView: View {
                 // Success is quiet: a plain tick on a neutral wash, never
                 // green and never the accent.
                 bannerLabel(
-                    "Decision applied: \(AttentionDisplay.label(record.action))",
+                    "Decision applied: \(AttentionDisplay.label(record.action, for: model.snapshot?.item))",
                     systemImage: "checkmark",
                     tint: .inkDim, wash: .neutralWash
                 )
@@ -2279,6 +2291,10 @@ struct DecisionDetailView: View {
         let register =
             recommendation.register.isUnverifiedClaim
             ? unverified(item, rendersInteractiveControls: rendersInteractiveControls) : nil
+        // On the finding card the recommendation is the batch action's own
+        // line under the cards (plan §9 revision 78, visual audit D09): no
+        // second frame, its reason, then what accepting covers.
+        let acceptanceScope = findingAcceptanceScope(recommendation.action, item: item)
         return cardSection(
             title: Group {
                 if let register, register.explanation == .onDemand {
@@ -2290,6 +2306,7 @@ struct DecisionDetailView: View {
                 }
             },
             dashed: register != nil,
+            boxed: acceptanceScope == nil,
             border: .accentBorder,
             fill: .accentWash
         ) {
@@ -2297,9 +2314,15 @@ struct DecisionDetailView: View {
                 Text("Written by an agent, not checked by the daemon.")
                     .foregroundStyle(Color.inkDim)
             }
-            KeywordLabel(text: "Why")
+            if acceptanceScope == nil {
+                KeywordLabel(text: "Why")
+            }
             Text(recommendation.reason)
                 .fixedSize(horizontal: false, vertical: true)
+            if let acceptanceScope {
+                Text(acceptanceScope)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             actionButton(
                 recommendation.action,
                 item: item,
@@ -3178,6 +3201,18 @@ struct DecisionDetailView: View {
                 }
             }
 
+            // The recommendation block states what accepting covers. An item
+            // whose recommendation did not revalidate has no block, and
+            // offers the same action here, so the sentence comes with it.
+            if (ranking.principal + ranking.overflow).contains(.accept_recommended_route),
+                let scope = findingAcceptanceScope(.accept_recommended_route, item: item)
+            {
+                Text(scope)
+                    .font(FreesideFont.callout)
+                    .foregroundStyle(Color.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             if !ranking.principal.isEmpty {
                 // Keyed by position: requested_decision does not enforce
                 // uniqueness, and duplicate identities may not drop a button.
@@ -3259,7 +3294,7 @@ struct DecisionDetailView: View {
                     Button {
                         trigger(action, item: item)
                     } label: {
-                        actionLabel(action)
+                        actionLabel(action, item: item)
                     }
                 }
                 if !ordinary.isEmpty, !consequential.isEmpty {
@@ -3269,7 +3304,7 @@ struct DecisionDetailView: View {
                     Button(role: .destructive) {
                         trigger(action, item: item)
                     } label: {
-                        actionLabel(action)
+                        actionLabel(action, item: item)
                     }
                 }
             } label: {
@@ -3295,7 +3330,7 @@ struct DecisionDetailView: View {
             trigger(action, item: item)
         } label: {
             HStack {
-                actionLabel(action, showsIcon: showsIcon)
+                actionLabel(action, item: item, showsIcon: showsIcon)
                 if model.phase == .submitting(action) {
                     ProgressView().controlSize(.small)
                 }
@@ -3311,12 +3346,13 @@ struct DecisionDetailView: View {
     @ViewBuilder
     private func actionLabel(
         _ action: Components.Schemas.Action,
+        item: Components.Schemas.AttentionItem,
         showsIcon: Bool = true
     ) -> some View {
         if showsIcon, let systemImage = AttentionDisplay.systemImage(action) {
-            Label(AttentionDisplay.label(action), systemImage: systemImage)
+            Label(AttentionDisplay.label(action, for: item), systemImage: systemImage)
         } else {
-            Text(AttentionDisplay.label(action))
+            Text(AttentionDisplay.label(action, for: item))
         }
     }
 

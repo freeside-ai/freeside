@@ -595,6 +595,19 @@ struct FindingCardPresentation: Equatable, Identifiable {
     func selectionAccessibilityLabel(_ route: Components.Schemas.AdjudicationRoute) -> String {
         "\(heading). \(Self.selectionNotice(route))"
     }
+
+    /// What `accept_recommended_route` covers, said beside the action:
+    /// every proposed route the item binds, whichever cards are open and
+    /// whatever alternatives are selected. It states coverage only. What
+    /// accepting does to each finding is the daemon's to say (the
+    /// recommendation and the reason): a disputed finding parks the run
+    /// with no disposition recorded, and a parked route beside a fix gets
+    /// none either, so "applies every disposition" would be false there.
+    static func acceptanceScope(findingCount: Int) -> String {
+        findingCount == 1
+            ? "Accepting covers the proposed route for the one finding above."
+            : "Accepting covers every proposed route above: all \(findingCount) findings."
+    }
 }
 
 struct DecisionGraphicPresentations: Equatable {

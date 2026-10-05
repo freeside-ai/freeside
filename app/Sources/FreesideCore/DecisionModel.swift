@@ -1279,7 +1279,7 @@ public final class DecisionModel {
         onConclusion(
             DecisionConclusion(
                 itemID: itemID,
-                actionLabel: AttentionDisplay.label(record.action),
+                actionLabel: AttentionDisplay.label(record.action, for: snapshot?.item),
                 resultingStatus: resultingStatus,
                 at: .now))
     }

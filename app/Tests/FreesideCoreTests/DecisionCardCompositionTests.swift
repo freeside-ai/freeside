@@ -1124,6 +1124,39 @@ import Testing
                 == "Finding 1. " + FindingCardPresentation.selectionNotice(.dispute))
     }
 
+    /// The batch action says what it covers from the bound proposals: every
+    /// one of them, at any count. One finding keeps the action's own label
+    /// (the approved reference shows only the batch).
+    @Test func acceptingStatesItsScopeFromTheBoundProposals() throws {
+        let batch = AttentionFixtures.fixture(type: .finding_adjudication).item
+        let single = AttentionFixtures.findingAdjudicationFixture(route: .remediate).item
+
+        #expect(batch.finding_adjudication?.value1.proposals.count == 2)
+        #expect(
+            AttentionDisplay.label(.accept_recommended_route, for: batch)
+                == "Accept all dispositions")
+        #expect(
+            FindingCardPresentation.acceptanceScope(findingCount: 2)
+                == "Accepting covers every proposed route above: all 2 findings.")
+
+        #expect(single.finding_adjudication?.value1.proposals.count == 1)
+        #expect(
+            AttentionDisplay.label(.accept_recommended_route, for: single)
+                == "Accept recommended route")
+        #expect(
+            FindingCardPresentation.acceptanceScope(findingCount: 1)
+                == "Accepting covers the proposed route for the one finding above.")
+
+        // Only the batch acceptance is relabeled, and only where the item
+        // binds findings.
+        #expect(
+            AttentionDisplay.label(.choose_alternative_route, for: batch)
+                == AttentionDisplay.label(.choose_alternative_route))
+        #expect(
+            AttentionDisplay.label(.accept_recommended_route, for: nil)
+                == "Accept recommended route")
+    }
+
     /// The card's Evidence module points at the open inspector rather than
     /// drawing the same attachments beside it, and the pointer counts them in
     /// the operator's words (#1107).
