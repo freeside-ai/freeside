@@ -116,7 +116,10 @@ func decodeControlPayload[T any](body json.RawMessage) (T, error) {
 	return value, err
 }
 
-func (p *pairingControl) registerControlRoutes(mux *http.ServeMux, st *store.Store, blobs *signet.BlobStore, backupFiles *store.LocalBackupFiles, approved map[domain.Digest]bool) {
+func (p *pairingControl) registerControlRoutes(
+	mux *http.ServeMux, st *store.Store, blobs *signet.BlobStore, backupFiles *store.LocalBackupFiles,
+	approved map[domain.Digest]bool, integrityProbe credentialIntegrityProbe,
+) {
 	observation := observedb.Borrow(st)
 	p.handleGet(mux, "/observe/runs/{run_id}", func(ctx context.Context, r *http.Request) (any, error) {
 		return observation.ObserveRun(ctx, domain.RunID(r.PathValue("run_id")))
@@ -139,6 +142,7 @@ func (p *pairingControl) registerControlRoutes(mux *http.ServeMux, st *store.Sto
 	withStore := func(ctx context.Context) context.Context {
 		return context.WithValue(ctx, daemonStoreContextKey{}, daemonStoreContext{
 			store: st, blobs: blobs, backupFiles: backupFiles, dbPath: p.dbPath, approvedRecipes: approved,
+			credentialIntegrityProbe: integrityProbe,
 		})
 	}
 	command := func(route string, run func(context.Context, []string, io.Writer, io.Writer) error) {

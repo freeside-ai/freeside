@@ -107,6 +107,10 @@ type (
 		backupFiles     *store.LocalBackupFiles
 		dbPath          string
 		approvedRecipes map[domain.Digest]bool
+		// credentialIntegrityProbe is the running daemon's live probe, nil
+		// when the daemon has no runtime to observe with. A command that
+		// opens the store itself never has one.
+		credentialIntegrityProbe credentialIntegrityProbe
 	}
 )
 
