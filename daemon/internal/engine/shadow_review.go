@@ -154,7 +154,7 @@ func (w *productionPublicationWorkflow) reconcileShadowReview(
 				"shadow review launch window expired", nil,
 			)
 		}
-		retained, retainErr := w.ensureReviewWorkspace(ctx, id, workspace, task.HeadSHA)
+		retained, retainErr := w.ensureReviewWorkspace(ctx, id, workspace, req.WorkspaceSHA())
 		if retainErr != nil {
 			return w.abandonShadowReview(task, routed.Round, id, retainErr)
 		}

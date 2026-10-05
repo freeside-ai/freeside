@@ -399,7 +399,12 @@ func productionRunIDFromPendingTaskKey(key string) (domain.RunID, bool) {
 	if runID, ok := productionRunIDFromPublicationTaskKey(key); ok {
 		return runID, true
 	}
-	for _, prefix := range []string{"production-publication-successor/", "production-publication-continuation/"} {
+	// The last segment is a command ID, or for a re-entry the digest of its
+	// predecessor item; either way only the run is read from the key.
+	for _, prefix := range []string{
+		"production-publication-successor/", "production-publication-continuation/",
+		"production-publication-reentry/",
+	} {
 		if rest, ok := strings.CutPrefix(key, prefix); ok {
 			encodedRun, commandID, found := strings.Cut(rest, "/")
 			runID, err := url.PathUnescape(encodedRun)
@@ -442,6 +447,12 @@ func (task productionPublicationTask) readyItemID() domain.ItemID {
 }
 
 func (task productionPublicationTask) verificationCheckpointKey() string {
+	if task.reentersInPlace() {
+		// Run plus head is not enough here: a base-advance re-entry keeps
+		// its predecessor's head, so the key names the cycle.
+		return productionVerificationCheckpointKey(task.RunID, task.HeadSHA, "") +
+			"/reentry/" + string(task.Successor.PublicationID())
+	}
 	commandID := ""
 	if task.reevaluation != nil {
 		commandID = task.reevaluation.CommandID
@@ -1197,7 +1208,10 @@ func (w *productionPublicationWorkflow) quarantineTaskMarkers(
 		var err error
 		transition, err = authenticateProductionRunTransition(ctx, tx, task.RunID)
 		run = transition.run
-		if err != nil || transition.remediation == nil {
+		// A re-entered cycle carries no replay or publication to compare
+		// with the remediation that produced its head; its authority is
+		// re-gated against the store in loadBinding.
+		if err != nil || transition.remediation == nil || task.reentersInPlace() {
 			return err
 		}
 		verified := transition.remediation
@@ -1287,6 +1301,9 @@ func (t productionPublicationTask) validate() error {
 }
 
 func (t productionPublicationTask) validateWithPublication(validatePublication func(ProductionPublication) error) error {
+	if t.reentersInPlace() {
+		return t.validateReentry()
+	}
 	_, remediationProducer := remediationRoundForInvocation(t.RunID, t.ProducingInvocationID)
 	validProducer := t.ProducingInvocationID == productionInvocationID(t.RunID) || remediationProducer
 	wantPublication := domain.ProductionPublicationInvocationID(t.RunID)
@@ -2021,11 +2038,23 @@ type productionBinding struct {
 	profile        domain.AutomationTrustProfile
 	image          domain.ProjectImage
 	remediation    *authenticatedRemediationTransition
+	// reentry is set for a cycle that re-enters in place (production_reentry.go).
+	// For such a cycle admission is the predecessor producer's with its base
+	// commit replaced by the cycle's base, so every reader of the admitted
+	// base below evaluates against the base the authority names.
+	reentry *reentryCycle
+	// evaluatedSHA is the prospective merge a base-advance re-entry verifies
+	// and has reviewed in place of its head. It is set only after
+	// AllowsProspectiveMerge admits it, and is empty for every other cycle.
+	evaluatedSHA string
 }
 
 func (w *productionPublicationWorkflow) loadBinding(
 	ctx context.Context, task productionPublicationTask,
 ) (productionBinding, error) {
+	if task.reentersInPlace() {
+		return w.loadReentryBinding(ctx, task)
+	}
 	var binding productionBinding
 	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
@@ -2232,6 +2261,10 @@ func ProductionPublicationBackupPayloadDigests(entry store.QueueEntry) ([]domain
 	if err != nil {
 		return nil, err
 	}
+	if task.reentersInPlace() {
+		// Nothing was imported, so the row retains no replay or result blob.
+		return nil, nil
+	}
 	return append(productionReplayDigests(task.Replay), task.Artifacts...), nil
 }
 
@@ -2278,6 +2311,9 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		if err != nil {
 			return productionTaskOutcome{}, err
 		}
+	}
+	if task.reentersInPlace() {
+		return w.reconcileReentryTask(ctx, task, binding)
 	}
 	if outcome, err := w.recoverScopeConflictTask(ctx, &task, binding); err != nil {
 		if errors.Is(err, domain.ErrParentKeyMismatch) || errors.Is(err, domain.ErrCardFactInconsistent) {
@@ -2333,30 +2369,18 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
-	var reviewInstructions exec.ReviewInstructionBinding
-	if !w.holdOnly {
-		// FetchBase deliberately leaves the import worktree empty. Discover
-		// instructions in a separate materialization of its pinned base, before
-		// importing any candidate-controlled files into the original checkout.
-		instructionDir := filepath.Join(scratch, "base-instructions")
-		if err := w.transport.RetainWorktree(ctx, checkout, instructionDir, binding.admission.Base.BaseSHA); err != nil {
-			if errors.Is(err, publish.ErrMaterializationRefused) {
-				return w.holdBlockedTask(ctx, task, importer.Result{CommitSHA: task.HeadSHA},
-					"Publication is durably held because the trusted base cannot be materialized for review instructions. Resolve the repository materialization problem before retrying.",
-					domain.HoldTrustBlocked)
-			}
-			return productionTaskOutcome{}, fmt.Errorf("materialize exact-base review instructions: %w", err)
+	// FetchBase deliberately leaves the import worktree empty. Discover
+	// instructions in a separate materialization of its pinned base, before
+	// importing any candidate-controlled files into the original checkout.
+	reviewInstructions, held, err := w.exactBaseReviewInstructions(
+		ctx, task, checkout, filepath.Join(scratch, "base-instructions"),
+		binding.admission.Base.BaseSHA,
+	)
+	if err != nil || held != nil {
+		if held != nil {
+			return *held, nil
 		}
-		reviewInstructions, err = w.composeReviewInstructions(instructionDir)
-		if err != nil {
-			if errors.Is(err, errReviewInstructionsRefused) {
-				return w.holdBlockedTask(ctx, task, importer.Result{CommitSHA: task.HeadSHA},
-					"Publication is durably held because the trusted review instructions cannot be composed within the approved delivery limits. Resolve the instruction configuration problem before retrying.",
-					domain.HoldTrustBlocked)
-			}
-			return productionTaskOutcome{}, fmt.Errorf(
-				"compose exact-base review instructions: %w", err)
-		}
+		return productionTaskOutcome{}, err
 	}
 	handoffDir := filepath.Join(scratch, "handoff")
 	if err := w.materializeReplay(binding.replay, handoffDir); err != nil {
@@ -2774,6 +2798,45 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	return w.completePublishedTask(ctx, task, binding, checkpoint, published, reviewInstructions)
 }
 
+// exactBaseReviewInstructions composes the review instructions from the
+// pinned base alone, materialized apart from the checkout so no
+// candidate-controlled file can shape them. A refusal holds the task and
+// returns its outcome; the hold-only composition composes nothing.
+func (w *productionPublicationWorkflow) exactBaseReviewInstructions(
+	ctx context.Context,
+	task productionPublicationTask,
+	checkout PublicationCheckout,
+	dir, baseSHA string,
+) (exec.ReviewInstructionBinding, *productionTaskOutcome, error) {
+	if w.holdOnly {
+		return exec.ReviewInstructionBinding{}, nil, nil
+	}
+	hold := func(reason string) (exec.ReviewInstructionBinding, *productionTaskOutcome, error) {
+		outcome, err := w.holdBlockedTask(
+			ctx, task, importer.Result{CommitSHA: task.HeadSHA}, reason, domain.HoldTrustBlocked)
+		if err != nil {
+			return exec.ReviewInstructionBinding{}, nil, err
+		}
+		return exec.ReviewInstructionBinding{}, &outcome, nil
+	}
+	if err := w.transport.RetainWorktree(ctx, checkout, dir, baseSHA); err != nil {
+		if errors.Is(err, publish.ErrMaterializationRefused) {
+			return hold("Publication is durably held because the trusted base cannot be materialized for review instructions. Resolve the repository materialization problem before retrying.")
+		}
+		return exec.ReviewInstructionBinding{}, nil, fmt.Errorf(
+			"materialize exact-base review instructions: %w", err)
+	}
+	instructions, err := w.composeReviewInstructions(dir)
+	if err != nil {
+		if errors.Is(err, errReviewInstructionsRefused) {
+			return hold("Publication is durably held because the trusted review instructions cannot be composed within the approved delivery limits. Resolve the instruction configuration problem before retrying.")
+		}
+		return exec.ReviewInstructionBinding{}, nil, fmt.Errorf(
+			"compose exact-base review instructions: %w", err)
+	}
+	return instructions, nil, nil
+}
+
 type productionReviewGateState uint8
 
 const (
@@ -2818,7 +2881,8 @@ func (w *productionPublicationWorkflow) productionReviewRequest(
 		Repo: binding.admission.Base.Repo, RepositoryID: binding.admission.Base.RepositoryID,
 		BaseRef: binding.admission.Base.BaseRef,
 		BaseSHA: binding.admission.Base.BaseSHA, HeadSHA: task.HeadSHA,
-		Workspace: reviewWorkspace, Verification: verification,
+		EvaluatedSHA: binding.evaluatedSHA,
+		Workspace:    reviewWorkspace, Verification: verification,
 		Instructions: instructions, RequestedAt: w.now().UTC(),
 	}
 	authority, err := request.AuthorityDigest()
@@ -3153,6 +3217,9 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			if !shadowComplete {
 				return productionReviewPending, nil
 			}
+			if latestRecord.Outcome == domain.ReviewFindings && task.reentersInPlace() {
+				return w.escalateReentryFindings(ctx, task, *latestRecord)
+			}
 			if latestRecord.Outcome == domain.ReviewFindings {
 				candidateWorkspace, err := w.ensureReviewWorkspace(
 					ctx, latestRecord.InvocationID, workspace, task.HeadSHA)
@@ -3361,7 +3428,7 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		// container can reference this invocation's retained path, and the
 		// launch below will seed its replacement. Keep that answer in this
 		// control flow instead of querying the review source again.
-		retainedWorkspace, workspaceErr := w.ensureReviewWorkspace(ctx, id, workspace, task.HeadSHA)
+		retainedWorkspace, workspaceErr := w.ensureReviewWorkspace(ctx, id, workspace, req.WorkspaceSHA())
 		if workspaceErr != nil {
 			if errors.Is(workspaceErr, publish.ErrMaterializationRefused) {
 				return w.recordReviewSourceFailure(ctx, task, id, round,
@@ -3489,8 +3556,10 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	// or parse our own trusted diff is an engine fault, not a reviewer
 	// contradiction, so it takes the retry/pending path instead.
 	if len(result.Findings) > 0 {
+		// The reviewer read the workspace commit, which for a base-advance
+		// re-entry is the prospective merge, not the head.
 		scope, err := reviewedDiffScope(
-			ctx, w.workDir, reviewWorkspace, binding.admission.Base.BaseSHA, task.HeadSHA)
+			ctx, w.workDir, reviewWorkspace, binding.admission.Base.BaseSHA, req.WorkspaceSHA())
 		if err != nil {
 			return productionReviewPending, err
 		}
@@ -3599,6 +3668,9 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			return productionReviewPending, err
 		}
 		return productionReviewEscalated, nil
+	}
+	if record.Outcome == domain.ReviewFindings && task.reentersInPlace() {
+		return w.escalateReentryFindings(ctx, task, record)
 	}
 	if record.Outcome == domain.ReviewFindings {
 		baseWorkspaceID := findingAdjudicationBaseWorkspaceID(id)
@@ -4546,9 +4618,19 @@ func (w *productionPublicationWorkflow) currentReadinessVerdict(
 		}
 	}
 	base := binding.admission.Base
-	verificationProof, err := domain.NewCheckProof(
-		resolutions[0], task.HeadSHA, &base, binding.image.RecipeDigest,
-	)
+	// A base-advance re-entry evaluated the prospective merge of the head
+	// into the base, so both proofs and the target name that merge. The
+	// proofs an earlier cycle recorded for the same head name none, and
+	// EvaluationTarget.covers refuses them.
+	newProof := func(resolution domain.RequirementResolution, recipe domain.Digest) (domain.CheckProof, error) {
+		if binding.evaluatedSHA == "" {
+			return domain.NewCheckProof(resolution, task.HeadSHA, &base, recipe)
+		}
+		return domain.NewProspectiveMergeCheckProof(resolution, domain.ProspectiveMergeIdentity{
+			BaseSHA: base.BaseSHA, HeadSHA: task.HeadSHA, MergeSHA: binding.evaluatedSHA,
+		}, base, recipe)
+	}
+	verificationProof, err := newProof(resolutions[0], binding.image.RecipeDigest)
 	if err != nil {
 		return productionReadiness{}, nil, err
 	}
@@ -4563,7 +4645,7 @@ func (w *productionPublicationWorkflow) currentReadinessVerdict(
 	if err != nil {
 		return productionReadiness{}, nil, err
 	}
-	reviewProof, err := domain.NewCheckProof(resolutions[1], task.HeadSHA, &base, reviewRecipeDigest)
+	reviewProof, err := newProof(resolutions[1], reviewRecipeDigest)
 	if err != nil {
 		return productionReadiness{}, nil, err
 	}
@@ -4572,7 +4654,9 @@ func (w *productionPublicationWorkflow) currentReadinessVerdict(
 		return productionReadiness{}, nil, err
 	}
 	states := []domain.CheckState{verificationState, reviewState}
-	target := domain.EvaluationTarget{CandidateHead: task.HeadSHA, Base: &base}
+	target := domain.EvaluationTarget{
+		CandidateHead: task.HeadSHA, Base: &base, MergeSHA: binding.evaluatedSHA,
+	}
 	verdict, err := domain.EvaluateReadiness(target, resolutions, states, nil)
 	if err != nil {
 		return productionReadiness{}, nil, err
@@ -4975,6 +5059,10 @@ type recordedPullRequest struct {
 	identity domain.Digest
 	base     domain.BaseRevision
 	number   int
+	// producer is the invocation whose export the pull request's head came
+	// from. A re-entered cycle has no producer of its own and names its
+	// predecessor's.
+	producer domain.InvocationID
 }
 
 func (p recordedPullRequest) reference() domain.PRReference {
@@ -5024,6 +5112,9 @@ func (w *productionPublicationWorkflow) heldPullRequest(
 func (w *productionPublicationWorkflow) recordedPullRequest(
 	ctx context.Context, task productionPublicationTask,
 ) (*recordedPullRequest, error) {
+	if task.reentersInPlace() {
+		return w.reentryPullRequest(ctx, task)
+	}
 	intentKey, err := publish.IntentKey(task.PublicationID, publish.IntentKindPublication)
 	if err != nil {
 		return nil, err
@@ -5090,6 +5181,7 @@ func (w *productionPublicationWorkflow) recordedPullRequest(
 		}
 		found = &recordedPullRequest{
 			identity: intent.Identity, base: admission.Base, number: outcome.PRNumber,
+			producer: task.ProducingInvocationID,
 		}
 		return nil
 	})
@@ -5302,7 +5394,7 @@ func (w *productionPublicationWorkflow) recordHeldItemPRBinding(
 		record := domain.HeldItemPRBinding{
 			ItemID:                  task.blockedItemID(),
 			RunID:                   task.RunID,
-			ProducingInvocationID:   task.ProducingInvocationID,
+			ProducingInvocationID:   pull.producer,
 			PublicationInvocationID: task.PublicationID,
 			PublicationIdentity:     pull.identity,
 			Repo:                    pull.base.Repo,
@@ -5819,18 +5911,17 @@ func digestProductionBytes(body []byte) domain.Digest {
 	return domain.Digest(contentaddr.Format(sum[:]))
 }
 
-func (w *productionPublicationWorkflow) verifyAndCheckpoint(
-	ctx context.Context,
-	task productionPublicationTask,
-	binding productionBinding,
-	imported importer.Result,
-	checkoutDir string,
-) (productionVerificationCheckpoint, error) {
+// verificationRoomAndRecipe constructs the networkless room for one cycle's
+// verification and reads the project image's recipe through it, refusing a
+// recipe that is not the one the image was built with.
+func (w *productionPublicationWorkflow) verificationRoomAndRecipe(
+	ctx context.Context, task productionPublicationTask, binding productionBinding,
+) (ProductionVerificationRoom, []byte, error) {
 	// The writer start already resolved this durable policy, so a failure
 	// here means the stored policy changed under the run.
 	sizes, err := ward.ResolveLaunchSizes(binding.resolvedPolicy.Keys)
 	if err != nil {
-		return productionVerificationCheckpoint{}, fmt.Errorf("resolve verification size: %w", err)
+		return nil, nil, fmt.Errorf("resolve verification size: %w", err)
 	}
 	var room ProductionVerificationRoom
 	if w.newBoundRoom != nil {
@@ -5839,28 +5930,60 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 		room, err = w.newRoom(binding.image, sizes.Verification)
 	}
 	if err != nil {
-		return productionVerificationCheckpoint{}, fmt.Errorf("construct networkless verification room: %w", err)
+		return nil, nil, fmt.Errorf("construct networkless verification room: %w", err)
 	}
 	readCtx, cancelRead := context.WithTimeout(ctx, w.recipeReadTimeout)
 	recipe, err := room.ReadRecipe(readCtx)
 	cancelRead()
 	if err != nil {
-		return productionVerificationCheckpoint{}, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"load project-image verification recipe: %w",
 			productionPublicationRetryableError(err),
 		)
 	}
 	if len(recipe) > verify.DefaultMaxRecipeBytes {
-		return productionVerificationCheckpoint{}, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"project-image verification recipe exceeds the %d-byte cap",
 			verify.DefaultMaxRecipeBytes,
 		)
 	}
 	if got := verify.RecipeDigest(recipe); got != binding.image.RecipeDigest {
-		return productionVerificationCheckpoint{}, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"project-image verification recipe digest %s, want %s: %w",
 			got, binding.image.RecipeDigest, domain.ErrParentKeyMismatch,
 		)
+	}
+	return room, recipe, nil
+}
+
+// storeVerificationEvidence writes each evidence blob to the artifact store
+// and reads it back, so a checkpoint never names evidence the store lacks.
+func (w *productionPublicationWorkflow) storeVerificationEvidence(
+	evidence []verify.Evidence,
+) ([]domain.Artifact, error) {
+	artifacts := make([]domain.Artifact, len(evidence))
+	for index, item := range evidence {
+		artifacts[index] = item.Artifact
+		if _, err := w.artifacts.Put(item.Artifact.Digest, bytes.NewReader(item.Content)); err != nil {
+			return nil, err
+		}
+		if err := verifyFakePublicationBlob(w.artifacts, item.Artifact); err != nil {
+			return nil, err
+		}
+	}
+	return artifacts, nil
+}
+
+func (w *productionPublicationWorkflow) verifyAndCheckpoint(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+	imported importer.Result,
+	checkoutDir string,
+) (productionVerificationCheckpoint, error) {
+	room, recipe, err := w.verificationRoomAndRecipe(ctx, task, binding)
+	if err != nil {
+		return productionVerificationCheckpoint{}, err
 	}
 	verified, err := verify.Verify(ctx, checkoutDir, verify.Options{
 		HeadSHA: imported.CommitSHA, BaseSHA: binding.admission.Base.BaseSHA,
@@ -5886,15 +6009,9 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 		return productionVerificationCheckpoint{}, fmt.Errorf("verification disagrees with project-image binding: %w",
 			domain.ErrParentKeyMismatch)
 	}
-	artifacts := make([]domain.Artifact, len(verified.Evidence))
-	for index, evidence := range verified.Evidence {
-		artifacts[index] = evidence.Artifact
-		if _, err := w.artifacts.Put(evidence.Artifact.Digest, bytes.NewReader(evidence.Content)); err != nil {
-			return productionVerificationCheckpoint{}, err
-		}
-		if err := verifyFakePublicationBlob(w.artifacts, evidence.Artifact); err != nil {
-			return productionVerificationCheckpoint{}, err
-		}
+	artifacts, err := w.storeVerificationEvidence(verified.Evidence)
+	if err != nil {
+		return productionVerificationCheckpoint{}, err
 	}
 	importDigest, err := digestJSON(imported)
 	if err != nil {
@@ -6371,17 +6488,27 @@ func (w *productionPublicationWorkflow) readyItemWithRecipes(
 	if err != nil {
 		return domain.AttentionItem{}, err
 	}
+	actions := []domain.Action{
+		domain.ActionOpenPR, domain.ActionReturnToAgent, domain.ActionMarkSeen,
+		domain.ActionDismiss, domain.ActionStop,
+	}
+	if task.reentersInPlace() {
+		// A re-entered cycle imported nothing, so it holds no candidate to
+		// hand back to the implementation agent (issue #502). The action is
+		// withheld rather than refused later: accepting a decision supersedes
+		// the item, which would spend the re-earned readiness on nothing.
+		actions = []domain.Action{
+			domain.ActionOpenPR, domain.ActionMarkSeen, domain.ActionDismiss, domain.ActionStop,
+		}
+	}
 	return domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: task.readyItemID(), ProjectID: task.ProjectID,
 		Subject: subject,
 		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
 		Reason: fmt.Sprintf("Published %s#%d and completed production verification.",
 			checkpoint.Authorization.Repo, published.PRNumber),
-		RequestedDecision: []domain.Action{
-			domain.ActionOpenPR, domain.ActionReturnToAgent, domain.ActionMarkSeen,
-			domain.ActionDismiss, domain.ActionStop,
-		},
-		EvidenceSnapshot: checkpoint.Artifacts,
+		RequestedDecision: actions,
+		EvidenceSnapshot:  checkpoint.Artifacts,
 		AgentClaims: normalizeSummaryClaims(
 			checkpoint.Imported.Claims, task.ProducingInvocationID),
 		PRHeadSHA: checkpoint.Imported.CommitSHA,

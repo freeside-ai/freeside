@@ -1128,6 +1128,13 @@ func (r activeResourceReconciler) commit(ctx context.Context, observation active
 				if err := tx.PutAttentionItem(ctx, item); err != nil {
 					return err
 				}
+				// A base advance or head change re-enters verification and
+				// review in this transaction (issue #502); any other
+				// invalidation, and a unit this pass just completed, starts
+				// nothing and stays with a person.
+				if _, err := engine.StartReadinessReentry(ctx, tx, item); err != nil {
+					return err
+				}
 			case observation.conclude:
 				item.Status = domain.StatusResolved
 				item.ItemVersion++
