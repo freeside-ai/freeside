@@ -1313,6 +1313,33 @@ public enum AttentionFixtures {
         return snapshot
     }
 
+    /// The two-finding `finding_adjudication` card with finding messages of
+    /// the length a reviewer writes: an explanation of a sentence or two,
+    /// where the default fixture carries one line each. The layout budget is
+    /// measured against this card, so it cannot pass on fixture brevity
+    /// (#1033, #1141).
+    public static func findingAdjudicationRealisticMessages()
+        -> Components.Schemas.AttentionItemSnapshot
+    {
+        var snapshot = fixture(type: .finding_adjudication)
+        snapshot.item.id = "item-finding-realistic-messages"
+        guard var binding = snapshot.item.finding_adjudication?.value1,
+            binding.proposals.count == 2
+        else {
+            preconditionFailure("finding_adjudication fixture does not bind two proposals")
+        }
+        binding.proposals[0].finding_message =
+            "The command handler re-derives the command id on every retry, so a client that "
+            + "resends after losing the first response records a second command instead of "
+            + "resolving to the one already written."
+        binding.proposals[1].finding_message =
+            "The change adds a retry path to the command handler, but no regression test covers "
+            + "a resend after a lost response, so the write-once identity can break again "
+            + "without any check failing."
+        snapshot.item.finding_adjudication = .init(value1: binding)
+        return snapshot
+    }
+
     private static func headIndependent(
         key: String
     ) -> Components.Schemas.EvidenceProvenance {
