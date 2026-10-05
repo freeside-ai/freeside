@@ -301,6 +301,86 @@ import Testing
         }
     }
 
+    @Test func followUpFilingItemServesFilingFactsWithNoClosureArm() async throws {
+        let filing = AttentionFixtures.followUpFilingEffectProposal()
+        let server = MockServer(items: AttentionFixtures.defaultInbox() + [filing])
+        let client = APIClientFactory.mock(server: server)
+
+        let item = try await client.getAttentionItem(
+            path: .init(item_id: filing.item.id)
+        ).ok.body.json
+        let facts = try await client.getEffectProposalFacts(
+            path: .init(item_id: filing.item.id)
+        ).ok.body.json
+        #expect(facts.effect_kind == .follow_up_filing)
+        #expect(facts.item_version == item.item.item_version)
+        #expect(facts.entity_version == item.entity_version)
+        #expect(item.item.artifact_digests == [facts.proposal_digest])
+        #expect(facts.source_issue_closure == nil)
+        #expect(facts.supersedes == nil)
+        let filed = try #require(facts.follow_up_filing?.value1)
+        #expect(filed.title.verdict == .passed)
+        #expect(filed.body.verdict == .passed)
+    }
+
+    @Test func followUpFilingConcludesOnApproveAndDeclineAndHidesOnSnooze() async throws {
+        // The filing item offers approve, decline, and snooze, and the mock
+        // applies each: approve resolves, decline dismisses, snooze hides.
+        for action in [Components.Schemas.Action.approve, .decline, .snooze] {
+            let filing = AttentionFixtures.followUpFilingEffectProposal()
+            let server = MockServer(items: [filing])
+            let client = APIClientFactory.mock(server: server)
+            let before = try await client.getAttentionItem(
+                path: .init(item_id: filing.item.id)
+            ).ok.body.json
+            var command = Self.command(id: "cmd-\(action.rawValue)-filing", against: before, action: action)
+            command.payload.asDecision.attachments = []
+            if action == .snooze {
+                command.payload.asDecision.snooze_until = Date(timeIntervalSince1970: 1_786_506_245)
+            }
+            _ = try await client.submitCommand(body: .json(command)).ok.body.json
+            if action == .snooze {
+                _ = try await client.getAttentionItem(path: .init(item_id: before.item.id)).notFound
+                _ = try await client.getEffectProposalFacts(path: .init(item_id: before.item.id)).notFound
+            } else {
+                let decided = try await client.getAttentionItem(
+                    path: .init(item_id: before.item.id)
+                ).ok.body.json
+                #expect(decided.item.status == (action == .approve ? .resolved : .dismissed))
+            }
+        }
+    }
+
+    @Test func followUpFilingRejectsApproveWithChangesWithoutSideEffect() async throws {
+        // A filing admits no revision, so its item never offers
+        // approve_with_changes; a well-formed revision command against it is
+        // rejected as an action the item did not offer.
+        let filing = AttentionFixtures.followUpFilingEffectProposal()
+        let server = MockServer(items: [filing])
+        let client = APIClientFactory.mock(server: server)
+        let before = try await client.getAttentionItem(
+            path: .init(item_id: filing.item.id)
+        ).ok.body.json
+        var command = Self.command(
+            id: "cmd-revise-filing", against: before, action: .approve_with_changes)
+        command.payload.asDecision.attachments = []
+        command.payload.asDecision.effect_proposal_revision = .init(
+            value1: .init(source_issue_closure: .init(resolves: false)))
+        let revisionBefore = try await client.getSyncRevision().ok.body.json.revision
+
+        let output = try await client.submitCommand(body: .json(command))
+        guard case .undocumented(let statusCode, _) = output else {
+            Issue.record("expected an authoritative rejection, got \(output)")
+            return
+        }
+        #expect(statusCode == 422)
+        #expect(try await client.getSyncRevision().ok.body.json.revision == revisionBefore)
+        let after = try await client.getAttentionItem(
+            path: .init(item_id: before.item.id)
+        ).ok.body.json
+        #expect(after == before)
+    }
+
     @Test func proposalSnoozeHidesThenReleasesWithVersionedTransitions() async throws {
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)

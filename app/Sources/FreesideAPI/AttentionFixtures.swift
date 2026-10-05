@@ -572,19 +572,78 @@ public enum AttentionFixtures {
         return snapshot
     }
 
-    /// The bounded source-issue-closure facts a client reads for one
-    /// effect-proposal item, built from the served snapshot's version tuple
-    /// and evidence digest. The default `item-effect_proposal` carries
-    /// `verified` provenance from `propose_site`; the named
-    /// `item-effect_proposal-recommended` carries `recommended`. The opaque
-    /// subject handle and policy identity stay server-side, as they do for
-    /// task_proposal. Returns nil for any non-effect_proposal item.
+    /// An effect-proposal fixture whose effect is a follow-up issue filing
+    /// (plan §5.17). It offers approve, decline, and snooze: the daemon
+    /// refuses `approve_with_changes` for a filing, which admits no
+    /// revision. It names no pull request head, because a filing binds no
+    /// merge. Like the recommended closure it stays out of `defaultInbox()`.
+    public static func followUpFilingEffectProposal() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = fixture(type: .effect_proposal)
+        snapshot.item.id = followUpFilingItemID
+        snapshot.item.reason = "a deferred review finding proposes a follow-up issue"
+        snapshot.item.requested_decision = [.approve, .decline, .snooze]
+        snapshot.item.pr_head_sha = ""
+        return snapshot
+    }
+
+    static let followUpFilingItemID = "item-effect_proposal-filing"
+
+    /// The issue body the filing fixture proposes. Several paragraphs and
+    /// two lines Markdown would format, so a card that renders it shows
+    /// both wrapping and that the text is drawn as it would be sent.
+    static let followUpFilingBody = """
+        Review of the delivery scheduler found that a failed delivery is retried \
+        with no upper bound while the receiver keeps answering 503.
+
+        The finding was deferred: bounding the budget changes the delivery \
+        contract, which the reviewed change doesn't own.
+
+        Proposed work:
+
+        - Add a per-delivery retry budget with a **hard** cap.
+        - Record an exhausted budget as a typed failure cause.
+        """
+
+    /// The bounded effect facts a client reads for one effect-proposal
+    /// item, built from the served snapshot's version tuple and evidence
+    /// digest. The default `item-effect_proposal` carries a source-issue
+    /// closure with `verified` provenance from `propose_site`; the named
+    /// `item-effect_proposal-recommended` carries `recommended`; the named
+    /// `item-effect_proposal-filing` carries a follow-up filing instead of
+    /// a closure. The opaque subject handle and policy identity stay
+    /// server-side, as they do for task_proposal. Returns nil for any
+    /// non-effect_proposal item.
     public static func effectProposalFacts(
         for snapshot: Components.Schemas.AttentionItemSnapshot
     ) -> Components.Schemas.EffectProposalFactsSnapshot? {
         guard snapshot.item._type == .effect_proposal,
             let digest = snapshot.item.evidence_snapshot.first?.digest
         else { return nil }
+        if snapshot.item.id == followUpFilingItemID {
+            return .init(
+                as_of_revision: snapshot.as_of_revision,
+                entity_version: snapshot.entity_version,
+                item_version: snapshot.item.item_version,
+                proposal_digest: digest,
+                effect_kind: .follow_up_filing,
+                supersedes: nil,
+                source_issue_closure: nil,
+                follow_up_filing: .init(
+                    value1: .init(
+                        repository: .init(repo: "owner/repo", repository_id: 84_958_515),
+                        labels: ["deferred-finding", "reliability"],
+                        milestone: "Backlog",
+                        title: .init(
+                            text: "Bound the delivery retry budget",
+                            ruleset: .github_hyphen_issue_sol_1, verdict: .passed),
+                        body: .init(
+                            text: followUpFilingBody,
+                            ruleset: .github_hyphen_issue_sol_1, verdict: .passed),
+                        source: .init(
+                            finding_id: "finding-3",
+                            adjudication_digest: "sha256:" + String(repeating: "c", count: 64),
+                            kind: .deferred_disposition))))
+        }
         let provenance: Components.Schemas.ClosureProvenance =
             snapshot.item.id == "item-effect_proposal-recommended" ? .recommended : .verified
         return .init(

@@ -289,6 +289,31 @@ import Testing
         #expect(AttentionFixtures.effectProposalFacts(for: AttentionFixtures.fixture(type: .task_proposal)) == nil)
     }
 
+    @Test func followUpFilingIsAValidNamedFixtureOfferingApproveDeclineAndSnooze() throws {
+        let filing = AttentionFixtures.followUpFilingEffectProposal()
+        #expect(filing.item._type == .effect_proposal)
+        #expect(filing.item.id == "item-effect_proposal-filing")
+        #expect(filing.item.status == .open)
+        // A filing admits no revision, so the item never offers
+        // approve_with_changes, and it names no pull request head.
+        #expect(filing.item.requested_decision == [.approve, .decline, .snooze])
+        #expect(filing.item.pr_head_sha.isEmpty)
+        #expect(!AttentionFixtures.defaultInboxItemIDs().contains(filing.item.id))
+
+        let facts = try #require(AttentionFixtures.effectProposalFacts(for: filing))
+        #expect(facts.effect_kind == .follow_up_filing)
+        #expect(facts.source_issue_closure == nil)
+        #expect(facts.supersedes == nil)
+        #expect(filing.item.artifact_digests == [facts.proposal_digest])
+        let filed = try #require(facts.follow_up_filing?.value1)
+        #expect(filed.labels == filed.labels.sorted())
+        #expect(filed.title.verdict == .passed)
+        #expect(filed.body.verdict == .passed)
+        // The body is several paragraphs, with lines Markdown would format.
+        #expect(filed.body.text.contains("\n\n"))
+        #expect(filed.body.text.contains("- Add a per-delivery retry budget with a **hard** cap."))
+    }
+
     @Test func holdAfterPublicationCarriesItsPullRequestAndOffersOpeningIt() {
         let unpublished = AttentionFixtures.fixture(type: .publish_blocked).item
         #expect(unpublished.pr_reference == nil)
