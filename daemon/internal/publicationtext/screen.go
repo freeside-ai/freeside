@@ -32,6 +32,14 @@ func ScreenField(field, text string, maxBytes int) error {
 // check has its own smaller budget, independent of the field's storage bound.
 // Errors identify the failing screen, never its input or a nested error.
 func Screen(text string, maxBytes int, collapseMarkdown bool) error {
+	return screenStages(text, maxBytes, collapseMarkdown, nil)
+}
+
+// screenStages is the fixpoint behind Screen. extra, when set, is one more
+// check run on every stage, so a ruleset that adds rules has them re-checked
+// after each HTML decode and Markdown collapse like the rules above. Its
+// errors must be content-free, as every error here is.
+func screenStages(text string, maxBytes int, collapseMarkdown bool, extra func(string) error) error {
 	if !utf8.ValidString(text) || len(text) > maxBytes {
 		return errors.New("encoding_or_size")
 	}
@@ -49,6 +57,11 @@ func Screen(text string, maxBytes int, collapseMarkdown bool) error {
 		}
 		if strings.Contains(strings.ToLower(text), "freeside:") {
 			return errors.New("publisher_marker")
+		}
+		if extra != nil {
+			if err := extra(text); err != nil {
+				return err
+			}
 		}
 		decoded := html.UnescapeString(text)
 		if collapseMarkdown {

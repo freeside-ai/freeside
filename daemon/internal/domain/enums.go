@@ -82,14 +82,67 @@ const (
 	// proposes closing the source issue a work unit's pull request resolves
 	// (plan §5.13). Its parameter type and gate live in effect_proposal.go.
 	EffectSourceIssueClosure EffectKind = "source_issue_closure"
+	// EffectFollowUpFiling is the third registry member: an effect that
+	// proposes filing a follow-up issue for a finding the review deferred or
+	// routed to separate work (plan §5.17). Its parameter type and gate live
+	// in follow_up_filing.go.
+	EffectFollowUpFiling EffectKind = "follow_up_filing"
 )
 
 // AllEffectKinds is the single registration point for effect kinds.
-var AllEffectKinds = []EffectKind{EffectTaskProposal, EffectSourceIssueClosure}
+var AllEffectKinds = []EffectKind{EffectTaskProposal, EffectSourceIssueClosure, EffectFollowUpFiling}
 
 func (k EffectKind) valid() bool {
 	switch k {
-	case EffectTaskProposal, EffectSourceIssueClosure:
+	case EffectTaskProposal, EffectSourceIssueClosure, EffectFollowUpFiling:
+		return true
+	default:
+		return false
+	}
+}
+
+// ScreeningVerdict is the recorded outcome of screening one agent-controlled
+// text field under a versioned ruleset (plan §5.17). passed is the only
+// verdict a proposal may carry; rejected exists so a producer can record a
+// refusal without inventing a value. The zero value is invalid.
+type ScreeningVerdict string
+
+const (
+	ScreeningVerdictPassed   ScreeningVerdict = "passed"
+	ScreeningVerdictRejected ScreeningVerdict = "rejected"
+)
+
+// AllScreeningVerdicts is the single registration point for screening verdicts.
+var AllScreeningVerdicts = []ScreeningVerdict{ScreeningVerdictPassed, ScreeningVerdictRejected}
+
+func (v ScreeningVerdict) valid() bool {
+	switch v {
+	case ScreeningVerdictPassed, ScreeningVerdictRejected:
+		return true
+	default:
+		return false
+	}
+}
+
+// FollowUpSourceKind names what a follow-up filing proposal came from (plan
+// §7 routing table): a finding's reasoned deferred disposition, or a
+// separate_work_required verdict, which parks the run and writes no
+// disposition. The zero value is invalid.
+type FollowUpSourceKind string
+
+const (
+	FollowUpSourceDeferredDisposition FollowUpSourceKind = "deferred_disposition"
+	FollowUpSourceSeparateWorkVerdict FollowUpSourceKind = "separate_work_verdict"
+)
+
+// AllFollowUpSourceKinds is the single registration point for the source kind.
+var AllFollowUpSourceKinds = []FollowUpSourceKind{
+	FollowUpSourceDeferredDisposition, FollowUpSourceSeparateWorkVerdict,
+}
+
+func (k FollowUpSourceKind) valid() bool {
+	switch k {
+	case FollowUpSourceDeferredDisposition, FollowUpSourceSeparateWorkVerdict:
 		return true
 	default:
 		return false
@@ -1613,6 +1666,35 @@ var AllMessageRulesets = []MessageRuleset{MessageRulesetGitHub1}
 func (r MessageRuleset) valid() bool {
 	switch r {
 	case MessageRulesetGitHub1:
+		return true
+	default:
+		return false
+	}
+}
+
+// IssueTextRuleset names a built-in versioned ruleset for screening agent
+// text that the daemon writes into a GitHub issue (plan §5.17), on the
+// MessageRuleset pattern. A proposal records the ruleset each text field was
+// screened under, and an identifier outside AllIssueTextRulesets fails closed.
+// The ruleset content lives with the screening implementation
+// (internal/publicationtext); this identifier is the digest-bound key that
+// pins which version screened the text.
+type IssueTextRuleset string
+
+const (
+	// IssueTextRulesetGitHubIssue1 is the built-in GitHub issue ruleset,
+	// version 1: everything the publication prose screen rejects, plus every
+	// @name token and every line that opens with a / command.
+	IssueTextRulesetGitHubIssue1 IssueTextRuleset = "github-issue/1"
+)
+
+// AllIssueTextRulesets is the built-in issue-text ruleset registry, the
+// single place a new ruleset version is registered.
+var AllIssueTextRulesets = []IssueTextRuleset{IssueTextRulesetGitHubIssue1}
+
+func (r IssueTextRuleset) valid() bool {
+	switch r {
+	case IssueTextRulesetGitHubIssue1:
 		return true
 	default:
 		return false

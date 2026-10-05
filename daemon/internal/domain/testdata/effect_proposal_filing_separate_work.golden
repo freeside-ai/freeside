@@ -1,0 +1,32 @@
+{
+  "encoding_version": 1,
+  "kind": "follow_up_filing",
+  "resolved_policy_run_id": "run-policy",
+  "resolved_policy_digest": "sha256:57afc93cbc6ec4a3dc987a7803b24f65f954d481569bdd5af0dc74e4fd251d11",
+  "run_proposal": null,
+  "follow_up_filing": {
+    "subject_handle": "subject-opaque-1",
+    "repository": {
+      "repo": "octo/repo",
+      "repository_id": 42
+    },
+    "labels": [],
+    "milestone": null,
+    "title": {
+      "text": "Bound the retry budget in the sync client",
+      "ruleset": "github-issue/1",
+      "verdict": "passed"
+    },
+    "body": {
+      "text": "The sync client retries without a budget.\n\nDeferred from review round 2.",
+      "ruleset": "github-issue/1",
+      "verdict": "passed"
+    },
+    "source": {
+      "finding_id": "finding-1",
+      "adjudication_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "kind": "separate_work_verdict"
+    }
+  },
+  "digest": "sha256:0b44cf24afe91fc70cd1fdc4fc7aada56eca7cf379fd0b1160496b92011adb2e"
+}

@@ -20,5 +20,6 @@
       "base_ref": "main",
       "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     }
-  }
+  },
+  "follow_up_filing": null
 }
