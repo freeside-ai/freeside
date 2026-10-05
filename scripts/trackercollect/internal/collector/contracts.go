@@ -206,17 +206,9 @@ func CollectContracts(ctx context.Context, config ContractsConfig, runner QueryR
 	}
 	markersByIssue := make(map[int][]MarkerComment)
 	for _, marker := range markers {
-		// Anyone may comment on a public repository's issues, and the claim
-		// protocol trusts collaborator comments only (docs/coordination.md,
-		// Claiming). The protocol gives an outsider's marker no stated
-		// standing, so it is neither counted nor dismissed: counting it
-		// could fill a slot or hide a live claim behind a forged release.
-		if !trustedMarkerAuthor(marker.AuthorAssociation) {
-			c.ambiguous("untrusted-marker-author", fmt.Sprintf("comment %d", marker.Stamp.DatabaseID),
-				fmt.Sprintf("%s marker on issue #%d has author association %s, not OWNER, MEMBER, or COLLABORATOR; it is not counted", marker.Kind, marker.IssueNumber, marker.AuthorAssociation))
-			continue
+		if c.countsMarker(marker) {
+			markersByIssue[marker.IssueNumber] = append(markersByIssue[marker.IssueNumber], marker)
 		}
-		markersByIssue[marker.IssueNumber] = append(markersByIssue[marker.IssueNumber], marker)
 	}
 
 	snapshot := ContractsSnapshot{
@@ -256,22 +248,43 @@ func CollectContracts(ctx context.Context, config ContractsConfig, runner QueryR
 	}
 	sort.Slice(snapshot.Contracts, func(i, j int) bool { return snapshot.Contracts[i].Number < snapshot.Contracts[j].Number })
 	sort.Slice(snapshot.Findings, func(i, j int) bool { return snapshot.Findings[i].Number < snapshot.Findings[j].Number })
-	sort.Slice(c.ambiguities, func(i, j int) bool {
-		if c.ambiguities[i].Code != c.ambiguities[j].Code {
-			return c.ambiguities[i].Code < c.ambiguities[j].Code
-		}
-		if c.ambiguities[i].Subject != c.ambiguities[j].Subject {
-			return c.ambiguities[i].Subject < c.ambiguities[j].Subject
-		}
-		return c.ambiguities[i].Detail < c.ambiguities[j].Detail
-	})
-	snapshot.Ambiguities = append([]Ambiguity{}, c.ambiguities...)
+	snapshot.Ambiguities = c.sortedAmbiguities()
 	snapshot.Complete = len(snapshot.Ambiguities) == 0
 	if snapshot.Complete {
 		snapshot.ActiveCount, snapshot.ReservedCount = &active, &reserved
 	}
 	snapshot.CompletedAt = clock().UTC()
 	return snapshot, nil
+}
+
+// sortedAmbiguities returns a copy ordered by code, subject, then detail.
+func (c *collector) sortedAmbiguities() []Ambiguity {
+	sorted := append([]Ambiguity{}, c.ambiguities...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].Code != sorted[j].Code {
+			return sorted[i].Code < sorted[j].Code
+		}
+		if sorted[i].Subject != sorted[j].Subject {
+			return sorted[i].Subject < sorted[j].Subject
+		}
+		return sorted[i].Detail < sorted[j].Detail
+	})
+	return sorted
+}
+
+// countsMarker reports whether a marker comment counts toward claim state,
+// recording an ambiguity for one that does not. Anyone may comment on a public
+// repository's issues, and the claim protocol trusts collaborator comments
+// only (docs/coordination.md, Claiming). The protocol gives an outsider's
+// marker no stated standing, so it is neither counted nor dismissed: counting
+// it could fill a slot or hide a live claim behind a forged release.
+func (c *collector) countsMarker(marker MarkerComment) bool {
+	if trustedMarkerAuthor(marker.AuthorAssociation) {
+		return true
+	}
+	c.ambiguous("untrusted-marker-author", fmt.Sprintf("comment %d", marker.Stamp.DatabaseID),
+		fmt.Sprintf("%s marker on issue #%d has author association %s, not OWNER, MEMBER, or COLLABORATOR; it is not counted", marker.Kind, marker.IssueNumber, marker.AuthorAssociation))
+	return false
 }
 
 // trustedMarkerAuthor reports whether the forge places a comment's author
