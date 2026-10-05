@@ -45,6 +45,8 @@ var holdClassifiedSentinels = []error{
 	domain.ErrPathBoundaryMismatch,
 	domain.ErrTrustProfileSuperseded,
 	domain.ErrReviewConfigurationUnapproved,
+	ErrEgressProfileNotEnforceable,
+	ErrEgressPolicyRefused,
 }
 
 // TestDispatchHoldReasonCoversEveryHoldClass: every sentinel the dispatch
