@@ -875,10 +875,11 @@ dependents start. `kind:contract` is a classification that invokes this
 contract review and verification; it implies no relationship to any other
 unit. A contract PR carries its required generated consumers and
 mechanical adapters (the cross-component one-work-unit rule under Monorepo
-Scope Discipline); only downstream feature work waits for the merge. Lane work
-never edits shared packages in passing: needing a contract change means filing
-the contract issue, linking it as a dependency, and blocking or switching
-units.
+Scope Discipline). It may also carry its first behavioral consumer, under the
+conditions in `docs/coordination.md` (Unit Sizing); all other downstream
+feature work waits for the merge. Lane work never edits shared packages in
+passing: needing a contract change means filing the contract issue, linking
+it as a dependency, and blocking or switching units.
 
 Contract units serialize by assessed conflict, not by label:
 
