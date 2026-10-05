@@ -378,6 +378,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["MessageRuleset"] = append(valids["MessageRuleset"], v.valid)
 	}
 	invalids["MessageRuleset"] = MessageRuleset("").valid
+	for _, v := range AllIssueTextRulesets {
+		valids["IssueTextRuleset"] = append(valids["IssueTextRuleset"], v.valid)
+	}
+	invalids["IssueTextRuleset"] = IssueTextRuleset("").valid
 	for _, v := range AllNativeReviewKinds {
 		valids["NativeReviewKind"] = append(valids["NativeReviewKind"], v.valid)
 	}

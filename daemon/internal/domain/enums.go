@@ -1619,6 +1619,35 @@ func (r MessageRuleset) valid() bool {
 	}
 }
 
+// IssueTextRuleset names a built-in versioned ruleset for screening agent
+// text that the daemon writes into a GitHub issue (plan §5.17), on the
+// MessageRuleset pattern. A proposal records the ruleset each text field was
+// screened under, and an identifier outside AllIssueTextRulesets fails closed.
+// The ruleset content lives with the screening implementation
+// (internal/publicationtext); this identifier is the digest-bound key that
+// pins which version screened the text.
+type IssueTextRuleset string
+
+const (
+	// IssueTextRulesetGitHubIssue1 is the built-in GitHub issue ruleset,
+	// version 1: everything the publication prose screen rejects, plus every
+	// @name token and every line that opens with a / command.
+	IssueTextRulesetGitHubIssue1 IssueTextRuleset = "github-issue/1"
+)
+
+// AllIssueTextRulesets is the built-in issue-text ruleset registry, the
+// single place a new ruleset version is registered.
+var AllIssueTextRulesets = []IssueTextRuleset{IssueTextRulesetGitHubIssue1}
+
+func (r IssueTextRuleset) valid() bool {
+	switch r {
+	case IssueTextRulesetGitHubIssue1:
+		return true
+	default:
+		return false
+	}
+}
+
 // CommitPlanNoticeReason classifies the daemon-derived commit-plan notice
 // (plan §5.6): the fact, carried on an attention item, that the reserved
 // plan channel was consumed without a plan structuring the import. It is
