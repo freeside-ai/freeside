@@ -101,6 +101,55 @@ It is never a fixture or upload source without that review.
 The pinned experiment and collector limits are recorded in
 [`devlog/2026-10-02-2245-claude-usage-spike.md`](../devlog/2026-10-02-2245-claude-usage-spike.md).
 
+## Codex Account Probe Spike
+
+`TestLiveCodexAccountProbe` measures Codex **0.147.0** `app-server` startup,
+`initialize`, and `account/read`. It uses the production `CODEX_HOME/auth.json`
+symlink into a read-only snapshot volume. A host-only network and a test TLS
+proxy block every outbound request, counting refresh attempts before refusing
+them. No provider request is forwarded. This is evidence for #866, not doctor
+integration or a usage observation.
+
+Offline tests need `jq` on `PATH` to exercise the same sanitizer as the image:
+
+```sh
+go -C daemon test ./internal/ward -run '^TestCodexAccount' -count=1
+```
+
+The live test needs macOS, a running Apple `container` service, and a cached
+digest-pinned Codex image with `jq`, named by
+`FREESIDE_WARD_CODEX_AGENT_IMAGE`. For the complete run, set
+`FREESIDE_WARD_CODEX_REVIEW_AUTH` to an operator-prepared access-only auth JSON
+file with more than ten minutes of access-token life. A nonempty refresh token
+is rejected before copying the file. The test never derives this input from a
+refreshable host store.
+
+```sh
+FREESIDE_WARD_LIVE_TEST=1 go -C daemon test ./internal/ward \
+  -run '^TestLiveCodexAccountProbe$' -count=1 -v
+```
+
+To run only synthetic cases, append `/(near_expiry|control)$` to the test
+selector. These need no real credential. The first sends `refreshToken: false`
+with a token expiring in two minutes; the control sends `refreshToken: true`.
+The complete test skips unless opted in, then fails for missing inputs.
+Selecting only synthetic cases never establishes an overall pass.
+
+Each invocation has a 60-second deadline and a 1-MiB stdout bound. Only fixed
+field names, JSON types, the reviewed plan enum, request labels, and measurement
+flags leave the container. Unknown fields fail capture; email, account ID,
+raw RPC errors, and tokens are never logged. The test checks hashes, symlink
+preservation, and append/unlink rejection. `pass`, `fail` (unsafe or unavailable
+probe), and `probe_failed` (broken measurement) are distinct; an unproven
+refresh detector always leaves the overall result `probe_failed`.
+A control pass proves detection only. Transport errors cannot erase a refresh
+that was observed, but they always prevent a safe read pass.
+
+Fresh resources have random names and ownership labels. Cleanup verifies
+labels and creation dates. A private recovery manifest survives failed
+cleanup; retained containers or volumes may contain credentials or raw
+responses. Use the manifest to prove ownership before removing them.
+
 ## Control Socket and Pairing Codes
 
 Every daemon run owns one private Unix control socket. It publishes the socket
