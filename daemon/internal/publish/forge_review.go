@@ -26,9 +26,12 @@ type listRead[E any] struct {
 	NotModified bool
 }
 
-// PullReview is one submitted native review on a pull request.
+// PullReview is one submitted native review on a pull request. AuthorID is
+// the author's immutable forge account ID and AuthorLogin the login exactly as
+// the forge returned it for this review; 0 means the forge named no account.
 type PullReview struct {
 	ID          int64
+	AuthorID    int64
 	AuthorLogin string
 	State       string
 	Body        string
@@ -40,8 +43,13 @@ type PullReview struct {
 // links it to the PullReview it belongs to (the forge's
 // pull_request_review_id).
 type PullReviewComment struct {
-	ID          int64
-	ReviewID    int64
+	ID       int64
+	ReviewID int64
+	// InReplyToID is the thread's first comment when this comment is a reply,
+	// and 0 when this comment starts the thread.
+	InReplyToID int64
+	// AuthorID is the author's immutable forge account ID; see PullReview.
+	AuthorID    int64
 	AuthorLogin string
 	Path        string
 	// StartLine is the first line of a multi-line inline comment; 0 for a
@@ -49,8 +57,16 @@ type PullReviewComment struct {
 	StartLine int
 	Line      int
 	Body      string
-	CommitID  string
-	CreatedAt time.Time
+	// CommitID is the commit the forge currently anchors the comment to: it
+	// moves to a newer head while the comment still applies there.
+	// OriginalCommitID is the commit the comment was left on and never moves,
+	// and a reply carries its thread's. OriginalStartLine and OriginalLine are
+	// the comment's range on that commit, in the form of StartLine and Line.
+	CommitID          string
+	OriginalCommitID  string
+	OriginalStartLine int
+	OriginalLine      int
+	CreatedAt         time.Time
 }
 
 // PullDescriptionReaction is one reaction on a pull request's description (the
@@ -65,6 +81,7 @@ type PullDescriptionReaction struct {
 type reviewResponse struct {
 	ID   int64 `json:"id"`
 	User struct {
+		ID    int64  `json:"id"`
 		Login string `json:"login"`
 	} `json:"user"`
 	State       string `json:"state"`
@@ -76,15 +93,29 @@ type reviewResponse struct {
 type reviewCommentResponse struct {
 	ID   int64 `json:"id"`
 	User struct {
+		ID    int64  `json:"id"`
 		Login string `json:"login"`
 	} `json:"user"`
-	ReviewID  int64  `json:"pull_request_review_id"`
-	Path      string `json:"path"`
-	StartLine *int   `json:"start_line"`
-	Line      *int   `json:"line"`
-	Body      string `json:"body"`
-	CommitID  string `json:"commit_id"`
-	CreatedAt string `json:"created_at"`
+	ReviewID          int64  `json:"pull_request_review_id"`
+	InReplyToID       int64  `json:"in_reply_to_id"`
+	Path              string `json:"path"`
+	StartLine         *int   `json:"start_line"`
+	Line              *int   `json:"line"`
+	OriginalStartLine *int   `json:"original_start_line"`
+	OriginalLine      *int   `json:"original_line"`
+	Body              string `json:"body"`
+	CommitID          string `json:"commit_id"`
+	OriginalCommitID  string `json:"original_commit_id"`
+	CreatedAt         string `json:"created_at"`
+}
+
+// lineOrZero reads an optional forge line number; the forge sends null for a
+// file-level comment and for a range the current diff no longer holds.
+func lineOrZero(line *int) int {
+	if line == nil {
+		return 0
+	}
+	return *line
 }
 
 type reactionResponse struct {
@@ -100,10 +131,7 @@ type reactionResponse struct {
 // Pending (never-submitted) reviews are not observations and are skipped.
 func (f *forge) getPullReviews(ctx context.Context, repo repoRef, number int, etag string) (listRead[PullReview], error) {
 	path := fmt.Sprintf("/repos/%s/pulls/%d/reviews?per_page=100", repo.path(), number)
-	// Review evidence is best-effort: a later-page change under a first-page 304
-	// is an accepted completeness gap (see fetchConditionalList), so multiPage is
-	// ignored here.
-	raw, resultETag, notModified, _, err := fetchConditionalList[reviewResponse](ctx, f, repo, path, etag)
+	raw, resultETag, notModified, multiPage, err := fetchConditionalList[reviewResponse](ctx, f, repo, path, etag)
 	if err != nil {
 		return listRead[PullReview]{}, fmt.Errorf("get pull reviews: %w", err)
 	}
@@ -120,9 +148,15 @@ func (f *forge) getPullReviews(ctx context.Context, repo repoRef, number int, et
 			return listRead[PullReview]{}, fmt.Errorf("get pull reviews: parse submitted_at: %w", err)
 		}
 		reviews = append(reviews, PullReview{
-			ID: rv.ID, AuthorLogin: rv.User.Login, State: rv.State,
+			ID: rv.ID, AuthorID: rv.User.ID, AuthorLogin: rv.User.Login, State: rv.State,
 			Body: rv.Body, CommitID: rv.CommitID, SubmittedAt: submitted.UTC(),
 		})
+	}
+	if multiPage {
+		// A review on a later page can start a round (issue #524), and a
+		// first-page 304 cannot prove a multi-page list unchanged, so the
+		// validator is dropped and the next poll re-reads every page.
+		resultETag = ""
 	}
 	return listRead[PullReview]{Items: reviews, ETag: resultETag}, nil
 }
@@ -131,8 +165,7 @@ func (f *forge) getPullReviews(ctx context.Context, repo repoRef, number int, et
 // conditionally.
 func (f *forge) getPullReviewComments(ctx context.Context, repo repoRef, number int, etag string) (listRead[PullReviewComment], error) {
 	path := fmt.Sprintf("/repos/%s/pulls/%d/comments?per_page=100", repo.path(), number)
-	// Best-effort review evidence: multiPage ignored (see getPullReviews).
-	raw, resultETag, notModified, _, err := fetchConditionalList[reviewCommentResponse](ctx, f, repo, path, etag)
+	raw, resultETag, notModified, multiPage, err := fetchConditionalList[reviewCommentResponse](ctx, f, repo, path, etag)
 	if err != nil {
 		return listRead[PullReviewComment]{}, fmt.Errorf("get pull review comments: %w", err)
 	}
@@ -145,19 +178,19 @@ func (f *forge) getPullReviewComments(ctx context.Context, repo repoRef, number 
 		if err != nil {
 			return listRead[PullReviewComment]{}, fmt.Errorf("get pull review comments: parse created_at: %w", err)
 		}
-		line := 0
-		if c.Line != nil {
-			line = *c.Line
-		}
-		startLine := 0
-		if c.StartLine != nil {
-			startLine = *c.StartLine
-		}
 		comments = append(comments, PullReviewComment{
-			ID: c.ID, ReviewID: c.ReviewID, AuthorLogin: c.User.Login,
-			Path: c.Path, StartLine: startLine, Line: line, Body: c.Body, CommitID: c.CommitID,
+			ID: c.ID, ReviewID: c.ReviewID, InReplyToID: c.InReplyToID,
+			AuthorID: c.User.ID, AuthorLogin: c.User.Login,
+			Path: c.Path, StartLine: lineOrZero(c.StartLine), Line: lineOrZero(c.Line), Body: c.Body,
+			CommitID: c.CommitID, OriginalCommitID: c.OriginalCommitID,
+			OriginalStartLine: lineOrZero(c.OriginalStartLine), OriginalLine: lineOrZero(c.OriginalLine),
 			CreatedAt: created.UTC(),
 		})
+	}
+	if multiPage {
+		// As for reviews: a comment on a later page must not hide behind an
+		// unchanged first page.
+		resultETag = ""
 	}
 	return listRead[PullReviewComment]{Items: comments, ETag: resultETag}, nil
 }
@@ -166,7 +199,9 @@ func (f *forge) getPullReviewComments(ctx context.Context, repo repoRef, number 
 // conditionally (the reactions surface is served under the issues path).
 func (f *forge) getIssueReactions(ctx context.Context, repo repoRef, number int, etag string) (listRead[PullDescriptionReaction], error) {
 	path := fmt.Sprintf("/repos/%s/issues/%d/reactions?per_page=100", repo.path(), number)
-	// Best-effort review evidence: multiPage ignored (see getPullReviews).
+	// Reactions are best-effort native review evidence and start nothing: a
+	// later-page change under a first-page 304 is an accepted completeness gap
+	// (see fetchConditionalList), so multiPage is ignored here.
 	raw, resultETag, notModified, _, err := fetchConditionalList[reactionResponse](ctx, f, repo, path, etag)
 	if err != nil {
 		return listRead[PullDescriptionReaction]{}, fmt.Errorf("get issue reactions: %w", err)
@@ -194,10 +229,11 @@ func (f *forge) getIssueReactions(ctx context.Context, repo repoRef, number int,
 // list unchanged. The known limitation is a list that spans pages: an item
 // appended to (or removed from) a later page while the first page is unchanged
 // answers 304 and is observed only once the first page changes. It reports
-// multiPage so a caller whose correctness needs the whole list (label intake)
-// can drop the validator and force an unconditional re-read; the review-evidence
-// callers accept the degradation as best-effort (readiness-inert) completeness,
-// never a safety property. The page bound fails closed on an unbounded history
+// multiPage so a caller whose correctness needs the whole list (label intake,
+// and the reviews and review comments that can start a round) can drop the
+// validator and force an unconditional re-read; the reactions caller accepts
+// the degradation as best-effort (readiness-inert) completeness, never a
+// safety property. The page bound fails closed on an unbounded history
 // rather than answering from a partial read.
 func fetchConditionalList[E any](
 	ctx context.Context, f *forge, repo repoRef, basePath, etag string,
