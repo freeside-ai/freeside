@@ -375,3 +375,73 @@ func TestClosureFollowsRepositoryRename(t *testing.T) {
 		}
 	}
 }
+
+// TestBindProposalItemRefusesClosureWithoutMerge pins the closure half of the
+// per-kind merge rule on an effect_proposal item: a closure approval binds a
+// prospective merge, so the bind refuses one that is absent or whose candidate
+// head differs from the item's.
+func TestBindProposalItemRefusesClosureWithoutMerge(t *testing.T) {
+	ctx := context.Background()
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+	source := domain.SpecificationSource{
+		Kind:         domain.SpecificationSourceIssueSubject,
+		IssueSubject: &domain.IssueSubjectRef{Repo: "owner/repo", RepositoryID: 123, IssueNumber: 42},
+	}
+	policy, handle := closureScaffold(t, ctx, st, "project-bind", &source)
+	proposal, err := domain.NewEffectProposal(domain.EffectSourceIssueClosure, domain.SourceIssueClosureInput{
+		SubjectHandle: handle,
+		Source: domain.ClosableSource{
+			Present: true, Provenance: domain.ClosureProvenanceVerified, Repo: "owner/repo", RepositoryID: 123, IssueNumber: 42,
+		},
+		Origin: domain.ClosureFlagOriginProposeSite, Resolves: true,
+	}, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := allocateClosure(t, ctx, st, proposal, "event-bind")
+	head := strings.Repeat("a", 40)
+	merge := domain.ProspectiveMerge{
+		PublicationIdentity: domain.Digest("sha256:" + strings.Repeat("9", 64)),
+		CandidateHeadSHA:    head, BaseRef: "main", BaseSHA: strings.Repeat("b", 40),
+	}
+	otherHead := merge
+	otherHead.CandidateHeadSHA = strings.Repeat("c", 40)
+
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		artifact, err := instance.EvidenceArtifact()
+		if err != nil {
+			return err
+		}
+		if err := tx.PutArtifact(ctx, artifact); err != nil {
+			return err
+		}
+		item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+			ID: domain.ItemID(string(instance.ID) + "/effect"), ProjectID: "project-bind",
+			Subject: domain.Subject{Type: domain.SubjectProposalBatch, ID: domain.SubjectID(instance.ProposalBatchID)},
+			Type:    domain.AttentionEffectProposal, Priority: domain.PriorityNormal,
+			Reason: "Decide the proposed effect on the source issue",
+			RequestedDecision: []domain.Action{
+				domain.ActionApprove, domain.ActionApproveWithChanges, domain.ActionDecline, domain.ActionSnooze,
+			},
+			EvidenceSnapshot: []domain.Artifact{artifact}, ItemVersion: 1,
+			InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
+			PRHeadSHA: head,
+		}, map[domain.Digest]bool{domain.EffectProposalRecipeDigest: true})
+		if err != nil {
+			return err
+		}
+		if err := tx.PutAttentionItem(ctx, item); err != nil {
+			return err
+		}
+		for name, refused := range map[string]*domain.ProspectiveMerge{
+			"no merge": nil, "another candidate head": &otherHead,
+		} {
+			if err := tx.BindProposalItem(ctx, item.ID, instance.ID, proposal.Digest, refused); !errors.Is(err, errRowInconsistent) {
+				t.Fatalf("bind a closure with %s = %v, want errRowInconsistent", name, err)
+			}
+		}
+		return tx.BindProposalItem(ctx, item.ID, instance.ID, proposal.Digest, &merge)
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

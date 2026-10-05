@@ -1810,13 +1810,14 @@ public enum Components {
         @frozen public enum TaskProposalIntent: String, Codable, Hashable, Sendable, CaseIterable {
             case implement_subject = "implement_subject"
         }
-        /// The effect-registry member an effect_proposal renders. run_proposal is the task-proposal encoding; source_issue_closure proposes closing the source issue a work unit's pull request resolves (plan §5.13). Matches domain.AllEffectKinds.
+        /// The effect-registry member an effect_proposal renders. run_proposal is the task-proposal encoding; source_issue_closure proposes closing the source issue a work unit's pull request resolves (plan §5.13); follow_up_filing proposes filing a follow-up issue for a deferred finding or a separate-work verdict (plan §5.17). Matches domain.AllEffectKinds.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/EffectKind`.
         @frozen public enum EffectKind: String, Codable, Hashable, Sendable, CaseIterable {
             case run_proposal = "run_proposal"
             case source_issue_closure = "source_issue_closure"
+            case follow_up_filing = "follow_up_filing"
         }
         /// The trust a source-issue-closure target earns: verified when the daemon bound the issue subject, recommended when a same-repository target came from a client-supplied source the daemon cannot re-derive (plan §5.13). Matches domain.AllClosureProvenances.
         ///

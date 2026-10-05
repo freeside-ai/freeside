@@ -1367,9 +1367,11 @@ components:
       description: >
         The effect-registry member an effect_proposal renders. run_proposal is
         the task-proposal encoding; source_issue_closure proposes closing the
-        source issue a work unit's pull request resolves (plan §5.13). Matches
+        source issue a work unit's pull request resolves (plan §5.13);
+        follow_up_filing proposes filing a follow-up issue for a deferred
+        finding or a separate-work verdict (plan §5.17). Matches
         domain.AllEffectKinds.
-      enum: [run_proposal, source_issue_closure]
+      enum: [run_proposal, source_issue_closure, follow_up_filing]
 
     ClosureProvenance:
       type: string

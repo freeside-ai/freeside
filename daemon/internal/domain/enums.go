@@ -82,14 +82,67 @@ const (
 	// proposes closing the source issue a work unit's pull request resolves
 	// (plan §5.13). Its parameter type and gate live in effect_proposal.go.
 	EffectSourceIssueClosure EffectKind = "source_issue_closure"
+	// EffectFollowUpFiling is the third registry member: an effect that
+	// proposes filing a follow-up issue for a finding the review deferred or
+	// routed to separate work (plan §5.17). Its parameter type and gate live
+	// in follow_up_filing.go.
+	EffectFollowUpFiling EffectKind = "follow_up_filing"
 )
 
 // AllEffectKinds is the single registration point for effect kinds.
-var AllEffectKinds = []EffectKind{EffectTaskProposal, EffectSourceIssueClosure}
+var AllEffectKinds = []EffectKind{EffectTaskProposal, EffectSourceIssueClosure, EffectFollowUpFiling}
 
 func (k EffectKind) valid() bool {
 	switch k {
-	case EffectTaskProposal, EffectSourceIssueClosure:
+	case EffectTaskProposal, EffectSourceIssueClosure, EffectFollowUpFiling:
+		return true
+	default:
+		return false
+	}
+}
+
+// ScreeningVerdict is the recorded outcome of screening one agent-controlled
+// text field under a versioned ruleset (plan §5.17). passed is the only
+// verdict a proposal may carry; rejected exists so a producer can record a
+// refusal without inventing a value. The zero value is invalid.
+type ScreeningVerdict string
+
+const (
+	ScreeningVerdictPassed   ScreeningVerdict = "passed"
+	ScreeningVerdictRejected ScreeningVerdict = "rejected"
+)
+
+// AllScreeningVerdicts is the single registration point for screening verdicts.
+var AllScreeningVerdicts = []ScreeningVerdict{ScreeningVerdictPassed, ScreeningVerdictRejected}
+
+func (v ScreeningVerdict) valid() bool {
+	switch v {
+	case ScreeningVerdictPassed, ScreeningVerdictRejected:
+		return true
+	default:
+		return false
+	}
+}
+
+// FollowUpSourceKind names what a follow-up filing proposal came from (plan
+// §7 routing table): a finding's reasoned deferred disposition, or a
+// separate_work_required verdict, which parks the run and writes no
+// disposition. The zero value is invalid.
+type FollowUpSourceKind string
+
+const (
+	FollowUpSourceDeferredDisposition FollowUpSourceKind = "deferred_disposition"
+	FollowUpSourceSeparateWorkVerdict FollowUpSourceKind = "separate_work_verdict"
+)
+
+// AllFollowUpSourceKinds is the single registration point for the source kind.
+var AllFollowUpSourceKinds = []FollowUpSourceKind{
+	FollowUpSourceDeferredDisposition, FollowUpSourceSeparateWorkVerdict,
+}
+
+func (k FollowUpSourceKind) valid() bool {
+	switch k {
+	case FollowUpSourceDeferredDisposition, FollowUpSourceSeparateWorkVerdict:
 		return true
 	default:
 		return false
