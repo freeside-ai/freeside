@@ -1,0 +1,8 @@
+{
+  "instance_id": "instance-1",
+  "repository_id": 123,
+  "opened_at": "2026-10-05T12:00:00Z",
+  "pre_dispatch": null,
+  "attempts": [],
+  "terminal": null
+}

@@ -149,6 +149,94 @@ func (k FollowUpSourceKind) valid() bool {
 	}
 }
 
+// FollowUpFilingOutcome is the one terminal outcome of a follow-up filing
+// creation intent (plan §5.17): the issue is in the ledger, the filing was
+// refused, or what the create did cannot be settled. Every outcome releases
+// the repository for the next filing. The zero value is invalid; an intent
+// with no outcome is outstanding and carries none.
+type FollowUpFilingOutcome string
+
+const (
+	FollowUpFilingLedgered  FollowUpFilingOutcome = "ledgered"
+	FollowUpFilingRefused   FollowUpFilingOutcome = "refused"
+	FollowUpFilingAmbiguous FollowUpFilingOutcome = "ambiguous"
+)
+
+// AllFollowUpFilingOutcomes is the single registration point for the outcome.
+var AllFollowUpFilingOutcomes = []FollowUpFilingOutcome{
+	FollowUpFilingLedgered, FollowUpFilingRefused, FollowUpFilingAmbiguous,
+}
+
+func (o FollowUpFilingOutcome) valid() bool {
+	switch o {
+	case FollowUpFilingLedgered, FollowUpFilingRefused, FollowUpFilingAmbiguous:
+		return true
+	default:
+		return false
+	}
+}
+
+// FollowUpFilingResponseClass classifies the response one create attempt
+// recorded (plan §5.17). The two rejections are responses in which the forge
+// refused the request before creating anything; unproven is every other
+// dispatched attempt, which may still have created the issue. The zero value
+// is invalid; an attempt with no recorded response carries none and reads as
+// unproven.
+type FollowUpFilingResponseClass string
+
+const (
+	FollowUpFilingResponseSuccess            FollowUpFilingResponseClass = "success"
+	FollowUpFilingResponseTransientRejection FollowUpFilingResponseClass = "transient_rejection"
+	FollowUpFilingResponseDefiniteRejection  FollowUpFilingResponseClass = "definite_rejection"
+	FollowUpFilingResponseUnproven           FollowUpFilingResponseClass = "unproven"
+)
+
+// AllFollowUpFilingResponseClasses is the single registration point for the
+// response class.
+var AllFollowUpFilingResponseClasses = []FollowUpFilingResponseClass{
+	FollowUpFilingResponseSuccess, FollowUpFilingResponseTransientRejection,
+	FollowUpFilingResponseDefiniteRejection, FollowUpFilingResponseUnproven,
+}
+
+func (c FollowUpFilingResponseClass) valid() bool {
+	switch c {
+	case FollowUpFilingResponseSuccess, FollowUpFilingResponseTransientRejection,
+		FollowUpFilingResponseDefiniteRejection, FollowUpFilingResponseUnproven:
+		return true
+	default:
+		return false
+	}
+}
+
+// FollowUpFilingRefusalReason says why a creation intent ended refused (plan
+// §5.17): the forge definitely rejected the create, a transient rejection's
+// retry bound is spent, or a daemon check before a create stopped a filing
+// whose intent was already open. The zero value is invalid.
+type FollowUpFilingRefusalReason string
+
+const (
+	FollowUpFilingRefusalDefiniteRejection  FollowUpFilingRefusalReason = "definite_rejection"
+	FollowUpFilingRefusalRetryBoundSpent    FollowUpFilingRefusalReason = "retry_bound_spent"
+	FollowUpFilingRefusalPreconditionFailed FollowUpFilingRefusalReason = "precondition_failed"
+)
+
+// AllFollowUpFilingRefusalReasons is the single registration point for the
+// refusal reason.
+var AllFollowUpFilingRefusalReasons = []FollowUpFilingRefusalReason{
+	FollowUpFilingRefusalDefiniteRejection, FollowUpFilingRefusalRetryBoundSpent,
+	FollowUpFilingRefusalPreconditionFailed,
+}
+
+func (r FollowUpFilingRefusalReason) valid() bool {
+	switch r {
+	case FollowUpFilingRefusalDefiniteRejection, FollowUpFilingRefusalRetryBoundSpent,
+		FollowUpFilingRefusalPreconditionFailed:
+		return true
+	default:
+		return false
+	}
+}
+
 // ClosureProvenance is the trust a source-issue-closure proposal's target
 // earns, fixed by plan §5.13: verified when the daemon itself bound the issue
 // subject, recommended when a same-repository target came from a client-supplied
