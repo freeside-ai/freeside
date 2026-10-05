@@ -392,7 +392,8 @@ func (r *intakeReconciler) admit(
 // the single entry for both start paths: a proposal already decided start (by an
 // operator on a propose card, or by a prior auto_start pass) is launched; an open
 // undecided card is either left for the operator (propose), refused (downgraded
-// mode or an exhausted WIP cap), or auto-started.
+// mode, a repository the daemon may have filed issues in, or an exhausted WIP
+// cap), or auto-started.
 func (r *intakeReconciler) decide(ctx context.Context, init intakeInitiator, occurrence domain.IntakeOccurrence) error {
 	if occurrence.Admission == nil {
 		return nil
@@ -446,8 +447,9 @@ func (r *intakeReconciler) decide(ctx context.Context, init intakeInitiator, occ
 }
 
 // autoStart applies an authorized auto_start: it refuses on a missing or stale
-// subject input or an exhausted WIP cap (leaving the card an ordinary proposal),
-// otherwise records the daemon-attributed start decision and launches.
+// subject input, on filing-ledger origin evidence (plan §5.17), or on an
+// exhausted WIP cap, each leaving the card an ordinary proposal; otherwise it
+// records the daemon-attributed start decision and launches.
 func (r *intakeReconciler) autoStart(
 	ctx context.Context, init intakeInitiator, occurrence domain.IntakeOccurrence, policy intake.IntakePolicy,
 ) error {
@@ -461,13 +463,30 @@ func (r *intakeReconciler) autoStart(
 	case stale:
 		return r.refuse(ctx, occurrence, domain.IntakeRefusalSubjectInputStale)
 	}
-	// The WIP count, the cap decision, and the start record run under one write
-	// so they cannot race another writer. WIP membership counts tasks that hold
-	// an admission slot (issue #1318 D2), not runs, so two runs of one task use
-	// one slot; the task being admitted is excluded and takes its slot only when
-	// the cap admits it, recorded as a start under this same write (D3).
+	// The origin gate, the WIP count, the cap decision, and the start record run
+	// under one write so they cannot race another writer. WIP membership counts
+	// tasks that hold an admission slot (issue #1318 D2), not runs, so two runs
+	// of one task use one slot; the task being admitted is excluded and takes its
+	// slot only when the cap admits it, recorded as a start under this same write
+	// (D3).
 	start := false
 	if err := r.store.Write(ctx, func(tx *store.WriteTx) error {
+		// The origin gate reads the filing ledger here, not earlier in the pass,
+		// so a filing that commits first is always seen. A ledger read error
+		// returns unchanged: no start and no refusal, and the next pass retries.
+		// The demotion reuses mode_not_authorized, since auto_start is not
+		// authorized in this repository; the refusal is per occurrence, so a
+		// relabel allocates a new occurrence and is gated again.
+		origin, err := originEvidence(ctx, &tx.ReadTx, occurrence)
+		if err != nil {
+			return err
+		}
+		if origin.DemotesAutoStart() {
+			_, err := tx.RecordIntakeRefusal(ctx,
+				occurrence.RepositoryID, occurrence.IssueNumber, occurrence.Label, occurrence.Ordinal,
+				domain.IntakeRefusalModeNotAuthorized, r.now())
+			return err
+		}
 		reserved, err := tx.GetRun(ctx, occurrence.Admission.Subject.SpecificationRunID)
 		if err != nil {
 			return err
@@ -531,6 +550,24 @@ func (r *intakeReconciler) autoStart(
 		return nil
 	}
 	return r.launch(ctx, init, occurrence)
+}
+
+// originEvidence reads what the filing ledger records about the occurrence's
+// issue and repository. Both reads fail with an error on a ledger they cannot
+// reconstruct, never with "no", so an unreadable ledger cannot pass for a
+// repository the daemon never filed in.
+func originEvidence(
+	ctx context.Context, tx *store.ReadTx, occurrence domain.IntakeOccurrence,
+) (intake.OriginEvidence, error) {
+	mayHaveFilings, err := tx.FollowUpFilingMayHaveCreated(ctx, occurrence.RepositoryID)
+	if err != nil {
+		return intake.OriginEvidence{}, fmt.Errorf("intake origin evidence: %w", err)
+	}
+	filed, err := tx.FiledFollowUpIssue(ctx, occurrence.RepositoryID, occurrence.IssueNumber)
+	if err != nil {
+		return intake.OriginEvidence{}, fmt.Errorf("intake origin evidence: %w", err)
+	}
+	return intake.OriginEvidence{FiledByDaemon: filed != nil, RepositoryMayHaveFilings: mayHaveFilings}, nil
 }
 
 // countProjectWIPTasks counts the project's tasks that hold a WIP admission
