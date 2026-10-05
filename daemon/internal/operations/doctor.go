@@ -46,6 +46,13 @@ type Doctor struct {
 	ReviewConfigurationDigest domain.Digest
 	Mode                      domain.OperatingMode
 	Now                       func() time.Time
+	// CredentialIntegrityProbe optionally runs the live credential-integrity
+	// probe before the credential_integrity finding is read. Nil reports the
+	// marks earlier passes recorded and observes no store.
+	CredentialIntegrityProbe func(context.Context) ([]CredentialIntegrityOutcome, error)
+	// IdentityLabel optionally renders an identity's masked label for a
+	// credential-integrity item. Nil names the identity by its id alone.
+	IdentityLabel func(domain.AuthIdentity) string
 }
 
 // ConvergeReviewConfiguration re-evaluates only the activated-profile
@@ -100,7 +107,8 @@ func (d Doctor) resolveReviewConfigurationItemsAcrossProjects(ctx context.Contex
 	return nil
 }
 
-// Run checks conformance/workspace handoff and every backup-health dimension.
+// Run checks conformance/workspace handoff, every backup-health dimension,
+// and stored-credential integrity.
 // Operational source failures are errors, not clean findings.
 func (d Doctor) Run(ctx context.Context) (DoctorReport, error) {
 	if d.Store == nil || d.Attention == nil || d.ProjectID == "" ||
@@ -182,6 +190,15 @@ func (d Doctor) Run(ctx context.Context) (DoctorReport, error) {
 	if err := d.converge(ctx, findings); err != nil {
 		return DoctorReport{}, err
 	}
+	// The credential-integrity finding stays out of converge, which files a
+	// blocking item for every unhealthy code: a marked credential is
+	// advisory, and its items converge per marked generation. It runs after
+	// converge so a probe failure cannot hold back the findings above.
+	integrity, err := d.credentialIntegrity(ctx)
+	if err != nil {
+		return DoctorReport{}, err
+	}
+	findings = append(findings, integrity)
 	report := DoctorReport{
 		Healthy: true, OperatingMode: d.Mode,
 		IsolationClass: string(d.Backend), Findings: findings,

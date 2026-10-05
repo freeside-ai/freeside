@@ -946,6 +946,44 @@ same effective review image, model, auth, instruction, and workspace inputs
 that unattended admission enforces. The default mode is `attended_dev`, where
 the review-configuration flag is not required.
 
+Doctor also reports a `credential_integrity` finding, which is unhealthy when
+any enrollment's current generation carries a credential-integrity mark. On a
+scheduled pass, and on a one-shot `freesided doctor` that reaches a running
+production daemon, a live probe runs first. It checks every enrollment's
+current generation under the identity's shared read hold:
+
+- **Truncation, on every store:** a Claude `token` file shorter than the
+  setup-token lower bound, or a Codex `auth.json` that is empty or ends before
+  its JSON document closes.
+- **Corruption, on `external`-refresh stores only:** the stored bytes match
+  neither digest convention for the generation's recorded store digest (the
+  token-bytes hash `auth add` records, or the whole-volume tree digest
+  `auth adopt` records). A store the daemon refreshes in place legitimately
+  moves past its recorded digest, so the finding's detail lists it as
+  "corruption check not run" and it never gets a corruption mark.
+
+A failed check records the mark, which refuses new admissions on that
+generation until the enrollment is re-enrolled. Only a finished observation
+marks, and a corruption finding marks only when a second observation under the
+same hold reports the same digests. One that does not reproduce records no
+mark and is listed in the detail as "corruption finding not reproduced"; a
+truncation both observations report still marks. A store the probe cannot
+observe (a missing volume or file, a runtime failure, a live mutation lease, a
+generation that changed during the observation, two observations that disagree
+on the token's length) is listed in the detail as not checked, with a fixed
+reason code, and the pass continues; the cause goes to the daemon log. The
+probe takes no mutation lease, triggers no refresh, and writes to no store.
+
+Unlike the other findings, a marked generation files an `advisory`
+`system_health` item (diagnostic code `credential_integrity`, impairing
+`agent_credential`), one per marked generation, naming the identity by its
+masked label. A later pass never refiles an item the operator handled, and
+resolves an open one once the enrollment's current generation has moved past
+the marked one. The startup pass and a one-shot doctor with no daemon running
+start no observer: they report the marks earlier passes recorded and say so in
+the detail. The probe is not the account probe: it reads stored bytes only and
+never contacts a provider.
+
 The [production walkthrough runbook](../docs/production-walkthrough.md) covers
 the harness's retained endpoint, explicit completion, interrupted-holder
 recovery and verified restoration of the supervised daemon. Final verification
