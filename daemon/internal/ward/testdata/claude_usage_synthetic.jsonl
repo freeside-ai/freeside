@@ -1,0 +1,3 @@
+{"type":"control_response","response":{"request_id":"usage-init","subtype":"success","response":{}}}
+{"type":"control_response","response":{"request_id":"unrelated","subtype":"success","response":{"account_id":"synthetic-private-id"}}}
+{"type":"control_response","response":{"request_id":"usage-read","subtype":"success","response":{"five_hour":{"utilization":12.5,"resets_at":"2026-10-03T06:00:00Z"},"seven_day_opus":null}}}

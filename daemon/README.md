@@ -34,6 +34,73 @@ authorization. Its token stays in process memory and must not be printed.
 - **Scope boundary:** daemon-side code only. The daemon/client contract is defined in `api/`; server-side code implementing it lives here, never hand-authored to diverge from the spec.
 - **Status:** every lane in `internal/` holds real, tested Go code, not placeholders, and the daemon builds as `freesided` (`cmd/freesided`). Per-wave implementation progress lives in the open wave tracker (`Wave N: <Name>`), resolved by the plan's [wave-tracker rule](../docs/plan.md#implementation-coordination-building-freeside-with-agents).
 
+## Claude Subscription Usage Spike
+
+`TestLiveClaudeUsage` tests Claude **2.1.220** with only a setup token. It
+runs two separate, bounded invocations: an idle `get_usage` control request
+after `initialize`, adding `--input-format stream-json`, and a minimal
+inference turn using the writer's `-p --output-format stream-json --verbose`
+mode. The idle variant sends no user message. This is test-only evidence for
+#1713; synthetic fixtures are not evidence of provider support.
+
+Run the offline evidence checks first, from the repository root:
+
+```sh
+go -C daemon test ./internal/ward -run '^TestClaudeUsage' -count=1
+```
+
+The live test requires macOS, Apple `container`, its running service, a
+cached digest-pinned Claude image in `FREESIDE_WARD_CLAUDE_AGENT_IMAGE`,
+`CLAUDE_CODE_OAUTH_TOKEN` supplied through the existing private secret-input
+convention. This standalone ephemeral probe starts no Freeside daemon and
+uses no GitHub App publication authority. It needs no production rig lease;
+leave supervised production and dev instances alone.
+
+```sh
+FREESIDE_WARD_LIVE_TEST=1 go -C daemon test ./internal/ward \
+  -run '^TestLiveClaudeUsage$' -count=1 -v
+```
+
+The test skips unless opted in; missing inputs then fail. It creates fresh
+randomly named containers and host-only networks and checks labels and creation
+dates before cleanup. A private, non-secret recovery manifest survives failed
+cleanup; the test reports its path. Never delete a resource whose ownership
+cannot be proved. A networkless seeder populates a named snapshot volume, then
+stops before the probe mounts it read-only. The setup token stays on that
+snapshot. An empty, root-owned auth file and sticky parent directories prevent
+the dropped CLI identity from changing or replacing auth storage while allowing
+ordinary config writes. The driver tests both append and unlink rejection.
+A fresh environment excludes interactive login, API keys, refresh credentials
+and alternate backends. Ordinary scratch is disposable.
+
+A test-only TLS proxy observes method/path counters before forwarding to
+the provider. It verifies upstream TLS, blocks refresh requests and blocks
+inference during the idle case. The isolated CLI trusts an ephemeral test CA;
+no host trust store changes. These are measurement deviations from the writer
+launch, alongside the fixed minimal prompt and session ID. The test fails if
+its observed topology differs from the declared host-only network and mounts.
+
+Each invocation has a 60-second deadline and a 1-MiB stdout bound. Raw stdout
+stays in the probe container and is read through a private bounded pipe; stderr
+is discarded. Successful cleanup deletes the snapshot and both containers.
+Failed cleanup can retain credentials or raw captures in those private runtime
+resources; use the manifest to recover them after proving ownership.
+Only reviewed usage fields and verdict metadata enter test output. Unknown
+usage fields fail capture instead of being silently discarded. Do not upload
+temporary captures or credentials. Review sanitized
+examples before committing them. No event in one successful turn means only
+`event_not_observed`; auth, transport, timeout and parsing failures mean
+`probe_failed`, never `unsupported`.
+
+For private schema diagnosis, `FREESIDE_WARD_USAGE_PRIVATE_CAPTURE_DIR` may
+name a new, empty, owner-only directory. It receives bounded raw captures,
+including non-usage details, and deliberately survives the run. Keep it
+private and delete it after reviewing and extracting only the allowed fields.
+It is never a fixture or upload source without that review.
+
+The pinned experiment and collector limits are recorded in
+[`devlog/2026-10-02-2245-claude-usage-spike.md`](../devlog/2026-10-02-2245-claude-usage-spike.md).
+
 ## Control Socket and Pairing Codes
 
 Every daemon run owns one private Unix control socket. It publishes the socket
