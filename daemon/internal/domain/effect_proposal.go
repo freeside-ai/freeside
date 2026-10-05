@@ -95,7 +95,10 @@ type EffectProposal struct {
 	// registry: a rendered null here would change every stored run_proposal's
 	// content digest and fail its revalidation (#1417).
 	ClosureProposal *SourceIssueClosureParameters `json:"source_issue_closure,omitempty"`
-	Digest          Digest                        `json:"digest"`
+	// FilingProposal carries follow_up_filing parameters. It is omitempty for
+	// the same reason: the two earlier kinds keep their encodings and digests.
+	FilingProposal *FollowUpFilingParameters `json:"follow_up_filing,omitempty"`
+	Digest         Digest                    `json:"digest"`
 }
 
 // ProposalInstance is one admitted occurrence. Its admission key, not the
@@ -165,6 +168,7 @@ type canonicalEffectProposal struct {
 	ResolvedPolicyDigest Digest                        `json:"resolved_policy_digest"`
 	TaskProposal         *TaskProposalParameters       `json:"run_proposal"`
 	ClosureProposal      *SourceIssueClosureParameters `json:"source_issue_closure,omitempty"`
+	FilingProposal       *FollowUpFilingParameters     `json:"follow_up_filing,omitempty"`
 }
 
 // NewEffectProposal dispatches construction through the kind's fixed Go type.
@@ -204,6 +208,20 @@ func NewEffectProposal(
 			Kind:            kind, ResolvedPolicyRunID: policy.RunID,
 			ResolvedPolicyDigest: policy.Digest, ClosureProposal: &params,
 		}
+	case EffectFollowUpFiling:
+		input, ok := parameters.(FollowUpFilingInput)
+		if !ok {
+			return EffectProposal{}, fmt.Errorf("effect kind %q requires FollowUpFilingInput: %w", kind, ErrEffectProposalInconsistent)
+		}
+		params, err := input.parameters()
+		if err != nil {
+			return EffectProposal{}, err
+		}
+		proposal = EffectProposal{
+			EncodingVersion: EffectProposalEncodingVersion,
+			Kind:            kind, ResolvedPolicyRunID: policy.RunID,
+			ResolvedPolicyDigest: policy.Digest, FilingProposal: &params,
+		}
 	}
 	if proposal.Kind == "" {
 		return EffectProposal{}, fmt.Errorf("effect kind %q: %w", kind, ErrInvalidEffectKind)
@@ -237,17 +255,24 @@ func (p EffectProposal) Validate() error {
 	}
 	switch p.Kind {
 	case EffectTaskProposal:
-		if p.TaskProposal == nil || p.ClosureProposal != nil {
+		if p.TaskProposal == nil || p.ClosureProposal != nil || p.FilingProposal != nil {
 			return fmt.Errorf("effect proposal kind %q parameters: %w", p.Kind, ErrEffectProposalInconsistent)
 		}
 		if err := p.TaskProposal.Validate(); err != nil {
 			return err
 		}
 	case EffectSourceIssueClosure:
-		if p.ClosureProposal == nil || p.TaskProposal != nil {
+		if p.ClosureProposal == nil || p.TaskProposal != nil || p.FilingProposal != nil {
 			return fmt.Errorf("effect proposal kind %q parameters: %w", p.Kind, ErrEffectProposalInconsistent)
 		}
 		if err := p.ClosureProposal.Validate(); err != nil {
+			return err
+		}
+	case EffectFollowUpFiling:
+		if p.FilingProposal == nil || p.TaskProposal != nil || p.ClosureProposal != nil {
+			return fmt.Errorf("effect proposal kind %q parameters: %w", p.Kind, ErrEffectProposalInconsistent)
+		}
+		if err := p.FilingProposal.Validate(); err != nil {
 			return err
 		}
 	}
@@ -269,7 +294,7 @@ func (p EffectProposal) canonical() canonicalEffectProposal {
 		EncodingVersion: p.EncodingVersion, Kind: p.Kind,
 		ResolvedPolicyRunID:  p.ResolvedPolicyRunID,
 		ResolvedPolicyDigest: p.ResolvedPolicyDigest, TaskProposal: p.TaskProposal,
-		ClosureProposal: p.ClosureProposal,
+		ClosureProposal: p.ClosureProposal, FilingProposal: p.FilingProposal,
 	}
 }
 
@@ -351,6 +376,17 @@ func gateEffectProposal(
 			return ErrEffectProposalInconsistent
 		}
 		if err := proposal.ClosureProposal.Validate(); err != nil {
+			return err
+		}
+		return nil
+	case EffectFollowUpFiling:
+		// The policy and structural gate runs here. The target re-gate is
+		// GateFollowUpFiling, and the store re-reads the source and screens the
+		// text again, with the rows and the screen this package cannot reach.
+		if proposal.FilingProposal == nil {
+			return ErrEffectProposalInconsistent
+		}
+		if err := proposal.FilingProposal.Validate(); err != nil {
 			return err
 		}
 		return nil

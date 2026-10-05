@@ -378,6 +378,18 @@ func TestEnumValidity(t *testing.T) {
 		valids["MessageRuleset"] = append(valids["MessageRuleset"], v.valid)
 	}
 	invalids["MessageRuleset"] = MessageRuleset("").valid
+	for _, v := range AllIssueTextRulesets {
+		valids["IssueTextRuleset"] = append(valids["IssueTextRuleset"], v.valid)
+	}
+	invalids["IssueTextRuleset"] = IssueTextRuleset("").valid
+	for _, v := range AllScreeningVerdicts {
+		valids["ScreeningVerdict"] = append(valids["ScreeningVerdict"], v.valid)
+	}
+	invalids["ScreeningVerdict"] = ScreeningVerdict("").valid
+	for _, v := range AllFollowUpSourceKinds {
+		valids["FollowUpSourceKind"] = append(valids["FollowUpSourceKind"], v.valid)
+	}
+	invalids["FollowUpSourceKind"] = FollowUpSourceKind("").valid
 	for _, v := range AllNativeReviewKinds {
 		valids["NativeReviewKind"] = append(valids["NativeReviewKind"], v.valid)
 	}

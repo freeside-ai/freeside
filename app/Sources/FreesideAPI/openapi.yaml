@@ -1206,10 +1206,11 @@ components:
     EffectProposalFactsSnapshot:
       type: object
       description: >
-        Store-authenticated, digest-bound source-issue-closure facts matched to
-        one exact attention-item snapshot before the client enables a decision.
-        The opaque subject handle and policy identities stay server-side, as they
-        do for task_proposal.
+        Store-authenticated, digest-bound effect-proposal facts matched to one
+        exact attention-item snapshot before the client enables a decision.
+        Exactly one kind member (source_issue_closure or follow_up_filing) is
+        non-null, the one effect_kind names. The opaque subject handle and
+        policy identities stay server-side, as they do for task_proposal.
       additionalProperties: false
       required:
         - as_of_revision
@@ -1219,6 +1220,7 @@ components:
         - effect_kind
         - supersedes
         - source_issue_closure
+        - follow_up_filing
       properties:
         as_of_revision:
           $ref: "#/components/schemas/AsOfRevision"
@@ -1237,7 +1239,8 @@ components:
             - $ref: "#/components/schemas/EffectProposalRevisionFacts"
           description: >
             The exact authenticated prior facts for a revised card; null for the
-            initially admitted proposal.
+            initially admitted proposal, and always null for a follow_up_filing
+            effect, which admits no revision.
         source_issue_closure:
           nullable: true
           allOf:
@@ -1245,6 +1248,13 @@ components:
           description: >
             The closure facts for a source_issue_closure effect; null for any
             other effect kind.
+        follow_up_filing:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/FollowUpFilingFacts"
+          description: >
+            The filing facts for a follow_up_filing effect; null for any other
+            effect kind.
 
     EffectProposalRevisionFacts:
       type: object
@@ -1302,6 +1312,99 @@ components:
           type: string
         base_sha:
           type: string
+
+    FollowUpFilingFacts:
+      type: object
+      description: >
+        Bounded follow-up-filing facts (plan §5.17): the repository, labels, and
+        milestone the daemon derived from the project and the run's resolved
+        policy, the screened title and body the filing would publish, and the
+        finding the filing answers. No subject handle, policy identity, or
+        filing identity; which credential files the issue is chosen at
+        dispatch.
+      additionalProperties: false
+      required: [repository, labels, milestone, title, body, source]
+      properties:
+        repository:
+          $ref: "#/components/schemas/FollowUpFilingRepository"
+        labels:
+          type: array
+          maxItems: 32
+          items:
+            type: string
+            minLength: 1
+            maxLength: 50
+          description: >
+            The labels the filed issue carries, sorted and duplicate-free;
+            empty when policy names none.
+        milestone:
+          type: string
+          nullable: true
+          minLength: 1
+          maxLength: 255
+          description: >
+            The milestone title the filed issue carries; null when policy names
+            none.
+        title:
+          $ref: "#/components/schemas/ScreenedIssueText"
+        body:
+          $ref: "#/components/schemas/ScreenedIssueText"
+        source:
+          $ref: "#/components/schemas/FollowUpFilingSource"
+
+    FollowUpFilingRepository:
+      type: object
+      description: >
+        The repository a follow-up issue is filed in. repository_id is the
+        forge identity; repo is the project's current name for it, so a
+        rename after the proposal was made shows the new name.
+      additionalProperties: false
+      required: [repo, repository_id]
+      properties:
+        repo:
+          type: string
+          minLength: 1
+        repository_id:
+          type: integer
+          format: int64
+          minimum: 1
+
+    ScreenedIssueText:
+      type: object
+      description: >
+        One agent-controlled issue text field with the ruleset it was screened
+        under and the verdict. The daemon screens the text again under the
+        recorded ruleset on every read, so a served record always carries the
+        passed verdict.
+      additionalProperties: false
+      required: [text, ruleset, verdict]
+      properties:
+        text:
+          type: string
+          minLength: 1
+        ruleset:
+          $ref: "#/components/schemas/IssueTextRuleset"
+        verdict:
+          $ref: "#/components/schemas/ScreeningVerdict"
+
+    FollowUpFilingSource:
+      type: object
+      description: >
+        What a follow-up filing came from: the finding, the finding-adjudication
+        artifact that routed it, and whether the route was a deferred
+        disposition or a separate-work verdict. The link is served as recorded:
+        if a later round fixes or re-routes the finding, the facts stay
+        readable and the daemon refuses approval.
+      additionalProperties: false
+      required: [finding_id, adjudication_digest, kind]
+      properties:
+        finding_id:
+          type: string
+          minLength: 1
+        adjudication_digest:
+          $ref: "#/components/schemas/Digest"
+        kind:
+          $ref: "#/components/schemas/FollowUpSourceKind"
 
     TaskProposalRevisionInput:
       type: object
@@ -1367,9 +1470,35 @@ components:
       description: >
         The effect-registry member an effect_proposal renders. run_proposal is
         the task-proposal encoding; source_issue_closure proposes closing the
-        source issue a work unit's pull request resolves (plan §5.13). Matches
+        source issue a work unit's pull request resolves (plan §5.13);
+        follow_up_filing proposes filing a follow-up issue for a deferred
+        finding or a separate-work verdict (plan §5.17). Matches
         domain.AllEffectKinds.
-      enum: [run_proposal, source_issue_closure]
+      enum: [run_proposal, source_issue_closure, follow_up_filing]
+
+    IssueTextRuleset:
+      type: string
+      description: >
+        The versioned ruleset an issue text field was screened under. Matches
+        domain.AllIssueTextRulesets.
+      enum: [github-issue/1]
+
+    ScreeningVerdict:
+      type: string
+      description: >
+        The outcome of screening one agent-controlled text field. Only a passed
+        field reaches a proposal; rejected names the refusal for records that
+        carry one. Matches domain.AllScreeningVerdicts.
+      enum: [passed, rejected]
+
+    FollowUpSourceKind:
+      type: string
+      description: >
+        What produced a follow-up filing: deferred_disposition when a finding's
+        effective disposition is deferred, separate_work_verdict when
+        adjudication parked the finding as separate work (plan §5.17). Matches
+        domain.AllFollowUpSourceKinds.
+      enum: [deferred_disposition, separate_work_verdict]
 
     ClosureProvenance:
       type: string

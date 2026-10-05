@@ -76,10 +76,11 @@ type TaskProposalRevisionFacts struct {
 }
 
 // EffectProposalFactsSnapshot is the authenticated, bounded review projection
-// for one effect_proposal (source_issue_closure) card. It mirrors
-// TaskProposalFactsSnapshot: the opaque subject handle and policy identities
-// remain server-side, and the version tuple proves the facts match the rendered
-// item and its digest-bound proposal revision.
+// for one effect_proposal card. It mirrors TaskProposalFactsSnapshot: the
+// opaque subject handle and policy identities remain server-side, and the
+// version tuple proves the facts match the rendered item and its digest-bound
+// proposal revision. Exactly one kind arm is set, the one EffectKind names;
+// every other arm renders an explicit null.
 type EffectProposalFactsSnapshot struct {
 	AsOfRevision       int64                        `json:"as_of_revision"`
 	EntityVersion      int64                        `json:"entity_version"`
@@ -88,6 +89,20 @@ type EffectProposalFactsSnapshot struct {
 	EffectKind         domain.EffectKind            `json:"effect_kind"`
 	Supersedes         *EffectProposalRevisionFacts `json:"supersedes"`
 	SourceIssueClosure *SourceIssueClosureFacts     `json:"source_issue_closure"`
+	FollowUpFiling     *FollowUpFilingFacts         `json:"follow_up_filing"`
+}
+
+// FollowUpFilingFacts carries the bounded filing facts: the daemon-derived
+// target repository, labels, and milestone, the screened title and body the
+// filing would publish, and the finding the filing answers. It holds no opaque
+// handle or policy identity.
+type FollowUpFilingFacts struct {
+	Repository domain.FollowUpFilingRepository `json:"repository"`
+	Labels     []string                        `json:"labels"`
+	Milestone  *string                         `json:"milestone"`
+	Title      domain.ScreenedIssueText        `json:"title"`
+	Body       domain.ScreenedIssueText        `json:"body"`
+	Source     domain.FollowUpFilingSource     `json:"source"`
 }
 
 // SourceIssueClosureFacts carries the bounded closure facts: the daemon-resolved
@@ -602,57 +617,109 @@ func (s *Service) GetEffectProposalFacts(ctx context.Context, id domain.ItemID) 
 		if err != nil {
 			return err
 		}
-		if proposal.Kind != domain.EffectSourceIssueClosure || proposal.ClosureProposal == nil ||
-			len(item.ArtifactDigests) != 1 || item.ArtifactDigests[0] != proposal.Digest {
+		if len(item.ArtifactDigests) != 1 || item.ArtifactDigests[0] != proposal.Digest {
 			return ErrInvalidSyncSnapshot
 		}
 		merge, err := tx.ProspectiveMergeForItem(ctx, id)
 		if err != nil {
 			return err
 		}
-		if merge == nil {
-			return ErrInvalidSyncSnapshot
-		}
-		// Re-gate the merge candidate head against the item head, the same
-		// invariant ClosureApprovalForInstance enforces at approval time. This
-		// reconstruction boundary must fail closed rather than serve a
-		// candidate the approval path would later reject as row-inconsistent.
-		if merge.CandidateHeadSHA != item.PRHeadSHA {
-			return ErrInvalidSyncSnapshot
-		}
-		var supersedes *EffectProposalRevisionFacts
-		if superseded != nil {
-			if superseded.ClosureProposal == nil {
-				return ErrInvalidSyncSnapshot
-			}
-			supersedes = &EffectProposalRevisionFacts{
-				ProposalDigest: superseded.Digest,
-				SourceIssueClosure: &EffectProposalRevisionClosureFacts{
-					Resolves: superseded.ClosureProposal.Resolves,
-				},
-			}
-		}
-		closure := proposal.ClosureProposal
 		out = EffectProposalFactsSnapshot{
 			AsOfRevision: snapshot.AsOfRevision, EntityVersion: snapshot.EntityVersion,
 			ItemVersion: item.ItemVersion, ProposalDigest: proposal.Digest,
-			EffectKind: proposal.Kind, Supersedes: supersedes,
-			SourceIssueClosure: &SourceIssueClosureFacts{
-				Target: closure.Target, Resolves: closure.Resolves,
-				Provenance: closure.Provenance, Origin: closure.Origin,
-				Merge: ProspectiveMergeFacts{
-					PublicationIdentity: merge.PublicationIdentity,
-					CandidateHeadSHA:    merge.CandidateHeadSHA,
-					BaseRef:             merge.BaseRef, BaseSHA: merge.BaseSHA,
-				},
-			},
+			EffectKind: proposal.Kind,
 		}
-		return nil
+		// The store gate already re-derived the proposal from current rows;
+		// each arm below re-checks only the item-level shape its kind binds.
+		// The run_proposal kind is served by the task-proposal facts read, so
+		// it falls through to the refusal with the invalid zero value.
+		switch proposal.Kind {
+		case domain.EffectSourceIssueClosure:
+			out.Supersedes, out.SourceIssueClosure, err = sourceIssueClosureFacts(item, proposal, superseded, merge)
+			return err
+		case domain.EffectFollowUpFiling:
+			// ProposalForItem tied the item's project to the proposal's
+			// subject, so this is the project the gate derived the target
+			// from.
+			project, err := tx.GetProject(ctx, item.ProjectID)
+			if err != nil {
+				return err
+			}
+			out.FollowUpFiling, err = followUpFilingFacts(project, proposal, superseded, merge)
+			return err
+		case domain.EffectTaskProposal:
+		}
+		return ErrInvalidSyncSnapshot
 	})
 	if err != nil {
 		return EffectProposalFactsSnapshot{}, fmt.Errorf("get effect proposal facts %q: %w", id, err)
 	}
 	return out, nil
+}
+
+// sourceIssueClosureFacts rebuilds the closure arm and the merge the approval
+// binds to.
+func sourceIssueClosureFacts(
+	item domain.AttentionItem, proposal domain.EffectProposal, superseded *domain.EffectProposal,
+	merge *domain.ProspectiveMerge,
+) (*EffectProposalRevisionFacts, *SourceIssueClosureFacts, error) {
+	closure := proposal.ClosureProposal
+	if closure == nil || merge == nil {
+		return nil, nil, ErrInvalidSyncSnapshot
+	}
+	// Re-gate the merge candidate head against the item head, the same
+	// invariant ClosureApprovalForInstance enforces at approval time. This
+	// reconstruction boundary must fail closed rather than serve a
+	// candidate the approval path would later reject as row-inconsistent.
+	if merge.CandidateHeadSHA != item.PRHeadSHA {
+		return nil, nil, ErrInvalidSyncSnapshot
+	}
+	var supersedes *EffectProposalRevisionFacts
+	if superseded != nil {
+		if superseded.ClosureProposal == nil {
+			return nil, nil, ErrInvalidSyncSnapshot
+		}
+		supersedes = &EffectProposalRevisionFacts{
+			ProposalDigest: superseded.Digest,
+			SourceIssueClosure: &EffectProposalRevisionClosureFacts{
+				Resolves: superseded.ClosureProposal.Resolves,
+			},
+		}
+	}
+	return supersedes, &SourceIssueClosureFacts{
+		Target: closure.Target, Resolves: closure.Resolves,
+		Provenance: closure.Provenance, Origin: closure.Origin,
+		Merge: ProspectiveMergeFacts{
+			PublicationIdentity: merge.PublicationIdentity,
+			CandidateHeadSHA:    merge.CandidateHeadSHA,
+			BaseRef:             merge.BaseRef, BaseSHA: merge.BaseSHA,
+		},
+	}, nil
+}
+
+// followUpFilingFacts rebuilds the filing arm. A filing binds no merge and
+// admits no revision, so a row carrying either is inconsistent and the read
+// fails closed instead of serving a card the decision path would refuse.
+//
+// The repository shown is the project's current record, not the stored one.
+// The gate compares repositories by id alone so a rename keeps a proposal
+// valid (#1537), which leaves the stored name unchecked; the approver must
+// see where the issue will be filed, and that is the project's repository.
+func followUpFilingFacts(
+	project domain.Project, proposal domain.EffectProposal,
+	superseded *domain.EffectProposal, merge *domain.ProspectiveMerge,
+) (*FollowUpFilingFacts, error) {
+	filing := proposal.FilingProposal
+	if filing == nil || merge != nil || superseded != nil ||
+		filing.Repository.RepositoryID != project.RepositoryID {
+		return nil, ErrInvalidSyncSnapshot
+	}
+	return &FollowUpFilingFacts{
+		Repository: domain.FollowUpFilingRepository{Repo: project.Repo, RepositoryID: project.RepositoryID},
+		Labels:     slices.Clone(filing.Labels),
+		Milestone:  filing.Milestone, Title: filing.Title, Body: filing.Body,
+		Source: filing.Source,
+	}, nil
 }
 
 func (s *Service) convergeProposalSnoozes(ctx context.Context, now time.Time) error {

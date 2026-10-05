@@ -179,6 +179,15 @@ continue past the failed step) while claim state cannot be verified.
 Collaborator comments are trusted; adversarial comment editing is outside this
 protocol's threat model.
 
+`scripts/trackercollect unit` (its README) may collect the evidence these
+reads use: the issue's typed Dependencies, its direct `exclusive-with` set in
+both directions, each member's claim and reservation state with each claim
+comment's ordering key, and the open trackers listing the issue. It is
+optional and replaces none of the reads or gates here. Run it afresh for the
+read after posting a claim. An `UNKNOWN` entry in its report means that state
+is not established, and it does not compute a contract unit's wider conflict
+set or the cap.
+
 `needs-human` deferrals use the fiat door defined under Deferral escalation,
 never self-selection: after the maintainer acts, fiat assigns the issue to a
 session; the session verifies the external state and records the audit

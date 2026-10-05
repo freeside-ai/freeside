@@ -106,9 +106,10 @@ func TestDecodeEffectProposalRejectsUntrustedShapes(t *testing.T) {
 }
 
 func TestProposalAdmissionKeyEnumeratesIdentitySpace(t *testing.T) {
-	if len(domain.AllEffectKinds) != 2 ||
+	if len(domain.AllEffectKinds) != 3 ||
 		domain.AllEffectKinds[0] != domain.EffectTaskProposal ||
-		domain.AllEffectKinds[1] != domain.EffectSourceIssueClosure {
+		domain.AllEffectKinds[1] != domain.EffectSourceIssueClosure ||
+		domain.AllEffectKinds[2] != domain.EffectFollowUpFiling {
 		t.Fatalf("effect registry = %v", domain.AllEffectKinds)
 	}
 	if len(domain.AllProposalAdmissionSources) != 3 || len(domain.AllTaskProposalIntents) != 1 {
