@@ -24,6 +24,9 @@ const (
 	decisionActionSurfacesDeleteTrigger = "decision_action_surfaces_append_only_delete"
 	comprehensionEventsDeleteTrigger    = "comprehension_events_append_only_delete"
 	comprehensionDefectsDeleteTrigger   = "comprehension_defects_append_only_delete"
+	followUpFilingIntentsDeleteTrigger  = "follow_up_filing_intents_append_only_delete"
+	followUpFilingAttemptsDeleteTrigger = "follow_up_filing_attempts_append_only_delete"
+	followUpFiledIssuesDeleteTrigger    = "follow_up_filed_issues_append_only_delete"
 )
 
 const canonicalOutboxPublicationInsertTriggerSQL = `CREATE TRIGGER outbox_publication_intent_requires_current_insert
@@ -57,6 +60,24 @@ BEGIN
     SELECT RAISE(ABORT, 'comprehension defects are append-only');
 END`
 
+const canonicalFollowUpFilingIntentsDeleteTriggerSQL = `CREATE TRIGGER follow_up_filing_intents_append_only_delete
+BEFORE DELETE ON follow_up_filing_intents
+BEGIN
+    SELECT RAISE(ABORT, 'follow-up filing intents are append-only');
+END`
+
+const canonicalFollowUpFilingAttemptsDeleteTriggerSQL = `CREATE TRIGGER follow_up_filing_attempts_append_only_delete
+BEFORE DELETE ON follow_up_filing_attempts
+BEGIN
+    SELECT RAISE(ABORT, 'follow-up filing attempts are append-only');
+END`
+
+const canonicalFollowUpFiledIssuesDeleteTriggerSQL = `CREATE TRIGGER follow_up_filed_issues_append_only_delete
+BEFORE DELETE ON follow_up_filed_issues
+BEGIN
+    SELECT RAISE(ABORT, 'filed follow-up issues are append-only');
+END`
+
 // deleteGuard names an append-only BEFORE DELETE trigger a restore must lift
 // around its wholesale delete+reinsert and canonically reinstate before commit.
 type deleteGuard struct {
@@ -75,6 +96,9 @@ var appendOnlyDeleteGuards = []deleteGuard{
 	{decisionActionSurfacesDeleteTrigger, canonicalDecisionActionSurfacesDeleteTriggerSQL},
 	{comprehensionEventsDeleteTrigger, canonicalComprehensionEventsDeleteTriggerSQL},
 	{comprehensionDefectsDeleteTrigger, canonicalComprehensionDefectsDeleteTriggerSQL},
+	{followUpFilingIntentsDeleteTrigger, canonicalFollowUpFilingIntentsDeleteTriggerSQL},
+	{followUpFilingAttemptsDeleteTrigger, canonicalFollowUpFilingAttemptsDeleteTriggerSQL},
+	{followUpFiledIssuesDeleteTrigger, canonicalFollowUpFiledIssuesDeleteTriggerSQL},
 }
 
 // Checkpoint writes a consistent snapshot of the live database to path: a

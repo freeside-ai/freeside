@@ -74,12 +74,21 @@ func modelEntry(
 // ids give distinct runs, so two fixtures can share a store.
 func seedFiling(t *testing.T, ctx context.Context, st *store.Store, projectID domain.ProjectID) filingFixture {
 	t.Helper()
+	return seedFilingIn(t, ctx, st, projectID, "owner/repo", 123)
+}
+
+// seedFilingIn is seedFiling for a named repository, so a test can hold
+// fixtures in two repositories.
+func seedFilingIn(
+	t *testing.T, ctx context.Context, st *store.Store, projectID domain.ProjectID, repo string, repositoryID int64,
+) filingFixture {
+	t.Helper()
 	runID := domain.RunID(string(projectID) + "-run")
 	policy := filingPolicy(t, runID, map[string]string{
 		domain.PolicyFollowUpFilingLabels:    "lane:spine, deferral",
 		domain.PolicyFollowUpFilingMilestone: "1B",
 	})
-	project := domain.Project{ID: projectID, Repo: "owner/repo", RepositoryID: 123}
+	project := domain.Project{ID: projectID, Repo: repo, RepositoryID: repositoryID}
 	target, err := domain.DeriveFollowUpFilingTarget(project, policy)
 	if err != nil {
 		t.Fatal(err)
