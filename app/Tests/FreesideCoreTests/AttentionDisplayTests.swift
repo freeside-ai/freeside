@@ -872,27 +872,107 @@ import Testing
         #expect(value(rows, "Effect") == "Source issue closure")
     }
 
-    @Test func followUpFilingFactsRenderNoClosureRows() throws {
-        var facts = try #require(
-            AttentionFixtures.effectProposalFacts(for: AttentionFixtures.fixture(type: .effect_proposal)))
-        facts.effect_kind = .follow_up_filing
-        facts.source_issue_closure = nil
-        facts.follow_up_filing = .init(
-            value1: .init(
-                repository: .init(repo: "owner/repo", repository_id: 123),
-                labels: ["deferral"],
-                milestone: "1B",
-                title: .init(text: "Bound the retry budget", ruleset: .github_hyphen_issue_sol_1, verdict: .passed),
-                body: .init(text: "Deferred from review.", ruleset: .github_hyphen_issue_sol_1, verdict: .passed),
-                source: .init(
-                    finding_id: "finding-1",
-                    adjudication_digest: "sha256:" + String(repeating: "c", count: 64),
-                    kind: .deferred_disposition)))
+    private func filingFacts() throws -> Components.Schemas.EffectProposalFactsSnapshot {
+        try #require(
+            AttentionFixtures.effectProposalFacts(
+                for: AttentionFixtures.followUpFilingEffectProposal()))
+    }
 
-        // The filing kind has a name but no card rows yet, so its facts never
-        // render under the closure card's labels.
-        #expect(AttentionDisplay.effectKindLabel(.follow_up_filing) == "Follow-up issue filing")
-        #expect(AttentionDisplay.effectProposalRows(facts).isEmpty)
+    @Test func followUpFilingRowsNameWhereItFilesWhatItCarriesAndItsSource() throws {
+        let rows = AttentionDisplay.effectProposalRows(try filingFacts())
+
+        #expect(
+            rows == [
+                .init("Effect", "Follow-up issue filing"),
+                .init("Repository", "owner/repo", monospaced: true),
+                .init("Labels", "deferred-finding, reliability"),
+                .init("Milestone", "Backlog"),
+                .init("Source", "Finding finding-3 · Deferred disposition"),
+                .init("Text screening", "Title and body: passed under github-issue/1"),
+            ])
+    }
+
+    @Test func followUpFilingRowsSayNoneForNoLabelsAndNoMilestone() throws {
+        var facts = try filingFacts()
+        facts.follow_up_filing?.value1.labels = []
+        facts.follow_up_filing?.value1.milestone = nil
+
+        let rows = AttentionDisplay.effectProposalRows(facts)
+        #expect(value(rows, "Labels") == "None")
+        #expect(value(rows, "Milestone") == "None")
+    }
+
+    @Test func followUpFilingSourceRowNamesASeparateWorkVerdict() throws {
+        var facts = try filingFacts()
+        facts.follow_up_filing?.value1.source.kind = .separate_work_verdict
+
+        #expect(
+            value(AttentionDisplay.effectProposalRows(facts), "Source")
+                == "Finding finding-3 · Separate-work verdict")
+    }
+
+    @Test func followUpFilingScreeningRowNamesEachFieldWhenTheyDiffer() throws {
+        var facts = try filingFacts()
+        facts.follow_up_filing?.value1.body.verdict = .rejected
+
+        #expect(
+            value(AttentionDisplay.effectProposalRows(facts), "Text screening")
+                == "Title: passed under github-issue/1 · Body: rejected under github-issue/1")
+    }
+
+    @Test func followUpFilingTitleAndBodyAreNeverFactRows() throws {
+        let facts = try filingFacts()
+        let filing = try #require(facts.follow_up_filing?.value1)
+
+        // The agent wrote the title and body, so no daemon-fact row carries
+        // either; the card draws them from proposedIssueText in their own
+        // unverified sections.
+        for row in AttentionDisplay.effectProposalRows(facts) {
+            #expect(!row.value.contains(filing.title.text))
+            #expect(!row.value.contains(filing.body.text))
+        }
+        for row in AttentionDisplay.followUpFilingDetailRows(facts) {
+            #expect(!row.value.contains(filing.title.text))
+            #expect(!row.value.contains(filing.body.text))
+        }
+        #expect(
+            AttentionDisplay.proposedIssueText(facts)
+                == .init(title: filing.title.text, body: filing.body.text))
+    }
+
+    @Test func followUpFilingDetailRowsCarryTheRepositoryIDAndFullDigest() throws {
+        #expect(
+            AttentionDisplay.followUpFilingDetailRows(try filingFacts()) == [
+                .init(label: "Repository ID", value: "84958515"),
+                .init(label: "Finding", value: "finding-3"),
+                .init(
+                    label: "Adjudication digest",
+                    value: "sha256:" + String(repeating: "c", count: 64)),
+            ])
+    }
+
+    @Test func filingTextAndDetailRowsFollowTheEffectKindNotTheArm() throws {
+        // A closure that carries a stray filing arm draws closure rows only:
+        // the display follows effect_kind, as the match gate does.
+        var closure = try #require(
+            AttentionFixtures.effectProposalFacts(for: AttentionFixtures.fixture(type: .effect_proposal)))
+        closure.follow_up_filing = try filingFacts().follow_up_filing
+
+        #expect(AttentionDisplay.proposedIssueText(closure) == nil)
+        #expect(AttentionDisplay.followUpFilingDetailRows(closure).isEmpty)
+        #expect(value(AttentionDisplay.effectProposalRows(closure), "Effect") == "Source issue closure")
+
+        // A filing kind with no filing arm draws nothing.
+        var armless = try filingFacts()
+        armless.follow_up_filing = nil
+        #expect(AttentionDisplay.effectProposalRows(armless).isEmpty)
+        #expect(AttentionDisplay.proposedIssueText(armless) == nil)
+    }
+
+    @Test func screenedIssueTextExplanationSaysWhatScreeningDoesNotEstablish() {
+        #expect(
+            AttentionDisplay.screenedIssueTextExplanation
+                == "Written by the agent. The daemon screened this text; it did not check that it is true.")
     }
 
     @Test func effectProposalBoundToShortensRevisionsToEightCharacters() throws {

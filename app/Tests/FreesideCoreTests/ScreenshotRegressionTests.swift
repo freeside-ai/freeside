@@ -2142,6 +2142,39 @@
                                 at: dynamicTypeSize,
                                 effectProposalFacts: recommendedEffectFacts))))
             }
+
+            // The follow-up filing card is not in the default inbox either.
+            // Its facts carry a filing arm instead of a closure, so these
+            // pin the filing rows and the proposed title and body in their
+            // unverified sections, at Mac and iPhone width in both schemes.
+            let filingEffect = AttentionFixtures.followUpFilingEffectProposal()
+            let filingEffectStore = InboxStore(client: client)
+            filingEffectStore.replaceAll(with: [filingEffect])
+            let filingEffectDetail = DecisionDetailView(
+                store: filingEffectStore,
+                itemID: filingEffect.item.id,
+                graphics: .init(),
+                loadsAttachments: false,
+                showsValidationProgress: false,
+                now: screenshotNow)
+            let filingEffectFacts = AttentionFixtures.effectProposalFacts(for: filingEffect)
+            for (suffix, width, scheme) in [
+                ("", canvasWidth, ColorScheme.light),
+                ("-phone", CGFloat(390), ColorScheme.light),
+                ("-dark", canvasWidth, ColorScheme.dark),
+                ("-phone-dark", CGFloat(390), ColorScheme.dark),
+            ] {
+                surfaces.append(
+                    Surface(
+                        name: "decision-effect_proposal-filing\(suffix)",
+                        width: width,
+                        colorScheme: scheme,
+                        view: AnyView(
+                            filingEffectDetail.screenshotCard(
+                                filingEffect.item,
+                                at: dynamicTypeSize,
+                                effectProposalFacts: filingEffectFacts))))
+            }
             surfaces.append(
                 Surface(
                     name: "task-proposal-snooze-sheet",
