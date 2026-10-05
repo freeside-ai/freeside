@@ -1795,6 +1795,7 @@ func TestGolden(t *testing.T) {
 		{"native_review_clean_pass", nativeReviewCleanPass},
 		{"work_unit_completion", unitCompletion},
 	}
+	cases = append(cases, filingLedgerGoldens(t)...)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			value := tc.value

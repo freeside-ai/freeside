@@ -1,0 +1,10 @@
+{
+  "instance_id": "instance-1",
+  "repository_id": 123,
+  "issue_number": 40,
+  "origin": {
+    "project_id": "proj-1",
+    "run_id": "run-1"
+  },
+  "ledgered_at": "2026-10-05T12:04:00Z"
+}

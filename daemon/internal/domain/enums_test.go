@@ -390,6 +390,18 @@ func TestEnumValidity(t *testing.T) {
 		valids["FollowUpSourceKind"] = append(valids["FollowUpSourceKind"], v.valid)
 	}
 	invalids["FollowUpSourceKind"] = FollowUpSourceKind("").valid
+	for _, v := range AllFollowUpFilingOutcomes {
+		valids["FollowUpFilingOutcome"] = append(valids["FollowUpFilingOutcome"], v.valid)
+	}
+	invalids["FollowUpFilingOutcome"] = FollowUpFilingOutcome("").valid
+	for _, v := range AllFollowUpFilingResponseClasses {
+		valids["FollowUpFilingResponseClass"] = append(valids["FollowUpFilingResponseClass"], v.valid)
+	}
+	invalids["FollowUpFilingResponseClass"] = FollowUpFilingResponseClass("").valid
+	for _, v := range AllFollowUpFilingRefusalReasons {
+		valids["FollowUpFilingRefusalReason"] = append(valids["FollowUpFilingRefusalReason"], v.valid)
+	}
+	invalids["FollowUpFilingRefusalReason"] = FollowUpFilingRefusalReason("").valid
 	for _, v := range AllNativeReviewKinds {
 		valids["NativeReviewKind"] = append(valids["NativeReviewKind"], v.valid)
 	}
