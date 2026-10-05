@@ -872,6 +872,29 @@ import Testing
         #expect(value(rows, "Effect") == "Source issue closure")
     }
 
+    @Test func followUpFilingFactsRenderNoClosureRows() throws {
+        var facts = try #require(
+            AttentionFixtures.effectProposalFacts(for: AttentionFixtures.fixture(type: .effect_proposal)))
+        facts.effect_kind = .follow_up_filing
+        facts.source_issue_closure = nil
+        facts.follow_up_filing = .init(
+            value1: .init(
+                repository: .init(repo: "owner/repo", repository_id: 123),
+                labels: ["deferral"],
+                milestone: "1B",
+                title: .init(text: "Bound the retry budget", ruleset: .github_hyphen_issue_sol_1, verdict: .passed),
+                body: .init(text: "Deferred from review.", ruleset: .github_hyphen_issue_sol_1, verdict: .passed),
+                source: .init(
+                    finding_id: "finding-1",
+                    adjudication_digest: "sha256:" + String(repeating: "c", count: 64),
+                    kind: .deferred_disposition)))
+
+        // The filing kind has a name but no card rows yet, so its facts never
+        // render under the closure card's labels.
+        #expect(AttentionDisplay.effectKindLabel(.follow_up_filing) == "Follow-up issue filing")
+        #expect(AttentionDisplay.effectProposalRows(facts).isEmpty)
+    }
+
     @Test func effectProposalBoundToShortensRevisionsToEightCharacters() throws {
         var facts = try #require(
             AttentionFixtures.effectProposalFacts(for: AttentionFixtures.fixture(type: .effect_proposal)))

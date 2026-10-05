@@ -8,11 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/publicationtext"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
@@ -48,8 +50,14 @@ func (tx *WriteTx) AllocateProposalInstance(
 	if err != nil {
 		return domain.ProposalInstance{}, false, fmt.Errorf("allocate proposal instance: %w", err)
 	}
-	if _, err := tx.gateProposalSubject(ctx, proposal); err != nil {
+	declaration, err := tx.gateProposalSubject(ctx, proposal)
+	if err != nil {
 		return domain.ProposalInstance{}, false, fmt.Errorf("allocate proposal instance gate: %w", err)
+	}
+	if proposal.Kind == domain.EffectFollowUpFiling {
+		if err := tx.gateFollowUpFilingSourceCurrent(ctx, declaration, proposal.FilingProposal.Source); err != nil {
+			return domain.ProposalInstance{}, false, fmt.Errorf("allocate proposal instance gate: %w", err)
+		}
 	}
 	admissionKey, err := admission.String()
 	if err != nil {
@@ -196,7 +204,7 @@ func scanProposalInstance(sc scanner) (domain.ProposalInstance, string, error) {
 	return instance, admissionKey, nil
 }
 
-// proposalSubjectHandle returns the opaque work-unit handle for either
+// proposalSubjectHandle returns the opaque work-unit handle for any
 // registry kind. The switch dispatches behaviour and so omits default; the
 // trailing return guards an unregistered kind.
 func proposalSubjectHandle(proposal domain.EffectProposal) (domain.OpaqueSubjectHandle, error) {
@@ -211,6 +219,11 @@ func proposalSubjectHandle(proposal domain.EffectProposal) (domain.OpaqueSubject
 			return "", domain.ErrEffectProposalInconsistent
 		}
 		return proposal.ClosureProposal.SubjectHandle, nil
+	case domain.EffectFollowUpFiling:
+		if proposal.FilingProposal == nil {
+			return "", domain.ErrEffectProposalInconsistent
+		}
+		return proposal.FilingProposal.SubjectHandle, nil
 	}
 	return "", domain.ErrInvalidEffectKind
 }
@@ -236,11 +249,13 @@ func (tx *ReadTx) GetProposalInstance(
 
 // BindProposalItem writes the immutable anchor from an attention item to its
 // proposal instance and rendered digest. A task_proposal item carries no
-// prospective merge (merge must be nil); an effect_proposal (closure) item
+// prospective merge (merge must be nil). An effect_proposal item's merge
+// follows its instance's effect kind, read from the durable row: a closure
 // requires one, and its candidate head must equal the item's PRHeadSHA so the
-// approval binding and the command binding check judge the same head. The bind
-// is idempotent: a repeat with the same instance, digest, and merge is a no-op,
-// and any divergence is an immutable conflict.
+// approval binding and the command binding check judge the same head; a
+// follow-up filing files an issue and merges nothing, so it carries none. The
+// bind is idempotent: a repeat with the same instance, digest, and merge is a
+// no-op, and any divergence is an immutable conflict.
 func (tx *WriteTx) BindProposalItem(
 	ctx context.Context,
 	itemID domain.ItemID,
@@ -261,14 +276,12 @@ func (tx *WriteTx) BindProposalItem(
 			return fmt.Errorf("bind proposal item %q: task proposal carries a merge: %w", itemID, errRowInconsistent)
 		}
 	case domain.AttentionEffectProposal:
-		if merge == nil {
-			return fmt.Errorf("bind proposal item %q: effect proposal lacks a merge: %w", itemID, errRowInconsistent)
+		kind, err := tx.proposalInstanceKind(ctx, instanceID)
+		if err != nil {
+			return fmt.Errorf("bind proposal item %q instance %q: %w", itemID, instanceID, err)
 		}
-		if err := merge.Validate(); err != nil {
-			return fmt.Errorf("bind proposal item %q merge: %w", itemID, errRowInconsistent)
-		}
-		if item.PRHeadSHA != merge.CandidateHeadSHA {
-			return fmt.Errorf("bind proposal item %q: candidate head differs from item head: %w", itemID, errRowInconsistent)
+		if err := gateEffectProposalItemMerge(kind, item, merge); err != nil {
+			return fmt.Errorf("bind proposal item %q: %w", itemID, err)
 		}
 	default:
 		return fmt.Errorf("bind proposal item %q: type %q: %w", itemID, item.Type, errRowInconsistent)
@@ -301,6 +314,37 @@ func (tx *WriteTx) BindProposalItem(
 		}
 	}
 	return nil
+}
+
+// gateEffectProposalItemMerge checks an effect_proposal item's prospective
+// merge against its instance's effect kind. The switch dispatches behaviour
+// and so omits default, forcing a new registry member to say whether its card
+// binds a merge; the trailing return guards an unregistered kind.
+func gateEffectProposalItemMerge(
+	kind domain.EffectKind, item domain.AttentionItem, merge *domain.ProspectiveMerge,
+) error {
+	switch kind {
+	case domain.EffectTaskProposal:
+		// A task proposal is decided on its own task_proposal item.
+		return fmt.Errorf("task proposal on an effect proposal item: %w", errRowInconsistent)
+	case domain.EffectSourceIssueClosure:
+		if merge == nil {
+			return fmt.Errorf("effect proposal lacks a merge: %w", errRowInconsistent)
+		}
+		if err := merge.Validate(); err != nil {
+			return fmt.Errorf("merge: %w", errRowInconsistent)
+		}
+		if item.PRHeadSHA != merge.CandidateHeadSHA {
+			return fmt.Errorf("candidate head differs from item head: %w", errRowInconsistent)
+		}
+		return nil
+	case domain.EffectFollowUpFiling:
+		if merge != nil {
+			return fmt.Errorf("follow-up filing carries a merge: %w", errRowInconsistent)
+		}
+		return nil
+	}
+	return domain.ErrInvalidEffectKind
 }
 
 // sameProspectiveMerge reports whether two optional merges are equal, treating
@@ -507,6 +551,10 @@ func (tx *ReadTx) expectedRevision(
 			Origin:         prior.ClosureProposal.Origin,
 			Resolves:       revision.Resolves,
 		}, policy)
+	case domain.EffectFollowUpFiling:
+		// A filing has no parameter an operator may change, so no command
+		// authors a revision of one and a stored revision row is not authority.
+		return domain.EffectProposal{}, domain.ErrTransitionCommandMismatch
 	}
 	return domain.EffectProposal{}, domain.ErrInvalidEffectKind
 }
@@ -679,8 +727,198 @@ func (tx *ReadTx) gateProposalSubject(
 			return domain.WorkUnitDeclaration{}, err
 		}
 		return declaration, nil
+	case domain.EffectFollowUpFiling:
+		if err := domain.GateEffectProposal(proposal, policy); err != nil {
+			return domain.WorkUnitDeclaration{}, err
+		}
+		target, err := tx.followUpFilingTarget(ctx, declaration, policy)
+		if err != nil {
+			return domain.WorkUnitDeclaration{}, err
+		}
+		if err := domain.GateFollowUpFiling(proposal, target); err != nil {
+			return domain.WorkUnitDeclaration{}, err
+		}
+		if err := tx.gateFollowUpFilingSource(ctx, declaration, proposal.FilingProposal.Source); err != nil {
+			return domain.WorkUnitDeclaration{}, err
+		}
+		if err := screenFollowUpFilingText(*proposal.FilingProposal); err != nil {
+			return domain.WorkUnitDeclaration{}, err
+		}
+		return declaration, nil
 	}
 	return domain.WorkUnitDeclaration{}, domain.ErrInvalidEffectKind
+}
+
+// followUpFilingTarget derives, from current durable rows, where a work
+// unit's follow-up issues are filed and what they carry: the project's own
+// repository, and the labels and milestone of the run's resolved policy. The
+// derived target, not the decoded proposal body, is the authority the filing
+// gate re-checks against, and the run-to-project join is verified so a
+// tampered declaration cannot redirect a filing to another project's
+// repository.
+func (tx *ReadTx) followUpFilingTarget(
+	ctx context.Context,
+	declaration domain.WorkUnitDeclaration,
+	policy domain.ResolvedPolicy,
+) (domain.FollowUpFilingTarget, error) {
+	project, err := tx.GetProject(ctx, declaration.ProjectID)
+	if errors.Is(err, ErrNotFound) {
+		return domain.FollowUpFilingTarget{}, fmt.Errorf("follow-up filing target: project %q: %w",
+			declaration.ProjectID, ErrProjectAuthorityMissing)
+	}
+	if err != nil {
+		return domain.FollowUpFilingTarget{}, err
+	}
+	run, err := tx.GetRun(ctx, declaration.RunID)
+	if err != nil {
+		return domain.FollowUpFilingTarget{}, err
+	}
+	if run.ProjectID != project.ID {
+		return domain.FollowUpFilingTarget{}, errRowInconsistent
+	}
+	return domain.DeriveFollowUpFilingTarget(project, policy)
+}
+
+// gateFollowUpFilingSource re-reads a filing proposal's source link from
+// durable rows on every admission and reconstruction. The named adjudication
+// artifact must exist, belong to the subject's run, and route the finding the
+// way the source kind says: defer for a deferred disposition,
+// park_separate_work for a separate-work verdict. A deferred source must also
+// have its disposition row, recorded as deferred under that artifact; a
+// separate-work verdict writes no disposition, so its entry is the whole
+// link. Every mismatch fails closed.
+//
+// Every row read here is append-only, so a proposal that passed once keeps
+// passing: this gate runs inside every attention-item reconstruction, and a
+// check on state that ordinary work moves would turn a fixed finding into an
+// unreadable inbox. Whether the source still backs the filing is the separate
+// question gateFollowUpFilingSourceCurrent answers.
+func (tx *ReadTx) gateFollowUpFilingSource(
+	ctx context.Context,
+	declaration domain.WorkUnitDeclaration,
+	source domain.FollowUpFilingSource,
+) error {
+	artifact, err := tx.GetFindingAdjudication(ctx, source.AdjudicationDigest)
+	if errors.Is(err, ErrNotFound) {
+		return fmt.Errorf("follow-up filing source adjudication %q: %w",
+			source.AdjudicationDigest, domain.ErrFollowUpFilingSourceMismatch)
+	}
+	if err != nil {
+		return err
+	}
+	if artifact.RunID != declaration.RunID {
+		return fmt.Errorf("follow-up filing source adjudication run %q: %w",
+			artifact.RunID, domain.ErrFollowUpFilingSourceMismatch)
+	}
+	route, err := followUpSourceRoute(source.Kind)
+	if err != nil {
+		return err
+	}
+	routed := slices.ContainsFunc(artifact.Entries, func(entry domain.FindingAdjudicationEntry) bool {
+		return entry.FindingID == source.FindingID && entry.Route == route
+	})
+	if !routed {
+		return fmt.Errorf("follow-up filing source finding %q has no %s entry: %w",
+			source.FindingID, route, domain.ErrFollowUpFilingSourceMismatch)
+	}
+	if source.Kind != domain.FollowUpSourceDeferredDisposition {
+		return nil
+	}
+	dispositions, err := tx.ListFindingDispositions(ctx, declaration.RunID)
+	if err != nil {
+		return err
+	}
+	recorded := slices.ContainsFunc(dispositions, func(disposition domain.ReviewDispositionRecord) bool {
+		return disposition.FindingID == source.FindingID &&
+			disposition.Disposition == domain.ReviewDispositionDeferred &&
+			disposition.AdjudicationDigest == source.AdjudicationDigest
+	})
+	if !recorded {
+		return fmt.Errorf("follow-up filing source finding %q has no deferred disposition under %q: %w",
+			source.FindingID, source.AdjudicationDigest, domain.ErrFollowUpFilingSourceMismatch)
+	}
+	return nil
+}
+
+// gateFollowUpFilingSourceCurrent refuses a filing whose source no longer
+// backs it. A deferred disposition must still be the finding's effective one,
+// so a finding a later round fixed or re-routed is not filed. No disposition
+// row pins which revision carried a separate-work verdict, so its artifact
+// must still be its round's head: a later revision is the amended
+// adjudication, and a verdict it replaced backs nothing.
+//
+// It runs where a filing gains authority, at admission and at approval, and
+// never on a read: the state it checks moves with ordinary review work. It
+// assumes gateFollowUpFilingSource already passed for the same source.
+func (tx *ReadTx) gateFollowUpFilingSourceCurrent(
+	ctx context.Context,
+	declaration domain.WorkUnitDeclaration,
+	source domain.FollowUpFilingSource,
+) error {
+	if source.Kind != domain.FollowUpSourceDeferredDisposition {
+		artifact, err := tx.GetFindingAdjudication(ctx, source.AdjudicationDigest)
+		if err != nil {
+			return err
+		}
+		head, err := tx.GetFindingAdjudicationForRound(ctx, artifact.RunID, artifact.Round)
+		if err != nil {
+			return err
+		}
+		if head.Digest != artifact.Digest {
+			return fmt.Errorf("follow-up filing source adjudication %q is superseded by revision %d: %w",
+				source.AdjudicationDigest, head.Revision, domain.ErrFollowUpFilingSourceStale)
+		}
+		return nil
+	}
+	// Every recorded round counts: the effective disposition is the finding's
+	// latest, with drift reversals applied.
+	effective, err := tx.EffectiveFindingDispositions(ctx, declaration.RunID, math.MaxInt)
+	if err != nil {
+		return err
+	}
+	deferred := slices.ContainsFunc(effective, func(disposition EffectiveFindingDisposition) bool {
+		return disposition.Stored.FindingID == source.FindingID &&
+			disposition.Effective == domain.ReviewDispositionDeferred &&
+			disposition.Stored.AdjudicationDigest == source.AdjudicationDigest
+	})
+	if !deferred {
+		return fmt.Errorf("follow-up filing source finding %q is not effectively deferred under %q: %w",
+			source.FindingID, source.AdjudicationDigest, domain.ErrFollowUpFilingSourceStale)
+	}
+	return nil
+}
+
+// followUpSourceRoute maps a source kind to the adjudication route that
+// produces it (plan §7 routing table). The switch dispatches behaviour and so
+// omits default; the trailing return guards an unregistered kind.
+func followUpSourceRoute(kind domain.FollowUpSourceKind) (domain.AdjudicationRoute, error) {
+	switch kind {
+	case domain.FollowUpSourceDeferredDisposition:
+		return domain.RouteDefer, nil
+	case domain.FollowUpSourceSeparateWorkVerdict:
+		return domain.RouteParkSeparateWork, nil
+	}
+	return "", domain.ErrEffectProposalInconsistent
+}
+
+// screenFollowUpFilingText screens the stored title and body again under the
+// ruleset each records. The proposal's own verdict is a claim domain cannot
+// check (the screen imports the github/1 rules, which domain cannot), so a
+// row marked passed whose text fails, or whose ruleset the registry no longer
+// holds, is refused here on every admission and reconstruction. The wrapped
+// screen error names the failing check, never the text.
+func screenFollowUpFilingText(filing domain.FollowUpFilingParameters) error {
+	if err := publicationtext.ScreenIssueTitle(
+		filing.Title.Ruleset, filing.Title.Text, domain.MaxFollowUpFilingTitleBytes,
+	); err != nil {
+		return fmt.Errorf("%w: %w", domain.ErrFollowUpFilingTextRejected, err)
+	}
+	if err := publicationtext.ScreenIssueBody(
+		filing.Body.Ruleset, filing.Body.Text, domain.MaxFollowUpFilingBodyBytes,
+	); err != nil {
+		return fmt.Errorf("%w: %w", domain.ErrFollowUpFilingTextRejected, err)
+	}
+	return nil
 }
 
 // closableSource derives, from current durable rows, whether the work unit
@@ -842,9 +1080,11 @@ func (tx *ReadTx) proposalInstanceKind(
 
 // gateDecisionActionKind rejects a decision action that does not belong to the
 // instance's effect kind. start and start_with_changes decide task proposals;
-// approve and approve_with_changes decide effect (closure) proposals; decline
-// terminates either. This is a predicate over the proposal-decision subset of
-// the Action union, so it uses default rather than exhaustive dispatch.
+// approve decides a closure or a follow-up filing; approve_with_changes decides
+// a closure only, because a filing has no parameter an operator may change;
+// decline terminates any kind. This is a predicate over the proposal-decision
+// subset of the Action union, so it uses default rather than exhaustive
+// dispatch.
 func gateDecisionActionKind(action domain.Action, kind domain.EffectKind) error {
 	switch action {
 	case domain.ActionStart, domain.ActionStartWithChanges:
@@ -852,7 +1092,12 @@ func gateDecisionActionKind(action domain.Action, kind domain.EffectKind) error 
 			return domain.ErrTransitionCommandMismatch
 		}
 		return nil
-	case domain.ActionApprove, domain.ActionApproveWithChanges:
+	case domain.ActionApprove:
+		if kind != domain.EffectSourceIssueClosure && kind != domain.EffectFollowUpFiling {
+			return domain.ErrTransitionCommandMismatch
+		}
+		return nil
+	case domain.ActionApproveWithChanges:
 		if kind != domain.EffectSourceIssueClosure {
 			return domain.ErrTransitionCommandMismatch
 		}
@@ -866,13 +1111,16 @@ func gateDecisionActionKind(action domain.Action, kind domain.EffectKind) error 
 
 // revisionActionForKind returns the decision action that authors a revision for
 // the given effect kind. The switch dispatches behaviour and so omits default,
-// forcing a new registry member to declare its revise action.
+// forcing a new registry member to declare its revise action, or, as a
+// follow-up filing does, that it has none.
 func revisionActionForKind(kind domain.EffectKind) (domain.Action, error) {
 	switch kind {
 	case domain.EffectTaskProposal:
 		return domain.ActionStartWithChanges, nil
 	case domain.EffectSourceIssueClosure:
 		return domain.ActionApproveWithChanges, nil
+	case domain.EffectFollowUpFiling:
+		return "", domain.ErrTransitionCommandMismatch
 	}
 	return "", domain.ErrInvalidEffectKind
 }
@@ -912,6 +1160,11 @@ func (tx *WriteTx) RecordProposalDecision(
 	// instance (or an approve on a task instance) even if a caller mis-routes.
 	if err := gateDecisionActionKind(action, kind); err != nil {
 		return fmt.Errorf("record proposal decision command %q: %w", commandID, err)
+	}
+	if kind == domain.EffectFollowUpFiling && action == domain.ActionApprove {
+		if err := tx.gateFollowUpFilingApproval(ctx, instanceID); err != nil {
+			return fmt.Errorf("record proposal decision command %q: %w", commandID, err)
+		}
 	}
 	// A "digest" decision (start/approve) binds the item's current rendered
 	// digest; a "revision" decision (start_with_changes/approve_with_changes)
@@ -969,6 +1222,26 @@ func (tx *WriteTx) RecordProposalDecision(
 		return fmt.Errorf("record proposal decision %q: %w", instanceID, err)
 	}
 	return nil
+}
+
+// gateFollowUpFilingApproval refuses an approval of a filing whose source
+// stopped backing it after the card opened. Reads stay open for a stale
+// filing so it can still be shown and declined; approval is where it would
+// gain authority to file.
+func (tx *ReadTx) gateFollowUpFilingApproval(ctx context.Context, instanceID domain.ProposalInstanceID) error {
+	instance, err := tx.GetProposalInstance(ctx, instanceID)
+	if err != nil {
+		return err
+	}
+	filing := instance.Proposal.FilingProposal
+	if filing == nil {
+		return domain.ErrEffectProposalInconsistent
+	}
+	declaration, _, err := tx.ResolveProposalSubject(ctx, filing.SubjectHandle)
+	if err != nil {
+		return err
+	}
+	return tx.gateFollowUpFilingSourceCurrent(ctx, declaration, filing.Source)
 }
 
 // RecordPolicyClosureApproval records the project policy actor's approval of a

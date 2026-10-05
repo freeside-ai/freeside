@@ -1,0 +1,35 @@
+{
+  "as_of_revision": 27,
+  "entity_version": 5,
+  "item_version": 1,
+  "proposal_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+  "effect_kind": "follow_up_filing",
+  "supersedes": null,
+  "source_issue_closure": null,
+  "follow_up_filing": {
+    "repository": {
+      "repo": "owner/repo",
+      "repository_id": 123
+    },
+    "labels": [
+      "deferral",
+      "lane:spine"
+    ],
+    "milestone": "1B",
+    "title": {
+      "text": "Bound the retry budget in the sync client",
+      "ruleset": "github-issue/1",
+      "verdict": "passed"
+    },
+    "body": {
+      "text": "The sync client retries without a budget.\n\nDeferred from review round 2.",
+      "ruleset": "github-issue/1",
+      "verdict": "passed"
+    },
+    "source": {
+      "finding_id": "finding-1",
+      "adjudication_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "kind": "deferred_disposition"
+    }
+  }
+}

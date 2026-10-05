@@ -311,6 +311,7 @@ enum AttentionDisplay {
         switch kind {
         case .run_proposal: return "Run proposal"
         case .source_issue_closure: return "Source issue closure"
+        case .follow_up_filing: return "Follow-up issue filing"
         }
     }
 
