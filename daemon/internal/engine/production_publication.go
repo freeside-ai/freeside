@@ -3217,6 +3217,9 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			if !shadowComplete {
 				return productionReviewPending, nil
 			}
+			if task.answersExternalReview() {
+				return w.escalateExternalReviewFindings(ctx, task, *latestRecord)
+			}
 			if latestRecord.Outcome == domain.ReviewFindings && task.reentersInPlace() {
 				return w.escalateReentryFindings(ctx, task, *latestRecord)
 			}
@@ -3344,10 +3347,13 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			RunID: task.RunID, Round: hardLimit,
 			BaseSHA: binding.admission.Base.BaseSHA, HeadSHA: task.HeadSHA,
 		}
+		itemID := productionReviewHardLimitItemID(task.RunID, hardLimit, recoveredContradiction)
+		if task.answersExternalReview() {
+			itemID = externalReviewExhaustionItemID(task.RunID, task.Successor.ReviewRound)
+		}
 		if err := w.putReviewAttentionWithID(ctx, task, record,
 			fmt.Sprintf("Review exhausted the resolved hard limit of %d rounds.", hardLimit),
-			domain.AttentionReviewDiminishing,
-			productionReviewHardLimitItemID(task.RunID, hardLimit, recoveredContradiction),
+			domain.AttentionReviewDiminishing, itemID,
 		); err != nil {
 			return productionReviewPending, err
 		}
@@ -3668,6 +3674,9 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			return productionReviewPending, err
 		}
 		return productionReviewEscalated, nil
+	}
+	if task.answersExternalReview() {
+		return w.escalateExternalReviewFindings(ctx, task, record)
 	}
 	if record.Outcome == domain.ReviewFindings && task.reentersInPlace() {
 		return w.escalateReentryFindings(ctx, task, record)
@@ -4380,6 +4389,10 @@ func (w *productionPublicationWorkflow) putReviewAttentionWithID(
 	itemType domain.AttentionType,
 	itemID domain.ItemID,
 ) error {
+	reason, err := w.withExternalReviewFindings(ctx, task, reason)
+	if err != nil {
+		return err
+	}
 	return w.putReviewAttentionWithActionsAndID(
 		ctx, task, record, reason, itemType, itemID,
 		[]domain.Action{domain.ActionDiscuss, domain.ActionStop},
