@@ -225,7 +225,7 @@ func WithAdmission(backend exec.RunnerBackend, floor []exec.Capability, env Admi
 			// profiles retain the configured identity; clean verification must
 			// have none. A single admitter cannot truthfully promise both shapes.
 			switch profile {
-			case domain.EgressProviderOnly, domain.EgressProviderWebRead:
+			case domain.EgressProviderOnly, domain.EgressProviderRegistry, domain.EgressProviderWebRead:
 				if env.Agents == nil && (env.AuthIdentityID == nil || *env.AuthIdentityID == "") {
 					return fmt.Errorf(
 						"with admission: enforceable egress profile %q has no auth identity", profile)

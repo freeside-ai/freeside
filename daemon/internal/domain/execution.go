@@ -592,7 +592,7 @@ func cloneStageInputSnapshot(in *StageInputSnapshot) *StageInputSnapshot {
 // default, so a new profile has to decide its stance here.
 func (a ExecutionAdmission) validateAuthIdentity() error {
 	switch a.EgressProfile {
-	case EgressProviderOnly, EgressProviderWebRead:
+	case EgressProviderOnly, EgressProviderRegistry, EgressProviderWebRead:
 		if a.AuthIdentityID == nil || *a.AuthIdentityID == "" {
 			return fmt.Errorf("execution admission %s auth_identity_id under egress %q: %w",
 				a.InvocationID, a.EgressProfile, ErrEmptyID)

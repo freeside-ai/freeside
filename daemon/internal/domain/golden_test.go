@@ -1075,6 +1075,30 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The provider_registry variant: the profile is the only field that
+	// differs from the base admission. The declared registry set is not a
+	// field here; policy_digest binds it.
+	registryAdmission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
+		InvocationID: "inv-1", RunID: "run-1", StageID: "stage-1", AttemptID: "attempt-1",
+		Backend: "fresh_vm_read_only_volume_handoff",
+		Capabilities: domain.CapabilitySnapshot{
+			domain.CapPostExitExport, domain.CapDetachableWorkspace, domain.CapReadOnlyRemount,
+		},
+		OperatingMode:  domain.ModeAttendedDev,
+		CredentialMode: domain.CredentialSubscriptionContained,
+		EgressProfile:  domain.EgressProviderRegistry,
+		ImageRef:       domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32)),
+		SpecDigest:     stageDigest("2"), PolicyDigest: resolvedPolicy.Digest, InputDigest: stageDigest("1"),
+		StageInputs:    &stageInputs,
+		Base:           domain.BaseRevision{Repo: "owner/repo", RepositoryID: 424242, BaseRef: "refs/heads/main", BaseSHA: "deadbeef"},
+		Workspace:      "freeside-handoff-run-1-ws",
+		AuthIdentityID: &authIdentity,
+		AdmittedAt:     ts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	// The agent-bound (v4) variant: the §5.4 admission step 5 snapshot rides
 	// beside the existing fields, and its presence selects the new encoding
 	// version, which this golden pins through the changed content address.
@@ -1766,6 +1790,7 @@ func TestGolden(t *testing.T) {
 		{"stage_input_snapshot", stageInputs},
 		{"stage_input_snapshot_codex", codexStageInput},
 		{"execution_admission", admission},
+		{"execution_admission_registry", registryAdmission},
 		{"execution_admission_waived", waivedAdmission},
 		{"execution_admission_agent", agentAdmission},
 		{"execution_admission_agent_explicit_model", claudeAdmission},
