@@ -9,9 +9,9 @@ import (
 )
 
 func TestCodexAccountObservedFixtures(t *testing.T) {
-	for _, mode := range []string{"near_expiry", "control"} {
+	for _, mode := range []string{"fresh", "near_expiry", "control"} {
 		t.Run(mode, func(t *testing.T) {
-			body, err := os.ReadFile("testdata/codex_account_observed_" + mode + ".jsonl") //nolint:gosec // mode is one of two literal fixture names
+			body, err := os.ReadFile("testdata/codex_account_observed_" + mode + ".jsonl") //nolint:gosec // mode is one of three literal fixture names
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -27,7 +27,7 @@ func TestCodexAccountObservedFixtures(t *testing.T) {
 				t.Fatal("fixture contains unreviewed capture fields")
 			}
 			want := "fail"
-			if mode == "control" {
+			if mode != "near_expiry" {
 				want = "pass"
 			}
 			if evidence.Case != mode || evidence.Verdict != want || codexAccountAnalyze(evidence.Capture, mode == "control", evidence.Requests, evidence.Failures) != want {
