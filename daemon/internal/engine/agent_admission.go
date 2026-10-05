@@ -110,6 +110,13 @@ func resolveRole(
 	if agent.Generation, err = tx.CurrentEnrollmentGeneration(ctx, agent.Enrollment.ID); err != nil {
 		return RoleAgent{}, fmt.Errorf("enrollment %s holds no store generation: %w", agent.Enrollment.ID, err)
 	}
+	// Credentialed, in part (§5.4 admission rule 4): a generation the
+	// credential-integrity probe marked is not a valid one. The mark is read
+	// here, in the transaction that read the generation, and not carried on
+	// it; re-enrollment appends an unmarked successor, which clears this.
+	if err := tx.RequireGenerationUnmarked(ctx, agent.Enrollment.ID, agent.Generation.Ordinal); err != nil {
+		return RoleAgent{}, err
+	}
 	return agent, nil
 }
 
@@ -216,7 +223,10 @@ func resolveAgentAdmission(
 		return nil
 	})
 	if err != nil {
-		return refuse("%v", err)
+		// Wrapped, not flattened like the other refusals: a marked
+		// generation's refusal is typed, and a caller reads the mark off it.
+		// The text is what refuse would have printed.
+		return agentAdmission{}, fmt.Errorf("role %s: %w: %w", role, err, ErrAgentNotAdmissible)
 	}
 	resolved, enrollment, generation := agent.Resolved, agent.Enrollment, agent.Generation
 	definition := resolved.Definition
