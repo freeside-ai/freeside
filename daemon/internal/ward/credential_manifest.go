@@ -37,19 +37,34 @@ func observeCredentialVolume(
 	manifest CredentialManifestPolicy,
 	authorize RuntimeResourceAuthorizer,
 ) (string, error) {
+	proof, err := observeCredentialVolumeProof(ctx, runtime, exporterImage, volume, manifest, authorize, false)
+	return proof.tree, err
+}
+
+// observeCredentialVolumeProof runs one credential observer over the volume
+// and returns its parsed proof; integrity selects the integrity observer
+// (observeCredentialProof).
+func observeCredentialVolumeProof(
+	ctx context.Context,
+	runtime Runtime,
+	exporterImage, volume string,
+	manifest CredentialManifestPolicy,
+	authorize RuntimeResourceAuthorizer,
+	integrity bool,
+) (credProof, error) {
 	if runtime == nil || exporterImage == "" || volume == "" || !manifest.valid() {
-		return "", errors.New("credential manifest inspection requires a runtime, exporter image, volume, and policy")
+		return credProof{}, errors.New("credential manifest inspection requires a runtime, exporter image, volume, and policy")
 	}
 	cfg := (Config{ExporterImage: exporterImage}).withDefaults()
 	owner, err := newOwnershipLabel()
 	if err != nil {
-		return "", err
+		return credProof{}, err
 	}
 	runID := "preflight-" + owner.Value[:12]
 	name := "freeside-preflight-credential-" + owner.Value[:12]
 	if authorize != nil {
 		if err := authorize(ctx, RuntimeResourceNames{Containers: []string{name}}); err != nil {
-			return "", err
+			return credProof{}, err
 		}
 	}
 	handoff := HandoffSpec{
@@ -66,12 +81,12 @@ func observeCredentialVolume(
 	}
 	state := &runState{ownershipLabel: owner}
 	var claim objectClaim
-	digest, inspectErr := backend.observeCredentialStore(ctx, handoff, name, state, &claim)
+	proof, inspectErr := backend.observeCredentialProof(ctx, handoff, name, state, &claim, integrity)
 	if inspectErr == nil {
-		return digest, nil
+		return proof, nil
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), max(cfg.TeardownTimeout, time.Second))
 	defer cancel()
 	cleanupErr := backend.runtimeOps.reapUnlistedContainer(cleanupCtx, name, claim, owner)
-	return "", errors.Join(inspectErr, cleanupErr)
+	return credProof{}, errors.Join(inspectErr, cleanupErr)
 }

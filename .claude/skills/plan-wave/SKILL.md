@@ -115,9 +115,12 @@ only what this wave genuinely needs.
 - Shape and sequencing come from the table row; encode required
   serialization, integration order, and intentional stacks in each unit's
   Dependencies field.
-- Size each unit against the budget, amplifier list, and split seams in
-  docs/coordination.md (Unit Sizing): estimate the expected PR
-  including migrations, goldens, generated clients, and mock parity;
+- Size each unit against the budget, amplifier list, split seams, and
+  first-consumer exception in docs/coordination.md (Unit Sizing):
+  estimate the expected PR's
+  authored lines, including migrations and mock parity, and declare
+  goldens and generated clients beside the estimate without counting
+  them;
   split a unit that materially exceeds the budget along a listed seam,
   encoding the resulting order in Dependencies: `starts-after` by
   default, and always for a contract-first split, since shared-package
