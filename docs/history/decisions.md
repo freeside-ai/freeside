@@ -2505,3 +2505,37 @@ selection units stay under #1616.)
 [visual audit handoff](../design/visual-audit-2026-10-02/README.md);
 [decision note](../../devlog/2026-10-02-2249-presentation-hierarchy-rules.md).
 The client work is #1732 and #1033.)
+
+---
+
+## Revision 79 ("Contract Serialization by Assessed Conflict"):
+
+1. **Contract units serialize by assessed conflict, not by classification.**
+   `kind:contract` keeps invoking contract review and verification and no
+   longer makes a unit exclusive against every other contract unit. The
+   spine assesses each pair and records the verdict in both issues'
+   Dependencies fields; a pair nobody has assessed stays serialized (Section
+   [11](../plan.md#11-roadmap-build-order-and-coordination), Implementation Coordination). This is the rule the frontier projection
+   already applies to the product: declared conflicts block and unknown
+   scope serializes (Section [5.18](../plan.md#518-the-world-model-post-merge-recompute-and-frontier-projection)). What changed is the evidence that the
+   chain serialized work nothing showed to conflict: Wave 8 holds seven
+   contract units in one chain, and Wave 7's exit repair called its later
+   links serialization, not dependency. Rejected: keeping the regime and
+   retyping queue-order edges (every pair stays exclusive, so nothing runs
+   together); and reading different files or a clean merge as independence
+   (two contracts can touch disjoint files and still disagree about a
+   field's meaning).
+2. **At most two contract implementations are active at once**, inside the
+   four-front width. `AGENTS.md` (Contract Changes) holds the cap and the
+   three conditions for raising it to three. Rejected: starting at three
+   (owner review is the bound, and nothing yet shows it keeps up with two).
+3. **The sequencing rows keep their recorded orders.** Waves 7, 10, and 11
+   now say the spine assesses contract positions at planning. No existing
+   relationship changes with this revision; the spine re-assesses pairs as
+   separate edits.
+4. **The authorization doors are unchanged.** Scheduling and fiat remain the
+   only two. Standing authorization for ad hoc trackers is deferred (#1711),
+   as is a migration protocol for concurrent contract units (#1712).
+
+(Owner decision of 2026-10-02, #1709;
+[decision note](../../devlog/2026-10-02-2238-assessed-contract-serialization.md).)

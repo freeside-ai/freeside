@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 79
+revision: 80
 status: active
-updated: 2026-10-02
+updated: 2026-10-05
 ---
 
 # Freeside
@@ -1686,7 +1686,7 @@ per identity:
   composition manifests, run records, or export.
 - Auth type.
 - Plan type.
-- Expiry and revocation state.
+- Expiry and, where independently observable, revocation state.
 - CLI version.
 - A model and capability snapshot.
 - The last probe time.
@@ -1707,9 +1707,22 @@ enrollment records, the tree, and the resolved policy. A probe that observes a n
 plan, or spare capacity produces a card or a proposed offer diff in the tree,
 never a changed selection.
 
-What a probe can report is a pinned-CLI empirical contract. The Codex app-server
-probe is expected to report account and plan facts, subject to the
-refresh-safety spike Section [10](#10-operations-and-onboarding) gates it on. The pinned Claude CLI offers a
+**Codex account facts come from the snapshot (revision 80).** The daemon
+decodes the stored ID token's account and plan claims locally; it does not
+launch the app-server for those facts. Present them as advisory claims "from
+the stored ID token", using that token's own issuance time when available;
+unknown age stays unknown. The auth store's `last_refresh` is not their
+freshness timestamp: a credential refresh can retain the previous ID token.
+Missing or malformed claims stay unknown. Account facts require a verified
+match between the decoded account ID and the identity or generation's fixed
+account binding; missing, unverifiable, or mismatched bindings leave those
+facts unknown without altering admission, credentials, or enrollment.
+The access token supplies its own expiry; the ID token's expiry is not a
+substitute. This path cannot detect a revocation or plan change since those
+claims were issued and must not report either as freshly checked.
+
+What a network probe can report remains a pinned-CLI empirical contract. The
+pinned Claude CLI offers a
 token digest plus an auth check. Whether its stream-json control protocol also
 answers a usage request under Freeside's setup-token credential, as current
 Agent SDK builds do for an interactive login, is an open question that a
@@ -5155,18 +5168,20 @@ Build the installer only after the underlying interfaces survive real use. The
 | `freesided reattempt --task <task>`, `--parent-run <run>`, or `--campaign <campaign>` | Requires an operator reason and allocates the campaign's next attempt from an already approved specification. The task selector resolves to the task's current campaign and its exact parent run; it refuses a live parent. |
 | `freesided resume --task <task>` or `--run <run>` | Reattaches observation to one exact non-terminal run without creating any identity. The task selector resolves to its current run. It refuses terminal runs and points to `reattempt`. |
 
-**`freesided doctor` probe rules.** The integrity probe extends to the Section
-[5.4](#54-credential-modes-egress-profiles-and-concurrency) account probe only after an empirical spike proves that the Codex app-server
-probe runs against the access-only read snapshot and never triggers a refresh
-outside the mutation lease. Until that spike passes, doctor reports integrity
-alone.
+**`freesided doctor` probe rules (revision 80).** Codex account facts extend
+the integrity report by locally decoding the access-only snapshot as Section
+[5.4](#54-credential-modes-egress-profiles-and-concurrency) specifies. No
+app-server, network request, or refresh is needed to read those stored claims.
+The #866 spike's negative result retires the proposed app-server account
+probe; it does not block this local read. Until #868 implements that read,
+doctor reports integrity alone. Replan #868 after this plan revision merges.
 
 Probe results are observation (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)). They file `advisory`
 `system_health` items and proposals, feed the operator-facing profile
 projection's display fields, and nothing else reads them. It runs on a schedule
 and files `system_health` items.
 
-**Usage collection rules (revision 77).** The account probe also collects
+**Usage collection rules (revisions 77 and 80).** A separate network read collects
 usage observations (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation) where the provider
 exposes them to the enrollment's credential. Each provider's collection path
 is a pinned-build empirical contract that its usage spike settles before its
@@ -5190,12 +5205,29 @@ response no longer reports is dropped, not kept as stale. A partial update, such
 event that names one window, updates that window's reading and freshness and
 leaves the others untouched. A reading collected under an enrollment generation that has
 since been replaced is discarded, never attributed to the successor.
-Collection never redeems a reset credit, never refreshes a token, and never
-writes the auth store: it runs against the access-only snapshot under the same
-lease rule as the account probe.
+Collection never redeems a reset credit, writes the auth store, or performs
+a refresh that could change a credential outside the mutation lease. It runs
+against the read-only access-only snapshot, with no refresh token, under
+`provider_only` egress. A tokenless refresh attempt that egress blocks is
+tolerated as an unsuccessful attempt, not counted as credential mutation or a
+successful usage observation. Record it and schedule around it; do not widen
+egress or supply a refresh token to make collection succeed. Credential
+renewal remains the separate lease-held operation.
+
+The pinned Codex usage read (`account/rateLimits/read`) calls the CLI's
+self-refreshing authentication path. Launch collection only when the access
+token has comfortably more than five minutes left: the margin must cover the
+bounded invocation and clock skew, so it stays outside the proactive-refresh
+window throughout collection. Missing, invalid, or insufficient lifetime
+defers collection and retains the prior readings and their observation times;
+it never triggers credential renewal from the collector. This guard schedules
+observation only, not execution admission. #1714 must measure fresh and
+near-expiry cases, pin the margin and deadline, and prove the snapshot and
+egress backstops before the collector ships. Its usage responses and update
+notifications need their own evidence; #866's account results do not prove them.
 
 **`freesided auth` subcommand rules.** `auth doctor` ships with the
-account-probe unit (#868), gated on the #866 spike like the probe itself, never
+account-facts unit (#868), replanned under revision 80 after the #866 negative result, never
 with the enrollment unit.
 
 `add` enrolls one harness client against one route for a new or existing
@@ -5880,8 +5912,8 @@ Contracts and fakes coordinate implementation. CI keeps lanes honest.
 | **6 (1B.0): convergence and yield** | Integrated | Convergence policy and the Section [7](#7-review-policy) finding-adjudication routing (#697; the spine assigns its contract splits at wave planning); the Claude shadow arm with second adjudication and sampled classification accuracy; automatic re-review of remediation heads as a standing integration test; yield history on ready-for-final-review; the full chain on the real backlog. iOS on-device install (Section [10](#10-operations-and-onboarding)). 1B.0 exit. |
 | **7 (1B.1): the decision surface** | Parallel lanes | The decision surface closes and reads from the phone. Contract-first, positions assessed by the spine at planning (unassessed pairs serialize): the revision-40 attention-presentation cluster (the Section [4](#4-the-attention-model) recommendation shape and Section [9](#9-comprehension) typed minimum card facts, #917, which must retire `adjudicate` or reassign it to an executable `review_dispute` transaction before client adoption; decision-surface identity, #942; per-type card facts, #724; adjudication finding context, #892; per-invocation cost observations, #901), then transaction closure for the remaining Phase 1 pending actions (#918, #919, #920, #921) and the retirement of `choose_alternate_profile` (#936), then Section [5.15](#515-evidence-and-images) evidence metadata (#922), pairing identity facts (#923), readiness rendering (#982), and the Section [8](#8-observability-and-optimization-telemetry)/9 comprehension-telemetry contracts the wave-11 exit evaluation reads (#924, the first unit to slip to wave 8 if review bandwidth binds). Beside the chain: the daemon fact producers, client adoption (the provisional Swift `ActionOutcome` and mock server converge with the daemon's `discuss` and spec-approval `request_changes`), and the Section [9](#9-comprehension) summary layer (#723, stage-agent-sourced, no daemon-inference call). The adjudication-size contract (#961) is placed here or in wave 9 at planning. Deferral drain: the attention-presentation and card-fact clusters only. Exit proof: every rendered Phase 1 action executes on Mac and iPhone; no action stays pending, disabled, or decorative; every card is self-contained at its Section [9](#9-comprehension) altitude; facts stay distinct from claims. |
 | **8 (1B.1): operational closure** | Parallel lanes | Freeside runs unattended, says when it is stuck, and lets published-PR activity back in. The `effect_proposal` card, arriving with the source-issue closure proposal (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) and reused by human-gated follow-up filing (Section [5.17](#517-follow-up-issue-filing)); the doctor credential-integrity probe (Section [10](#10-operations-and-onboarding)); the stall heartbeat (Section [5.12](#512-workflow-definition-initiators-and-artifacts)); the external daemon-liveness probe (Section [5.2](#52-the-daemon-and-its-supervisor), #510); the held-work item (#766); the review drift audit (Section [7](#7-review-policy); the #1048 contract, then #1049–#1053, floor before model site); the standing stopped-operation indicator (#980); device listing and revocation (#981); the clean-machine onboarding proof (#428); and the egress floor's first capabilities above it (Sections [5.4](#54-credential-modes-egress-profiles-and-concurrency), [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, `kind:contract` because `EgressProfile` is a domain enum carried in the admission record, then (b) the policy-gated project-image rebuild in the reusable builder, `starts-after` (a) because its gate reads the registry set (a) declares; both build on merged #302 and #334. Ward container limits (#1597, revision 72) launch every ward container with a declared CPU cap and memory limit and measure real peak memory, so wave 9's memory budget reserves against recorded sizes; it has no open prerequisite and is startable at wave start. Re-entry after a ready-item invalidation (#502; the spine splits its contract half at planning) and external review ingestion on published PRs (#524) share the re-entry trigger shape and land together. Deferral drain: the operational and re-entry clusters, plus #1597. Exit proof: a clean machine reaches an unattended real run; daemon death, crash loops, stalls, held work, a stopped state, a review loop that grows past its specification, and external review each alert without terminal patrol or manual polling. |
-| **9 (1B.1): provider diversity** | Parallel lanes; split-eligible | One agent vocabulary and a second real provider. The agent-vocabulary contract chain, positions assigned at planning: review admission and provenance (#898), the cross-lane failure model (#899), judgment roles in the lineup (#900, decided in revision 65: every agent activity is a lineup role), the role-name lineup keys and wardless admission class that decision needs (#1421, `starts-after` #900), then agent and run facts in the clients (#979). The Codex tail: the adapter registration (#406, `starts-after` the merged admitted-agent contract #894), ward's second vendor topology (#407), the continuation compatibility digest (#873), then #397 by explicit owner decision on shadow evidence (none existed at the wave-6 exit because the shadow configuration was never approved for a project, #1001; #397 `starts-after` #898 and #869 `starts-after` #899 are recorded under the ambiguity rule for wave-9 planning to confirm), then the StageDriver binding (#408, `merges-after` #873; Section [7](#7-review-policy) keeps #397 ahead of it so that Codex-implements plus Codex-reviews does not become the default pairing); the alternate-provider retry card (#869, `starts-after` #406 and #408). The ward front with no open prerequisite, startable at wave start or earlier by fiat: the Codex probe refresh-safety spike (#866). Guided enrollment with the two-step cutover (#867) `starts-after` #1421, because `freesided auth adopt` emits the first real lineup and must not emit stage-named keys (owner decision, revision 65); until then #867 no longer starts early by fiat. The doctor account probe (#868) `starts-after` #406 and #866. The pi adapter, enrollment, and specification agent (#895) `starts-after` #897 and #867, specification only, with its pre-adoption gates run against the pinned build. The capacity cluster (revisions 72 and 73), its contract units placed in the same chain at planning: the shared-identity writer lease (#1585), per-pool execution limits (#1596, `starts-after` #1585), the host memory budget and machine-capacity hold (#1598, `starts-after` #898 and #1597), and task lines (#1600, `starts-after` #1421). #1585's prerequisite has merged, so it may start before the wave by fiat once the spine gives it a chain position. Beside the chain: the budget command (#1595, `starts-after` #1598), the task-line change command (#1601, `starts-after` #1600), the hold wording in the clients (#1599, `starts-after` #1596 and #1598), and the New Task agent picker (#1602, `starts-after` #1600 and #979). The spine splits this wave into 9a (contracts) and 9b (adapters) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because a wave tracker is titled `Wave N: <Name>`. Deferral drain: the agent, provider, and capacity clusters. Exit proof: a real unattended Codex run and a pi specification; provider switching explicit in the lineup and visible in the clients; correct cost and independence records (#901); quota and capacity failures recover through the retry card, never a silent fallback. |
-| **10 (1B.1): subscription operations** | Parallel lanes | The operator sees each subscription's allowance and chooses where work runs. Contract-first, positions assessed by the spine at planning (unassessed pairs serialize): the usage-observation record keyed by usage pool and provider window (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation), `starts-after` the per-pool record (#1596), with the sync-visibility question (#1145) resolved before the client projection adopts its freshness contract; then the client contract for the account usage view, for reassigning a pool's collector, and for changing a waiting task's line from a client (the client half that #1601 leaves to its own contract unit). Beside the chain: the Codex and Claude usage spikes (the Codex spike `starts-after` #866, whose refresh-safety scope is unchanged; the Claude spike proves what the pinned CLI answers under the setup-token credential), the collectors those spikes prove, the refresh lifecycle (Section [10](#10-operations-and-onboarding)), the daemon's operator-facing projection, the Mac and iPhone account usage view, and the usage facts beside the agent choices of #1602, #1601, and #869's alternate-agent retry card (wave 10 owns that projection: the reading cannot sit beside the card until the observation record exists, and #869 ships the card without it). Quota, expiry, and capacity failures keep #869's retry card; no usage-specific failure surface is added. Deferral drain: the subscription-usage cluster. Exit proof: on Mac and iPhone the operator inspects a real pool's windows, reset times, and freshness; chooses an agent on that pool for new work; changes a waiting task's role; and reads the recorded admission showing the chosen identity ran, with a stale reading shown as stale and an unsupported provider shown as unsupported. 1B.1 exit evaluation. |
+| **9 (1B.1): provider diversity** | Parallel lanes; split-eligible | One agent vocabulary and a second real provider. The agent-vocabulary contract chain, positions assigned at planning: review admission and provenance (#898), the cross-lane failure model (#899), judgment roles in the lineup (#900, decided in revision 65: every agent activity is a lineup role), the role-name lineup keys and wardless admission class that decision needs (#1421, `starts-after` #900), then agent and run facts in the clients (#979). The Codex tail: the adapter registration (#406, `starts-after` the merged admitted-agent contract #894), ward's second vendor topology (#407), the continuation compatibility digest (#873), then #397 by explicit owner decision on shadow evidence (none existed at the wave-6 exit because the shadow configuration was never approved for a project, #1001; #397 `starts-after` #898 and #869 `starts-after` #899 are recorded under the ambiguity rule for wave-9 planning to confirm), then the StageDriver binding (#408, `merges-after` #873; Section [7](#7-review-policy) keeps #397 ahead of it so that Codex-implements plus Codex-reviews does not become the default pairing); the alternate-provider retry card (#869, `starts-after` #406 and #408). The Codex account-probe spike (#866) finishes as a negative result: local account facts replace the proposed app-server probe, while its harness supports the usage spike. Guided enrollment with the two-step cutover (#867) `starts-after` #1421, because `freesided auth adopt` emits the first real lineup and must not emit stage-named keys (owner decision, revision 65); until then #867 no longer starts early by fiat. The local doctor account facts (#868) `starts-after` #406 and the completed #866 spike; replan #868 after the revision-80 policy PR (#1758) merges. The pi adapter, enrollment, and specification agent (#895) `starts-after` #897 and #867, specification only, with its pre-adoption gates run against the pinned build. The capacity cluster (revisions 72 and 73), its contract units placed in the same chain at planning: the shared-identity writer lease (#1585), per-pool execution limits (#1596, `starts-after` #1585), the host memory budget and machine-capacity hold (#1598, `starts-after` #898 and #1597), and task lines (#1600, `starts-after` #1421). #1585's prerequisite has merged, so it may start before the wave by fiat once the spine gives it a chain position. Beside the chain: the budget command (#1595, `starts-after` #1598), the task-line change command (#1601, `starts-after` #1600), the hold wording in the clients (#1599, `starts-after` #1596 and #1598), and the New Task agent picker (#1602, `starts-after` #1600 and #979). The spine splits this wave into 9a (contracts) and 9b (adapters) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because a wave tracker is titled `Wave N: <Name>`. Deferral drain: the agent, provider, and capacity clusters. Exit proof: a real unattended Codex run and a pi specification; provider switching explicit in the lineup and visible in the clients; correct cost and independence records (#901); quota and capacity failures recover through the retry card, never a silent fallback. |
+| **10 (1B.1): subscription operations** | Parallel lanes | The operator sees each subscription's allowance and chooses where work runs. Contract-first, positions assessed by the spine at planning (unassessed pairs serialize): the usage-observation record keyed by usage pool and provider window (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation), `starts-after` the per-pool record (#1596), with the sync-visibility question (#1145) resolved before the client projection adopts its freshness contract; then the client contract for the account usage view, for reassigning a pool's collector, and for changing a waiting task's line from a client (the client half that #1601 leaves to its own contract unit). Beside the chain: the Codex and Claude usage spikes (the Codex spike #1714 `starts-after` #866, accepts its negative account-probe result, and measures fresh and near-expiry usage reads under Section [10](#10-operations-and-onboarding); the Claude spike proves what the pinned CLI answers under the setup-token credential), the collectors those spikes prove, the refresh lifecycle (Section [10](#10-operations-and-onboarding)), the daemon's operator-facing projection, the Mac and iPhone account usage view, and the usage facts beside the agent choices of #1602, #1601, and #869's alternate-agent retry card (wave 10 owns that projection: the reading cannot sit beside the card until the observation record exists, and #869 ships the card without it). Quota, expiry, and capacity failures keep #869's retry card; no usage-specific failure surface is added. Deferral drain: the subscription-usage cluster. Exit proof: on Mac and iPhone the operator inspects a real pool's windows, reset times, and freshness; chooses an agent on that pool for new work; changes a waiting task's role; and reads the recorded admission showing the chosen identity ran, with a stale reading shown as stale and an unsupported provider shown as unsupported. 1B.1 exit evaluation. |
 | **11 (1B.2): the initiative view** | Integrated | Many work units become one picture. Typed relationship kinds in the Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection) capture records (#884, its position assessed by the spine at planning), the frontier projection, and the deterministic initiative view rendering the dependency graph (#885). 1B exit evaluation against recorded comprehension and operational evidence. |
 
 Wave 5's row stays as built: it shipped the specifier with daemon fetching
@@ -6039,37 +6071,29 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 79 ("Contract Serialization by Assessed Conflict"):
+Revision 80 ("Local Account Facts and Credential-Safe Usage Reads"):
 
-1. **Contract units serialize by assessed conflict, not by classification.**
-   `kind:contract` keeps invoking contract review and verification and no
-   longer makes a unit exclusive against every other contract unit. The
-   spine assesses each pair and records the verdict in both issues'
-   Dependencies fields; a pair nobody has assessed stays serialized (Section
-   [11](#11-roadmap-build-order-and-coordination), Implementation Coordination). This is the rule the frontier projection
-   already applies to the product: declared conflicts block and unknown
-   scope serializes (Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection)). What changed is the evidence that the
-   chain serialized work nothing showed to conflict: Wave 8 holds seven
-   contract units in one chain, and Wave 7's exit repair called its later
-   links serialization, not dependency. Rejected: keeping the regime and
-   retyping queue-order edges (every pair stays exclusive, so nothing runs
-   together); and reading different files or a clean merge as independence
-   (two contracts can touch disjoint files and still disagree about a
-   field's meaning).
-2. **At most two contract implementations are active at once**, inside the
-   four-front width. `AGENTS.md` (Contract Changes) holds the cap and the
-   three conditions for raising it to three. Rejected: starting at three
-   (owner review is the bound, and nothing yet shows it keeps up with two).
-3. **The sequencing rows keep their recorded orders.** Waves 7, 10, and 11
-   now say the spine assesses contract positions at planning. No existing
-   relationship changes with this revision; the spine re-assesses pairs as
-   separate edits.
-4. **The authorization doors are unchanged.** Scheduling and fiat remain the
-   only two. Standing authorization for ad hoc trackers is deferred (#1711),
-   as is a migration protocol for concurrent contract units (#1712).
+1. **Codex account facts come from stored ID-token claims.** #866's fresh
+   baseline answers without a token-endpoint POST, while its near-expiry
+   invocation attempts refresh despite `refreshToken: false`. Local decoding
+   avoids launching the app-server for facts already in the snapshot. Display
+   them as claims from the stored ID token, dated by its own issuance time
+   when available, never by the auth store's `last_refresh`. Unknown claim age,
+   current revocation, and later plan changes stay unknown.
+2. **The safety rule protects credentials, not an attempt counter.** No
+   observation may refresh in a way that could change a credential outside
+   the mutation lease. Access-only snapshots and `provider_only` egress remain
+   mandatory. A tokenless attempt blocked by egress is tolerated, recorded,
+   and scheduled around; it is neither mutation nor a successful observation.
+3. **The lifetime gate belongs on the network usage read.** #1714 measures
+   fresh and near-expiry behavior and fixes a bounded invocation and margin
+   beyond the pinned CLI's five-minute refresh window. Insufficient lifetime
+   defers collection without admitting or withholding executions. #868 is
+   replanned only after this plan revision merges.
 
-(Owner decision of 2026-10-02, #1709;
-[decision note](../devlog/2026-10-02-2238-assessed-contract-serialization.md).)
+(Owner decision of 2026-10-05, #1758, following #866;
+[decision note](../devlog/2026-10-05-1145-codex-observation-boundary.md) and
+[ADR 0004](decisions/0004-read-codex-account-facts-locally.md).)
 
 ## 14. Risks
 
