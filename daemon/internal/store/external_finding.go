@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
@@ -92,4 +93,98 @@ func externalFindingAdmittedBy(
 			p.Forge, p.ReviewerAccountID, p.ReviewerLogin, profile.ProfileDigest, domain.ErrExternalReviewNotAdmitted)
 	}
 	return nil
+}
+
+// ListExternalFindings returns the external findings stored for one run,
+// earliest first by the forge's timestamp and then by ID. Like GetFinding it
+// is a history read and grants nothing: each finding still has to pass
+// GetAdmittedExternalFinding before it may drive a round. Every finding row
+// of the run is reconstructed and validated before the filter, so a damaged
+// row fails the read instead of dropping out of it.
+func (tx *ReadTx) ListExternalFindings(ctx context.Context, runID domain.RunID) ([]domain.Finding, error) {
+	rows, err := tx.tx.QueryContext(ctx,
+		`SELECT id, body FROM findings WHERE run_id = ? ORDER BY id`, runID)
+	if err != nil {
+		return nil, fmt.Errorf("list external findings %q: %w", runID, err)
+	}
+	var out []domain.Finding
+	for rows.Next() {
+		var (
+			id   string
+			body []byte
+		)
+		if err := rows.Scan(&id, &body); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("list external findings %q: %w", runID, err)
+		}
+		finding, err := decode[domain.Finding](body)
+		if err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("list external findings %q row %q: %w", runID, id, err)
+		}
+		if finding.ID != domain.FindingID(id) || finding.RunID != runID {
+			_ = rows.Close()
+			return nil, fmt.Errorf("list external findings %q row %q: %w", runID, id, errRowInconsistent)
+		}
+		if finding.External != nil {
+			out = append(out, finding)
+		}
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, fmt.Errorf("list external findings %q: %w", runID, err)
+	}
+	slices.SortStableFunc(out, func(a, b domain.Finding) int {
+		return a.CreatedAt.Compare(b.CreatedAt)
+	})
+	return out, nil
+}
+
+// ExternalReviewCycleFindings returns the external findings one
+// external_review cycle answers: the run's external findings on the cycle's
+// head whose reviewer the profile the authority names admits, earliest first.
+// The authority is read through its gate, and the named profile is used, not
+// the active one, so the set reads the same after the owner edits the
+// allowlist. The finding the authority names is always in it.
+func (tx *ReadTx) ExternalReviewCycleFindings(
+	ctx context.Context, runID domain.RunID, publication domain.InvocationID,
+) ([]domain.Finding, error) {
+	successor, err := tx.GetPublicationSuccessor(ctx, runID, publication)
+	if err != nil {
+		return nil, fmt.Errorf("external review cycle findings %q: %w", publication, err)
+	}
+	if successor.EffectiveOrigin() != domain.PublicationSuccessorExternalReview || successor.Reentry == nil {
+		return nil, fmt.Errorf("external review cycle findings %q: not an external review cycle: %w",
+			publication, domain.ErrParentKeyMismatch)
+	}
+	ready, err := tx.GetReadyItemPRBinding(ctx, successor.PredecessorItemID)
+	if err != nil || ready.RunID != runID {
+		return nil, fmt.Errorf("external review cycle findings %q: %w",
+			publication, errors.Join(err, domain.ErrParentKeyMismatch))
+	}
+	profile, err := tx.GetTrustProfile(ctx, successor.AdmittingProfileDigest)
+	if err != nil {
+		return nil, fmt.Errorf("external review cycle findings %q: %w",
+			publication, errors.Join(err, domain.ErrExternalReviewNotAdmitted))
+	}
+	all, err := tx.ListExternalFindings(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	var (
+		out   []domain.Finding
+		named bool
+	)
+	for _, finding := range all {
+		if finding.External.HeadSHA != successor.Reentry.HeadSHA ||
+			externalFindingAdmittedBy(finding, profile, ready) != nil {
+			continue
+		}
+		named = named || finding.ID == successor.ExternalFindingID
+		out = append(out, finding)
+	}
+	if !named {
+		return nil, fmt.Errorf("external review cycle findings %q: triggering finding %q is not among them: %w",
+			publication, successor.ExternalFindingID, domain.ErrParentKeyMismatch)
+	}
+	return out, nil
 }

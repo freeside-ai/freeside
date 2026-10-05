@@ -491,6 +491,17 @@ func TestExternalReviewRefusedOnAForeignHead(t *testing.T) {
 				t.Fatal(err)
 			}
 			prior = putReentryReview(t, r.st, r.run.ID, 3, reentryBase3, head)
+			// The trigger asks the same question from a read, while the item
+			// is still open, so a refusal withdraws nothing.
+			for id, want := range map[domain.ItemID]bool{r.item.ID: false, again.ID: tc.foreign} {
+				var foreign bool
+				if err := r.st.Read(context.Background(), func(tx *ReadTx) (err error) {
+					foreign, err = tx.ReadyHeadIsForeign(context.Background(), id)
+					return err
+				}); err != nil || foreign != want {
+					t.Fatalf("ReadyHeadIsForeign(%s) = %t, %v; want %t", id, foreign, err, want)
+				}
+			}
 			supersedeReadyItem(t, r.st, again.ID)
 			external := externalReviewAuthority(r.run.ID, again.ID, prior, finding, admitting)
 			err := r.record(t, external)

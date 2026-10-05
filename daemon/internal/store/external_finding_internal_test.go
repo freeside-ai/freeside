@@ -379,3 +379,155 @@ func TestPreExternalFindingRowConverges(t *testing.T) {
 		t.Fatalf("replayed write of a pre-change finding: %v", err)
 	}
 }
+
+// externalFindingBy builds an external finding one account left on one
+// thread of a published head.
+func externalFindingBy(
+	t *testing.T, runID domain.RunID, head string, accountID int64, login, thread string, at time.Time,
+) domain.Finding {
+	t.Helper()
+	finding, err := domain.NewExternalFinding(domain.ExternalFindingInput{
+		RunID: runID, Forge: domain.ExternalReviewForgeGitHub,
+		ReviewerAccountID: accountID, ReviewerLogin: login,
+		ThreadID: thread, HeadSHA: head,
+		Message: "unchecked error", RawText: "P2: " + thread, CreatedAt: at,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return finding
+}
+
+func findingIDs(findings []domain.Finding) []domain.FindingID {
+	ids := make([]domain.FindingID, len(findings))
+	for i, finding := range findings {
+		ids[i] = finding.ID
+	}
+	return ids
+}
+
+// TestListExternalFindings: the list is one run's external findings, earliest
+// first by the forge's time, whoever left them and on whatever head. It grants
+// nothing, and a damaged finding row of the run fails it.
+func TestListExternalFindings(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := seedExternalReview(t, externalReviewOptions{leaveOpen: true})
+	list := func() ([]domain.Finding, error) {
+		var out []domain.Finding
+		err := f.st.Read(ctx, func(tx *ReadTx) (err error) {
+			out, err = tx.ListExternalFindings(ctx, f.run.ID)
+			return err
+		})
+		return out, err
+	}
+	later := externalFindingBy(t, f.run.ID, reentryHead1,
+		externalReviewerID, externalReviewerLogin, "review_comment/2", reentryAt.Add(time.Minute))
+	unlisted := externalFindingBy(t, f.run.ID, reentryHead2,
+		900, "passer-by", "review_comment/3", reentryAt.Add(-time.Minute))
+	otherRun := f.run
+	otherRun.ID, otherRun.Stages = "run-other", nil
+	native := domain.Finding{
+		ID: "find-native", RunID: f.run.ID, Source: "codex_github", Message: "m", RawText: "r", CreatedAt: reentryAt,
+	}
+	if err := f.st.Write(ctx, func(tx *WriteTx) error {
+		if err := tx.PutRun(ctx, otherRun); err != nil {
+			return err
+		}
+		if err := tx.PutFinding(ctx, native); err != nil {
+			return err
+		}
+		for _, finding := range []domain.Finding{
+			later, unlisted,
+			externalFindingBy(t, otherRun.ID, reentryHead1,
+				externalReviewerID, externalReviewerLogin, "review_comment/4", reentryAt),
+		} {
+			if err := tx.PutExternalFinding(ctx, finding); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := list()
+	want := []domain.FindingID{unlisted.ID, f.finding.ID, later.ID}
+	if err != nil || !reflect.DeepEqual(findingIDs(got), want) {
+		t.Fatalf("ListExternalFindings = %v, %v; want %v", findingIDs(got), err, want)
+	}
+
+	if _, err := f.st.db.ExecContext(ctx, `UPDATE findings SET body = '{' WHERE id = ?`, native.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := list(); err == nil {
+		t.Fatal("a damaged finding row of the run was skipped")
+	}
+}
+
+// TestExternalReviewCycleFindings: a cycle answers the external findings on
+// its head that the profile its authority names admits, and no others. The
+// set does not move when the owner edits the allowlist afterwards.
+func TestExternalReviewCycleFindings(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := seedExternalReview(t, externalReviewOptions{})
+	second := externalFindingBy(t, f.run.ID, reentryHead1,
+		externalReviewerID, externalReviewerLogin, "review_comment/2", reentryAt.Add(time.Minute))
+	for _, finding := range []domain.Finding{
+		second,
+		// An unlisted account, a listed account under another login, and a
+		// listed reviewer on a head that was never published.
+		externalFindingBy(t, f.run.ID, reentryHead1, 900, "passer-by", "review_comment/3", reentryAt),
+		externalFindingBy(t, f.run.ID, reentryHead1, externalReviewerID, "codex-renamed[bot]", "review_comment/4", reentryAt),
+		externalFindingBy(t, f.run.ID, reentryHead2, externalReviewerID, externalReviewerLogin, "review_comment/5", reentryAt),
+	} {
+		putExternalFinding(t, f.st, finding)
+	}
+	if err := f.record(t, f.authority); err != nil {
+		t.Fatal(err)
+	}
+	cycle := func(publication domain.InvocationID) ([]domain.Finding, error) {
+		var out []domain.Finding
+		err := f.st.Read(ctx, func(tx *ReadTx) (err error) {
+			out, err = tx.ExternalReviewCycleFindings(ctx, f.run.ID, publication)
+			return err
+		})
+		return out, err
+	}
+	want := []domain.FindingID{f.finding.ID, second.ID}
+	got, err := cycle(f.authority.PublicationID())
+	if err != nil || !reflect.DeepEqual(findingIDs(got), want) {
+		t.Fatalf("cycle findings = %v, %v; want %v", findingIDs(got), err, want)
+	}
+
+	// The owner removes the reviewer and lists the passer-by. The sealed
+	// cycle still answers what its named profile admitted.
+	activateProfile(t, f.st, f.binding.Repo, f.binding.RepositoryID, reentryAt.Add(time.Hour),
+		reviewerEntry(900, "passer-by"))
+	got, err = cycle(f.authority.PublicationID())
+	if err != nil || !reflect.DeepEqual(findingIDs(got), want) {
+		t.Fatalf("cycle findings after an allowlist edit = %v, %v; want %v", findingIDs(got), err, want)
+	}
+
+	if _, err := cycle("publish-reentry-unknown"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an unsealed cycle: %v, want ErrNotFound", err)
+	}
+}
+
+// TestExternalReviewCycleFindingsRefusesOtherOrigins: only an external_review
+// authority names findings to answer.
+func TestExternalReviewCycleFindingsRefusesOtherOrigins(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := seedReentry(t, domain.ReadinessInvalidationBaseAdvanced, reentryOptions{})
+	if err := r.record(t, r.authority); err != nil {
+		t.Fatal(err)
+	}
+	err := r.st.Read(ctx, func(tx *ReadTx) error {
+		_, err := tx.ExternalReviewCycleFindings(ctx, r.run.ID, r.authority.PublicationID())
+		return err
+	})
+	if !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("a readiness re-entry: %v, want ErrParentKeyMismatch", err)
+	}
+}

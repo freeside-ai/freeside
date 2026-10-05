@@ -349,6 +349,19 @@ func (tx *ReadTx) publishedHeadIsForeign(ctx context.Context, ready domain.Ready
 	}
 }
 
+// ReadyHeadIsForeign reports whether a ready item's published head is one no
+// Freeside invocation produced, which is the head an external_review
+// authority is refused on. It lets the trigger decide that refusal from a
+// read, before it supersedes anything. The binding is read through its gate
+// here, never taken from the caller.
+func (tx *ReadTx) ReadyHeadIsForeign(ctx context.Context, itemID domain.ItemID) (bool, error) {
+	ready, err := tx.GetReadyItemPRBinding(ctx, itemID)
+	if err != nil {
+		return false, err
+	}
+	return tx.publishedHeadIsForeign(ctx, ready)
+}
+
 // requireUninvalidatedPredecessor keeps an invalidated ready item from
 // counting as the current ready item for any authority but re-entry. A cycle
 // that stopped before publication has no item row, which is not an
