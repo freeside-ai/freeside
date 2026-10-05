@@ -4532,10 +4532,17 @@ components:
           minLength: 1
           pattern: '^[ -~]+$'
         egress_profile:
-          type: string
-          enum: [provider_only, provider_web_read, clean_verification]
+          $ref: "#/components/schemas/EgressProfile"
         digest:
           $ref: "#/components/schemas/Digest"
+
+    EgressProfile:
+      type: string
+      description: >
+        The network exposure a stage runs under (plan §5.4). provider_registry
+        adds only the project policy's declared set of public package-registry
+        hosts to provider_only.
+      enum: [provider_only, provider_registry, provider_web_read, clean_verification]
 
     TrustRule:
       type: string

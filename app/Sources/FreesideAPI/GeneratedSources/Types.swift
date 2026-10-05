@@ -9631,13 +9631,7 @@ public enum Components {
             /// - Remark: Generated from `#/components/schemas/CapabilityManifestOffer/name`.
             public var name: Swift.String
             /// - Remark: Generated from `#/components/schemas/CapabilityManifestOffer/egress_profile`.
-            @frozen public enum egress_profilePayload: String, Codable, Hashable, Sendable, CaseIterable {
-                case provider_only = "provider_only"
-                case provider_web_read = "provider_web_read"
-                case clean_verification = "clean_verification"
-            }
-            /// - Remark: Generated from `#/components/schemas/CapabilityManifestOffer/egress_profile`.
-            public var egress_profile: Components.Schemas.CapabilityManifestOffer.egress_profilePayload
+            public var egress_profile: Components.Schemas.EgressProfile
             /// - Remark: Generated from `#/components/schemas/CapabilityManifestOffer/digest`.
             public var digest: Components.Schemas.Digest
             /// Creates a new `CapabilityManifestOffer`.
@@ -9648,7 +9642,7 @@ public enum Components {
             ///   - digest:
             public init(
                 name: Swift.String,
-                egress_profile: Components.Schemas.CapabilityManifestOffer.egress_profilePayload,
+                egress_profile: Components.Schemas.EgressProfile,
                 digest: Components.Schemas.Digest
             ) {
                 self.name = name
@@ -9667,7 +9661,7 @@ public enum Components {
                     forKey: .name
                 )
                 self.egress_profile = try container.decode(
-                    Components.Schemas.CapabilityManifestOffer.egress_profilePayload.self,
+                    Components.Schemas.EgressProfile.self,
                     forKey: .egress_profile
                 )
                 self.digest = try container.decode(
@@ -9680,6 +9674,16 @@ public enum Components {
                     "digest"
                 ])
             }
+        }
+        /// The network exposure a stage runs under (plan §5.4). provider_registry adds only the project policy's declared set of public package-registry hosts to provider_only.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/EgressProfile`.
+        @frozen public enum EgressProfile: String, Codable, Hashable, Sendable, CaseIterable {
+            case provider_only = "provider_only"
+            case provider_registry = "provider_registry"
+            case provider_web_read = "provider_web_read"
+            case clean_verification = "clean_verification"
         }
         /// A definitive publication trust rule surfaced on a blocked card.
         ///
