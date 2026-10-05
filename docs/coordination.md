@@ -256,7 +256,9 @@ see the contract cap's occupancy in one issue list.
 4. Resolve every typed relationship before starting:
    - verify each `starts-after` prerequisite's PR is merged;
    - record each `merges-after` prerequisite for the handoff and integration
-     checks; it does not block start;
+     checks; it does not block start, except on a `kind:contract` unit,
+     where a prerequisite that has not merged blocks start as `starts-after`
+     does (Relationship Types);
    - for each `stacked-on` relation, use the named branch explicitly while its
      base PR is open, and verify any existing child PR still names that base.
      If the base has merged, treat the relation as satisfied: start unbegun
@@ -554,7 +556,14 @@ never creates a relationship or authorizes work.
   after the prerequisite's PR. This constrains integration order, never start
   order. Example: two disjoint documentation units may proceed in parallel
   while the later vocabulary consumer declares `merges-after: #791` so the
-  spine integrates the defining change first.
+  spine integrates the defining change first. A `kind:contract` unit
+  declares none (AGENTS.md, Contract Changes). Its open PR is an active
+  claim with no expiry that counts toward the contract cap, so one that
+  waits to merge holds a slot through another unit's work. Its ordering
+  prerequisites are `starts-after`, and the claim gate reads a
+  `merges-after` left on it the same way until the spine retypes or removes
+  it. A tracker's diagram and **Startable now** still follow the field as
+  written (Tracking Issues); retyping the field is what repairs them.
 - **`stacked-on`:** A unit intentionally bases its branch and PR on another
   unit's open PR branch. Example: #65 was stacked on #91's
   `feat/store-snapshot-meta` branch so it could use the unmerged store snapshot
@@ -594,10 +603,12 @@ the rationale:
 
 - **A verdict other than independent is the typed relationship it yields,**
   with the assessment as its rationale: `exclusive-with` for a conflict,
-  `starts-after` for a dependency, `merges-after` for an integration order.
-  An independent pair may also carry `merges-after` when the spine fixes
-  its integration order. A `merges-after` edge alone is not an independence
-  record.
+  `starts-after` for a dependency or a required integration order. No
+  verdict yields `merges-after`, because a contract unit declares none. An
+  independent pair carries no order: either unit may merge first, and the
+  second revalidates against the first (AGENTS.md, Integration Ordering and
+  Merge-Result Audit). A `merges-after` edge left between two contract
+  units is not an independence record.
 - **A pair without the record on both issues is unassessed.** It serializes:
   claims and planning reservations treat it as conflicting, and the spine
   records it as `starts-after` when it places a unit in the assessed
