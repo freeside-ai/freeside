@@ -115,8 +115,9 @@ only what this wave genuinely needs.
 - Shape and sequencing come from the table row; encode required
   serialization, integration order, and intentional stacks in each unit's
   Dependencies field.
-- Size each unit against the budget, amplifier list, and split seams in
-  docs/coordination.md (Unit Sizing): estimate the expected PR's
+- Size each unit against the budget, amplifier list, split seams, and
+  first-consumer exception in docs/coordination.md (Unit Sizing):
+  estimate the expected PR's
   authored lines, including migrations and mock parity, and declare
   goldens and generated clients beside the estimate without counting
   them;

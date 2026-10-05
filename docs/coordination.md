@@ -475,7 +475,9 @@ unit:
 - persistence first: migration, store accessors, and goldens as one
   unit, with the behavior consuming them following;
 - contract first: a new field and the behavior using it are two units
-  even when the field alone looks trivial;
+  by default, even when the field alone looks trivial; a `kind:contract`
+  unit may instead carry its first behavioral consumer under the
+  conditions below;
 - happy path, then hardening: the working skeleton with its tests lands
   first; failure, recovery, and drift-tolerance behaviors follow as
   their own units;
@@ -484,6 +486,48 @@ unit:
   or as an intentionally declared `stacked-on` pull request on a
   non-contract base; a contract-first split's dependent always waits
   for the contract unit to merge.
+
+**A contract unit may carry its first behavioral consumer.** One unit
+then holds the contract change and the first behavior that uses it,
+when both conditions hold:
+
+- **The two can be understood and verified together.** A reviewer reads
+  the contract change and the behavior as one change, and one
+  verification run exercises both.
+- **No other contract unit is waiting for the slot.** The combined
+  unit's pull request stays open longer than the contract change alone
+  would, and an open contract pull request holds one of the cap's slots
+  until it merges (AGENTS.md, Contract Changes). Another open
+  `kind:contract` unit is a candidate when it holds no active claim and
+  it is scheduled, the wave planning in progress will schedule it, or
+  it holds a planning reservation. A candidate is waiting when this
+  unit is what would hold it back:
+  - it `starts-after` this unit;
+  - the pair is `exclusive-with`, or the spine has not assessed it as
+    independent with the consumer included; or
+  - only the cap would hold it back: its `starts-after` prerequisites
+    have merged, it conflicts with no unit that holds an active claim,
+    and the slot this unit would hold is the one it needs.
+
+  A unit that is not a candidate is not waiting, whatever tracker lists
+  it.
+
+The split stays the default. Keep it when the parts are each valuable
+alone, when the contract serves several consumers, or when splitting
+isolates design uncertainty.
+
+The combined unit owes everything a contract unit owes. It stays
+`kind:contract`, declares every component it touches, and gets contract
+review and regenerated-output verification. Every further consumer
+waits for its merge. The budget applies to it as to any other unit.
+
+Check both conditions where the unit is shaped: at wave decomposition,
+and again at planning. The Dependencies fields and
+`scripts/trackercollect contracts` supply the evidence. Folding a
+consumer into a contract unit is a spine or owner action, as executing
+a split is; planning proposes the fold in the plan comment. The fold
+edits the unit's Objective and Scope, so it withdraws the unit's
+independence records (Relationship Types).
 
 The budget applies at three checkpoints. Wave decomposition estimates
 coarsely and splits the obvious cases. The planning stage refines the
