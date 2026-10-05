@@ -320,7 +320,13 @@ func (w *productionPublicationWorkflow) startPublicationContinuation(ctx context
 		if err := intent.persist(ctx, tx, artifact.CreatedAt); err != nil {
 			return err
 		}
-		return persistFindingRouteDispositions(ctx, tx, artifact, routes, artifact.CreatedAt)
+		if err := persistFindingRouteDispositions(ctx, tx, artifact, routes, artifact.CreatedAt); err != nil {
+			return err
+		}
+		// An accepted separate-work route was proposed when its decision
+		// landed; only the deferred rows are new here.
+		return w.proposeFollowUpFilings(ctx, tx, source.ProjectID, artifact, routes,
+			domain.FollowUpSourceDeferredDisposition)
 	})
 	if errors.Is(err, store.ErrPublicationCompleted) {
 		return w.refuseCompletedPublicationContinuation(ctx, source)

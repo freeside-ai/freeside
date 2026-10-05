@@ -1560,6 +1560,14 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 	if err != nil {
 		return productionReviewPending, err
 	}
+	if command != nil {
+		// The operator accepted the routes, which concludes a separate-work
+		// verdict. An undecided item proposes nothing: a discuss reply can
+		// still revise the adjudication.
+		if err := w.proposeSeparateWorkFilings(ctx, task, artifact, routes); err != nil {
+			return productionReviewPending, err
+		}
+	}
 	needsFindingAttention := false
 	needsDisputeAttention := false
 	for _, entry := range artifact.Entries {
@@ -1704,7 +1712,11 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 				return err
 			}
 		}
-		return persistFindingRouteDispositions(ctx, tx, artifact, routes, dispositionAt)
+		if err := persistFindingRouteDispositions(ctx, tx, artifact, routes, dispositionAt); err != nil {
+			return err
+		}
+		return w.proposeFollowUpFilings(ctx, tx, task.ProjectID, artifact, routes,
+			domain.FollowUpSourceDeferredDisposition)
 	}); err != nil {
 		return productionReviewPending, err
 	}

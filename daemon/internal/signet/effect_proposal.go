@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -12,10 +14,11 @@ import (
 
 // OpenEffectProposalItem opens (or returns) the effect_proposal attention item
 // for one stored closure proposal instance and the prospective merge its pull
-// request has now. It is the only path that creates an effect_proposal item:
-// generic intake refuses the type (ValidateItemIntake), so the trusted context
-// here (a re-gated closure instance and a validated merge) is the item's sole
-// authority.
+// request has now. It and OpenEffectProposalNotice are the only paths that
+// create a closure's effect_proposal item, and OpenFollowUpFilingItem the only
+// one that creates a filing's: generic intake refuses the type
+// (ValidateItemIntake), so the trusted context here (a re-gated closure
+// instance and a validated merge) is the item's sole authority.
 //
 // The call is idempotent for the same instance and merge: a repeat returns the
 // existing open item and writes nothing. A different merge (a new candidate
@@ -188,6 +191,91 @@ func (s *Service) newEffectProposalItem(
 		return domain.AttentionItem{}, domain.Artifact{}, err
 	}
 	return item, artifact, nil
+}
+
+// followUpFilingItemReason is fixed daemon text. The finding and adjudicator
+// text a filing carries appears only in its proposal's screened title and
+// body, never in the item's reason.
+const followUpFilingItemReason = "Decide whether to file the follow-up issue"
+
+// OpenFollowUpFilingItem opens (or returns) the effect_proposal attention item
+// for one stored follow_up_filing instance. It runs inside the caller's
+// transaction, so a producer commits the instance, the item, and their binding
+// together with the row that concluded the filing's source.
+//
+// The instance is read back by ID, which re-runs the registry gate, so the
+// item's authority is the stored row and never a caller's struct. A filing
+// binds no prospective merge, so nothing supersedes its item and the ID needs
+// no per-open suffix: a repeat call returns the item it finds, open or
+// decided, and writes nothing. The item offers approve, decline, and snooze;
+// a filing cannot be approved with changes.
+func OpenFollowUpFilingItem(
+	ctx context.Context,
+	tx *store.WriteTx,
+	instanceID domain.ProposalInstanceID,
+	now time.Time,
+) (domain.AttentionItem, error) {
+	instance, err := tx.GetProposalInstance(ctx, instanceID)
+	if err != nil {
+		return domain.AttentionItem{}, fmt.Errorf("open follow-up filing item %q: %w", instanceID, err)
+	}
+	filing := instance.Proposal.FilingProposal
+	if instance.Proposal.Kind != domain.EffectFollowUpFiling || filing == nil {
+		return domain.AttentionItem{}, fmt.Errorf("open follow-up filing item %q: not a filing proposal: %w",
+			instanceID, domain.ErrEffectProposalInconsistent)
+	}
+	itemID := domain.ItemID(string(instance.ID) + "/effect")
+	existing, err := tx.GetAttentionItem(ctx, itemID)
+	if err == nil {
+		return existing, nil
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return domain.AttentionItem{}, fmt.Errorf("open follow-up filing item %q: %w", instanceID, err)
+	}
+	declaration, _, err := tx.ResolveProposalSubject(ctx, filing.SubjectHandle)
+	if err != nil {
+		return domain.AttentionItem{}, fmt.Errorf("open follow-up filing item %q: %w", instanceID, err)
+	}
+	subject := domain.Subject{
+		Type: domain.SubjectProposalBatch, ID: domain.SubjectID(instance.ProposalBatchID),
+	}
+	names, err := tx.DisplayNamesFor(ctx, declaration.ProjectID, subject)
+	if err != nil {
+		return domain.AttentionItem{}, fmt.Errorf("open follow-up filing item %q: %w", instanceID, err)
+	}
+	artifact, err := instance.EvidenceArtifact()
+	if err != nil {
+		return domain.AttentionItem{}, fmt.Errorf("open follow-up filing item %q: %w", instanceID, err)
+	}
+	createdAt := now.UTC()
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID:                itemID,
+		ProjectID:         declaration.ProjectID,
+		Subject:           subject,
+		Type:              domain.AttentionEffectProposal,
+		Priority:          domain.PriorityNormal,
+		Reason:            followUpFilingItemReason,
+		RequestedDecision: []domain.Action{domain.ActionApprove, domain.ActionDecline, domain.ActionSnooze},
+		EvidenceSnapshot:  []domain.Artifact{artifact},
+		ItemVersion:       1,
+		DisplayNames:      names,
+		InterruptionClass: domain.InterruptionPlannedGate,
+		Status:            domain.StatusOpen,
+		CreatedAt:         &createdAt,
+	}, map[domain.Digest]bool{domain.EffectProposalRecipeDigest: true})
+	if err != nil {
+		return domain.AttentionItem{}, fmt.Errorf("open follow-up filing item %q: %w", instanceID, err)
+	}
+	if err := tx.PutArtifact(ctx, artifact); err != nil {
+		return domain.AttentionItem{}, fmt.Errorf("open follow-up filing item %q artifact: %w", instanceID, err)
+	}
+	if err := tx.PutAttentionItem(ctx, item); err != nil {
+		return domain.AttentionItem{}, fmt.Errorf("open follow-up filing item %q item: %w", instanceID, err)
+	}
+	if err := tx.BindProposalItem(ctx, item.ID, instance.ID, instance.Proposal.Digest, nil); err != nil {
+		return domain.AttentionItem{}, fmt.Errorf("open follow-up filing item %q bind: %w", instanceID, err)
+	}
+	return item, nil
 }
 
 // randomItemSuffix produces a unique per-open item-id suffix. Each open for a
