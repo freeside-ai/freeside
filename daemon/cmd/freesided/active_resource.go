@@ -78,7 +78,17 @@ type activeResourceObservation struct {
 	// retries.
 	nativeObservations []domain.NativeReviewObservation
 	nativeErr          error
-	foreclosure        *completionForeclosure
+	// externalFindings are the same fetch's review activity as external
+	// findings, one per counted review body and inline comment whoever wrote
+	// it (plan §5.19; issue #524). externalSkipped names the activity that
+	// could not be a valid finding.
+	externalFindings []domain.Finding
+	externalSkipped  []error
+	// boundOpen reports that the pass saw the pull request open and still the
+	// bound one, the only state in which its review activity is read and an
+	// external finding may start a cycle.
+	boundOpen   bool
+	foreclosure *completionForeclosure
 	// held marks an observation of a publication hold's pull request, read
 	// through the held binding because the run has no ready item (issue #531).
 	// It is always completion-only: it records facts and work-unit completion
@@ -105,6 +115,9 @@ type completionRecoveryState struct {
 type activeResourceReconcileResult struct {
 	operatorActive bool
 	failures       []error
+	// skipped names review activity a pass read and could not store as an
+	// external finding. Nothing retries it: the activity itself is unusable.
+	skipped []error
 }
 
 func validateObservedPullIdentityCoordinates(repositoryID int64, prNumber int) error {
@@ -235,6 +248,9 @@ func (r activeResourceReconciler) Run(
 			// Isolated per-item failures: the pass converged around them, so
 			// they are error severity without being loop-fatal.
 			logger.Error("active resource observation failed", "error", failure)
+		}
+		for _, skip := range result.skipped {
+			logger.Warn("external review activity skipped", "error", skip)
 		}
 		if result.operatorActive != operatorActive {
 			operatorActive = result.operatorActive
@@ -429,8 +445,59 @@ func (r *activeResourceReconciler) Reconcile(
 				}
 			}
 		}
+		// External findings ride the same fetch and are isolated the same way:
+		// their own transaction, a collected failure, and an evicted cache so
+		// the retry rebuilds them.
+		result.skipped = append(result.skipped, observation.externalSkipped...)
+		if len(observation.externalFindings) > 0 {
+			if err := r.commitExternalFindings(ctx, observation); err != nil {
+				result.failures = append(result.failures,
+					fmt.Errorf("record external review %s: %w", item.ID, err))
+				r.dropReviewCache(observation.binding)
+			}
+		}
+		// An admitted external finding on the published head withdraws
+		// readiness and starts a review cycle (issue #524). The trigger reads
+		// the store, not this pass's fetch, so it runs on every pass: it also
+		// picks up a finding stored before a crash and a reviewer the owner
+		// listed after their comment arrived. A failure is isolated like the
+		// intake's and retried on the next pass.
+		if observation.boundOpen && observation.invalidation == nil && !observation.conclude {
+			if err := r.startExternalReview(ctx, item.ID, observation.pull.ObservedAt); err != nil {
+				result.failures = append(result.failures,
+					fmt.Errorf("start external review %s: %w", item.ID, err))
+			}
+		}
 	}
 	return result, nil
+}
+
+// startExternalReview starts an external review cycle for a ready item when
+// one is due. The cycle starts in its own transaction: the store seals its
+// authority only against an item that is already superseded, so the
+// supersession, the authority, and the task commit together or not at all,
+// and the item stays open when anything fails. The transaction is opened
+// only when a cycle is due, because every write transaction advances the
+// client-visible revision.
+func (r activeResourceReconciler) startExternalReview(
+	ctx context.Context, itemID domain.ItemID, observedAt time.Time,
+) error {
+	var due bool
+	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		due, err = engine.ExternalReviewReentryDue(ctx, tx, itemID)
+		return err
+	}); err != nil || !due {
+		return err
+	}
+	return r.store.Write(ctx, func(tx *store.WriteTx) error {
+		started, err := engine.StartExternalReviewReentry(ctx, tx, itemID)
+		if err != nil || !started {
+			return err
+		}
+		// The item is no longer ready, so its watches end with it.
+		return concludePublicationSchedules(ctx, tx, itemID, observedAt)
+	})
 }
 
 // reconcileHeldResource observes the pull request behind an open publication
@@ -788,6 +855,7 @@ func (r activeResourceReconciler) observeReadyResource(
 		foreclosure   *completionForeclosure
 		bindingAbsent bool
 		mergeRecorded bool
+		reviewFetched bool
 	)
 	if held && !completionOnly {
 		return activeResourceObservation{}, errors.New("a held resource is observed for completion only")
@@ -933,13 +1001,16 @@ func (r activeResourceReconciler) observeReadyResource(
 	// ready (plan §5.16). The observer's failure is isolated into nativeErr so
 	// it never blocks the pull/issue facts; on success, unchanged activity
 	// (a 304 across all sub-resources) yields nothing to record.
-	if !completionOnly && r.review != nil && exact && pullFact.State == domain.PullRequestOpen {
+	observation.boundOpen = !completionOnly && exact && pullFact.State == domain.PullRequestOpen
+	if observation.boundOpen && r.review != nil {
 		reviewObs, err := r.review(ctx, binding.Repo, binding.PRNumber)
 		switch {
 		case err != nil:
 			observation.nativeErr = fmt.Errorf("observe native review %s#%d: %w", binding.Repo, binding.PRNumber, err)
 		case !reviewObs.NotModified:
+			reviewFetched = true
 			observation.nativeObservations = buildNativeReviewObservations(reviewObs, binding, r.reviewers, observedAt)
+			observation.externalFindings, observation.externalSkipped = buildExternalFindings(reviewObs, binding)
 		}
 	}
 	if declaration != nil && unitBinding != nil && !completed && exact && pullFact.Merged &&
@@ -1025,9 +1096,23 @@ func (r activeResourceReconciler) observeReadyResource(
 		}
 		return nil
 	}); err != nil {
+		// The observation is discarded with the review activity it fetched.
+		if reviewFetched {
+			r.dropReviewCache(binding)
+		}
 		return activeResourceObservation{}, err
 	}
 	return observation, nil
+}
+
+// dropReviewCache evicts the review observer's validators for a pull request
+// whose fetched activity was not stored. The observer advanced its ETags on
+// the fetch, so without this the next pass would be answered 304 and the
+// unstored activity would stay unread until the pull request changed again.
+func (r activeResourceReconciler) dropReviewCache(binding domain.ReadyItemPRBinding) {
+	if r.reviewInvalidate != nil {
+		r.reviewInvalidate(binding.Repo, binding.PRNumber)
+	}
 }
 
 func (r activeResourceReconciler) commit(ctx context.Context, observation activeResourceObservation) error {

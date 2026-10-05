@@ -126,6 +126,10 @@ type fakeGitHub struct {
 	// labelIssuesPageSize, when non-zero, paginates the labeled open-issue list
 	// with rel="next" Link headers (default: one page).
 	labelIssuesPageSize int
+	// reviewActivityPageSize, when non-zero, paginates a pull request's
+	// reviews and inline review comments with rel="next" Link headers
+	// (default: one page).
+	reviewActivityPageSize int
 
 	// Native review activity per PR number, each list ETag'd by its revision
 	// counter (bump to invalidate). reviews are submitted reviews, comments
@@ -173,7 +177,10 @@ func newFakeGitHub(t *testing.T) *fakeGitHub {
 }
 
 type fakeReview struct {
-	ID          int64
+	ID int64
+	// AccountID is the author's account ID; 0 serves a user with no id, the
+	// shape every fixture had before the field was read.
+	AccountID   int64
 	Login       string
 	State       string
 	Body        string
@@ -181,15 +188,53 @@ type fakeReview struct {
 	SubmittedAt string // RFC3339; "" is a pending review
 }
 
+// fakeReviewPage returns the requested page of one review activity list and
+// sets the rel="next" Link header when another page follows. A zero pageSize
+// serves the whole list as one page.
+func fakeReviewPage(
+	w http.ResponseWriter, r *http.Request, rows []map[string]any, pageSize int,
+) []map[string]any {
+	if pageSize <= 0 {
+		return rows
+	}
+	page, err := strconv.Atoi(r.URL.Query().Get("page"))
+	if err != nil || page < 1 {
+		page = 1
+	}
+	start := min((page-1)*pageSize, len(rows))
+	end := min(start+pageSize, len(rows))
+	if end < len(rows) {
+		w.Header().Set("Link", fmt.Sprintf(`<http://%s%s?per_page=100&page=%d>; rel="next"`,
+			r.Host, r.URL.Path, page+1))
+	}
+	return rows[start:end]
+}
+
 type fakeReviewComment struct {
 	ID        int64
 	ReviewID  int64
+	AccountID int64 // see fakeReview
 	Login     string
 	Path      string
 	Line      *int
 	Body      string
 	CommitID  string
 	CreatedAt string
+	// The fields below are served only when set, so a fixture without them
+	// is the response shape from before they were read.
+	InReplyToID       int64
+	OriginalCommitID  string
+	OriginalStartLine *int
+	OriginalLine      *int
+}
+
+// fakeUserJSON renders a review author, omitting an unset account ID.
+func fakeUserJSON(accountID int64, login string) map[string]any {
+	user := map[string]any{"login": login}
+	if accountID != 0 {
+		user["id"] = accountID
+	}
+	return user
 }
 
 type fakeReaction struct {
@@ -388,12 +433,12 @@ func (g *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		out := []map[string]any{}
 		for _, rv := range g.reviews[number] {
 			out = append(out, map[string]any{
-				"id": rv.ID, "user": map[string]any{"login": rv.Login},
+				"id": rv.ID, "user": fakeUserJSON(rv.AccountID, rv.Login),
 				"state": rv.State, "body": rv.Body, "commit_id": rv.CommitID,
 				"submitted_at": rv.SubmittedAt,
 			})
 		}
-		_ = json.NewEncoder(w).Encode(out)
+		_ = json.NewEncoder(w).Encode(fakeReviewPage(w, r, out, g.reviewActivityPageSize))
 
 	case r.Method == http.MethodGet && strings.HasPrefix(path, testRepoPath+"/pulls/") && strings.HasSuffix(path, "/comments"):
 		number, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(path, testRepoPath+"/pulls/"), "/comments"))
@@ -411,15 +456,27 @@ func (g *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		for _, c := range g.reviewComments[number] {
 			row := map[string]any{
 				"id": c.ID, "pull_request_review_id": c.ReviewID,
-				"user": map[string]any{"login": c.Login}, "path": c.Path,
+				"user": fakeUserJSON(c.AccountID, c.Login), "path": c.Path,
 				"line": nil, "body": c.Body, "commit_id": c.CommitID, "created_at": c.CreatedAt,
 			}
 			if c.Line != nil {
 				row["line"] = *c.Line
 			}
+			if c.InReplyToID != 0 {
+				row["in_reply_to_id"] = c.InReplyToID
+			}
+			if c.OriginalCommitID != "" {
+				row["original_commit_id"] = c.OriginalCommitID
+			}
+			if c.OriginalStartLine != nil {
+				row["original_start_line"] = *c.OriginalStartLine
+			}
+			if c.OriginalLine != nil {
+				row["original_line"] = *c.OriginalLine
+			}
 			out = append(out, row)
 		}
-		_ = json.NewEncoder(w).Encode(out)
+		_ = json.NewEncoder(w).Encode(fakeReviewPage(w, r, out, g.reviewActivityPageSize))
 
 	case r.Method == http.MethodGet && strings.HasPrefix(path, testRepoPath+"/issues/") && strings.HasSuffix(path, "/reactions"):
 		number, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(path, testRepoPath+"/issues/"), "/reactions"))

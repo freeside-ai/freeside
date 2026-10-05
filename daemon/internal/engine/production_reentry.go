@@ -373,6 +373,14 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 		}
 		binding.evaluatedSHA = merge
 	} else if !fetched.DescendsFromBase {
+		if task.answersExternalReview() {
+			// The last review covered the head's merge into an advanced base.
+			// The external review authority admits no prospective merge, so
+			// this cycle has nothing it may review.
+			return w.stopReentryCycle(ctx, task, fmt.Sprintf(
+				"Freeside did not review pull request head %s again because it does not descend from the reviewed base %s. That is expected after the base advanced: the last review covered their merge, and this cycle reviews only the head.",
+				task.HeadSHA, base.BaseSHA), nil)
+		}
 		return w.stopReentryCycle(ctx, task, fmt.Sprintf(
 			"Readiness re-entry stopped because the pull request head %s does not descend from the reviewed base %s. Inspect the pull request.",
 			task.HeadSHA, base.BaseSHA), nil)
@@ -549,6 +557,10 @@ func (w *productionPublicationWorkflow) stopReentryCycle(
 	reason string,
 	artifacts []domain.Artifact,
 ) (productionTaskOutcome, error) {
+	reason, err := w.withExternalReviewFindings(ctx, task, reason)
+	if err != nil {
+		return productionTaskOutcome{}, err
+	}
 	pull, err := w.reentryPullRequest(ctx, task)
 	if err != nil {
 		return productionTaskOutcome{}, err
