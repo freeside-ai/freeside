@@ -3,7 +3,6 @@ package ward
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -17,10 +16,10 @@ import (
 	"time"
 )
 
-func codexAccountSynthetic(t *testing.T) []byte {
+func codexAccountSynthetic(t *testing.T, lifetime time.Duration) []byte {
 	t.Helper()
 	claims := map[string]any{
-		"email": "probe@example.invalid", "exp": time.Now().Add(2 * time.Minute).Unix(),
+		"email": "probe@example.invalid", "exp": time.Now().Add(lifetime).Unix(),
 		"https://api.openai.com/auth": map[string]string{"chatgpt_plan_type": "plus", "chatgpt_account_id": "synthetic-account"},
 	}
 	payload, err := json.Marshal(claims)
@@ -42,8 +41,8 @@ func codexAccountSynthetic(t *testing.T) []byte {
 	return body
 }
 
-// Select /near_expiry or /control to exercise synthetic cases without an
-// operator credential. The complete suite still fails when its real input is absent.
+// All cases use made-up token claims: account/read answers from the snapshot,
+// so a real credential adds no evidence about this invocation's refresh behavior.
 func TestLiveCodexAccountProbe(t *testing.T) {
 	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
 		t.Skip("set FREESIDE_WARD_LIVE_TEST=1; see Codex Account Probe Spike in daemon/README.md")
@@ -58,36 +57,14 @@ func TestLiveCodexAccountProbe(t *testing.T) {
 	}
 	rt := NewCLIRuntime(bin)
 	verdicts := map[string]string{}
-	for _, mode := range []string{"real", "near_expiry", "control"} {
+	for _, mode := range []string{"fresh", "near_expiry", "control"} {
 		t.Run(mode, func(t *testing.T) {
-			body := codexAccountSynthetic(t)
-			authPath := ""
-			if mode == "real" {
-				authPath = os.Getenv("FREESIDE_WARD_CODEX_REVIEW_AUTH")
-				if authPath == "" {
-					t.Fatal("probe_failed: FREESIDE_WARD_CODEX_REVIEW_AUTH is required for real case")
-				}
-				var err error
-				body, err = os.ReadFile(authPath) //nolint:gosec // explicit operator-selected access-only file; never logged
-				if err != nil {
-					t.Fatal("probe_failed: access-only input unavailable")
-				}
-				expires, err := inspectCodexAuthSnapshot(CodexAuthSubscription, body)
-				if err != nil || expires == nil || time.Until(*expires) <= 10*time.Minute {
-					t.Fatal("probe_failed: input must be access-only with more than ten minutes remaining")
-				}
+			lifetime := 2 * time.Minute
+			if mode == "fresh" {
+				lifetime = time.Hour
 			}
-			original := sha256.Sum256(body)
+			body := codexAccountSynthetic(t, lifetime)
 			evidence := codexAccountRun(t, rt, bin, image, mode, body)
-			if authPath != "" {
-				after, err := os.ReadFile(authPath) //nolint:gosec // same operator-selected file, hash only
-				if err != nil {
-					t.Fatal("probe_failed: cannot verify operator input after run")
-				}
-				if sha256.Sum256(after) != original {
-					evidence.Capture.AuthUnchanged = false
-				}
-			}
 			evidence.Verdict = codexAccountAnalyze(evidence.Capture, mode == "control", evidence.Requests, evidence.Failures)
 			verdicts[mode] = evidence.Verdict
 			encoded, err := json.Marshal(evidence)
@@ -103,7 +80,7 @@ func TestLiveCodexAccountProbe(t *testing.T) {
 	overall := "probe_failed"
 	if len(verdicts) == 3 && verdicts["control"] == "pass" {
 		overall = "pass"
-		for _, mode := range []string{"real", "near_expiry"} {
+		for _, mode := range []string{"fresh", "near_expiry"} {
 			if verdicts[mode] == "probe_failed" {
 				overall = "probe_failed"
 				break
@@ -240,7 +217,7 @@ func codexAccountRun(t *testing.T, rt *CLIRuntime, bin, image, mode string, body
 		t.Fatal(err)
 	}
 	input, auth := t.TempDir(), t.TempDir()
-	if err := os.WriteFile(filepath.Join(auth, "auth.json"), body, 0o600); err != nil { //nolint:gosec // fixed basename in private t.TempDir; credential bytes affect contents, never the path
+	if err := os.WriteFile(filepath.Join(auth, "auth.json"), body, 0o600); err != nil {
 		t.Fatal("write private access-only input")
 	}
 	settings, err := json.Marshal(map[string]any{

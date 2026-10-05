@@ -203,8 +203,8 @@ func newCodexAccountProxy(t *testing.T, subnet string) *codexAccountProxy {
 	return p
 }
 
-func codexAccountRequestLabel(host, path string) string {
-	if strings.EqualFold(host, "auth.openai.com") || strings.Contains(strings.ToLower(path), "oauth/token") {
+func codexAccountRequestLabel(method, path string) string {
+	if method == http.MethodPost && path == "/oauth/token" {
 		return "blocked_refresh"
 	}
 	return "blocked_other"
@@ -229,7 +229,7 @@ func (p *codexAccountProxy) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method != http.MethodConnect {
-		p.record(codexAccountRequestLabel(r.URL.Hostname(), r.URL.Path))
+		p.record(codexAccountRequestLabel(r.Method, r.URL.Path))
 		http.Error(w, "denied", http.StatusForbidden)
 		return
 	}
@@ -278,7 +278,7 @@ func (p *codexAccountProxy) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = request.Body.Close() }()
-	p.record(codexAccountRequestLabel(strings.TrimSuffix(r.Host, ":443"), request.URL.Path))
+	p.record(codexAccountRequestLabel(request.Method, request.URL.Path))
 	_, _ = io.WriteString(secure, "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
 }
 
@@ -293,8 +293,21 @@ func TestCodexAccountProxy(t *testing.T) {
 	transport := &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport}
-	for _, target := range []string{"https://auth.openai.com/oauth/token?secret=never-log", "https://chatgpt.com/oauth/token", "https://chatgpt.com/unknown-private-id"} {
-		response, err := client.Post(target, "application/json", strings.NewReader(`{"refresh_token":"synthetic"}`))
+	for _, tc := range []struct{ method, target string }{
+		{http.MethodPost, "https://auth.openai.com/oauth/token?secret=never-log"},
+		{http.MethodPost, "https://chatgpt.com/oauth/token"},
+		{http.MethodGet, "https://auth.openai.com/oauth/token"},
+		{http.MethodPost, "https://auth.openai.com/unknown-private-id"},
+		{http.MethodPost, "https://chatgpt.com/prefix/oauth/token"},
+		{http.MethodPost, "https://chatgpt.com/oauth/token/suffix"},
+		{http.MethodPost, "http://auth.openai.com/oauth/token"},
+		{http.MethodGet, "http://auth.openai.com/oauth/token"},
+	} {
+		request, err := http.NewRequest(tc.method, tc.target, strings.NewReader(`{"refresh_token":"synthetic"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, err := client.Do(request)
 		if err != nil {
 			t.Fatal("proxy request failed")
 		}
@@ -305,7 +318,7 @@ func TestCodexAccountProxy(t *testing.T) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if strings.Join(p.requests, ",") != "blocked_refresh,blocked_refresh,blocked_other" || p.failures != 0 {
+	if strings.Join(p.requests, ",") != "blocked_refresh,blocked_refresh,blocked_other,blocked_other,blocked_other,blocked_other,blocked_refresh,blocked_other" || p.failures != 0 {
 		t.Fatal("classification differs")
 	}
 }
@@ -413,6 +426,10 @@ func TestCodexAccountCaptureStrict(t *testing.T) {
 // Exercise the actual in-container reducer with synthetic values. jq is also
 // a declared image/runtime tool; this test needs no provider or network.
 func TestCodexAccountSanitizer(t *testing.T) {
+	jq, err := exec.LookPath("jq")
+	if err != nil {
+		t.Fatal("jq is required for the Codex account sanitizer tests; install jq and put it on PATH")
+	}
 	for _, tc := range []struct {
 		name  string
 		body  string
@@ -427,7 +444,7 @@ func TestCodexAccountSanitizer(t *testing.T) {
 		{"wrong type", `{"requiresOpenaiAuth":true,"account":{"type":"chatgpt","email":{},"planType":"plus"}}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd := exec.Command("jq", "-ef", "testdata/codex_account_sanitize.jq")
+			cmd := exec.Command(jq, "-ef", "testdata/codex_account_sanitize.jq")
 			cmd.Stdin = strings.NewReader(tc.body)
 			out, err := cmd.Output()
 			if (err == nil) != tc.valid {
