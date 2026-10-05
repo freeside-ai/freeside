@@ -895,52 +895,67 @@ func authStoreObservation(hs HandoffSpec, st *runState, postDigest string) AuthS
 // exported root filesystem, bound to this run by the unpredictable nonce, and
 // the observer is proven absent before the flow continues.
 func (b *Backend) observeCredentialStore(ctx context.Context, hs HandoffSpec, name string, st *runState, claim *objectClaim) (string, error) {
+	proof, err := b.observeCredentialProof(ctx, hs, name, st, claim, false)
+	return proof.tree, err
+}
+
+// observeCredentialProof is observeCredentialStore's observation, returning
+// the whole parsed proof. With integrity set the observer runs the integrity
+// script instead of the gate's, in the same container shape and under the
+// same allowlist, and the proof must carry the token facts.
+func (b *Backend) observeCredentialProof(
+	ctx context.Context, hs HandoffSpec, name string, st *runState, claim *objectClaim, integrity bool,
+) (credProof, error) {
 	spec := buildCredentialObserverSpec(b.cfg, hs, name, st.ownershipLabel)
+	if integrity {
+		spec.Command = credIntegrityObserverCommand(b.cfg, st.ownershipLabel.Value, hs.leasedCredentialTarget())
+	}
 	claim.attempted = true
 	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return "", failf(CheckAuthStoreMutationLease, "create credential observer container: %v", err)
+		return credProof{}, failf(CheckAuthStoreMutationLease, "create credential observer container: %v", err)
 	}
 	claim.owned = true
 	rep, err := b.rt.Inspect(ctx, name)
 	if err != nil {
-		return "", failf(CheckAuthStoreMutationLease, "inspect credential observer before execution: %v", err)
+		return credProof{}, failf(CheckAuthStoreMutationLease, "inspect credential observer before execution: %v", err)
 	}
 	if err := verifyCredentialObserverAllowlist(rep, spec); err != nil {
-		return "", err
+		return credProof{}, err
 	}
 	claim.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel)
 	if err != nil {
-		return "", failf(CheckAuthStoreMutationLease, "credential observer container %q: %v", name, err)
+		return credProof{}, failf(CheckAuthStoreMutationLease, "credential observer container %q: %v", name, err)
 	}
 	if err := b.rt.StartContainer(ctx, name); err != nil {
-		return "", failf(CheckAuthStoreMutationLease, "start credential observer container: %v", err)
+		return credProof{}, failf(CheckAuthStoreMutationLease, "start credential observer container: %v", err)
 	}
 	if err := b.waitStopped(ctx, name, *claim, st.ownershipLabel, b.cfg.SeedTimeout); err != nil {
-		return "", failf(CheckAuthStoreMutationLease, "credential observer: %v", err)
+		return credProof{}, failf(CheckAuthStoreMutationLease, "credential observer: %v", err)
 	}
 	if err := b.helperStopped(ctx, hs.Class, hs.Size, name); err != nil {
-		return "", err
+		return credProof{}, err
 	}
 
-	digest, err := b.readCredProof(
+	proof, err := b.readCredProof(
 		ctx,
 		hs.RunID,
 		name,
 		st,
 		hs.leasedCredentialManifest(),
+		integrity,
 	)
 	if err != nil {
-		return "", err
+		return credProof{}, err
 	}
 
 	if err := b.rt.DeleteContainer(ctx, name); err != nil {
-		return "", failf(CheckAuthStoreMutationLease, "delete stopped credential observer: %v", err)
+		return credProof{}, failf(CheckAuthStoreMutationLease, "delete stopped credential observer: %v", err)
 	}
 	if err := b.verifyContainerAbsent(ctx, name, *claim, st.ownershipLabel, CheckAuthStoreMutationLease); err != nil {
-		return "", err
+		return credProof{}, err
 	}
 	*claim = objectClaim{}
-	return digest, nil
+	return proof, nil
 }
 
 // readCredProof collects the credential observer's proof out of its stopped
@@ -951,10 +966,11 @@ func (b *Backend) readCredProof(
 	runID, id string,
 	st *runState,
 	manifest CredentialManifestPolicy,
-) (string, error) {
+	integrity bool,
+) (credProof, error) {
 	dir, err := os.MkdirTemp("", "freeside-handoff-"+runID+"-cred-")
 	if err != nil {
-		return "", failf(CheckAuthStoreMutationLease, "create credential proof directory: %v", err)
+		return credProof{}, failf(CheckAuthStoreMutationLease, "create credential proof directory: %v", err)
 	}
 	st.credArchiveDir = dir
 	defer func() {
@@ -963,24 +979,25 @@ func (b *Backend) readCredProof(
 	}()
 	tarPath := filepath.Join(dir, "observer.tar")
 	if err := b.materializeRootFS(ctx, id, tarPath, CheckAuthStoreMutationLease); err != nil {
-		return "", err
+		return credProof{}, err
 	}
 	f, err := os.Open(tarPath) //nolint:gosec // gate-owned path under a fresh temp directory
 	if err != nil {
-		return "", failf(CheckAuthStoreMutationLease, "open credential proof archive: %v", err)
+		return credProof{}, failf(CheckAuthStoreMutationLease, "open credential proof archive: %v", err)
 	}
 	defer f.Close() //nolint:errcheck // read-only handle on a temp file removed above
 	data, found, err := extractArchiveRegularFile(f, b.cfg.CredProofPath, maxBaseProofBytes)
 	if err != nil {
-		return "", failf(CheckAuthStoreMutationLease, "read credential proof from observer rootfs: %v", err)
+		return credProof{}, failf(CheckAuthStoreMutationLease, "read credential proof from observer rootfs: %v", err)
 	}
 	if !found {
-		return "", failf(CheckAuthStoreMutationLease, "credential observer produced no proof")
+		return credProof{}, failf(CheckAuthStoreMutationLease, "credential observer produced no proof")
 	}
-	return verifyCredProof(
+	return parseCredProof(
 		data,
 		st.ownershipLabel.Value,
 		manifest,
+		integrity,
 	)
 }
 

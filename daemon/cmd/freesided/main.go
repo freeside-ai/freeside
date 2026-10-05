@@ -1178,26 +1178,45 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			return nil, fmt.Errorf("reconcile orphaned handoffs: %w", err)
 		}
 	}
-	runDoctor := func(runCtx context.Context) error {
-		if cfg.Claude == nil {
-			return nil
-		}
-		doctorConvergenceLock.Lock()
-		defer doctorConvergenceLock.Unlock()
-		_, err := (operations.Doctor{
-			Store: st, Attention: attention,
-			ProjectID:                 domain.ProjectID("project-system"),
-			Backend:                   domain.BackendFreshVMReadOnlyVolumeHandoff,
-			ConfigurationDigest:       claudeWiring.backend.ConfigurationDigest(),
-			ReviewConfigurationDigest: claudeWiring.reviewConfigurationDigest,
-			Mode:                      cfg.Claude.OperatingMode,
-			Now:                       cfg.now,
-		}).Run(runCtx)
-		return err
+	// The live credential-integrity probe exists only in Claude mode, where
+	// the daemon has a runtime and a pinned exporter image to observe with.
+	var integrityProbe credentialIntegrityProbe
+	if cfg.Claude != nil {
+		integrityProbe = newCredentialIntegrityProbe(st,
+			productionCredentialIntegrityObservers(*cfg.Claude, ward.NewCLIRuntime(claudeWiring.containerBin)),
+			cfg.now, cfg.Logger)
 	}
-	if err := runDoctor(parent); err != nil {
+	doctorPass := func(probe credentialIntegrityProbe) func(context.Context) error {
+		return func(runCtx context.Context) error {
+			if cfg.Claude == nil {
+				return nil
+			}
+			// The probe runs before the lock is taken. It lasts as long as
+			// its observer containers do, and the unattended engine waits on
+			// this lock before every dispatch.
+			replay := probe.runOnce(runCtx)
+			doctorConvergenceLock.Lock()
+			defer doctorConvergenceLock.Unlock()
+			_, err := (operations.Doctor{
+				Store: st, Attention: attention,
+				ProjectID:                 domain.ProjectID("project-system"),
+				Backend:                   domain.BackendFreshVMReadOnlyVolumeHandoff,
+				ConfigurationDigest:       claudeWiring.backend.ConfigurationDigest(),
+				ReviewConfigurationDigest: claudeWiring.reviewConfigurationDigest,
+				Mode:                      cfg.Claude.OperatingMode,
+				Now:                       cfg.now,
+				CredentialIntegrityProbe:  replay,
+				IdentityLabel:             credentialIdentityLabel,
+			}).Run(runCtx)
+			return err
+		}
+	}
+	// The startup pass reports recorded marks only, so starting the daemon
+	// starts no observer container. Scheduled passes run the live probe.
+	if err := doctorPass(nil)(parent); err != nil {
 		return nil, fmt.Errorf("initial doctor pass: %w", err)
 	}
+	runDoctor := doctorPass(integrityProbe)
 	if workflow != nil {
 		if err := workflow.ConvergeLegacyFakePublicationPolicies(parent); err != nil {
 			return nil, fmt.Errorf("converge legacy fake-publication policies: %w", err)
@@ -1240,7 +1259,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		d.sessionCloser = claudeWiring.closer
 	}
 	d.pairing.configure(d.readiness().APIURL, attention.MintPairingCode)
-	d.pairing.registerControlRoutes(d.pairing.mux, st, blobs, localBackupFiles, cfg.ApprovedRecipes)
+	d.pairing.registerControlRoutes(d.pairing.mux, st, blobs, localBackupFiles, cfg.ApprovedRecipes, integrityProbe)
 	var fakeSched *scheduler.Scheduler
 	var claudeSched *scheduler.Scheduler
 	var activeReconciler *activeResourceReconciler

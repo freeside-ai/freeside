@@ -93,7 +93,11 @@ func runDoctorCommand(
 	var blobs *signet.BlobStore
 	var st *store.Store
 	var backupHealth store.BackupHealthSource
+	// Only a running daemon can observe a credential store. With no daemon
+	// the report carries the marks earlier passes recorded.
+	var integrityProbe credentialIntegrityProbe
 	if daemon, borrowed := ctx.Value(daemonStoreContextKey{}).(daemonStoreContext); borrowed {
+		integrityProbe = daemon.credentialIntegrityProbe
 		for digest := range approvedRecipes {
 			if digest != domain.EffectProposalRecipeDigest && !daemon.approvedRecipes[digest] {
 				return fmt.Errorf("recipe %s is not approved by the running daemon", digest)
@@ -141,6 +145,8 @@ func runDoctorCommand(
 		ConfigurationDigest:       domain.Digest(*configurationDigest),
 		ReviewConfigurationDigest: domain.Digest(*reviewConfigurationDigest),
 		Mode:                      mode,
+		CredentialIntegrityProbe:  integrityProbe,
+		IdentityLabel:             credentialIdentityLabel,
 	}).Run(ctx)
 	if err != nil {
 		return err

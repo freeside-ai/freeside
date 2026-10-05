@@ -549,6 +549,19 @@ func verifyCredentialObserverAllowlist(rep InspectReport, spec ContainerSpec) er
 	return nil
 }
 
+// credProof is a parsed credential observer proof. The token fields are set
+// only by an integrity proof.
+type credProof struct {
+	// tree is the hex SHA-256 over the volume's complete tree.
+	tree string
+	// tokenDigest is the hex SHA-256 of the token file's bytes, empty when
+	// the volume holds no regular token file.
+	tokenDigest string
+	// tokenLengthOK reports the token file is at least MinSetupTokenBytes
+	// long. It is false when the file is absent.
+	tokenLengthOK bool
+}
+
 // verifyCredProof reads the credential observer's proof file and returns the
 // observed tree digest. Held to verifyBaseProof's line: the proof comes out
 // of an archive nothing has scanned, so it is parsed strictly and never
@@ -561,8 +574,28 @@ func verifyCredProof(
 	nonce string,
 	manifest CredentialManifestPolicy,
 ) (string, error) {
+	proof, err := parseCredProof(data, nonce, manifest, false)
+	return proof.tree, err
+}
+
+// parseCredProof is verifyCredProof's parser. With integrity set it also
+// requires the two token keys credIntegrityObserverScript appends, under the
+// same exactly-once, known-value discipline; without it both stay unknown
+// keys, so the handoff gate's proof contract does not widen.
+func parseCredProof(
+	data []byte,
+	nonce string,
+	manifest CredentialManifestPolicy,
+	integrity bool,
+) (credProof, error) {
+	fail := func(format string, args ...any) (credProof, error) {
+		return credProof{}, failf(CheckAuthStoreMutationLease, format, args...)
+	}
 	seen := map[string]bool{}
-	var digest string
+	var (
+		proof        credProof
+		lengthAbsent bool
+	)
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	for sc.Scan() {
 		line := strings.TrimRight(sc.Text(), "\r")
@@ -571,45 +604,76 @@ func verifyCredProof(
 		}
 		key, value, ok := strings.Cut(line, "=")
 		if !ok {
-			return "", failf(CheckAuthStoreMutationLease, "credential proof carries a line that is not key=value")
+			return fail("credential proof carries a line that is not key=value")
 		}
 		if seen[key] {
-			return "", failf(CheckAuthStoreMutationLease, "credential proof repeats a required key")
+			return fail("credential proof repeats a required key")
 		}
 		seen[key] = true
+		integrityKey := key == credProofTokenDigestKey || key == credProofTokenLengthKey
+		if integrityKey && !integrity {
+			return fail("credential proof carries an unknown key")
+		}
 		switch key {
 		case credProofNonceKey:
 			if value != nonce {
 				// Categorical: naming the mismatch would confirm a guessed
 				// token to whoever produced the file.
-				return "", failf(CheckAuthStoreMutationLease, "credential proof reports an unexpected value for a required key")
+				return fail("credential proof reports an unexpected value for a required key")
 			}
 		case credProofTreeKey:
 			if !sha256HexPattern.MatchString(value) {
-				return "", failf(CheckAuthStoreMutationLease, "credential proof reports a value that is not a tree digest")
+				return fail("credential proof reports a value that is not a tree digest")
 			}
-			digest = value
+			proof.tree = value
 		case credProofManifestKey:
 			if manifest != CredentialManifestSetupToken || value != "setup_token" {
-				return "", failf(CheckAuthStoreMutationLease, "credential proof reports an unexpected value for a required key")
+				return fail("credential proof reports an unexpected value for a required key")
+			}
+		case credProofTokenDigestKey:
+			switch {
+			case value == credProofTokenAbsent:
+			case sha256HexPattern.MatchString(value):
+				proof.tokenDigest = value
+			default:
+				return fail("credential proof reports a value that is not a token digest")
+			}
+		case credProofTokenLengthKey:
+			switch value {
+			case credProofTokenLengthOK:
+				proof.tokenLengthOK = true
+			case credProofTokenLengthShort:
+			case credProofTokenAbsent:
+				lengthAbsent = true
+			default:
+				return fail("credential proof reports an unexpected value for a required key")
 			}
 		default:
-			return "", failf(CheckAuthStoreMutationLease, "credential proof carries an unknown key")
+			return fail("credential proof carries an unknown key")
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return "", failf(CheckAuthStoreMutationLease, "credential proof unreadable")
+		return fail("credential proof unreadable")
 	}
 	required := []string{credProofNonceKey, credProofTreeKey}
 	if manifest == CredentialManifestSetupToken {
 		required = append(required, credProofManifestKey)
 	}
+	if integrity {
+		required = append(required, credProofTokenDigestKey, credProofTokenLengthKey)
+	}
 	for _, key := range required {
 		if !seen[key] {
-			return "", failf(CheckAuthStoreMutationLease, "credential proof omits a required key")
+			return fail("credential proof omits a required key")
 		}
 	}
-	return digest, nil
+	// The script sets both token keys in one branch, so a proof that reports
+	// a digest without a length, or a length without a digest, is not its
+	// output.
+	if integrity && (proof.tokenDigest == "") != lengthAbsent {
+		return fail("credential proof reports contradictory token facts")
+	}
+	return proof, nil
 }
 
 // verifyBaseProof reads the observer's proof file and returns the base the
