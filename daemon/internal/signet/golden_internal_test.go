@@ -240,6 +240,12 @@ func TestSignetWireGoldens(t *testing.T) {
 			name:  "effect-proposal-facts-fallback",
 			value: effectProposalFactsFixture(domain.ClosureProvenanceVerified, domain.ClosureFlagOriginDaemonFallback, false, false),
 		},
+		{
+			// The filing arm with a policy milestone; source_issue_closure and
+			// supersedes render explicit null.
+			name:  "effect-proposal-facts-filing",
+			value: followUpFilingFactsFixture(),
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -283,6 +289,36 @@ func effectProposalFactsFixture(
 		}
 	}
 	return snapshot
+}
+
+// followUpFilingFactsFixture builds a fixed, valid follow_up_filing facts
+// snapshot: the daemon-derived target, both screened text fields, and the
+// source link.
+func followUpFilingFactsFixture() EffectProposalFactsSnapshot {
+	milestone := "1B"
+	return EffectProposalFactsSnapshot{
+		AsOfRevision: 27, EntityVersion: 5, ItemVersion: 1,
+		ProposalDigest: domain.Digest("sha256:" + strings.Repeat("7", 64)),
+		EffectKind:     domain.EffectFollowUpFiling,
+		FollowUpFiling: &FollowUpFilingFacts{
+			Repository: domain.FollowUpFilingRepository{Repo: "owner/repo", RepositoryID: 123},
+			Labels:     []string{"deferral", "lane:spine"},
+			Milestone:  &milestone,
+			Title: domain.ScreenedIssueText{
+				Text:    "Bound the retry budget in the sync client",
+				Ruleset: domain.IssueTextRulesetGitHubIssue1, Verdict: domain.ScreeningVerdictPassed,
+			},
+			Body: domain.ScreenedIssueText{
+				Text:    "The sync client retries without a budget.\n\nDeferred from review round 2.",
+				Ruleset: domain.IssueTextRulesetGitHubIssue1, Verdict: domain.ScreeningVerdictPassed,
+			},
+			Source: domain.FollowUpFilingSource{
+				FindingID:          "finding-1",
+				AdjudicationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+				Kind:               domain.FollowUpSourceDeferredDisposition,
+			},
+		},
+	}
 }
 
 // TestEffectProposalFactsProvenanceGoldensDiffer proves the verified and

@@ -494,6 +494,9 @@ func TestEffectProposalFactsMatchItemAndCarryNoAuthority(t *testing.T) {
 	if closure == nil {
 		t.Fatal("facts carried no source_issue_closure arm")
 	}
+	if facts.FollowUpFiling != nil {
+		t.Fatalf("closure facts carried a follow_up_filing arm: %#v", facts.FollowUpFiling)
+	}
 	want := f.instance.Proposal.ClosureProposal
 	if closure.Target != want.Target || closure.Resolves != want.Resolves ||
 		closure.Provenance != want.Provenance || closure.Origin != want.Origin {

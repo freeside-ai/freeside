@@ -1144,6 +1144,36 @@ import Testing
         #expect(!model.actionsEnabled)
     }
 
+    @Test func followUpFilingFactsAreDroppedAndActionsStayDisabled() async {
+        let server = MockServer()
+        // A follow_up_filing item carries a null closure arm and no bound
+        // merge. The card renders only source_issue_closure, so filing facts
+        // must fail the match gate until the filing card exists.
+        await server.setEffectProposalFactsTransform { facts in
+            var filing = facts
+            filing.effect_kind = .follow_up_filing
+            filing.source_issue_closure = nil
+            filing.follow_up_filing = .init(
+                value1: .init(
+                    repository: .init(repo: "owner/repo", repository_id: 123),
+                    labels: [],
+                    title: .init(text: "Bound the retry budget", ruleset: .github_hyphen_issue_sol_1, verdict: .passed),
+                    body: .init(text: "Deferred from review.", ruleset: .github_hyphen_issue_sol_1, verdict: .passed),
+                    source: .init(
+                        finding_id: "finding-1",
+                        adjudication_digest: "sha256:" + String(repeating: "c", count: 64),
+                        kind: .separate_work_verdict)))
+            return filing
+        }
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-effect_proposal")
+
+        await model.validate()
+
+        #expect(model.effectProposalFacts == nil)
+        #expect(!model.actionsEnabled)
+    }
+
     @Test func effectFactsWhoseBoundHeadDiffersFromTheItemAreDropped() async {
         let server = MockServer()
         // The card shows the facts' candidate head but submits the item's

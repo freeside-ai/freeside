@@ -1296,7 +1296,7 @@ public enum Components {
                 ])
             }
         }
-        /// Store-authenticated, digest-bound source-issue-closure facts matched to one exact attention-item snapshot before the client enables a decision. The opaque subject handle and policy identities stay server-side, as they do for task_proposal.
+        /// Store-authenticated, digest-bound effect-proposal facts matched to one exact attention-item snapshot before the client enables a decision. Exactly one kind member (source_issue_closure or follow_up_filing) is non-null, the one effect_kind names. The opaque subject handle and policy identities stay server-side, as they do for task_proposal.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot`.
@@ -1311,7 +1311,7 @@ public enum Components {
             public var proposal_digest: Components.Schemas.Digest
             /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/effect_kind`.
             public var effect_kind: Components.Schemas.EffectKind
-            /// The exact authenticated prior facts for a revised card; null for the initially admitted proposal.
+            /// The exact authenticated prior facts for a revised card; null for the initially admitted proposal, and always null for a follow_up_filing effect, which admits no revision.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/supersedes`.
@@ -1332,7 +1332,7 @@ public enum Components {
                     try self.value1.encode(to: encoder)
                 }
             }
-            /// The exact authenticated prior facts for a revised card; null for the initially admitted proposal.
+            /// The exact authenticated prior facts for a revised card; null for the initially admitted proposal, and always null for a follow_up_filing effect, which admits no revision.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/supersedes`.
@@ -1363,6 +1363,32 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/source_issue_closure`.
             public var source_issue_closure: Components.Schemas.EffectProposalFactsSnapshot.source_issue_closurePayload?
+            /// The filing facts for a follow_up_filing effect; null for any other effect kind.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/follow_up_filing`.
+            public struct follow_up_filingPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/follow_up_filing/value1`.
+                public var value1: Components.Schemas.FollowUpFilingFacts
+                /// Creates a new `follow_up_filingPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.FollowUpFilingFacts) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The filing facts for a follow_up_filing effect; null for any other effect kind.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/follow_up_filing`.
+            public var follow_up_filing: Components.Schemas.EffectProposalFactsSnapshot.follow_up_filingPayload?
             /// Creates a new `EffectProposalFactsSnapshot`.
             ///
             /// - Parameters:
@@ -1371,8 +1397,9 @@ public enum Components {
             ///   - item_version:
             ///   - proposal_digest:
             ///   - effect_kind:
-            ///   - supersedes: The exact authenticated prior facts for a revised card; null for the initially admitted proposal.
+            ///   - supersedes: The exact authenticated prior facts for a revised card; null for the initially admitted proposal, and always null for a follow_up_filing effect, which admits no revision.
             ///   - source_issue_closure: The closure facts for a source_issue_closure effect; null for any other effect kind.
+            ///   - follow_up_filing: The filing facts for a follow_up_filing effect; null for any other effect kind.
             public init(
                 as_of_revision: Components.Schemas.AsOfRevision,
                 entity_version: Components.Schemas.EntityVersion,
@@ -1380,7 +1407,8 @@ public enum Components {
                 proposal_digest: Components.Schemas.Digest,
                 effect_kind: Components.Schemas.EffectKind,
                 supersedes: Components.Schemas.EffectProposalFactsSnapshot.supersedesPayload? = nil,
-                source_issue_closure: Components.Schemas.EffectProposalFactsSnapshot.source_issue_closurePayload? = nil
+                source_issue_closure: Components.Schemas.EffectProposalFactsSnapshot.source_issue_closurePayload? = nil,
+                follow_up_filing: Components.Schemas.EffectProposalFactsSnapshot.follow_up_filingPayload? = nil
             ) {
                 self.as_of_revision = as_of_revision
                 self.entity_version = entity_version
@@ -1389,6 +1417,7 @@ public enum Components {
                 self.effect_kind = effect_kind
                 self.supersedes = supersedes
                 self.source_issue_closure = source_issue_closure
+                self.follow_up_filing = follow_up_filing
             }
             public enum CodingKeys: String, CodingKey {
                 case as_of_revision
@@ -1398,6 +1427,7 @@ public enum Components {
                 case effect_kind
                 case supersedes
                 case source_issue_closure
+                case follow_up_filing
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -1429,6 +1459,10 @@ public enum Components {
                     Components.Schemas.EffectProposalFactsSnapshot.source_issue_closurePayload.self,
                     forKey: .source_issue_closure
                 )
+                self.follow_up_filing = try container.decodeIfPresent(
+                    Components.Schemas.EffectProposalFactsSnapshot.follow_up_filingPayload.self,
+                    forKey: .follow_up_filing
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "as_of_revision",
                     "entity_version",
@@ -1436,7 +1470,8 @@ public enum Components {
                     "proposal_digest",
                     "effect_kind",
                     "supersedes",
-                    "source_issue_closure"
+                    "source_issue_closure",
+                    "follow_up_filing"
                 ])
             }
         }
@@ -1648,6 +1683,242 @@ public enum Components {
                 ])
             }
         }
+        /// Bounded follow-up-filing facts (plan §5.17): the repository, labels, and milestone the daemon derived from the project and the run's resolved policy, the screened title and body the filing would publish, and the finding the filing answers. No subject handle, policy identity, or filing identity; which credential files the issue is chosen at dispatch.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/FollowUpFilingFacts`.
+        public struct FollowUpFilingFacts: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/FollowUpFilingFacts/repository`.
+            public var repository: Components.Schemas.FollowUpFilingRepository
+            /// The labels the filed issue carries, sorted and duplicate-free; empty when policy names none.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/FollowUpFilingFacts/labels`.
+            public var labels: [Swift.String]
+            /// The milestone title the filed issue carries; null when policy names none.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/FollowUpFilingFacts/milestone`.
+            public var milestone: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/FollowUpFilingFacts/title`.
+            public var title: Components.Schemas.ScreenedIssueText
+            /// - Remark: Generated from `#/components/schemas/FollowUpFilingFacts/body`.
+            public var body: Components.Schemas.ScreenedIssueText
+            /// - Remark: Generated from `#/components/schemas/FollowUpFilingFacts/source`.
+            public var source: Components.Schemas.FollowUpFilingSource
+            /// Creates a new `FollowUpFilingFacts`.
+            ///
+            /// - Parameters:
+            ///   - repository:
+            ///   - labels: The labels the filed issue carries, sorted and duplicate-free; empty when policy names none.
+            ///   - milestone: The milestone title the filed issue carries; null when policy names none.
+            ///   - title:
+            ///   - body:
+            ///   - source:
+            public init(
+                repository: Components.Schemas.FollowUpFilingRepository,
+                labels: [Swift.String],
+                milestone: Swift.String? = nil,
+                title: Components.Schemas.ScreenedIssueText,
+                body: Components.Schemas.ScreenedIssueText,
+                source: Components.Schemas.FollowUpFilingSource
+            ) {
+                self.repository = repository
+                self.labels = labels
+                self.milestone = milestone
+                self.title = title
+                self.body = body
+                self.source = source
+            }
+            public enum CodingKeys: String, CodingKey {
+                case repository
+                case labels
+                case milestone
+                case title
+                case body
+                case source
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.repository = try container.decode(
+                    Components.Schemas.FollowUpFilingRepository.self,
+                    forKey: .repository
+                )
+                self.labels = try container.decode(
+                    [Swift.String].self,
+                    forKey: .labels
+                )
+                self.milestone = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .milestone
+                )
+                self.title = try container.decode(
+                    Components.Schemas.ScreenedIssueText.self,
+                    forKey: .title
+                )
+                self.body = try container.decode(
+                    Components.Schemas.ScreenedIssueText.self,
+                    forKey: .body
+                )
+                self.source = try container.decode(
+                    Components.Schemas.FollowUpFilingSource.self,
+                    forKey: .source
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "repository",
+                    "labels",
+                    "milestone",
+                    "title",
+                    "body",
+                    "source"
+                ])
+            }
+        }
+        /// The repository a follow-up issue is filed in. repository_id is the forge identity; repo is the project's current name for it, so a rename after the proposal was made shows the new name.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/FollowUpFilingRepository`.
+        public struct FollowUpFilingRepository: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/FollowUpFilingRepository/repo`.
+            public var repo: Swift.String
+            /// - Remark: Generated from `#/components/schemas/FollowUpFilingRepository/repository_id`.
+            public var repository_id: Swift.Int64
+            /// Creates a new `FollowUpFilingRepository`.
+            ///
+            /// - Parameters:
+            ///   - repo:
+            ///   - repository_id:
+            public init(
+                repo: Swift.String,
+                repository_id: Swift.Int64
+            ) {
+                self.repo = repo
+                self.repository_id = repository_id
+            }
+            public enum CodingKeys: String, CodingKey {
+                case repo
+                case repository_id
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.repo = try container.decode(
+                    Swift.String.self,
+                    forKey: .repo
+                )
+                self.repository_id = try container.decode(
+                    Swift.Int64.self,
+                    forKey: .repository_id
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "repo",
+                    "repository_id"
+                ])
+            }
+        }
+        /// One agent-controlled issue text field with the ruleset it was screened under and the verdict. The daemon screens the text again under the recorded ruleset on every read, so a served record always carries the passed verdict.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ScreenedIssueText`.
+        public struct ScreenedIssueText: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ScreenedIssueText/text`.
+            public var text: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ScreenedIssueText/ruleset`.
+            public var ruleset: Components.Schemas.IssueTextRuleset
+            /// - Remark: Generated from `#/components/schemas/ScreenedIssueText/verdict`.
+            public var verdict: Components.Schemas.ScreeningVerdict
+            /// Creates a new `ScreenedIssueText`.
+            ///
+            /// - Parameters:
+            ///   - text:
+            ///   - ruleset:
+            ///   - verdict:
+            public init(
+                text: Swift.String,
+                ruleset: Components.Schemas.IssueTextRuleset,
+                verdict: Components.Schemas.ScreeningVerdict
+            ) {
+                self.text = text
+                self.ruleset = ruleset
+                self.verdict = verdict
+            }
+            public enum CodingKeys: String, CodingKey {
+                case text
+                case ruleset
+                case verdict
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.text = try container.decode(
+                    Swift.String.self,
+                    forKey: .text
+                )
+                self.ruleset = try container.decode(
+                    Components.Schemas.IssueTextRuleset.self,
+                    forKey: .ruleset
+                )
+                self.verdict = try container.decode(
+                    Components.Schemas.ScreeningVerdict.self,
+                    forKey: .verdict
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "text",
+                    "ruleset",
+                    "verdict"
+                ])
+            }
+        }
+        /// What a follow-up filing came from: the finding, the finding-adjudication artifact that routed it, and whether the route was a deferred disposition or a separate-work verdict. The link is served as recorded: if a later round fixes or re-routes the finding, the facts stay readable and the daemon refuses approval.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/FollowUpFilingSource`.
+        public struct FollowUpFilingSource: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/FollowUpFilingSource/finding_id`.
+            public var finding_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/FollowUpFilingSource/adjudication_digest`.
+            public var adjudication_digest: Components.Schemas.Digest
+            /// - Remark: Generated from `#/components/schemas/FollowUpFilingSource/kind`.
+            public var kind: Components.Schemas.FollowUpSourceKind
+            /// Creates a new `FollowUpFilingSource`.
+            ///
+            /// - Parameters:
+            ///   - finding_id:
+            ///   - adjudication_digest:
+            ///   - kind:
+            public init(
+                finding_id: Swift.String,
+                adjudication_digest: Components.Schemas.Digest,
+                kind: Components.Schemas.FollowUpSourceKind
+            ) {
+                self.finding_id = finding_id
+                self.adjudication_digest = adjudication_digest
+                self.kind = kind
+            }
+            public enum CodingKeys: String, CodingKey {
+                case finding_id
+                case adjudication_digest
+                case kind
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.finding_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .finding_id
+                )
+                self.adjudication_digest = try container.decode(
+                    Components.Schemas.Digest.self,
+                    forKey: .adjudication_digest
+                )
+                self.kind = try container.decode(
+                    Components.Schemas.FollowUpSourceKind.self,
+                    forKey: .kind
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "finding_id",
+                    "adjudication_digest",
+                    "kind"
+                ])
+            }
+        }
         /// Bounded public parameters an operator may revise; the opaque work-unit handle and current policy remain store-derived authority.
         ///
         ///
@@ -1818,6 +2089,29 @@ public enum Components {
             case run_proposal = "run_proposal"
             case source_issue_closure = "source_issue_closure"
             case follow_up_filing = "follow_up_filing"
+        }
+        /// The versioned ruleset an issue text field was screened under. Matches domain.AllIssueTextRulesets.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/IssueTextRuleset`.
+        @frozen public enum IssueTextRuleset: String, Codable, Hashable, Sendable, CaseIterable {
+            case github_hyphen_issue_sol_1 = "github-issue/1"
+        }
+        /// The outcome of screening one agent-controlled text field. Only a passed field reaches a proposal; rejected names the refusal for records that carry one. Matches domain.AllScreeningVerdicts.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ScreeningVerdict`.
+        @frozen public enum ScreeningVerdict: String, Codable, Hashable, Sendable, CaseIterable {
+            case passed = "passed"
+            case rejected = "rejected"
+        }
+        /// What produced a follow-up filing: deferred_disposition when a finding's effective disposition is deferred, separate_work_verdict when adjudication parked the finding as separate work (plan §5.17). Matches domain.AllFollowUpSourceKinds.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/FollowUpSourceKind`.
+        @frozen public enum FollowUpSourceKind: String, Codable, Hashable, Sendable, CaseIterable {
+            case deferred_disposition = "deferred_disposition"
+            case separate_work_verdict = "separate_work_verdict"
         }
         /// The trust a source-issue-closure target earns: verified when the daemon bound the issue subject, recommended when a same-repository target came from a client-supplied source the daemon cannot re-derive (plan §5.13). Matches domain.AllClosureProvenances.
         ///
