@@ -805,7 +805,9 @@ condition is inert until something else tells you to go look.
   as an issue-backed unit and reaches this gate without claiming anything.
   - `starts-after`: the prerequisite must be merged before the unit starts.
   - `merges-after`: never blocks start, but recheck it at handoff and before
-    integration.
+    integration. A contract unit is the exception: before claiming one,
+    check its own Dependencies field, and treat a `merges-after` whose
+    prerequisite has not merged as `starts-after` (Contract Changes).
   - `stacked-on`: names the intended base branch. Use that branch explicitly
     while the base PR is open and verify any existing child stays based
     there. After the base merges the relation is satisfied, but an existing
@@ -887,9 +889,19 @@ Contract units serialize by assessed conflict, not by label:
 - **Both issues' Dependencies fields carry the record.** A contract
   assessment names the other unit, the verdict, the rationale, and the issue
   state or base commit it was assessed against. A conflict is recorded as
-  `exclusive-with`, a dependency as `starts-after`, and an integration order
-  as `merges-after`; a pair with none of these is recorded as independent.
-  The record's form is in `docs/coordination.md` (Relationship Types).
+  `exclusive-with`, and a dependency or a required integration order as
+  `starts-after`; a pair with neither is recorded as independent. The
+  record's form is in `docs/coordination.md` (Relationship Types).
+- **A contract unit declares no `merges-after`.** Its open PR is an active
+  claim that never expires and counts toward the cap, so a contract PR that
+  waits on another unit's merge holds a slot through that unit's work. The
+  spine records every ordering prerequisite of a contract unit as
+  `starts-after`, whatever kind of unit the prerequisite is, and records no
+  order that nothing requires. The claim gate reads a `merges-after`
+  already on a contract unit as `starts-after` until the spine retypes or
+  removes it; a tracker's diagram and **Startable now** still follow the
+  field as written. Another unit may still declare `merges-after` on a
+  contract unit.
 - **A scope edit withdraws the record.** Before saving an edit to a
   contract unit's Objective, Scope, or Affected interfaces/contracts, check
   its Dependencies field for independence records. Whoever makes the edit
