@@ -1126,9 +1126,9 @@ import Testing
 
     @Test func unsupportedEffectKindFactsAreDroppedAndActionsStayDisabled() async {
         let server = MockServer()
-        // The schema permits a null closure arm for a non-closure effect kind.
-        // The card can render only source_issue_closure, so such facts must
-        // fail the match gate and never enable actions on an unrendered effect.
+        // run_proposal has no effect card: the task-proposal card and its own
+        // facts read carry that kind, so such facts must fail the match gate
+        // and never enable actions on an unrendered effect.
         await server.setEffectProposalFactsTransform { facts in
             var unsupported = facts
             unsupported.effect_kind = .run_proposal
@@ -1144,26 +1144,148 @@ import Testing
         #expect(!model.actionsEnabled)
     }
 
-    @Test func followUpFilingFactsAreDroppedAndActionsStayDisabled() async {
+    private func filingModel(server: MockServer) async -> DecisionModel {
+        let store = await makeStore(server: server)
+        return DecisionModel(
+            store: store, itemID: AttentionFixtures.followUpFilingEffectProposal().item.id)
+    }
+
+    private static func filingServer() -> MockServer {
+        MockServer(items: [AttentionFixtures.followUpFilingEffectProposal()])
+    }
+
+    @Test func followUpFilingFactsValidateAndEnableTheOfferedActions() async throws {
+        let model = await filingModel(server: Self.filingServer())
+
+        await model.validate()
+
+        let facts = try #require(model.effectProposalFacts)
+        #expect(facts.effect_kind == .follow_up_filing)
+        #expect(facts.follow_up_filing != nil)
+        #expect(model.actionsEnabled)
+        // A filing admits no revision, so the item never offers one.
+        #expect(model.offeredActions == [.approve, .decline, .snooze])
+    }
+
+    @Test func followUpFilingFactsMatchWhateverHeadTheItemNames() async {
+        // A filing binds no merge and its card shows no head, so the gate
+        // has no head rule: nothing on screen can differ from the head the
+        // command stamps. The mock item names none; one that names a head
+        // validates the same way.
+        var filing = AttentionFixtures.followUpFilingEffectProposal()
+        filing.item.pr_head_sha = "cafebabe"
+        let model = await filingModel(server: MockServer(items: [filing]))
+
+        await model.validate()
+
+        #expect(model.effectProposalFacts?.effect_kind == .follow_up_filing)
+        #expect(model.actionsEnabled)
+    }
+
+    @Test func followUpFilingApproveSubmitsAndResolvesTheItem() async {
+        let model = await filingModel(server: Self.filingServer())
+        await model.validate()
+
+        await model.submit(.approve)
+
+        #expect(model.appliedRecord?.action == .approve)
+        #expect(model.snapshot?.item.status == .resolved)
+    }
+
+    @Test func followUpFilingDeclineSubmitsAndDismissesTheItem() async {
+        let model = await filingModel(server: Self.filingServer())
+        await model.validate()
+
+        await model.submit(.decline)
+
+        #expect(model.appliedRecord?.action == .decline)
+        #expect(model.snapshot?.item.status == .dismissed)
+    }
+
+    @Test func followUpFilingSnoozeSubmitsAndHidesTheItem() async {
+        let model = await filingModel(server: Self.filingServer())
+        await model.validate()
+
+        await model.snooze(until: Date(timeIntervalSince1970: 1_786_506_245))
+
+        #expect(model.appliedRecord?.action == .snooze)
+        #expect(model.snapshot == nil)
+    }
+
+    /// One way served filing facts can disagree with the item or with
+    /// themselves. Each must fail the match gate on its own.
+    enum FilingFactsMismatch: String, CaseIterable {
+        case closureKind, runProposalKind, missingFilingArm, closureArmPresent, supersedesPresent
+        case rejectedTitle, rejectedBody
+        case staleRevision, staleEntityVersion, staleItemVersion, wrongProposalDigest
+
+        func apply(
+            to facts: Components.Schemas.EffectProposalFactsSnapshot
+        ) -> Components.Schemas.EffectProposalFactsSnapshot {
+            var mutated = facts
+            switch self {
+            case .closureKind:
+                mutated.effect_kind = .source_issue_closure
+            case .runProposalKind:
+                mutated.effect_kind = .run_proposal
+            case .missingFilingArm:
+                mutated.follow_up_filing = nil
+            case .closureArmPresent:
+                mutated.source_issue_closure =
+                    AttentionFixtures.effectProposalFacts(
+                        for: AttentionFixtures.fixture(type: .effect_proposal))?.source_issue_closure
+            case .supersedesPresent:
+                mutated.supersedes = .init(
+                    value1: .init(proposal_digest: "sha256:prior-effect", source_issue_closure: nil))
+            case .rejectedTitle:
+                mutated.follow_up_filing?.value1.title.verdict = .rejected
+            case .rejectedBody:
+                mutated.follow_up_filing?.value1.body.verdict = .rejected
+            case .staleRevision:
+                mutated.as_of_revision += 1
+            case .staleEntityVersion:
+                mutated.entity_version += 1
+            case .staleItemVersion:
+                mutated.item_version += 1
+            case .wrongProposalDigest:
+                mutated.proposal_digest = "sha256:another-proposal"
+            }
+            return mutated
+        }
+    }
+
+    @Test(arguments: FilingFactsMismatch.allCases)
+    func mismatchedFollowUpFilingFactsAreDroppedAndActionsStayDisabled(
+        mismatch: FilingFactsMismatch
+    ) async throws {
+        let server = Self.filingServer()
+        // The mutation must change the served facts, or the case would pass
+        // by proving nothing.
+        let served = try #require(
+            AttentionFixtures.effectProposalFacts(
+                for: AttentionFixtures.followUpFilingEffectProposal()))
+        #expect(mismatch.apply(to: served) != served)
+        await server.setEffectProposalFactsTransform { mismatch.apply(to: $0) }
+        let model = await filingModel(server: server)
+
+        await model.validate()
+
+        #expect(model.effectProposalFacts == nil)
+        #expect(!model.actionsEnabled)
+    }
+
+    @Test func closureFactsCarryingAFilingArmAreDropped() async throws {
         let server = MockServer()
-        // A follow_up_filing item carries a null closure arm and no bound
-        // merge. The card renders only source_issue_closure, so filing facts
-        // must fail the match gate until the filing card exists.
+        // Exactly one kind arm is non-null. A closure that also carries a
+        // filing is internally inconsistent, so it fails the match gate
+        // instead of drawing whichever arm the card happens to read.
+        let filing = try #require(
+            AttentionFixtures.effectProposalFacts(
+                for: AttentionFixtures.followUpFilingEffectProposal())?.follow_up_filing)
         await server.setEffectProposalFactsTransform { facts in
-            var filing = facts
-            filing.effect_kind = .follow_up_filing
-            filing.source_issue_closure = nil
-            filing.follow_up_filing = .init(
-                value1: .init(
-                    repository: .init(repo: "owner/repo", repository_id: 123),
-                    labels: [],
-                    title: .init(text: "Bound the retry budget", ruleset: .github_hyphen_issue_sol_1, verdict: .passed),
-                    body: .init(text: "Deferred from review.", ruleset: .github_hyphen_issue_sol_1, verdict: .passed),
-                    source: .init(
-                        finding_id: "finding-1",
-                        adjudication_digest: "sha256:" + String(repeating: "c", count: 64),
-                        kind: .separate_work_verdict)))
-            return filing
+            var mutated = facts
+            mutated.follow_up_filing = filing
+            return mutated
         }
         let store = await makeStore(server: server)
         let model = DecisionModel(store: store, itemID: "item-effect_proposal")

@@ -617,26 +617,50 @@ public final class DecisionModel {
             && snapshot.item.artifact_digests == [facts.proposal_digest]
     }
 
+    /// Whether served effect facts describe exactly the item on screen, in
+    /// a shape the card can draw. This is the trust boundary for a returned
+    /// object: only facts that pass reach the card, and only then do the
+    /// actions enable, so an unsupported or internally inconsistent answer
+    /// fails closed rather than enabling a decision on an effect the
+    /// operator cannot read.
     private func effectProposalFactsMatch(
         _ snapshot: Components.Schemas.AttentionItemSnapshot,
         _ facts: Components.Schemas.EffectProposalFactsSnapshot
     ) -> Bool {
-        // The card can only render, and the operator can only decide, a
-        // source-issue-closure effect whose closure arm is present. The schema
-        // permits a null closure arm for another effect kind, so this trust
-        // boundary fails closed on any unsupported or internally inconsistent
-        // facts rather than enabling actions on an unrendered effect.
-        // The card shows the closure's candidate head as the merge the
-        // approval binds to, but the submitted command stamps the item's
-        // pr_head_sha; requiring them equal keeps the displayed binding and
-        // the submitted binding the same head, so the card can never show one
-        // head and approve another.
-        facts.effect_kind == .source_issue_closure
-            && facts.source_issue_closure?.value1.merge.candidate_head_sha == snapshot.item.pr_head_sha
-            && facts.as_of_revision == snapshot.as_of_revision
-            && facts.entity_version == snapshot.entity_version
-            && facts.item_version == snapshot.item.item_version
-            && snapshot.item.artifact_digests == [facts.proposal_digest]
+        guard facts.as_of_revision == snapshot.as_of_revision,
+            facts.entity_version == snapshot.entity_version,
+            facts.item_version == snapshot.item.item_version,
+            snapshot.item.artifact_digests == [facts.proposal_digest]
+        else { return false }
+        // Exactly one kind arm is non-null, the one effect_kind names. The
+        // switch has no default, so a new kind does not compile until its
+        // rule is decided here.
+        switch facts.effect_kind {
+        case .source_issue_closure:
+            // The card shows the closure's candidate head as the merge the
+            // approval binds to, but the submitted command stamps the item's
+            // pr_head_sha; requiring them equal keeps the displayed binding
+            // and the submitted binding the same head, so the card can never
+            // show one head and approve another.
+            return facts.follow_up_filing == nil
+                && facts.source_issue_closure?.value1.merge.candidate_head_sha
+                    == snapshot.item.pr_head_sha
+        case .follow_up_filing:
+            // A filing binds no merge, so the card shows no head that could
+            // differ from the one the command stamps, and there is no head
+            // rule. It admits no revision, so a prior proposal is
+            // inconsistent. The daemon serves a filing only with both texts
+            // screened as passed; anything else is not a filing the operator
+            // may approve.
+            guard let filing = facts.follow_up_filing?.value1 else { return false }
+            return facts.source_issue_closure == nil
+                && facts.supersedes == nil
+                && filing.title.verdict == .passed
+                && filing.body.verdict == .passed
+        case .run_proposal:
+            // The task-proposal card and its own facts read carry this kind.
+            return false
+        }
     }
 
     public func submitTaskProposalRevision(

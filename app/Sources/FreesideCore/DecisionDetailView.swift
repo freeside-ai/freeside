@@ -767,9 +767,9 @@ struct DecisionDetailView: View {
                     proposalRows(proposalFacts)
                 }
             }
-            // effectProposalRows is empty for an effect kind the card can't
-            // render yet (only source_issue_closure has rows today), so the
-            // titled section is suppressed rather than drawn empty.
+            // effectProposalRows is empty for an effect kind this card has
+            // no rows for (it draws a closure and a follow-up filing), so
+            // the titled section is suppressed rather than drawn empty.
             if let effectProposalFacts,
                 case let effectRows = AttentionDisplay.effectProposalRows(effectProposalFacts),
                 !effectRows.isEmpty
@@ -779,6 +779,17 @@ struct DecisionDetailView: View {
                         factRow(fact.label, value: fact.value, monospaced: fact.monospaced)
                     }
                 }
+            }
+            // A filing's title and body are the agent's words. They stay in
+            // this module, ahead of the actions, so the operator reads all
+            // that would be filed before deciding, and each draws in its own
+            // unverified section so neither shares one with a daemon fact.
+            if let effectProposalFacts,
+                let proposed = AttentionDisplay.proposedIssueText(effectProposalFacts)
+            {
+                let register = unverified(item, rendersInteractiveControls: rendersInteractiveControls)
+                proposedIssueTextSection("Proposed title", text: proposed.title, unverified: register)
+                proposedIssueTextSection("Proposed body", text: proposed.body, unverified: register)
             }
         case .agentQuestion:
             agentQuestionLead(item, rendersInteractiveControls: rendersInteractiveControls)
@@ -927,6 +938,25 @@ struct DecisionDetailView: View {
         #else
             true
         #endif
+    }
+
+    /// One field of the issue a follow-up filing would create, in full and
+    /// as plain text: the operator approves the exact text that would be
+    /// sent, so nothing is truncated and Markdown is not interpreted.
+    private func proposedIssueTextSection(
+        _ title: String,
+        text: String,
+        unverified: UnverifiedRegister
+    ) -> some View {
+        cardSection(title, unverified: unverified) {
+            Text(AttentionDisplay.screenedIssueTextExplanation)
+                .foregroundStyle(Color.inkDim)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(verbatim: text)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     @ViewBuilder
@@ -2188,6 +2218,9 @@ struct DecisionDetailView: View {
             rows.append(.init(label: "Bound head", value: merge.candidate_head_sha))
             rows.append(.init(label: "Bound base", value: "\(merge.base_ref)@\(merge.base_sha)"))
             rows.append(.init(label: "Publication identity", value: merge.publication_identity))
+        }
+        if let facts = model.effectProposalFacts {
+            rows.append(contentsOf: AttentionDisplay.followUpFilingDetailRows(facts))
         }
         rows.append(
             contentsOf: AttentionDisplay.unavailableActionRows(actionRanking(item).unavailable))

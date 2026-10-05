@@ -258,18 +258,35 @@ enum AttentionDisplay {
         }
     }
 
-    /// The authenticated-proposal card facts for a source-issue-closure
-    /// effect proposal, as pure label/value pairs so a display test asserts
-    /// the wording without a view. Every value is a daemon fact from the
-    /// snapshot; the card names no PR (the facts carry none). Returns [] for
-    /// an effect kind the card does not render, so a future kind stays blank
-    /// until it grows its own rows rather than mislabelling closure facts.
+    /// The authenticated-proposal card facts for an effect proposal, as pure
+    /// label/value pairs so a display test asserts the wording without a
+    /// view. Every value is a daemon fact from the snapshot; agent-written
+    /// text (a filing's title and body) is never a row here and draws in
+    /// its own unverified sections (`proposedIssueText`). The rows follow
+    /// `effect_kind`, never which arm happens to be present, and are empty
+    /// when the kind's arm is missing or the kind has no effect card.
     static func effectProposalRows(
         _ facts: Components.Schemas.EffectProposalFactsSnapshot
     ) -> [FactRow] {
-        guard let closure = facts.source_issue_closure?.value1 else { return [] }
+        switch facts.effect_kind {
+        case .source_issue_closure:
+            guard let closure = facts.source_issue_closure?.value1 else { return [] }
+            return sourceIssueClosureRows(closure, supersedes: facts.supersedes?.value1)
+        case .follow_up_filing:
+            guard let filing = facts.follow_up_filing?.value1 else { return [] }
+            return followUpFilingRows(filing)
+        case .run_proposal:
+            return []
+        }
+    }
+
+    /// The closure card names no PR (the facts carry none).
+    private static func sourceIssueClosureRows(
+        _ closure: Components.Schemas.SourceIssueClosureFacts,
+        supersedes: Components.Schemas.EffectProposalRevisionFacts?
+    ) -> [FactRow] {
         var rows: [FactRow] = [
-            .init("Effect", effectKindLabel(facts.effect_kind)),
+            .init("Effect", effectKindLabel(.source_issue_closure)),
             .init(
                 "Target", "\(closure.target.repo)#\(closure.target.issue_number)",
                 monospaced: true),
@@ -284,7 +301,7 @@ enum AttentionDisplay {
                     + "Base \(closure.merge.base_ref)@\(shortRevision(closure.merge.base_sha))",
                 monospaced: true),
         ]
-        if let prior = facts.supersedes?.value1 {
+        if let prior = supersedes {
             let priorPhrase =
                 switch prior.source_issue_closure?.resolves {
                 case .some(true): "was closing the issue"
@@ -301,6 +318,105 @@ enum AttentionDisplay {
                     "Previously \(priorPhrase) (\(prior.proposal_digest))"))
         }
         return rows
+    }
+
+    /// What the daemon derived or checked for a filing: where the issue
+    /// would be filed, what it would carry, which finding it answers, and
+    /// what the title and body were screened under.
+    private static func followUpFilingRows(
+        _ filing: Components.Schemas.FollowUpFilingFacts
+    ) -> [FactRow] {
+        [
+            .init("Effect", effectKindLabel(.follow_up_filing)),
+            .init("Repository", filing.repository.repo, monospaced: true),
+            .init("Labels", filing.labels.isEmpty ? "None" : filing.labels.joined(separator: ", ")),
+            .init("Milestone", filing.milestone ?? "None"),
+            .init(
+                "Source",
+                "Finding \(filing.source.finding_id) · \(followUpSourceKindLabel(filing.source.kind))"),
+            .init("Text screening", textScreening(title: filing.title, body: filing.body)),
+        ]
+    }
+
+    /// One phrase while the title and body share a ruleset and verdict;
+    /// otherwise each field names its own, so a difference is never hidden
+    /// behind the other field's result.
+    private static func textScreening(
+        title: Components.Schemas.ScreenedIssueText,
+        body: Components.Schemas.ScreenedIssueText
+    ) -> String {
+        func screened(_ text: Components.Schemas.ScreenedIssueText) -> String {
+            "\(screeningVerdictLabel(text.verdict)) under \(issueTextRulesetLabel(text.ruleset))"
+        }
+        if title.ruleset == body.ruleset, title.verdict == body.verdict {
+            return "Title and body: \(screened(title))"
+        }
+        return "Title: \(screened(title)) · Body: \(screened(body))"
+    }
+
+    static func followUpSourceKindLabel(_ kind: Components.Schemas.FollowUpSourceKind) -> String {
+        switch kind {
+        case .deferred_disposition: return "Deferred disposition"
+        case .separate_work_verdict: return "Separate-work verdict"
+        }
+    }
+
+    /// The ruleset's own versioned name: the operator compares it with the
+    /// daemon's records, so it is not reworded.
+    static func issueTextRulesetLabel(_ ruleset: Components.Schemas.IssueTextRuleset) -> String {
+        switch ruleset {
+        case .github_hyphen_issue_sol_1: return "github-issue/1"
+        }
+    }
+
+    static func screeningVerdictLabel(_ verdict: Components.Schemas.ScreeningVerdict) -> String {
+        switch verdict {
+        case .passed: return "passed"
+        case .rejected: return "rejected"
+        }
+    }
+
+    /// The agent-written text a follow-up filing would publish, exactly as
+    /// it would be sent.
+    struct ProposedIssueText: Equatable {
+        let title: String
+        let body: String
+    }
+
+    /// The filing's title and body, kept apart from `effectProposalRows`
+    /// so agent text never shares a row or a section with a daemon fact.
+    /// Nil for any other effect kind, even one that carries a stray filing
+    /// arm.
+    static func proposedIssueText(
+        _ facts: Components.Schemas.EffectProposalFactsSnapshot
+    ) -> ProposedIssueText? {
+        guard facts.effect_kind == .follow_up_filing,
+            let filing = facts.follow_up_filing?.value1
+        else { return nil }
+        return .init(title: filing.title.text, body: filing.body.text)
+    }
+
+    /// The sentence under a filing's title and body. The shared unverified
+    /// sentence says the daemon did not check the text; the daemon did
+    /// screen this text (the "Text screening" row), so the sentence says
+    /// what that screening does not establish.
+    static let screenedIssueTextExplanation =
+        "Written by the agent. The daemon screened this text; it did not check that it is true."
+
+    /// The filing's audit coordinates for Details, in full: the card's rows
+    /// name the repository and finding for reading, and these are the
+    /// forge identity and digest an operator copies to compare.
+    static func followUpFilingDetailRows(
+        _ facts: Components.Schemas.EffectProposalFactsSnapshot
+    ) -> [BindingRow] {
+        guard facts.effect_kind == .follow_up_filing,
+            let filing = facts.follow_up_filing?.value1
+        else { return [] }
+        return [
+            .init(label: "Repository ID", value: String(filing.repository.repository_id)),
+            .init(label: "Finding", value: filing.source.finding_id),
+            .init(label: "Adjudication digest", value: filing.source.adjudication_digest),
+        ]
     }
 
     /// The effect kind, named neutrally: the "On merge" row carries whether
