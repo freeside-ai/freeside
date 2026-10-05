@@ -426,21 +426,46 @@ reports the post-merge results required by AGENTS.md.
 
 ## Unit Sizing
 
-A work unit's expected pull request stays around or under 1,000 changed
-lines. The budget is soft, not a gate: merged-PR review history shows
-automated-review convergence flat below roughly that size and
-multiplying above it (devlog 2026-08-18-0818-unit-size-budget.md), so a
-unit kept deliberately larger records its reason on the issue and
-proceeds.
+A work unit's expected pull request stays around or under 1,000 authored
+changed lines. The budget is soft, not a gate: merged-PR review history
+shows automated-review convergence flat below roughly that size and
+multiplying above it (devlog 2026-08-18-0818-unit-size-budget.md, which
+counted every added line; devlog 2026-10-05-1014-unit-sizing-revision.md
+narrows the count to authored lines), so a unit kept deliberately larger
+records its reason on the issue and proceeds.
 
-Estimate against the repository's known size amplifiers, not the core
-change alone; a unit touching two or more is presumed over budget:
+The budget counts authored lines because each one is a decision a
+reviewer has to weigh. One test tells authored lines from regenerated
+output:
+
+- **Authored:** someone, agent or person, decided the line, and a
+  reviewer has to weigh it.
+- **Regenerated:** a documented command reproduces the file from tracked
+  inputs. A reviewer confirms that the command reproduces it, then scans
+  the diff for change the authored lines don't explain.
+
+The estimate declares regenerated output beside the authored count and
+leaves it out of the count. That output is still verified, and a
+golden's diff is still reviewed (`daemon/README.md`):
+
+- the generated API client under
+  `app/Sources/FreesideAPI/GeneratedSources/`, with the schema mirror and
+  the contract-digest constants regenerated alongside it
+  (`bash scripts/check.sh app generate`);
+- golden files rewritten by `go test -update`
+  (`daemon/internal/golden`);
+- any other fixture a documented command rewrites. A fixture edited line
+  by line is authored and counts.
+
+Estimate the authored lines against the repository's known size
+amplifiers, not the core change alone; a unit touching two or more is
+presumed over budget:
 
 - a new migration, which also joins every migration-subset exclusion
   list;
-- store plus domain golden regeneration;
-- a sync-carried contract field, which is `kind:contract` and drags the
-  API schema plus the generated app client;
+- a sync-carried contract field, which is `kind:contract` and adds the
+  API schema edit; its generated app client is regenerated output and
+  stays out of the count;
 - new mock state, whose MockServer daemon parity lands in the first
   push.
 
