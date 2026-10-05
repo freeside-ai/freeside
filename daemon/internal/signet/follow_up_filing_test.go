@@ -17,8 +17,8 @@ import (
 // filingFixture seeds one follow_up_filing proposal instance with the rows its
 // gate re-derives from (project, policy naming labels and a milestone, run,
 // declaration, and a review round whose adjudication defers the finding) and
-// binds an effect_proposal item to it. No signet path opens a filing item
-// yet, so the item is written through the store, as its producer will.
+// opens its effect_proposal item in the same transaction, as its producer
+// does.
 type filingFixture struct {
 	fixture
 	service  *signet.Service
@@ -136,30 +136,8 @@ func newFilingFixture(t *testing.T) filingFixture {
 		if err != nil {
 			return err
 		}
-		artifact, err := instance.EvidenceArtifact()
-		if err != nil {
-			return err
-		}
-		if err := tx.PutArtifact(ctx, artifact); err != nil {
-			return err
-		}
-		item, err = domain.NewAttentionItem(domain.AttentionItemInput{
-			ID: domain.ItemID(string(instance.ID) + "/effect"), ProjectID: project.ID,
-			Subject: domain.Subject{Type: domain.SubjectProposalBatch, ID: domain.SubjectID(instance.ProposalBatchID)},
-			Type:    domain.AttentionEffectProposal, Priority: domain.PriorityNormal,
-			Reason:            "Decide whether to file the follow-up issue",
-			RequestedDecision: []domain.Action{domain.ActionApprove, domain.ActionDecline, domain.ActionSnooze},
-			EvidenceSnapshot:  []domain.Artifact{artifact}, ItemVersion: 1,
-			InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
-			CreatedAt: &now,
-		}, map[domain.Digest]bool{domain.EffectProposalRecipeDigest: true})
-		if err != nil {
-			return err
-		}
-		if err := tx.PutAttentionItem(ctx, item); err != nil {
-			return err
-		}
-		return tx.BindProposalItem(ctx, item.ID, instance.ID, proposal.Digest, nil)
+		item, err = signet.OpenFollowUpFilingItem(ctx, tx, instance.ID, now)
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -223,5 +201,108 @@ func TestFilingInstanceOpensNoClosureCard(t *testing.T) {
 	}
 	if _, err := f.service.OpenEffectProposalItem(context.Background(), f.instance.ID, merge); !errors.Is(err, domain.ErrEffectProposalInconsistent) {
 		t.Fatalf("OpenEffectProposalItem(filing) = %v, want ErrEffectProposalInconsistent", err)
+	}
+}
+
+// TestOpenFollowUpFilingItemOpensTheFilingCard pins the item the filing opener
+// writes: a planned-gate effect_proposal on the proposal batch, with fixed
+// daemon text for its reason, the three decisions a filing takes, the
+// proposal's evidence carrier, and no head or prospective merge.
+func TestOpenFollowUpFilingItemOpensTheFilingCard(t *testing.T) {
+	f := newFilingFixture(t)
+	ctx := context.Background()
+	item := f.item
+	wantActions := []domain.Action{domain.ActionApprove, domain.ActionDecline, domain.ActionSnooze}
+	if item.ID != domain.ItemID(string(f.instance.ID)+"/effect") ||
+		item.Type != domain.AttentionEffectProposal || item.Status != domain.StatusOpen ||
+		item.InterruptionClass != domain.InterruptionPlannedGate ||
+		item.Subject.Type != domain.SubjectProposalBatch ||
+		item.Subject.ID != domain.SubjectID(f.instance.ProposalBatchID) || item.Subject.RunID != nil ||
+		item.Reason != "Decide whether to file the follow-up issue" || item.PRHeadSHA != "" ||
+		!slices.Equal(item.RequestedDecision, wantActions) ||
+		!slices.Equal(item.ArtifactDigests, []domain.Digest{f.instance.Proposal.Digest}) {
+		t.Fatalf("filing item = %#v", item)
+	}
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		instance, _, err := tx.ProposalForItem(ctx, item.ID)
+		if err != nil {
+			return err
+		}
+		if instance.ID != f.instance.ID {
+			t.Fatalf("item bound to instance %q, want %q", instance.ID, f.instance.ID)
+		}
+		merge, err := tx.ProspectiveMergeForItem(ctx, item.ID)
+		if err != nil {
+			return err
+		}
+		if merge != nil {
+			t.Fatalf("filing item bound a prospective merge: %#v", merge)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestOpenFollowUpFilingItemReturnsTheItemItFinds proves a repeat call opens
+// no second card: it returns the first item unchanged while that item is open,
+// and still returns it, decided, after the operator declines.
+func TestOpenFollowUpFilingItemReturnsTheItemItFinds(t *testing.T) {
+	f := newFilingFixture(t)
+	ctx := context.Background()
+	reopen := func() domain.AttentionItem {
+		t.Helper()
+		var item domain.AttentionItem
+		if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+			var err error
+			item, err = signet.OpenFollowUpFilingItem(ctx, tx, f.instance.ID, (*f.now).Add(time.Hour))
+			return err
+		}); err != nil {
+			t.Fatalf("OpenFollowUpFilingItem: %v", err)
+		}
+		return item
+	}
+	again := reopen()
+	if again.ID != f.item.ID || again.ItemVersion != f.item.ItemVersion ||
+		again.CreatedAt == nil || !again.CreatedAt.Equal(*f.item.CreatedAt) {
+		t.Fatalf("reopened item = %#v, want the first item unchanged", again)
+	}
+	if _, err := f.service.Submit(ctx, signet.ClientCommand{
+		CommandID: "decline-filing", DeviceID: f.device.ID, ExpectedEntityVersion: 1,
+		Payload: signet.DecisionPayload{
+			ItemID: f.item.ID, Action: domain.ActionDecline, ItemVersion: f.item.ItemVersion,
+			ArtifactDigests: f.item.ArtifactDigests,
+		},
+	}); err != nil {
+		t.Fatalf("decline: %v", err)
+	}
+	decided := reopen()
+	if decided.ID != f.item.ID || decided.Status != domain.StatusDismissed {
+		t.Fatalf("reopened item after decline = %#v, want the dismissed first item", decided)
+	}
+	var items []domain.AttentionItem
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		items, err = tx.ListOpenAttentionItems(ctx, domain.AttentionEffectProposal)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("open effect_proposal items after decline = %d, want 0", len(items))
+	}
+}
+
+// TestOpenFollowUpFilingItemRefusesAClosureInstance pins the kind check: a
+// closure instance takes the card that binds a merge, never the filing card.
+func TestOpenFollowUpFilingItemRefusesAClosureInstance(t *testing.T) {
+	f := newClosureFixture(t, true, domain.ClosureFlagOriginProposeSite)
+	ctx := context.Background()
+	err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+		_, err := signet.OpenFollowUpFilingItem(ctx, tx, f.instance.ID, *f.now)
+		return err
+	})
+	if !errors.Is(err, domain.ErrEffectProposalInconsistent) {
+		t.Fatalf("OpenFollowUpFilingItem(closure) = %v, want ErrEffectProposalInconsistent", err)
 	}
 }
