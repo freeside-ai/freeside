@@ -1762,6 +1762,13 @@ func TestFindingAdjudicationProjectsAuthenticatedFindingContext(t *testing.T) {
 // recommended routes, as the command path does.
 func acceptFindingAdjudicationItem(t *testing.T, f *findingAdjudicationFixture, itemID domain.ItemID) {
 	t.Helper()
+	decideFindingAdjudicationItem(t, f, itemID, domain.ActionAcceptRecommendedRoute)
+}
+
+func decideFindingAdjudicationItem(
+	t *testing.T, f *findingAdjudicationFixture, itemID domain.ItemID, action domain.Action,
+) {
+	t.Helper()
 	var item domain.AttentionItem
 	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
 		var err error
@@ -1774,7 +1781,7 @@ func acceptFindingAdjudicationItem(t *testing.T, f *findingAdjudicationFixture, 
 		CommandID: "command-accept-park", DeviceID: "device-1",
 		ItemID: item.ID, ItemVersion: item.ItemVersion, PRHeadSHA: item.PRHeadSHA,
 		ArtifactDigests: item.ArtifactDigests,
-		Action:          domain.ActionAcceptRecommendedRoute,
+		Action:          action,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2240,11 +2247,12 @@ func TestRemediationOversizedInputParksRunWithoutStoppingLane(t *testing.T) {
 	assertNoDispatchedMarker()
 }
 
-// TestAcceptingParkingRouteRecordsNothing pins the behavior the parking card
-// text claims (#1551): accepting a single parking finding records no
+// TestAcceptingParkingRouteRecordsNoDisposition pins the behavior the parking
+// card text claims (#1551): accepting a single parking finding records no
 // disposition and dispatches no remediation, so the round stays incomplete and
-// the run can't publish.
-func TestAcceptingParkingRouteRecordsNothing(t *testing.T) {
+// the run can't publish. An accepted separate-work route also proposes a
+// follow-up filing, which follow_up_filing_test.go covers.
+func TestAcceptingParkingRouteRecordsNoDisposition(t *testing.T) {
 	for _, route := range []domain.AdjudicationRoute{
 		domain.RouteParkRevision, domain.RouteParkSeparateWork,
 	} {
