@@ -1444,6 +1444,18 @@ const (
 	credProofNonceKey    = "nonce"
 	credProofTreeKey     = "cred_tree"
 	credProofManifestKey = "cred_manifest"
+	// The integrity observer's extra keys. Only an integrity proof may carry
+	// them: the handoff gate's proof keeps refusing both as unknown.
+	credProofTokenDigestKey = "cred_token_sha256" //nolint:gosec // G101: a proof key name, not a credential
+	credProofTokenLengthKey = "cred_token_length" //nolint:gosec // G101: a proof key name, not a credential
+)
+
+// Values of the integrity keys beside a digest. credProofTokenAbsent is the
+// value of both keys when the volume holds no regular token file.
+const (
+	credProofTokenAbsent      = "absent"
+	credProofTokenLengthOK    = "ok"
+	credProofTokenLengthShort = "short"
 )
 
 // buildCredentialObserverSpec generates the container that attests the leased
@@ -1557,6 +1569,45 @@ func credObserverScript(
 		"printf '" + credProofNonceKey + "=%s\\n" + credProofTreeKey + "=%s\\n" +
 		manifestFormat + "' " + shellQuote(nonce) + " \"$t\"" + manifestArgument +
 		" > " + proof + "; sync"
+}
+
+func credIntegrityObserverCommand(cfg Config, nonce, target string) []string {
+	return []string{"sh", "-c", credIntegrityObserverScript(cfg, nonce, target)}
+}
+
+// credIntegrityObserverScript is the opaque observer script followed by the
+// credential-integrity probe's two facts about a setup-token store: the
+// SHA-256 of the token file's bytes and whether the file is at least
+// MinSetupTokenBytes long. The prefix is credObserverScript's output
+// unchanged, so the tree digest is the one every other observation of the
+// volume reports, and the handoff gate's own command does not move.
+//
+// The opaque policy is deliberate. The setup-token manifest check would fail
+// the whole proof on the damage this script exists to describe (an empty
+// token, a changed mode).
+//
+// Neither token fact can fail toward a finding. A token that is absent, a
+// symlink, or not a regular file reports absent for both keys. A hash or a
+// byte count the image cannot produce writes a value verifyCredProof
+// refuses, so the observation errors rather than report a short token.
+//
+// The tree digest carries no such guarantee: its passes discard tool errors
+// by design, so a tool that fails mid-pass moves the digest and the proof
+// still parses. A caller that reads a changed tree digest as damage must
+// see it reproduce first, as the integrity probe does.
+func credIntegrityObserverScript(cfg Config, nonce, target string) string {
+	token := shellQuote(target + "/token")
+	proof := shellQuote(cfg.CredProofPath)
+	return credObserverScript(cfg, nonce, target, CredentialManifestOpaque) + "; " +
+		"ts=" + credProofTokenAbsent + "; tb=" + credProofTokenAbsent + "; " +
+		"if [ -f " + token + " ] && [ ! -L " + token + " ]; then " +
+		"ts=\"$(sha256sum < " + token + " 2>/dev/null | cut -d' ' -f1)\"; " +
+		"tb=unknown; n=\"$(wc -c < " + token + " 2>/dev/null | tr -d ' ')\"; " +
+		"case \"$n\" in ''|*[!0-9]*) ;; *) " +
+		"if [ \"$n\" -ge " + strconv.Itoa(MinSetupTokenBytes) + " ]; then tb=" + credProofTokenLengthOK +
+		"; else tb=" + credProofTokenLengthShort + "; fi ;; esac; fi; " +
+		"printf '" + credProofTokenDigestKey + "=%s\\n" + credProofTokenLengthKey + "=%s\\n' " +
+		"\"$ts\" \"$tb\" >> " + proof + "; sync"
 }
 
 // cloneContainerSpec detaches every reference field before a spec crosses the
