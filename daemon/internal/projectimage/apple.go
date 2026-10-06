@@ -311,6 +311,17 @@ func (a appleBackend) CheckProvenance(ctx context.Context, ref string, want prov
 			return fmt.Errorf("embedded Node toolchain launcher %s does not match the builder input", launcher)
 		}
 	}
+	// The recorded environment claims these exact seed bytes. Prove the claim
+	// against the image, not only against the context the build was given.
+	for path, wantHash := range map[string]string{
+		seedPackageJSONPath: want.PackageJSONSHA256,
+		seedPackageLockPath: want.PackageLockSHA256,
+	} {
+		seed, found := files[path]
+		if !found || manifestSHA256(seed) != wantHash {
+			return fmt.Errorf("baked dependency seed %s does not match the recorded environment", path)
+		}
+	}
 	return nil
 }
 
@@ -1144,6 +1155,8 @@ func projectEvidenceTargets() map[string]int64 {
 		npmLauncherPath:          maxPrepareBytes,
 		npxLauncherPath:          maxPrepareBytes,
 		busyboxPath:              maxBusyboxBytes,
+		seedPackageJSONPath:      maxManifestBytes,
+		seedPackageLockPath:      maxManifestBytes,
 	}
 }
 

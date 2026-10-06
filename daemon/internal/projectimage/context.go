@@ -1,8 +1,11 @@
 package projectimage
 
 import (
+	"crypto/sha256"
 	"fmt"
+	"strconv"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
@@ -15,6 +18,12 @@ const (
 	nodeLauncherPath           = "/usr/local/bin/node"
 	npmLauncherPath            = "/usr/local/bin/npm"
 	npxLauncherPath            = "/usr/local/bin/npx"
+	// The dependency seed the Containerfile bakes and prepareScript compares
+	// each fresh workspace against.
+	seedPackageJSONPath = "/opt/freeside/project-seed/package.json"
+	seedPackageLockPath = "/opt/freeside/project-seed/package-lock.json"
+
+	preparationDigestVersion = "freeside.project-image-preparation/v1"
 )
 
 const nodeToolchainLauncher = `#!/usr/bin/busybox sh
@@ -78,6 +87,33 @@ export NPM_CONFIG_GLOBALCONFIG=/usr/local/etc/npmrc
 export NPM_CONFIG_USERCONFIG=/dev/null
 exec npm ci --ignore-scripts
 `
+
+// PreparationDigest addresses this binary's fixed toolchain and preparation
+// implementation: the preparation helper, the Node launcher, the Containerfile
+// template (which carries the toolchain base image and the npm configuration),
+// and the pinned Node version and archive hash. A project image records the
+// value it was built with, and reuse at another commit requires the running
+// binary's to equal it: these sources decide what an image's environment is as
+// much as the project's manifests do.
+//
+// It is deliberately coarse. Any edit to those sources, a comment included,
+// changes it, so an image built by a different builder is never assumed
+// equivalent.
+func PreparationDigest() domain.Digest {
+	// Length-prefixed parts, so no two source sets share a preimage.
+	hash := sha256.New()
+	for _, part := range []string{
+		preparationDigestVersion,
+		prepareScript,
+		nodeToolchainLauncher,
+		renderContainerfile(Request{}, ""),
+		nodeToolchainVersion,
+		nodeToolchainArchiveSHA256,
+	} {
+		hash.Write([]byte(strconv.Itoa(len(part)) + ":" + part))
+	}
+	return domain.Digest(contentaddr.Format(hash.Sum(nil)))
+}
 
 func renderContainerfile(request Request, recipeDigest domain.Digest) string {
 	// Every interpolated value has already passed validateRequest's restricted

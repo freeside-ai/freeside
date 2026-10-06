@@ -57,6 +57,11 @@ func TestOperationalContractGoldens(t *testing.T) {
 			"ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("3", 64)),
 		ImageRef: domain.ImageRef(
 			"ghcr.io/freeside-ai/example-repo@sha256:" + strings.Repeat("4", 64)),
+		Environment: &domain.ProjectImageEnvironment{
+			PackageJSONSHA256: strings.Repeat("5", 64),
+			PackageLockSHA256: strings.Repeat("6", 64),
+			PreparationDigest: domain.Digest("sha256:" + strings.Repeat("7", 64)),
+		},
 	})
 	if err != nil {
 		t.Fatal(err)

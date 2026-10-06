@@ -24,6 +24,17 @@ type imageBuilderStub struct {
 	preparationCommand []string
 	afterBuild         func()
 	mutateRequest      func(*projectimage.Request)
+	// environment overrides the recorded environment of a stub-built image;
+	// nil records this binary's, as the real builder does.
+	environment func() *domain.ProjectImageEnvironment
+}
+
+func stubProjectImageEnvironment() *domain.ProjectImageEnvironment {
+	return &domain.ProjectImageEnvironment{
+		PackageJSONSHA256: strings.Repeat("1", 64),
+		PackageLockSHA256: strings.Repeat("2", 64),
+		PreparationDigest: projectimage.PreparationDigest(),
+	}
 }
 
 func (b *imageBuilderStub) Build(
@@ -38,6 +49,10 @@ func (b *imageBuilderStub) Build(
 		if command == nil {
 			command = []string{projectimage.PreparationPath}
 		}
+		environment := stubProjectImageEnvironment
+		if b.environment != nil {
+			environment = b.environment
+		}
 		image, err := domain.NewProjectImage(domain.ProjectImageInput{
 			Repository: req.Repository, RepositoryID: req.RepositoryID,
 			CommitSHA: req.CommitSHA, RecipeDigest: verify.RecipeDigest(req.Recipe),
@@ -46,6 +61,7 @@ func (b *imageBuilderStub) Build(
 			ImageRef: domain.ImageRef(
 				"127.0.0.1:" + fmt.Sprint(req.LocalRegistryPort) + "/" +
 					req.ImageName + "@sha256:" + strings.Repeat("b", 64)),
+			Environment: environment(),
 		})
 		if err != nil {
 			return domain.ProjectImage{}, err
@@ -482,6 +498,27 @@ func TestOnboardRequiresOneDigestBoundReviewBeforeBuildAndActivation(t *testing.
 		t.Fatal("onboard accepted a substituted project-image preparation command")
 	}
 	builder.preparationCommand = nil
+	// A result must record this binary's environment: one with none could
+	// never be reused, and one naming another builder's preparation sources
+	// would be reused on evidence this binary did not produce.
+	builder.image = domain.ProjectImage{}
+	builder.environment = func() *domain.ProjectImageEnvironment { return nil }
+	if _, err := onboard.Run(ctx, req); err == nil ||
+		!strings.Contains(err.Error(), "does not record this builder's environment") {
+		t.Fatalf("project image without an environment error = %v", err)
+	}
+	builder.image = domain.ProjectImage{}
+	builder.environment = func() *domain.ProjectImageEnvironment {
+		environment := stubProjectImageEnvironment()
+		environment.PreparationDigest = domain.Digest("sha256:" + strings.Repeat("9", 64))
+		return environment
+	}
+	if _, err := onboard.Run(ctx, req); err == nil ||
+		!strings.Contains(err.Error(), "does not record this builder's environment") {
+		t.Fatalf("project image from another builder error = %v", err)
+	}
+	builder.image = domain.ProjectImage{}
+	builder.environment = nil
 	builder.image, err = domain.NewProjectImage(domain.ProjectImageInput{
 		Repository: req.Repository, RepositoryID: req.RepositoryID,
 		CommitSHA:          req.Image.CommitSHA,
@@ -490,6 +527,7 @@ func TestOnboardRequiresOneDigestBoundReviewBeforeBuildAndActivation(t *testing.
 		BaseImageRef:       req.Image.BaseImageRef,
 		ImageRef: domain.ImageRef(
 			"registry.example.test/other-image@sha256:" + strings.Repeat("b", 64)),
+		Environment: stubProjectImageEnvironment(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -527,7 +565,7 @@ func TestOnboardRequiresOneDigestBoundReviewBeforeBuildAndActivation(t *testing.
 	if err != nil {
 		t.Fatalf("approval pass: %v", err)
 	}
-	if complete.Status != "complete" || builder.calls != 7 {
+	if complete.Status != "complete" || builder.calls != 9 {
 		t.Fatalf("complete result = %+v, builder calls = %d", complete, builder.calls)
 	}
 	var active domain.AutomationTrustProfile

@@ -165,7 +165,7 @@
     "build_proxy": "http://proxy.example.test"
   },
   "project_image": {
-    "id": "sha256:eea884f32f8b3ba13ca83bde42b1a0cff843ef36fdb64648232612b1b2687eb8",
+    "id": "sha256:f9aa7896a459adf173fbe66878dc691da9dc2310f57f73662f9d0f1e8ce2ceac",
     "repository": "example/repo",
     "repository_id": 44,
     "commit_sha": "1111111111111111111111111111111111111111",
@@ -175,7 +175,11 @@
     ],
     "base_image_ref": "ghcr.io/freeside-ai/agent@sha256:3333333333333333333333333333333333333333333333333333333333333333",
     "image_ref": "ghcr.io/freeside-ai/example-repo@sha256:4444444444444444444444444444444444444444444444444444444444444444",
-    "environment": null
+    "environment": {
+      "package_json_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "package_lock_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+      "preparation_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+    }
   },
   "operating_mode": "attended_dev",
   "isolation_class": "process_local"

@@ -4,6 +4,7 @@ package projectimage
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -31,6 +32,10 @@ const (
 	maxRecipeBytes   = 1 << 20
 	maxManifestBytes = 32 << 20
 )
+
+// unsupportedInputNames are the npm inputs no project image supports. The
+// build commit and every run base are held to the same list.
+var unsupportedInputNames = []string{"npm-shrinkwrap.json", ".npmrc"}
 
 var (
 	repositoryPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$`)
@@ -150,6 +155,8 @@ type provenanceSpec struct {
 	RecipeDigest               domain.Digest
 	NodeVersion                string
 	NodeToolchainArchiveSHA256 string
+	PackageJSONSHA256          string
+	PackageLockSHA256          string
 }
 
 type runSpec struct {
@@ -262,6 +269,10 @@ func (b *Builder) Build(
 	if err := createBuildContext(contextDir, sourceDir, normalized, recipeDigest); err != nil {
 		return domain.ProjectImage{}, err
 	}
+	environment, err := bakedEnvironment(contextDir)
+	if err != nil {
+		return domain.ProjectImage{}, err
+	}
 
 	baseDigest := imageDigest(normalized.BaseImageRef)
 	observedBase, err := b.backend.ImageDigest(ctx, normalized.BaseBuildRef)
@@ -326,6 +337,8 @@ func (b *Builder) Build(
 		RepositoryID: normalized.RepositoryID, CommitSHA: normalized.CommitSHA,
 		RecipeDigest: recipeDigest, NodeVersion: nodeToolchainVersion,
 		NodeToolchainArchiveSHA256: nodeToolchainArchiveSHA256,
+		PackageJSONSHA256:          environment.PackageJSONSHA256,
+		PackageLockSHA256:          environment.PackageLockSHA256,
 	}
 	if err := b.backend.CheckProvenance(ctx, localRef, provenance); err != nil {
 		return domain.ProjectImage{}, fmt.Errorf("local image provenance: %w: %w", err, ErrProofFailed)
@@ -399,6 +412,7 @@ func (b *Builder) Build(
 		CommitSHA: normalized.CommitSHA, RecipeDigest: recipeDigest,
 		PreparationCommand: []string{PreparationPath},
 		BaseImageRef:       normalized.BaseImageRef, ImageRef: ref,
+		Environment: &environment,
 	})
 	if err != nil {
 		return domain.ProjectImage{}, fmt.Errorf("construct project-image result: %w", err)
@@ -606,7 +620,7 @@ func createBuildContext(
 	request Request,
 	recipeDigest domain.Digest,
 ) error {
-	for _, name := range []string{"npm-shrinkwrap.json", ".npmrc"} {
+	for _, name := range unsupportedInputNames {
 		if _, err := os.Lstat(filepath.Join(sourceDir, name)); err == nil {
 			return fmt.Errorf("source contains unsupported npm input %s", name)
 		} else if !errors.Is(err, os.ErrNotExist) {
@@ -643,6 +657,29 @@ func createBuildContext(
 		return fmt.Errorf("write generated Containerfile: %w", err)
 	}
 	return nil
+}
+
+// bakedEnvironment records the environment inputs the build context carries:
+// the exact manifest bytes COPY will bake as the dependency seed, and this
+// binary's preparation implementation. It hashes the context's copies, not the
+// source tree's, so the record describes what the image is built from.
+func bakedEnvironment(contextDir string) (domain.ProjectImageEnvironment, error) {
+	environment := domain.ProjectImageEnvironment{PreparationDigest: PreparationDigest()}
+	for name, hash := range map[string]*string{
+		"package.json":      &environment.PackageJSONSHA256,
+		"package-lock.json": &environment.PackageLockSHA256,
+	} {
+		content, err := os.ReadFile(filepath.Join(contextDir, name)) //nolint:gosec // G304: fixed manifest name inside the private build context
+		if err != nil {
+			return domain.ProjectImageEnvironment{}, fmt.Errorf("hash baked %s: %w", name, err)
+		}
+		*hash = manifestSHA256(content)
+	}
+	return environment, nil
+}
+
+func manifestSHA256(content []byte) string {
+	return fmt.Sprintf("%x", sha256.Sum256(content))
 }
 
 func copyRegularFile(source, target string, maxBytes int64) error {
