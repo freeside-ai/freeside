@@ -282,7 +282,8 @@ does, and two more facts make part 3 its own planning question:
   (`prompts/phase-1a/remediator.md`) calls that input daemon-authenticated.
   The adjudicator receives the finding whole as well. Both framings live
   outside this unit's paths, and the comment-edit limit above means the text
-  is not always the listed reviewer's.
+  is not always the listed reviewer's. Follow-up: #1767
+  (`2026-10-06-1046-external-finding-adjudication.md`).
 - **Remediation is admitted at one base for the whole daemon.**
   `AllowsRemediation` requires the cycle's base, and every agent run is
   admitted at the daemon's configured base. Decision 6 on the issue already
