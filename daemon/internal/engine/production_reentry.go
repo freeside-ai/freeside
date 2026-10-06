@@ -36,7 +36,13 @@ import (
 // bound in place to the same pull request.
 
 const (
-	productionReentryCheckpointVersion = "freeside.production-reentry-verification/v1"
+	// v2 added TreeSHA. The cycle still accepts a v1 checkpoint, which has
+	// no tree: the inbox never replaces a row, so refusing one would stall
+	// a cycle verified before the upgrade on every pass. Only a remediation
+	// needs the tree, and loadReentryRemediationSourceTree refuses a
+	// checkpoint without one.
+	productionReentryCheckpointVersion   = "freeside.production-reentry-verification/v2"
+	productionReentryCheckpointVersionV1 = "freeside.production-reentry-verification/v1"
 	// A re-entered cycle's checkpoint has its own kind because it carries no
 	// import account and no stored authorization, so a reader of the original
 	// kind can never decode one as a publishable candidate.
@@ -84,6 +90,11 @@ type productionReentryCheckpoint struct {
 	TaskKey string `json:"task_key"`
 	BaseSHA string `json:"base_sha"`
 	HeadSHA string `json:"head_sha"`
+	// TreeSHA is the head's tree, resolved in the cycle's checkout. The
+	// remediation an external review cycle starts compares the remediator's
+	// imported tree with it, as an ordinary round compares with the tree its
+	// importer recorded (issue #1767).
+	TreeSHA string `json:"tree_sha"`
 	// EvaluatedSHA is the prospective merge a base advance verified in place
 	// of its head, and empty for a head change.
 	EvaluatedSHA           string                     `json:"evaluated_sha"`
@@ -126,6 +137,19 @@ func (c productionReentryCheckpoint) view(repo string) productionVerificationChe
 // was exported for it.
 func (t productionPublicationTask) reentersInPlace() bool {
 	return t.Successor != nil && t.Successor.Reentry != nil && t.ProducingInvocationID == ""
+}
+
+// admittedBaseSHA is the base the task's candidate was admitted at: the
+// replay's observed base, and for a cycle that re-enters in place, which has
+// no replay, the base its sealed authority names. A remediation the cycle
+// starts is admitted at that base; externalReviewMayAdjudicate lets the cycle
+// start one only while it is the base the predecessor's producer was admitted
+// at.
+func (t productionPublicationTask) admittedBaseSHA() string {
+	if t.reentersInPlace() {
+		return t.Successor.Reentry.BaseSHA
+	}
+	return t.Replay.ObservedBaseSHA
 }
 
 func reentryVerificationInvocationID(successor domain.PublicationSuccessor) domain.InvocationID {
@@ -724,6 +748,10 @@ func (w *productionPublicationWorkflow) verifyReentry(
 	if err != nil {
 		return productionReentryCheckpoint{}, err
 	}
+	treeSHA, err := w.reentryTreeSHA(ctx, checkoutDir, task.HeadSHA)
+	if err != nil {
+		return productionReentryCheckpoint{}, err
+	}
 	// The cycle's own base, not the one its producer was admitted at. The
 	// caller turns a refusal into this cycle's stop.
 	if err := requireProjectImageServesBase(
@@ -777,7 +805,7 @@ func (w *productionPublicationWorkflow) verifyReentry(
 	checkpoint := productionReentryCheckpoint{
 		Version: productionReentryCheckpointVersion,
 		TaskKey: task.intentKey(),
-		BaseSHA: baseSHA, HeadSHA: task.HeadSHA, EvaluatedSHA: binding.evaluatedSHA,
+		BaseSHA: baseSHA, HeadSHA: task.HeadSHA, TreeSHA: treeSHA, EvaluatedSHA: binding.evaluatedSHA,
 		ProjectImage: binding.verificationImage().ID,
 		Outcome:      reentryOutcome(verified.Outcome), RecipeDigest: verified.RecipeDigest,
 		EvidenceSnapshotDigest: evidenceDigest,
@@ -803,6 +831,34 @@ func reentryOutcome(outcome verify.Outcome) domain.VerificationOutcome {
 		return domain.VerificationPassed
 	}
 	return domain.VerificationFailed
+}
+
+// reentryTreeSHA resolves the tree of the cycle's head in its checkout, which
+// already holds that commit.
+func (w *productionPublicationWorkflow) reentryTreeSHA(
+	ctx context.Context, checkoutDir, headSHA string,
+) (string, error) {
+	scratch, err := os.MkdirTemp(w.workDir, ".reentry-tree-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(scratch) //nolint:errcheck // daemon-owned scratch
+	runner, err := gitrun.New(gitrun.Options{Scratch: scratch})
+	if err != nil {
+		return "", err
+	}
+	if _, err := runner.PinCheckout(ctx, checkoutDir); err != nil {
+		return "", fmt.Errorf("bind re-entry tree checkout: %w", err)
+	}
+	out, err := runner.Run(ctx, nil, "rev-parse", "--verify", headSHA+"^{tree}")
+	if err != nil {
+		return "", fmt.Errorf("resolve re-entry head tree: %w", err)
+	}
+	tree := strings.TrimSpace(string(out))
+	if !validCommitSHA(tree) {
+		return "", fmt.Errorf("resolve re-entry head tree: %q: %w", tree, domain.ErrParentKeyMismatch)
+	}
+	return tree, nil
 }
 
 // reentryDiff derives what the workspace commit changes against the cycle's
@@ -959,7 +1015,10 @@ func (w *productionPublicationWorkflow) loadReentryCheckpoint(
 		return productionReentryCheckpoint{}, false, err
 	}
 	baseSHA := binding.admission.Base.BaseSHA
-	if checkpoint.Version != productionReentryCheckpointVersion ||
+	versionAgrees := (checkpoint.Version == productionReentryCheckpointVersion &&
+		validCommitSHA(checkpoint.TreeSHA)) ||
+		(checkpoint.Version == productionReentryCheckpointVersionV1 && checkpoint.TreeSHA == "")
+	if !versionAgrees ||
 		checkpoint.TaskKey != task.intentKey() ||
 		checkpoint.ProjectImage != binding.verificationImage().ID ||
 		checkpoint.BaseSHA != baseSHA || checkpoint.HeadSHA != task.HeadSHA ||
@@ -1000,19 +1059,29 @@ func (w *productionPublicationWorkflow) loadReentryCheckpoint(
 		return productionReentryCheckpoint{}, false, fmt.Errorf(
 			"production re-entry checkpoint report: %w", errors.Join(err, domain.ErrParentKeyMismatch))
 	}
-	if report.HeadSHA != task.HeadSHA || report.BaseSHA != baseSHA ||
-		report.EvaluatedSHA != binding.evaluatedSHA ||
-		report.RecipeDigest != checkpoint.RecipeDigest ||
-		reentryOutcome(report.Outcome) != checkpoint.Outcome ||
-		!slices.EqualFunc(candidateFindings(nil, report.Findings), checkpoint.Findings,
-			func(reported, stored domain.CandidateFinding) bool {
-				return reflect.DeepEqual(reported, stored)
-			}) {
+	if !checkpoint.reportAgrees(report, baseSHA, task.HeadSHA, binding.evaluatedSHA) {
 		return productionReentryCheckpoint{}, false, fmt.Errorf(
 			"production re-entry checkpoint disagrees with its verification report: %w",
 			domain.ErrParentKeyMismatch)
 	}
 	return checkpoint, true, nil
+}
+
+// reportAgrees reports whether the verifier's own report names the commits
+// the reader holds and gives the recipe, outcome, and findings the checkpoint
+// records. Every reader of a re-entry checkpoint asks it: the row has no
+// stored authorization to witness what it decoded.
+func (c productionReentryCheckpoint) reportAgrees(
+	report verify.Report, baseSHA, headSHA, evaluatedSHA string,
+) bool {
+	return report.HeadSHA == headSHA && report.BaseSHA == baseSHA &&
+		report.EvaluatedSHA == evaluatedSHA &&
+		report.RecipeDigest == c.RecipeDigest &&
+		reentryOutcome(report.Outcome) == c.Outcome &&
+		slices.EqualFunc(candidateFindings(nil, report.Findings), c.Findings,
+			func(reported, stored domain.CandidateFinding) bool {
+				return reflect.DeepEqual(reported, stored)
+			})
 }
 
 // completeReentryTask re-earns readiness in place. It mirrors the tail of a

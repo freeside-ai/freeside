@@ -102,7 +102,7 @@ func (w *productionPublicationWorkflow) diffStatsSincePreviousRound(
 			request.BaseSHA, request.HeadSHA, record.BaseSHA, previous.HeadSHA,
 			domain.ErrParentKeyMismatch)
 	}
-	previousTree, err := w.loadRemediationSourceTree(ctx, task, binding)
+	previousTree, err := w.loadRemediationSourceTree(ctx, task, binding, reviewWorkspace)
 	if err != nil {
 		return nil, err
 	}

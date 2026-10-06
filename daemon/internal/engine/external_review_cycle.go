@@ -31,6 +31,18 @@ func (t productionPublicationTask) externalReviewFirstRound(record domain.Review
 	return t.answersExternalReview() && record.Round == t.Successor.ReviewRound
 }
 
+// remediatesExternalFindings reports whether a remediation of round under
+// successor is one an external review cycle's first round starts: the one
+// round whose remediation may fix the cycle's admitted external findings,
+// which no review record lists, and may answer a clean record when it fixes
+// nothing of the record's own (issue #1767 decisions 1 and 2). The three
+// producer gates (store, engine, signet) widen under this condition and no
+// other.
+func remediatesExternalFindings(successor domain.PublicationSuccessor, round int) bool {
+	return successor.EffectiveOrigin() == domain.PublicationSuccessorExternalReview &&
+		successor.Reentry != nil && round == successor.ReviewRound
+}
+
 // externalCycleFindings splits the external findings a cycle admits by whether
 // an earlier cycle already gave them an outcome.
 type externalCycleFindings struct {

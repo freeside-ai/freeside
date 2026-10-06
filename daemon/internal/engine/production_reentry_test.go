@@ -12,10 +12,12 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
 
@@ -112,6 +114,82 @@ func TestReentryVerificationCheckpointKeyNamesTheCycle(t *testing.T) {
 	}
 	if keys[0] == keys[1] || keys[1] == keys[2] || keys[0] == keys[2] {
 		t.Fatalf("checkpoint keys collide: %q", keys)
+	}
+}
+
+// TestReentryCheckpointLoaderAcceptsAPreUpgradeRow: the inbox never replaces
+// a row, so a cycle verified before the tree was recorded must find its v1
+// checkpoint acceptable or stall on every pass. A current checkpoint without
+// a tree is still a disagreement.
+func TestReentryCheckpointLoaderAcceptsAPreUpgradeRow(t *testing.T) {
+	t.Parallel()
+	successor := reentrySuccessorForTest(
+		productionReadyItemID("run-reentry"), domain.ReadinessInvalidationBaseAdvanced)
+	task := newReentryTask("project-reentry", successor)
+	binding := productionBinding{image: domain.ProjectImage{ID: "sha256:image", RecipeDigest: "sha256:recipe"}}
+	binding.admission.Base.BaseSHA = successor.Reentry.BaseSHA
+	// The loader reads the outcome back from the verifier's own report, so
+	// an accepted checkpoint needs one that agrees with it.
+	raw, err := json.MarshalIndent(verify.Report{
+		HeadSHA: task.HeadSHA, BaseSHA: successor.Reentry.BaseSHA,
+		RecipeDigest: binding.image.RecipeDigest, Outcome: verify.OutcomePassed,
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = append(raw, '\n')
+	artifacts := []domain.Artifact{{
+		Type: domain.ArtifactKindVerificationReport, Digest: domain.Digest(contentaddr.Sum(raw)),
+		Provenance: domain.Provenance{ProducerInvocationID: task.verificationInvocationID()},
+	}}
+	evidence, err := domain.ComputeEvidenceSnapshotDigest(artifacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1 := productionReentryCheckpoint{
+		Version: productionReentryCheckpointVersionV1, TaskKey: task.intentKey(),
+		BaseSHA: successor.Reentry.BaseSHA, HeadSHA: task.HeadSHA, ProjectImage: "sha256:image",
+		Outcome: domain.VerificationPassed, RecipeDigest: "sha256:recipe",
+		EvidenceSnapshotDigest: evidence, Artifacts: artifacts,
+	}
+	v2 := v1
+	v2.Version, v2.TreeSHA = productionReentryCheckpointVersion, strings.Repeat("7", 40)
+	v1WithTree, v2WithoutTree := v1, v2
+	v1WithTree.TreeSHA, v2WithoutTree.TreeSHA = v2.TreeSHA, ""
+	for name, tc := range map[string]struct {
+		checkpoint productionReentryCheckpoint
+		want       error
+	}{
+		"v1 without a tree": {v1, nil},
+		"v2 with a tree":    {v2, nil},
+		"v1 with a tree":    {v1WithTree, domain.ErrParentKeyMismatch},
+		"v2 without a tree": {v2WithoutTree, domain.ErrParentKeyMismatch},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{})
+			payload, err := json.Marshal(tc.checkpoint)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+				_, _, err := tx.RecordInbox(ctx, task.verificationCheckpointKey(), productionReentryCheckpointKind, payload)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			w := &productionPublicationWorkflow{store: st, artifacts: &findingAdjudicationArtifactStore{
+				bodies: map[domain.Digest][]byte{artifacts[0].Digest: raw},
+			}}
+			got, found, err := w.loadReentryCheckpoint(ctx, task, binding)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("loadReentryCheckpoint = %v, want %v", err, tc.want)
+			}
+			if tc.want == nil && (!found || got.Version != tc.checkpoint.Version || got.TreeSHA != tc.checkpoint.TreeSHA) {
+				t.Fatalf("loadReentryCheckpoint = %+v, %v; want the stored checkpoint", got, found)
+			}
+		})
 	}
 }
 

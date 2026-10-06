@@ -658,17 +658,56 @@ func (tx *ReadTx) AuthenticateSuccessorProducer(ctx context.Context, successor d
 	}
 	review, err := tx.GetReviewRecord(ctx, request.ReviewInvocationID)
 	if err != nil || review.RunID != successor.RunID || review.Round != request.Round ||
-		review.HeadSHA != request.HeadSHA || review.BaseSHA != request.BaseSHA || review.Outcome != domain.ReviewFindings {
+		review.HeadSHA != request.HeadSHA || review.BaseSHA != request.BaseSHA {
 		return errors.Join(err, domain.ErrParentKeyMismatch)
 	}
 	adjudication, err := tx.GetFindingAdjudication(ctx, request.AdjudicationDigest)
 	if err != nil || adjudication.RunID != successor.RunID || adjudication.Round != request.Round || len(request.FindingIDs) == 0 {
 		return errors.Join(err, domain.ErrParentKeyMismatch)
 	}
-	for _, finding := range request.FindingIDs {
-		if !slices.Contains(review.FindingIDs, finding) {
+	// An external review cycle's first round may route the cycle's admitted
+	// external findings to a fix (issue #1767). No review record lists one,
+	// so under that round the gate admits each such ID through the cycle's
+	// own admission, and admits a clean record when every ID is one. The
+	// admission is rebuilt from the authority in hand: this gate runs inside
+	// the authority's own read, which must not look the authority up again.
+	//
+	// The admission says only that the cycle answers the finding, which is
+	// also true of one the request's adjudication declined, deferred, or
+	// never saw. A review finding is tied to the request through the review
+	// record; an external one is tied through the adjudication, which must
+	// hold it on a remediate route. An operator's alternative route can only
+	// take that route away, so the recorded route is necessary, and the
+	// engine's gate holds the request to the exact effective set.
+	var cycle *externalReviewCycleAdmission
+	if successor.EffectiveOrigin() == domain.PublicationSuccessorExternalReview &&
+		successor.Reentry != nil && request.Round == successor.ReviewRound {
+		admission, err := tx.externalReviewCycleAdmission(ctx, successor)
+		if err != nil {
+			return err
+		}
+		cycle = &admission
+	}
+	reviewed := 0
+	for _, id := range request.FindingIDs {
+		if slices.Contains(review.FindingIDs, id) {
+			reviewed++
+			continue
+		}
+		if cycle == nil {
 			return domain.ErrParentKeyMismatch
 		}
+		finding, err := tx.GetFinding(ctx, id)
+		if err != nil || cycle.admits(finding) != nil ||
+			!slices.ContainsFunc(adjudication.Entries, func(entry domain.FindingAdjudicationEntry) bool {
+				return entry.FindingID == id && entry.Route == domain.RouteRemediate
+			}) {
+			return errors.Join(err, domain.ErrParentKeyMismatch)
+		}
+	}
+	if review.Outcome != domain.ReviewFindings &&
+		(review.Outcome != domain.ReviewClean || cycle == nil || reviewed != 0) {
+		return domain.ErrParentKeyMismatch
 	}
 	return nil
 }
