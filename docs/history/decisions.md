@@ -2539,3 +2539,29 @@ The client work is #1732 and #1033.)
 
 (Owner decision of 2026-10-02, #1709;
 [decision note](../../devlog/2026-10-02-2238-assessed-contract-serialization.md).)
+
+---
+
+## Revision 80 ("Local Account Facts and Credential-Safe Usage Reads"):
+
+1. **Codex account facts come from stored ID-token claims.** #866's fresh
+   baseline answers without a token-endpoint POST, while its near-expiry
+   invocation attempts refresh despite `refreshToken: false`. Local decoding
+   avoids launching the app-server for facts already in the snapshot. Display
+   them as claims from the stored ID token, dated by its own issuance time
+   when available, never by the auth store's `last_refresh`. Unknown claim age,
+   current revocation, and later plan changes stay unknown.
+2. **The safety rule protects credentials, not an attempt counter.** No
+   observation may refresh in a way that could change a credential outside
+   the mutation lease. Access-only snapshots and `provider_only` egress remain
+   mandatory. A tokenless attempt blocked by egress is tolerated, recorded,
+   and scheduled around; it is neither mutation nor a successful observation.
+3. **The lifetime gate belongs on the network usage read.** #1714 measures
+   fresh and near-expiry behavior and fixes a bounded invocation and margin
+   beyond the pinned CLI's five-minute refresh window. Insufficient lifetime
+   defers collection without admitting or withholding executions. #868 is
+   replanned only after this plan revision merges.
+
+(Owner decision of 2026-10-05, #1758, following #866;
+[decision note](../../devlog/2026-10-05-1145-codex-observation-boundary.md) and
+[ADR 0004](../decisions/0004-read-codex-account-facts-locally.md).)
