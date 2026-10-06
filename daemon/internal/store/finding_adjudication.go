@@ -72,8 +72,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (run_id, round, revision) DO NOTHING`
 
 // validateFindingAdjudicationBinding re-runs every authoritative join instead of
-// trusting the artifact's copied keys: the review round must exist, the artifact's
-// entry finding set must equal that round's finding set exactly, each engine entry's
+// trusting the artifact's copied keys: the review round must exist, the artifact
+// must carry an entry for every finding of that round's review record and for no
+// other finding except an admitted external one (below), each engine entry's
 // evidence must equal what the deterministic fast path actually derives, its
 // instruction snapshot must equal the round's authoritative instruction binding, and
 // its approved-spec and resolved-policy digests must equal the run's authoritative
@@ -83,6 +84,13 @@ ON CONFLICT (run_id, round, revision) DO NOTHING`
 // ErrParentKeyMismatch. Together these re-gate every caller-supplied trust bit the
 // artifact carries: the finding batch, each engine entry's evidence, the instruction
 // snapshot, and the spec and policy the adjudication's routing decisions rest on.
+//
+// An external finding never joins a review record (plan §5.19), yet an admitted
+// one consumes this same adjudication (plan §7), so the first round of an
+// external_review cycle is the one place an entry may name a finding outside the
+// record: there, and only for a finding that cycle admits. The rule stays one-way.
+// The artifact must cover the review record; it need not cover every admitted
+// external finding, which is the engine's to require.
 func (tx *ReadTx) validateFindingAdjudicationBinding(
 	ctx context.Context, artifact domain.FindingAdjudication,
 ) error {
@@ -125,11 +133,23 @@ func (tx *ReadTx) validateFindingAdjudicationBinding(
 			}
 		}
 	}
-	recordIDs := slices.Clone(record.FindingIDs)
-	slices.Sort(recordIDs)
-	slices.Sort(entryIDs)
-	if !slices.Equal(entryIDs, recordIDs) {
-		return domain.ErrParentKeyMismatch
+	for _, id := range record.FindingIDs {
+		if _, entered := seen[id]; !entered {
+			return domain.ErrParentKeyMismatch
+		}
+	}
+	var outsideRecord []domain.FindingID
+	for _, id := range entryIDs {
+		if !slices.Contains(record.FindingIDs, id) {
+			outsideRecord = append(outsideRecord, id)
+		}
+	}
+	// Only an artifact that names a finding outside the record reads the
+	// cycle, so an ordinary round's adjudication depends on no successor.
+	if len(outsideRecord) > 0 {
+		if err := tx.requireAdmittedExternalEntries(ctx, record, outsideRecord); err != nil {
+			return err
+		}
 	}
 	// The instruction snapshot must equal the review round's authoritative
 	// instruction binding (already loaded above): an adjudication naming a
@@ -151,6 +171,32 @@ func (tx *ReadTx) validateFindingAdjudicationBinding(
 	}
 	if artifact.ApprovedSpecDigest != run.SpecDigest || artifact.ResolvedPolicyDigest != run.PolicyDigest {
 		return domain.ErrParentKeyMismatch
+	}
+	return nil
+}
+
+// requireAdmittedExternalEntries proves each finding an adjudication names
+// outside its round's review record: the round is the first round of an
+// external_review cycle, and that cycle admits every one of them. Anything
+// else is a foreign finding, as it was before external entries existed.
+func (tx *ReadTx) requireAdmittedExternalEntries(
+	ctx context.Context, record domain.ReviewRecord, ids []domain.FindingID,
+) error {
+	authority, found, err := tx.externalReviewCycleForRound(ctx, record)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return domain.ErrParentKeyMismatch
+	}
+	admitted, err := tx.ExternalReviewCycleFindings(ctx, record.RunID, authority.PublicationID())
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if !slices.ContainsFunc(admitted, func(finding domain.Finding) bool { return finding.ID == id }) {
+			return domain.ErrParentKeyMismatch
+		}
 	}
 	return nil
 }

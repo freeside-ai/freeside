@@ -734,6 +734,13 @@ func publicationReadPath(ctx context.Context) string {
 	return path.String()
 }
 
+// publicationReadActive reports whether the read is already reconstructing a
+// ready item, feedback, or successor record.
+func publicationReadActive(ctx context.Context) bool {
+	link, _ := ctx.Value(publicationReadKey{}).(*publicationReadLink)
+	return link != nil
+}
+
 // Carry the active reconstruction path across ready, feedback and successor
 // reads. A forged cycle fails closed before recursively trusting its own row.
 func publicationReadContext(ctx context.Context, key string) (context.Context, error) {
