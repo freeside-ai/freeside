@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -176,6 +177,68 @@ func (s *Service) Revoke(ctx context.Context, caller, id domain.DeviceID) (Devic
 	})
 	if err != nil && !errors.Is(err, errRevokeReplay) {
 		return DeviceSnapshot{}, err
+	}
+	return out, nil
+}
+
+// deviceActivityGranularity is how old a device's recorded last-seen instant
+// must be before an authenticated request refreshes it. A client polls the
+// revision every few seconds, so recording each request would turn every
+// poll into a row write; five minutes is fine enough to tell a device in use
+// from one in a drawer.
+const deviceActivityGranularity = 5 * time.Minute
+
+// recordDeviceActivity notes that an authorized device just made a request,
+// for the device list's last_seen_at. It goes through WriteInternal, so it
+// never moves the server revision or the device's entity version. It is
+// advisory: a failure is logged and the request proceeds, because losing a
+// last-seen instant must never lock a device out.
+func (s *Service) recordDeviceActivity(ctx context.Context, id domain.DeviceID) {
+	err := s.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.TouchDeviceActivity(ctx, id, s.now(), deviceActivityGranularity)
+	})
+	if err != nil {
+		s.logger.Warn("record device activity", "device_id", id, "error", err)
+	}
+}
+
+// ListDevices returns every paired device, active or revoked, with its sync
+// metadata and last-seen instant (api/openapi.yaml GET /devices). Devices and
+// activity are read at one snapshot. The entries carry no credential
+// material: neither store read touches device_credentials.
+func (s *Service) ListDevices(ctx context.Context) ([]DeviceListEntry, error) {
+	var out []DeviceListEntry
+	err := s.store.Read(ctx, func(tx *store.ReadTx) error {
+		state, err := tx.ServerState(ctx)
+		if err != nil {
+			return err
+		}
+		devices, err := tx.ListDevices(ctx)
+		if err != nil {
+			return err
+		}
+		activity, err := tx.ListDeviceActivity(ctx)
+		if err != nil {
+			return err
+		}
+		out = make([]DeviceListEntry, 0, len(devices))
+		for _, device := range devices {
+			if err := validateSnapshot(state, device.Snapshot); err != nil {
+				return fmt.Errorf("device %q: %w", device.Value.ID, err)
+			}
+			entry := DeviceListEntry{
+				AsOfRevision: device.Snapshot.AsOfRevision, EntityVersion: device.Snapshot.EntityVersion,
+				Device: device.Value,
+			}
+			if lastSeenAt, ok := activity[device.Value.ID]; ok {
+				entry.LastSeenAt = &lastSeenAt
+			}
+			out = append(out, entry)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list devices: %w", err)
 	}
 	return out, nil
 }

@@ -119,6 +119,17 @@ func deviceSnapshot(device domain.Device, snapshot store.Snapshot) DeviceSnapsho
 	}
 }
 
+// DeviceListEntry is one row of the device list, matching api/openapi.yaml:
+// the DeviceSnapshot fields plus when the daemon last saw the device.
+// LastSeenAt is advisory bookkeeping, not synchronized state, and is nil for
+// a device with no recorded activity.
+type DeviceListEntry struct {
+	AsOfRevision  int64         `json:"as_of_revision"`
+	EntityVersion int64         `json:"entity_version"`
+	Device        domain.Device `json:"device"`
+	LastSeenAt    *time.Time    `json:"last_seen_at"`
+}
+
 // MintPairingCode mints one short-lived single-use pairing code and returns
 // its plaintext for the daemon host to display or print (the composition's
 // job; the service never logs it). Only the keyed digest persists, through

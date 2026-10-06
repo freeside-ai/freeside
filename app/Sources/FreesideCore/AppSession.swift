@@ -174,6 +174,16 @@ public final class AppSession {
         applyReadiness(lastReadiness)
     }
 
+    /// `rePair()` for the Devices screen, once the daemon has confirmed the
+    /// revocation of the device `coordinator` syncs as. A no-op when the
+    /// session has moved on from that pairing: a revoke answer can arrive
+    /// after the operator has paired again, and deleting the credential then
+    /// would remove the new pairing's, not the revoked one's.
+    public func rePair(endingPairingOf coordinator: SyncCoordinator) throws {
+        guard case .ready(let current) = phase, current === coordinator else { return }
+        try rePair()
+    }
+
     private init(
         localDaemonURL: URL?, cacheRoot: URL?,
         credentialStore: @escaping (URL) -> any DeviceCredentialStore,

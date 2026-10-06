@@ -185,6 +185,123 @@ private func client(server: MockServer, token: String? = nil) -> Client {
         _ = try output.notFound
     }
 
+    @Test func deviceListFollowsPairingAndRevocation() async throws {
+        // An enforcing mock lists exactly what paired with it, active or
+        // revoked, in id order, with the sync metadata each write recorded.
+        let server = MockServer(authMode: .enforcing)
+        await server.seedPairingCode("483911")
+        await server.seedPairingCode("592044")
+        let first = try await client(server: server).pairDevice(
+            body: .json(.init(pairing_code: "483911", display_name: "Ben's Mac"))
+        ).created.body.json
+        let second = try await client(server: server).pairDevice(
+            body: .json(.init(pairing_code: "592044", display_name: "Ben's iPhone"))
+        ).created.body.json
+        let api = client(server: server, token: first.device_token)
+
+        let paired = try await api.listDevices().ok.body.json
+        #expect(paired.map(\.device) == [first.device.device, second.device.device])
+        #expect(paired.map(\.entity_version) == [1, 1])
+        #expect(paired.map(\.as_of_revision) == [first.device.as_of_revision, second.device.as_of_revision])
+        // The caller's own listing request is already recorded; a device
+        // that has made no authenticated request reports null.
+        #expect(paired[0].last_seen_at != nil)
+        #expect(paired[1].last_seen_at == nil)
+
+        // Activity is not synchronized state: an authenticated request from
+        // the second device moves its last-seen instant and nothing else.
+        let before = try await api.getSyncRevision().ok.body.json
+        _ = try await client(server: server, token: second.device_token).getSyncRevision().ok
+        let seen = try await api.listDevices().ok.body.json
+        #expect(seen[1].last_seen_at != nil)
+        #expect(seen[1].entity_version == 1)
+        #expect(try await api.getSyncRevision().ok.body.json == before)
+
+        // A revoked device stays listed, at its revoking write's versions,
+        // and keeps the instant it was last seen.
+        let revoked = try await api.revokeDevice(path: .init(device_id: "device-2")).ok.body.json
+        let after = try await api.listDevices().ok.body.json
+        #expect(after.count == 2)
+        #expect(after[1].device == revoked.device)
+        #expect(after[1].entity_version == 2)
+        #expect(after[1].as_of_revision == revoked.as_of_revision)
+        #expect(after[1].last_seen_at == seen[1].last_seen_at)
+    }
+
+    @Test func deviceListCarriesNoCredential() async throws {
+        // The no-credential rule, on the wire: the list holds neither
+        // device's token, nor any field the contract does not name.
+        let server = MockServer(authMode: .enforcing)
+        await server.seedPairingCode("483911")
+        await server.seedPairingCode("592044")
+        var tokens: [String] = []
+        for (code, name) in [("483911", "Ben's Mac"), ("592044", "Ben's iPhone")] {
+            let grant = try await client(server: server).pairDevice(
+                body: .json(.init(pairing_code: code, display_name: name))
+            ).created.body.json
+            tokens.append(grant.device_token)
+        }
+
+        var request = HTTPRequest(method: .get, scheme: nil, authority: nil, path: "/devices")
+        request.headerFields[.authorization] = "Bearer \(tokens[0])"
+        // swift-format-ignore: NeverForceUnwrap
+        let (response, body) = try await MockServerTransport(server: server).send(
+            request, body: nil, baseURL: URL(string: "https://freeside.invalid")!,
+            operationID: "listDevices")
+        #expect(response.status == .ok)
+        let data = try await Data(collecting: try #require(body), upTo: 1 << 20)
+        let text = String(decoding: data, as: UTF8.self)
+        for token in tokens {
+            #expect(!text.contains(token))
+            #expect(!text.contains(String(token.split(separator: ".")[2])))
+        }
+        for forbidden in ["fsd1.", "device_token", "credential", "public_key", "sha256:", "topic", "ntfy"] {
+            #expect(!text.contains(forbidden))
+        }
+        let entries = try #require(try JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+        #expect(entries.count == 2)
+        for entry in entries {
+            #expect(Set(entry.keys) == ["as_of_revision", "entity_version", "device", "last_seen_at"])
+            let device = try #require(entry["device"] as? [String: Any])
+            #expect(Set(device.keys) == ["id", "display_name", "status", "paired_at", "revoked_at"])
+        }
+    }
+
+    @Test func permissiveMockSeedsEveryDeviceState() async throws {
+        // The mock app reads as the fixed mock identity, which never pairs:
+        // the seed puts it in the list beside another active device and a
+        // revoked one, so the Devices screen has every state to render.
+        let server = MockServer()
+        let api = client(server: server)
+        let seeded = try await api.listDevices().ok.body.json
+        // Seeded rows never run ahead of the revision the heartbeat reports.
+        let revision = try await api.getSyncRevision().ok.body.json.revision
+        #expect(seeded.map(\.as_of_revision).allSatisfy { $0 <= revision })
+
+        let statuses = seeded.map { entry -> String in
+            switch entry.device {
+            case .active(let device): "\(device.id) active"
+            case .revoked(let device): "\(device.id) revoked"
+            }
+        }
+        #expect(
+            statuses == [
+                "\(DeviceFixtures.currentDeviceID) active",
+                "\(DeviceFixtures.otherDeviceID) active",
+                "\(DeviceFixtures.revokedDeviceID) revoked",
+            ])
+        #expect(seeded.map(\.last_seen_at) == DeviceFixtures.defaultDevices().map(\.last_seen_at))
+        #expect(seeded.map { $0.last_seen_at == nil } == [false, false, true])
+
+        // Revoking a seeded device is the ordinary revoking write.
+        let revoked = try await api.revokeDevice(path: .init(device_id: DeviceFixtures.otherDeviceID))
+            .ok.body.json
+        let after = try await api.listDevices().ok.body.json
+        #expect(after[1].device == revoked.device)
+        #expect(after[1].entity_version == 2)
+        #expect(after[1].last_seen_at == seeded[1].last_seen_at)
+    }
+
     @Test func enforcingModeFailsClosedExceptForPairing() async throws {
         let server = MockServer(authMode: .enforcing)
         await server.seedPairingCode("483911")

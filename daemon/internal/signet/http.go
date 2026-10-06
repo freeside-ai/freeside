@@ -49,6 +49,7 @@ func NewHTTPHandler(service *Service, authorize RequestAuthorizer, configuredHea
 	mux.Handle("GET /health", http.HandlerFunc(h.getHealth))
 	mux.Handle("POST /pairing", http.HandlerFunc(h.pairDevice))
 	mux.Handle("POST /pairing/preview", http.HandlerFunc(h.previewPairing))
+	mux.Handle("GET /devices", h.authenticated(h.listDevices))
 	mux.Handle("POST /devices/{device_id}/revoke", h.authenticated(h.revokeDevice))
 	mux.Handle("GET /sync/bootstrap", h.authenticated(h.getBootstrap))
 	mux.Handle("GET /sync/revision", h.authenticated(h.getRevision))
@@ -114,6 +115,9 @@ func (h httpHandler) authenticated(next authenticatedHandler) http.Handler {
 			writeJSON(w, http.StatusUnauthorized, errorResponse{Message: "unauthorized"})
 			return
 		}
+		// Recorded before the handler runs, so a device listing the devices
+		// sees its own request.
+		h.service.recordDeviceActivity(r.Context(), deviceID)
 		next(w, r, deviceID)
 	})
 }
@@ -784,6 +788,15 @@ func (h httpHandler) previewPairing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, facts)
+}
+
+func (h httpHandler) listDevices(w http.ResponseWriter, r *http.Request, _ domain.DeviceID) {
+	devices, err := h.service.ListDevices(r.Context())
+	if err != nil {
+		writeReadError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, devices)
 }
 
 func (h httpHandler) revokeDevice(w http.ResponseWriter, r *http.Request, authenticatedDevice domain.DeviceID) {

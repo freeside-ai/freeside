@@ -265,6 +265,21 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /pairing/preview`.
     /// - Remark: Generated from `#/paths//pairing/preview/post(previewPairing)`.
     func previewPairing(_ input: Operations.previewPairing.Input) async throws -> Operations.previewPairing.Output
+    /// List paired devices
+    ///
+    /// Lists every paired device, active or revoked, for the clients'
+    /// Devices screen (plan §5.14 devices). A partial fetch, like
+    /// `GET /schedules`: devices are not in the bootstrap snapshot, and
+    /// this read never marks the whole cache current. Any active device
+    /// may list all of them, since any active device may revoke any other
+    /// (`POST /devices/{device_id}/revoke`). The response carries no
+    /// credential, credential digest, public key, or ntfy subscription:
+    /// `Device` cannot represent one.
+    ///
+    ///
+    /// - Remark: HTTP `GET /devices`.
+    /// - Remark: Generated from `#/paths//devices/get(listDevices)`.
+    func listDevices(_ input: Operations.listDevices.Input) async throws -> Operations.listDevices.Output
     /// Revoke a paired device
     ///
     /// Revokes the device's credential (plan §5.14): a revoked device
@@ -718,6 +733,23 @@ extension APIProtocol {
             headers: headers,
             body: body
         ))
+    }
+    /// List paired devices
+    ///
+    /// Lists every paired device, active or revoked, for the clients'
+    /// Devices screen (plan §5.14 devices). A partial fetch, like
+    /// `GET /schedules`: devices are not in the bootstrap snapshot, and
+    /// this read never marks the whole cache current. Any active device
+    /// may list all of them, since any active device may revoke any other
+    /// (`POST /devices/{device_id}/revoke`). The response carries no
+    /// credential, credential digest, public key, or ntfy subscription:
+    /// `Device` cannot represent one.
+    ///
+    ///
+    /// - Remark: HTTP `GET /devices`.
+    /// - Remark: Generated from `#/paths//devices/get(listDevices)`.
+    public func listDevices(headers: Operations.listDevices.Input.Headers = .init()) async throws -> Operations.listDevices.Output {
+        try await listDevices(Operations.listDevices.Input(headers: headers))
     }
     /// Revoke a paired device
     ///
@@ -5828,6 +5860,47 @@ public enum Components {
                 case as_of_revision
                 case entity_version
                 case device
+            }
+        }
+        /// One row of the device list (plan §5.14): a device's resource snapshot plus when the daemon last saw it. as_of_revision, entity_version, and device are exactly the DeviceSnapshot fields and are synchronized state. last_seen_at is not: it is advisory bookkeeping the daemon keeps beside the device.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/DeviceListEntry`.
+        public struct DeviceListEntry: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/DeviceListEntry/as_of_revision`.
+            public var as_of_revision: Components.Schemas.AsOfRevision
+            /// - Remark: Generated from `#/components/schemas/DeviceListEntry/entity_version`.
+            public var entity_version: Components.Schemas.EntityVersion
+            /// - Remark: Generated from `#/components/schemas/DeviceListEntry/device`.
+            public var device: Components.Schemas.Device
+            /// The device's most recent authenticated request, at a coarse granularity: the daemon refreshes it only once the recorded instant is several minutes old, so it can trail the true last request by that much. Null means the device has made no authenticated request since the daemon began recording activity. Recording it never moves the server revision or this device's entity_version, so a change here is observable only by reading the list again. A revoked device keeps the instant it was last seen while active.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/DeviceListEntry/last_seen_at`.
+            public var last_seen_at: Foundation.Date?
+            /// Creates a new `DeviceListEntry`.
+            ///
+            /// - Parameters:
+            ///   - as_of_revision:
+            ///   - entity_version:
+            ///   - device:
+            ///   - last_seen_at: The device's most recent authenticated request, at a coarse granularity: the daemon refreshes it only once the recorded instant is several minutes old, so it can trail the true last request by that much. Null means the device has made no authenticated request since the daemon began recording activity. Recording it never moves the server revision or this device's entity_version, so a change here is observable only by reading the list again. A revoked device keeps the instant it was last seen while active.
+            public init(
+                as_of_revision: Components.Schemas.AsOfRevision,
+                entity_version: Components.Schemas.EntityVersion,
+                device: Components.Schemas.Device,
+                last_seen_at: Foundation.Date? = nil
+            ) {
+                self.as_of_revision = as_of_revision
+                self.entity_version = entity_version
+                self.device = device
+                self.last_seen_at = last_seen_at
+            }
+            public enum CodingKeys: String, CodingKey {
+                case as_of_revision
+                case entity_version
+                case device
+                case last_seen_at
             }
         }
         /// The server revision of the transaction that last wrote this entity (plan §5.14); lets a client detect revision gaps per resource.
@@ -17317,6 +17390,126 @@ public enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "forbidden",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// List paired devices
+    ///
+    /// Lists every paired device, active or revoked, for the clients'
+    /// Devices screen (plan §5.14 devices). A partial fetch, like
+    /// `GET /schedules`: devices are not in the bootstrap snapshot, and
+    /// this read never marks the whole cache current. Any active device
+    /// may list all of them, since any active device may revoke any other
+    /// (`POST /devices/{device_id}/revoke`). The response carries no
+    /// credential, credential digest, public key, or ntfy subscription:
+    /// `Device` cannot represent one.
+    ///
+    ///
+    /// - Remark: HTTP `GET /devices`.
+    /// - Remark: Generated from `#/paths//devices/get(listDevices)`.
+    public enum listDevices {
+        public static let id: Swift.String = "listDevices"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/devices/GET/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.listDevices.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.listDevices.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.listDevices.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - headers:
+            public init(headers: Operations.listDevices.Input.Headers = .init()) {
+                self.headers = headers
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/devices/GET/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/devices/GET/responses/200/content/application\/json`.
+                    case json([Components.Schemas.DeviceListEntry])
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: [Components.Schemas.DeviceListEntry] {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.listDevices.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.listDevices.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Every paired device, ordered by id.
+            ///
+            /// - Remark: Generated from `#/paths//devices/get(listDevices)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.listDevices.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.listDevices.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
                             response: self
                         )
                     }
