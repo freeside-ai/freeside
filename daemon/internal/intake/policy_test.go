@@ -181,3 +181,24 @@ func TestWIPCapExhausted(t *testing.T) {
 		}
 	}
 }
+
+func TestOriginEvidenceDemotesAutoStart(t *testing.T) {
+	cases := []struct {
+		name     string
+		evidence OriginEvidence
+		want     bool
+	}{
+		{"repository the daemon never filed in", OriginEvidence{}, false},
+		{"another issue in a repository with filings", OriginEvidence{RepositoryMayHaveFilings: true}, true},
+		{"daemon-filed issue", OriginEvidence{FiledByDaemon: true, RepositoryMayHaveFilings: true}, true},
+		// Unreachable from the ledger today (a row is a filing in the
+		// repository); it is the case a later authority profile leaves, when
+		// the repository rule is relaxed and the per-issue rule must still hold.
+		{"daemon-filed issue with the repository rule relaxed", OriginEvidence{FiledByDaemon: true}, true},
+	}
+	for _, tc := range cases {
+		if got := tc.evidence.DemotesAutoStart(); got != tc.want {
+			t.Errorf("%s: DemotesAutoStart() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

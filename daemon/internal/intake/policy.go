@@ -149,3 +149,35 @@ func (p IntakePolicy) Downgraded() bool {
 func (p IntakePolicy) WIPCapExhausted(wipTasks int) bool {
 	return wipTasks >= p.WIPCap
 }
+
+// OriginEvidence is what the daemon's filing ledger says about a labeled
+// issue at the final intake transition (plan §5.17). The caller reads both
+// facts from the ledger under the store write that records the start or its
+// refusal, so a filing that lands concurrently cannot slip past the gate.
+// Nothing in the issue itself is evidence: a marker in issue content carries
+// zero authority, so the type has no field a title, body, or label could set.
+type OriginEvidence struct {
+	// FiledByDaemon: the ledger holds a row for this issue, so the daemon
+	// created it.
+	FiledByDaemon bool
+	// RepositoryMayHaveFilings: the daemon may have created an issue in this
+	// repository, ledgered or not (a create whose answer was lost counts).
+	RepositoryMayHaveFilings bool
+}
+
+// DemotesAutoStart reports whether an authorized auto_start must be reduced
+// to propose. It applies two §5.17 rules:
+//
+//   - A daemon-filed issue is never auto-started, at any observation.
+//   - While no issue-event authority profile exists, every labeled issue in
+//     a repository the daemon may have filed in is demoted, because without
+//     one the daemon cannot prove a labeled issue there is not its own.
+//
+// The second rule implies the first today, since a ledger row is itself a
+// filing in the repository. They stay separate facts so that a later
+// authority profile can relax the repository rule and leave the per-issue
+// one standing. An operator's start decision on the demoted card is the
+// explicit human admission and is not this gate's concern.
+func (e OriginEvidence) DemotesAutoStart() bool {
+	return e.FiledByDaemon || e.RepositoryMayHaveFilings
+}
