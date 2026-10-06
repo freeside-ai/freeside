@@ -197,6 +197,281 @@ func TestProductionReplayDeliveryDefersToKnownDriverInvocation(t *testing.T) {
 	}
 }
 
+// seedRunPolicy stores the run with a resolved policy and returns it bound to
+// that policy's digest. Writer-stage admission reads the run's policy, so a
+// fixture that admits one stores it first. values adds keys to the one every
+// seeded policy carries.
+func seedRunPolicy(t *testing.T, st *store.Store, run domain.Run, values map[string]string) domain.Run {
+	t.Helper()
+	provenance := domain.KeyProvenance{Source: domain.ProvenancePreset, Digest: "sha256:test-policy"}
+	keys := []domain.PolicyKey{{Key: "rein", Value: "tight", Provenance: provenance}}
+	for key, value := range values {
+		keys = append(keys, domain.PolicyKey{Key: key, Value: value, Provenance: provenance})
+	}
+	policy, err := domain.NewResolvedPolicy(run.ID, keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.PolicyDigest = policy.Digest
+	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
+		if err := tx.PutRun(t.Context(), run); err != nil {
+			return err
+		}
+		return tx.PutResolvedPolicy(t.Context(), policy)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return run
+}
+
+// The writer's egress profile comes from the run's resolved policy, and a
+// profile the composition cannot enforce is refused rather than recorded.
+// The production composition declares only provider_only enforceable, so
+// until the proxy enforces the registry set (#1628) a policy that opts in to
+// provider_registry admits nothing.
+func TestWriterAdmissionTakesTheEgressProfileFromPolicy(t *testing.T) {
+	const registrySet = `["proxy.golang.org","sum.golang.org"]`
+	optIn := map[string]string{
+		domain.EgressProfilePolicyKey: string(domain.EgressProviderRegistry),
+		domain.RegistrySetPolicyKey:   registrySet,
+	}
+	providerOnly := []domain.EgressProfile{domain.EgressProviderOnly}
+	withRegistry := []domain.EgressProfile{domain.EgressProviderOnly, domain.EgressProviderRegistry}
+	for name, tc := range map[string]struct {
+		policy      map[string]string
+		enforceable []domain.EgressProfile
+		want        domain.EgressProfile
+		wantErr     error
+	}{
+		"no key admits provider_only": {
+			policy: nil, enforceable: providerOnly, want: domain.EgressProviderOnly,
+		},
+		"a declared set alone admits provider_only": {
+			policy:      map[string]string{domain.RegistrySetPolicyKey: registrySet},
+			enforceable: withRegistry, want: domain.EgressProviderOnly,
+		},
+		"opt-in is refused when only provider_only is enforceable": {
+			policy: optIn, enforceable: providerOnly, wantErr: ErrEgressProfileNotEnforceable,
+		},
+		"opt-in is admitted when the composition enforces it": {
+			policy: optIn, enforceable: withRegistry, want: domain.EgressProviderRegistry,
+		},
+		"opt-in without a registry set is a policy error": {
+			policy: map[string]string{
+				domain.EgressProfilePolicyKey: string(domain.EgressProviderRegistry),
+			},
+			enforceable: withRegistry, wantErr: domain.ErrRegistrySetInvalid,
+		},
+		"a profile the key cannot select is a policy error": {
+			policy: map[string]string{
+				domain.EgressProfilePolicyKey: string(domain.EgressProviderWebRead),
+			},
+			enforceable: []domain.EgressProfile{domain.EgressProviderOnly, domain.EgressProviderWebRead},
+			wantErr:     domain.ErrInvalidEgressProfile,
+		},
+		"a profile the domain does not know is a policy error": {
+			policy: map[string]string{
+				domain.EgressProfilePolicyKey: "provider_everything",
+			},
+			enforceable: withRegistry, wantErr: ErrEgressPolicyRefused,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newAgentAdmissionFixture(t)
+			f.engine.admission.environment.EnforceableEgressProfiles = tc.enforceable
+			run := seedRunPolicy(t, f.store, domain.Run{
+				ID: "run-egress", ProjectID: f.run.ProjectID, SpecDigest: f.run.SpecDigest,
+			}, tc.policy)
+			stage := domain.Stage{ID: productionStageID(run.ID), RunID: run.ID, Name: productionStageName}
+			invocation, err := domain.NewAgentInvocation(
+				productionInvocationID(run.ID), []domain.ArtifactID{agentTestInputArtifact}, nil, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			admission, admitted, err := f.engine.admitAttempt(
+				t.Context(), invocationBinding{run: run, invocation: invocation}, stage, invocation.ID)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) || admitted {
+					t.Fatalf("admitAttempt = admitted %t, err %v; want %v and no admission", admitted, err, tc.wantErr)
+				}
+				// The refusal is this run's own: the pass holds the one
+				// invocation under a typed reason and goes on to the next.
+				// Unclassified, it would end the reconcile loop.
+				if !invocationDispatchHold(err) || unattendedDispatchRefusal(err) {
+					t.Fatalf("refusal %v does not hold its own invocation only", err)
+				}
+				if reason, ok := dispatchHoldReason(err); !ok || reason != domain.HoldAdmissionPolicyRefused {
+					t.Fatalf("hold reason = %q, %t; want %q", reason, ok, domain.HoldAdmissionPolicyRefused)
+				}
+				return
+			}
+			if err != nil || !admitted {
+				t.Fatalf("admitAttempt = admitted %t, err %v", admitted, err)
+			}
+			if admission.EgressProfile != tc.want || admission.PolicyDigest != run.PolicyDigest {
+				t.Fatalf("admission = profile %q under policy %q; want %q under %q",
+					admission.EgressProfile, admission.PolicyDigest, tc.want, run.PolicyDigest)
+			}
+		})
+	}
+}
+
+// A writer attempt whose run has no stored policy, or whose stored policy is
+// not the one the run names, has no request to read: admission refuses it
+// instead of assuming the default.
+func TestWriterAdmissionRefusesAnUnreadablePolicy(t *testing.T) {
+	f := newAgentAdmissionFixture(t)
+	admit := func(run domain.Run) error {
+		t.Helper()
+		stage := domain.Stage{ID: productionStageID(run.ID), RunID: run.ID, Name: productionStageName}
+		invocation, err := domain.NewAgentInvocation(
+			productionInvocationID(run.ID), []domain.ArtifactID{agentTestInputArtifact}, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, admitted, err := f.engine.admitAttempt(
+			t.Context(), invocationBinding{run: run, invocation: invocation}, stage, invocation.ID)
+		if admitted {
+			t.Fatal("admitAttempt admitted a run whose policy cannot be read")
+		}
+		return err
+	}
+	missing := domain.Run{
+		ID: "run-no-policy", ProjectID: f.run.ProjectID,
+		SpecDigest: f.run.SpecDigest, PolicyDigest: f.run.PolicyDigest,
+	}
+	if err := admit(missing); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("missing policy: err = %v, want store.ErrNotFound", err)
+	}
+	renamed := f.run
+	renamed.PolicyDigest = agentTestDigest("6")
+	mismatch := admit(renamed)
+	if !errors.Is(mismatch, domain.ErrPolicyDigestMismatch) {
+		t.Fatalf("mismatched policy digest: err = %v, want ErrPolicyDigestMismatch", mismatch)
+	}
+	// Neither is a policy verdict. A run that names a policy the store does
+	// not hold is a broken binding, and it keeps the loud failure path.
+	for name, err := range map[string]error{"missing": admit(missing), "mismatched": mismatch} {
+		if _, held := dispatchHoldReason(err); held || invocationDispatchHold(err) || unattendedDispatchRefusal(err) {
+			t.Fatalf("%s policy refusal %v is held quietly", name, err)
+		}
+	}
+}
+
+// Every writer stage reads the request: a remediation round and an
+// operator-feedback retry run the same writer as the first production
+// attempt, so an opt-in the composition cannot enforce is refused on each. A
+// stage that is not the writer's runs under the composition's profile and
+// never reads the key.
+func TestEgressPolicyGovernsEveryWriterStageAndNoOther(t *testing.T) {
+	f := newAgentAdmissionFixture(t)
+	f.engine.productionPublication = &productionPublicationWorkflow{
+		remediationPromptPackage: agentTestDigest("8"),
+	}
+	run := seedRunPolicy(t, f.store, domain.Run{
+		ID: "run-egress", ProjectID: f.run.ProjectID, SpecDigest: f.run.SpecDigest,
+	}, map[string]string{
+		domain.EgressProfilePolicyKey: string(domain.EgressProviderRegistry),
+		domain.RegistrySetPolicyKey:   `["proxy.golang.org","sum.golang.org"]`,
+	})
+	admit := func(stage domain.Stage, id domain.InvocationID) (domain.ExecutionAdmission, bool, error) {
+		t.Helper()
+		invocation, err := domain.NewAgentInvocation(id, []domain.ArtifactID{agentTestInputArtifact}, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f.engine.admitAttempt(
+			t.Context(), invocationBinding{run: run, invocation: invocation}, stage, id)
+	}
+	feedbackID := operatorFeedbackInvocationID("command-1")
+	for name, tc := range map[string]struct {
+		stage domain.StageID
+		id    domain.InvocationID
+	}{
+		"production":        {productionStageID(run.ID), productionInvocationID(run.ID)},
+		"remediation":       {remediationStageID(run.ID, 1), remediationInvocationID(run.ID, 1)},
+		"operator feedback": {operatorFeedbackStageID(feedbackID), feedbackID},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, admitted, err := admit(domain.Stage{ID: tc.stage, RunID: run.ID, Name: productionStageName}, tc.id)
+			if admitted || !errors.Is(err, ErrEgressProfileNotEnforceable) {
+				t.Fatalf("admitAttempt = admitted %t, err %v; want ErrEgressProfileNotEnforceable", admitted, err)
+			}
+		})
+	}
+	// The lineup admitter binds ward stages only, so the other stage is
+	// admitted under a composition that names its identity directly.
+	f.engine.admission.environment.Agents = nil
+	f.engine.admission.environment.AuthIdentityID = &f.identity.ID
+	admission, admitted, err := admit(domain.Stage{ID: "stage-review", RunID: run.ID, Name: "review"}, "inv-review")
+	if err != nil || !admitted {
+		t.Fatalf("non-writer stage: admitted %t, err %v", admitted, err)
+	}
+	if admission.EgressProfile != domain.EgressProviderOnly {
+		t.Fatalf("non-writer stage profile = %q, want the composition's provider_only", admission.EgressProfile)
+	}
+}
+
+// The gate applies to the selected profile, not to how it was selected. A
+// capability manifest names a profile and no set, so one that selects
+// provider_registry under a policy without a valid declared set is refused
+// like the policy opt-in.
+func TestWriterEgressRefusalRequiresADeclaredSetForTheRegistryProfile(t *testing.T) {
+	policy := func(values map[string]string) domain.ResolvedPolicy {
+		t.Helper()
+		provenance := domain.KeyProvenance{Source: domain.ProvenancePreset, Digest: "sha256:test-policy"}
+		keys := []domain.PolicyKey{{Key: "rein", Value: "tight", Provenance: provenance}}
+		for key, value := range values {
+			keys = append(keys, domain.PolicyKey{Key: key, Value: value, Provenance: provenance})
+		}
+		resolved, err := domain.NewResolvedPolicy("run-egress", keys)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resolved
+	}
+	all := []domain.EgressProfile{
+		domain.EgressProviderOnly, domain.EgressProviderRegistry, domain.EgressProviderWebRead,
+	}
+	declared := policy(map[string]string{domain.RegistrySetPolicyKey: `["pypi.org"]`})
+	for name, tc := range map[string]struct {
+		enforceable []domain.EgressProfile
+		policy      domain.ResolvedPolicy
+		profile     domain.EgressProfile
+		want        []error
+	}{
+		"registry profile with a declared set": {all, declared, domain.EgressProviderRegistry, nil},
+		"registry profile without a set": {
+			all, policy(nil), domain.EgressProviderRegistry,
+			[]error{ErrEgressPolicyRefused, domain.ErrRegistrySetInvalid},
+		},
+		"registry profile with a malformed set": {
+			all, policy(map[string]string{domain.RegistrySetPolicyKey: `["PyPI.org"]`}),
+			domain.EgressProviderRegistry,
+			[]error{ErrEgressPolicyRefused, domain.ErrRegistrySetInvalid},
+		},
+		"registry profile the composition does not enforce": {
+			[]domain.EgressProfile{domain.EgressProviderOnly},
+			declared, domain.EgressProviderRegistry,
+			[]error{ErrEgressProfileNotEnforceable},
+		},
+		"another profile needs no set":   {all, policy(nil), domain.EgressProviderWebRead, nil},
+		"the default profile needs none": {all, policy(nil), domain.EgressProviderOnly, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := writerEgressRefusal(tc.enforceable, tc.policy, tc.profile)
+			if len(tc.want) == 0 && err != nil {
+				t.Fatalf("refused: %v", err)
+			}
+			for _, want := range tc.want {
+				if !errors.Is(err, want) {
+					t.Fatalf("err = %v, want %v", err, want)
+				}
+			}
+		})
+	}
+}
+
 func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 	ctx := t.Context()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
@@ -287,15 +562,17 @@ func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 					BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
 				},
 				Workspace: "workspace-1", AuthIdentityID: &identity,
+				// WithAdmission defaults this set; a directly built admitter
+				// states it.
+				EnforceableEgressProfiles: []domain.EgressProfile{domain.EgressProviderOnly},
 			},
 			now: func() time.Time { return time.Date(2026, 7, 27, 1, 2, 3, 0, time.UTC) },
 		},
 	}
 	binding := invocationBinding{
-		run: domain.Run{
-			ID: "run-1", ProjectID: "project-1",
-			SpecDigest: digest("4"), PolicyDigest: digest("5"),
-		},
+		run: seedRunPolicy(t, st, domain.Run{
+			ID: "run-1", ProjectID: "project-1", SpecDigest: digest("4"),
+		}, nil),
 		invocation: invocation, conversation: conversation,
 	}
 	admission, admitted, err := e.admitAttempt(

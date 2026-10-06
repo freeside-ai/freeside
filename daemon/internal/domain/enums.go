@@ -2048,26 +2048,30 @@ func (m CredentialMode) valid() bool {
 
 // EgressProfile is the network exposure a stage runs under, assigned by
 // control-plane policy above the credential-mode floor (plan §5.4).
-// provider_only is the default; provider_web_read is a materially wider
-// credential-exfiltration exposure and requires an explicit record of it,
-// which is why the profile is part of the durable admission record;
+// provider_only is the default; provider_registry is opt-in per project
+// policy and adds only that policy's declared set of public package-registry
+// authorities, consumed read-only (RegistrySet), so it is its own risk class
+// rather than a narrower provider_web_read; provider_web_read is a materially
+// wider credential-exfiltration exposure and requires an explicit record of
+// it, which is why the profile is part of the durable admission record;
 // clean_verification is the plan's no-network verification profile.
 type EgressProfile string
 
 const (
 	EgressProviderOnly      EgressProfile = "provider_only"
+	EgressProviderRegistry  EgressProfile = "provider_registry"
 	EgressProviderWebRead   EgressProfile = "provider_web_read"
 	EgressCleanVerification EgressProfile = "clean_verification"
 )
 
 // AllEgressProfiles lists every valid EgressProfile.
 var AllEgressProfiles = []EgressProfile{
-	EgressProviderOnly, EgressProviderWebRead, EgressCleanVerification,
+	EgressProviderOnly, EgressProviderRegistry, EgressProviderWebRead, EgressCleanVerification,
 }
 
 func (p EgressProfile) valid() bool {
 	switch p {
-	case EgressProviderOnly, EgressProviderWebRead, EgressCleanVerification:
+	case EgressProviderOnly, EgressProviderRegistry, EgressProviderWebRead, EgressCleanVerification:
 		return true
 	default:
 		return false

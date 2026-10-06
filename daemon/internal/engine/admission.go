@@ -225,7 +225,7 @@ func WithAdmission(backend exec.RunnerBackend, floor []exec.Capability, env Admi
 			// profiles retain the configured identity; clean verification must
 			// have none. A single admitter cannot truthfully promise both shapes.
 			switch profile {
-			case domain.EgressProviderOnly, domain.EgressProviderWebRead:
+			case domain.EgressProviderOnly, domain.EgressProviderRegistry, domain.EgressProviderWebRead:
 				if env.Agents == nil && (env.AuthIdentityID == nil || *env.AuthIdentityID == "") {
 					return fmt.Errorf(
 						"with admission: enforceable egress profile %q has no auth identity", profile)
@@ -278,6 +278,61 @@ func WithAdmissionDerivation(derive AdmissionDerivation) Option {
 		e.derive = derive
 		return nil
 	}
+}
+
+// ErrEgressProfileNotEnforceable refuses an attempt whose requested egress
+// profile is outside the composition's EnforceableEgressProfiles.
+var ErrEgressProfileNotEnforceable = errors.New("egress profile is not enforceable by this composition")
+
+// ErrEgressPolicyRefused refuses an attempt whose run policy does not name an
+// egress request the writer can be admitted under: a profile the policy key
+// cannot select, or provider_registry without a valid declared registry set.
+// It marks the refusal as the run's own policy content, which holds that run
+// and no other. The domain error joined to it says which rule refused.
+var ErrEgressPolicyRefused = errors.New("run policy egress request is refused")
+
+// writerEgressPolicy reads the resolved policy the writer's egress request
+// comes from. A run without a readable policy, or one whose stored policy is
+// not the one the run names, has no request to honor and is refused: the
+// admission records the run's policy digest as what bound the profile and the
+// declared registry set. Both are binding failures, not policy verdicts, so
+// they carry no hold sentinel.
+func (e *Engine) writerEgressPolicy(ctx context.Context, run domain.Run) (domain.ResolvedPolicy, error) {
+	var policy domain.ResolvedPolicy
+	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		policy, err = tx.GetResolvedPolicy(ctx, run.ID)
+		return err
+	}); err != nil {
+		return domain.ResolvedPolicy{}, err
+	}
+	if policy.Digest != run.PolicyDigest {
+		return domain.ResolvedPolicy{}, fmt.Errorf("resolved policy digest %q is not the run's %q: %w",
+			policy.Digest, run.PolicyDigest, domain.ErrPolicyDigestMismatch)
+	}
+	return policy, nil
+}
+
+// writerEgressRefusal is the gate on the profile a writer attempt was
+// selected to run under, whichever of policy or a capability manifest
+// selected it. Recording the profile promises the writer runs under it, so
+// one this composition cannot materialize is refused: a policy request alone
+// never widens egress. A manifest names a profile, not a set, and the
+// registry profile exposes only what the policy declares, so a manifest that
+// selects it under a policy with no valid set is refused as the policy opt-in
+// is.
+func writerEgressRefusal(
+	enforceable []domain.EgressProfile, policy domain.ResolvedPolicy, profile domain.EgressProfile,
+) error {
+	if !slices.Contains(enforceable, profile) {
+		return fmt.Errorf("egress profile %q: %w", profile, ErrEgressProfileNotEnforceable)
+	}
+	if profile == domain.EgressProviderRegistry {
+		if _, err := domain.DeclaredRegistrySet(policy); err != nil {
+			return fmt.Errorf("egress profile %q: %w", profile, errors.Join(ErrEgressPolicyRefused, err))
+		}
+	}
+	return nil
 }
 
 // admitAttempt runs the capability gate and builds the durable record for one
@@ -339,6 +394,21 @@ func (e *Engine) admitAttempt(
 	}
 	var capabilityManifestDigest *domain.Digest
 	if stage.Name == productionStageName {
+		// Project policy, not the composition, requests the writer's profile
+		// (plan §5.4). A capability manifest selected for a retry still wins
+		// below, because the operator chose it for this attempt.
+		policy, err := e.writerEgressPolicy(ctx, binding.run)
+		if err != nil {
+			return domain.ExecutionAdmission{}, false, fmt.Errorf(
+				"admit invocation %q egress policy: %w", invocationID, err)
+		}
+		requested, err := domain.EgressProfileFromPolicy(policy)
+		if err != nil {
+			return domain.ExecutionAdmission{}, false, fmt.Errorf(
+				"admit invocation %q egress policy: %w",
+				invocationID, errors.Join(ErrEgressPolicyRefused, err))
+		}
+		env.EgressProfile = requested
 		var attempt domain.ProductionAttempt
 		if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
 			var err error
@@ -358,6 +428,12 @@ func (e *Engine) admitAttempt(
 			env.EgressProfile = manifest.EgressProfile
 			digest := manifest.Digest
 			capabilityManifestDigest = &digest
+		}
+		if err := writerEgressRefusal(
+			e.admission.environment.EnforceableEgressProfiles, policy, env.EgressProfile,
+		); err != nil {
+			return domain.ExecutionAdmission{}, false, fmt.Errorf(
+				"admit invocation %q: %w", invocationID, err)
 		}
 	}
 	stageInputs, err := e.stageInputSnapshot(

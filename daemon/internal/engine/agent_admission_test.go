@@ -158,10 +158,9 @@ func newAgentAdmissionFixture(t *testing.T) *agentAdmissionFixture {
 	if err := os.WriteFile(vendorPath, []byte("# Host instructions\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	f.run = domain.Run{
-		ID: "run-1", ProjectID: "project-1",
-		SpecDigest: agentTestDigest("4"), PolicyDigest: agentTestDigest("6"),
-	}
+	f.run = seedRunPolicy(t, st, domain.Run{
+		ID: "run-1", ProjectID: "project-1", SpecDigest: agentTestDigest("4"),
+	}, nil)
 	f.stage = domain.Stage{ID: productionStageID(f.run.ID), RunID: f.run.ID, Name: productionStageName}
 	input, err := domain.NewArtifact(domain.ArtifactInput{
 		ID: agentTestInputArtifact, Type: domain.ArtifactKindEvidence, Digest: agentTestDigest("1"),
@@ -210,6 +209,9 @@ func newAgentAdmissionFixture(t *testing.T) *agentAdmissionFixture {
 					Repo: "owner/repo", RepositoryID: 1, BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
 				},
 				Workspace: "workspace-1", Agents: &selection,
+				// WithAdmission defaults this set; a directly built admitter
+				// states it.
+				EnforceableEgressProfiles: []domain.EgressProfile{domain.EgressProviderOnly},
 			},
 			now: func() time.Time { return agentTestAt },
 		},
@@ -598,9 +600,7 @@ func TestCutoverLeavesLegacyAdmissionsAndBindsQueuedRuns(t *testing.T) {
 	}
 	queuedStage := domain.Stage{ID: productionStageID(queued.ID), RunID: queued.ID, Name: productionStageName}
 	queued.Stages = []domain.Stage{queuedStage}
-	if err := f.store.Write(ctx, func(tx *store.WriteTx) error { return tx.PutRun(ctx, queued) }); err != nil {
-		t.Fatal(err)
-	}
+	queued = seedRunPolicy(t, f.store, queued, nil)
 
 	// Before the cutover: the daemon runs on -auth-identity.
 	f.engine.admission.environment.Agents = nil

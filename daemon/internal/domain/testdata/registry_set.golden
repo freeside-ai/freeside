@@ -1,0 +1,15 @@
+{
+  "policy_key": "execution.registry_set",
+  "policy_value": "[\"files.pythonhosted.org\",\"proxy.golang.org\",\"pypi.org\",\"registry.npmjs.org\",\"sum.golang.org\"]",
+  "registry_set": {
+    "encoding_version": 1,
+    "hosts": [
+      "files.pythonhosted.org",
+      "proxy.golang.org",
+      "pypi.org",
+      "registry.npmjs.org",
+      "sum.golang.org"
+    ]
+  },
+  "digest": "sha256:ea49200730cbaeb73b7a1b894da5aaaa08825822b4a6efa01a3d8bad7de19564"
+}
