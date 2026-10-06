@@ -171,8 +171,10 @@ func (p testProvider) HandoffSpec(
 		p.handoffInputMutate(&in)
 	}
 	spec := in.Spec
+	enforceable := spec.EgressProfile == domain.EgressProviderOnly ||
+		spec.EgressProfile == domain.EgressProviderRegistry
 	if spec.CredentialMode != domain.CredentialSubscriptionContained ||
-		spec.EgressProfile != domain.EgressProviderOnly || spec.AuthIdentityID == "" ||
+		!enforceable || spec.AuthIdentityID == "" ||
 		spec.Workspace != p.Workspace(in.InvocationID) {
 		return ward.HandoffSpec{}, ErrUnsupportedStart
 	}
@@ -1554,6 +1556,9 @@ func TestHandoffSpecRefusesProviderRetargeting(t *testing.T) {
 		}},
 		{"egress profile", func(hs *ward.HandoffSpec) {
 			hs.Agent.EgressProfile = domain.EgressProviderWebRead
+		}},
+		{"registry set", func(hs *ward.HandoffSpec) {
+			hs.RegistryHosts = []string{"registry.npmjs.org"}
 		}},
 		{"vendor instructions", func(hs *ward.HandoffSpec) {
 			body := []byte("different trusted instructions")
