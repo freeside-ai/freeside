@@ -27,6 +27,24 @@ type AdjudicationFinding struct {
 	Compatibility      domain.WorkUnitCompatibility `json:"compatibility"`
 }
 
+// ExternalAdjudicationFinding is one admitted external reviewer's finding as
+// the adjudicator may observe it. The reviewer's words are a claim from outside
+// Freeside, so they never travel as a domain.Finding in Findings: the engine
+// cuts them to a fixed length, quotes them, and sends them here beside a notice
+// that says what they are. Location is daemon-derived, never the reviewer's
+// text, and null when the comment names no line.
+type ExternalAdjudicationFinding struct {
+	FindingID          domain.FindingID             `json:"finding_id"`
+	ReviewerLogin      string                       `json:"reviewer_login"`
+	ThreadID           string                       `json:"thread_id"`
+	HeadSHA            string                       `json:"head_sha"`
+	Location           *domain.FindingLocation      `json:"location"`
+	QuotedText         string                       `json:"quoted_text"`
+	Notice             string                       `json:"notice"`
+	RemediationSurface string                       `json:"remediation_surface"`
+	Compatibility      domain.WorkUnitCompatibility `json:"compatibility"`
+}
+
 // AdjudicationDissent is the typed structured re-entry signal. Conversational
 // text is not representable here and therefore grants no routing authority.
 type AdjudicationDissent struct {
@@ -68,10 +86,13 @@ type FindingAdjudicationInput struct {
 	ResolvedPolicyDigest      domain.Digest
 	DeclaredPaths             []string
 	Findings                  []AdjudicationFinding
-	PriorDispositions         []domain.ReviewDispositionRecord
-	PriorEntries              []domain.FindingAdjudicationEntry
-	Dissent                   *AdjudicationDissent
-	Feedback                  *AdjudicationFeedback
+	// ExternalFindings are the admitted external findings the batch also
+	// judges. They are sent as external_findings (null when there are none).
+	ExternalFindings  []ExternalAdjudicationFinding
+	PriorDispositions []domain.ReviewDispositionRecord
+	PriorEntries      []domain.FindingAdjudicationEntry
+	Dissent           *AdjudicationDissent
+	Feedback          *AdjudicationFeedback
 	// DiffMetrics is the round's diff shape (plan §7 Review Drift), nil when
 	// nothing was recorded for the round. It is an engine fact read from the
 	// store, never model output, and is sent as diff_metrics (null for a gap).
@@ -164,21 +185,49 @@ func (o adjudicatorOutput) validateEntries() error {
 	return nil
 }
 
+// compatibilities maps every finding the batch offers, Freeside's own and
+// external alike, to the compatibility the engine derived for it.
+func (i FindingAdjudicationInput) compatibilities() (map[domain.FindingID]domain.WorkUnitCompatibility, error) {
+	inputs := make(map[domain.FindingID]domain.WorkUnitCompatibility,
+		len(i.Findings)+len(i.ExternalFindings))
+	add := func(id domain.FindingID, compatibility domain.WorkUnitCompatibility) error {
+		if id == "" {
+			return errors.New("adjudicator input omits finding id")
+		}
+		if _, duplicate := inputs[id]; duplicate {
+			return errors.New("adjudicator input repeats finding id")
+		}
+		inputs[id] = compatibility
+		return nil
+	}
+	for _, finding := range i.Findings {
+		// The engine routes an external finding to ExternalFindings. Refusing
+		// one here keeps a caller's mistake from sending a reviewer's raw words
+		// where the adjudicator reads Freeside's own findings.
+		if finding.Finding.External != nil {
+			return nil, errors.New("adjudicator input carries an external finding outside external_findings")
+		}
+		if err := add(finding.Finding.ID, finding.Compatibility); err != nil {
+			return nil, err
+		}
+	}
+	for _, finding := range i.ExternalFindings {
+		if err := add(finding.FindingID, finding.Compatibility); err != nil {
+			return nil, err
+		}
+	}
+	return inputs, nil
+}
+
 func (o adjudicatorOutput) domainEntries(
-	findings []AdjudicationFinding,
+	input FindingAdjudicationInput,
 ) ([]domain.FindingAdjudicationEntry, error) {
 	if err := o.validateEntries(); err != nil {
 		return nil, err
 	}
-	inputs := make(map[domain.FindingID]AdjudicationFinding, len(findings))
-	for _, finding := range findings {
-		if finding.Finding.ID == "" {
-			return nil, errors.New("adjudicator input omits finding id")
-		}
-		if _, duplicate := inputs[finding.Finding.ID]; duplicate {
-			return nil, errors.New("adjudicator input repeats finding id")
-		}
-		inputs[finding.Finding.ID] = finding
+	inputs, err := input.compatibilities()
+	if err != nil {
+		return nil, err
 	}
 	entries := make([]domain.FindingAdjudicationEntry, 0, len(*o.Entries))
 	for _, proposed := range *o.Entries {
@@ -188,8 +237,8 @@ func (o adjudicatorOutput) domainEntries(
 		)
 		if proposed.GoalRelationship == domain.GoalRequired && proposed.Compatibility.Value == nil &&
 			proposed.Route.Value == nil {
-			input, ok := inputs[proposed.FindingID]
-			if !ok || input.Compatibility != domain.CompatibilityAllowed {
+			compatibility, ok := inputs[proposed.FindingID]
+			if !ok || compatibility != domain.CompatibilityAllowed {
 				return nil, errors.New("engine-authorized adjudication does not match an allowed input")
 			}
 			entry, err = domain.NewEngineModelAdjudicationEntry(
@@ -228,6 +277,9 @@ func AdjudicatorSite(budget Budget) Site {
 			{Name: "resolved_policy_digest", Sensitivity: SensitivityOperational},
 			{Name: "declared_paths", Sensitivity: SensitivityRepository},
 			{Name: "findings", Sensitivity: SensitivityRepository},
+			// A reviewer's words from outside Freeside, quoted and cut by the
+			// engine; never merged into findings.
+			{Name: "external_findings", Sensitivity: SensitivityRepository},
 			{Name: "prior_disposition_history", Sensitivity: SensitivityRepository},
 			{Name: "prior_adjudication", Sensitivity: SensitivityRepository},
 			{Name: "dissent", Sensitivity: SensitivityRepository},
@@ -315,11 +367,19 @@ func adjudicatorRows() []AdjudicationRow {
 func (c *Client) AdjudicateFindings(
 	ctx context.Context, project, root string, input FindingAdjudicationInput,
 ) ([]domain.FindingAdjudicationEntry, error) {
+	// Checked before anything is sent: a refused batch reaches no model.
+	if _, err := input.compatibilities(); err != nil {
+		return nil, errors.Join(ErrAdjudicationNotAvailable, err)
+	}
 	declaredPaths, err := adjudicationJSON(input.DeclaredPaths)
 	if err != nil {
 		return nil, err
 	}
 	findings, err := adjudicationJSON(input.Findings)
+	if err != nil {
+		return nil, err
+	}
+	externalFindings, err := adjudicationJSON(input.ExternalFindings)
 	if err != nil {
 		return nil, err
 	}
@@ -353,6 +413,7 @@ func (c *Client) AdjudicateFindings(
 		"resolved_policy_digest":      {Value: string(input.ResolvedPolicyDigest), Sensitivity: SensitivityOperational},
 		"declared_paths":              {Value: declaredPaths, Sensitivity: SensitivityRepository},
 		"findings":                    {Value: findings, Sensitivity: SensitivityRepository},
+		"external_findings":           {Value: externalFindings, Sensitivity: SensitivityRepository},
 		"prior_disposition_history":   {Value: dispositions, Sensitivity: SensitivityRepository},
 		"prior_adjudication":          {Value: priorEntries, Sensitivity: SensitivityRepository},
 		"dissent":                     {Value: dissent, Sensitivity: SensitivityRepository},
@@ -369,7 +430,7 @@ func (c *Client) AdjudicateFindings(
 	if err := json.Unmarshal(result.Output, &output); err != nil {
 		return nil, fmt.Errorf("decode validated adjudicator output: %w", err)
 	}
-	entries, err := output.domainEntries(input.Findings)
+	entries, err := output.domainEntries(input)
 	if err != nil {
 		return nil, errors.Join(ErrAdjudicationNotAvailable, err)
 	}

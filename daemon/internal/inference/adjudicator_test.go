@@ -123,7 +123,7 @@ func TestAdjudicatorAllowlistConvertsValidatedProposal(t *testing.T) {
 		t.Fatalf("entries = %#v", entries)
 	}
 	requests := driver.Requests()
-	if len(requests) != 1 || len(requests[0].Fields) != 14 {
+	if len(requests) != 1 || len(requests[0].Fields) != 15 {
 		t.Fatalf("requests = %#v", requests)
 	}
 	fields := requests[0].Fields
@@ -131,7 +131,8 @@ func TestAdjudicatorAllowlistConvertsValidatedProposal(t *testing.T) {
 		fields["instruction_snapshot"] != "repository [REDACTED] instructions" ||
 		!strings.Contains(fields["findings"], "[REDACTED] should never leave") ||
 		!strings.Contains(fields["dissent"], "[REDACTED] evidence") ||
-		fields["prior_adjudication"] != "null" || fields["diff_metrics"] != "null" {
+		fields["prior_adjudication"] != "null" || fields["diff_metrics"] != "null" ||
+		fields["external_findings"] != "null" {
 		t.Fatalf("redacted fields = %#v", fields)
 	}
 	if _, present := fields["implementer_reasoning"]; present {
@@ -139,6 +140,83 @@ func TestAdjudicatorAllowlistConvertsValidatedProposal(t *testing.T) {
 	}
 	if requests[0].InputDigest != contentaddr.Sum(mustJSON(t, fields)) {
 		t.Fatal("input digest does not bind adjudicator fields")
+	}
+}
+
+func externalAdjudicationFinding() inference.ExternalAdjudicationFinding {
+	return inference.ExternalAdjudicationFinding{
+		FindingID: "external-1", ReviewerLogin: "maintainer", ThreadID: "review_comment/1",
+		HeadSHA:    "head-1",
+		Location:   &domain.FindingLocation{Path: "main.go", StartLine: 2, EndLine: 2},
+		QuotedText: `"this leaks the handle"`, Notice: "a reviewer's words",
+		RemediationSurface: "main.go", Compatibility: domain.CompatibilityAllowed,
+	}
+}
+
+// TestAdjudicatorAllowlistCarriesExternalFindings pins that an external
+// finding crosses the allowlist only as external_findings, exactly as
+// supplied, and that the adjudicator's entry for it is accepted like one for a
+// finding of Freeside's own.
+func TestAdjudicatorAllowlistCarriesExternalFindings(t *testing.T) {
+	const output = `{"entries":[` +
+		`{"finding_id":"finding-1","goal_relationship":"adjacent","compatibility":null,"route":"defer","confidence":"high","rationale":"outside the accepted outcome","evidence":["main.go:1"],"cited_rules":[],"assumptions":[],"alternatives":[],"open_questions":[]},` +
+		`{"finding_id":"external-1","goal_relationship":"required","compatibility":null,"route":null,"confidence":"high","rationale":"the approved outcome requires the contained fix","evidence":["main.go:2"],"cited_rules":[],"assumptions":[],"alternatives":[],"open_questions":[]}]}`
+	driver := fake.New()
+	driver.Script(inference.AdjudicatorSiteID, fake.Script{Response: inference.Response{
+		Output: []byte(output), ComputeUnits: 4,
+	}})
+	client, _, _ := testClient(t, driver, 10)
+	input := adjudicatorInput()
+	input.ExternalFindings = []inference.ExternalAdjudicationFinding{externalAdjudicationFinding()}
+	entries, err := client.AdjudicateFindings(context.Background(), "project-1", "run-1", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 || entries[1].FindingID != "external-1" ||
+		entries[1].Producer != domain.AdjudicationProducerEngineModel ||
+		entries[1].Route != domain.RouteRemediate {
+		t.Fatalf("entries = %#v", entries)
+	}
+	requests := driver.Requests()
+	if len(requests) != 1 ||
+		requests[0].Fields["external_findings"] != string(mustJSON(t, input.ExternalFindings)) ||
+		strings.Contains(requests[0].Fields["findings"], "external-1") {
+		t.Fatalf("requests = %#v", requests)
+	}
+}
+
+// TestAdjudicatorRefusesExternalFindingAmongFindings pins that a reviewer's
+// raw words cannot ride in findings: a finding with external provenance, or
+// one named in both lists, is refused before anything reaches the model.
+func TestAdjudicatorRefusesExternalFindingAmongFindings(t *testing.T) {
+	external := finding("medium")
+	external.External = &domain.ExternalFindingProvenance{ReviewerLogin: "maintainer"}
+	repeated := externalAdjudicationFinding()
+	repeated.FindingID = "finding-1"
+	for name, mutate := range map[string]func(*inference.FindingAdjudicationInput){
+		"external provenance in findings": func(input *inference.FindingAdjudicationInput) {
+			input.Findings[0].Finding = external
+		},
+		"one finding in both lists": func(input *inference.FindingAdjudicationInput) {
+			input.ExternalFindings = []inference.ExternalAdjudicationFinding{repeated}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			driver := fake.New()
+			driver.Script(inference.AdjudicatorSiteID, fake.Script{Response: inference.Response{
+				Output: []byte(acceptedAdjudicatorOutput), ComputeUnits: 4,
+			}})
+			client, _, _ := testClient(t, driver, 10)
+			input := adjudicatorInput()
+			mutate(&input)
+			entries, err := client.AdjudicateFindings(context.Background(), "project-1", "run-1", input)
+			if !errors.Is(err, inference.ErrAdjudicationNotAvailable) || entries != nil {
+				t.Fatalf("AdjudicateFindings = %#v, %v", entries, err)
+			}
+			if requests := driver.Requests(); len(requests) != 0 {
+				t.Fatalf("refused input reached the model: %#v", requests)
+			}
+		})
 	}
 }
 
