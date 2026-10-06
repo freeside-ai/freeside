@@ -127,7 +127,7 @@ func (w *productionPublicationWorkflow) openExternalFindings(
 
 // externalRoundCard is what the adjudication card of an external review
 // cycle's first round says that no other round's card does. That round acts
-// on a card only when every route is a decline or a defer
+// on a card only when every route is a decline, a defer, or a remediation
 // (externalReviewRoutesHandoff), so its card cannot promise what an ordinary
 // round's does. Any other round or task has none.
 type externalRoundCard struct {
@@ -295,20 +295,20 @@ func externalReviewHandoffItemID(runID domain.RunID, round int) domain.ItemID {
 
 // externalReviewRoutesHandoff says why the routes of an external review
 // cycle's adjudicated first round end the cycle on a person, and is empty
-// when they do not. They do when a finding routes to a fix, because the cycle
-// starts no remediation, and when any finding keeps a route other than
-// decline or defer, because those two are the only outcomes the cycle can
-// record itself. The adjudication card asks the same question of the routes
-// it recommends, so what it says accepting does is what accepting does.
+// when they do not. They do when any finding keeps a route other than
+// decline, defer, or remediate: the first two are the outcomes the cycle
+// records itself, and the third starts the remediation round whose review
+// records the rest. The adjudication card asks the same question of the
+// routes it recommends, so what it says accepting does is what accepting
+// does.
 func externalReviewRoutesHandoff(
 	artifact domain.FindingAdjudication, routes map[domain.FindingID]domain.AdjudicationRoute,
 ) string {
-	if len(remediationFindingIDs(artifact, routes)) > 0 {
-		return "Adjudication judged that a finding needs a fix in this pull request. An external review cycle starts no remediation, so a person must decide."
-	}
 	for _, entry := range artifact.Entries {
-		if route := routes[entry.FindingID]; route != domain.RouteDecline && route != domain.RouteDefer {
-			return "Adjudication left a finding that is neither declined nor deferred. An external review cycle records no other outcome, so a person must take the finding from here."
+		switch routes[entry.FindingID] {
+		case domain.RouteDecline, domain.RouteDefer, domain.RouteRemediate:
+		default:
+			return "Adjudication left a finding that is neither declined, deferred, nor fixed in this pull request. An external review cycle records no other outcome, so a person must take the finding from here."
 		}
 	}
 	return ""

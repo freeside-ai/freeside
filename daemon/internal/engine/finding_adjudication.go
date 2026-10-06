@@ -1196,12 +1196,12 @@ const maxReasonAllowedPaths = 5
 // and quotes their words.
 //
 // external is set only in an external review cycle's first round, where
-// accepting does something else: the cycle starts no remediator and records
-// outcomes only for a card of declines and deferrals, so any other card ends
-// the cycle on a person with no route acted on. The card says that in place
-// of the ordinary lead and per-finding outcomes. It also names the findings
-// an earlier cycle already answered in one closing line, so a reader does not
-// take them for open (issue #1767 decision 6).
+// accepting does less: the cycle acts on a card only when every route is a
+// decline, a defer, or a remediation, so any other card ends the cycle on a
+// person with no route acted on (externalReviewRoutesHandoff). The card says
+// that in place of the ordinary lead and per-finding outcomes. It also names
+// the findings an earlier cycle already answered in one closing line, so a
+// reader does not take them for open (issue #1767 decision 6).
 func findingAdjudicationReason(
 	artifact domain.FindingAdjudication, predecessor *domain.FindingAdjudication,
 	findings map[domain.FindingID]domain.Finding, allowedPaths []string,
@@ -1216,7 +1216,7 @@ func findingAdjudicationReason(
 		externalReviewRoutesHandoff(artifact, findingAdjudicationRoutes(artifact.Entries)) != ""
 	switch {
 	case handsOff:
-		lines = append(lines, "Accepting fixes nothing and records no outcome: an external review cycle starts no remediator, and it records outcomes only when every finding is declined or deferred. The cycle ends, and a new item hands the findings to a person.")
+		lines = append(lines, "Accepting fixes nothing and records no outcome: an external review cycle acts on a card only when every finding is declined, deferred, or fixed in this pull request. The cycle ends, and a new item hands the findings to a person.")
 	case outcome.Halted:
 		lines = append(lines, "Accepting parks the run: a disputed finding stops every other route, so nothing is fixed, recorded, or published.")
 	case outcome.ParksRun:
@@ -1769,11 +1769,7 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 		return productionReviewEscalated, nil
 	}
 	var remediation *preparedRemediationIntent
-	// An external review cycle's first round reaches here with nothing to
-	// remediate and no convergence stop, so it prepares no remediation and
-	// runs no drift audit: the audit's verdict parks a round on an item that
-	// answers only the record's findings.
-	if w.artifacts != nil && !externalFirstRound {
+	if w.artifacts != nil {
 		// A deterministic undeliverable-input refusal terminalized on a prior
 		// reconcile parks the run; re-preparing would just re-refuse and re-diff.
 		parked, checkErr := w.remediationUndeliverableRecorded(ctx, task, record)
@@ -1798,14 +1794,20 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 		}
 		// The audit runs here, after the dispatched check: a round whose
 		// remediation is queued already acted on its verdict, and a round
-		// dispatched before the audit existed must not park under it.
-		simplification, driftParked, driftErr := w.reconcileDriftAudit(
-			ctx, task, record, artifact, routes, diminishing, baseRoot, candidateRoot)
-		if driftErr != nil {
-			return productionReviewPending, driftErr
-		}
-		if driftParked {
-			return productionReviewPending, nil
+		// dispatched before the audit existed must not park under it. An
+		// external review cycle's first round runs none: the audit's verdict
+		// parks a round on an item that answers only the record's findings.
+		var simplification *driftSimplification
+		if !externalFirstRound {
+			var driftParked bool
+			simplification, driftParked, err = w.reconcileDriftAudit(
+				ctx, task, record, artifact, routes, diminishing, baseRoot, candidateRoot)
+			if err != nil {
+				return productionReviewPending, err
+			}
+			if driftParked {
+				return productionReviewPending, nil
+			}
 		}
 		remediation, err = w.prepareRemediationIntent(
 			ctx, task, record, artifact, routes, candidateRoot, simplification)
