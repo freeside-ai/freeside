@@ -1172,6 +1172,132 @@ currently active trust profile at import, where its protected paths are
 applied; an unattended admission remains bound to the exact profile digest it
 recorded before execution.
 
+### Rebuild A Project Image For A Dependency Change
+
+A candidate that changes `package.json` or `package-lock.json` cannot verify
+in the image onboarding approved, because that image bakes the old
+dependencies. Production driver mode rebuilds the image itself when the change
+stays inside the project's declared policy (`docs/plan.md` §5.7,
+**Policy-gated rebuild**), and blocks publication otherwise. The gate runs in
+the publication lane immediately before verification, on first publication
+and on every re-entered cycle. A head that keeps the manifests the image
+baked takes no gate.
+
+Three flags give the daemon the host-specific build inputs no image record
+carries:
+
+| Flag | Meaning |
+| --- | --- |
+| `-base-build-ref <tag>` | Local tag the container runtime resolves to the approved agent base, as for `freesided onboard`. Enables the rebuild. The build proves the tag's digest equals the admitted image's base before using it. |
+| `-build-proxy <url>` | Build-only HTTP proxy without credentials, overriding the managed build proxy. Needs `-base-build-ref`. |
+| `-build-dns <server>` | Build DNS server; repeatable. Needs `-base-build-ref`. |
+
+Everything else carries over from the admitted image's record: the
+repository, the recipe, the base image, and the registry destination. The
+rebuilt image is pushed beside the admitted one under the tag
+`rebuild-<first 12 hex of the commit>`, so the daemon's host needs the
+registry access onboarding had. The build reads the candidate from the lane's
+own checkout at the verified commit and makes no forge request.
+
+The gate holds when the candidate, compared with its base:
+
+- Holds neither `npm-shrinkwrap.json` nor `.npmrc`.
+- Declares the same verification recipe.
+- Runs under a policy that declares a valid `registry_set`.
+- Leaves `package.json`'s `overrides`, `workspaces`, and `packageManager` as
+  they are.
+- Declares every dependency it adds or respecifies in `package.json` by a
+  registry version, range, or tag.
+- Has an npm v2 or v3 lockfile whose root agrees with `package.json`, in which
+  every package entry added or changed is a registry tarball: an exact
+  version, an `https` URL on a declared host, and a `sha512` integrity value.
+- Holds a lockfile entry for every dependency of the root and of each added
+  or changed package, with no peer dependency nested under the package that
+  declares it.
+
+The gate reads the candidate's files, which npm reads again inside the build
+with network access, so it refuses whatever it does not recognize in what the
+candidate changed. A changed lockfile entry is refused when its key is not a
+plain `node_modules/<name>` path, when it carries a field outside the gate's
+list, when it is a link, a bundled package, or a package with its own
+shrinkwrap, or when it depends on anything but a registry version, range, or
+tag. `npm:` aliases are refused with the URL, git, and path sources. An entry
+the base lockfile holds byte for byte is not re-examined, and neither is a
+`package.json` dependency the base declares identically: both are in the image
+a person approved.
+
+> **The gate reads manifests; it does not bound the install's connections.**
+> npm keeps a lockfile entry only while every dependency that reaches it is
+> satisfied by it. Otherwise it asks the default registry for the package and
+> follows that registry's metadata, whatever the lockfile pins. The gate
+> refuses the cases it can read without npm's own version arithmetic (a
+> dependency declared by URL, a dependency with no entry, a nested peer). It
+> does not check that a locked version satisfies the range that reaches it. A
+> candidate built that way can make the build contact a host outside the
+> registry set, and the build proxy admits any public host. Until the build's
+> egress is held to the registry set (#1793), give a daemon `-base-build-ref`
+> only where that is acceptable.
+
+Two ordinary shapes are refused and need a person to rebuild: a package that
+depends on another through an `npm:` alias (`glob` 10 does, through
+`@isaacs/cliui`), and a registry on a host npm reads as a git forge
+(`github.com`, `gitlab.com`, `bitbucket.org`, `git.sr.ht`). So is a rarer
+one: a manifest in which one object holds two keys that differ only by case,
+such as a tree with both `JSONStream` and `jsonstream`.
+
+The rebuild then runs the builder's own proofs (the networkless positive run
+and the masked-cache probe), records the image, and binds the run to it.
+Verification runs in the rebuilt image, still with `--network none`, and the
+verification checkpoint names that image. The admitted image still answers
+whether the run's base is one it serves. A rebuild leaves the admitted image
+in place for later runs: a recorded rebuilt image is reused only by a
+candidate whose manifests it baked.
+
+A refused gate names one clause:
+
+| Clause | The candidate, or the daemon |
+| --- | --- |
+| `undeclared_authority` | Resolves a changed package from a host outside the registry set. |
+| `unpinned_source` | Declares or pins a changed package as something other than a registry package at an exact version, from an `https` tarball with a `sha512` integrity value: a link, an alias, a VCS, URL, or file source, a bundled or shrinkwrapped package, a missing pin, a lockfile field the gate does not know. |
+| `recipe_changed` | Changes the verification recipe along with its dependencies. |
+| `lockfile_inconsistent` | Has a lockfile that is unreadable, repeats a key or holds two that differ only by case, is not v2 or v3, disagrees with `package.json`, lacks an entry for a dependency, or nests a peer dependency under its dependent; or its base's manifests cannot be read to compare with. |
+| `unsupported_npm_input` | Holds `npm-shrinkwrap.json` or `.npmrc`, or changes `package.json`'s `overrides`, `workspaces`, or `packageManager`. |
+| `no_registry_set` | Runs under a policy with no registry set, or a malformed one. |
+| `rebuild_not_configured` | Passed the gate, but the daemon has no `-base-build-ref`. |
+| `build_or_proof_failed` | Passed the gate, but the image failed its build-time proof, or the build did not finish within one hour. |
+
+No verification room runs for a refused gate. Where the clause appears
+depends on the cycle:
+
+- **First publication:** The run blocks on the existing `publish_blocked`
+  item for a failed verification. Its one evidence artifact begins
+  `Project image rebuild refused: <clause>.` and says what failed the clause.
+  The item's reason text is the shared verification-failure reason, because a
+  per-clause reason is a contract change this lane does not make.
+- **Re-entered cycle:** The cycle stops, and the stop item's reason names the
+  clause and the commit.
+
+A build fault that is not a proof failure (the registry unreachable, the
+container runtime down) is the build's environment, not a verdict: the task
+stays queued under the lane's visible `publication_environment` hold and the
+next paced attempt builds again. That includes an install the candidate's own
+lockfile breaks, such as a tarball that fails its integrity value: the builder
+does not tell that apart from a registry fault, so it retries on every paced
+attempt. A restart during a build converges on the image the build recorded
+and does not build a second one.
+
+One build, with its proofs, is bounded at one hour. The proofs run the
+candidate's verification commands, and the lane handles one task at a time, so
+a build that does not finish is a verdict (`build_or_proof_failed`) and not a
+retry. The bound covers the build and its proofs, not the builder's cleanup
+afterwards: a container runtime that stalls while images are removed holds
+the lane until the daemon restarts (#1806).
+
+A refusal is the task's recorded verification result, so it does not clear
+when the daemon is later given `-base-build-ref` or the policy changes. It
+reruns as any failed verification does: after a revised trust profile,
+through the item's rerun action, or in a new run.
+
 ## Run Observation Contract
 
 The run-monitoring contract (issue #394; plan §8) lets an operator client
