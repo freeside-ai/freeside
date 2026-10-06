@@ -410,6 +410,8 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 
 	res, err := b.Handoff(ctx, HandoffSpec{
 		RunID:           runID,
+		Class:           LaunchWriter,
+		Size:            DefaultLaunchSize(LaunchWriter),
 		WorkspaceSizeMB: 64,
 		Seed:            WorkspaceSeed{Mode: SeedBlank},
 		Agent: AgentSpec{
@@ -749,6 +751,8 @@ func TestLiveWorkspaceSeeding(t *testing.T) {
 	}
 	hs := HandoffSpec{
 		RunID:           runID,
+		Class:           LaunchWriter,
+		Size:            DefaultLaunchSize(LaunchWriter),
 		WorkspaceSizeMB: 64,
 		Seed:            WorkspaceSeed{Mode: SeedBaseCheckout, SourceDir: checkout, Base: base},
 		Agent: AgentSpec{
@@ -922,6 +926,8 @@ func TestLiveWorkerGitIdentity(t *testing.T) {
 			)
 			result, err := b.Handoff(context.Background(), HandoffSpec{
 				RunID:           runID,
+				Class:           LaunchWriter,
+				Size:            DefaultLaunchSize(LaunchWriter),
 				WorkspaceSizeMB: 64,
 				Seed: WorkspaceSeed{
 					Mode: SeedBaseCheckout, SourceDir: checkout, Base: base,
@@ -1150,6 +1156,8 @@ func TestLiveLeasedMutationAndReadOnlyProbe(t *testing.T) {
 
 	res, err := b.Handoff(ctx, HandoffSpec{
 		RunID:           runID,
+		Class:           LaunchWriter,
+		Size:            DefaultLaunchSize(LaunchWriter),
 		WorkspaceSizeMB: 64,
 		Seed:            WorkspaceSeed{Mode: SeedBlank},
 		AuthStoreLease:  &AuthStoreLeaseClaim{AuthIdentityID: "live-identity", Holder: "live-holder"},
@@ -1252,6 +1260,7 @@ func TestLiveConcurrentReadHeldWriters(t *testing.T) {
 		t.Fatalf("create credential volume: %v", err)
 	}
 	if err := rt.CreateContainer(ctx, ContainerSpec{
+		Size:  testContainerSize,
 		Name:  seedName,
 		Image: liveImage,
 		// The setup-token manifest admits exactly one entry, so the
@@ -1297,6 +1306,8 @@ func TestLiveConcurrentReadHeldWriters(t *testing.T) {
 		go func() {
 			res, err := b.Handoff(ctx, HandoffSpec{
 				RunID:           runID,
+				Class:           LaunchWriter,
+				Size:            DefaultLaunchSize(LaunchWriter),
 				WorkspaceSizeMB: 64,
 				Seed:            WorkspaceSeed{Mode: SeedBlank},
 				AuthStoreLease: &AuthStoreLeaseClaim{
