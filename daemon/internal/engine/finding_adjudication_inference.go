@@ -81,12 +81,9 @@ func (a *productionFindingAdjudicator) Adjudicate(
 	if err != nil {
 		return nil, fmt.Errorf("load instruction snapshot for adjudication: %w", err)
 	}
-	findings := make([]inference.AdjudicationFinding, 0, len(request.Findings))
-	for _, input := range request.Findings {
-		findings = append(findings, inference.AdjudicationFinding{
-			Finding: input.Finding, Classification: input.Classification,
-			RemediationSurface: input.Surface, Compatibility: input.Compatibility,
-		})
+	findings, externalFindings, err := adjudicationFindingInputs(request.Findings)
+	if err != nil {
+		return nil, err
 	}
 	var dissent *inference.AdjudicationDissent
 	if request.Dissent != nil {
@@ -118,9 +115,41 @@ func (a *productionFindingAdjudicator) Adjudicate(
 			InstructionSnapshotDigest: request.InstructionSnapshotDigest,
 			InstructionSnapshot:       string(instructions), ResolvedPolicyDigest: request.ResolvedPolicyDigest,
 			DeclaredPaths: append([]string(nil), request.DeclaredPaths...), Findings: findings,
+			ExternalFindings:  externalFindings,
 			PriorDispositions: dispositions,
 			PriorEntries:      slices.Clone(request.PriorEntries),
 			Dissent:           dissent, Feedback: feedback,
 			DiffMetrics: diffMetrics,
 		})
+}
+
+// adjudicationFindingInputs splits the residue into the two lists the
+// adjudicator reads. A reviewer outside Freeside wrote an external finding's
+// message, so the adjudicator reads it quoted and cut, in a list of its own,
+// and never as a finding (issue #1767 decision 3).
+func adjudicationFindingInputs(inputs []findingAdjudicationInput) (
+	[]inference.AdjudicationFinding, []inference.ExternalAdjudicationFinding, error,
+) {
+	findings := make([]inference.AdjudicationFinding, 0, len(inputs))
+	var externalFindings []inference.ExternalAdjudicationFinding
+	for _, input := range inputs {
+		if input.Finding.External != nil {
+			quoted, err := quoteExternalFinding(input.Finding)
+			if err != nil {
+				return nil, nil, err
+			}
+			externalFindings = append(externalFindings, inference.ExternalAdjudicationFinding{
+				FindingID: quoted.FindingID, ReviewerLogin: quoted.ReviewerLogin,
+				ThreadID: quoted.ThreadID, HeadSHA: quoted.HeadSHA, Location: quoted.Location,
+				QuotedText: quoted.QuotedText, Notice: quoted.Notice,
+				RemediationSurface: input.Surface, Compatibility: input.Compatibility,
+			})
+			continue
+		}
+		findings = append(findings, inference.AdjudicationFinding{
+			Finding: input.Finding, Classification: input.Classification,
+			RemediationSurface: input.Surface, Compatibility: input.Compatibility,
+		})
+	}
+	return findings, externalFindings, nil
 }

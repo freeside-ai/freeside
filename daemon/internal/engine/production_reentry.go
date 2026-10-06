@@ -493,8 +493,14 @@ func reentryMissingHeadReason(task productionPublicationTask, branch string) str
 // push access can write, cut to a bounded length first: a stop item's reason
 // is stored and synced, and git bounds neither a path nor a tree's size.
 func reentryQuoted(text string) string {
-	if len(text) > reentryQuotedTextLimit {
-		text = strings.ToValidUTF8(text[:reentryQuotedTextLimit], "") + "..."
+	return quotedWithin(text, reentryQuotedTextLimit)
+}
+
+// quotedWithin quotes text nobody at Freeside wrote, cut to limit bytes first.
+// The cut can split a character, so the tail is repaired before quoting.
+func quotedWithin(text string, limit int) string {
+	if len(text) > limit {
+		text = strings.ToValidUTF8(text[:limit], "") + "..."
 	}
 	return strconv.Quote(text)
 }
