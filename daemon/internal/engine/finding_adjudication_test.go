@@ -297,7 +297,7 @@ func putFindingAdjudicationRecommendationCase(
 	}
 	item, err := f.workflow.newFindingAdjudicationAttentionItem(
 		f.task, f.binding.run.TaskID, artifact, nil, map[domain.FindingID]domain.Finding{f.finding.ID: f.finding},
-		domain.CanonicalDeclaredPaths(f.binding.resolvedPolicy), names)
+		domain.CanonicalDeclaredPaths(f.binding.resolvedPolicy), nil, names)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2289,7 +2289,7 @@ func TestAcceptingParkingRouteRecordsNoDisposition(t *testing.T) {
 			if err != nil || dispatched {
 				t.Fatalf("remediation dispatched = %v, %v", dispatched, err)
 			}
-			complete, err := f.workflow.reviewRoundDispositionComplete(f.ctx, f.record)
+			complete, err := f.workflow.reviewRoundDispositionComplete(f.ctx, f.task, f.record)
 			if err != nil || complete {
 				t.Fatalf("round complete = %v, %v", complete, err)
 			}
@@ -2345,7 +2345,7 @@ func TestFindingAdjudicationTextSaysWhatAcceptingDoes(t *testing.T) {
 			artifact := domain.FindingAdjudication{Revision: 1, Entries: []domain.FindingAdjudicationEntry{
 				adjudicationRouteEntry(t, id, tc.route),
 			}}
-			if got := findingAdjudicationReason(artifact, nil, findings, allowedPaths); got != tc.wantReason {
+			if got := findingAdjudicationReason(artifact, nil, findings, allowedPaths, nil); got != tc.wantReason {
 				t.Fatalf("reason =\n%s\nwant\n%s", got, tc.wantReason)
 			}
 			if got := domain.FindingAdjudicatorRecommendationReason(artifact.Entries); got != tc.wantRecommendation {
@@ -2398,7 +2398,7 @@ func TestFindingAdjudicationMixedCardTextFollowsTheEngine(t *testing.T) {
 				adjudicationRouteEntry(t, "finding-a", tc.routes[0]),
 				adjudicationRouteEntry(t, "finding-b", tc.routes[1]),
 			}}
-			if got := findingAdjudicationReason(artifact, nil, findings, []string{"daemon/**"}); got != tc.wantReason {
+			if got := findingAdjudicationReason(artifact, nil, findings, []string{"daemon/**"}, nil); got != tc.wantReason {
 				t.Fatalf("reason =\n%s\nwant\n%s", got, tc.wantReason)
 			}
 			if got := domain.FindingAdjudicatorRecommendationReason(artifact.Entries); got != tc.wantRecommendation {
@@ -2424,17 +2424,17 @@ func TestFindingAdjudicationRevisionSaysWhichRoutesChanged(t *testing.T) {
 	changed := domain.FindingAdjudication{Revision: 2, Entries: []domain.FindingAdjudicationEntry{
 		adjudicationRouteEntry(t, id, domain.RouteRemediate),
 	}}
-	reason := findingAdjudicationReason(changed, &prior, findings, []string{"daemon/**"})
+	reason := findingAdjudicationReason(changed, &prior, findings, []string{"daemon/**"}, nil)
 	wantFirst := `Changed after Discuss: review-finding-17 moved from "Park: needs separate work" to "Fix in this PR".`
 	if first, _, _ := strings.Cut(reason, "\n"); first != wantFirst {
 		t.Fatalf("changed revision opens with %q, want %q", first, wantFirst)
 	}
 	unchanged := domain.FindingAdjudication{Revision: 2, Entries: prior.Entries}
-	reason = findingAdjudicationReason(unchanged, &prior, findings, nil)
+	reason = findingAdjudicationReason(unchanged, &prior, findings, nil, nil)
 	if first, _, _ := strings.Cut(reason, "\n"); first != "No route changed after Discuss." {
 		t.Fatalf("unchanged revision opens with %q", first)
 	}
-	reason = findingAdjudicationReason(prior, nil, findings, nil)
+	reason = findingAdjudicationReason(prior, nil, findings, nil, nil)
 	if strings.Contains(reason, "Discuss:") || strings.Contains(reason, "after Discuss") {
 		t.Fatalf("revision 1 names a change: %q", reason)
 	}
@@ -2483,8 +2483,8 @@ func TestFindingAdjudicationTextCarriesNoEnumValues(t *testing.T) {
 		prior := domain.FindingAdjudication{Entries: []domain.FindingAdjudicationEntry{adjudicationRouteEntry(t, id, other)}}
 		current := domain.FindingAdjudication{Entries: []domain.FindingAdjudicationEntry{entry}}
 		texts = append(texts,
-			findingAdjudicationReason(current, nil, findings, []string{"daemon/**"}),
-			findingAdjudicationReason(current, &prior, findings, []string{"daemon/**"}),
+			findingAdjudicationReason(current, nil, findings, []string{"daemon/**"}, nil),
+			findingAdjudicationReason(current, &prior, findings, []string{"daemon/**"}, nil),
 			domain.FindingAdjudicatorRecommendationReason(current.Entries),
 			findingAdjudicationReplySummary(prior, current.Entries))
 		for _, alternative := range entry.OfferedAlternatives {
@@ -2493,7 +2493,7 @@ func TestFindingAdjudicationTextCarriesNoEnumValues(t *testing.T) {
 	}
 	mixed := domain.FindingAdjudication{Entries: every}
 	texts = append(texts,
-		findingAdjudicationReason(mixed, nil, findings, []string{"daemon/**"}),
+		findingAdjudicationReason(mixed, nil, findings, []string{"daemon/**"}, nil),
 		domain.FindingAdjudicatorRecommendationReason(every))
 	for _, text := range texts {
 		for _, value := range raw {

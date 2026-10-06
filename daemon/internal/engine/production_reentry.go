@@ -67,6 +67,10 @@ type reentryCycle struct {
 	// the export time a first cycle stamps its evidence with, so a re-run
 	// reproduces the same evidence bytes.
 	createdAt time.Time
+	// admittedBaseSHA is the base the predecessor's producer was admitted at.
+	// The cycle reviews its own base, which a base advance moves past this
+	// one; an external review cycle adjudicates only while the two agree.
+	admittedBaseSHA string
 }
 
 // productionReentryCheckpoint is the durable verification result of one
@@ -277,6 +281,7 @@ func (w *productionPublicationWorkflow) loadReentryBinding(
 			"production re-entry binding disagrees with durable authority: %w",
 			domain.ErrParentKeyMismatch)
 	}
+	cycle.admittedBaseSHA = base.BaseSHA
 	binding.admission.Base.BaseSHA = task.Successor.Reentry.BaseSHA
 	binding.reentry = &cycle
 	return binding, nil

@@ -117,7 +117,7 @@ func TestExternalReviewNoteQuotesAndBoundsReviewerText(t *testing.T) {
 		findings = append(findings, externalFindingForTest(t, n, "maintainer", fmt.Sprintf("finding %d", n)))
 	}
 
-	note := externalReviewFindingsNote(head, findings)
+	note := externalReviewFindingsNote(head, externalCycleFindings{open: findings})
 	for _, want := range []string{
 		"An external reviewer's findings on " + head + " started this cycle",
 		"a person must decide",
@@ -139,7 +139,7 @@ func TestExternalReviewNoteQuotesAndBoundsReviewerText(t *testing.T) {
 	if strings.Contains(note, fmt.Sprintf("finding %d", externalReviewItemFindingLimit)) {
 		t.Errorf("note names more than %d findings:\n%s", externalReviewItemFindingLimit, note)
 	}
-	if one := externalReviewFindingsNote(head, findings[:1]); strings.Contains(one, "more.") {
+	if one := externalReviewFindingsNote(head, externalCycleFindings{open: findings[:1]}); strings.Contains(one, "more.") {
 		t.Errorf("note for one finding counts more:\n%s", one)
 	}
 

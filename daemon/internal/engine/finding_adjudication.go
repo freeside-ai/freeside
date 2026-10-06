@@ -153,7 +153,7 @@ func (w *productionPublicationWorkflow) reconcileFindingAdjudicationWithDissent(
 	baseRoot, candidateRoot string,
 	dissent *findingAdjudicationDissent,
 ) (productionReviewGateState, error) {
-	complete, err := w.reviewRoundDispositionComplete(ctx, record)
+	complete, err := w.reviewRoundDispositionComplete(ctx, task, record)
 	if err != nil {
 		return productionReviewPending, err
 	}
@@ -198,6 +198,11 @@ func (w *productionPublicationWorkflow) reconcileFindingAdjudicationWithDissent(
 		return productionReviewPending, err
 	}
 	if parked {
+		// An external review cycle ends on that item: a pass that finds it was
+		// interrupted between the item and the end of the cycle's task.
+		if task.externalReviewFirstRound(record) {
+			return productionReviewEscalated, nil
+		}
 		return productionReviewPending, nil
 	}
 
@@ -240,22 +245,11 @@ func (w *productionPublicationWorkflow) reconcileFindingAdjudicationWithDissent(
 				classification = nil
 			}
 		}
-		surface, err := domain.DeriveRemediationSurface(finding.Location,
-			func(path string) (bool, bool, error) {
-				inBase, baseErr := pathExists(baseRoot, path)
-				if baseErr != nil {
-					return false, false, baseErr
-				}
-				inCandidate, candidateErr := pathExists(candidateRoot, path)
-				return inBase, inCandidate, candidateErr
-			})
+		surfacePath, compatibility, err := findingRemediationSurface(
+			finding, declaredPaths, baseRoot, candidateRoot)
 		if err != nil {
 			return productionReviewPending, err
 		}
-		compatibility := domain.EngineCompatibility(surface, declaredPaths,
-			func(patterns []string, path string) bool {
-				return pathfold.MatchAny(patterns, path, false)
-			})
 		fastPath := (dissent == nil || !slices.Contains(dissent.FindingIDs, finding.ID)) &&
 			classification != nil && compatibility == domain.CompatibilityAllowed &&
 			classificationMeets(classification.Materiality, materialityThreshold) &&
@@ -273,13 +267,27 @@ func (w *productionPublicationWorkflow) reconcileFindingAdjudicationWithDissent(
 			entries = append(entries, entry)
 			continue
 		}
-		surfacePath := ""
-		if surface != nil && finding.Location != nil {
-			surfacePath = finding.Location.Path
-		}
 		residue = append(residue, findingAdjudicationInput{
 			Finding: finding, Classification: classification,
 			Surface: surfacePath, Compatibility: compatibility,
+		})
+	}
+	// An external review cycle's first round also judges the open findings the
+	// cycle admits. A reviewer outside Freeside wrote them: nothing classifies
+	// one and the fast path never routes one, so each is residue for the
+	// adjudicator, which reads it quoted (issue #1767 decision 3).
+	external, err := w.openExternalFindings(ctx, task, record)
+	if err != nil {
+		return productionReviewPending, err
+	}
+	for _, finding := range external {
+		surfacePath, compatibility, err := findingRemediationSurface(
+			finding, declaredPaths, baseRoot, candidateRoot)
+		if err != nil {
+			return productionReviewPending, err
+		}
+		residue = append(residue, findingAdjudicationInput{
+			Finding: finding, Surface: surfacePath, Compatibility: compatibility,
 		})
 	}
 
@@ -471,8 +479,12 @@ func (w *productionPublicationWorkflow) reviseFindingAdjudication(
 		if err != nil {
 			return err
 		}
+		external, err := loadExternalRoundCard(ctx, &tx.ReadTx, task, record)
+		if err != nil {
+			return err
+		}
 		replacement, err := w.newFindingAdjudicationAttentionItem(task, binding.run.TaskID, successor, &prior,
-			findings, domain.CanonicalDeclaredPaths(binding.resolvedPolicy), names)
+			findings, domain.CanonicalDeclaredPaths(binding.resolvedPolicy), external, names)
 		if err != nil {
 			return err
 		}
@@ -763,29 +775,44 @@ func (w *productionPublicationWorkflow) findingAdjudicationRevisionInputs(
 		} else {
 			classification = nil
 		}
-		surface, err := domain.DeriveRemediationSurface(finding.Location,
-			func(path string) (bool, bool, error) {
-				inBase, baseErr := pathExists(baseRoot, path)
-				if baseErr != nil {
-					return false, false, baseErr
-				}
-				inCandidate, candidateErr := pathExists(candidateRoot, path)
-				return inBase, inCandidate, candidateErr
-			})
+		surfacePath, compatibility, err := findingRemediationSurface(
+			finding, declaredPaths, baseRoot, candidateRoot)
 		if err != nil {
 			return nil, err
 		}
-		surfacePath := ""
-		if surface != nil && finding.Location != nil {
-			surfacePath = finding.Location.Path
-		}
 		residue = append(residue, findingAdjudicationInput{
 			Finding: finding, Classification: classification, Surface: surfacePath,
-			Compatibility: domain.EngineCompatibility(surface, declaredPaths,
-				func(patterns []string, path string) bool { return pathfold.MatchAny(patterns, path, false) }),
+			Compatibility: compatibility,
 		})
 	}
 	return residue, nil
+}
+
+// findingRemediationSurface derives the two engine facts an adjudication reads
+// for one finding from its stored location and the round's trees: the path a
+// fix would touch ("" when the location names none in either tree) and whether
+// the run's declared paths contain it.
+func findingRemediationSurface(
+	finding domain.Finding, declaredPaths []string, baseRoot, candidateRoot string,
+) (string, domain.WorkUnitCompatibility, error) {
+	surface, err := domain.DeriveRemediationSurface(finding.Location,
+		func(path string) (bool, bool, error) {
+			inBase, baseErr := pathExists(baseRoot, path)
+			if baseErr != nil {
+				return false, false, baseErr
+			}
+			inCandidate, candidateErr := pathExists(candidateRoot, path)
+			return inBase, inCandidate, candidateErr
+		})
+	if err != nil {
+		return "", "", err
+	}
+	surfacePath := ""
+	if surface != nil && finding.Location != nil {
+		surfacePath = finding.Location.Path
+	}
+	return surfacePath, domain.EngineCompatibility(surface, declaredPaths,
+		func(patterns []string, path string) bool { return pathfold.MatchAny(patterns, path, false) }), nil
 }
 
 func validateModelAdjudicationEntries(
@@ -913,6 +940,11 @@ func findingAdjudicationReplySummary(
 func (w *productionPublicationWorkflow) parkUnacceptedFindingBatch(
 	ctx context.Context, task productionPublicationTask, record domain.ReviewRecord,
 ) (productionReviewGateState, error) {
+	// An external review cycle that cannot adjudicate ends as it does when it
+	// never tries: on a person, with the item naming the reviewer's findings.
+	if task.externalReviewFirstRound(record) {
+		return w.escalateExternalReviewFindings(ctx, task, record)
+	}
 	reason := fmt.Sprintf(
 		"Review found %d issue(s); deterministic routing could not accept the complete adjudication batch.",
 		len(record.FindingIDs))
@@ -970,16 +1002,34 @@ func (w *productionPublicationWorkflow) reserveFindingAdjudicationRevisionAttent
 	)
 }
 
+// reviewRoundDispositionComplete reports whether every finding the round has
+// to answer holds an outcome: each finding the review record lists and, in an
+// external review cycle's first round, each open external finding the cycle
+// admits. The second set is not in the record, so a clean record there is
+// complete only once those findings are answered. Readiness reads this too,
+// so an unanswered external finding withholds it.
 func (w *productionPublicationWorkflow) reviewRoundDispositionComplete(
-	ctx context.Context, record domain.ReviewRecord,
+	ctx context.Context, task productionPublicationTask, record domain.ReviewRecord,
 ) (bool, error) {
-	if record.Outcome == domain.ReviewClean {
+	external, err := w.openExternalFindings(ctx, task, record)
+	if err != nil {
+		return false, err
+	}
+	if record.Outcome == domain.ReviewClean && len(external) == 0 {
 		return true, nil
 	}
-	var dispositions []domain.ReviewDispositionRecord
+	var (
+		dispositions         []domain.ReviewDispositionRecord
+		externalDispositions []domain.ExternalFindingDisposition
+	)
 	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		dispositions, err = tx.ListFindingDispositions(ctx, record.RunID)
+		if dispositions, err = tx.ListFindingDispositions(ctx, record.RunID); err != nil {
+			return err
+		}
+		if len(external) > 0 {
+			externalDispositions, err = tx.ListExternalFindingDispositions(ctx, record.RunID)
+		}
 		return err
 	}); err != nil {
 		return false, err
@@ -987,6 +1037,13 @@ func (w *productionPublicationWorkflow) reviewRoundDispositionComplete(
 	for _, findingID := range record.FindingIDs {
 		if !slices.ContainsFunc(dispositions, func(disposition domain.ReviewDispositionRecord) bool {
 			return disposition.FindingID == findingID && disposition.Round == record.Round
+		}) {
+			return false, nil
+		}
+	}
+	for _, finding := range external {
+		if !slices.ContainsFunc(externalDispositions, func(disposition domain.ExternalFindingDisposition) bool {
+			return disposition.FindingID == finding.ID && disposition.Round == record.Round
 		}) {
 			return false, nil
 		}
@@ -1097,11 +1154,12 @@ func prospectiveFindingAdjudicationSurfaceDigest(
 
 // newFindingAdjudicationAttentionItem builds the card for artifact. predecessor
 // is the revision a Discuss superseded, nil on revision 1; allowedPaths are the
-// run's declared paths, the only paths a remediator may change.
+// run's declared paths, the only paths a remediator may change; external is
+// set only in an external review cycle's first round.
 func (w *productionPublicationWorkflow) newFindingAdjudicationAttentionItem(
 	task productionPublicationTask, taskID domain.TaskID, artifact domain.FindingAdjudication,
 	predecessor *domain.FindingAdjudication, findings map[domain.FindingID]domain.Finding,
-	allowedPaths []string, names *domain.DisplayNames,
+	allowedPaths []string, external *externalRoundCard, names *domain.DisplayNames,
 ) (domain.AttentionItem, error) {
 	binding := findingAdjudicationBinding(artifact, findings)
 	surfaceItem := findingAdjudicationSurfaceItem(
@@ -1112,7 +1170,7 @@ func (w *productionPublicationWorkflow) newFindingAdjudicationAttentionItem(
 		ProjectID: task.ProjectID,
 		Subject:   surfaceItem.Subject,
 		Type:      domain.AttentionFindingAdjudication, Priority: domain.PriorityHigh,
-		Reason:            findingAdjudicationReason(artifact, predecessor, findings, allowedPaths),
+		Reason:            findingAdjudicationReason(artifact, predecessor, findings, allowedPaths, external),
 		RequestedDecision: surfaceItem.RequestedDecision, PRHeadSHA: surfaceItem.PRHeadSHA,
 		FindingAdjudication: &binding, ItemVersion: 1,
 		DisplayNames:      names,
@@ -1132,16 +1190,33 @@ const maxReasonAllowedPaths = 5
 // already shows as a daemon fact, #892), and the run's allowed paths. The
 // model's rationale shows in its own proposal register and is never quoted
 // here. On a revision it opens with the routes the Discuss changed.
+//
+// An external finding is the exception to "location only": no review of
+// Freeside's own produced it, so its line also names the reviewer and thread
+// and quotes their words.
+//
+// external is set only in an external review cycle's first round, where
+// accepting does something else: the cycle starts no remediator and records
+// outcomes only for a card of declines and deferrals, so any other card ends
+// the cycle on a person with no route acted on. The card says that in place
+// of the ordinary lead and per-finding outcomes. It also names the findings
+// an earlier cycle already answered in one closing line, so a reader does not
+// take them for open (issue #1767 decision 6).
 func findingAdjudicationReason(
 	artifact domain.FindingAdjudication, predecessor *domain.FindingAdjudication,
 	findings map[domain.FindingID]domain.Finding, allowedPaths []string,
+	external *externalRoundCard,
 ) string {
 	var lines []string
 	if predecessor != nil {
 		lines = append(lines, findingAdjudicationRouteChanges(predecessor.Entries, artifact.Entries)...)
 	}
 	outcome := domain.AcceptFindingAdjudication(artifact.Entries)
+	handsOff := external != nil &&
+		externalReviewRoutesHandoff(artifact, findingAdjudicationRoutes(artifact.Entries)) != ""
 	switch {
+	case handsOff:
+		lines = append(lines, "Accepting fixes nothing and records no outcome: an external review cycle starts no remediator, and it records outcomes only when every finding is declined or deferred. The cycle ends, and a new item hands the findings to a person.")
 	case outcome.Halted:
 		lines = append(lines, "Accepting parks the run: a disputed finding stops every other route, so nothing is fixed, recorded, or published.")
 	case outcome.ParksRun:
@@ -1162,10 +1237,21 @@ func findingAdjudicationReason(
 		lines = append(lines, "Accepting records each finding's outcome, and the run continues.")
 	}
 	for _, entry := range artifact.Entries {
+		finding := findings[entry.FindingID]
 		line := fmt.Sprintf("%s (%s): %s.", entry.FindingID,
-			describeFindingLocation(findings[entry.FindingID].Location),
+			describeFindingLocation(finding.Location),
 			domain.AdjudicationRouteLabel(entry.Route))
+		if finding.External != nil {
+			// The reviewer's words come from outside Freeside, so the card
+			// says whose they are and shows them quoted and cut.
+			line = fmt.Sprintf("%s (external finding, %s on %s, %s; the reviewer wrote %s): %s.",
+				entry.FindingID, finding.External.ReviewerLogin, finding.External.ThreadID,
+				describeFindingLocation(finding.Location), reentryQuoted(finding.Message),
+				domain.AdjudicationRouteLabel(entry.Route))
+		}
 		switch {
+		case handsOff:
+			// The lead already says no route on this card is acted on.
 		case entry.Route.ParksRun() && outcome.Remediates:
 			line += " It gets no disposition and isn't fixed by accepting. Use Discuss to argue for fixing it in this PR."
 		case entry.Route.ParksRun():
@@ -1178,6 +1264,11 @@ func findingAdjudicationReason(
 			line += " It's recorded as declined and isn't fixed."
 		}
 		lines = append(lines, line)
+	}
+	if external != nil {
+		if note := externalReviewAnsweredNote(external.answered); note != "" {
+			lines = append(lines, strings.TrimSpace(note))
+		}
 	}
 	return strings.Join(lines, "\n")
 }
@@ -1288,10 +1379,14 @@ func (w *productionPublicationWorkflow) putFindingAdjudicationAttention(
 		return nil
 	}
 	var findings map[domain.FindingID]domain.Finding
+	var external *externalRoundCard
 	var policy domain.ResolvedPolicy
 	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		if findings, err = loadAdjudicationFindings(ctx, tx, artifact); err != nil {
+			return err
+		}
+		if external, err = loadExternalRoundCard(ctx, tx, task, record); err != nil {
 			return err
 		}
 		policy, err = tx.GetResolvedPolicy(ctx, task.RunID)
@@ -1305,7 +1400,7 @@ func (w *productionPublicationWorkflow) putFindingAdjudicationAttention(
 		return err
 	}
 	item, err := w.newFindingAdjudicationAttentionItem(task, taskID, artifact, nil,
-		findings, domain.CanonicalDeclaredPaths(policy), names)
+		findings, domain.CanonicalDeclaredPaths(policy), external, names)
 	if err != nil {
 		return err
 	}
@@ -1547,10 +1642,23 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 	if err != nil {
 		return productionReviewPending, err
 	}
+	// An external review cycle never parks its task on an answer nothing will
+	// read. Its first round waits only while an adjudication card is open;
+	// every other ending that needs a person finishes the cycle's task and
+	// leaves the item as the durable surface, as the cycle does when it
+	// adjudicates nothing. A pass that finds such an item already written was
+	// interrupted between the item and the task's end.
+	externalFirstRound := task.externalReviewFirstRound(record)
 	if command != nil && command.Action == domain.ActionStop {
+		if externalFirstRound {
+			return productionReviewEscalated, nil
+		}
 		return productionReviewPending, nil
 	}
 	if item != nil && item.Type == domain.AttentionReviewDispute {
+		if externalFirstRound {
+			return productionReviewEscalated, nil
+		}
 		return productionReviewPending, nil
 	}
 	if item != nil && command == nil {
@@ -1585,7 +1693,11 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 				}); err != nil {
 					return productionReviewPending, err
 				}
-				if finding.Severity == domain.FindingSeverityP0 || finding.Severity == domain.FindingSeverityP1 {
+				// An external reviewer's severity is whatever badge their comment
+				// carried, and most carry none. Plan §7 reads a missing severity as
+				// high, so the adjudicator alone never dismisses such a finding.
+				if finding.Severity == domain.FindingSeverityP0 || finding.Severity == domain.FindingSeverityP1 ||
+					(finding.External != nil && finding.Severity == "") {
 					needsDisputeAttention = true
 					continue
 				}
@@ -1599,7 +1711,9 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 		}
 	}
 
-	if needsDisputeAttention {
+	// A decided card holds the round's review identity, so an external review
+	// cycle whose dispute outlives the card ends on the handoff item below.
+	if needsDisputeAttention && (item == nil || !externalFirstRound) {
 		if item != nil {
 			return productionReviewPending, nil
 		}
@@ -1611,6 +1725,9 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 			domain.AttentionReviewDispute); err != nil {
 			return productionReviewPending, err
 		}
+		if externalFirstRound {
+			return productionReviewEscalated, nil
+		}
 		return productionReviewPending, nil
 	}
 	if needsFindingAttention && item == nil {
@@ -1621,6 +1738,15 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 			return productionReviewPending, err
 		}
 		return productionReviewPending, nil
+	}
+	if externalFirstRound {
+		reason, err := w.externalReviewRoundEndsOnPerson(ctx, record, artifact, routes)
+		if err != nil {
+			return productionReviewPending, err
+		}
+		if reason != "" {
+			return w.escalateExternalReviewHandoff(ctx, task, record, reason)
+		}
 	}
 	diminishing, diminishingState, handled, err := w.reconcileReviewDiminishing(
 		ctx, task, record, artifact)
@@ -1643,7 +1769,11 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 		return productionReviewEscalated, nil
 	}
 	var remediation *preparedRemediationIntent
-	if w.artifacts != nil {
+	// An external review cycle's first round reaches here with nothing to
+	// remediate and no convergence stop, so it prepares no remediation and
+	// runs no drift audit: the audit's verdict parks a round on an item that
+	// answers only the record's findings.
+	if w.artifacts != nil && !externalFirstRound {
 		// A deterministic undeliverable-input refusal terminalized on a prior
 		// reconcile parks the run; re-preparing would just re-refuse and re-diff.
 		parked, checkErr := w.remediationUndeliverableRecorded(ctx, task, record)
@@ -1724,7 +1854,7 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 		DurableTransitionFindingAdjudication, DurableTransitionAfter); err != nil {
 		return productionReviewPending, err
 	}
-	complete, err := w.reviewRoundDispositionComplete(ctx, record)
+	complete, err := w.reviewRoundDispositionComplete(ctx, task, record)
 	if err != nil {
 		return productionReviewPending, err
 	}
@@ -1754,6 +1884,23 @@ func persistFindingRouteDispositions(ctx context.Context, tx *store.WriteTx, art
 			return domain.ErrParentKeyMismatch
 		}
 		reason := fmt.Sprintf("%s (finding adjudication %s)", strings.TrimSpace(entry.Rationale), artifact.Digest)
+		finding, err := tx.GetFinding(ctx, entry.FindingID)
+		if err != nil {
+			return err
+		}
+		// No review record lists an external finding, so its outcome is the
+		// record of its own kind, keyed by the cycle's first round, which is
+		// the round this adjudication belongs to.
+		if finding.External != nil {
+			digest := artifact.Digest
+			if err := tx.PutExternalFindingDisposition(ctx, domain.ExternalFindingDisposition{
+				FindingID: entry.FindingID, RunID: artifact.RunID, Round: artifact.Round,
+				Disposition: disposition, Reason: reason, AdjudicationDigest: &digest, CreatedAt: at,
+			}); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := tx.PutFindingDisposition(ctx, domain.ReviewDispositionRecord{
 			FindingID: entry.FindingID, RunID: artifact.RunID, Round: artifact.Round,
 			Disposition: disposition, Reason: reason, AdjudicationDigest: artifact.Digest, CreatedAt: at,
