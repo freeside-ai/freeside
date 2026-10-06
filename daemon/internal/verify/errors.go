@@ -16,6 +16,10 @@ var (
 	// resolved to readable bytes; there is no fallback to candidate
 	// content.
 	ErrRecipeUnreadable = errors.New("trusted recipe cannot be read")
+	// ErrCommitFileUnreadable rejects a path a commit's tree holds in a
+	// shape ReadFileAtCommit refuses: not a regular blob, or one beyond the
+	// caller's size limit. It is distinct from absence, which is a result.
+	ErrCommitFileUnreadable = errors.New("file at commit is not a regular blob within the size limit")
 
 	// Checkout failures.
 	ErrGitPlumbing     = errors.New("git plumbing failed")
