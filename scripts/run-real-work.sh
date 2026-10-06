@@ -48,7 +48,18 @@
 # Required environment:
 #   FREESIDE_REAL_RUN_STATE_ROOT     daemon state root (holds the SQLite store)
 #   FREESIDE_REAL_RUN_LISTEN         fixed, nonzero signet listener address
-#   FREESIDE_REAL_RUN_AGENT_IMAGE    digest-pinned admitted project image
+#   FREESIDE_REAL_RUN_AGENT_IMAGE    digest-pinned admitted project image. It
+#                                    may have been built at an earlier commit
+#                                    than FREESIDE_REAL_RUN_BASE_SHA when the
+#                                    base leaves its environment inputs
+#                                    unchanged (package.json,
+#                                    package-lock.json, no .npmrc or
+#                                    npm-shrinkwrap.json, no different in-tree
+#                                    recipe) and this binary's builder sources
+#                                    match the image's. An image recorded
+#                                    before environment evidence existed runs
+#                                    only at its build commit; rebuild it once
+#                                    to reuse it.
 #   FREESIDE_WARD_EXPORTER_IMAGE     digest-pinned export helper image
 #   FREESIDE_REAL_RUN_REVIEW_IMAGE   digest-pinned Codex reviewer image
 #   FREESIDE_REAL_RUN_REVIEW_INPUT_ROOT private root containing the review
@@ -112,8 +123,11 @@
 #                                    whose origin proves the base and which
 #                                    already contains the exact base commit. The
 #                                    composition preflight verifies its origin
-#                                    and that the base is reachable; it never
-#                                    fetches into it, so keep it current.
+#                                    and that the base is reachable, and reads
+#                                    the base's environment inputs from it to
+#                                    check the agent image against that base;
+#                                    it never fetches into it, so keep it
+#                                    current.
 #   FREESIDE_REAL_RUN_PROMPT_PACKAGE trusted prompt-package file
 #   FREESIDE_REAL_RUN_SPECIFICATION_PROMPT_PACKAGE trusted specifier prompt-package file
 #   FREESIDE_REAL_RUN_REMEDIATION_PROMPT_PACKAGE trusted remediator prompt-package file
