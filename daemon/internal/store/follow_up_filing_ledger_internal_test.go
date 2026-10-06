@@ -72,8 +72,9 @@ func TestEncryptedRestoreRoundTripsFollowUpFilingLedger(t *testing.T) {
 		args  []any
 	}{
 		{`INSERT INTO follow_up_filing_intents
-			(instance_id, repository_id, opened_at, pre_dispatch_issue_numbers, pre_dispatch_recorded_at)
-			VALUES (?, 123, ?, '[7]', ?)`, []any{instance.ID, at, at}},
+			(instance_id, repository_id, opened_at, pre_dispatch_issue_numbers,
+			 pre_dispatch_bot_user_id, pre_dispatch_recorded_at)
+			VALUES (?, 123, ?, '[7]', 4100, ?)`, []any{instance.ID, at, at}},
 		{`INSERT INTO follow_up_filing_attempts
 			(instance_id, ordinal, dispatch_started_at, response_class, response_recorded_at)
 			VALUES (?, 1, ?, 'transient_rejection', ?)`, []any{instance.ID, at, at}},
@@ -89,7 +90,8 @@ func TestEncryptedRestoreRoundTripsFollowUpFilingLedger(t *testing.T) {
 		var out []string
 		for table, columns := range map[string]string{
 			"follow_up_filing_intents": `instance_id || '|' || repository_id || '|' || opened_at || '|' ||
-				pre_dispatch_issue_numbers || '|' || pre_dispatch_recorded_at || '|' || IFNULL(outcome, 'open')`,
+				pre_dispatch_issue_numbers || '|' || pre_dispatch_bot_user_id || '|' ||
+				pre_dispatch_recorded_at || '|' || IFNULL(outcome, 'open')`,
 			"follow_up_filing_attempts": `instance_id || '|' || ordinal || '|' || dispatch_started_at || '|' ||
 				IFNULL(response_class, 'none')`,
 			"follow_up_filed_issues": `repository_id || '|' || issue_number || '|' || instance_id || '|' || body`,

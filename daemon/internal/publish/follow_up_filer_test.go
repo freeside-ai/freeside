@@ -324,6 +324,206 @@ func TestFollowUpFilerBoundsAnIncompleteListing(t *testing.T) {
 	})
 }
 
+// TestFollowUpFilerHoldsAFilingToItsDispatchingIdentity pins issue #1777: a
+// filing's pre-dispatch set and its create belong to one GitHub App, so once
+// the repository is registered to another App the filing neither sends a
+// create under the new one nor adopts one of its issues.
+func TestFollowUpFilerHoldsAFilingToItsDispatchingIdentity(t *testing.T) {
+	assertCreates := func(t *testing.T, h *filingHarness, want int) {
+		t.Helper()
+		// Nothing later changes the outcome or sends anything more.
+		h.advance(pastSettle)
+		h.mustPass()
+		h.restart()
+		h.mustPass()
+		if got := h.creates(); got != want {
+			t.Fatalf("create requests = %d, want %d", got, want)
+		}
+	}
+	t.Run("an unproven create adopts nothing under another App", func(t *testing.T) {
+		t.Parallel()
+		h := newFilingHarness(t)
+		instance := h.approve(h.seedRun("run-a", nil, nil), 0)
+		// The create committed under the first App, so its issue exists and
+		// the second App's listing cannot show it.
+		h.respond(unprovenCommitted)
+		h.mustPass()
+		h.reregister()
+		// The only issue the second App authored in the window: the single
+		// candidate a listing under it would adopt.
+		h.plant(h.otherBotIssue(900))
+		h.advance(pastSettle)
+		h.mustPass()
+
+		item := h.assertTerminal(instance.ID, domain.FollowUpFilingAmbiguous, "", "follow_up_filing_ambiguous")
+		for _, id := range []int64{filingBotID, otherFilingBotID} {
+			if !strings.Contains(item.Reason, fmt.Sprint(id)) {
+				t.Fatalf("ambiguous notice %q does not name bot user %d", item.Reason, id)
+			}
+		}
+		assertCreates(t, h, 1)
+		h.assertTerminal(instance.ID, domain.FollowUpFilingAmbiguous, "", "follow_up_filing_ambiguous")
+	})
+	t.Run("a filing that sent nothing is refused under another App", func(t *testing.T) {
+		t.Parallel()
+		h := newFilingHarness(t)
+		instance := h.approve(h.seedRun("run-a", nil, nil), 0)
+		h.passUntilCreateToken(instance.ID)
+		h.restart()
+		h.reregister()
+		h.mustPass()
+
+		h.assertTerminal(instance.ID, domain.FollowUpFilingRefused,
+			domain.FollowUpFilingRefusalPreconditionFailed, "follow_up_filing_refused")
+		assertCreates(t, h, 0)
+	})
+	t.Run("a registration that changes as the create is built sends nothing", func(t *testing.T) {
+		t.Parallel()
+		h := newFilingHarness(t)
+		instance := h.approve(h.seedRun("run-a", nil, nil), 0)
+		// The set is listed under the first App and the create's token is
+		// minted after the registration changed.
+		h.atCreateToken(h.reregister)
+		h.mustPass()
+		h.step = nil
+
+		h.assertTerminal(instance.ID, domain.FollowUpFilingRefused,
+			domain.FollowUpFilingRefusalPreconditionFailed, "follow_up_filing_refused")
+		if intent := h.intent(instance.ID); intent.PreDispatch == nil ||
+			intent.PreDispatch.BotUserID == nil || *intent.PreDispatch.BotUserID != filingBotID {
+			t.Fatalf("intent = %+v, want a set listed under bot user %d", intent, filingBotID)
+		}
+		assertCreates(t, h, 0)
+	})
+	t.Run("a transient rejection is not retried under another App", func(t *testing.T) {
+		t.Parallel()
+		h := newFilingHarness(t)
+		instance := h.approve(h.seedRun("run-a", nil, nil), 0)
+		h.respond(fakeCreateResponse{Status: http.StatusTooManyRequests})
+		h.mustPass()
+		h.reregister()
+		h.advance(time.Minute)
+		h.mustPass()
+
+		h.assertTerminal(instance.ID, domain.FollowUpFilingRefused,
+			domain.FollowUpFilingRefusalPreconditionFailed, "follow_up_filing_refused")
+		assertCreates(t, h, 1)
+	})
+	t.Run("a refusal frees the repository for a filing under the new App", func(t *testing.T) {
+		t.Parallel()
+		h := newFilingHarness(t)
+		run := h.seedRun("run-a", nil, nil)
+		instance, next := h.approve(run, 0), h.approve(run, 1)
+		h.passUntilCreateToken(instance.ID)
+		h.restart()
+		h.reregister()
+		h.mustPass()
+
+		h.assertTerminal(instance.ID, domain.FollowUpFilingRefused,
+			domain.FollowUpFilingRefusalPreconditionFailed, "follow_up_filing_refused")
+		if intent := h.intent(next.ID); intent == nil || intent.PreDispatch == nil ||
+			intent.PreDispatch.BotUserID == nil || *intent.PreDispatch.BotUserID != otherFilingBotID {
+			t.Fatalf("next filing's intent = %+v, want a set listed under bot user %d", intent, otherFilingBotID)
+		}
+	})
+}
+
+// TestFollowUpFilerFailsClosedWithoutARecordedIdentity pins the rows that
+// predate migration 0093: a recorded pre-dispatch set that names no
+// dispatching identity proves no authorship, so its filing sends no create
+// and adopts nothing, whatever the repository's App is now.
+func TestFollowUpFilerFailsClosedWithoutARecordedIdentity(t *testing.T) {
+	t.Run("an unproven create ends ambiguous", func(t *testing.T) {
+		t.Parallel()
+		h := newFilingHarness(t)
+		instance := h.approve(h.seedRun("run-a", nil, nil), 0)
+		// The committed issue is the single candidate an identity-blind settle
+		// would adopt.
+		h.respond(unprovenCommitted)
+		h.mustPass()
+		h.forgetIdentity(instance.ID)
+		h.advance(pastSettle)
+		h.mustPass()
+
+		h.assertTerminal(instance.ID, domain.FollowUpFilingAmbiguous, "", "follow_up_filing_ambiguous")
+		if got := h.creates(); got != 1 {
+			t.Fatalf("create requests = %d, want 1", got)
+		}
+	})
+	t.Run("a filing that sent nothing is refused", func(t *testing.T) {
+		t.Parallel()
+		h := newFilingHarness(t)
+		instance := h.approve(h.seedRun("run-a", nil, nil), 0)
+		h.passUntilCreateToken(instance.ID)
+		h.forgetIdentity(instance.ID)
+		h.mustPass()
+
+		h.assertTerminal(instance.ID, domain.FollowUpFilingRefused,
+			domain.FollowUpFilingRefusalPreconditionFailed, "follow_up_filing_refused")
+		if got := h.creates(); got != 0 {
+			t.Fatalf("create requests = %d, want 0", got)
+		}
+	})
+	t.Run("a transient rejection is not retried", func(t *testing.T) {
+		t.Parallel()
+		h := newFilingHarness(t)
+		instance := h.approve(h.seedRun("run-a", nil, nil), 0)
+		h.respond(fakeCreateResponse{Status: http.StatusTooManyRequests})
+		h.mustPass()
+		h.forgetIdentity(instance.ID)
+		h.advance(time.Minute)
+		h.mustPass()
+
+		h.assertTerminal(instance.ID, domain.FollowUpFilingRefused,
+			domain.FollowUpFilingRefusalPreconditionFailed, "follow_up_filing_refused")
+		if got := h.creates(); got != 1 {
+			t.Fatalf("create requests = %d, want 1", got)
+		}
+	})
+	// The ledger alone fixes each of those outcomes, so the pass that records
+	// one asks GitHub nothing. A repository or App that cannot be read then
+	// holds neither the filing nor the later filings its intent blocks.
+	offline := map[string]struct {
+		arrange func(h *filingHarness, id domain.ProposalInstanceID)
+		outcome domain.FollowUpFilingOutcome
+		reason  domain.FollowUpFilingRefusalReason
+		code    string
+	}{
+		"an unproven create": {
+			func(h *filingHarness, _ domain.ProposalInstanceID) {
+				h.respond(unprovenCommitted)
+				h.mustPass()
+			},
+			domain.FollowUpFilingAmbiguous, "", "follow_up_filing_ambiguous",
+		},
+		"a filing that sent nothing": {
+			func(h *filingHarness, id domain.ProposalInstanceID) { h.passUntilCreateToken(id) },
+			domain.FollowUpFilingRefused, domain.FollowUpFilingRefusalPreconditionFailed, "follow_up_filing_refused",
+		},
+		"a transient rejection": {
+			func(h *filingHarness, _ domain.ProposalInstanceID) {
+				h.respond(fakeCreateResponse{Status: http.StatusTooManyRequests})
+				h.mustPass()
+				h.advance(time.Minute)
+			},
+			domain.FollowUpFilingRefused, domain.FollowUpFilingRefusalPreconditionFailed, "follow_up_filing_refused",
+		},
+	}
+	for name, c := range offline {
+		t.Run(name+" is decided without reaching GitHub", func(t *testing.T) {
+			t.Parallel()
+			h := newFilingHarness(t)
+			instance := h.approve(h.seedRun("run-a", nil, nil), 0)
+			c.arrange(h, instance.ID)
+			h.forgetIdentity(instance.ID)
+			h.step = func(name string) { t.Errorf("the pass reached outside the store: %s", name) }
+			h.mustPass()
+
+			h.assertTerminal(instance.ID, c.outcome, c.reason, c.code)
+		})
+	}
+}
+
 func TestFollowUpFilerAmbiguousRepositoryAdoptsNothing(t *testing.T) {
 	h := newFilingHarness(t)
 	run := h.seedRun("run-a", nil, nil)

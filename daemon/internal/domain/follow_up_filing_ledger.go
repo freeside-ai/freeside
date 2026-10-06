@@ -24,14 +24,28 @@ import (
 // intent created anything, so the intent never adopts it. An empty set is a
 // recorded observation of no candidates and is distinct from a set not yet
 // recorded, which is a nil pointer on the intent.
+//
+// The set belongs to one GitHub App: it lists the issues that App's bot
+// account had authored, and every create of the intent is sent as that
+// account. Recovery tells the intent's own issue from a foreign one by
+// authorship, so a candidate search under any other identity proves nothing
+// about this intent (issue #1777).
 type FollowUpFilingPreDispatchSet struct {
 	// IssueNumbers is strictly ascending and never nil, so one set has one
 	// encoding.
-	IssueNumbers []int     `json:"issue_numbers"`
-	RecordedAt   time.Time `json:"recorded_at"`
+	IssueNumbers []int `json:"issue_numbers"`
+	// BotUserID is the numeric user ID of the App bot account the set was
+	// listed under. It is nil only on a set recorded before the identity was
+	// (migration 0093). Such an intent can prove no authorship: it starts no
+	// attempt, and its caller adopts nothing for it.
+	BotUserID  *int64    `json:"bot_user_id"`
+	RecordedAt time.Time `json:"recorded_at"`
 }
 
 func (s FollowUpFilingPreDispatchSet) validate() error {
+	if s.BotUserID != nil && *s.BotUserID <= 0 {
+		return fmt.Errorf("follow-up filing pre-dispatch bot_user_id %d: %w", *s.BotUserID, ErrNonPositive)
+	}
 	if s.IssueNumbers == nil {
 		return fmt.Errorf("follow-up filing pre-dispatch issue_numbers absent: %w", ErrFollowUpFilingLedgerInconsistent)
 	}
@@ -239,8 +253,12 @@ func (i FollowUpFilingIntent) MayHaveCreated() bool {
 }
 
 // RecordPreDispatch records the candidate issues seen before the first
-// dispatch. The set is written once, before any attempt.
-func (i FollowUpFilingIntent) RecordPreDispatch(issueNumbers []int, at time.Time) (FollowUpFilingIntent, error) {
+// dispatch, and botUserID, the App bot account they were listed under. The
+// set is written once, before any attempt, so the identity that listed it is
+// the one every create of the intent is held to.
+func (i FollowUpFilingIntent) RecordPreDispatch(
+	issueNumbers []int, botUserID int64, at time.Time,
+) (FollowUpFilingIntent, error) {
 	if i.Terminal != nil {
 		return FollowUpFilingIntent{}, ErrFollowUpFilingIntentResolved
 	}
@@ -252,7 +270,9 @@ func (i FollowUpFilingIntent) RecordPreDispatch(issueNumbers []int, at time.Time
 	numbers := append([]int{}, issueNumbers...)
 	slices.Sort(numbers)
 	next := i
-	next.PreDispatch = &FollowUpFilingPreDispatchSet{IssueNumbers: slices.Compact(numbers), RecordedAt: at.UTC()}
+	next.PreDispatch = &FollowUpFilingPreDispatchSet{
+		IssueNumbers: slices.Compact(numbers), BotUserID: &botUserID, RecordedAt: at.UTC(),
+	}
 	return next.validated()
 }
 
@@ -261,12 +281,20 @@ func (i FollowUpFilingIntent) RecordPreDispatch(issueNumbers []int, at time.Time
 // committed: no attempt was dispatched, or the last attempt recorded a
 // transient rejection. A definite rejection is evidence too, but it ends the
 // intent as refused instead of allowing another create.
+//
+// The set must also name the identity it was listed under: a create sent
+// with none recorded could never be told from another App's issue. Whether
+// that identity is still the repository's is live state, and the caller's to
+// compare before it calls.
 func (i FollowUpFilingIntent) StartAttempt(at time.Time) (FollowUpFilingIntent, error) {
 	if i.Terminal != nil {
 		return FollowUpFilingIntent{}, ErrFollowUpFilingIntentResolved
 	}
 	if i.PreDispatch == nil {
 		return FollowUpFilingIntent{}, ErrFollowUpFilingPreDispatchMissing
+	}
+	if i.PreDispatch.BotUserID == nil {
+		return FollowUpFilingIntent{}, ErrFollowUpFilingIdentityMissing
 	}
 	if last := i.lastAttempt(); last != nil && last.class() != FollowUpFilingResponseTransientRejection {
 		return FollowUpFilingIntent{}, fmt.Errorf("last attempt is %s: %w", last.class(), ErrFollowUpFilingCreateUnproven)

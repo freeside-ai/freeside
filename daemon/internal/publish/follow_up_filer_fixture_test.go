@@ -26,6 +26,10 @@ const (
 	filingBotID   int64 = 4242
 	filingBotSlug       = "freeside-test"
 	filingRepo          = "freeside-ai/evidence-repo"
+	// A second GitHub App, for a repository registered to another App while a
+	// filing is outstanding.
+	otherFilingBotID   int64 = 5151
+	otherFilingBotSlug       = "freeside-other"
 )
 
 var filingAt = time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
@@ -222,13 +226,12 @@ func (s steppedTokens) Token(ctx context.Context, repo string) (publish.Installa
 	return s.h.tokens.Token(ctx, repo)
 }
 
-type fixedBotIdentity struct {
-	identity publish.AppBotIdentity
-	err      error
-}
+// harnessBotIdentity resolves the harness's current App identity on every
+// call, as the production resolver revalidates the registration each time.
+type harnessBotIdentity struct{ h *filingHarness }
 
-func (s fixedBotIdentity) Resolve(context.Context, string) (publish.AppBotIdentity, error) {
-	return s.identity, s.err
+func (s harnessBotIdentity) Resolve(context.Context, string) (publish.AppBotIdentity, error) {
+	return s.h.bot, nil
 }
 
 // errTokenSource fails every token request with a fixed error.
@@ -247,7 +250,9 @@ type filingHarness struct {
 	gh     *fakeGitHub
 	now    time.Time
 	tokens publish.TokenSource
-	filer  *publish.FollowUpFiler
+	// bot is the App the repository is registered to now.
+	bot   publish.AppBotIdentity
+	filer *publish.FollowUpFiler
 	// step, when set, sees every point at which the filer reaches outside the
 	// store: each token request and each side of each forge request.
 	step func(name string)
@@ -264,6 +269,7 @@ func newFilingHarness(t *testing.T) *filingHarness {
 	h := &filingHarness{
 		t: t, path: filepath.Join(t.TempDir(), "store.db"), gh: newFakeGitHub(t),
 		now: filingAt.Add(24 * time.Hour), tokens: testTokenSource(),
+		bot: publish.AppBotIdentity{AppSlug: filingBotSlug, BotUserID: filingBotID},
 	}
 	h.gh.filing.milestones = map[string]int{"1B": 7}
 	h.gh.filing.now = func() time.Time { return h.now }
@@ -287,8 +293,7 @@ func (h *filingHarness) open() {
 	var err error
 	h.filer, err = publish.NewFollowUpFiler(
 		s, steppedTokens{h}, &http.Client{Transport: fakeTransport{h}}, "http://github.test",
-		fixedBotIdentity{identity: publish.AppBotIdentity{AppSlug: filingBotSlug, BotUserID: filingBotID}},
-		func() time.Time { return h.now })
+		harnessBotIdentity{h}, func() time.Time { return h.now })
 	if err != nil {
 		h.t.Fatalf("NewFollowUpFiler: %v", err)
 	}
@@ -650,6 +655,21 @@ func (h *filingHarness) assertTerminal(
 // tamper rewrites rows behind the store's back, then reopens the store.
 func (h *filingHarness) tamper(statement string, args ...any) {
 	h.t.Helper()
+	h.raw(func(raw *sql.DB) {
+		result, err := raw.Exec(statement, args...)
+		if err != nil {
+			h.t.Fatalf("tamper: %v", err)
+		}
+		if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+			h.t.Fatalf("tamper changed %d rows (err %v), want 1", rows, err)
+		}
+	})
+}
+
+// raw closes the store, runs fn on a direct connection to its file, and
+// reopens it.
+func (h *filingHarness) raw(fn func(raw *sql.DB)) {
+	h.t.Helper()
 	if err := h.store.Close(); err != nil {
 		h.t.Fatalf("store.Close: %v", err)
 	}
@@ -657,17 +677,65 @@ func (h *filingHarness) tamper(statement string, args ...any) {
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	result, err := raw.Exec(statement, args...)
-	if err != nil {
-		h.t.Fatalf("tamper: %v", err)
-	}
-	if rows, err := result.RowsAffected(); err != nil || rows != 1 {
-		h.t.Fatalf("tamper changed %d rows (err %v), want 1", rows, err)
-	}
+	fn(raw)
 	if err := raw.Close(); err != nil {
 		h.t.Fatal(err)
 	}
 	h.open()
+}
+
+// forgetIdentity leaves the filing's intent as a row written before
+// migration 0093 reads back: a recorded pre-dispatch set that names no
+// dispatching identity. The schema refuses that change to a live row, so the
+// trigger that fixes the identity is dropped first.
+func (h *filingHarness) forgetIdentity(id domain.ProposalInstanceID) {
+	h.t.Helper()
+	h.raw(func(raw *sql.DB) {
+		if _, err := raw.Exec(`DROP TRIGGER follow_up_filing_intents_identity_update`); err != nil {
+			h.t.Fatalf("drop the identity trigger: %v", err)
+		}
+	})
+	h.tamper(`UPDATE follow_up_filing_intents SET pre_dispatch_bot_user_id = NULL
+		WHERE instance_id = ? AND pre_dispatch_bot_user_id IS NOT NULL`, string(id))
+}
+
+// reregister points the repository at the second App, as a changed trusted
+// registration would. The filer sees it on its next identity read.
+func (h *filingHarness) reregister() {
+	h.bot = publish.AppBotIdentity{AppSlug: otherFilingBotSlug, BotUserID: otherFilingBotID}
+}
+
+// atCreateToken arms a step that runs do when the filer asks for the create
+// request's token in a pass that lists the pre-dispatch set. The caller clears
+// h.step afterwards.
+func (h *filingHarness) atCreateToken(do func()) {
+	previous := ""
+	h.step = func(name string) {
+		// The pre-dispatch listing is the last read before the create's token.
+		if name == "token" && previous == "receive GET "+testRepoPath+"/issues" {
+			do()
+		}
+		previous = name
+	}
+}
+
+// passUntilCreateToken runs a pass and stops it at the create request's
+// token: after the pre-dispatch set is recorded and before the dispatch
+// marker, so the filing has listed the repository's issues and sent nothing.
+func (h *filingHarness) passUntilCreateToken(id domain.ProposalInstanceID) {
+	h.t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.atCreateToken(cancel)
+	err := h.filer.Pass(ctx)
+	h.step = nil
+	if err == nil {
+		h.t.Fatal("pass stopped at the create request's token reported no error")
+	}
+	intent := h.intent(id)
+	if intent == nil || intent.PreDispatch == nil || len(intent.Attempts) != 0 || intent.Terminal != nil {
+		h.t.Fatalf("intent stopped before its create = %+v, want a recorded set and no attempt", intent)
+	}
 }
 
 // creates is how many create requests reached the forge.
@@ -699,6 +767,15 @@ func (h *filingHarness) plant(issue fakeFiledIssue) {
 		issue.Login = filingBotSlug + "[bot]"
 	}
 	h.gh.filing.issues = append(h.gh.filing.issues, issue)
+}
+
+// otherBotIssue is a planted issue the second App's bot account authored at
+// the harness's current time.
+func (h *filingHarness) otherBotIssue(number int) fakeFiledIssue {
+	return fakeFiledIssue{
+		Number: number, Login: otherFilingBotSlug + "[bot]", UserID: otherFilingBotID, UserType: "Bot",
+		CreatedAt: h.now.UTC().Truncate(time.Second),
+	}
 }
 
 // botIssue is a planted issue the App's bot account authored at the

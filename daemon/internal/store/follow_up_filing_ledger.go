@@ -39,7 +39,8 @@ import (
 const (
 	selectFilingIntentsSQL = `
 SELECT instance_id, repository_id, opened_at, pre_dispatch_issue_numbers,
-       pre_dispatch_recorded_at, outcome, refusal_reason, resolved_at
+       pre_dispatch_bot_user_id, pre_dispatch_recorded_at, outcome,
+       refusal_reason, resolved_at
 FROM follow_up_filing_intents`
 	selectFilingAttemptsSQL = `
 SELECT ordinal, dispatch_started_at, response_class, response_issue_number,
@@ -106,16 +107,17 @@ func (tx *InternalTx) OpenFollowUpFilingIntent(
 }
 
 // RecordFollowUpFilingPreDispatch records the issue numbers a candidate
-// search found before the first create attempt. The set is written once,
-// before any attempt, and an empty set is a recorded fact distinct from no
-// set: a second set, and any set after an attempt, is refused with
-// ErrFollowUpFilingPreDispatchFixed.
+// search found before the first create attempt, with botUserID, the App bot
+// account the search listed under and every create of the intent is sent as.
+// The set is written once, before any attempt, and an empty set is a recorded
+// fact distinct from no set: a second set, and any set after an attempt, is
+// refused with ErrFollowUpFilingPreDispatchFixed.
 func (tx *InternalTx) RecordFollowUpFilingPreDispatch(
-	ctx context.Context, instanceID domain.ProposalInstanceID, issueNumbers []int, at time.Time,
+	ctx context.Context, instanceID domain.ProposalInstanceID, issueNumbers []int, botUserID int64, at time.Time,
 ) (domain.FollowUpFilingIntent, error) {
 	return tx.advanceFollowUpFiling(ctx, "record follow-up filing pre-dispatch set", instanceID,
 		func(intent domain.FollowUpFilingIntent) (domain.FollowUpFilingIntent, error) {
-			return intent.RecordPreDispatch(issueNumbers, at)
+			return intent.RecordPreDispatch(issueNumbers, botUserID, at)
 		},
 		func(next domain.FollowUpFilingIntent) error {
 			numbers, err := json.Marshal(next.PreDispatch.IssueNumbers)
@@ -123,9 +125,9 @@ func (tx *InternalTx) RecordFollowUpFilingPreDispatch(
 				return err
 			}
 			return tx.execOneFilingRow(ctx, `UPDATE follow_up_filing_intents
-				SET pre_dispatch_issue_numbers = ?, pre_dispatch_recorded_at = ?
+				SET pre_dispatch_issue_numbers = ?, pre_dispatch_bot_user_id = ?, pre_dispatch_recorded_at = ?
 				WHERE instance_id = ? AND pre_dispatch_recorded_at IS NULL AND outcome IS NULL`,
-				string(numbers), formatTime(next.PreDispatch.RecordedAt), instanceID)
+				string(numbers), *next.PreDispatch.BotUserID, formatTime(next.PreDispatch.RecordedAt), instanceID)
 		})
 }
 
@@ -543,6 +545,7 @@ type filingIntentRow struct {
 	repositoryID        int64
 	openedAt            string
 	preDispatchNumbers  sql.NullString
+	preDispatchBot      sql.NullInt64
 	preDispatchRecorded sql.NullString
 	outcome             sql.NullString
 	refusalReason       sql.NullString
@@ -552,7 +555,7 @@ type filingIntentRow struct {
 func scanFilingIntentRow(row scanner) (filingIntentRow, error) {
 	var stored filingIntentRow
 	err := row.Scan(&stored.instanceID, &stored.repositoryID, &stored.openedAt,
-		&stored.preDispatchNumbers, &stored.preDispatchRecorded,
+		&stored.preDispatchNumbers, &stored.preDispatchBot, &stored.preDispatchRecorded,
 		&stored.outcome, &stored.refusalReason, &stored.resolvedAt)
 	return stored, err
 }
@@ -616,9 +619,15 @@ func (tx *ReadTx) reconstructFilingIntent(
 
 // decodeFilingPreDispatch reads the recorded pre-dispatch set. The numbers
 // are stored as a canonical JSON array, so a column that does not re-encode
-// to itself was not written by the store.
+// to itself was not written by the store. The dispatching identity is
+// written with the set and is absent only on a set that predates migration
+// 0093; it is never trusted from here, because the filer compares it with the
+// repository's live App identity before every step that relies on it.
 func decodeFilingPreDispatch(stored filingIntentRow) (*domain.FollowUpFilingPreDispatchSet, error) {
 	if !stored.preDispatchNumbers.Valid && !stored.preDispatchRecorded.Valid {
+		if stored.preDispatchBot.Valid {
+			return nil, errors.New("pre-dispatch identity is recorded without its set")
+		}
 		return nil, nil
 	}
 	if !stored.preDispatchNumbers.Valid || !stored.preDispatchRecorded.Valid {
@@ -639,7 +648,11 @@ func decodeFilingPreDispatch(stored filingIntentRow) (*domain.FollowUpFilingPreD
 	if err != nil {
 		return nil, err
 	}
-	return &domain.FollowUpFilingPreDispatchSet{IssueNumbers: numbers, RecordedAt: recordedAt}, nil
+	set := &domain.FollowUpFilingPreDispatchSet{IssueNumbers: numbers, RecordedAt: recordedAt}
+	if stored.preDispatchBot.Valid {
+		set.BotUserID = &stored.preDispatchBot.Int64
+	}
+	return set, nil
 }
 
 func decodeFilingTerminal(stored filingIntentRow) (*domain.FollowUpFilingTerminal, error) {

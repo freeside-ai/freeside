@@ -226,6 +226,7 @@ var (
 	ErrFollowUpFilingIntentResolved       = errors.New("follow-up filing intent already has a terminal outcome")
 	ErrFollowUpFilingPreDispatchFixed     = errors.New("follow-up filing pre-dispatch set is written once, before the first attempt")
 	ErrFollowUpFilingPreDispatchMissing   = errors.New("follow-up filing pre-dispatch set is not recorded")
+	ErrFollowUpFilingIdentityMissing      = errors.New("follow-up filing pre-dispatch set records no dispatching identity")
 	ErrFollowUpFilingCreateUnproven       = errors.New("follow-up filing create may start only with no earlier attempt or after a recorded transient rejection")
 	ErrFollowUpFilingResponseConflict     = errors.New("follow-up filing attempt response is recorded once, on the dispatched attempt")
 	ErrFollowUpFilingAdoptionRefused      = errors.New("follow-up filing intent may not adopt this issue")
