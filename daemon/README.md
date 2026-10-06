@@ -149,6 +149,92 @@ labels and creation dates. A private recovery manifest survives failed
 cleanup; retained containers or volumes may contain credentials or raw
 responses. Use the manifest to prove ownership before removing them.
 
+## Codex Usage Spike
+
+`TestLiveCodexUsage` measures Codex **0.147.0** `app-server`
+`account/rateLimits/read` and the `account/rateLimits/updated` notification
+over the same access-only, read-only snapshot. It is evidence for #1714, not
+a collector. Unlike the account probe, its proxy forwards: exactly
+`GET /backend-api/wham/usage`, and in the turn case
+`POST /backend-api/codex/responses`, to `chatgpt.com:443` with provider TLS
+verified normally. A query string or an escaped path is not the reviewed
+route. Everything else is answered 403 by the proxy itself, nothing is ever
+forwarded to `auth.openai.com`, and only `POST /oauth/token` counts as a
+refresh attempt.
+
+Offline tests need `jq` on `PATH`:
+
+```sh
+go -C daemon test ./internal/ward -run '^TestCodexUsage' -count=1
+```
+
+The live test has the account probe's requirements and runs four cases:
+
+| Case | Credential | What It Shows |
+| --- | --- | --- |
+| `synthetic_fresh` | Made-up store, one hour of life | The read completes with no refresh attempt |
+| `synthetic_near_expiry` | Made-up store, two minutes of life | The detector control: the CLI attempts a refresh and the proxy blocks it |
+| `real_idle` | Operator's subscription | The provider answers the read; the response's fields |
+| `real_turn` | Operator's subscription | The same read, then one minimal inference turn, counting `updated` notifications |
+
+The synthetic cases never reach the provider; the proxy answers their usage
+read with a canned body. The real cases need two operator inputs and skip
+without the first:
+
+- `FREESIDE_WARD_CODEX_AUTH_STORE`: the path to a subscription `auth.json`,
+  an owner-only, singly linked regular file in an owner-only directory. The
+  test only reads it, through the production private-file checks, derives the
+  access-only snapshot with the production derivation, and compares the
+  store's hash before and after. The refresh token never leaves the test
+  process.
+- Consent to one inference turn. `real_turn` sends a single low-effort
+  one-word prompt, which draws on the subscription's allowance. Select
+  `real_idle` alone to withhold it.
+
+```sh
+FREESIDE_WARD_LIVE_TEST=1 FREESIDE_WARD_CODEX_AUTH_STORE=<path-to-auth.json> \
+  go -C daemon test ./internal/ward -run '^TestLiveCodexUsage$' -count=1 -v \
+  -timeout 20m
+```
+
+A real case launches only when the snapshot's access token has at least seven
+minutes left: the CLI's five-minute proactive refresh window, the 60-second
+invocation deadline, and 60 seconds for clock skew and launch latency. The
+gate runs before any resource exists and again immediately before the driver
+starts. A refusal starts no app-server and is reported as `deferred`; a
+missing expiry always defers. The driver reports how long after the last gate
+check its session began, and a launch slower than the 60-second allowance is
+`probe_failed`.
+
+The CLI routinely abandons connections before sending a request. On
+`chatgpt.com` that is recorded and ignored, because a lost request there
+fails the read or the turn. On `auth.openai.com` the lost request could have
+been a refresh, so it counts against the measurement.
+
+Only fixed field names, JSON types, the bucket count, the reviewed plan enum,
+request labels, and measurement flags leave the container. Unknown fields and
+unreviewed enum values fail capture; usage values, limit names, account
+identifiers, RPC error text, and tokens are never logged. Verdicts are `pass`,
+`fail` (a refresh attempt outside the control, a lost protection, or a
+provider refusal), `probe_failed` (broken or incomplete measurement),
+`event_not_observed` (the turn completed without a notification), and
+`deferred`. The overall result needs all four cases.
+
+`FREESIDE_WARD_USAGE_PRIVATE_CAPTURE_DIR` optionally names an existing, empty,
+owner-only directory that receives each case's raw app-server stream for
+diagnosis. With a real credential those files hold account identifiers and
+usage values; never commit or paste them. Resource naming, cleanup, and the
+recovery manifest follow the account probe. Each case logs its manifest path
+before creating anything, because an interrupted run skips cleanup and can
+leave a volume holding the access-only snapshot. Until the volume is seeded
+the snapshot also sits in a host temporary file; the manifest's
+`host_snapshot_copy` entry holds its path, and reads `removed` once seeding
+has deleted it.
+
+The measured behavior and the constants later collectors inherit are recorded
+in
+[`devlog/2026-10-05-1743-codex-usage-spike.md`](../devlog/2026-10-05-1743-codex-usage-spike.md).
+
 ## Control Socket and Pairing Codes
 
 Every daemon run owns one private Unix control socket. It publishes the socket
