@@ -33,6 +33,9 @@ public final class NavigationModel {
     /// sheet through the same gated path.
     public var newTaskComposerPresented = false
     public var submissionRecoveryPresented = false
+    /// The Devices sheet's presentation flag, shared by the toolbar buttons
+    /// and the `-FreesideDevices` launch argument.
+    public var devicesPresented: Bool
     public private(set) var operatorNavigationRevision = 0
 
     public init(launchInputs: LaunchInputs) {
@@ -43,6 +46,7 @@ public final class NavigationModel {
         taskSelection = nil
         runSelection = nil
         inspectorPresented = launchInputs.detailsExpanded
+        devicesPresented = launchInputs.devicesPresented
 
         switch launchInputs.screen {
         case .inbox:

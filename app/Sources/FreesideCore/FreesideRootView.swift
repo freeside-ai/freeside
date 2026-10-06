@@ -168,6 +168,23 @@ public struct FreesideRootView: View {
                 rePairConfirmationPresented = false
             }
         }
+        // One sheet for both platforms, above the navigation containers, so
+        // the Mac toolbar and both iPhone stacks open the same one.
+        .sheet(isPresented: $navigation.devicesPresented) {
+            DevicesView(
+                model: DevicesModel(
+                    coordinator: coordinator,
+                    signOut: {
+                        try session.rePair(endingPairingOf: coordinator)
+                        // The sheet leaves with the synced surface, but the
+                        // flag outlives it: left set, the sheet would open
+                        // again by itself once the operator pairs.
+                        if case .needsPairing = session.phase { navigation.devicesPresented = false }
+                    }),
+                unresolvedActionCount: pendingUnderOldPairing
+            )
+            .dynamicTypeSize(launchDynamicTypeSize ?? systemDynamicTypeSize)
+        }
         // Deleting the credential cannot be undone, so the revoked banner's
         // "Pair Again" confirms first (#1458). A 401 can be the wrong daemon
         // answering, so the operator, not the app, decides.
@@ -379,6 +396,7 @@ public struct FreesideRootView: View {
                     }
                     .help("Refresh")
                     LastUpdatedLabel(lastUpdatedAt: coordinator.lastUpdatedAt)
+                    devicesButton
                     Button {
                         navigation.inspectorPresented.toggle()
                     } label: {
@@ -400,6 +418,15 @@ public struct FreesideRootView: View {
                 submissionRecoverySheet(coordinator)
             }
         #endif
+    }
+
+    private var devicesButton: some View {
+        Button {
+            navigation.devicesPresented = true
+        } label: {
+            Label("Devices", systemImage: "laptopcomputer.and.iphone")
+        }
+        .help("Devices")
     }
 
     @ViewBuilder
@@ -464,7 +491,8 @@ public struct FreesideRootView: View {
                     // navigation bar and stays off the pushed decision detail.
                     // iOS drops a toolbar attached to the NavigationStack.
                     .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) {
+                        ToolbarItemGroup(placement: .topBarTrailing) {
+                            devicesButton
                             decisionFlowMenu
                         }
                     }
@@ -507,6 +535,7 @@ public struct FreesideRootView: View {
                         .disabled(
                             !TaskSubmissionModel.canCompose(freshness: coordinator.store.freshness))
                         submissionRecoveryButton(coordinator)
+                        devicesButton
                         decisionFlowMenu
                     }
                 }

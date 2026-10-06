@@ -436,6 +436,21 @@
                                 rendersInteractiveControls: false))))
             }
 
+            // The Devices sheet (#981) with every state it renders: this
+            // device, another active one, and a revoked one never seen.
+            let devicesModel = await DevicesScreenshots.model()
+            for (name, width, scheme) in [
+                ("devices", CGFloat(380), ColorScheme.light),
+                ("devices-dark", CGFloat(380), ColorScheme.dark),
+                ("devices-phone", CGFloat(390), ColorScheme.light),
+                ("devices-phone-dark", CGFloat(390), ColorScheme.dark),
+            ] {
+                surfaces.append(
+                    Surface(
+                        name: name, width: width, colorScheme: scheme,
+                        view: AnyView(DevicesView(model: devicesModel, rendersInteractiveControls: false))))
+            }
+
             // The Answer-and-retry composer with the route picker (#1083): the
             // operator answers and chooses whether to retry the implementer or
             // revise the specification. Captured on Mac and phone, light and dark.

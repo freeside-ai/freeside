@@ -1352,6 +1352,54 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
         #expect(persisted == [deploymentURL, deploymentURL])
     }
 
+    @Test func endingASupersededPairingLeavesTheNewCredentialAlone() async throws {
+        // The Devices screen signs out on the daemon's answer to a
+        // self-revocation. That answer can arrive after the operator has
+        // already paired again, when the stored credential is the new
+        // device's: only the pairing the answer is about may be ended.
+        let server = MockServer(authMode: .enforcing, pairingCodes: ["483911": .valid])
+        let credentials = InMemoryCredentialStore(
+            credential: DeviceCredential(
+                deviceID: "device-old", token: testDeviceToken(for: "device-old"),
+                ntfySubscription: .mock)!)
+        let session = AppSession(
+            client: APIClientFactory.mock(server: server) { (try? credentials.load())?.token },
+            credentials: credentials,
+            cache: InMemoryCacheStore(),
+            deploymentURL: URL(string: "http://100.64.0.1:7331")!,
+            persistServerURL: { _ in })
+        guard case .ready(let revoked) = session.phase else {
+            Issue.record("expected a ready session, got \(session.phase)")
+            return
+        }
+        try session.rePair()
+        guard case .needsPairing(let model) = session.phase else {
+            Issue.record("expected pairing after re-pair, got \(session.phase)")
+            return
+        }
+        model.pairingCode = "483911"
+        model.displayName = "Ben's iPhone"
+        await model.refreshFacts()
+        let credential = try #require(await model.pair())
+        session.completePairing(credential)
+
+        try session.rePair(endingPairingOf: revoked)
+
+        guard case .ready(let current) = session.phase else {
+            Issue.record("a superseded pairing's sign-out left ready, got \(session.phase)")
+            return
+        }
+        #expect(try credentials.load()?.deviceID == credential.deviceID)
+
+        // The pairing the session is on ends as `rePair()` does.
+        try session.rePair(endingPairingOf: current)
+        guard case .needsPairing = session.phase else {
+            Issue.record("expected pairing after ending the current pairing, got \(session.phase)")
+            return
+        }
+        #expect(try credentials.load() == nil)
+    }
+
     @Test func aRelaunchAfterRePairLandsOnPairing() throws {
         // #1458 acceptance 4: the delete persists, so a new session built on
         // the same store starts at pairing, not the revoked banner.

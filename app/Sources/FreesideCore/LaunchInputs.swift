@@ -62,11 +62,15 @@ public struct LaunchInputs {
     public let projectID: String?
     public let detailsExpanded: Bool
 
+    /// `-FreesideDevices YES`: the Devices sheet is open at launch, so a
+    /// capture needs no click on the toolbar.
+    public let devicesPresented: Bool
+
     public init(
         colorSchemeRaw: String?, contrastRaw: String? = nil, selectionRaw: String?,
         inboxScopeRaw: String? = nil, projectIDRaw: String? = nil,
         detailsExpanded: Bool = false, screenRaw: String? = nil,
-        dynamicTypeSizeRaw: String? = nil
+        dynamicTypeSizeRaw: String? = nil, devicesPresented: Bool = false
     ) {
         screen = Screen(rawValue: screenRaw ?? "") ?? .inbox
         colorScheme =
@@ -87,6 +91,7 @@ public struct LaunchInputs {
         inboxScope = inboxScopeRaw.flatMap(InboxStore.Scope.init(rawValue:))
         projectID = projectIDRaw
         self.detailsExpanded = detailsExpanded
+        self.devicesPresented = devicesPresented
     }
 
     /// The screen decides which fixture ids a selection may name. On the
@@ -122,7 +127,8 @@ public struct LaunchInputs {
             projectIDRaw: defaults.string(forKey: "FreesideProject"),
             detailsExpanded: defaults.bool(forKey: "FreesideDetailsExpanded"),
             screenRaw: defaults.string(forKey: "FreesideScreen"),
-            dynamicTypeSizeRaw: defaults.string(forKey: "FreesideDynamicType"))
+            dynamicTypeSizeRaw: defaults.string(forKey: "FreesideDynamicType"),
+            devicesPresented: defaults.bool(forKey: "FreesideDevices"))
     }
 
     static func accessibilityContrastOverride(defaults: UserDefaults = .standard) -> Contrast? {

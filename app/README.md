@@ -38,6 +38,7 @@ Launch arguments also pin the presentation per launch (`LaunchInputs`), so scree
 - `-FreesideInboxScope open|resolved|all`: select the inbox scope for a screenshot or automation launch.
 - `-FreesideProject <project-id>`: select the inbox project filter for a screenshot or automation launch.
 - `-FreesideDetailsExpanded YES`: open the selected decision card's Details disclosure at launch.
+- `-FreesideDevices YES`: open the Devices sheet at launch. The mock lists three devices (this one, another active one, and a revoked one), so one capture shows every state.
 
 ## Running a Dev Daemon
 
@@ -118,6 +119,16 @@ New task always opens a fresh form. Opening or reconnecting never sends a
 saved request automatically. Entries belong to the paired device and daemon;
 switching either does not replay another connection's commands. A failed local
 save prevents sending.
+
+## Devices
+
+The **Devices** toolbar button opens the list of devices paired with the
+daemon: this device first, other active devices next, revoked ones apart, each
+with its paired and last-seen times. Last-seen is coarse: the daemon refreshes
+it at most every few minutes, and "Never" means it has recorded no request
+from that device. **Revoke** asks for confirmation. Revoking this device signs
+the app out: once the daemon confirms, the stored credential is deleted and
+the app returns to pairing, which takes a new code from the daemon's host.
 
 ## Capturing screenshots
 
