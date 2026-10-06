@@ -23,12 +23,14 @@ func mintAuditFixture() store.MintAudit {
 		RequestedEnvironments:   "read",
 		RequestedPullRequests:   "write",
 		RequestedMetadata:       "read",
+		RequestedIssues:         "write",
 		GrantedContents:         "write",
 		GrantedActions:          "read",
 		GrantedAdministration:   "read",
 		GrantedEnvironments:     "read",
 		GrantedPullRequests:     "write",
 		GrantedMetadata:         "read",
+		GrantedIssues:           "write",
 		ExpiresAt:               time.Date(2026, 7, 17, 13, 0, 0, 0, time.UTC),
 	}
 }
@@ -45,6 +47,9 @@ func TestRecordMintAuditRoundTrip(t *testing.T) {
 	second.Repo = "freeside-ai/other-repo"
 	// A non-UTC wall clock must round-trip as the same instant.
 	second.MintedAt = second.MintedAt.In(time.FixedZone("PDT", -7*60*60))
+	// A mint that never asked for a scope records it empty, and reads back
+	// empty rather than as the scope another row recorded.
+	second.RequestedIssues, second.GrantedIssues = "", ""
 
 	var recorded []store.MintAudit
 	err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
