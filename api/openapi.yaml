@@ -87,10 +87,9 @@ tags:
       Device pairing and revocation, the credential control surface (plan
       §5.14 devices): deliberately outside the ClientCommand path, which
       decides attention items under a device credential these operations
-      grant and invalidate. Devices are revision-carrying state; the sync
-      read surface that carries them to clients (bootstrap widening or a
-      device list) lands with its first client consumer, via a later
-      contract change.
+      grant and invalidate. Devices are revision-carrying state; clients
+      read them through the device list (`GET /devices`), a partial read
+      outside the bootstrap snapshot.
   - name: attachments
     description: Digest-addressed attachment upload.
 
@@ -686,6 +685,30 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+
+  /devices:
+    get:
+      operationId: listDevices
+      tags: [devices]
+      summary: List paired devices
+      description: |
+        Lists every paired device, active or revoked, for the clients'
+        Devices screen (plan §5.14 devices). A partial fetch, like
+        `GET /schedules`: devices are not in the bootstrap snapshot, and
+        this read never marks the whole cache current. Any active device
+        may list all of them, since any active device may revoke any other
+        (`POST /devices/{device_id}/revoke`). The response carries no
+        credential, credential digest, public key, or ntfy subscription:
+        `Device` cannot represent one.
+      responses:
+        "200":
+          description: Every paired device, ordered by id.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DeviceListEntry"
 
   /devices/{device_id}/revoke:
     post:
@@ -2899,6 +2922,47 @@ components:
           $ref: "#/components/schemas/EntityVersion"
         device:
           $ref: "#/components/schemas/Device"
+
+    DeviceListEntry:
+      type: object
+      description: >
+        One row of the device list (plan §5.14): a device's resource
+        snapshot plus when the daemon last saw it. as_of_revision,
+        entity_version, and device are exactly the DeviceSnapshot fields and
+        are synchronized state. last_seen_at is not: it is advisory
+        bookkeeping the daemon keeps beside the device.
+      required: [as_of_revision, entity_version, device, last_seen_at]
+      properties:
+        as_of_revision:
+          $ref: "#/components/schemas/AsOfRevision"
+        entity_version:
+          $ref: "#/components/schemas/EntityVersion"
+        device:
+          $ref: "#/components/schemas/Device"
+        last_seen_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            The device's most recent authenticated request, at a coarse
+            granularity: the daemon refreshes it only once the recorded
+            instant is several minutes old, so it can trail the true last
+            request by that much. Null means the device has made no
+            authenticated request since the daemon began recording activity.
+            Recording it never moves the server revision or this device's
+            entity_version, so a change here is observable only by reading
+            the list again. A revoked device keeps the instant it was last
+            seen while active.
+      example:
+        as_of_revision: 42
+        entity_version: 1
+        device:
+          id: "device-1"
+          display_name: "Ben's iPhone"
+          status: "active"
+          paired_at: "2026-01-02T03:04:05Z"
+          revoked_at: null
+        last_seen_at: "2026-01-03T09:15:00Z"
 
     AsOfRevision:
       type: integer
