@@ -89,7 +89,7 @@ func (s *Service) StartTaskProposalUnattended(
 		if err := tx.PutCommand(ctx, command); err != nil {
 			return fmt.Errorf("start task proposal unattended: %w", err)
 		}
-		if err := s.applyStartProposal(ctx, tx, command, item, s.now().UTC()); err != nil {
+		if _, err := s.applyStartProposal(ctx, tx, command, item, s.now().UTC()); err != nil {
 			return err
 		}
 		started = true
@@ -98,22 +98,25 @@ func (s *Service) StartTaskProposalUnattended(
 	return started, err
 }
 
+// applyStartProposal records the decision on the item's current proposal and
+// concludes the item. It returns the proposal's kind, which the caller needs
+// to tell which effect the decision started.
 func (s *Service) applyStartProposal(
 	ctx context.Context,
 	tx *store.WriteTx,
 	command domain.Command,
 	item domain.AttentionItem,
 	now time.Time,
-) error {
+) (domain.EffectKind, error) {
 	instance, proposal, err := s.currentProposal(ctx, tx, item.ID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	digest := proposal.Digest
 	if err := tx.RecordProposalDecision(ctx, instance.ID, command.CommandID, command.Action, &digest, now); err != nil {
-		return err
+		return "", err
 	}
-	return concludeItem(ctx, tx, item, domain.StatusResolved, now)
+	return proposal.Kind, concludeItem(ctx, tx, item, domain.StatusResolved, now)
 }
 
 func (s *Service) applyDeclineProposal(

@@ -67,6 +67,36 @@ type Service struct {
 	// cannot call the engine directly.
 	taskSubmitter TaskSubmitter
 	taskStopGuard func(context.Context, domain.TaskID, func() error) error
+	// followUpFiler is the filer an approved follow-up filing wakes
+	// (WithFollowUpFiler). Nil means no filer is bound.
+	followUpFiler func() FollowUpFiler
+}
+
+// FollowUpFiler is the dispatcher that files approved follow-up issues. It is
+// injected because its package imports signet's store-side peers, and signet
+// needs only its wake.
+type FollowUpFiler interface {
+	// Wake asks for a filing pass now. It must not block.
+	Wake()
+}
+
+// WithFollowUpFiler supplies the filer a committed approval of a follow-up
+// filing wakes, so the issue is filed without waiting for the filer's next
+// sweep. The func is read at each approval so the composition can bind the
+// filer after the service is built. The wake is a latency hint only: with no
+// option, a nil func, or a nil filer, the approval is recorded all the same
+// and the filer's own sweep finds it.
+func WithFollowUpFiler(filer func() FollowUpFiler) Option {
+	return func(s *Service) { s.followUpFiler = filer }
+}
+
+func (s *Service) wakeFollowUpFiler() {
+	if s.followUpFiler == nil {
+		return
+	}
+	if filer := s.followUpFiler(); filer != nil {
+		filer.Wake()
+	}
 }
 
 // WithTaskStopGuard connects Stop acceptance to the runtime's short launch
@@ -260,6 +290,10 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 	}
 
 	var result CommandResult
+	// approvedFiling is set only by a new command that approves a follow-up
+	// filing. A replay never sets it and a failed write returns before the
+	// wake, so only a committed approval wakes the filer.
+	approvedFiling := false
 	err = s.store.Write(ctx, func(tx *store.WriteTx) error {
 		_, _, getErr := tx.GetCommandSnapshot(ctx, command.CommandID)
 		if getErr != nil && !errors.Is(getErr, store.ErrNotFound) {
@@ -420,9 +454,11 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 				}
 			case outcomeStartsProposal:
-				if err := s.applyStartProposal(ctx, tx, command, item, s.now().UTC()); err != nil {
+				kind, err := s.applyStartProposal(ctx, tx, command, item, s.now().UTC())
+				if err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 				}
+				approvedFiling = item.Type == domain.AttentionEffectProposal && kind == domain.EffectFollowUpFiling
 			case outcomeRevisesAndStartsProposal:
 				if err := s.applyStartProposalWithChanges(ctx, tx, command, item, s.now().UTC()); err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
@@ -482,6 +518,9 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 	})
 	if err != nil && !errors.Is(err, errReplay) {
 		return CommandResult{}, err
+	}
+	if approvedFiling {
+		s.wakeFollowUpFiler()
 	}
 	return result, nil
 }
