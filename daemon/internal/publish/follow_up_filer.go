@@ -612,6 +612,43 @@ func candidateWindowStart(intent domain.FollowUpFilingIntent) time.Time {
 	return intent.OpenedAt.Add(-followUpFilingClockSkew)
 }
 
+// dispatchIdentityFault says why bot cannot stand for the intent whose
+// pre-dispatch set is given, or "" when the set was listed under bot. The set
+// lists one App's issues and every create is sent as that App, so each step
+// that sends a create or adopts a candidate holds the repository's current
+// identity to the recorded one (issue #1777). The App registered for a
+// repository can change between steps; without this check a settle after the
+// change would list the new App's issues against the old App's set and adopt
+// an issue this filing never created.
+//
+// The comparison is by bot user ID, so the same App under new credentials is
+// the same identity.
+func dispatchIdentityFault(set *domain.FollowUpFilingPreDispatchSet, bot AppBotIdentity) string {
+	if fault := dispatchIdentityMissing(set); fault != "" {
+		return fault
+	}
+	if *set.BotUserID != bot.BotUserID {
+		return fmt.Sprintf(
+			"the GitHub App that listed the repository's issues before dispatch (bot user ID %d) is not the one registered for it now (bot user ID %d)",
+			*set.BotUserID, bot.BotUserID)
+	}
+	return ""
+}
+
+// dispatchIdentityMissing is the fault of a set that names no dispatching
+// identity, or "" when it names one. Such a set predates the identity's
+// recording (migration 0093) and matches no App, so the filing's outcome is
+// fixed by the ledger alone. A step asks this before anything else: a
+// repository or App that cannot be read would otherwise hold a filing whose
+// outcome no answer can change, and hold the repository's later filings
+// behind it.
+func dispatchIdentityMissing(set *domain.FollowUpFilingPreDispatchSet) string {
+	if set == nil || set.BotUserID == nil {
+		return "its ledger entry does not record which GitHub App listed the repository's issues before dispatch"
+	}
+	return ""
+}
+
 // listBotIssues lists what the App's bot account created in the intent's
 // window, one entry per issue number: a listing that shifts between pages can
 // return an issue twice, and a repeat is not a second candidate.
@@ -627,11 +664,20 @@ func (f *FollowUpFiler) listBotIssues(
 }
 
 // dispatch checks the preconditions, records the pre-dispatch set if none is
-// recorded, and sends one create request.
+// recorded, and sends one create request. A set already recorded was listed
+// under one App, and a create under any other is refused: nothing was sent
+// under the new one, and the set says nothing about its issues.
 func (f *FollowUpFiler) dispatch(ctx context.Context, filing approvedFiling, view filingView, all []approvedFiling) error {
 	intent := *view.intent
 	refusePrecondition := func(code, reason string) error {
 		return f.refuse(ctx, filing, domain.FollowUpFilingRefusalPreconditionFailed, code, reason, nil)
+	}
+	// A set recorded without an identity is refused first, on the ledger
+	// alone; a filing with no set yet records both below.
+	if intent.PreDispatch != nil {
+		if fault := dispatchIdentityMissing(intent.PreDispatch); fault != "" {
+			return refusePrecondition(followUpFilingRefusedCode, fault)
+		}
 	}
 	if view.capsErr != nil {
 		return refusePrecondition(followUpFilingRefusedCode, "its policy carries a malformed cap ("+view.capsErr.Error()+")")
@@ -691,6 +737,17 @@ func (f *FollowUpFiler) dispatch(ctx context.Context, filing approvedFiling, vie
 	if err != nil {
 		return err
 	}
+	// The identity is read after the request holds its token, not taken from
+	// the target: the token is minted separately, so a registration that
+	// changed while the target was resolved or the set was listed would
+	// otherwise send this create as the new App.
+	target.bot, err = f.identity.Resolve(ctx, target.repo.path())
+	if err != nil {
+		return err
+	}
+	if fault := dispatchIdentityFault(intent.PreDispatch, target.bot); fault != "" {
+		return refusePrecondition(followUpFilingRefusedCode, fault)
+	}
 	if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		var err error
 		intent, err = tx.StartFollowUpFilingAttempt(ctx, filing.instanceID, f.now())
@@ -738,9 +795,17 @@ func (f *FollowUpFiler) recordResponse(
 
 // settle resolves an unproven create: it waits the settle interval, lists
 // the App's issues, and adopts the single candidate or records residual
-// ambiguity. It never sends another create.
+// ambiguity. It never sends another create. When the ledger does not name
+// the App the create was sent as, or the repository's App is no longer that
+// one, no listing can find that create's issue, so the filing ends ambiguous
+// without one.
 func (f *FollowUpFiler) settle(ctx context.Context, filing approvedFiling, view filingView, since time.Time) error {
 	intent := *view.intent
+	// No listing can be held to an identity the ledger does not name, so this
+	// outcome waits on neither the settle interval nor the live target.
+	if fault := dispatchIdentityMissing(intent.PreDispatch); fault != "" {
+		return f.recordAmbiguous(ctx, filing, view, fault)
+	}
 	var repositoryAmbiguous bool
 	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
@@ -759,7 +824,17 @@ func (f *FollowUpFiler) settle(ctx context.Context, filing approvedFiling, view 
 	if f.now().Before(since.Add(view.caps.SettleInterval)) {
 		return nil
 	}
-	candidates, err := f.candidates(ctx, view)
+	target, err := f.resolveTarget(ctx, view, false)
+	var candidates []int
+	if err == nil {
+		// A definite answer, not a listing failure: it does not wait out the
+		// listing bound.
+		if fault := dispatchIdentityFault(intent.PreDispatch, target.bot); fault != "" {
+			delete(f.listingFailures, filing.instanceID)
+			return f.recordAmbiguous(ctx, filing, view, fault)
+		}
+		candidates, err = f.candidates(ctx, view, target)
+	}
 	if err != nil {
 		f.listingFailures[filing.instanceID]++
 		if f.listingFailures[filing.instanceID] < followUpFilingListingBound {
@@ -787,12 +862,10 @@ func (f *FollowUpFiler) settle(ctx context.Context, filing approvedFiling, view 
 // candidates lists the issues that could be this intent's create: authored
 // by the App's bot account in the target repository, created in the intent's
 // window, outside the pre-dispatch set, and not ledgered to another filing.
-func (f *FollowUpFiler) candidates(ctx context.Context, view filingView) ([]int, error) {
+// target is the live target, which the caller has held to the intent's
+// dispatching identity.
+func (f *FollowUpFiler) candidates(ctx context.Context, view filingView, target filingTarget) ([]int, error) {
 	intent := *view.intent
-	target, err := f.resolveTarget(ctx, view, false)
-	if err != nil {
-		return nil, err
-	}
 	issues, err := f.listBotIssues(ctx, target, intent)
 	if err != nil {
 		return nil, err
