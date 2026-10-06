@@ -5,10 +5,13 @@
 #        check-commit-messages.sh --message-file <path>
 #
 # Range mode resolves both refs, finds their merge base, and checks every
-# non-merge commit in <merge-base>..<head-ref>. This keeps mainline commits
-# brought into a feature branch by a base-freshness merge out of the
-# checked set. The script performs no network I/O and does not mutate the
-# repository.
+# non-merge commit in <merge-base>..<head-ref>. It reads no merge commit's
+# message. A merge that brings the base into the branch is a violation of
+# its own (base-merge, below), because the project refreshes a pull-request
+# branch by rebasing it (AGENTS.md, Integration Ordering and Merge-Result
+# Audit). The merge base keeps the mainline commits such a merge brought in
+# out of the checked set, so the report names the merge and not them. The
+# script performs no network I/O and does not mutate the repository.
 #
 # Message-file mode gives .githooks/commit-msg a best-effort early check for
 # the normal editor path: fixed/default core.commentChar and strip cleanup.
@@ -37,6 +40,15 @@
 #   characters, except a line with no whitespace, so an unbreakable URL,
 #   object ID, or ref stays intact). Prefix and marker matches are
 #   case-insensitive.
+#
+# One rule reads history, not a message: base-merge (a merge commit in the
+# range with a parent the base ref already contains). A merge of two lines
+# of work the base does not contain stays exempt, so the rule misses a base
+# brought in through a side branch that carries commits of its own. When
+# <base-ref> is older than the tip the branch merged, the range also holds
+# the mainline history that merge brought in, and the commit reported is
+# the first mainline merge commit in it, not the branch's own merge. A
+# mainline that advanced without a merge commit is missed in that case.
 #
 # Exit codes:
 #   0  every checked commit satisfies the mechanical policy
@@ -234,8 +246,31 @@ for sha in $COMMITS; do
   check_message "$sha" "$MESSAGE_FILE"
 done
 
+MERGES=$(git rev-list --reverse --merges "$MERGE_BASE..$HEAD_SHA") \
+  || fail_git "cannot enumerate merge commits in $MERGE_BASE..$HEAD_SHA"
+merges=0
+
+for sha in $MERGES; do
+  merges=$((merges + 1))
+  parents=$(git rev-list --parents -n 1 "$sha") \
+    || fail_git "cannot read the parents of merge commit $sha"
+  for parent in ${parents#* }; do
+    contained=0
+    git merge-base --is-ancestor "$parent" "$BASE_SHA" || contained=$?
+    case $contained in
+      0)
+        report_violation "$sha" "$(git log -1 --format=%s "$sha")" base-merge \
+          "parent ${parent:0:12} is already in the base, so the range holds a merge of the base; rebase the branch onto the base instead"
+        break
+        ;;
+      1) ;;
+      *) fail_git "cannot compare parent $parent of $sha with base $BASE_SHA" ;;
+    esac
+  done
+done
+
 if [ "$violations" -ne 0 ]; then
-  echo "FAIL: $violations violation(s) across $checked non-merge commit(s)" >&2
+  echo "FAIL: $violations violation(s) across $checked non-merge commit(s) and $merges merge commit(s)" >&2
   exit 1
 fi
 

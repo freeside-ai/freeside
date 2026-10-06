@@ -193,7 +193,7 @@ assert_not_contains "$good_one"
 assert_not_contains "$good_two"
 assert_contains "[sentence-case]"
 
-begin_case "merge commits are exempt"
+begin_case "a merge of work the base lacks is exempt"
 repo=$(new_repo "case$case_number")
 base=$(git -C "$repo" rev-parse HEAD)
 git -C "$repo" switch -q -c side
@@ -206,7 +206,7 @@ run_check "$repo" "$base" "$head"
 assert_rc 0
 assert_contains "PASS: checked 2 non-merge commit(s)"
 
-begin_case "base-freshness merge excludes mainline commits"
+begin_case "a merge of the base is rejected and its mainline commits are not checked"
 repo=$(new_repo "case$case_number")
 git -C "$repo" switch -q -c feature
 commit_message "$repo" $'Add valid feature work\n\nKeep the feature commit inside the checked range.' >/dev/null
@@ -215,6 +215,56 @@ commit_message "$repo" $'fix: simulate accepted mainline history\n\nKeep this kn
 base=$(git -C "$repo" rev-parse HEAD)
 git -C "$repo" switch -q feature
 git -C "$repo" merge -q --no-ff -m 'Merge main without a body' main
+head=$(git -C "$repo" rev-parse HEAD)
+run_check "$repo" "$base" "$head"
+assert_rc 1
+assert_contains "$head \"Merge main without a body\": [base-merge]"
+assert_contains "FAIL: 1 violation(s) across 1 non-merge commit(s) and 1 merge commit(s)"
+assert_not_contains "[conventional-prefix]"
+
+begin_case "a merge of an earlier base tip is rejected after the base advances"
+repo=$(new_repo "case$case_number")
+git -C "$repo" switch -q -c feature
+commit_message "$repo" $'Add valid feature work\n\nKeep the feature commit inside the checked range.' >/dev/null
+git -C "$repo" switch -q main
+commit_message "$repo" $'Advance the mainline once\n\nGive the feature branch a base tip to merge.' >/dev/null
+git -C "$repo" switch -q feature
+git -C "$repo" merge -q --no-ff -m 'Merge the earlier main tip' main
+head=$(git -C "$repo" rev-parse HEAD)
+git -C "$repo" switch -q main
+commit_message "$repo" $'Advance the mainline again\n\nMove the base past the tip the branch merged.' >/dev/null
+base=$(git -C "$repo" rev-parse HEAD)
+run_check "$repo" "$base" "$head"
+assert_rc 1
+assert_contains "$head \"Merge the earlier main tip\": [base-merge]"
+
+begin_case "a base merge is rejected when the given base is older than the merged tip"
+repo=$(new_repo "case$case_number")
+base=$(git -C "$repo" rev-parse HEAD)
+git -C "$repo" switch -q -c feature
+commit_message "$repo" $'Add valid feature work\n\nKeep the feature commit inside the checked range.' >/dev/null
+git -C "$repo" switch -q -c topic "$base"
+commit_message "$repo" $'Add valid mainline work\n\nLand on the mainline through a merge commit.' >/dev/null
+git -C "$repo" switch -q main
+git -C "$repo" merge -q --no-ff -m 'Land the topic on the mainline' topic
+mainline_merge=$(git -C "$repo" rev-parse HEAD)
+git -C "$repo" switch -q feature
+git -C "$repo" merge -q --no-ff -m 'Merge the newer main tip' main
+head=$(git -C "$repo" rev-parse HEAD)
+run_check "$repo" "$base" "$head"
+assert_rc 1
+assert_contains "$mainline_merge \"Land the topic on the mainline\": [base-merge]"
+assert_contains "FAIL: 1 violation(s) across 2 non-merge commit(s) and 2 merge commit(s)"
+
+begin_case "a rebased branch passes after the base advances"
+repo=$(new_repo "case$case_number")
+git -C "$repo" switch -q -c feature
+commit_message "$repo" $'Add valid feature work\n\nKeep the feature commit inside the checked range.' >/dev/null
+git -C "$repo" switch -q main
+commit_message "$repo" $'fix: simulate accepted mainline history\n\nKeep this known violation outside the feature range.' >/dev/null
+base=$(git -C "$repo" rev-parse HEAD)
+git -C "$repo" switch -q feature
+git -C "$repo" rebase -q main
 head=$(git -C "$repo" rev-parse HEAD)
 run_check "$repo" "$base" "$head"
 assert_rc 0
