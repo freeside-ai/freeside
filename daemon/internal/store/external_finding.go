@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -152,19 +153,9 @@ func (tx *ReadTx) ExternalReviewCycleFindings(
 	if err != nil {
 		return nil, fmt.Errorf("external review cycle findings %q: %w", publication, err)
 	}
-	if successor.EffectiveOrigin() != domain.PublicationSuccessorExternalReview || successor.Reentry == nil {
-		return nil, fmt.Errorf("external review cycle findings %q: not an external review cycle: %w",
-			publication, domain.ErrParentKeyMismatch)
-	}
-	ready, err := tx.GetReadyItemPRBinding(ctx, successor.PredecessorItemID)
-	if err != nil || ready.RunID != runID {
-		return nil, fmt.Errorf("external review cycle findings %q: %w",
-			publication, errors.Join(err, domain.ErrParentKeyMismatch))
-	}
-	profile, err := tx.GetTrustProfile(ctx, successor.AdmittingProfileDigest)
+	admission, err := tx.externalReviewCycleAdmission(ctx, successor)
 	if err != nil {
-		return nil, fmt.Errorf("external review cycle findings %q: %w",
-			publication, errors.Join(err, domain.ErrExternalReviewNotAdmitted))
+		return nil, fmt.Errorf("external review cycle findings %q: %w", publication, err)
 	}
 	all, err := tx.ListExternalFindings(ctx, runID)
 	if err != nil {
@@ -175,8 +166,7 @@ func (tx *ReadTx) ExternalReviewCycleFindings(
 		named bool
 	)
 	for _, finding := range all {
-		if finding.External.HeadSHA != successor.Reentry.HeadSHA ||
-			externalFindingAdmittedBy(finding, profile, ready) != nil {
+		if admission.admits(finding) != nil {
 			continue
 		}
 		named = named || finding.ID == successor.ExternalFindingID
@@ -187,4 +177,129 @@ func (tx *ReadTx) ExternalReviewCycleFindings(
 			publication, successor.ExternalFindingID, domain.ErrParentKeyMismatch)
 	}
 	return out, nil
+}
+
+// externalReviewCycleAdmission is what decides whether an external finding
+// belongs to one external_review cycle: the authority, already read through
+// its gate, the binding of the ready item it superseded, and the trust
+// profile it names.
+type externalReviewCycleAdmission struct {
+	authority domain.PublicationSuccessor
+	ready     domain.ReadyItemPRBinding
+	profile   domain.AutomationTrustProfile
+}
+
+func (tx *ReadTx) externalReviewCycleAdmission(
+	ctx context.Context, authority domain.PublicationSuccessor,
+) (externalReviewCycleAdmission, error) {
+	none := externalReviewCycleAdmission{}
+	if authority.EffectiveOrigin() != domain.PublicationSuccessorExternalReview || authority.Reentry == nil {
+		return none, fmt.Errorf("not an external review cycle: %w", domain.ErrParentKeyMismatch)
+	}
+	ready, err := tx.GetReadyItemPRBinding(ctx, authority.PredecessorItemID)
+	if err != nil || ready.RunID != authority.RunID {
+		return none, errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	profile, err := tx.GetTrustProfile(ctx, authority.AdmittingProfileDigest)
+	if err != nil {
+		return none, errors.Join(err, domain.ErrExternalReviewNotAdmitted)
+	}
+	return externalReviewCycleAdmission{authority: authority, ready: ready, profile: profile}, nil
+}
+
+// admits reports whether the cycle answers the finding: an external finding
+// of the cycle's run, on the cycle's head, whose reviewer the named profile
+// admits. The named profile is used, not the active one, so the answer reads
+// the same after the owner edits the allowlist.
+func (a externalReviewCycleAdmission) admits(finding domain.Finding) error {
+	if finding.External == nil {
+		return domain.ErrExternalFindingInconsistent
+	}
+	if finding.RunID != a.authority.RunID || finding.External.HeadSHA != a.authority.Reentry.HeadSHA {
+		return domain.ErrParentKeyMismatch
+	}
+	return externalFindingAdmittedBy(finding, a.profile, a.ready)
+}
+
+// externalReviewAuthorityForRound picks, from a run's linked successors, the
+// external_review one whose cycle starts at the given round, and false when
+// there is none. Two for one round are refused: nothing says which of them
+// names the findings the round answers.
+//
+// The round is the one the authority names. A cycle whose first review
+// attempt fails reviews one round later and so has no first round here
+// (#1781).
+func externalReviewAuthorityForRound(
+	chain []domain.PublicationSuccessor, round int,
+) (domain.PublicationSuccessor, bool, error) {
+	var (
+		authority domain.PublicationSuccessor
+		found     bool
+	)
+	for _, successor := range chain {
+		if successor.EffectiveOrigin() != domain.PublicationSuccessorExternalReview ||
+			successor.ReviewRound != round {
+			continue
+		}
+		if found {
+			return domain.PublicationSuccessor{}, false, domain.ErrParentKeyMismatch
+		}
+		authority, found = successor, true
+	}
+	return authority, found, nil
+}
+
+// externalReviewCycleForRound returns the external_review authority whose
+// cycle starts at the given review record's round, read through its gate, and
+// false when the run has none. A cycle that does start there must have
+// reviewed what its authority names: a record on another base or head fails
+// with ErrParentKeyMismatch, because everything bound to "the cycle's first
+// round" would otherwise rest on a review of some other commit.
+//
+// The authority must be on the run's one authenticated successor chain. Its
+// own gate is not enough: it admits any superseded ready item, including one
+// a feedback return already superseded, and only sealing checks that the item
+// is the run's current one. So the whole chain is read through
+// PublicationSuccessorChain, which gates every sealed row and refuses a
+// branch or an orphan.
+//
+// A read that is already reconstructing a successor or ready item cannot do
+// that. A remediation successor's gate reads the adjudication of this round,
+// and that read reaches here: gating the chain again would re-enter the
+// successor being authenticated and fail its read as a cycle. Inside such a
+// read the sealed rows are linked and only the authority is gated. The read
+// that started the reconstruction decides what it trusts, and the chain walk
+// is the one every current-successor read starts from.
+func (tx *ReadTx) externalReviewCycleForRound(
+	ctx context.Context, record domain.ReviewRecord,
+) (domain.PublicationSuccessor, bool, error) {
+	none := domain.PublicationSuccessor{}
+	var chain []domain.PublicationSuccessor
+	if publicationReadActive(ctx) {
+		sealed, err := tx.dispatchedPublicationSuccessors(ctx, record.RunID)
+		if err != nil {
+			return none, false, err
+		}
+		if chain, err = linkPublicationSuccessors(record.RunID, sealed); err != nil {
+			return none, false, err
+		}
+	} else {
+		var err error
+		if chain, err = tx.PublicationSuccessorChain(ctx, record.RunID); err != nil {
+			return none, false, err
+		}
+	}
+	sealedAuthority, found, err := externalReviewAuthorityForRound(chain, record.Round)
+	if err != nil || !found {
+		return none, false, err
+	}
+	authority, err := tx.GetPublicationSuccessor(ctx, record.RunID, sealedAuthority.PublicationID())
+	if err != nil || !reflect.DeepEqual(authority, sealedAuthority) {
+		return none, false, errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	if authority.Reentry == nil || record.BaseSHA != authority.Reentry.BaseSHA ||
+		record.HeadSHA != authority.Reentry.HeadSHA {
+		return none, false, domain.ErrParentKeyMismatch
+	}
+	return authority, true, nil
 }

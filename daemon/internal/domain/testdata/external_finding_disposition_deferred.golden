@@ -1,0 +1,10 @@
+{
+  "finding_id": "external-bcd35f3299c61de23210682a659cead3",
+  "run_id": "run-1",
+  "round": 2,
+  "disposition": "deferred",
+  "reason": "requires a separate hardening unit",
+  "adjudication_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "remediation_invocation_id": null,
+  "created_at": "2026-01-02T03:04:05Z"
+}

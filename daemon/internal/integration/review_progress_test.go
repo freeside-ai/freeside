@@ -100,6 +100,7 @@ func TestProductionReviewUpgradePreservesRequestTime(t *testing.T) {
 				"DROP TABLE generation_integrity_marks",
 				"DROP TABLE follow_up_filed_issues", "DROP TABLE follow_up_filing_attempts",
 				"DROP TABLE follow_up_filing_intents",
+				"DROP TABLE external_finding_dispositions",
 				"DELETE FROM schema_migrations WHERE version >= 67",
 			} {
 				if _, err := raw.ExecContext(p.ctx, query); err != nil {

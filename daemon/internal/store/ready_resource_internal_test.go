@@ -85,7 +85,8 @@ func migrationsBeforeReadyResource(t *testing.T) fs.FS {
 			entry.Name() == "0086_held_item_pr_bindings.sql" ||
 			entry.Name() == "0087_generation_integrity_marks.sql" ||
 			entry.Name() == "0088_follow_up_filing_kind.sql" ||
-			entry.Name() == "0089_follow_up_filing_ledger.sql" || entry.IsDir() {
+			entry.Name() == "0089_follow_up_filing_ledger.sql" ||
+			entry.Name() == "0090_external_finding_dispositions.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())
@@ -919,6 +920,11 @@ type readyBindingFixture struct {
 	outcomePayload []byte
 }
 
+// readyAnchorSpecDigest is a well-formed content address, so an artifact
+// that must restate the run's spec digest (a finding adjudication) can be
+// written against this fixture.
+var readyAnchorSpecDigest = domain.Digest("sha256:" + strings.Repeat("5", 64))
+
 func seedReadyItemBinding(t *testing.T, branch, baseSHA, headSHA string) readyBindingFixture {
 	t.Helper()
 	ctx := context.Background()
@@ -939,7 +945,7 @@ func seedReadyItemBinding(t *testing.T, branch, baseSHA, headSHA string) readyBi
 		t.Fatal(err)
 	}
 	run := domain.Run{
-		ID: runID, ProjectID: "project-1", SpecDigest: "sha256:spec", PolicyDigest: policy.Digest,
+		ID: runID, ProjectID: "project-1", SpecDigest: readyAnchorSpecDigest, PolicyDigest: policy.Digest,
 		Stages: []domain.Stage{{
 			ID: stageID, RunID: runID, Name: "implementation",
 			Attempts: []domain.Attempt{{ID: attemptID, StageID: stageID, Number: 1, InvocationID: invocationID}},
