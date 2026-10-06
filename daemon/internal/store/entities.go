@@ -2191,27 +2191,50 @@ func (tx *ReadTx) GetDevice(ctx context.Context, id domain.DeviceID) (domain.Dev
 // a DeviceSnapshot, and deriving entity_version/as_of_revision outside the
 // store would duplicate its private revision-stamping invariant.
 func (tx *ReadTx) GetDeviceSnapshot(ctx context.Context, id domain.DeviceID) (domain.Device, Snapshot, error) {
-	var (
-		status string
-		snap   Snapshot
-		body   []byte
-	)
-	err := tx.tx.QueryRowContext(ctx,
-		`SELECT status, entity_version, as_of_revision, body FROM devices WHERE id = ?`, id).
-		Scan(&status, &snap.EntityVersion, &snap.AsOfRevision, &body)
+	device, snap, err := tx.scanDeviceSnapshot(tx.tx.QueryRowContext(ctx,
+		`SELECT id, status, entity_version, as_of_revision, body FROM devices WHERE id = ?`, id))
 	if err != nil {
 		return domain.Device{}, Snapshot{}, fmt.Errorf("get device %q: %w", id, notFoundOr(err))
 	}
+	return device, snap, nil
+}
+
+const listDevicesSQL = `
+SELECT id, status, entity_version, as_of_revision, body
+FROM devices ORDER BY id`
+
+// ListDevices enumerates every paired device, active or revoked (List
+// semantics in list.go). The rows carry no credential material: that lives in
+// device_credentials, which this read never touches.
+func (tx *ReadTx) ListDevices(ctx context.Context) ([]Snapshotted[domain.Device], error) {
+	devices, err := listSnapshotted(ctx, tx, listDevicesSQL, (*ReadTx).scanDeviceSnapshot)
+	if err != nil {
+		return nil, fmt.Errorf("list devices: %w", err)
+	}
+	return devices, nil
+}
+
+// scanDeviceSnapshot reconstructs one devices row for both the single Get and
+// the list, so the two apply the same gates.
+func (tx *ReadTx) scanDeviceSnapshot(sc scanner) (domain.Device, Snapshot, error) {
+	var (
+		id, status string
+		snap       Snapshot
+		body       []byte
+	)
+	if err := sc.Scan(&id, &status, &snap.EntityVersion, &snap.AsOfRevision, &body); err != nil {
+		return domain.Device{}, Snapshot{}, err
+	}
 	device, err := decode[domain.Device](body)
 	if err != nil {
-		return domain.Device{}, Snapshot{}, fmt.Errorf("get device %q: %w", id, err)
+		return domain.Device{}, Snapshot{}, err
 	}
 	// Devices are mutable (revocation bumps entity_version), so the metadata
 	// is held to the mutable-entity range PutDevice can produce: versions
 	// start at 1, revisions are client-visible and positive.
-	if device.ID != id || device.Status != domain.DeviceStatus(status) ||
+	if device.ID != domain.DeviceID(id) || device.Status != domain.DeviceStatus(status) ||
 		snap.EntityVersion < 1 || snap.AsOfRevision < 1 {
-		return domain.Device{}, Snapshot{}, fmt.Errorf("get device %q: %w", id, errRowInconsistent)
+		return domain.Device{}, Snapshot{}, errRowInconsistent
 	}
 	return device, snap, nil
 }
