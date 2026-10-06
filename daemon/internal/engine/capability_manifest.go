@@ -42,3 +42,29 @@ func (e *Engine) capabilityManifestForRun(
 		"manifest digest %q is absent from current run policy: %w",
 		digest, domain.ErrCapabilityManifestInvalid)
 }
+
+// offerableManifests returns the capability choices a failed writer attempt's
+// card may offer: each policy manifest that names a profile other than the one
+// the attempt was admitted under and that the retry's admission would not
+// refuse. The retry inherits this run's policy keys, so a choice refused here
+// could only allocate a run that holds at admission and never clears. That
+// covers a profile the composition does not enforce and a provider_registry
+// manifest under a policy with no valid declared set. A policy whose
+// manifests do not reconstruct offers nothing.
+func offerableManifests(
+	enforceable []domain.EgressProfile, policy domain.ResolvedPolicy, admitted domain.EgressProfile,
+) []domain.CapabilityManifestOffer {
+	manifests, err := domain.CapabilityManifestsFromPolicy(policy)
+	if err != nil {
+		return nil
+	}
+	var offers []domain.CapabilityManifestOffer
+	for _, manifest := range manifests {
+		if manifest.EgressProfile == admitted ||
+			writerEgressRefusal(enforceable, policy, manifest.EgressProfile) != nil {
+			continue
+		}
+		offers = append(offers, manifest.Offer())
+	}
+	return offers
+}

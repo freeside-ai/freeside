@@ -49,6 +49,7 @@ func TestOpenAPIEnumsMatchDomain(t *testing.T) {
 		"ObservedInvocationStatus":  enumStrings(domain.AllObservedInvocationStatuses),
 		"ExecutionOutcomeStatus":    enumStrings(domain.AllExecutionOutcomeStatuses),
 		"ImpairedCapability":        enumStrings(domain.AllImpairedCapabilities),
+		"EgressProfile":             enumStrings(domain.AllEgressProfiles),
 		"TrustRule":                 enumStrings(domain.AllTrustRules),
 		"RunMilestoneKind":          enumStrings(domain.AllRunMilestoneKinds),
 		"ReviewSubjectKind":         enumStrings(domain.AllReviewSubjectKinds),

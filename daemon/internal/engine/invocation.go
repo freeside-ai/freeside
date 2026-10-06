@@ -689,7 +689,20 @@ func invocationDispatchHold(err error) bool {
 		errors.Is(err, store.ErrTaskCancellationFenced) ||
 		errors.Is(err, domain.ErrIdentityParallelismExhausted) ||
 		errors.Is(err, ErrAgentNotAdmissible) ||
-		errors.Is(err, domain.ErrGenerationIntegrityMarked)
+		errors.Is(err, domain.ErrGenerationIntegrityMarked) ||
+		egressAdmissionRefusal(err)
+}
+
+// egressAdmissionRefusal identifies a writer attempt refused for the egress
+// profile its own run requests. The verdict is the run's: its policy content,
+// or a profile this composition does not enforce yet, says nothing about any
+// other run, so it holds the one invocation instead of ending the pass. A
+// composition that later enforces the profile clears the second kind; the
+// first kind stays held under its recorded reason until the operator stops
+// the run, because a run's policy does not change.
+func egressAdmissionRefusal(err error) bool {
+	return errors.Is(err, ErrEgressProfileNotEnforceable) ||
+		errors.Is(err, ErrEgressPolicyRefused)
 }
 
 // MutableAdmissionPolicyRefusal identifies a fail-closed current-policy

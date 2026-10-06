@@ -1663,15 +1663,9 @@ func (e *Engine) recordProductionTerminalWithCompletion(
 				if admissionErr != nil {
 					return admissionErr
 				}
-				manifests, manifestErr := domain.CapabilityManifestsFromPolicy(policy)
-				if manifestErr == nil {
-					for _, manifest := range manifests {
-						if manifest.EgressProfile != admission.EgressProfile &&
-							slices.Contains(e.admission.environment.EnforceableEgressProfiles, manifest.EgressProfile) {
-							facts.OfferedManifests = append(facts.OfferedManifests, manifest.Offer())
-						}
-					}
-				}
+				facts.OfferedManifests = append(facts.OfferedManifests, offerableManifests(
+					e.admission.environment.EnforceableEgressProfiles, policy, admission.EgressProfile,
+				)...)
 			}
 			names, err := tx.DisplayNamesFor(ctx, run.ProjectID, domain.Subject{
 				Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &run.ID,

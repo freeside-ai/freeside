@@ -1,0 +1,51 @@
+{
+  "id": "sha256:cb476816de5e22bd787d90b7825429208c332311aeae77a445f850ba5080da29",
+  "invocation_id": "inv-1",
+  "run_id": "run-1",
+  "stage_id": "stage-1",
+  "attempt_id": "attempt-1",
+  "backend": "fresh_vm_read_only_volume_handoff",
+  "capabilities": [
+    "supports_detachable_workspace",
+    "supports_post_exit_export",
+    "supports_read_only_remount"
+  ],
+  "operating_mode": "attended_dev",
+  "credential_mode": "subscription_contained",
+  "egress_profile": "provider_registry",
+  "image_ref": "ghcr.io/freeside-ai/agent@sha256:abababababababababababababababababababababababababababababababab",
+  "spec_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "policy_digest": "sha256:dc1af0d4d3c8cdc2f6b59b72234a6988199c4d9dd9c3f2e663452eb58cd97ca7",
+  "input_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "stage_inputs": {
+    "id": "sha256:65a81743d60ccd4d93aa03709b982d2d8a7f3a8ff0002ca2fbc4b207787ead0b",
+    "input_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "specification_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "prompt_package_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    "policy_digest": "sha256:dc1af0d4d3c8cdc2f6b59b72234a6988199c4d9dd9c3f2e663452eb58cd97ca7",
+    "vendor_instructions": {
+      "vendor": "claude",
+      "delivery": "append_file",
+      "digest": "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+    },
+    "conversation_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+    "prior_artifact_digests": [
+      "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    ],
+    "image_input_digests": [
+      "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+    ]
+  },
+  "base": {
+    "repo": "owner/repo",
+    "repository_id": 424242,
+    "base_ref": "refs/heads/main",
+    "base_sha": "deadbeef"
+  },
+  "workspace": "freeside-handoff-run-1-ws",
+  "auth_identity_id": "auth-claude-owner",
+  "trust_profile_digest": null,
+  "backup_encryption_waiver": null,
+  "admitted_at": "2026-01-02T03:04:05Z"
+}

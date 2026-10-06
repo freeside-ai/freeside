@@ -327,6 +327,9 @@ var (
 	ErrCapabilityManifestInvalid        = errors.New("capability manifest is invalid")
 	ErrCapabilityManifestDigestMismatch = errors.New(
 		"capability manifest digest does not match its canonical content")
+	// ErrRegistrySetInvalid refuses a declared registry set, or a policy that
+	// requests provider_registry without one (plan §5.4).
+	ErrRegistrySetInvalid     = errors.New("registry set is invalid")
 	ErrAccountBindingMismatch = errors.New(
 		"credential account binding does not match its identity's")
 	ErrAccountBindingTaken = errors.New(
