@@ -1,4 +1,5 @@
 import Foundation
+import FreesideAPI
 
 /// The submitting device's identity, carried on every ClientCommand.
 /// Pairing (plan §5.14; the cache-and-pairing unit) will mint a real one;
@@ -10,5 +11,7 @@ public struct DeviceIdentity: Sendable {
         self.deviceID = deviceID
     }
 
-    public static let mock = DeviceIdentity(deviceID: "device-mock")
+    /// The permissive mock seeds a device under this id, so the mock app's
+    /// device list contains the device reading it.
+    public static let mock = DeviceIdentity(deviceID: DeviceFixtures.currentDeviceID)
 }

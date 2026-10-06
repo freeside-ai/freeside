@@ -291,6 +291,8 @@ public struct MockServerTransport: ClientTransport {
                         message: "the pairing code is unknown, expired, or already consumed")
                 )
             }
+        case "listDevices":
+            return try Self.json(status: .ok, body: await server.listDevices())
         case "revokeDevice":
             guard let deviceID = Self.deviceID(inRevokePath: request.path) else {
                 return (HTTPResponse(status: .badRequest), nil)
@@ -675,15 +677,22 @@ public struct MockServerTransport: ClientTransport {
             headerFields: [.contentType: "application/json"]
         )
         let data = try requiredNullableMembersPresent(
-            in: encoder.encode(body), taskTimeline: body is Components.Schemas.TaskTimeline)
+            in: encoder.encode(body), taskTimeline: body is Components.Schemas.TaskTimeline,
+            deviceList: body is [Components.Schemas.DeviceListEntry])
         return (response, HTTPBody(data))
     }
 
     /// Swift's synthesized Encodable omits nil optionals even when OpenAPI
     /// declares them required and nullable. Patch the affected mock responses
     /// so their raw JSON exercises the production wire contract.
-    private static func requiredNullableMembersPresent(in data: Data, taskTimeline: Bool) throws -> Data {
-        let object = try JSONSerialization.jsonObject(with: data)
+    private static func requiredNullableMembersPresent(
+        in data: Data, taskTimeline: Bool, deviceList: Bool
+    ) throws -> Data {
+        var object = try JSONSerialization.jsonObject(with: data)
+        if deviceList, let entries = object as? [[String: Any]] {
+            // A device the daemon never recorded a request from.
+            object = entries.map { $0.merging(["last_seen_at": NSNull()]) { present, _ in present } }
+        }
         return try JSONSerialization.data(
             withJSONObject: insertingRequiredNullableMembers(in: object, taskTimeline: taskTimeline),
             options: [.sortedKeys])

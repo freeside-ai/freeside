@@ -135,6 +135,10 @@ public actor MockServer {
     /// digest keys the stored record.
     private var deviceIDsByToken: [String: String] = [:]
     private var pairedDeviceCount = 0
+    /// When each device last made an authenticated request. Daemon parity:
+    /// activity is server bookkeeping outside the synchronized device row,
+    /// so recording it moves no entity version and no server revision.
+    private var lastSeenByDeviceID: [String: Date] = [:]
     /// Pairing-grant test hooks. Defaults satisfy the contract; callers can
     /// inject malformed values to exercise client-side returned-object gates.
     private let pairingNtfyServerURL: String
@@ -284,6 +288,20 @@ public actor MockServer {
                 }
             }
             itemsByID[itemID] = snapshot
+        }
+        // The permissive mock's caller is the fixed mock identity, which
+        // never pairs here, so the device list is seeded with it and with
+        // the other states the Devices screen renders. An enforcing mock
+        // lists only what pairs with it, as the daemon does.
+        if case .permissive = authMode {
+            for entry in DeviceFixtures.defaultDevices() {
+                let id = Self.id(of: entry.device)
+                devicesByID[id] = .init(
+                    as_of_revision: entry.as_of_revision,
+                    entity_version: entry.entity_version,
+                    device: entry.device)
+                lastSeenByDeviceID[id] = entry.last_seen_at
+            }
         }
         self.approvedRecipes = approvedRecipes
         self.authMode = authMode
@@ -481,6 +499,11 @@ public actor MockServer {
     /// device snapshots stay deterministic under test equality.
     private static let pairedInstant = Date(timeIntervalSince1970: 1_767_323_045)
     private static let revokedInstant = Date(timeIntervalSince1970: 1_767_326_645)
+    /// The instant an authenticated request is recorded at: after pairing
+    /// and before revocation, and fixed like both. The daemon refreshes a
+    /// recorded instant only once it is several minutes old; a fixed
+    /// instant satisfies that trivially.
+    private static let seenInstant = Date(timeIntervalSince1970: 1_767_323_105)
     /// The decision instant a concluding command stamps (daemon parity,
     /// #171): fixed like the pairing instants so item snapshots stay
     /// deterministic under test equality.
@@ -599,6 +622,28 @@ public actor MockServer {
         }
     }
 
+    /// Every paired device, active or revoked, in id order with its
+    /// last-seen instant (GET /devices). The entry is built from the device
+    /// snapshot alone, so no token can reach it.
+    func listDevices() -> [Components.Schemas.DeviceListEntry] {
+        devicesByID.keys.sorted().compactMap { id in
+            devicesByID[id].map {
+                .init(
+                    as_of_revision: $0.as_of_revision,
+                    entity_version: $0.entity_version,
+                    device: $0.device,
+                    last_seen_at: lastSeenByDeviceID[id])
+            }
+        }
+    }
+
+    private static func id(of device: Components.Schemas.Device) -> String {
+        switch device {
+        case .active(let active): active.id
+        case .revoked(let revoked): revoked.id
+        }
+    }
+
     enum AuthOutcome {
         /// Permissive mode: the caller is whoever it claims to be.
         case anonymous
@@ -614,7 +659,11 @@ public actor MockServer {
             let snapshot = devicesByID[deviceID]
         else { return .unauthorized }
         switch snapshot.device {
-        case .active: return .device(id: deviceID)
+        case .active:
+            // Recorded before the handler runs, so a device listing the
+            // devices sees its own request (daemon parity).
+            lastSeenByDeviceID[deviceID] = Self.seenInstant
+            return .device(id: deviceID)
         case .revoked: return .revokedDevice(id: deviceID)
         }
     }
