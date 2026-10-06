@@ -68,7 +68,12 @@ type claudeDriverConfig struct {
 	// provider response before the advisory invocation_stalled notice is
 	// raised. It never changes WriterStopTimeout. Zero keeps ward's default.
 	WriterStallInterval time.Duration
-	ProviderEndpoints   []string
+	// Rebuild holds the host-specific inputs for rebuilding a project image
+	// when a candidate changes its dependencies within policy (plan §5.7). An
+	// empty BaseBuildRef leaves the daemon unable to rebuild: such a candidate
+	// then blocks publication as it did before.
+	Rebuild           projectimage.BuildInputs
+	ProviderEndpoints []string
 	// The prompt-package files are trusted implementation, specification, and
 	// remediation inputs. The daemon derives every digest from ingested bytes.
 	PromptPackageFile              string
@@ -120,6 +125,13 @@ type claudeDriverConfig struct {
 var errBackendConformanceUnavailable = errors.New("exact passing backend conformance proof is unavailable")
 
 func (c claudeDriverConfig) validate() error {
+	if c.Rebuild.BaseBuildRef == "" {
+		if c.Rebuild.BuildProxy != "" || len(c.Rebuild.DNS) != 0 {
+			return fmt.Errorf("-build-proxy and -build-dns configure the project-image rebuild and need -base-build-ref")
+		}
+	} else if err := c.Rebuild.Validate(); err != nil {
+		return fmt.Errorf("project-image rebuild flags: %w", err)
+	}
 	switch {
 	case c.AgentImage == "":
 		return fmt.Errorf("-agent-image is required in claude driver mode")

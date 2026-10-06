@@ -14,6 +14,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
+	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
@@ -273,6 +274,30 @@ func TestClaudeDriverConfigRequiresExplicitBindings(t *testing.T) {
 		// may rewrite, even when their spelling is not the literal "**".
 		"match-everything allowlist": func(c *claudeDriverConfig) { c.AllowedPaths = []string{"**/*"} },
 		"malformed allowlist":        func(c *claudeDriverConfig) { c.AllowedPaths = []string{"daemon/[abc"} },
+		// The rebuild's egress flags mean nothing without the base to build
+		// from, and a malformed one would refuse every rebuild at run time.
+		"build proxy without base build ref": func(c *claudeDriverConfig) {
+			c.Rebuild.BuildProxy = "http://192.168.64.1:3128"
+		},
+		"build dns without base build ref": func(c *claudeDriverConfig) { c.Rebuild.DNS = []string{"192.168.64.1"} },
+		"base build ref shape": func(c *claudeDriverConfig) {
+			c.Rebuild.BaseBuildRef = "ghcr.io/x/agent@sha256:" + strings.Repeat("a", 64)
+		},
+		"build proxy scheme": func(c *claudeDriverConfig) {
+			c.Rebuild = projectimage.BuildInputs{
+				BaseBuildRef: "local/agent:test", BuildProxy: "https://192.168.64.1:3128",
+			}
+		},
+		"build dns shape": func(c *claudeDriverConfig) {
+			c.Rebuild = projectimage.BuildInputs{BaseBuildRef: "local/agent:test", DNS: []string{"--flag"}}
+		},
+	}
+	rebuilding := valid
+	rebuilding.Rebuild = projectimage.BuildInputs{
+		BaseBuildRef: "local/agent:test", BuildProxy: "http://192.168.64.1:3128", DNS: []string{"192.168.64.1"},
+	}
+	if err := rebuilding.validate(); err != nil {
+		t.Fatalf("valid rebuild inputs rejected: %v", err)
 	}
 	for name, edit := range tests {
 		t.Run(name, func(t *testing.T) {

@@ -38,6 +38,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/procbound"
+	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/scheduler"
 	"github.com/freeside-ai/freeside/daemon/internal/seedfixture"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
@@ -208,6 +209,13 @@ func main() {
 	exporterImage := flags.String("exporter-image", "", "digest-pinned export helper image")
 	containerBin := flags.String("container-bin", "container", "Apple container CLI path")
 	seedRoot := flags.String("seed-root", "", "daemon-owned exact-base checkout root")
+	baseBuildRef := flags.String("base-build-ref", "",
+		"local tag of the approved agent base image; enables rebuilding a project image "+
+			"when a candidate changes its dependencies within the project's declared policy")
+	buildProxy := flags.String("build-proxy", "",
+		"with -base-build-ref: build-only HTTP proxy URL without credentials, overriding the managed build proxy")
+	var buildDNS repeatedStringFlag
+	flags.Var(&buildDNS, "build-dns", "with -base-build-ref: build DNS server; repeatable")
 	writerStopTimeout := flags.Duration("writer-stop-timeout", 0,
 		"max time the implementation writer container may run before it must reach stopped; 0 uses the ward default (10m)")
 	writerStallInterval := flags.Duration("writer-stall-interval", 0,
@@ -420,6 +428,9 @@ func main() {
 			AgentImage: domain.ImageRef(*agentImage), ExporterImage: *exporterImage,
 			ContainerBin: *containerBin, SeedRoot: *seedRoot,
 			WriterStopTimeout: *writerStopTimeout, WriterStallInterval: *writerStallInterval,
+			Rebuild: projectimage.BuildInputs{
+				BaseBuildRef: *baseBuildRef, BuildProxy: *buildProxy, DNS: buildDNS,
+			},
 			StateDir: *stateDir, RigTokenFile: *rigTokenFile, Judgments: judgmentsConfig,
 			ProviderEndpoints:              strings.Split(*providerEndpoints, ","),
 			PromptPackageFile:              *promptPackage,
@@ -1104,6 +1115,10 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 				return joined
 			},
 		}))
+		rebuild, err := newProjectImageRebuild(*cfg.Claude, st)
+		if err != nil {
+			return nil, err
+		}
 		engineOptions = append(engineOptions, engine.WithProductionPublication(engine.ProductionPublicationConfig{
 			WorkDir:   filepath.Join(cfg.Claude.SeedRoot, "production-publication"),
 			Transport: claudeWiring.publicationTransport,
@@ -1121,6 +1136,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			ShadowReviewFailure:    shadowReviewFailure,
 			ReviewHostInstructions: claudeWiring.reviewHostInstructions,
 			HoldOnly:               cfg.Claude.OperatingMode != domain.ModeUnattended,
+			RebuildProjectImage:    rebuild,
 			NewRoom: func(image domain.ProjectImage, size ward.ContainerSize) (engine.ProductionVerificationRoom, error) {
 				return ward.NewProjectImageRoom(claudeWiring.containerBin, image, size, cfg.Logger)
 			},
