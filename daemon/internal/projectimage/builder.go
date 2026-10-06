@@ -580,14 +580,8 @@ func validateRequest(request Request) (Request, verify.Recipe, domain.Digest, er
 	if err := request.BaseImageRef.Validate(); err != nil {
 		return Request{}, verify.Recipe{}, "", fmt.Errorf("base image: %w: %w", err, ErrInvalidRequest)
 	}
-	if request.BaseBuildRef == "" {
-		return Request{}, verify.Recipe{}, "", fmt.Errorf("base build ref is required: %w", ErrInvalidRequest)
-	}
-	if strings.HasPrefix(request.BaseBuildRef, "-") ||
-		strings.ContainsAny(request.BaseBuildRef, " \t\r\n@") ||
-		strings.Contains(request.BaseBuildRef, "://") {
-		return Request{}, verify.Recipe{}, "", fmt.Errorf("base build ref %q: %w",
-			request.BaseBuildRef, ErrInvalidRequest)
+	if err := validateBaseBuildRef(request.BaseBuildRef); err != nil {
+		return Request{}, verify.Recipe{}, "", err
 	}
 	if (request.Registry == "") == (request.LocalRegistryPort == 0) {
 		return Request{}, verify.Recipe{}, "", fmt.Errorf(
@@ -612,15 +606,32 @@ func validateRequest(request Request) (Request, verify.Recipe, domain.Digest, er
 	if !refTagPattern.MatchString(request.RefTag) {
 		return Request{}, verify.Recipe{}, "", fmt.Errorf("reference tag %q: %w", request.RefTag, ErrInvalidRequest)
 	}
-	for _, dns := range request.DNS {
-		if dns == "" || strings.HasPrefix(dns, "-") || strings.ContainsAny(dns, " \t\r\n") {
-			return Request{}, verify.Recipe{}, "", fmt.Errorf("DNS server %q: %w", dns, ErrInvalidRequest)
-		}
+	if err := validateBuildDNS(request.DNS); err != nil {
+		return Request{}, verify.Recipe{}, "", err
 	}
 	if err := ValidateBuildProxy(request.BuildProxy); err != nil {
 		return Request{}, verify.Recipe{}, "", err
 	}
 	return request, recipe, verify.RecipeDigest(request.Recipe), nil
+}
+
+func validateBaseBuildRef(ref string) error {
+	if ref == "" {
+		return fmt.Errorf("base build ref is required: %w", ErrInvalidRequest)
+	}
+	if strings.HasPrefix(ref, "-") || strings.ContainsAny(ref, " \t\r\n@") || strings.Contains(ref, "://") {
+		return fmt.Errorf("base build ref %q: %w", ref, ErrInvalidRequest)
+	}
+	return nil
+}
+
+func validateBuildDNS(servers []string) error {
+	for _, dns := range servers {
+		if dns == "" || strings.HasPrefix(dns, "-") || strings.ContainsAny(dns, " \t\r\n") {
+			return fmt.Errorf("DNS server %q: %w", dns, ErrInvalidRequest)
+		}
+	}
+	return nil
 }
 
 // ValidateBuildProxy validates the supported project-image egress proxy
