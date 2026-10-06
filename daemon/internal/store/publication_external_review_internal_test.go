@@ -25,6 +25,8 @@ type externalReviewFixture struct {
 type externalReviewOptions struct {
 	// leaveOpen skips superseding the predecessor.
 	leaveOpen bool
+	// priorRound is the round of the review the cycle follows; zero means 1.
+	priorRound int
 }
 
 func externalFindingWithText(t *testing.T, runID domain.RunID, head, raw string) domain.Finding {
@@ -76,7 +78,7 @@ func seedExternalReview(t *testing.T, opts externalReviewOptions) externalReview
 	f := externalReviewFixture{reentryFixture: reentryFixture{
 		readyBindingFixture: seedReadyItemBinding(t, "feat/meaningful-task", reentryBase1, reentryHead1),
 	}}
-	prior := putReentryReview(t, f.st, f.run.ID, 1, reentryBase1, reentryHead1)
+	prior := putReentryReview(t, f.st, f.run.ID, max(opts.priorRound, 1), reentryBase1, reentryHead1)
 	repo, id := f.binding.Repo, f.binding.RepositoryID
 	at := func(minute int) time.Time { return reentryAt.Add(time.Duration(minute) * time.Minute) }
 	f.unlisted = activateProfile(t, f.st, repo, id, at(1), reviewerEntry(900, "maintainer"))
