@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -350,6 +351,30 @@ func (w *productionPublicationWorkflow) recordDriftAuditFailure(
 	})
 }
 
+// driftAuditEntries collects the current entries of every adjudicated round,
+// leaving out the entries for external findings. The adjudication list is in
+// round then revision order, so the last artifact of a round is its current
+// one.
+func driftAuditEntries(
+	adjudications []domain.FindingAdjudication, external []domain.Finding,
+) []domain.FindingAdjudicationEntry {
+	var entries []domain.FindingAdjudicationEntry
+	for index, adjudication := range adjudications {
+		if index+1 < len(adjudications) && adjudications[index+1].Round == adjudication.Round {
+			continue
+		}
+		for _, entry := range adjudication.Entries {
+			if slices.ContainsFunc(external, func(finding domain.Finding) bool {
+				return finding.ID == entry.FindingID
+			}) {
+				continue
+			}
+			entries = append(entries, entry)
+		}
+	}
+	return entries
+}
+
 // driftAuditorInput loads the audit's whole input from daemon records. A store
 // read failure propagates: the rest of the round reads the same rows. Only
 // content the round did not retain is reported as unavailable.
@@ -364,6 +389,7 @@ func (w *productionPublicationWorkflow) driftAuditorInput(
 		policy        domain.ResolvedPolicy
 		dispositions  []domain.ReviewDispositionRecord
 		adjudications []domain.FindingAdjudication
+		external      []domain.Finding
 		records       []domain.ReviewRecord
 		diffMetrics   *domain.ReviewRoundDiffMetrics
 		roundOneInput *domain.Artifact
@@ -380,6 +406,9 @@ func (w *productionPublicationWorkflow) driftAuditorInput(
 			return err
 		}
 		if adjudications, err = tx.ListFindingAdjudications(ctx, task.RunID); err != nil {
+			return err
+		}
+		if external, err = tx.ListExternalFindings(ctx, task.RunID); err != nil {
 			return err
 		}
 		if records, err = tx.ListReviewRecords(ctx, task.RunID); err != nil {
@@ -428,15 +457,11 @@ func (w *productionPublicationWorkflow) driftAuditorInput(
 	if err != nil {
 		return unavailable("round-1 diff", err)
 	}
-	// The adjudication list is in round then revision order, so the last
-	// artifact of a round is its current one.
-	var entries []domain.FindingAdjudicationEntry
-	for index, adjudication := range adjudications {
-		if index+1 < len(adjudications) && adjudications[index+1].Round == adjudication.Round {
-			continue
-		}
-		entries = append(entries, adjudication.Entries...)
-	}
+	// An external review cycle's first round also judged the cycle's external
+	// findings (issue #1767); no review record lists one, and the store
+	// refuses a reversal that names a finding outside the records, so their
+	// entries stay out of the input.
+	entries := driftAuditEntries(adjudications, external)
 	return string(run.ProjectID), inference.DriftAuditorInput{
 		RunID: task.RunID, Round: record.Round,
 		BaseSHA: record.BaseSHA, HeadSHA: record.HeadSHA,
