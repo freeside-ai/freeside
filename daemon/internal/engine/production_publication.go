@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -31,6 +32,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/gitrun"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
+	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
@@ -129,10 +131,15 @@ type ProductionPublicationConfig struct {
 	// queue. Attended startup uses it to recognize publication tasks admitted
 	// by an earlier unattended process while preserving the attended ban on
 	// automatic verification, push, and pull-request effects.
-	HoldOnly             bool
-	RecipeReadTimeout    time.Duration
-	HoldRetryInterval    time.Duration
-	Now                  func() time.Time
+	HoldOnly          bool
+	RecipeReadTimeout time.Duration
+	HoldRetryInterval time.Duration
+	Now               func() time.Time
+	// PreparationDigest is the running binary's toolchain and preparation
+	// digest, which a project image reused at another commit must have been
+	// built with. Empty selects projectimage.PreparationDigest(); a test sets
+	// another value to stand for a daemon whose builder sources changed.
+	PreparationDigest    domain.Digest
 	AfterVerification    func() error
 	AfterPublication     func() error
 	AfterReady           func() error
@@ -252,6 +259,7 @@ type productionPublicationWorkflow struct {
 	// clear when it accepts a queued task (issue #394). Process state only,
 	// never authority.
 	holdPace             observationPace
+	preparationDigest    domain.Digest
 	afterVerification    func() error
 	afterPublication     func() error
 	afterReady           func() error
@@ -358,6 +366,7 @@ func newProductionPublicationWorkflow(
 		holdRetryAfter:              make(map[string]time.Time),
 		successorObservationPending: make(map[string]int),
 		reviewRetryAfter:            make(map[domain.RunID]time.Time),
+		preparationDigest:           cmp.Or(cfg.PreparationDigest, projectimage.PreparationDigest()),
 		afterVerification:           cfg.AfterVerification,
 		afterPublication:            cfg.AfterPublication, afterReady: cfg.AfterReady,
 		afterBlocked: cfg.AfterBlocked, afterTerminal: cfg.AfterTerminal,
@@ -2160,8 +2169,7 @@ func (w *productionPublicationWorkflow) loadBinding(
 		binding.profile.Repo != binding.admission.Base.Repo ||
 		binding.profile.RepositoryID != binding.admission.Base.RepositoryID ||
 		binding.image.Repository != binding.admission.Base.Repo ||
-		binding.image.RepositoryID != binding.admission.Base.RepositoryID ||
-		binding.image.CommitSHA != binding.admission.Base.BaseSHA {
+		binding.image.RepositoryID != binding.admission.Base.RepositoryID {
 		return productionBinding{}, fmt.Errorf("production publication binding disagrees with durable authority: %w",
 			domain.ErrParentKeyMismatch)
 	}
@@ -2169,6 +2177,45 @@ func (w *productionPublicationWorkflow) loadBinding(
 		return productionBinding{}, err
 	}
 	return binding, nil
+}
+
+// requireProjectImageServesBase refuses to build a verification room from an
+// image that cannot serve baseSHA (domain.ProjectImage.AdmissibleAt). Both
+// verification paths call it immediately before the room exists, so a task
+// that already holds its verification evidence is never refused: that
+// evidence was produced under a passing check, and one clause of the verdict
+// follows the running binary.
+//
+// checkoutDir is the checkout the caller proved with
+// validatePublicationCheckoutBinding. The inputs are read from baseSHA's tree
+// by its exact name, never the worktree, so nothing imported or fetched into
+// the checkout since can change them.
+//
+// The verdict is re-derived from the immutable image record and the base tree
+// instead of being read from the admission: the admission names the image and
+// the base, and a stored "compatible" bit would be a trust bit this boundary
+// could not re-check. An image built at exactly baseSHA is admitted from the
+// record alone, as it always was.
+//
+// A refusal carries domain.ErrProjectImageIncompatible and each caller decides
+// what it ends. A base that holds a dependency manifest in a shape no image
+// can have baked is the same refusal. A plumbing fault reading the checkout is
+// returned as itself.
+func requireProjectImageServesBase(
+	ctx context.Context, image domain.ProjectImage, checkoutDir, baseSHA string,
+	preparation domain.Digest,
+) error {
+	if image.CommitSHA == baseSHA {
+		return nil
+	}
+	inputs, err := projectimage.ObserveBaseInputs(ctx, "git", checkoutDir, baseSHA)
+	if errors.Is(err, verify.ErrCommitFileUnreadable) {
+		return fmt.Errorf("%w: %w (image %s)", domain.ErrProjectImageIncompatible, err, image.ImageRef)
+	}
+	if err != nil {
+		return fmt.Errorf("observe project-image inputs at base %s: %w", baseSHA, err)
+	}
+	return image.AdmissibleAt(inputs, preparation)
 }
 
 // Replay uses the start-pinned commit date to reproduce HeadSHA. RecordedAt
@@ -5994,6 +6041,17 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 	imported importer.Result,
 	checkoutDir string,
 ) (productionVerificationCheckpoint, error) {
+	// Composition admitted this image at this base before the run started, so
+	// a refusal here is a disagreement with durable authority, not a hold.
+	if err := requireProjectImageServesBase(
+		ctx, binding.image, checkoutDir, binding.admission.Base.BaseSHA, w.preparationDigest,
+	); err != nil {
+		if errors.Is(err, domain.ErrProjectImageIncompatible) {
+			err = fmt.Errorf("production publication binding disagrees with durable authority: %w",
+				errors.Join(domain.ErrParentKeyMismatch, err))
+		}
+		return productionVerificationCheckpoint{}, err
+	}
 	room, recipe, err := w.verificationRoomAndRecipe(ctx, task, binding)
 	if err != nil {
 		return productionVerificationCheckpoint{}, err

@@ -33,6 +33,7 @@ import (
 	inferencefake "github.com/freeside-ai/freeside/daemon/internal/inference/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/observe"
 	"github.com/freeside-ai/freeside/daemon/internal/observe/observedb"
+	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -208,6 +209,9 @@ func (s *faultReviewSource) VerifyReviewRequestSupersession(
 
 type productionPublicationHarness struct {
 	*publicationHarness
+	// preparationDigest, when set, is the builder-source digest the next
+	// engine reports as its own: a daemon upgraded since the image was built.
+	preparationDigest         domain.Digest
 	runID                     domain.RunID
 	projectID                 domain.ProjectID
 	image                     domain.ProjectImage
@@ -225,6 +229,34 @@ type productionPublicationHarness struct {
 	recipeReadTimeout         time.Duration
 	declaration               *domain.WorkUnitDeclaration
 	judgments                 *inference.Client
+}
+
+// productionBaseManifests are the npm manifests the production harness
+// commits at its base, as every repository a project image serves holds them.
+func productionBaseManifests() map[string]string {
+	return map[string]string{
+		"package.json":      `{"name":"fixture","private":true}` + "\n",
+		"package-lock.json": `{"name":"fixture","lockfileVersion":3,"packages":{}}` + "\n",
+	}
+}
+
+// bakedEnvironment is the environment a project image built from the base's
+// manifests by this binary records, or nil for a base without both: that image
+// is the legacy record, usable only at its build commit.
+func (h *publicationHarness) bakedEnvironment() *domain.ProjectImageEnvironment {
+	hashes := map[string]string{}
+	for _, path := range []string{"package.json", "package-lock.json"} {
+		body, ok := h.baseFiles[path]
+		if !ok {
+			return nil
+		}
+		sum := sha256.Sum256([]byte(body))
+		hashes[path] = hex.EncodeToString(sum[:])
+	}
+	return &domain.ProjectImageEnvironment{
+		PackageJSONSHA256: hashes["package.json"], PackageLockSHA256: hashes["package-lock.json"],
+		PreparationDigest: projectimage.PreparationDigest(),
+	}
 }
 
 func newProductionPublicationHarness(t *testing.T, resultHead string) *productionPublicationHarness {
@@ -267,7 +299,8 @@ func newProductionPublicationHarnessWithFiles(
 	extraFiles map[string]string,
 ) *productionPublicationHarness {
 	t.Helper()
-	h := newPublicationHarness(t)
+	h := newPublicationHarnessWithBaseFiles(
+		t, []byte(`{"commands":[["/usr/bin/true"]],"capture":"none"}`), productionBaseManifests())
 	return newProductionPublicationHarnessFromBase(t, h, resultHead, extraKeys, boundIssue, extraFiles)
 }
 
@@ -292,13 +325,18 @@ func newProductionPublicationHarnessWithMetadata(
 	// embedded in the project image. The managed repository intentionally has
 	// no in-tree .freeside/verify.json.
 
-	image, err := domain.NewProjectImage(domain.ProjectImageInput{
+	imageInput := domain.ProjectImageInput{
 		Repository: fakePublicationRepo, RepositoryID: h.profile.RepositoryID,
 		CommitSHA: h.baseSHA, RecipeDigest: h.recipeD,
 		PreparationCommand: []string{"/usr/bin/true"},
 		BaseImageRef:       domain.ImageRef("ghcr.io/freeside-ai/base@sha256:" + strings.Repeat("1", 64)),
 		ImageRef:           domain.ImageRef("ghcr.io/freeside-ai/project@sha256:" + strings.Repeat("2", 64)),
-	})
+		Environment:        h.bakedEnvironment(),
+	}
+	if h.projectImageInput != nil {
+		h.projectImageInput(&imageInput)
+	}
+	image, err := domain.NewProjectImage(imageInput)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -479,6 +517,13 @@ func buildProductionReplayWithFilesAt(
 ) engine.ProductionReplay {
 	t.Helper()
 	workspace := t.TempDir()
+	// The export is the candidate's whole tree, so it carries the base's npm
+	// manifests unchanged; a test that edits one names it in files.
+	for name := range productionBaseManifests() {
+		if content, ok := h.baseFiles[name]; ok {
+			writeFile(t, workspace, name, content)
+		}
+	}
 	for name, content := range files {
 		writeFile(t, workspace, name, content)
 	}
@@ -849,6 +894,7 @@ func (p *productionPublicationHarness) newEngineForMode(
 			WorkDir:   filepath.Join(p.workDir, "production-publication"),
 			Transport: p.transport, Publisher: p.newPublisher(t), Artifacts: p.blobs,
 			ApprovedRecipes:                approvedRecipes,
+			PreparationDigest:              p.preparationDigest,
 			RemediationPromptPackageDigest: p.remediationPromptPackage,
 			HoldOnly:                       holdOnly,
 			RecipeReadTimeout:              p.recipeReadTimeout,
