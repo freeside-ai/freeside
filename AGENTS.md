@@ -443,7 +443,8 @@ and its guarantees.
   (`docs/agent-workflow.md` §handing-off); a stacked child rebases onto its
   base the same way (Stacked PRs). Resolve a conflict in the commit that
   owns the conflicting change, and recheck that each rebased commit is
-  still green.
+  still green. Decision record:
+  `devlog/2026-10-06-1236-rebase-base-refresh.md`.
 - Before final handoff, and again after any base advance: fetch the default
   branch and run
   `scripts/merge-result-audit.sh origin/main <head-branch> <allowed-path>...`
