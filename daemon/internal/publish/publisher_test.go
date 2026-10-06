@@ -158,6 +158,10 @@ type fakeGitHub struct {
 	// handled (for ordering assertions and mid-flow interleavings).
 	onRequest func(method, path string)
 
+	// filing is the follow-up filing state: issue create, the creator
+	// listing, and milestones (follow_up_filer_test.go).
+	filing fakeFiling
+
 	// repositoryID is the canonical numeric identity served for GET /repos/{repo}
 	// (label intake's §5.18 rebinding check). Defaults to testRepoID; a test sets
 	// it to a different value to simulate a rebound name.
@@ -525,6 +529,15 @@ func (g *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		// only the canonical numeric id.
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprintf(w, `{"id":%d}`, g.repositoryID)
+
+	case r.Method == http.MethodPost && path == testRepoPath+"/issues":
+		g.filing.create(g.t, w, r)
+
+	case r.Method == http.MethodGet && path == testRepoPath+"/issues" && r.URL.Query().Has("creator"):
+		g.filing.list(w, r)
+
+	case r.Method == http.MethodGet && path == testRepoPath+"/milestones":
+		g.filing.listMilestones(w)
 
 	case r.Method == http.MethodGet && path == testRepoPath+"/issues":
 		label := r.URL.Query().Get("labels")
