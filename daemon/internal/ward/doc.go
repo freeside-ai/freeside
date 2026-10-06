@@ -50,7 +50,10 @@
 // whole contract as one pass on the current runtime: a synthetic handoff with
 // a benign writer and a seeded fake credential exercises checks 1-5 and 7
 // together (including declared-provider success, undeclared CONNECT refusal,
-// and direct external-IP refusal), then two of the spike's three negative probes run — the
+// and direct external-IP refusal), the same handoff then runs again as a second
+// run under provider_registry with one declared registry witness (reachable
+// through the proxy, with an undeclared authority, a direct connection, and
+// DNS still refused), then two of the spike's three negative probes run — the
 // read-write-attach exclusion (a second VM cannot attach the workspace a live
 // writer holds read-write) and credential-marker containment (the marker is
 // absent from the export yet still readable from the detached credential

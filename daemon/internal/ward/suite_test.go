@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -39,6 +40,7 @@ func newSuiteTest(t *testing.T) (*Suite, *fakeRuntime) {
 		AgentImage:       "example.test/agent@sha256:" + strings.Repeat("1", 64),
 		CredentialMarker: suiteMarker,
 		RunID:            "conf-run",
+		RegistryRunID:    "conf-run-registry",
 		Seed:             seed,
 	})
 	if err != nil {
@@ -52,7 +54,18 @@ func newSuiteTest(t *testing.T) (*Suite, *fakeRuntime) {
 	// carry it (and not the credential marker) for Full's non-vacuousness check.
 	// Tests that assert a containment failure override this.
 	fx.rt.exportTarPath = buildTar(t, writerArchive(t, s.fx.RunID))
+	scriptRegistryExport(t, s, fx.rt)
 	return s, fx.rt
+}
+
+// scriptRegistryExport makes the fake's exporter for Full's provider_registry
+// handoff carry that run's own writer output, as the first handoff's does.
+func scriptRegistryExport(t *testing.T, s *Suite, rt *fakeRuntime) {
+	t.Helper()
+	runID := s.fx.RegistryRunID
+	rt.exportTarPathFor = map[string]string{
+		namesFor(runID).Exporter: buildTar(t, writerArchive(t, runID)),
+	}
 }
 
 func suiteSeed(t *testing.T, fx *handoffFixture) WorkspaceSeed {
@@ -262,6 +275,40 @@ func (s *Suite) assertReaped(t *testing.T, rt *fakeRuntime) {
 	}
 }
 
+// The provider_registry proof is the writer's own probe: the second handoff
+// must run the command that reaches the registry witness through the proxy
+// and still probes every refusal, and the provider_only writer must not reach
+// for the witness at all.
+func TestSuiteFullRegistryWriterProbesTheWitness(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	scriptHappyProbes(s, rt)
+	commands := map[string]string{}
+	rt.onCreateContainer = func(spec ContainerSpec) error {
+		commands[spec.Name] = strings.Join(spec.Command, " ")
+		return nil
+	}
+	if err := s.Full(context.Background()); err != nil {
+		t.Fatalf("Full = %v, want nil", err)
+	}
+	witness := registryWitnessHost + ":443"
+	registry := commands[namesFor(s.fx.RegistryRunID).Agent]
+	if got := strings.Count(registry, witness); got != 4 {
+		t.Errorf("provider_registry writer references %q %d times, want CONNECT pair plus two HTTPS URLs", witness, got)
+	}
+	for _, probe := range append(slices.Clone(s.b.cfg.ProviderEndpoints),
+		"undeclared.invalid:443", "nslookup example.com", "1.1.1.1 443",
+		writerSentinel(s.fx.RegistryRunID),
+	) {
+		if !strings.Contains(registry, probe) {
+			t.Errorf("provider_registry writer omits %q", probe)
+		}
+	}
+	if providerOnly := commands[namesFor(s.fx.RunID).Agent]; providerOnly == "" ||
+		strings.Contains(providerOnly, registryWitnessHost) {
+		t.Errorf("provider_only writer command = %q, want one that never names the registry witness", providerOnly)
+	}
+}
+
 func TestSuiteFullSuccess(t *testing.T) {
 	s, rt := newSuiteTest(t)
 	scriptHappyProbes(s, rt)
@@ -279,7 +326,7 @@ func TestSuiteFullSuccess(t *testing.T) {
 			created.Networks = append(created.Networks, strings.TrimPrefix(call, "create-network "))
 		}
 	}
-	authorized := FullConformanceRuntimeResourceNamesFor(s.fx.RunID)
+	authorized := FullConformanceRuntimeResourceNamesFor(s.fx.RunID, s.fx.RegistryRunID)
 	for _, names := range []struct {
 		kind       string
 		created    []string
@@ -683,9 +730,14 @@ func TestSuiteFullOlderSuccessCannotOverrideNewerFailure(t *testing.T) {
 	seed := suiteSeed(t, fx)
 	scannerEntered := make(chan struct{})
 	releaseScanner := make(chan struct{})
+	// Only the older pass's first export scan parks: its second handoff scans
+	// again after the newer pass has already come and gone.
+	var park sync.Once
 	fx.cfg.Scanner = scannerFunc(func(context.Context, string) error {
-		scannerEntered <- struct{}{}
-		<-releaseScanner
+		park.Do(func() {
+			scannerEntered <- struct{}{}
+			<-releaseScanner
+		})
 		return nil
 	})
 	b := fx.backend(t)
@@ -695,6 +747,7 @@ func TestSuiteFullOlderSuccessCannotOverrideNewerFailure(t *testing.T) {
 			AgentImage:       "example.test/agent@sha256:" + strings.Repeat("1", 64),
 			CredentialMarker: suiteMarker,
 			RunID:            runID,
+			RegistryRunID:    runID + "-registry",
 			Seed:             seed,
 		}, WithConformanceRecorder(rec))
 		if err != nil {
@@ -706,6 +759,7 @@ func TestSuiteFullOlderSuccessCannotOverrideNewerFailure(t *testing.T) {
 	older := newSuite("older-run", olderRec)
 	newer := newSuite("newer-run", newerRec)
 	fx.rt.exportTarPath = buildTar(t, writerArchive(t, older.fx.RunID))
+	scriptRegistryExport(t, older, fx.rt)
 	scriptHappyProbes(older, fx.rt)
 	newerCredential := newer.conformanceName("cred")
 	fx.rt.onCreateVolume = func(name string) error {
@@ -881,6 +935,7 @@ func TestSuiteFullAuditExportCapped(t *testing.T) {
 		AgentImage:       "example.test/agent@sha256:" + strings.Repeat("1", 64),
 		CredentialMarker: suiteMarker,
 		RunID:            "conf-run",
+		RegistryRunID:    "conf-run-registry",
 		Seed:             seed,
 	})
 	if err != nil {
@@ -912,6 +967,7 @@ func TestSuiteFullAuditExportOverflowSwallowed(t *testing.T) {
 		AgentImage:       "example.test/agent@sha256:" + strings.Repeat("1", 64),
 		CredentialMarker: suiteMarker,
 		RunID:            "conf-run",
+		RegistryRunID:    "conf-run-registry",
 		Seed:             seed,
 	})
 	if err != nil {
@@ -1699,6 +1755,7 @@ func TestNewSuiteValidation(t *testing.T) {
 		AgentImage:       "example.test/agent@sha256:" + strings.Repeat("1", 64),
 		CredentialMarker: suiteMarker,
 		RunID:            "conf-run",
+		RegistryRunID:    "conf-run-registry",
 		Seed:             seed,
 	}
 	if _, err := NewSuite(b, valid); err != nil {
@@ -1728,6 +1785,9 @@ func TestNewSuiteValidation(t *testing.T) {
 		{"marker collides with blob directory", func(fx *SuiteFixture) { fx.CredentialMarker = "blob" }},
 		{"credential target shadows audit marker path", func(fx *SuiteFixture) { fx.CredentialTarget = auditMarkerPath("conf-run") }},
 		{"bad run id", func(fx *SuiteFixture) { fx.RunID = "Conf/Run" }},
+		{"no registry run id", func(fx *SuiteFixture) { fx.RegistryRunID = "" }},
+		{"bad registry run id", func(fx *SuiteFixture) { fx.RegistryRunID = "Conf/Registry" }},
+		{"registry run id repeats run id", func(fx *SuiteFixture) { fx.RegistryRunID = fx.RunID }},
 		{"blank seed", func(fx *SuiteFixture) { fx.Seed = WorkspaceSeed{Mode: SeedBlank} }},
 		{"invalid base seed", func(fx *SuiteFixture) {
 			fx.Seed = WorkspaceSeed{Mode: SeedBaseCheckout, SourceDir: "relative", Base: testBaseRevision()}

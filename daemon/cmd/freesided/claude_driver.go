@@ -2020,13 +2020,21 @@ func runClaudeConformance(
 	cfg claudeDriverConfig,
 	withStableCoverage func(func() error) error,
 ) error {
-	var nonce [8]byte
+	// Full runs two synthetic handoffs, one per enforced egress profile. Each
+	// is a run of its own, minted in the same conf-<16 hex> shape so both sets
+	// of objects stay inside the namespace the production rig owns.
+	var nonce, registryNonce [8]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return fmt.Errorf("mint conformance run identity: %w", err)
 	}
+	if _, err := rand.Read(registryNonce[:]); err != nil {
+		return fmt.Errorf("mint conformance registry run identity: %w", err)
+	}
 	runID := "conf-" + hex.EncodeToString(nonce[:])
+	registryRunID := "conf-" + hex.EncodeToString(registryNonce[:])
 	if err := bindRigRuntimeResources(
-		cfg.StateDir, cfg.RigTokenFile, ward.FullConformanceRuntimeResourceNamesFor(runID),
+		cfg.StateDir, cfg.RigTokenFile,
+		ward.FullConformanceRuntimeResourceNamesFor(runID, registryRunID),
 	); err != nil {
 		return fmt.Errorf("bind production rig conformance resources: %w", err)
 	}
@@ -2061,6 +2069,7 @@ func runClaudeConformance(
 		CredentialTarget: "/var/lib/freeside/conformance-token",
 		CredentialMarker: "FREESIDE_CONF_" + strings.ToUpper(hex.EncodeToString(nonce[:])),
 		RunID:            runID,
+		RegistryRunID:    registryRunID,
 		Seed: ward.WorkspaceSeed{
 			Mode:      ward.SeedBaseCheckout,
 			SourceDir: seedDir,

@@ -148,6 +148,9 @@ type fakeRuntime struct {
 	runningInspects map[string]int
 	// exportTarPath is the archive ExportRootFS copies to its destination.
 	exportTarPath string
+	// exportTarPathFor overrides exportTarPath for one container, so two
+	// handoffs in one test can each export their own archive.
+	exportTarPathFor map[string]string
 	// blockDelete, when set, makes DeleteContainer of that id block until its
 	// context is done (modeling a wedged runtime call under teardown's
 	// bounded deadline).
@@ -1085,7 +1088,11 @@ func (f *fakeRuntime) ExportRootFS(ctx context.Context, id string, dest io.Write
 		}
 		return tw.Close()
 	}
-	src, err := os.Open(f.exportTarPath)
+	tarPath := f.exportTarPath
+	if override, ok := f.exportTarPathFor[id]; ok {
+		tarPath = override
+	}
+	src, err := os.Open(tarPath) //nolint:gosec // archive path scripted by the test
 	if err != nil {
 		return err
 	}

@@ -48,22 +48,24 @@ func requireLiveContainer(t *testing.T) string {
 }
 
 // TestLiveConformanceSuite runs the invocable suite against the reference
-// runtime: Full proves checks 1-5, 7, provider-only egress, the
-// credential-containment probe, and the read-write-attach exclusion probe on
-// real VMs, and PreJob proves the lightweight precondition path.
+// runtime: Full proves checks 1-5, 7, provider-only egress, provider_registry
+// egress against the registry witness, the credential-containment probe, and
+// the read-write-attach exclusion probe on real VMs, and PreJob proves the
+// lightweight precondition path.
 func TestLiveConformanceSuite(t *testing.T) {
 	bin := requireLiveContainer(t)
 	ctx := context.Background()
 	rt := NewCLIRuntime(bin)
 	runID := fmt.Sprintf("conf-%d", time.Now().UnixNano())
+	registryRunID := runID + "-reg"
 
 	// Failsafe sweep so an aborted assertion cannot orphan runtime state; the
 	// suite reaps its own objects on every path, this only backstops a panic.
-	names := namesFor(runID)
+	names, registryNames := namesFor(runID), namesFor(registryRunID)
 	prefix := conformanceObjectPrefix + runID + "-"
 	t.Cleanup(func() {
 		for _, c := range []string{
-			names.Agent, names.Exporter,
+			names.Agent, names.Exporter, registryNames.Agent, registryNames.Exporter,
 			prefix + "seed", prefix + "audit", prefix + "prejob",
 			prefix + networklessProbeSuffix, prefix + networklessLivenessProbeSuffix,
 			prefix + "excl-writer", prefix + "excl-second",
@@ -72,12 +74,13 @@ func TestLiveConformanceSuite(t *testing.T) {
 			_ = rt.DeleteContainer(ctx, c)
 		}
 		for _, v := range []string{
-			names.Workspace, prefix + "cred", prefix + "excl-ws",
+			names.Workspace, registryNames.Workspace, prefix + "cred", prefix + "excl-ws",
 			prefix + networklessLivenessVolumeProbeSuffix,
 		} {
 			_ = rt.DeleteVolume(ctx, v)
 		}
 		_ = rt.DeleteNetwork(ctx, names.Network)
+		_ = rt.DeleteNetwork(ctx, registryNames.Network)
 	})
 
 	// The §5.4 scanner proves the configured hook runs and never sees the
@@ -132,6 +135,7 @@ func TestLiveConformanceSuite(t *testing.T) {
 		AgentImage:       liveImage,
 		CredentialMarker: liveMarker,
 		RunID:            runID,
+		RegistryRunID:    registryRunID,
 		Seed: WorkspaceSeed{
 			Mode: SeedBaseCheckout, SourceDir: seedDir, Base: base,
 		},

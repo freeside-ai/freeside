@@ -117,6 +117,38 @@ func TestSuiteFullRecorderFailureFailsThePass(t *testing.T) {
 	}
 }
 
+// TestSuiteFullRegistryHandoffFailureWithholdsCapabilities: the provider_only
+// handoff passing does not earn supports_enforced_provider_egress by itself.
+// A provider_registry handoff whose proxy does not realize the declared
+// registry fails the pass, so no capability is declared or recorded.
+func TestSuiteFullRegistryHandoffFailureWithholdsCapabilities(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	rec := &recordingConformance{}
+	WithConformanceRecorder(rec)(s)
+	scriptHappyProbes(s, rt)
+	s.b.cfg.readEgressAllowlist = func(p *connectProxy) ([]string, []string) {
+		providers, _ := p.Allowlist()
+		return providers, nil
+	}
+
+	wantCheckFailure(t, s.Full(context.Background()), CheckAgentEgress)
+	if !slices.Contains(rt.calls, "create-container "+namesFor(s.fx.RunID).Exporter) {
+		t.Error("the provider_only handoff did not run to its export before the registry handoff failed")
+	}
+	if slices.Contains(rt.calls, "create-container "+namesFor(s.fx.RegistryRunID).Agent) {
+		t.Error("the provider_registry writer started behind a proxy missing its registry")
+	}
+	for _, c := range conformancePendingCapabilities {
+		if s.b.Capabilities().Has(c) {
+			t.Errorf("Full declared %q without the provider_registry proof", c)
+		}
+	}
+	if len(rec.records) != 2 || rec.records[1].Outcome != domain.ConformanceFailed {
+		t.Fatalf("recorder = %+v, want the marker then the failed record", rec.records)
+	}
+	s.assertReaped(t, rt)
+}
+
 // TestSuiteFullPanicRecordsFailure: the publish defer's panic path records
 // the failure (best-effort) and still re-raises.
 func TestSuiteFullPanicRecordsFailure(t *testing.T) {
