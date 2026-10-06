@@ -26,10 +26,10 @@ type externalReviewReentryPlan struct {
 // run it, so the writer never acts on a decision made in another transaction.
 //
 // A cycle starts only when the item is the run's open, current ready item,
-// its latest review covers the published head, that head is one Freeside
-// pushed, and a stored external finding on it is one the repository's active
-// trust profile admits and no earlier cycle answered. One finding starts one
-// cycle, the earliest first.
+// the task that wrote it has ended, its latest review covers the published
+// head, that head is one Freeside pushed, and a stored external finding on
+// it is one the repository's active trust profile admits and no earlier
+// cycle answered. One finding starts one cycle, the earliest first.
 func planExternalReviewReentry(
 	ctx context.Context, tx *store.ReadTx, itemID domain.ItemID,
 ) (*externalReviewReentryPlan, error) {
@@ -97,14 +97,27 @@ func planExternalReviewReentry(
 		return nil, err
 	}
 	current := domain.ProductionReadyItemID(runID)
+	taskKey := productionPublicationTaskKey(runID)
 	answered := make(map[domain.FindingID]bool)
 	for _, sealed := range chain {
-		current = sealed.ReadyItemID()
+		current, taskKey = sealed.ReadyItemID(), sealed.TaskKey()
 		if sealed.ExternalFindingID != "" {
 			answered[sealed.ExternalFindingID] = true
 		}
 	}
 	if current != item.ID {
+		return nil, nil
+	}
+	// The task that wrote this ready item ends a few records after it, and a
+	// pass can fail in between. Until that task ends it still acts for the
+	// run: a cycle started under it would be judged a second time by a task
+	// whose round has passed. The task heals on its next pass, and this
+	// decision is made again on the pass after.
+	owner, err := tx.GetOutbox(ctx, taskKey)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return nil, err
+	}
+	if err == nil && !owner.Dispatched() {
 		return nil, nil
 	}
 	// A cycle answers every open finding it admits, not only the one that
