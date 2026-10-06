@@ -107,6 +107,15 @@ func planExternalReviewReentry(
 	if current != item.ID {
 		return nil, nil
 	}
+	// A cycle answers every open finding it admits, not only the one that
+	// started it, and a finding with an outcome starts no second cycle.
+	dispositions, err := tx.ListExternalFindingDispositions(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	for _, disposition := range dispositions {
+		answered[disposition.FindingID] = true
+	}
 	latest, err := tx.LatestReviewRecord(ctx, runID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, nil
