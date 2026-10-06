@@ -108,7 +108,11 @@ type ProductionPublicationConfig struct {
 	// NewBoundRoom supplies concrete task-bound ownership for production.
 	// NewRoom remains the isolated test/attended factory.
 	NewBoundRoom func(domain.ProjectImage, ward.ContainerSize, domain.Run, domain.InvocationID) (ProductionVerificationRoom, error)
-	ReviewSource exec.ReviewSource
+	// RebuildProjectImage lets the lane rebuild the project image for a
+	// candidate whose dependency change stays within policy (plan §5.7). Nil
+	// leaves every such candidate refused as rebuild_not_configured.
+	RebuildProjectImage *ProjectImageRebuild
+	ReviewSource        exec.ReviewSource
 	// RemediationPromptPackageDigest selects the trusted prompt package for
 	// implementation-role follow-up invocations created by finding
 	// adjudication or accepted operator feedback.
@@ -227,6 +231,7 @@ type productionPublicationWorkflow struct {
 	approvedRecipes                 map[domain.Digest]bool
 	newRoom                         func(domain.ProjectImage, ward.ContainerSize) (ProductionVerificationRoom, error)
 	newBoundRoom                    func(domain.ProjectImage, ward.ContainerSize, domain.Run, domain.InvocationID) (ProductionVerificationRoom, error)
+	rebuild                         *ProjectImageRebuild
 	beginTaskWork                   func(context.Context, domain.RunID) (context.Context, func(), error)
 	reviewSource                    exec.ReviewSource
 	remediationPromptPackage        domain.Digest
@@ -326,6 +331,17 @@ func newProductionPublicationWorkflow(
 	if len(cfg.ApprovedRecipes) == 0 && !cfg.HoldOnly {
 		return nil, errors.New("approved recipe set is empty")
 	}
+	if cfg.RebuildProjectImage != nil {
+		if cfg.RebuildProjectImage.Builder == nil {
+			return nil, errors.New("project-image rebuild needs a builder")
+		}
+		if err := cfg.RebuildProjectImage.Inputs.Validate(); err != nil {
+			return nil, fmt.Errorf("project-image rebuild inputs: %w", err)
+		}
+		if cfg.RebuildProjectImage.Timeout < 0 {
+			return nil, errors.New("project-image rebuild timeout is negative")
+		}
+	}
 	if cfg.RecipeReadTimeout < 0 {
 		return nil, errors.New("negative recipe-read timeout")
 	}
@@ -347,6 +363,7 @@ func newProductionPublicationWorkflow(
 		approvedRecipes: mapsClone(cfg.ApprovedRecipes),
 		newRoom:         cfg.NewRoom, reviewSource: cfg.ReviewSource,
 		newBoundRoom:             cfg.NewBoundRoom,
+		rebuild:                  cfg.RebuildProjectImage,
 		remediationPromptPackage: cfg.RemediationPromptPackageDigest,
 		shadowReviewSource:       cfg.ShadowReviewSource,
 		reviewRecovery:           cfg.ReviewRecovery, reviewRecoveryPending: true,
@@ -2045,8 +2062,13 @@ type productionBinding struct {
 	resolvedPolicy domain.ResolvedPolicy
 	replay         ProductionReplay
 	profile        domain.AutomationTrustProfile
-	image          domain.ProjectImage
-	remediation    *authenticatedRemediationTransition
+	// image is the project image the run was admitted with. It answers
+	// whether the run's base is served and names the recipe.
+	image domain.ProjectImage
+	// rebuilt is the image the run is bound to for the verified commit when
+	// that is not image (production_rebuild.go); nil otherwise.
+	rebuilt     *domain.ProjectImage
+	remediation *authenticatedRemediationTransition
 	// reentry is set for a cycle that re-enters in place (production_reentry.go).
 	// For such a cycle admission is the predecessor producer's with its base
 	// commit replaced by the cycle's base, so every reader of the admitted
@@ -2174,6 +2196,9 @@ func (w *productionPublicationWorkflow) loadBinding(
 			domain.ErrParentKeyMismatch)
 	}
 	if err := validateProductionReplayOptions(binding, task.Publication); err != nil {
+		return productionBinding{}, err
+	}
+	if err := w.resolveVerificationImage(ctx, &binding, task.HeadSHA); err != nil {
 		return productionBinding{}, err
 	}
 	return binding, nil
@@ -5987,10 +6012,20 @@ func digestProductionBytes(body []byte) domain.Digest {
 }
 
 // verificationRoomAndRecipe constructs the networkless room for one cycle's
-// verification and reads the project image's recipe through it, refusing a
-// recipe that is not the one the image was built with.
+// verification from the image the binding verifies in, and reads that image's
+// recipe through it.
 func (w *productionPublicationWorkflow) verificationRoomAndRecipe(
 	ctx context.Context, task productionPublicationTask, binding productionBinding,
+) (ProductionVerificationRoom, []byte, error) {
+	return w.roomAndRecipe(ctx, task, binding, binding.verificationImage())
+}
+
+// roomAndRecipe constructs a networkless room from image and reads the
+// image's recipe through it, refusing a recipe that is not the one the
+// admitted image was built with.
+func (w *productionPublicationWorkflow) roomAndRecipe(
+	ctx context.Context, task productionPublicationTask, binding productionBinding,
+	image domain.ProjectImage,
 ) (ProductionVerificationRoom, []byte, error) {
 	// The writer start already resolved this durable policy, so a failure
 	// here means the stored policy changed under the run.
@@ -6000,9 +6035,9 @@ func (w *productionPublicationWorkflow) verificationRoomAndRecipe(
 	}
 	var room ProductionVerificationRoom
 	if w.newBoundRoom != nil {
-		room, err = w.newBoundRoom(binding.image, sizes.Verification, binding.run, task.verificationInvocationID())
+		room, err = w.newBoundRoom(image, sizes.Verification, binding.run, task.verificationInvocationID())
 	} else {
-		room, err = w.newRoom(binding.image, sizes.Verification)
+		room, err = w.newRoom(image, sizes.Verification)
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("construct networkless verification room: %w", err)
@@ -6067,29 +6102,51 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 		}
 		return productionVerificationCheckpoint{}, err
 	}
-	room, recipe, err := w.verificationRoomAndRecipe(ctx, task, binding)
+	binding, refusal, err := w.bindVerificationImage(
+		ctx, task, binding, checkoutDir, binding.admission.Base.BaseSHA, imported.CommitSHA)
 	if err != nil {
+		// A rebuilt image the run is bound to is durable authority as the
+		// admitted one is, so its refusal is the same disagreement.
+		if errors.Is(err, domain.ErrProjectImageIncompatible) {
+			err = fmt.Errorf("production publication binding disagrees with durable authority: %w",
+				errors.Join(domain.ErrParentKeyMismatch, err))
+		}
 		return productionVerificationCheckpoint{}, err
 	}
-	verified, err := verify.Verify(ctx, checkoutDir, verify.Options{
-		HeadSHA: imported.CommitSHA, BaseSHA: binding.admission.Base.BaseSHA,
-		InvocationID: task.verificationInvocationID(), RecipeSource: verify.ConfigRecipe(recipe),
-		RecipePath: verify.DefaultRecipePath, Room: room,
-		ApprovedRecipes: w.approvedRecipes, Changes: imported.Changes,
-		// A stable per-verification time, not a wall clock: the emitted evidence
-		// is content-addressed and write-once, and this checkpoint can re-run, so
-		// the evidence metadata must converge byte-identically on replay (mirrors
-		// the checkpoint's CandidateAuthorization CreatedAt).
-		Now: binding.export.RecordedAt,
-		Policy: verify.Policy{ExtraVerificationControlPatterns: slices.Clone(
-			binding.profile.ProtectedPaths.ExtraVerificationControlPatterns,
-		)},
-	})
-	if err != nil {
-		if !productionVerificationStateContradiction(err) {
-			err = productionPublicationRetryableError(err)
+	var verified verify.Result
+	if refusal != nil {
+		// No room is built for a refused gate. The refusal is recorded as this
+		// candidate's failed verification, so the block, its recovery, and a
+		// rerun are the ones every failed verification already has.
+		verified, err = refusedRebuildVerification(task, binding, imported.CommitSHA, *refusal, w.approvedRecipes)
+		if err != nil {
+			return productionVerificationCheckpoint{}, err
 		}
-		return productionVerificationCheckpoint{}, fmt.Errorf("clean production verification: %w", err)
+	} else {
+		room, recipe, err := w.verificationRoomAndRecipe(ctx, task, binding)
+		if err != nil {
+			return productionVerificationCheckpoint{}, err
+		}
+		verified, err = verify.Verify(ctx, checkoutDir, verify.Options{
+			HeadSHA: imported.CommitSHA, BaseSHA: binding.admission.Base.BaseSHA,
+			InvocationID: task.verificationInvocationID(), RecipeSource: verify.ConfigRecipe(recipe),
+			RecipePath: verify.DefaultRecipePath, Room: room,
+			ApprovedRecipes: w.approvedRecipes, Changes: imported.Changes,
+			// A stable per-verification time, not a wall clock: the emitted evidence
+			// is content-addressed and write-once, and this checkpoint can re-run, so
+			// the evidence metadata must converge byte-identically on replay (mirrors
+			// the checkpoint's CandidateAuthorization CreatedAt).
+			Now: binding.export.RecordedAt,
+			Policy: verify.Policy{ExtraVerificationControlPatterns: slices.Clone(
+				binding.profile.ProtectedPaths.ExtraVerificationControlPatterns,
+			)},
+		})
+		if err != nil {
+			if !productionVerificationStateContradiction(err) {
+				err = productionPublicationRetryableError(err)
+			}
+			return productionVerificationCheckpoint{}, fmt.Errorf("clean production verification: %w", err)
+		}
 	}
 	if verified.HeadSHA != imported.CommitSHA || verified.RecipeDigest != binding.image.RecipeDigest {
 		return productionVerificationCheckpoint{}, fmt.Errorf("verification disagrees with project-image binding: %w",
@@ -6132,7 +6189,7 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 	checkpoint := productionVerificationCheckpoint{
 		Version: productionVerificationVersion,
 		TaskKey: task.intentKey(), HeadSHA: task.HeadSHA,
-		ProjectImage: binding.image.ID,
+		ProjectImage: binding.verificationImage().ID,
 		Imported:     imported, Authorization: authorization, Artifacts: artifacts,
 		DiffStats: diffStats,
 	}
@@ -6256,7 +6313,7 @@ func (w *productionPublicationWorkflow) loadCheckpoint(
 	}
 	if !versionMatches ||
 		checkpoint.TaskKey != task.intentKey() ||
-		checkpoint.ProjectImage != binding.image.ID || authorization.Validate() != nil ||
+		checkpoint.ProjectImage != binding.verificationImage().ID || authorization.Validate() != nil ||
 		authorization.Repo != binding.admission.Base.Repo ||
 		authorization.BaseSHA != binding.admission.Base.BaseSHA ||
 		authorization.HeadSHA != task.HeadSHA ||

@@ -399,6 +399,11 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 		}
 		return productionTaskOutcome{}, err
 	}
+	// The commit this cycle verifies is known only now, so its image binding
+	// is resolved here and not in the loader, as a first cycle's is.
+	if err := w.resolveVerificationImage(ctx, &binding, reentryWorkspaceSHA(task, binding)); err != nil {
+		return productionTaskOutcome{}, err
+	}
 	stored, found, err := w.loadReentryCheckpoint(ctx, task, binding)
 	if err != nil {
 		return productionTaskOutcome{}, err
@@ -422,6 +427,9 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 	if !found {
 		stored, err = w.verifyReentry(ctx, task, binding, checkoutDir)
 		if reason, stop := reentryUnverifiableTreeReason(task, base.BaseSHA, err); stop {
+			return w.stopReentryCycle(ctx, task, reason, nil)
+		}
+		if reason, stop := reentryRebuildRefusedReason(task, base.BaseSHA, err); stop {
 			return w.stopReentryCycle(ctx, task, reason, nil)
 		}
 		if reason, stop := reentryUnservedBaseReason(task, base.BaseSHA, err); stop {
@@ -693,9 +701,17 @@ func (w *productionPublicationWorkflow) escalateReentryFindings(
 	return productionReviewEscalated, nil
 }
 
-// verifyReentry verifies the cycle's workspace commit (the prospective merge
-// for a base advance, the head otherwise) in the networkless room and
-// persists the result. The checkout already holds every commit involved.
+// reentryWorkspaceSHA is the commit a cycle verifies: the prospective merge
+// for a base advance, the head otherwise.
+func reentryWorkspaceSHA(task productionPublicationTask, binding productionBinding) string {
+	if binding.evaluatedSHA != "" {
+		return binding.evaluatedSHA
+	}
+	return task.HeadSHA
+}
+
+// verifyReentry verifies the cycle's workspace commit in the networkless room
+// and persists the result. The checkout already holds every commit involved.
 func (w *productionPublicationWorkflow) verifyReentry(
 	ctx context.Context,
 	task productionPublicationTask,
@@ -703,10 +719,7 @@ func (w *productionPublicationWorkflow) verifyReentry(
 	checkoutDir string,
 ) (productionReentryCheckpoint, error) {
 	baseSHA := binding.admission.Base.BaseSHA
-	workspaceSHA := task.HeadSHA
-	if binding.evaluatedSHA != "" {
-		workspaceSHA = binding.evaluatedSHA
-	}
+	workspaceSHA := reentryWorkspaceSHA(task, binding)
 	changes, diffStats, err := w.reentryDiff(ctx, checkoutDir, baseSHA, workspaceSHA, task.HeadSHA)
 	if err != nil {
 		return productionReentryCheckpoint{}, err
@@ -717,6 +730,14 @@ func (w *productionPublicationWorkflow) verifyReentry(
 		ctx, binding.image, checkoutDir, baseSHA, w.preparationDigest,
 	); err != nil {
 		return productionReentryCheckpoint{}, err
+	}
+	// The same gate a first cycle takes, at the commit this cycle verifies.
+	binding, refusal, err := w.bindVerificationImage(ctx, task, binding, checkoutDir, baseSHA, workspaceSHA)
+	if err != nil {
+		return productionReentryCheckpoint{}, err
+	}
+	if refusal != nil {
+		return productionReentryCheckpoint{}, &reentryRebuildRefusal{refusal: *refusal}
 	}
 	room, recipe, err := w.verificationRoomAndRecipe(ctx, task, binding)
 	if err != nil {
@@ -757,7 +778,7 @@ func (w *productionPublicationWorkflow) verifyReentry(
 		Version: productionReentryCheckpointVersion,
 		TaskKey: task.intentKey(),
 		BaseSHA: baseSHA, HeadSHA: task.HeadSHA, EvaluatedSHA: binding.evaluatedSHA,
-		ProjectImage: binding.image.ID,
+		ProjectImage: binding.verificationImage().ID,
 		Outcome:      reentryOutcome(verified.Outcome), RecipeDigest: verified.RecipeDigest,
 		EvidenceSnapshotDigest: evidenceDigest,
 		Findings:               candidateFindings(nil, verified.Findings),
@@ -940,7 +961,7 @@ func (w *productionPublicationWorkflow) loadReentryCheckpoint(
 	baseSHA := binding.admission.Base.BaseSHA
 	if checkpoint.Version != productionReentryCheckpointVersion ||
 		checkpoint.TaskKey != task.intentKey() ||
-		checkpoint.ProjectImage != binding.image.ID ||
+		checkpoint.ProjectImage != binding.verificationImage().ID ||
 		checkpoint.BaseSHA != baseSHA || checkpoint.HeadSHA != task.HeadSHA ||
 		checkpoint.EvaluatedSHA != binding.evaluatedSHA ||
 		(checkpoint.Outcome != domain.VerificationPassed &&
