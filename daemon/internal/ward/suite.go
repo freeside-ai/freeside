@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path"
 	"path/filepath"
@@ -48,6 +49,10 @@ type Suite struct {
 	b            *Backend
 	fx           SuiteFixture
 	agentCommand []string
+	// registryAgentCommand is the writer of the provider_registry handoff:
+	// the same writer under the registry run's identity, whose egress probe
+	// also reaches the registry witness.
+	registryAgentCommand []string
 	// recorder receives the durable conformance record of every completed,
 	// generation-current Full pass. Nil is allowed and fails closed twice
 	// over: a recorderless pass never declares the suite-earned capabilities
@@ -127,6 +132,11 @@ type SuiteFixture struct {
 	// invocation, e.g. from a timestamp). Probe objects derive their names
 	// from it.
 	RunID string
+	// RegistryRunID names Full's second synthetic handoff, the one that runs
+	// under provider_registry. It is a run of its own, so it follows the same
+	// rules as RunID and must differ from it. The caller mints it, as it does
+	// RunID, so both stay inside whatever namespace the caller owns.
+	RegistryRunID string
 	// Seed is the daemon-owned exact-base checkout the synthetic handoff stages.
 	// Full requires a real base_checkout seed so startup and configuration
 	// conformance exercise the same seeder and observer path as a real run.
@@ -163,17 +173,24 @@ const (
 	// conformanceObjectPrefix leaves enough room under that same limit for the
 	// longest valid RunID and the suite's longest existing role suffix.
 	conformanceObjectPrefix = "freeside-ward-conf-"
+	// registryWitnessHost is the one registry Full declares for its
+	// provider_registry handoff.
+	// The proof needs a real public registry: the proxy resolves the name
+	// itself and refuses anything but public addresses, so a local stand-in
+	// could only be reached by weakening the rule under test. Every Full pass
+	// therefore reaches this host through the proxy.
+	registryWitnessHost = "registry.npmjs.org"
 )
 
-// suiteBudget is Full's overall wall-clock ceiling: the synthetic handoff's
-// own budget plus room for the seed and the three probes (the credential and
-// writer-exclusion probes, the networkless-export probe, and the in-exporter
-// check-5 probe, each a create, a start, and a bounded wait). A wedge backstop,
-// not an SLA; it exists so a runtime that hangs inside a side-effecting call
-// fails the suite closed instead of blocking a long-lived daemon context
-// forever.
+// suiteBudget is Full's overall wall-clock ceiling: the two synthetic
+// handoffs' own budgets plus room for the seed and the three probes (the
+// credential and writer-exclusion probes, the networkless-export probe, and
+// the in-exporter check-5 probe, each a create, a start, and a bounded
+// wait). A wedge backstop, not an SLA; it exists so a runtime that hangs
+// inside a side-effecting call fails the suite closed instead of blocking a
+// long-lived daemon context forever.
 func (s *Suite) suiteBudget() time.Duration {
-	return s.b.cfg.HandoffTimeout + 7*probeStopTimeout
+	return 2*s.b.cfg.HandoffTimeout + 7*probeStopTimeout
 }
 
 // withDefaults fills unset fixture fields.
@@ -194,15 +211,19 @@ func (fx SuiteFixture) withDefaults() SuiteFixture {
 // reading the seeded marker and emits run-bound exact content. Letting callers
 // replace this command would make Full's non-vacuousness proof optional: an
 // arbitrary command has no output protocol the suite can authenticate.
-func (fx SuiteFixture) agentCommand(cfg Config) []string {
+//
+// runID is the handoff the writer runs in and endpoints is every authority
+// that handoff's profile admits: the provider endpoints, plus the registry
+// witness under provider_registry.
+func (fx SuiteFixture) agentCommand(cfg Config, runID string, endpoints []string) []string {
 	token := shellQuote(path.Join(fx.CredentialTarget, credentialTokenFile))
 	ws := shellQuote(cfg.WorkspaceTarget)
 	return []string{
 		"sh", "-c",
-		// Prove the writer can reach the declared provider only through the
+		// Prove the writer can reach each admitted authority only through the
 		// daemon proxy, the proxy rejects an undeclared CONNECT authority, and
 		// the host-only network blocks both direct external-IP and DNS paths.
-		"set -eu; " + providerEgressProbeScript(cfg.ProviderEndpoints) +
+		"set -eu; " + providerEgressProbeScript(endpoints) +
 			// Verify the realized credential is the seeded marker before writing
 			// anything: a runtime that mounted some other volume carrying a `token`
 			// file, or did not realize the mount at all, aborts under set -eu.
@@ -214,7 +235,7 @@ func (fx SuiteFixture) agentCommand(cfg Config) []string {
 			"find " + ws + " -mindepth 1 -maxdepth 1 -exec rm -rf {} \\;; " +
 			// Emit this run's writer sentinel only after the marker check, so its
 			// presence proves this run's writer produced the output.
-			"printf '%s\\n' " + writerSentinel(fx.RunID) + " > " + ws + "/" + writerResultPath + "; " +
+			"printf '%s\\n' " + writerSentinel(runID) + " > " + ws + "/" + writerResultPath + "; " +
 			"mkdir -p " + ws + "/nested; " +
 			"printf '%s\\n' " + workspaceStatePayload + " > " + ws + "/" + workspaceStateFile + "; sync",
 	}
@@ -465,6 +486,10 @@ func (fx SuiteFixture) validate() error {
 		return fmt.Errorf("%w: SuiteFixture.CredentialSizeMB %d is not positive", ErrInvalidConfig, fx.CredentialSizeMB)
 	case !runIDPattern.MatchString(fx.RunID):
 		return fmt.Errorf("%w: SuiteFixture.RunID %q does not match %s", ErrInvalidConfig, fx.RunID, runIDPattern)
+	case !runIDPattern.MatchString(fx.RegistryRunID):
+		return fmt.Errorf("%w: SuiteFixture.RegistryRunID %q does not match %s", ErrInvalidConfig, fx.RegistryRunID, runIDPattern)
+	case fx.RegistryRunID == fx.RunID:
+		return fmt.Errorf("%w: SuiteFixture.RegistryRunID %q repeats RunID", ErrInvalidConfig, fx.RegistryRunID)
 	case fx.Seed.Mode != SeedBaseCheckout:
 		return fmt.Errorf("%w: SuiteFixture.Seed must use %s", ErrInvalidConfig, SeedBaseCheckout)
 	}
@@ -510,19 +535,30 @@ func NewSuite(b *Backend, fx SuiteFixture, opts ...SuiteOption) (*Suite, error) 
 	// marker, precisely to avoid this collision). A marker that is a substring of
 	// any of these four would make the suite's own output indistinguishable from
 	// a leak. Reject such a fixture up front.
-	for _, reserved := range []string{writerSentinel(fx.RunID), workspaceStatePayload, writerResultPath, workspaceStateFile} {
+	for _, reserved := range []string{
+		writerSentinel(fx.RunID), writerSentinel(fx.RegistryRunID),
+		workspaceStatePayload, writerResultPath, workspaceStateFile,
+	} {
 		if strings.Contains(reserved, fx.CredentialMarker) {
 			return nil, fmt.Errorf("%w: SuiteFixture.CredentialMarker %q collides with the generated suite string %q", ErrInvalidConfig, fx.CredentialMarker, reserved)
 		}
 	}
-	metadata, err := expectedWriterExportMetadata(fx.RunID)
-	if err != nil {
-		return nil, fmt.Errorf("%w: encode expected writer export metadata: %w", ErrInvalidConfig, err)
+	for _, runID := range []string{fx.RunID, fx.RegistryRunID} {
+		metadata, err := expectedWriterExportMetadata(runID)
+		if err != nil {
+			return nil, fmt.Errorf("%w: encode expected writer export metadata: %w", ErrInvalidConfig, err)
+		}
+		if bytes.Contains(metadata, []byte(fx.CredentialMarker)) {
+			return nil, fmt.Errorf("%w: SuiteFixture.CredentialMarker %q collides with generated export metadata", ErrInvalidConfig, fx.CredentialMarker)
+		}
 	}
-	if bytes.Contains(metadata, []byte(fx.CredentialMarker)) {
-		return nil, fmt.Errorf("%w: SuiteFixture.CredentialMarker %q collides with generated export metadata", ErrInvalidConfig, fx.CredentialMarker)
+	s := &Suite{
+		b: b, fx: fx,
+		agentCommand: fx.agentCommand(b.cfg, fx.RunID, b.cfg.ProviderEndpoints),
+		registryAgentCommand: fx.agentCommand(b.cfg, fx.RegistryRunID, append(
+			slices.Clone(b.cfg.ProviderEndpoints), net.JoinHostPort(registryWitnessHost, registryPort),
+		)),
 	}
-	s := &Suite{b: b, fx: fx, agentCommand: fx.agentCommand(b.cfg)}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -542,19 +578,20 @@ func (s *Suite) conformanceName(role string) string {
 }
 
 // FullConformanceRuntimeResourceNamesFor returns every deterministic runtime
-// object the full suite may create, including its synthetic handoff. The
+// object the full suite may create, including its two synthetic handoffs. The
 // caller binds this complete namespace before Full can make its first runtime
 // call, so a crashed suite cannot outlive the production rig's global gate.
-func FullConformanceRuntimeResourceNamesFor(runID string) RuntimeResourceNames {
-	handoff := namesFor(runID)
-	resources := RuntimeResourceNames{
-		Containers: []string{
+func FullConformanceRuntimeResourceNamesFor(runID, registryRunID string) RuntimeResourceNames {
+	var resources RuntimeResourceNames
+	for _, handoffRunID := range []string{runID, registryRunID} {
+		handoff := namesFor(handoffRunID)
+		resources.Containers = append(resources.Containers,
 			handoff.Seeder, handoff.Observer,
 			handoff.InstructionSeeder, handoff.InstructionObserver,
 			handoff.Agent, handoff.Exporter,
-		},
-		Volumes:  []string{handoff.Workspace, handoff.Instructions},
-		Networks: []string{handoff.Network},
+		)
+		resources.Volumes = append(resources.Volumes, handoff.Workspace, handoff.Instructions)
+		resources.Networks = append(resources.Networks, handoff.Network)
 	}
 	for _, role := range []string{
 		"liveness", "seed", "audit", "excl-writer", "excl-second",
@@ -951,15 +988,69 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 	// benign writer holding the seeded credential read-only. Its own gate
 	// tears the writer, workspace, and exporter down; the credential volume
 	// (caller-owned to the gate) survives for the containment probe.
+	if err := s.proveSyntheticHandoff(
+		ctx, s.fx.RunID, credVolume, domain.EgressProviderOnly, nil, s.agentCommand,
+	); err != nil {
+		return err
+	}
+	// The same handoff again under provider_registry, as its own run. The
+	// writer still holds the credential, so the export proof repeats for the
+	// wider profile, and its egress probe adds the registry witness: reachable
+	// through the proxy, while an undeclared authority, a direct connection,
+	// and DNS stay refused. supports_enforced_provider_egress covers both
+	// profiles (plan §5.7), so the capability is earned only when both pass.
+	if err := s.proveSyntheticHandoff(
+		ctx, s.fx.RegistryRunID, credVolume, domain.EgressProviderRegistry,
+		[]string{registryWitnessHost}, s.registryAgentCommand,
+	); err != nil {
+		return err
+	}
+
+	// Containment, detached-volume half: the marker is still readable from the
+	// credential volume, proving absence from the export was mount omission,
+	// not deletion.
+	if err := s.probeCredentialContainment(ctx, run, credVolume); err != nil {
+		return err
+	}
+
+	// The read-write-attach exclusion the gate's check-3 termination depends
+	// on: a second VM cannot attach a volume a live writer holds read-write.
+	if err := s.probeWriterVolumeExclusion(ctx, run); err != nil {
+		return err
+	}
+	if err := s.probeNetworklessExport(ctx, run); err != nil {
+		return err
+	}
+	// Check 5, attested here rather than per handoff: the handoff exporter now
+	// runs only the trusted helper (which emits no environment proof), so a
+	// dedicated probe confirms the in-VM view the ro-mount topology produces.
+	if err := s.probeInExporterVerification(ctx, run); err != nil {
+		return err
+	}
+	proved = true
+	return nil
+}
+
+// proveSyntheticHandoff runs one synthetic handoff under profile with the
+// suite-owned writer command and proves the export is exactly that run's
+// writer output with the seeded credential contained. The writer emits its
+// sentinel only after its egress probes and credential check pass, so a
+// proven export is also the proof that the probes held inside the writer.
+func (s *Suite) proveSyntheticHandoff(
+	ctx context.Context,
+	runID, credVolume string,
+	profile domain.EgressProfile,
+	registryHosts, command []string,
+) error {
 	res, err := s.b.Handoff(ctx, HandoffSpec{
-		RunID:           s.fx.RunID,
+		RunID:           runID,
 		WorkspaceSizeMB: s.fx.WorkspaceSizeMB,
 		Seed:            s.fx.Seed,
 		Agent: AgentSpec{
 			Image:         s.fx.AgentImage,
-			Command:       s.agentCommand,
+			Command:       command,
 			Env:           []string{"FREESIDE_CONFORMANCE_A=1", "FREESIDE_CONFORMANCE_B=2"},
-			EgressProfile: domain.EgressProviderOnly,
+			EgressProfile: profile,
 			LaunchState:   LaunchStateNone,
 			CredentialMounts: []CredentialMount{{
 				Volume: credVolume, Target: s.fx.CredentialTarget,
@@ -970,8 +1061,9 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 			},
 			InstructionPolicy: ClaudeInvocationInstructionPolicy(),
 		},
-		Class: LaunchConformance,
-		Size:  DefaultLaunchSize(LaunchConformance),
+		Class:         LaunchConformance,
+		Size:          DefaultLaunchSize(LaunchConformance),
+		RegistryHosts: registryHosts,
 	})
 	if err != nil {
 		// A *ConformanceFailure already names its check; any other error is a
@@ -979,7 +1071,12 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 		return err
 	}
 	defer func() { _ = os.RemoveAll(res.ExportDir) }()
+	return s.proveWriterExport(res, runID)
+}
 
+// proveWriterExport proves a synthetic handoff's export is exactly the suite
+// writer's output for runID and carries no trace of the credential marker.
+func (s *Suite) proveWriterExport(res *HandoffResult, runID string) error {
 	// Containment must not be vacuous: the export has to carry this run's
 	// writer output, or "marker absent" proves nothing. An empty export means
 	// either the credential mount was not realized (the writer aborted) or
@@ -995,7 +1092,7 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 	// scanning the export tree, so a stale file merely NAMED like the sentinel
 	// (which would appear as a path in manifest.json) cannot satisfy the proof,
 	// and the check binds to the exact expected content at the exact path.
-	if !manifestHasContent(res.Manifest.Entries, writerResultPath, writerSentinel(s.fx.RunID)+"\n") {
+	if !manifestHasContent(res.Manifest.Entries, writerResultPath, writerSentinel(runID)+"\n") {
 		return failf(CheckCredentialContainment, "export does not carry this run's writer sentinel at %s; containment cannot be proven", writerResultPath)
 	}
 	// Prove the export carries only this run's writer output: blobsContainMarker
@@ -1051,32 +1148,9 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 	if !manifestHasContent(res.Manifest.Entries, workspaceStateFile, workspaceStatePayload+"\n") {
 		return failf(CheckCredentialContainment, "export does not carry this run's nested workspace fixture at %s; the durable directory tree was not proven to survive", workspaceStateFile)
 	}
-	if !manifestFixtureMetadataMatches(res.Manifest.Entries, expectedWriterManifest(s.fx.RunID).Entries) {
+	if !manifestFixtureMetadataMatches(res.Manifest.Entries, expectedWriterManifest(runID).Entries) {
 		return failf(CheckCredentialContainment, "export manifest metadata does not exactly match the suite writer fixture (paths redacted)")
 	}
-
-	// Containment, detached-volume half: the marker is still readable from the
-	// credential volume, proving absence from the export was mount omission,
-	// not deletion.
-	if err := s.probeCredentialContainment(ctx, run, credVolume); err != nil {
-		return err
-	}
-
-	// The read-write-attach exclusion the gate's check-3 termination depends
-	// on: a second VM cannot attach a volume a live writer holds read-write.
-	if err := s.probeWriterVolumeExclusion(ctx, run); err != nil {
-		return err
-	}
-	if err := s.probeNetworklessExport(ctx, run); err != nil {
-		return err
-	}
-	// Check 5, attested here rather than per handoff: the handoff exporter now
-	// runs only the trusted helper (which emits no environment proof), so a
-	// dedicated probe confirms the in-VM view the ro-mount topology produces.
-	if err := s.probeInExporterVerification(ctx, run); err != nil {
-		return err
-	}
-	proved = true
 	return nil
 }
 

@@ -340,8 +340,11 @@ func (b *Backend) Capabilities() exec.CapabilitySet {
 }
 
 // provenCapabilities is the exact set a green Full pass proves: the frozen
-// base declaration plus both suite-earned capabilities. It is spelled out
-// rather than read back from the live declaration so the durable conformance
+// base declaration plus both suite-earned capabilities.
+// supports_enforced_provider_egress covers provider_only and
+// provider_registry alike (plan §5.7), so Full earns it only when its
+// synthetic handoff passes under each. The set is spelled out rather than
+// read back from the live declaration so the durable conformance
 // record states what the pass proved, not whatever the flags happen to say
 // when the record is built; a drift test binds it to the domain's class
 // ceiling.

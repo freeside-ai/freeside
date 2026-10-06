@@ -223,14 +223,14 @@ func projectImageEnvironmentColumn(t *testing.T, s *Store, id domain.Digest) sql
 	return column
 }
 
-// 0090 lands on a store that already holds a project image: the row's body is
+// 0091 lands on a store that already holds a project image: the row's body is
 // untouched, no environment is invented for it, and it reconstructs under its
 // original ID as a record without one.
 func TestProjectImageEnvironmentMigrationKeepsLegacyRows(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0090_")
+	migrateThrough(t, ctx, db, "0091_")
 
 	legacy := testProjectImage(t)
 	current, err := json.Marshal(legacy)

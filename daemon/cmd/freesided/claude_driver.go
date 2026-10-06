@@ -1500,6 +1500,15 @@ func observeCompositionBaseInputs(
 	return projectimage.ObserveBaseInputs(ctx, "git", dir, cfg.BaseSHA)
 }
 
+// wardEnforceableEgressProfiles is the closed set of writer egress profiles
+// this composition can materialize: the two the ward handoff proxy enforces
+// and Suite.Full proves before supports_enforced_provider_egress is declared.
+// Listing a profile here lets policy or a capability manifest select it, so a
+// profile ward refuses (provider_web_read) must stay out.
+func wardEnforceableEgressProfiles() []domain.EgressProfile {
+	return []domain.EgressProfile{domain.EgressProviderOnly, domain.EgressProviderRegistry}
+}
+
 // composeClaudeDriver builds the production ward gate and Claude driver. Its
 // network work is the publication transport's: the janitor's startup pass,
 // and one exact-base fetch when the project image was built at a commit other
@@ -1810,7 +1819,7 @@ func composeClaudeDriver(
 		OperatingMode:             cfg.OperatingMode,
 		CredentialMode:            domain.CredentialSubscriptionContained,
 		EgressProfile:             domain.EgressProviderOnly,
-		EnforceableEgressProfiles: []domain.EgressProfile{domain.EgressProviderOnly},
+		EnforceableEgressProfiles: wardEnforceableEgressProfiles(),
 		ImageRef:                  cfg.AgentImage,
 		PromptPackageDigest:       promptPackage,
 		ReviewConfigurationDigest: reviewConfigurationDigest,
@@ -2114,13 +2123,21 @@ func runClaudeConformance(
 	cfg claudeDriverConfig,
 	withStableCoverage func(func() error) error,
 ) error {
-	var nonce [8]byte
+	// Full runs two synthetic handoffs, one per enforced egress profile. Each
+	// is a run of its own, minted in the same conf-<16 hex> shape so both sets
+	// of objects stay inside the namespace the production rig owns.
+	var nonce, registryNonce [8]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return fmt.Errorf("mint conformance run identity: %w", err)
 	}
+	if _, err := rand.Read(registryNonce[:]); err != nil {
+		return fmt.Errorf("mint conformance registry run identity: %w", err)
+	}
 	runID := "conf-" + hex.EncodeToString(nonce[:])
+	registryRunID := "conf-" + hex.EncodeToString(registryNonce[:])
 	if err := bindRigRuntimeResources(
-		cfg.StateDir, cfg.RigTokenFile, ward.FullConformanceRuntimeResourceNamesFor(runID),
+		cfg.StateDir, cfg.RigTokenFile,
+		ward.FullConformanceRuntimeResourceNamesFor(runID, registryRunID),
 	); err != nil {
 		return fmt.Errorf("bind production rig conformance resources: %w", err)
 	}
@@ -2155,6 +2172,7 @@ func runClaudeConformance(
 		CredentialTarget: "/var/lib/freeside/conformance-token",
 		CredentialMarker: "FREESIDE_CONF_" + strings.ToUpper(hex.EncodeToString(nonce[:])),
 		RunID:            runID,
+		RegistryRunID:    registryRunID,
 		Seed: ward.WorkspaceSeed{
 			Mode:      ward.SeedBaseCheckout,
 			SourceDir: seedDir,

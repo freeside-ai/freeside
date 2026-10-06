@@ -63,7 +63,7 @@ func TestCurrentSchemaVersion(t *testing.T) {
 	}
 	// This is the single schema-head pin to bump when adding a migration.
 	// Other numeric assertions cover historical boundaries or synthetic fixtures.
-	const want = 90
+	const want = 91
 	if got != want {
 		t.Fatalf("current schema version = %d, want %d", got, want)
 	}

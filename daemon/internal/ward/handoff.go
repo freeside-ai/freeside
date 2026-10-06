@@ -116,10 +116,19 @@ type AuthStoreObservation struct {
 }
 
 type EgressObservation struct {
+	// Profile is the profile the handoff ran under.
 	Profile        domain.EgressProfile
 	Network        string
 	HostOnly       bool
 	ProxyAuthority string
+	// Allowlist is every CONNECT authority the run's proxy admitted, sorted,
+	// read back from the proxy and checked against Profile before the writer
+	// was created.
+	Allowlist []string
+	// RegistrySetDigest is the content address of the declared registry set
+	// (domain.RegistrySet) the allowlist was built from; empty under
+	// provider_only.
+	RegistrySetDigest domain.Digest
 }
 
 // WorkspaceObservation is the workspace's identity as the gate observed it,
@@ -322,6 +331,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	hs.Agent.InstructionPolicy.Boundaries = slices.Clone(
 		hs.Agent.InstructionPolicy.Boundaries,
 	)
+	hs.RegistryHosts = slices.Clone(hs.RegistryHosts)
 	if err := hs.validate(); err != nil {
 		return nil, err
 	}
@@ -661,9 +671,13 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		}
 	}
 
-	networkReport, proxyURL, err := b.prepareProviderEgress(ctx, hs, names, st)
+	networkReport, proxyURL, allowlist, err := b.prepareProviderEgress(ctx, hs, names, st)
 	if err != nil {
 		return nil, err
+	}
+	registrySetDigest, err := hs.registrySetDigest()
+	if err != nil {
+		return nil, failf(CheckAgentEgress, "digest the declared registry set: %v", err)
 	}
 	// Checks 1-2 plus provider_only: the generated writer spec is re-verified,
 	// not trusted, after the runtime supplies the host-only gateway the proxy
@@ -844,10 +858,12 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 			ObservedBaseSHA: observedBaseSHA,
 		},
 		Egress: EgressObservation{
-			Profile:        domain.EgressProviderOnly,
-			Network:        networkReport.Name,
-			HostOnly:       networkReport.Mode == NetworkHostOnly,
-			ProxyAuthority: mustProxyAddress(proxyURL),
+			Profile:           hs.Agent.EgressProfile,
+			Network:           networkReport.Name,
+			HostOnly:          networkReport.Mode == NetworkHostOnly,
+			ProxyAuthority:    mustProxyAddress(proxyURL),
+			Allowlist:         allowlist,
+			RegistrySetDigest: registrySetDigest,
 		},
 		AuthStore: authStoreObservation(hs, st, credPostDigest),
 	}, nil

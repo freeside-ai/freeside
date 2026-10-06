@@ -495,17 +495,26 @@ func TestRunClaudeConformanceBindsExactNamespaceBeforeSetup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runID := ""
+	// Full's two synthetic handoffs each bind a seeder; only the first run
+	// also owns the suite's probe objects.
+	runID, registryRunID := "", ""
 	for _, name := range manifest.Resources.Containers {
-		if strings.HasPrefix(name, "freeside-handoff-conf-") && strings.HasSuffix(name, "-seeder") {
-			runID = strings.TrimSuffix(strings.TrimPrefix(name, "freeside-handoff-"), "-seeder")
-			break
+		if !strings.HasPrefix(name, "freeside-handoff-conf-") || !strings.HasSuffix(name, "-seeder") {
+			continue
+		}
+		id := strings.TrimSuffix(strings.TrimPrefix(name, "freeside-handoff-"), "-seeder")
+		if slices.Contains(manifest.Resources.Containers, "freeside-ward-conf-"+id+"-liveness") {
+			runID = id
+		} else {
+			registryRunID = id
 		}
 	}
-	if !strings.HasPrefix(runID, "conf-") || len(runID) != len("conf-")+16 {
-		t.Fatalf("bound conformance run ID = %q, want conf-<16hex>", runID)
+	for _, id := range []string{runID, registryRunID} {
+		if !strings.HasPrefix(id, "conf-") || len(id) != len("conf-")+16 {
+			t.Fatalf("bound conformance run IDs = %q and %q, want two conf-<16hex>", runID, registryRunID)
+		}
 	}
-	want := ward.FullConformanceRuntimeResourceNamesFor(runID)
+	want := ward.FullConformanceRuntimeResourceNamesFor(runID, registryRunID)
 	for _, names := range []struct {
 		kind string
 		got  []string
@@ -606,7 +615,7 @@ func TestFullConformanceResiduePreservesGlobalGateAcrossCrash(t *testing.T) {
 	runID := "conf-" + strings.Repeat("e", 16)
 	assertVolumeResiduePreservesGlobalGate(
 		t,
-		ward.FullConformanceRuntimeResourceNamesFor(runID),
+		ward.FullConformanceRuntimeResourceNamesFor(runID, "conf-"+strings.Repeat("f", 16)),
 		"freeside-ward-conf-"+runID+"-cred",
 	)
 }

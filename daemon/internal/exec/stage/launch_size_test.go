@@ -7,14 +7,23 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 func handoffSpecWithPolicy(t *testing.T, policyBody string) (ward.HandoffSpec, error) {
 	t.Helper()
+	return handoffSpecWithProfileAndPolicy(t, domain.EgressProviderOnly, policyBody)
+}
+
+func handoffSpecWithProfileAndPolicy(
+	t *testing.T, profile domain.EgressProfile, policyBody string,
+) (ward.HandoffSpec, error) {
+	t.Helper()
 	d := newTestDriver(t, &stubGate{}, newStubExports())
 	spec := testStartSpec()
+	spec.EgressProfile = profile
 	inputs := stageInputsWithBodies(t, &spec,
 		[]byte("# Work item\nDo the thing.\n"),
 		[]byte("You are the Phase 1A implementer.\n"),

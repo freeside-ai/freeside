@@ -614,6 +614,21 @@ func TestGolden(t *testing.T) {
 		AdjudicationDigest: domain.Digest("sha256:" + strings.Repeat("a", 64)),
 		CreatedAt:          ts,
 	}
+	externalAdjudication := domain.Digest("sha256:" + strings.Repeat("a", 64))
+	externalRemediation := domain.InvocationID("review-run-1-3")
+	externalDispositionDeferred := domain.ExternalFindingDisposition{
+		FindingID: findingExternal.ID, RunID: findingExternal.RunID, Round: 2,
+		Disposition:        domain.ReviewDispositionDeferred,
+		Reason:             "requires a separate hardening unit",
+		AdjudicationDigest: &externalAdjudication,
+		CreatedAt:          ts,
+	}
+	externalDispositionFixed := domain.ExternalFindingDisposition{
+		FindingID: findingExternal.ID, RunID: findingExternal.RunID, Round: 2,
+		Disposition: domain.ReviewDispositionFixed, Reason: "remediated in the cycle's next round",
+		RemediationInvocationID: &externalRemediation,
+		CreatedAt:               ts,
+	}
 	humanSupersession := domain.FindingDispositionSupersession{
 		RunID: finding.RunID, ReversingRound: 3, FindingID: finding.ID, SupersededRound: 1,
 		RemediationInvocationID: "review-run-1-2",
@@ -1751,6 +1766,8 @@ func TestGolden(t *testing.T) {
 		{"shadow_review_record", shadowReviewRecord},
 		{"classifier_accuracy_sample", classifierAccuracySample},
 		{"review_disposition_record", reviewDisposition},
+		{"external_finding_disposition_deferred", externalDispositionDeferred},
+		{"external_finding_disposition_fixed", externalDispositionFixed},
 		{"finding_disposition_supersession_human_command", humanSupersession},
 		{"finding_disposition_supersession_auto_route", autoSupersession},
 		{"review_failure", reviewFailure},

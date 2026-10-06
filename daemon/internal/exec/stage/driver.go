@@ -278,6 +278,11 @@ func (d *Driver) handoffSpec(ctx context.Context, in intent) (ward.HandoffSpec, 
 			"%w: provider handoff egress profile differs from the durable input",
 			ErrUnsupportedStart,
 		)
+	case len(hs.RegistryHosts) != 0:
+		return ward.HandoffSpec{}, fmt.Errorf(
+			"%w: provider handoff chose a registry set; it comes from the run's policy",
+			ErrUnsupportedStart,
+		)
 	case !vendorInstructionsEqual(hs.Agent.VendorInstructions, in.Instructions):
 		return ward.HandoffSpec{}, fmt.Errorf(
 			"%w: provider handoff vendor instructions differ from the durable input",
@@ -334,6 +339,16 @@ func (d *Driver) handoffSpec(ctx context.Context, in intent) (ward.HandoffSpec, 
 		return ward.HandoffSpec{}, fmt.Errorf("%w: %w", ErrUnsupportedStart, err)
 	}
 	hs.Class, hs.Size = ward.LaunchWriter, sizes.Writer
+	// The registry set is the run's durable policy too, read strictly: the
+	// profile was admitted against this policy, and a set that is missing or
+	// malformed here refuses the start instead of narrowing to provider_only.
+	if providerInput.Spec.EgressProfile == domain.EgressProviderRegistry {
+		set, err := domain.DeclaredRegistrySet(domain.ResolvedPolicy{Keys: keys})
+		if err != nil {
+			return ward.HandoffSpec{}, fmt.Errorf("%w: %w", ErrUnsupportedStart, err)
+		}
+		hs.RegistryHosts = set.Hosts
+	}
 	return hs, nil
 }
 
