@@ -435,6 +435,16 @@ and its guarantees.
   constraints and `stacked-on` intentional bases (see Stacked PRs).
 - After any merge to `main`, every remaining open PR's integration evidence is
   stale until revalidated against the new tip.
+- Refresh a PR branch by rebasing it onto the freshly fetched tip of its
+  base, then push with `--force-with-lease`. Never merge the base into a PR
+  branch: not with `git merge`, not with the forge's "Update branch" merge,
+  and not with a host tool that merges the base in. This is the project's
+  method wherever a workflow step says to update the branch
+  (`docs/agent-workflow.md` §handing-off); a stacked child rebases onto its
+  base the same way (Stacked PRs). Resolve a conflict in the commit that
+  owns the conflicting change, and recheck that each rebased commit is
+  still green. Decision record:
+  `devlog/2026-10-06-1236-rebase-base-refresh.md`.
 - Before final handoff, and again after any base advance: fetch the default
   branch and run
   `scripts/merge-result-audit.sh origin/main <head-branch> <allowed-path>...`
@@ -663,9 +673,11 @@ the forbidden Conventional Commit, autosquash, WIP, and review-cleanup
 prefixes) are in the header of `scripts/check-commit-messages.sh`. CI runs the
 script over every non-merge commit in `merge-base..head`, and
 `bash scripts/check-commit-messages.sh origin/main HEAD` checks a branch
-locally. The same `core.hooksPath` opt-in also enables the `pre-commit` hook
-that regenerates the tracked API client when a commit stages one of its
-inputs; CI's `generate` job stays the backstop.
+locally. The script also rejects a merge of the base into the branch
+(`base-merge`), which enforces the rebase rule under Integration Ordering and
+Merge-Result Audit. The same `core.hooksPath` opt-in also enables the
+`pre-commit` hook that regenerates the tracked API client when a commit
+stages one of its inputs; CI's `generate` job stays the backstop.
 
 <!-- agents-md:managed:done -->
 
