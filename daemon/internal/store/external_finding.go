@@ -152,19 +152,9 @@ func (tx *ReadTx) ExternalReviewCycleFindings(
 	if err != nil {
 		return nil, fmt.Errorf("external review cycle findings %q: %w", publication, err)
 	}
-	if successor.EffectiveOrigin() != domain.PublicationSuccessorExternalReview || successor.Reentry == nil {
-		return nil, fmt.Errorf("external review cycle findings %q: not an external review cycle: %w",
-			publication, domain.ErrParentKeyMismatch)
-	}
-	ready, err := tx.GetReadyItemPRBinding(ctx, successor.PredecessorItemID)
-	if err != nil || ready.RunID != runID {
-		return nil, fmt.Errorf("external review cycle findings %q: %w",
-			publication, errors.Join(err, domain.ErrParentKeyMismatch))
-	}
-	profile, err := tx.GetTrustProfile(ctx, successor.AdmittingProfileDigest)
+	admission, err := tx.externalReviewCycleAdmission(ctx, successor)
 	if err != nil {
-		return nil, fmt.Errorf("external review cycle findings %q: %w",
-			publication, errors.Join(err, domain.ErrExternalReviewNotAdmitted))
+		return nil, fmt.Errorf("external review cycle findings %q: %w", publication, err)
 	}
 	all, err := tx.ListExternalFindings(ctx, runID)
 	if err != nil {
@@ -175,8 +165,7 @@ func (tx *ReadTx) ExternalReviewCycleFindings(
 		named bool
 	)
 	for _, finding := range all {
-		if finding.External.HeadSHA != successor.Reentry.HeadSHA ||
-			externalFindingAdmittedBy(finding, profile, ready) != nil {
+		if admission.admits(finding) != nil {
 			continue
 		}
 		named = named || finding.ID == successor.ExternalFindingID
@@ -187,4 +176,46 @@ func (tx *ReadTx) ExternalReviewCycleFindings(
 			publication, successor.ExternalFindingID, domain.ErrParentKeyMismatch)
 	}
 	return out, nil
+}
+
+// externalReviewCycleAdmission is what decides whether an external finding
+// belongs to one external_review cycle: the authority, already read through
+// its gate, the binding of the ready item it superseded, and the trust
+// profile it names.
+type externalReviewCycleAdmission struct {
+	authority domain.PublicationSuccessor
+	ready     domain.ReadyItemPRBinding
+	profile   domain.AutomationTrustProfile
+}
+
+func (tx *ReadTx) externalReviewCycleAdmission(
+	ctx context.Context, authority domain.PublicationSuccessor,
+) (externalReviewCycleAdmission, error) {
+	none := externalReviewCycleAdmission{}
+	if authority.EffectiveOrigin() != domain.PublicationSuccessorExternalReview || authority.Reentry == nil {
+		return none, fmt.Errorf("not an external review cycle: %w", domain.ErrParentKeyMismatch)
+	}
+	ready, err := tx.GetReadyItemPRBinding(ctx, authority.PredecessorItemID)
+	if err != nil || ready.RunID != authority.RunID {
+		return none, errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	profile, err := tx.GetTrustProfile(ctx, authority.AdmittingProfileDigest)
+	if err != nil {
+		return none, errors.Join(err, domain.ErrExternalReviewNotAdmitted)
+	}
+	return externalReviewCycleAdmission{authority: authority, ready: ready, profile: profile}, nil
+}
+
+// admits reports whether the cycle answers the finding: an external finding
+// of the cycle's run, on the cycle's head, whose reviewer the named profile
+// admits. The named profile is used, not the active one, so the answer reads
+// the same after the owner edits the allowlist.
+func (a externalReviewCycleAdmission) admits(finding domain.Finding) error {
+	if finding.External == nil {
+		return domain.ErrExternalFindingInconsistent
+	}
+	if finding.RunID != a.authority.RunID || finding.External.HeadSHA != a.authority.Reentry.HeadSHA {
+		return domain.ErrParentKeyMismatch
+	}
+	return externalFindingAdmittedBy(finding, a.profile, a.ready)
 }

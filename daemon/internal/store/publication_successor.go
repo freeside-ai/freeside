@@ -380,9 +380,10 @@ func (tx *ReadTx) requireUninvalidatedPredecessor(ctx context.Context, successor
 	return nil
 }
 
-// CurrentPublicationSuccessor follows one unbranched, authenticated chain.
-// No insertion order or caller-supplied "latest" bit grants precedence.
-func (tx *ReadTx) PublicationSuccessorChain(ctx context.Context, runID domain.RunID) ([]domain.PublicationSuccessor, error) {
+// dispatchedPublicationSuccessors decodes every dispatched successor record
+// stored under one run's key prefix, in insertion order. It runs no gate, so
+// nothing it returns is an authority until GetPublicationSuccessor says so.
+func (tx *ReadTx) dispatchedPublicationSuccessors(ctx context.Context, runID domain.RunID) ([]domain.PublicationSuccessor, error) {
 	prefix := "publication-successor/" + url.PathEscape(string(runID)) + "/"
 	entries, err := tx.listOutboxQuery(ctx, `SELECT id, idempotency_key, kind, payload,
 		payload_version, payload_digest, status, created_at FROM outbox
@@ -392,7 +393,7 @@ func (tx *ReadTx) PublicationSuccessorChain(ctx context.Context, runID domain.Ru
 	if err != nil {
 		return nil, err
 	}
-	byParent := make(map[domain.ItemID]domain.PublicationSuccessor)
+	sealed := make([]domain.PublicationSuccessor, 0, len(entries))
 	for _, entry := range entries {
 		successor, err := domain.DecodePublicationSuccessor(entry.Payload)
 		if err != nil {
@@ -401,10 +402,22 @@ func (tx *ReadTx) PublicationSuccessorChain(ctx context.Context, runID domain.Ru
 		if successor.RunID != runID {
 			return nil, domain.ErrParentKeyMismatch
 		}
-		verified, err := tx.GetPublicationSuccessor(ctx, runID, successor.PublicationID())
-		if err != nil || !reflect.DeepEqual(verified, successor) {
-			return nil, errors.Join(err, domain.ErrParentKeyMismatch)
-		}
+		sealed = append(sealed, successor)
+	}
+	return sealed, nil
+}
+
+// linkPublicationSuccessors orders a run's sealed successors into its one
+// chain from the root ready item. Two successors of one item are a branch,
+// and a successor no walk from the root reaches is an orphan: both fail,
+// because neither insertion order nor anything else says which row is the
+// run's. It checks structure only, so a linked row is still not an authority
+// until GetPublicationSuccessor says so.
+func linkPublicationSuccessors(
+	runID domain.RunID, sealed []domain.PublicationSuccessor,
+) ([]domain.PublicationSuccessor, error) {
+	byParent := make(map[domain.ItemID]domain.PublicationSuccessor, len(sealed))
+	for _, successor := range sealed {
 		if _, exists := byParent[successor.PredecessorItemID]; exists {
 			return nil, domain.ErrParentKeyMismatch
 		}
@@ -422,6 +435,22 @@ func (tx *ReadTx) PublicationSuccessorChain(ctx context.Context, runID domain.Ru
 		parent = next.ReadyItemID()
 	}
 	return chain, nil
+}
+
+// CurrentPublicationSuccessor follows one unbranched, authenticated chain.
+// No insertion order or caller-supplied "latest" bit grants precedence.
+func (tx *ReadTx) PublicationSuccessorChain(ctx context.Context, runID domain.RunID) ([]domain.PublicationSuccessor, error) {
+	sealed, err := tx.dispatchedPublicationSuccessors(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	for _, successor := range sealed {
+		verified, err := tx.GetPublicationSuccessor(ctx, runID, successor.PublicationID())
+		if err != nil || !reflect.DeepEqual(verified, successor) {
+			return nil, errors.Join(err, domain.ErrParentKeyMismatch)
+		}
+	}
+	return linkPublicationSuccessors(runID, sealed)
 }
 
 func (tx *ReadTx) CurrentPublicationSuccessor(ctx context.Context, runID domain.RunID) (*domain.PublicationSuccessor, error) {
