@@ -14,6 +14,10 @@ import (
 // fixed anchor keeps the seed deterministic.
 var filingSeedAt = time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 
+// filingSeedBotUserID stands in for the App bot account a seeded filing's
+// candidate search listed under. No seed reads it back against a live App.
+const filingSeedBotUserID int64 = 4100
+
 // filingSeedDigest is a well-formed digest standing in for content the seed
 // never stores (a spec, an instruction set, a provenance source).
 func filingSeedDigest(name string) domain.Digest {
@@ -48,7 +52,8 @@ func DispatchFollowUpFiling(t testing.TB, st *store.Store, filing FollowUpFiling
 			return err
 		}
 		// An attempt needs the candidate search recorded first; it found nothing.
-		if _, err := tx.RecordFollowUpFilingPreDispatch(t.Context(), instance, nil, opened.Add(time.Minute)); err != nil {
+		if _, err := tx.RecordFollowUpFilingPreDispatch(
+			t.Context(), instance, nil, filingSeedBotUserID, opened.Add(time.Minute)); err != nil {
 			return err
 		}
 		_, err := tx.StartFollowUpFilingAttempt(t.Context(), instance, opened.Add(2*time.Minute))

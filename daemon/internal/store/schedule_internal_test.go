@@ -450,7 +450,8 @@ func migrationsBeforeScheduleAuthority(t *testing.T) fs.FS {
 			entry.Name() == "0089_follow_up_filing_ledger.sql" ||
 			entry.Name() == "0090_external_finding_dispositions.sql" ||
 			entry.Name() == "0091_project_image_environment.sql" ||
-			entry.Name() == "0092_publish_audit_issues.sql" || entry.IsDir() {
+			entry.Name() == "0092_publish_audit_issues.sql" ||
+			entry.Name() == "0093_follow_up_filing_dispatch_identity.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())

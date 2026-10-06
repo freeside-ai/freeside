@@ -11,13 +11,25 @@ import (
 
 var filingLedgerAt = time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
 
+// filingBotUserID is the App bot account every test history lists under.
+const filingBotUserID int64 = 4100
+
 // filingStep is one ledger transition, so a test names the history it needs.
 type filingStep func(domain.FollowUpFilingIntent) (domain.FollowUpFilingIntent, error)
 
 func filingPreDispatch(numbers ...int) filingStep {
 	return func(i domain.FollowUpFilingIntent) (domain.FollowUpFilingIntent, error) {
-		return i.RecordPreDispatch(numbers, filingLedgerAt.Add(time.Minute))
+		return i.RecordPreDispatch(numbers, filingBotUserID, filingLedgerAt.Add(time.Minute))
 	}
+}
+
+// filingForgetIdentity leaves the intent as a row written before the
+// dispatching identity was recorded reads back: its set names no account.
+func filingForgetIdentity(i domain.FollowUpFilingIntent) (domain.FollowUpFilingIntent, error) {
+	set := *i.PreDispatch
+	set.BotUserID = nil
+	i.PreDispatch = &set
+	return i, nil
 }
 
 func filingAttempt(i domain.FollowUpFilingIntent) (domain.FollowUpFilingIntent, error) {
@@ -94,6 +106,10 @@ func TestFollowUpFilingAttemptRule(t *testing.T) {
 		{"after a marker with no response", []filingStep{set, filingAttempt}, domain.ErrFollowUpFilingCreateUnproven},
 		{"after a success", []filingStep{set, filingAttempt, filingLedgerSuccess(40)}, domain.ErrFollowUpFilingIntentResolved},
 		{"before the pre-dispatch set", nil, domain.ErrFollowUpFilingPreDispatchMissing},
+		{"under a set with no recorded identity", []filingStep{set, filingForgetIdentity}, domain.ErrFollowUpFilingIdentityMissing},
+		{"after a transient rejection with no recorded identity", []filingStep{
+			set, filingAttempt, filingResponse(domain.FollowUpFilingResponseTransientRejection), filingForgetIdentity,
+		}, domain.ErrFollowUpFilingIdentityMissing},
 		{"after a refused outcome", []filingStep{
 			set, filingRefuse(domain.FollowUpFilingRefusalPreconditionFailed),
 		}, domain.ErrFollowUpFilingIntentResolved},
@@ -117,12 +133,15 @@ func TestFollowUpFilingAttemptRule(t *testing.T) {
 func TestFollowUpFilingPreDispatchIsWrittenOnce(t *testing.T) {
 	t.Parallel()
 	open := filingIntentAfter(t)
-	recorded, err := open.RecordPreDispatch([]int{9, 7, 9}, filingLedgerAt)
+	recorded, err := open.RecordPreDispatch([]int{9, 7, 9}, filingBotUserID, filingLedgerAt)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := recorded.PreDispatch.IssueNumbers; !slices.Equal(got, []int{7, 9}) {
 		t.Fatalf("pre-dispatch set = %v, want it sorted and duplicate-free", got)
+	}
+	if got := recorded.PreDispatch.BotUserID; got == nil || *got != filingBotUserID {
+		t.Fatalf("pre-dispatch identity = %v, want bot user %d", got, filingBotUserID)
 	}
 	if open.PreDispatch != nil {
 		t.Fatal("recording the set changed the intent it was applied to")
@@ -137,7 +156,7 @@ func TestFollowUpFilingPreDispatchIsWrittenOnce(t *testing.T) {
 		"a set on an empty set":     empty,
 		"a set on a refused intent": filingIntentAfter(t, filingRefuse(domain.FollowUpFilingRefusalPreconditionFailed)),
 	} {
-		_, err := intent.RecordPreDispatch([]int{12}, filingLedgerAt)
+		_, err := intent.RecordPreDispatch([]int{12}, filingBotUserID, filingLedgerAt)
 		want := domain.ErrFollowUpFilingPreDispatchFixed
 		if intent.Terminal != nil {
 			want = domain.ErrFollowUpFilingIntentResolved
@@ -146,8 +165,13 @@ func TestFollowUpFilingPreDispatchIsWrittenOnce(t *testing.T) {
 			t.Errorf("%s: error = %v, want %v", name, err, want)
 		}
 	}
-	if _, err := open.RecordPreDispatch([]int{0}, filingLedgerAt); !errors.Is(err, domain.ErrNonPositive) {
+	if _, err := open.RecordPreDispatch([]int{0}, filingBotUserID, filingLedgerAt); !errors.Is(err, domain.ErrNonPositive) {
 		t.Errorf("issue number 0: error = %v, want %v", err, domain.ErrNonPositive)
+	}
+	for _, botUserID := range []int64{0, -1} {
+		if _, err := open.RecordPreDispatch(nil, botUserID, filingLedgerAt); !errors.Is(err, domain.ErrNonPositive) {
+			t.Errorf("bot user %d: error = %v, want %v", botUserID, err, domain.ErrNonPositive)
+		}
 	}
 }
 
@@ -342,6 +366,10 @@ func TestFollowUpFilingIntentValidateRejectsUnreachableStates(t *testing.T) {
 			"unsorted pre-dispatch set", filingIntentAfter(t, set),
 			func(i *domain.FollowUpFilingIntent) { i.PreDispatch.IssueNumbers = []int{9, 7} },
 			domain.ErrFollowUpFilingLedgerInconsistent,
+		},
+		{
+			"non-positive dispatching identity", filingIntentAfter(t, set),
+			func(i *domain.FollowUpFilingIntent) { *i.PreDispatch.BotUserID = 0 }, domain.ErrNonPositive,
 		},
 		{
 			"ordinal gap", filingIntentAfter(t, set, filingAttempt),

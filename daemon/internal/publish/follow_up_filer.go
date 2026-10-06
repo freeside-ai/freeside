@@ -676,7 +676,8 @@ func (f *FollowUpFiler) dispatch(ctx context.Context, filing approvedFiling, vie
 		}
 		if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 			var err error
-			intent, err = tx.RecordFollowUpFilingPreDispatch(ctx, filing.instanceID, numbers, f.now())
+			intent, err = tx.RecordFollowUpFilingPreDispatch(
+				ctx, filing.instanceID, numbers, target.bot.BotUserID, f.now())
 			return err
 		}); err != nil {
 			return err

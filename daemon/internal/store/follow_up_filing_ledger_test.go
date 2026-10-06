@@ -17,6 +17,9 @@ import (
 
 var ledgerAt = filingAt.Add(24 * time.Hour)
 
+// ledgerBotUserID is the App bot account every test history lists under.
+const ledgerBotUserID int64 = 4100
+
 // ledgerOp is one ledger write against an instance's intent, so a test names
 // the history it needs.
 type ledgerOp func(ctx context.Context, tx *store.InternalTx, id domain.ProposalInstanceID) error
@@ -28,7 +31,7 @@ func ledgerOpen(ctx context.Context, tx *store.InternalTx, id domain.ProposalIns
 
 func ledgerSet(numbers ...int) ledgerOp {
 	return func(ctx context.Context, tx *store.InternalTx, id domain.ProposalInstanceID) error {
-		_, err := tx.RecordFollowUpFilingPreDispatch(ctx, id, numbers, ledgerAt.Add(time.Minute))
+		_, err := tx.RecordFollowUpFilingPreDispatch(ctx, id, numbers, ledgerBotUserID, ledgerAt.Add(time.Minute))
 		return err
 	}
 }
@@ -216,8 +219,8 @@ func (l *ledgerFixture) tamper(t *testing.T, statements ...string) {
 		if err := errors.Join(triggers.Err(), triggers.Close()); err != nil {
 			t.Fatal(err)
 		}
-		if len(names) != 7 {
-			t.Fatalf("ledger triggers = %v, want seven", names)
+		if len(names) != 8 {
+			t.Fatalf("ledger triggers = %v, want eight", names)
 		}
 		for _, name := range names {
 			if _, err := raw.Exec(`DROP TRIGGER "` + name + `"`); err != nil {
@@ -374,12 +377,25 @@ func TestFollowUpFilingPreDispatchIsWrittenOnceInStore(t *testing.T) {
 	if got := intent.PreDispatch.IssueNumbers; !reflect.DeepEqual(got, []int{7, 31}) {
 		t.Fatalf("pre-dispatch set = %v, want [7 31]", got)
 	}
+	if got := intent.PreDispatch.BotUserID; got == nil || *got != ledgerBotUserID {
+		t.Fatalf("pre-dispatch identity = %v, want bot user %d", got, ledgerBotUserID)
+	}
 
 	// An empty set is a recorded fact, distinct from no set: it reads back
 	// as recorded after a reopen and still fixes the set.
 	mustLedger(t, ctx, l.st, l.first.ID, ledgerAmbiguous)
 	if err := tryLedger(ctx, l.st, l.second.ID, ledgerOpen, ledgerAttempt); !errors.Is(err, domain.ErrFollowUpFilingPreDispatchMissing) {
 		t.Fatalf("attempt before any set: error = %v, want %v", err, domain.ErrFollowUpFilingPreDispatchMissing)
+	}
+	// A set names the account it was listed under, or it is not recorded.
+	for _, botUserID := range []int64{0, -1} {
+		err := l.st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+			_, err := tx.RecordFollowUpFilingPreDispatch(ctx, l.second.ID, nil, botUserID, ledgerAt.Add(time.Minute))
+			return err
+		})
+		if !errors.Is(err, domain.ErrNonPositive) {
+			t.Fatalf("a set under bot user %d: error = %v, want %v", botUserID, err, domain.ErrNonPositive)
+		}
 	}
 	mustLedger(t, ctx, l.st, l.second.ID, ledgerSet())
 	l.raw(t, func(*sql.DB) {})
@@ -630,6 +646,8 @@ func TestFollowUpFilingLedgerRowsAreAppendOnly(t *testing.T) {
 		"change a terminal outcome":           `UPDATE follow_up_filing_intents SET outcome = 'ambiguous' WHERE instance_id = '` + first + `'`,
 		"reopen a resolved intent":            `UPDATE follow_up_filing_intents SET outcome = NULL, resolved_at = NULL WHERE instance_id = '` + first + `'`,
 		"change a recorded pre-dispatch set":  `UPDATE follow_up_filing_intents SET pre_dispatch_issue_numbers = '[]' WHERE instance_id = '` + second + `'`,
+		"change a recorded identity":          `UPDATE follow_up_filing_intents SET pre_dispatch_bot_user_id = 4200 WHERE instance_id = '` + second + `'`,
+		"clear a recorded identity":           `UPDATE follow_up_filing_intents SET pre_dispatch_bot_user_id = NULL WHERE instance_id = '` + second + `'`,
 		"move an intent to another repo":      `UPDATE follow_up_filing_intents SET repository_id = 456 WHERE instance_id = '` + second + `'`,
 		"delete an intent":                    `DELETE FROM follow_up_filing_intents WHERE instance_id = '` + second + `'`,
 		"change a recorded response":          `UPDATE follow_up_filing_attempts SET response_class = 'unproven' WHERE instance_id = '` + second + `' AND ordinal = 1`,
@@ -656,6 +674,9 @@ func TestFollowUpFilingLedgerRowsAreAppendOnly(t *testing.T) {
 		intent, err := ledgerIntent(ctx, l.st, id)
 		if err != nil || len(intent.Attempts) != wantAttempts {
 			t.Fatalf("intent %q after refused statements = %+v, %v", id, intent, err)
+		}
+		if got := intent.PreDispatch.BotUserID; got == nil || *got != ledgerBotUserID {
+			t.Fatalf("intent %q identity after refused statements = %v, want bot user %d", id, got, ledgerBotUserID)
 		}
 	}
 }
@@ -726,6 +747,17 @@ func TestFollowUpFilingReconstructionFailsClosed(t *testing.T) {
 			"the pre-dispatch set is not canonical", func(first, _ string) []string {
 				return []string{`UPDATE follow_up_filing_intents SET pre_dispatch_issue_numbers = '[31, 7]' WHERE instance_id = '` + first + `'`}
 			}, 40, func(l ledgerFixture) domain.ProposalInstanceID { return l.first.ID }, true,
+		},
+		{
+			// Without its attempt and set the row would otherwise read as an
+			// intent that has listed nothing yet, and take a new set under
+			// whatever identity came next.
+			"the dispatching identity is recorded without its set", func(_, second string) []string {
+				return []string{
+					`DELETE FROM follow_up_filing_attempts WHERE instance_id = '` + second + `'`,
+					`UPDATE follow_up_filing_intents SET pre_dispatch_issue_numbers = NULL, pre_dispatch_recorded_at = NULL WHERE instance_id = '` + second + `'`,
+				}
+			}, 0, func(l ledgerFixture) domain.ProposalInstanceID { return l.second.ID }, true,
 		},
 	}
 	for _, tc := range cases {
@@ -840,7 +872,7 @@ func TestFollowUpFilingLedgerNormalizesCallerTimes(t *testing.T) {
 				if _, err := tx.OpenFollowUpFilingIntent(ctx, l.first.ID, at); err != nil {
 					return err
 				}
-				if _, err := tx.RecordFollowUpFilingPreDispatch(ctx, l.first.ID, nil, at); err != nil {
+				if _, err := tx.RecordFollowUpFilingPreDispatch(ctx, l.first.ID, nil, ledgerBotUserID, at); err != nil {
 					return err
 				}
 				if _, err := tx.StartFollowUpFilingAttempt(ctx, l.first.ID, at); err != nil {
