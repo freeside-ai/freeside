@@ -17,15 +17,21 @@
 // The credential-bearing writer receives exactly one per-run host-only
 // network. Its only route beyond that network is a daemon-side CONNECT proxy
 // advertised at the network's host gateway; the proxy admits only configured
-// canonical DNS host:port authorities and requires matching TLS SNI before
-// forwarding the ClientHello. The gate attests both the runtime's host-only
-// mode and the writer's exact named attachment before execution. Proxy
-// environment is compared as an exact key/value set independent of runtime
-// ordering, and direct external and guest-DNS egress remain structurally
-// absent if the writer ignores or clears those variables. Suite.Full also
-// requires each configured provider/CDN to reject an alternate encrypted HTTP
-// Host; without TLS termination, that application-layer rule is an explicit
-// provider assumption rather than a property CONNECT can enforce.
+// canonical DNS host:port authorities and, under provider_registry, the run's
+// declared registry hosts on port 443, and requires matching TLS SNI before
+// forwarding the ClientHello. A registry host comes from run policy, not
+// daemon configuration, so the proxy resolves it itself and refuses the
+// tunnel unless every address it resolves to is public unicast. After the
+// proxy starts, the gate reads back the allowlist it enforces and fails
+// closed when that differs from the handoff's request. The gate attests both
+// the runtime's host-only mode and the writer's exact named attachment before
+// execution. Proxy environment is compared as an exact key/value set
+// independent of runtime ordering, and direct external and guest-DNS egress
+// remain structurally absent if the writer ignores or clears those variables.
+// Suite.Full also requires each configured provider/CDN to reject an
+// alternate encrypted HTTP Host; without TLS termination, that
+// application-layer rule is an explicit provider assumption rather than a
+// property CONNECT can enforce.
 //
 // Host-only describes the network shape, not absence of a host neighbor: the
 // runtime gateway remains an address through which a wildcard-bound host

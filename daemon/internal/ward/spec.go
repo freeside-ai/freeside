@@ -592,6 +592,14 @@ type HandoffSpec struct {
 	// when zero, so a spec journaled before sizes were declared keeps its
 	// digest and still recovers.
 	Size ContainerSize `json:",omitzero"`
+	// RegistryHosts is the run's declared registry set (plan §5.4), the
+	// hosts of domain.RegistrySet in canonical order, each reached on port
+	// 443. It is required under provider_registry and refused under
+	// provider_only. The caller reads it from the run's policy; the agent
+	// spec never chooses it. Omitted from the journaled digest when empty,
+	// so a provider_only spec keeps the digest it had before the field
+	// existed.
+	RegistryHosts []string `json:",omitempty"`
 	// Stall, when set, hears the writer's stall heartbeat: true once the
 	// writer has gone Config.StallInterval without a provider response
 	// byte, false once one arrives or the writer wait ends while a stall is
@@ -627,13 +635,23 @@ func (s HandoffSpec) validate() error {
 		return fmt.Errorf("%w: Agent.Image must be digest-pinned", ErrInvalidHandoffSpec)
 	case len(s.Agent.Command) == 0:
 		return fmt.Errorf("%w: Agent.Command is required", ErrInvalidHandoffSpec)
-	case s.Agent.EgressProfile != domain.EgressProviderOnly:
+	case s.Agent.EgressProfile != domain.EgressProviderOnly &&
+		s.Agent.EgressProfile != domain.EgressProviderRegistry:
 		return fmt.Errorf("%w: Agent.EgressProfile %q is not enforceable by this backend", ErrInvalidHandoffSpec, s.Agent.EgressProfile)
+	case s.Agent.EgressProfile == domain.EgressProviderOnly && len(s.RegistryHosts) != 0:
+		return fmt.Errorf("%w: RegistryHosts is set under provider_only", ErrInvalidHandoffSpec)
 	case s.Class != LaunchWriter && s.Class != LaunchConformance:
 		return fmt.Errorf("%w: Class %q is not a handoff launch class", ErrInvalidHandoffSpec, s.Class)
 	}
 	if err := s.Size.validate(); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidHandoffSpec, err)
+	}
+	if s.Agent.EgressProfile == domain.EgressProviderRegistry {
+		// An empty set fails here too: the profile without a declared
+		// registry is a request the proxy could only answer as provider_only.
+		if _, err := domain.NewRegistrySet(s.RegistryHosts); err != nil {
+			return fmt.Errorf("%w: RegistryHosts under provider_registry: %w", ErrInvalidHandoffSpec, err)
+		}
 	}
 	if s.Agent.OutcomeMarkerPath != "" {
 		if !strings.HasPrefix(s.Agent.OutcomeMarkerPath, "/") {
@@ -717,6 +735,19 @@ func (s HandoffSpec) validate() error {
 			ErrInvalidHandoffSpec)
 	}
 	return s.Seed.validate()
+}
+
+// registrySetDigest is the content address of the declared registry set the
+// run's allowlist is built from, or empty under provider_only.
+func (s HandoffSpec) registrySetDigest() (domain.Digest, error) {
+	if s.Agent.EgressProfile != domain.EgressProviderRegistry {
+		return "", nil
+	}
+	set, err := domain.NewRegistrySet(s.RegistryHosts)
+	if err != nil {
+		return "", err
+	}
+	return set.Digest()
 }
 
 // writableCredentialTarget is the target of the one leased writable

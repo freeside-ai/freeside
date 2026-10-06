@@ -156,6 +156,7 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 	hs.Agent.InstructionPolicy.Boundaries = slices.Clone(
 		hs.Agent.InstructionPolicy.Boundaries,
 	)
+	hs.RegistryHosts = slices.Clone(hs.RegistryHosts)
 	if err := hs.validate(); err != nil {
 		return nil, err
 	}

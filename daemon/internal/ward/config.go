@@ -141,10 +141,12 @@ type Config struct {
 	// NewSuite refuses a fixture for any other image.
 	AgentImage string
 	// ProviderEndpoints is the exact CONNECT authority allowlist for
-	// provider_only writer egress. Each entry is a canonical lowercase
-	// TLS DNS-name:port pair; no wildcard, IP literal, or implicit port is
-	// allowed. Suite.Full requires matching TLS SNI and an HTTP response from
-	// every entry, plus rejection of its alternate-Host fronting witness.
+	// provider_only writer egress, and the part of the provider_registry
+	// allowlist that does not come from the run's declared registry set.
+	// Each entry is a canonical lowercase TLS DNS-name:port pair; no
+	// wildcard, IP literal, or implicit port is allowed. Suite.Full requires
+	// matching TLS SNI and an HTTP response from every entry, plus rejection
+	// of its alternate-Host fronting witness.
 	ProviderEndpoints []string
 	// EgressProxyTimeout bounds CONNECT request parsing and upstream dialing.
 	// Defaults to 15 seconds.
@@ -152,6 +154,11 @@ type Config struct {
 	// EgressDialContext is an injectable upstream dialer for conformance tests.
 	// Nil uses net.Dialer; production callers leave it nil.
 	EgressDialContext dialContextFunc
+	// EgressLookupIP is an injectable resolver for declared registry hosts
+	// under provider_registry, for conformance tests. Nil resolves the host
+	// as a rooted name with the system resolver; production callers leave
+	// it nil.
+	EgressLookupIP lookupIPFunc
 	// ExporterImage is the digest-pinned exporter image reference
 	// ("repo/name@sha256:..."). A tag-only reference is refused: the exporter
 	// is trusted compute, and trust binds to bytes, not a movable tag.
@@ -294,6 +301,10 @@ type Config struct {
 	// defaults to a context-aware real sleep.
 	Sleep              func(context.Context, time.Duration) error
 	checkSeedWorkspace func(context.Context, string, int) error
+	// readEgressAllowlist reads back the started proxy's table; tests script
+	// it to model a proxy that realized another allowlist than the one
+	// requested. Nil reads the proxy.
+	readEgressAllowlist func(*connectProxy) (providers, registries []string)
 }
 
 // withDefaults returns cfg with unset optional fields filled.

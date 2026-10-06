@@ -17,12 +17,17 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
 const (
 	maxProxyHeaderBytes = 8 << 10
 	maxClientHelloBytes = 64 << 10
 	maxProxyConnections = 32
+	// registryPort is the one port a declared registry host is reached on
+	// (plan §5.4 names authorities; the registry set declares hosts).
+	registryPort = "443"
 	// registryDialStagger is how long the proxy gives one registry address
 	// before it also tries the next. An address that never answers (a
 	// blackholed IPv6 route ahead of a working IPv4 one) then delays the
@@ -620,39 +625,97 @@ func proxyAddress(proxyURL string) (string, error) {
 	return u.Host, nil
 }
 
-func (b *Backend) prepareProviderEgress(ctx context.Context, hs HandoffSpec, names handoffNames, st *runState) (NetworkReport, string, error) {
+// registryAuthorities returns the CONNECT authority of each declared registry
+// host.
+func registryAuthorities(hosts []string) []string {
+	authorities := make([]string, len(hosts))
+	for i, host := range hosts {
+		authorities[i] = net.JoinHostPort(host, registryPort)
+	}
+	return authorities
+}
+
+// realizedAllowlist reads back the table the started proxy enforces and
+// refuses one that is not exactly what the requested profile calls for (plan
+// §5.7: the realized allowlist is conformance-checked against the requested
+// profile, never trusted from configuration). The required side is derived
+// here from the profile, the provider endpoints, and the declared registry
+// set; the realized side comes from the proxy, split by how it reaches each
+// authority, so a registry admitted on the provider's dial-by-name path is a
+// difference too. It returns the whole allowlist, sorted, for the handoff's
+// record.
+func (b *Backend) realizedAllowlist(hs HandoffSpec, proxy *connectProxy) ([]string, error) {
+	read := b.cfg.readEgressAllowlist
+	if read == nil {
+		read = (*connectProxy).Allowlist
+	}
+	providers, registries := read(proxy)
+	wantProviders := slices.Clone(b.cfg.ProviderEndpoints)
+	slices.Sort(wantProviders)
+	var wantRegistries []string
+	if hs.Agent.EgressProfile == domain.EgressProviderRegistry {
+		for _, authority := range registryAuthorities(hs.RegistryHosts) {
+			if !slices.Contains(wantProviders, authority) {
+				wantRegistries = append(wantRegistries, authority)
+			}
+		}
+		slices.Sort(wantRegistries)
+	}
+	if !slices.Equal(providers, wantProviders) || !slices.Equal(registries, wantRegistries) {
+		return nil, fmt.Errorf(
+			"proxy admits providers %v and registries %v, but %s requires providers %v and registries %v",
+			providers, registries, hs.Agent.EgressProfile, wantProviders, wantRegistries,
+		)
+	}
+	allowlist := slices.Concat(providers, registries)
+	slices.Sort(allowlist)
+	return allowlist, nil
+}
+
+// prepareProviderEgress creates the run's host-only network and starts its
+// proxy. The returned allowlist is the proxy's own, already checked against
+// the requested profile.
+func (b *Backend) prepareProviderEgress(ctx context.Context, hs HandoffSpec, names handoffNames, st *runState) (NetworkReport, string, []string, error) {
 	st.network.attempted = true
 	labels := append(runLabels(hs.RunID), st.ownershipLabel)
 	if err := b.rt.CreateNetwork(ctx, names.Network, slices.Clone(labels)); err != nil {
-		return NetworkReport{}, "", failf(CheckAgentEgress, "create provider network: %v", err)
+		return NetworkReport{}, "", nil, failf(CheckAgentEgress, "create provider network: %v", err)
 	}
 	st.network.owned = true
 	report, err := b.rt.InspectNetwork(ctx, names.Network)
 	if err != nil {
-		return NetworkReport{}, "", failf(CheckAgentEgress, "inspect provider network: %v", err)
+		return NetworkReport{}, "", nil, failf(CheckAgentEgress, "inspect provider network: %v", err)
 	}
 	if report.Name != names.Network {
-		return NetworkReport{}, "", failf(CheckAgentEgress, "provider network inspection identified the wrong network")
+		return NetworkReport{}, "", nil, failf(CheckAgentEgress, "provider network inspection identified the wrong network")
 	}
 	if report.Mode != NetworkHostOnly {
-		return NetworkReport{}, "", failf(CheckAgentEgress, "provider network is not host-only")
+		return NetworkReport{}, "", nil, failf(CheckAgentEgress, "provider network is not host-only")
 	}
 	st.network.fingerprint, err = ownedFingerprint(report.CreationDate, report.Labels, report.LabelsObserved, st.ownershipLabel)
 	if err != nil {
-		return NetworkReport{}, "", failf(CheckAgentEgress, "provider network ownership is unproven: %v", err)
+		return NetworkReport{}, "", nil, failf(CheckAgentEgress, "provider network ownership is unproven: %v", err)
 	}
-	proxy, err := startConnectProxy(
+	proxy, err := startRegistryConnectProxy(
 		ctx,
 		report.IPv4Gateway,
 		report.IPv4Subnet,
 		b.cfg.ProviderEndpoints,
+		registryRoutes{
+			authorities: registryAuthorities(hs.RegistryHosts),
+			lookup:      b.cfg.EgressLookupIP,
+		},
 		b.cfg.EgressProxyTimeout,
 		b.cfg.EgressDialContext,
 		b.cfg.Now,
 	)
 	if err != nil {
-		return NetworkReport{}, "", failf(CheckAgentEgress, "start provider proxy: %v", err)
+		return NetworkReport{}, "", nil, failf(CheckAgentEgress, "start provider proxy: %v", err)
 	}
 	st.proxy = proxy
-	return report, proxy.URL(), nil
+	allowlist, err := b.realizedAllowlist(hs, proxy)
+	if err != nil {
+		return NetworkReport{}, "", nil, failf(CheckAgentEgress, "realized proxy allowlist: %v", err)
+	}
+	return report, proxy.URL(), allowlist, nil
 }
