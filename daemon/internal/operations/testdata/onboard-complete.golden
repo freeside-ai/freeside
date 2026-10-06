@@ -174,7 +174,8 @@
       "/usr/local/bin/freeside-project-prepare"
     ],
     "base_image_ref": "ghcr.io/freeside-ai/agent@sha256:3333333333333333333333333333333333333333333333333333333333333333",
-    "image_ref": "ghcr.io/freeside-ai/example-repo@sha256:4444444444444444444444444444444444444444444444444444444444444444"
+    "image_ref": "ghcr.io/freeside-ai/example-repo@sha256:4444444444444444444444444444444444444444444444444444444444444444",
+    "environment": null
   },
   "operating_mode": "attended_dev",
   "isolation_class": "process_local"

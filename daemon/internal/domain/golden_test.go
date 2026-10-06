@@ -1323,6 +1323,21 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	projectImageWithEnvironment, err := domain.NewProjectImage(domain.ProjectImageInput{
+		Repository: projectImage.Repository, RepositoryID: projectImage.RepositoryID,
+		CommitSHA: projectImage.CommitSHA, RecipeDigest: projectImage.RecipeDigest,
+		PreparationCommand: projectImage.PreparationCommand,
+		BaseImageRef:       projectImage.BaseImageRef, ImageRef: projectImage.ImageRef,
+		Environment: &domain.ProjectImageEnvironment{
+			PackageJSONSHA256: strings.Repeat("12", 32),
+			PackageLockSHA256: strings.Repeat("34", 32),
+			PreparationDigest: domain.Digest("sha256:" + strings.Repeat("56", 32)),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	project, err := domain.NewProject("project-alpha", "freeasinbird/gh-imgup", 1278475858)
 	if err != nil {
 		t.Fatal(err)
@@ -1817,6 +1832,7 @@ func TestGolden(t *testing.T) {
 		{"execution_export", export},
 		{"current_import_start", currentImportStart},
 		{"project_image", projectImage},
+		{"project_image_environment", projectImageWithEnvironment},
 		{"project", project},
 		{"backend_conformance", backendConformance},
 		{"backend_conformance_failed", failedConformance},
