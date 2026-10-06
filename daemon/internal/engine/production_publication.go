@@ -3264,13 +3264,21 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			if !shadowComplete {
 				return productionReviewPending, nil
 			}
-			if task.answersExternalReview() {
+			adjudicatesExternal, err := w.adjudicatesExternalReview(ctx, task, binding, *latestRecord)
+			if err != nil {
+				return productionReviewPending, err
+			}
+			if task.answersExternalReview() && !adjudicatesExternal {
 				return w.escalateExternalReviewFindings(ctx, task, *latestRecord)
 			}
-			if latestRecord.Outcome == domain.ReviewFindings && task.reentersInPlace() {
+			if latestRecord.Outcome == domain.ReviewFindings && task.reentersInPlace() &&
+				!adjudicatesExternal {
 				return w.escalateReentryFindings(ctx, task, *latestRecord)
 			}
-			if latestRecord.Outcome == domain.ReviewFindings {
+			// An external review cycle's first round adjudicates its external
+			// findings whatever Freeside's own review found, so a clean record
+			// reaches adjudication there too.
+			if latestRecord.Outcome == domain.ReviewFindings || adjudicatesExternal {
 				candidateWorkspace, err := w.ensureReviewWorkspace(
 					ctx, latestRecord.InvocationID, workspace, task.HeadSHA)
 				if err != nil {
@@ -3722,13 +3730,20 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		}
 		return productionReviewEscalated, nil
 	}
-	if task.answersExternalReview() {
+	adjudicatesExternal, err := w.adjudicatesExternalReview(ctx, task, binding, record)
+	if err != nil {
+		return productionReviewPending, err
+	}
+	if task.answersExternalReview() && !adjudicatesExternal {
 		return w.escalateExternalReviewFindings(ctx, task, record)
 	}
-	if record.Outcome == domain.ReviewFindings && task.reentersInPlace() {
+	if record.Outcome == domain.ReviewFindings && task.reentersInPlace() && !adjudicatesExternal {
 		return w.escalateReentryFindings(ctx, task, record)
 	}
-	if record.Outcome == domain.ReviewFindings {
+	// An external review cycle's first round adjudicates its external findings
+	// whatever Freeside's own review found, so a clean record reaches
+	// adjudication there too.
+	if record.Outcome == domain.ReviewFindings || adjudicatesExternal {
 		baseWorkspaceID := findingAdjudicationBaseWorkspaceID(id)
 		baseWorkspace, err := w.ensureReviewWorkspace(
 			ctx, baseWorkspaceID, workspace, binding.admission.Base.BaseSHA)
@@ -4793,7 +4808,7 @@ func (w *productionPublicationWorkflow) assertReviewedCandidate(
 	}
 	roundComplete := false
 	if record != nil {
-		roundComplete, err = w.reviewRoundDispositionComplete(ctx, *record)
+		roundComplete, err = w.reviewRoundDispositionComplete(ctx, task, *record)
 		if err != nil {
 			return productionReadiness{}, nil, err
 		}

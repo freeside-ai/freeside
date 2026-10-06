@@ -176,9 +176,21 @@ func planFollowUpFilings(
 	}
 	var plan followUpFilingPlan
 	for _, candidate := range entries {
-		if !proposed[candidate.ordinal] {
-			plan.pending = append(plan.pending, candidate)
+		if proposed[candidate.ordinal] {
+			continue
 		}
+		// An external finding proposes no filing: the title and body would
+		// carry a reviewer's words onto the forge under Freeside's name, and
+		// that path is not built yet (issue #1767 decision 5). Dropping it
+		// here keeps a pass with nothing else to propose a read.
+		finding, err := tx.GetFinding(ctx, candidate.entry.FindingID)
+		if err != nil {
+			return followUpFilingPlan{}, err
+		}
+		if finding.External != nil {
+			continue
+		}
+		plan.pending = append(plan.pending, candidate)
 	}
 	if len(plan.pending) == 0 {
 		return plan, nil

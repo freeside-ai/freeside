@@ -67,6 +67,10 @@ type reentryCycle struct {
 	// the export time a first cycle stamps its evidence with, so a re-run
 	// reproduces the same evidence bytes.
 	createdAt time.Time
+	// admittedBaseSHA is the base the predecessor's producer was admitted at.
+	// The cycle reviews its own base, which a base advance moves past this
+	// one; an external review cycle adjudicates only while the two agree.
+	admittedBaseSHA string
 }
 
 // productionReentryCheckpoint is the durable verification result of one
@@ -274,6 +278,7 @@ func (w *productionPublicationWorkflow) loadReentryBinding(
 			"production re-entry binding disagrees with durable authority: %w",
 			domain.ErrParentKeyMismatch)
 	}
+	cycle.admittedBaseSHA = base.BaseSHA
 	// The cycle keeps its producer's image and runs it on the re-entry base,
 	// so that is the base the image must serve. verifyReentry checks it before
 	// it builds a room; the predecessor's base decides nothing about the newer
@@ -497,8 +502,14 @@ func reentryMissingHeadReason(task productionPublicationTask, branch string) str
 // push access can write, cut to a bounded length first: a stop item's reason
 // is stored and synced, and git bounds neither a path nor a tree's size.
 func reentryQuoted(text string) string {
-	if len(text) > reentryQuotedTextLimit {
-		text = strings.ToValidUTF8(text[:reentryQuotedTextLimit], "") + "..."
+	return quotedWithin(text, reentryQuotedTextLimit)
+}
+
+// quotedWithin quotes text nobody at Freeside wrote, cut to limit bytes first.
+// The cut can split a character, so the tail is repaired before quoting.
+func quotedWithin(text string, limit int) string {
+	if len(text) > limit {
+		text = strings.ToValidUTF8(text[:limit], "") + "..."
 	}
 	return strconv.Quote(text)
 }
