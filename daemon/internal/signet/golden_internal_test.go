@@ -90,6 +90,11 @@ func TestSignetWireGoldens(t *testing.T) {
 		ID: "device-569", DisplayName: "Fixture iPhone",
 		Status: domain.DeviceActive, PairedAt: createdAt,
 	}
+	revokedAt := createdAt.Add(48 * time.Hour)
+	revokedDevice := domain.Device{
+		ID: "device-570", DisplayName: "Fixture Mac",
+		Status: domain.DeviceRevoked, PairedAt: createdAt, RevokedAt: &revokedAt,
+	}
 	pairingFacts := PairingFacts{
 		HostDisplayName: "fixture-host.local",
 		CodeExpiresAt:   createdAt.Add(10 * time.Minute),
@@ -109,6 +114,7 @@ func TestSignetWireGoldens(t *testing.T) {
 		"conversation":   conversation,
 		"schedule":       schedule,
 		"device":         device,
+		"revoked device": revokedDevice,
 		"command":        command,
 	} {
 		if err := fixture.Validate(); err != nil {
@@ -190,6 +196,15 @@ func TestSignetWireGoldens(t *testing.T) {
 					ServerURL: "https://ntfy.example.test", Topic: "fs-55555555555555555555555555555555",
 				},
 				Facts: pairingFacts,
+			},
+		},
+		{
+			// One active device with recorded activity and one revoked device
+			// with none: last_seen_at renders an instant and an explicit null.
+			name: "device-list",
+			value: []DeviceListEntry{
+				{AsOfRevision: 24, EntityVersion: 1, Device: device, LastSeenAt: new(createdAt.Add(24 * time.Hour))},
+				{AsOfRevision: 26, EntityVersion: 2, Device: revokedDevice},
 			},
 		},
 		{

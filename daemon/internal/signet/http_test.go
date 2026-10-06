@@ -76,6 +76,7 @@ func TestHTTPOnlyHealthAndPairingAreUnauthenticated(t *testing.T) {
 		method string
 		path   string
 	}{
+		{http.MethodGet, "/devices"},
 		{http.MethodPost, "/devices/device-1/revoke"},
 		{http.MethodGet, "/sync/bootstrap"},
 		{http.MethodGet, "/sync/revision"},

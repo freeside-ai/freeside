@@ -9,9 +9,8 @@ import (
 
 // Device is the daemon-side record of a paired client device (plan §5.14). It
 // is synchronized state: revocation changes what a device may do (§5.14 tests
-// 15-16), so writing it bumps the server revision now, and the sync read
-// surface that carries devices to clients arrives with its consumer (a later
-// contract change) without reworking revision accounting. The record
+// 15-16), so writing it bumps the server revision, and clients read it
+// through the device list (api/openapi.yaml GET /devices). The record
 // deliberately carries no credential material: the credential lives on
 // DeviceCredential, a separate daemon-internal type, so no synchronized body
 // or wire schema can leak a secret, or even its hash.
