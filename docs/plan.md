@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 80
+revision: 81
 status: active
-updated: 2026-10-05
+updated: 2026-10-06
 ---
 
 # Freeside
@@ -2174,8 +2174,8 @@ compliant base does not make the extension trusted.
 A reusable builder consumes the canonical repository identity, an exact
 commit, and the trusted verification recipe. It derives a project image from
 the approved agent base, bakes the dependency closure and tool configuration
-in as files, records the repository, commit, recipe, and base-image
-provenance, and returns a digest-pinned image reference. Per-project image
+in as files, records the repository, commit, recipe, base-image, and
+environment provenance, and returns a digest-pinned image reference. Per-project image
 definitions and copied dependency manifests do not live in the Freeside
 control-plane source, so a changed dependency manifest rebuilds the runtime
 artifact without a Freeside source change.
@@ -2194,6 +2194,36 @@ A candidate that changes the dependency closure
 beyond the baked inputs fails loudly and requires a new reviewed project
 image, unless the policy-gated rebuild below applies. Verification never
 fetches a missing dependency.
+
+**Reuse across compatible commits (revision 81).** A project image is bound
+to the environment it baked, not to the commit it was built from. The image
+record names its build commit and its environment inputs: the SHA-256 of the
+exact `package.json` and `package-lock.json` bytes it seeded, and one digest
+of the builder's fixed toolchain and preparation sources, beside the recipe
+digest and base image it already records. The image is admissible at a run
+base when that base is its build commit, or when all of these hold at the
+base:
+
+- Both dependency manifests hash to the recorded values.
+- Neither `npm-shrinkwrap.json` nor `.npmrc` exists.
+- The base's tree declares no verification recipe other than the baked one. A
+  repository whose recipe is supplied outside its tree declares none.
+- The recorded toolchain and preparation digest equals the running binary's.
+
+Repository identity, the fixed preparation command, and recipe approval
+against current policy are checked as before. Every boundary that binds an
+image to a base (composition preflight, daemon start, publication, and
+readiness re-entry) re-derives the verdict from the immutable record and the
+exact base tree; none stores or trusts one. The publication lane decides
+immediately before it builds a verification room, so finished verification
+evidence is never judged again. A re-entered cycle whose image cannot serve
+its base stops on an attention item that carries the pull request; it does not
+fail the lane. A record built before environment
+evidence existed carries none and stays admissible only at its build commit,
+so reusing it takes one rebuild. Compatibility selects the environment and
+nothing else: the run's own base and candidate are still verified in fresh
+networkless workspaces, and the build's proof at its own commit never stands
+in for that evidence.
 
 **Policy-gated rebuild.** A dependency change stops costing a human round trip
 when it stays inside the project's declared policy. The gate holds when:
@@ -6071,29 +6101,40 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 80 ("Local Account Facts and Credential-Safe Usage Reads"):
+Revision 81 ("Project Images Bind to Their Environment"):
 
-1. **Codex account facts come from stored ID-token claims.** #866's fresh
-   baseline answers without a token-endpoint POST, while its near-expiry
-   invocation attempts refresh despite `refreshToken: false`. Local decoding
-   avoids launching the app-server for facts already in the snapshot. Display
-   them as claims from the stored ID token, dated by its own issuance time
-   when available, never by the auth store's `last_refresh`. Unknown claim age,
-   current revocation, and later plan changes stay unknown.
-2. **The safety rule protects credentials, not an attempt counter.** No
-   observation may refresh in a way that could change a credential outside
-   the mutation lease. Access-only snapshots and `provider_only` egress remain
-   mandatory. A tokenless attempt blocked by egress is tolerated, recorded,
-   and scheduled around; it is neither mutation nor a successful observation.
-3. **The lifetime gate belongs on the network usage read.** #1714 measures
-   fresh and near-expiry behavior and fixes a bounded invocation and margin
-   beyond the pinned CLI's five-minute refresh window. Insufficient lifetime
-   defers collection without admitting or withholding executions. #868 is
-   replanned only after this plan revision merges.
+1. **Environment compatibility replaces exact-base equality.** A project image
+   was admissible only at the commit it was built from, so every base advance
+   cost a rebuild and a re-pin even when nothing the image baked had changed.
+   The image record now carries its environment inputs, and the image serves
+   any base that leaves them unchanged (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Golden Agent and
+   Project Images). Rejected: keeping equality; and comparing package versions
+   alone, which misses installation configuration, the toolchain, and the
+   preparation implementation.
+2. **Each boundary re-derives the verdict.** Preflight, daemon start,
+   publication, and readiness re-entry each read the exact base tree and
+   decide again from the immutable image record. Rejected: storing a
+   compatibility verdict on the admission, a trust bit no later boundary could
+   re-check.
+3. **Legacy records stay exact-commit.** A record without environment evidence
+   proves nothing about another commit. Rejected: backfilling evidence the
+   builder never observed.
+4. **Readiness re-entry checks its own base.** A re-entered cycle keeps its
+   producer's image on a newer base; it previously checked that image only
+   against the producer's base. It now applies the same rule to the base it
+   runs on, and a refusal stops that one cycle on an attention item. Rejected:
+   a lane error, which would stop publication for every run because one base
+   advanced.
+5. **The recipe clause refuses a contradiction, not an absence.** A base whose
+   tree declares a different recipe is refused. A base that declares none is
+   compatible, because the image runs the recipe it baked and approval still
+   gates that recipe; repositories onboarded with a recipe supplied outside
+   the tree never declare one. Rejected: requiring an in-tree recipe at the
+   base, which would leave those repositories unable to reuse an image at all.
 
-(Owner decision of 2026-10-05, #1758, following #866;
-[decision note](../devlog/2026-10-05-1145-codex-observation-boundary.md) and
-[ADR 0004](decisions/0004-read-codex-account-facts-locally.md).)
+(#1230's owner-approved contract, with the owner's recipe-clause decision of
+2026-10-06;
+[decision note](../devlog/2026-10-06-0758-project-image-environment-compatibility.md).)
 
 ## 14. Risks
 

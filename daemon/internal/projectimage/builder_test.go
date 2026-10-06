@@ -75,6 +75,7 @@ type fakeBackend struct {
 	published      domain.ImageRef
 	allowlist      []string
 	provenance     []string
+	provenanceSpec provenanceSpec
 	pins           [][3]string
 	releases       []string
 	runs           []runSpec
@@ -139,8 +140,9 @@ func (f *fakeBackend) CheckAllowlist(_ context.Context, ref string) error {
 	return f.allowlistErr
 }
 
-func (f *fakeBackend) CheckProvenance(_ context.Context, ref string, _ provenanceSpec) error {
+func (f *fakeBackend) CheckProvenance(_ context.Context, ref string, spec provenanceSpec) error {
 	f.provenance = append(f.provenance, ref)
+	f.provenanceSpec = spec
 	return f.provenanceErr
 }
 
@@ -282,6 +284,21 @@ func TestBuildBindsExactInputsAndProvesEveryFreshWorkspace(t *testing.T) {
 	}
 	if source.fetches != 1 || source.copies != 5 {
 		t.Fatalf("source fetch/copies = %d/%d, want 1/5", source.fetches, source.copies)
+	}
+	// The record names the exact manifest bytes the context baked and this
+	// binary's preparation implementation, and the image was proven against
+	// the same hashes before anything was recorded.
+	wantEnvironment := domain.ProjectImageEnvironment{
+		PackageJSONSHA256: manifestSHA256([]byte(`{"scripts":{}}`)),
+		PackageLockSHA256: manifestSHA256([]byte(`{"lockfileVersion":3}`)),
+		PreparationDigest: PreparationDigest(),
+	}
+	if got.Environment == nil || *got.Environment != wantEnvironment {
+		t.Fatalf("environment = %+v, want %+v", got.Environment, wantEnvironment)
+	}
+	if backend.provenanceSpec.PackageJSONSHA256 != wantEnvironment.PackageJSONSHA256 ||
+		backend.provenanceSpec.PackageLockSHA256 != wantEnvironment.PackageLockSHA256 {
+		t.Fatalf("provenance spec = %+v, want the recorded manifest hashes", backend.provenanceSpec)
 	}
 	if len(backend.builds) != 1 || backend.builds[0].BaseDigest != testBaseDigest ||
 		backend.builds[0].CommitSHA != testCommit ||

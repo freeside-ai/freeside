@@ -28,7 +28,12 @@ func (s *capturedReviewRequestSource) RequestReview(ctx context.Context, id doma
 func TestProductionReviewUpgradePreservesRequestTime(t *testing.T) {
 	for _, corruption := range []string{"none", "legacy", "run", "round", "base", "head", "time", "digest"} {
 		t.Run(corruption, func(t *testing.T) {
-			p := newProductionPublicationHarness(t, "")
+			// The database is rolled back below to a schema that predates the
+			// project-image environment, so its image is one such a database
+			// could hold: a record without one.
+			p := newProjectImageReuseHarness(t, nil, func(input *domain.ProjectImageInput) {
+				input.Environment = nil
+			})
 			source := &capturedReviewRequestSource{ReviewSource: p.reviewer}
 			p.reviewSource = source
 			p.workflow = p.newEngine(t, productionCrashSeams{}, true)
@@ -101,6 +106,7 @@ func TestProductionReviewUpgradePreservesRequestTime(t *testing.T) {
 				"DROP TABLE follow_up_filed_issues", "DROP TABLE follow_up_filing_attempts",
 				"DROP TABLE follow_up_filing_intents",
 				"DROP TABLE external_finding_dispositions",
+				"ALTER TABLE project_images DROP COLUMN environment_digest",
 				"DELETE FROM schema_migrations WHERE version >= 67",
 			} {
 				if _, err := raw.ExecContext(p.ctx, query); err != nil {

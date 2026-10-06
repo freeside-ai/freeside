@@ -562,12 +562,15 @@ func TestAppleCheckProvenanceBindsLabelsAndEmbeddedFiles(t *testing.T) {
 	recipeDigest := verify.RecipeDigest([]byte(testRecipe))
 	nodeArchive := []byte("pinned Node archive")
 	nodeArchiveDigest := fmt.Sprintf("%x", sha256.Sum256(nodeArchive))
+	packageJSON, packageLock := []byte(`{"scripts":{}}`), []byte(`{"lockfileVersion":3}`)
 	spec := provenanceSpec{
 		ImageDigest:  testImageDigest,
 		BaseBuildRef: "base:local", BaseDigest: testBaseDigest,
 		Repository:   "freeasinbird/gh-imgup",
 		RepositoryID: 1278475858, CommitSHA: testCommit, RecipeDigest: recipeDigest,
 		NodeVersion: nodeToolchainVersion, NodeToolchainArchiveSHA256: nodeArchiveDigest,
+		PackageJSONSHA256: manifestSHA256(packageJSON),
+		PackageLockSHA256: manifestSHA256(packageLock),
 	}
 	ref := "project:local"
 	projectLabels := map[string]string{
@@ -603,6 +606,8 @@ func TestAppleCheckProvenanceBindsLabelsAndEmbeddedFiles(t *testing.T) {
 		npmLauncherPath:          []byte(nodeToolchainLauncher),
 		npxLauncherPath:          []byte(nodeToolchainLauncher),
 		busyboxPath:              baseBusybox,
+		seedPackageJSONPath:      packageJSON,
+		seedPackageLockPath:      packageLock,
 	}
 	modes := map[string]int64{
 		ward.ProjectRecipePath: 0o600, PreparationPath: 0o700,
@@ -668,6 +673,24 @@ func TestAppleCheckProvenanceBindsLabelsAndEmbeddedFiles(t *testing.T) {
 		t.Fatal("CheckProvenance accepted sticky bits on the Node toolchain archive")
 	}
 	modes[nodeToolchainArchivePath] = 0o644
+	// The record's environment hashes describe the baked seed. An image
+	// whose seed is something else would hydrate another dependency set
+	// under a record that claims this one.
+	files[seedPackageLockPath] = []byte(`{"lockfileVersion":3,"packages":{"":{}}}`)
+	if err := backend.CheckProvenance(t.Context(), ref, spec); err == nil {
+		t.Fatal("CheckProvenance accepted a baked lockfile the record does not describe")
+	}
+	files[seedPackageLockPath] = packageLock
+	delete(files, seedPackageJSONPath)
+	if err := backend.CheckProvenance(t.Context(), ref, spec); err == nil {
+		t.Fatal("CheckProvenance accepted an image with no baked package.json")
+	}
+	files[seedPackageJSONPath] = packageJSON
+	swapped := spec
+	swapped.PackageJSONSHA256, swapped.PackageLockSHA256 = spec.PackageLockSHA256, spec.PackageJSONSHA256
+	if err := backend.CheckProvenance(t.Context(), ref, swapped); err == nil {
+		t.Fatal("CheckProvenance accepted manifest hashes bound to the wrong seed files")
+	}
 	projectConfig.Config.User = "node"
 	if err := backend.CheckProvenance(t.Context(), ref, spec); err == nil {
 		t.Fatal("CheckProvenance accepted a project config with a non-root user")
