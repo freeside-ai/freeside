@@ -25,6 +25,8 @@ const (
 type fakeSource struct {
 	fetches int
 	copies  int
+	// sources records the repository each copy read from.
+	sources []string
 }
 
 func (f *fakeSource) Fetch(
@@ -38,8 +40,9 @@ func (f *fakeSource) Fetch(
 	return os.MkdirAll(destination, 0o700)
 }
 
-func (f *fakeSource) Copy(_ context.Context, _ string, commit, destination string) error {
+func (f *fakeSource) Copy(_ context.Context, source, commit, destination string) error {
 	f.copies++
+	f.sources = append(f.sources, source)
 	if commit != testCommit {
 		return errors.New("unexpected copied commit")
 	}
@@ -782,5 +785,34 @@ func TestBuildContextPreparationBindsNPMInputs(t *testing.T) {
 		t.Errorf(
 			"generated Containerfile does not clear launcher paths before the toolchain COPY (clear=%d, copy=%d)",
 			clearAt, copyNodeAt)
+	}
+}
+
+func TestBuildFromLocalSourceMakesNoForgeRequest(t *testing.T) {
+	source := &fakeSource{}
+	resolver := &fakeResolver{}
+	builder := newBuilder(source, newFakeBackend(), t.TempDir())
+	builder.resolver = resolver
+	request := validRequest()
+	request.SourceDir = "/publication/checkout"
+	got, err := builder.Build(t.Context(), request)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if source.fetches != 0 || resolver.calls != 0 {
+		t.Fatalf("fetches = %d, identity checks = %d; a local-source build makes neither",
+			source.fetches, resolver.calls)
+	}
+	// Every workspace, the build context's and each proof's, is materialized
+	// from the caller's checkout at the requested commit.
+	if source.copies != 5 || slices.ContainsFunc(source.sources, func(dir string) bool {
+		return dir != request.SourceDir
+	}) {
+		t.Fatalf("copies read from %v, want five from %s", source.sources, request.SourceDir)
+	}
+	if got.CommitSHA != testCommit || got.Repository != request.Repository ||
+		got.RepositoryID != request.RepositoryID || got.Environment == nil ||
+		got.Environment.PackageLockSHA256 != manifestSHA256([]byte(`{"lockfileVersion":3}`)) {
+		t.Fatalf("result = %+v", got)
 	}
 }

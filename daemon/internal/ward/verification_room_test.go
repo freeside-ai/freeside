@@ -327,3 +327,55 @@ func TestProjectImageRoomRefusesForeignRuntimeIdentity(t *testing.T) {
 		t.Fatal("foreign container was deleted")
 	}
 }
+
+// A project image rebuilt at a candidate's head (plan §5.7, the policy-gated
+// rebuild) is an image record like any other, and the room it verifies in
+// holds no route out: the rebuild fetched what the candidate declares, and
+// verification still fetches nothing.
+func TestProjectImageRoomIsNetworklessForARebuiltImage(t *testing.T) {
+	recipe := []byte(`{"commands":[["verify"]],"capture":"none"}`)
+	rebuilt, err := domain.NewProjectImage(domain.ProjectImageInput{
+		Repository: "owner/repo", RepositoryID: 42, CommitSHA: strings.Repeat("b", 40),
+		RecipeDigest:       verify.RecipeDigest(recipe),
+		PreparationCommand: []string{"/usr/local/bin/freeside-prepare"},
+		BaseImageRef:       domain.ImageRef("ghcr.io/owner/base@sha256:" + strings.Repeat("c", 64)),
+		ImageRef:           domain.ImageRef("ghcr.io/owner/project@sha256:" + strings.Repeat("e", 64)),
+		Environment: &domain.ProjectImageEnvironment{
+			PackageJSONSHA256: strings.Repeat("1", 64), PackageLockSHA256: strings.Repeat("2", 64),
+			PreparationDigest: domain.Digest("sha256:" + strings.Repeat("3", 64)),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := newFakeRuntime(t)
+	var calls [][]string
+	room := newProjectImageRoom(
+		"container", rebuilt, runtime,
+		verificationRunner(t, runtime, []verify.StepResult{{}, {}}, &calls),
+		nil, verify.DefaultMaxRoomOutputBytes, DefaultLaunchSize(LaunchVerification),
+	)
+	if result, err := room.Run(t.Context(), t.TempDir(), []string{"verify"}); err != nil || result.ExitCode != 0 {
+		t.Fatalf("Run = %#v, %v", result, err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("container launches = %d, want preparation and the command", len(calls))
+	}
+	for _, call := range calls {
+		separator := slices.Index(call, "--")
+		if separator < 0 || call[separator+1] != string(rebuilt.ImageRef) {
+			t.Fatalf("launch does not run the rebuilt image: %q", call)
+		}
+		options := call[:separator]
+		network := slices.Index(options, "--network")
+		if network < 0 || options[network+1] != "none" ||
+			slices.Index(options[network+1:], "--network") >= 0 {
+			t.Errorf("launch is not exactly --network none: %q", call)
+		}
+		for _, option := range options {
+			if option == "--publish" || option == "--dns" || strings.HasPrefix(option, "--network=") {
+				t.Errorf("launch carries network option %q: %q", option, call)
+			}
+		}
+	}
+}

@@ -55,6 +55,8 @@ type productionRoom struct {
 	fail   bool
 	// sizes records the verification size each room construction received.
 	sizes []ward.ContainerSize
+	// images records the project image each room construction received.
+	images []domain.Digest
 }
 
 func (r *productionRoom) ReadRecipe(ctx context.Context) ([]byte, error) {
@@ -229,6 +231,10 @@ type productionPublicationHarness struct {
 	recipeReadTimeout         time.Duration
 	declaration               *domain.WorkUnitDeclaration
 	judgments                 *inference.Client
+	// rebuild, when set, lets the next engine rebuild the project image, and
+	// rebuiltImages are the images a room may then be built from beside image.
+	rebuild       *engine.ProjectImageRebuild
+	rebuiltImages map[domain.Digest]bool
 }
 
 // productionBaseManifests are the npm manifests the production harness
@@ -904,15 +910,17 @@ func (p *productionPublicationHarness) newEngineForMode(
 			ReviewRecovery:                 reviewRecovery,
 			ReviewConfigurationDigest:      p.reviewConfigurationDigest,
 			NewRoom: func(image domain.ProjectImage, size ward.ContainerSize) (engine.ProductionVerificationRoom, error) {
-				if image.ID != p.image.ID {
+				if image.ID != p.image.ID && !p.rebuiltImages[image.ID] {
 					return nil, domain.ErrParentKeyMismatch
 				}
 				p.room.sizes = append(p.room.sizes, size)
+				p.room.images = append(p.room.images, image.ID)
 				return p.room, nil
 			},
-			AfterVerification: seams.afterVerification,
-			AfterPublication:  seams.afterPublication,
-			AfterReady:        seams.afterReady, AfterBlocked: seams.afterBlocked,
+			RebuildProjectImage: p.rebuild,
+			AfterVerification:   seams.afterVerification,
+			AfterPublication:    seams.afterPublication,
+			AfterReady:          seams.afterReady, AfterBlocked: seams.afterBlocked,
 			AfterTerminal:        seams.afterTerminal,
 			AfterTaskLockRelease: seams.afterLockRelease,
 			TransitionHook:       seams.transitionHook,

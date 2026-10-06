@@ -57,9 +57,15 @@ var ErrProofFailed = errors.New("project-image proof failed")
 // use for FROM; the builder verifies it resolves to BaseImageRef's exact digest
 // before the build and records only BaseImageRef in provenance.
 type Request struct {
-	Repository        string
-	RepositoryID      int64
-	CommitSHA         string
+	Repository   string
+	RepositoryID int64
+	CommitSHA    string
+	// SourceDir, when set, is a local git checkout the build reads CommitSHA
+	// from instead of cloning Repository from the forge. The builder then
+	// makes no forge request and proves nothing about the checkout: the
+	// caller owns proving it is Repository at RepositoryID, which the record
+	// still names. The commit is materialized exactly, as from a clone.
+	SourceDir         string
 	Recipe            []byte
 	BaseImageRef      domain.ImageRef
 	BaseBuildRef      string
@@ -232,34 +238,15 @@ func (b *Builder) Build(
 	if err != nil {
 		return domain.ProjectImage{}, err
 	}
-	if err := b.resolver.Verify(ctx, normalized.Repository, normalized.RepositoryID); err != nil {
-		return domain.ProjectImage{}, err
-	}
 	scratch, err := os.MkdirTemp(b.tempDir, "freeside-project-image-*")
 	if err != nil {
 		return domain.ProjectImage{}, fmt.Errorf("create project-image scratch: %w", err)
 	}
 	defer os.RemoveAll(scratch) //nolint:errcheck // private scratch, best-effort after all handles close
 
-	repositoryDir := filepath.Join(scratch, "repository.git")
-	if err := b.source.Fetch(
-		ctx, normalized.Repository, normalized.RepositoryID,
-		normalized.CommitSHA, repositoryDir,
-	); err != nil {
-		return domain.ProjectImage{}, fmt.Errorf("materialize %s at %s: %w",
-			normalized.Repository, normalized.CommitSHA, err)
-	}
-	// Re-resolve owner/name -> numeric ID now that the clone is complete: the
-	// HTTPS clone URL is name-addressed and mutable, and forks share object
-	// stores (see ward's seed rebinding), so a name transferred between the
-	// pre-fetch verification and the clone would serve foreign content that
-	// still carries the pinned commit. Verifying at both edges of the fetch
-	// rebinds the fetched content to the pre-verified RepositoryID; a transfer
-	// away and back inside the clone window, or API state lagging git serving,
-	// still escapes, and GitHub offers no ID-bound fetch mechanism to close
-	// either.
-	if err := b.resolver.Verify(ctx, normalized.Repository, normalized.RepositoryID); err != nil {
-		return domain.ProjectImage{}, fmt.Errorf("post-fetch repository identity: %w: %w", err, ErrProofFailed)
+	repositoryDir, err := b.materializeRepository(ctx, normalized, scratch)
+	if err != nil {
+		return domain.ProjectImage{}, err
 	}
 	sourceDir := filepath.Join(scratch, "source")
 	if err := b.source.Copy(ctx, repositoryDir, normalized.CommitSHA, sourceDir); err != nil {
@@ -425,6 +412,42 @@ func (b *Builder) Build(
 	return result, nil
 }
 
+// materializeRepository returns the git repository the build reads its commit
+// from: the caller's checkout for a local-source request, a fresh clone
+// otherwise.
+func (b *Builder) materializeRepository(
+	ctx context.Context, request Request, scratch string,
+) (string, error) {
+	if request.SourceDir != "" {
+		// No forge request and no identity check: the name-to-ID binding the
+		// clone path proves below is about a name-addressed fetch, and
+		// nothing is fetched here.
+		return request.SourceDir, nil
+	}
+	if err := b.resolver.Verify(ctx, request.Repository, request.RepositoryID); err != nil {
+		return "", err
+	}
+	repositoryDir := filepath.Join(scratch, "repository.git")
+	if err := b.source.Fetch(
+		ctx, request.Repository, request.RepositoryID, request.CommitSHA, repositoryDir,
+	); err != nil {
+		return "", fmt.Errorf("materialize %s at %s: %w", request.Repository, request.CommitSHA, err)
+	}
+	// Re-resolve owner/name -> numeric ID now that the clone is complete: the
+	// HTTPS clone URL is name-addressed and mutable, and forks share object
+	// stores (see ward's seed rebinding), so a name transferred between the
+	// pre-fetch verification and the clone would serve foreign content that
+	// still carries the pinned commit. Verifying at both edges of the fetch
+	// rebinds the fetched content to the pre-verified RepositoryID; a transfer
+	// away and back inside the clone window, or API state lagging git serving,
+	// still escapes, and GitHub offers no ID-bound fetch mechanism to close
+	// either.
+	if err := b.resolver.Verify(ctx, request.Repository, request.RepositoryID); err != nil {
+		return "", fmt.Errorf("post-fetch repository identity: %w: %w", err, ErrProofFailed)
+	}
+	return repositoryDir, nil
+}
+
 // ValidatePublishedRef proves that ref names the exact registry and image
 // destination selected by request. A digest-pinned reference under a different
 // destination is a different artifact, even when every build input matches.
@@ -557,14 +580,8 @@ func validateRequest(request Request) (Request, verify.Recipe, domain.Digest, er
 	if err := request.BaseImageRef.Validate(); err != nil {
 		return Request{}, verify.Recipe{}, "", fmt.Errorf("base image: %w: %w", err, ErrInvalidRequest)
 	}
-	if request.BaseBuildRef == "" {
-		return Request{}, verify.Recipe{}, "", fmt.Errorf("base build ref is required: %w", ErrInvalidRequest)
-	}
-	if strings.HasPrefix(request.BaseBuildRef, "-") ||
-		strings.ContainsAny(request.BaseBuildRef, " \t\r\n@") ||
-		strings.Contains(request.BaseBuildRef, "://") {
-		return Request{}, verify.Recipe{}, "", fmt.Errorf("base build ref %q: %w",
-			request.BaseBuildRef, ErrInvalidRequest)
+	if err := validateBaseBuildRef(request.BaseBuildRef); err != nil {
+		return Request{}, verify.Recipe{}, "", err
 	}
 	if (request.Registry == "") == (request.LocalRegistryPort == 0) {
 		return Request{}, verify.Recipe{}, "", fmt.Errorf(
@@ -589,15 +606,32 @@ func validateRequest(request Request) (Request, verify.Recipe, domain.Digest, er
 	if !refTagPattern.MatchString(request.RefTag) {
 		return Request{}, verify.Recipe{}, "", fmt.Errorf("reference tag %q: %w", request.RefTag, ErrInvalidRequest)
 	}
-	for _, dns := range request.DNS {
-		if dns == "" || strings.HasPrefix(dns, "-") || strings.ContainsAny(dns, " \t\r\n") {
-			return Request{}, verify.Recipe{}, "", fmt.Errorf("DNS server %q: %w", dns, ErrInvalidRequest)
-		}
+	if err := validateBuildDNS(request.DNS); err != nil {
+		return Request{}, verify.Recipe{}, "", err
 	}
 	if err := ValidateBuildProxy(request.BuildProxy); err != nil {
 		return Request{}, verify.Recipe{}, "", err
 	}
 	return request, recipe, verify.RecipeDigest(request.Recipe), nil
+}
+
+func validateBaseBuildRef(ref string) error {
+	if ref == "" {
+		return fmt.Errorf("base build ref is required: %w", ErrInvalidRequest)
+	}
+	if strings.HasPrefix(ref, "-") || strings.ContainsAny(ref, " \t\r\n@") || strings.Contains(ref, "://") {
+		return fmt.Errorf("base build ref %q: %w", ref, ErrInvalidRequest)
+	}
+	return nil
+}
+
+func validateBuildDNS(servers []string) error {
+	for _, dns := range servers {
+		if dns == "" || strings.HasPrefix(dns, "-") || strings.ContainsAny(dns, " \t\r\n") {
+			return fmt.Errorf("DNS server %q: %w", dns, ErrInvalidRequest)
+		}
+	}
+	return nil
 }
 
 // ValidateBuildProxy validates the supported project-image egress proxy

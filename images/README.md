@@ -12,6 +12,14 @@ image from the managed repository and trusted recipe; `freesided onboard
 artifact, not source in the control plane. A checked-in per-project directory
 would also import that repository's dependency churn into this history.
 
+The production daemon runs the same builder when a candidate changes its
+dependencies within the project's declared policy (plan §5.7, **Policy-gated
+rebuild**). That rebuild reads the candidate from the daemon's own checkout
+instead of a GitHub clone, and keeps the admitted image's recipe, base image,
+and registry destination. `daemon/README.md` (Rebuild A Project Image For A
+Dependency Change) documents the gate, the flags, and what a refusal looks
+like.
+
 This directory may split to its own repo later if vendor-CLI version churn pollutes this repo's history; that is an anticipated, acceptable move, not a failure.
 
 - **Toolchain:** OCI image definitions (devcontainer-spec shaped), pinned CLI + adapter versions.
@@ -44,8 +52,8 @@ from host processes.
 
 **The managed proxy:** With no proxy configured, the build scripts run
 `container build` through `daemon/cmd/freeside-image-build`, and the
-project-image builder (`freesided onboard`, `freeside-project-image`) does the
-same in process. Both start `daemon/internal/buildproxy` for exactly one
+project-image builder (`freesided onboard`, `freeside-project-image`, and the
+production daemon's policy-gated rebuild) does the same in process. Both start `daemon/internal/buildproxy` for exactly one
 build and pass its URL as the predefined proxy build args, which the runtime
 injects into `RUN` steps in both uppercase and lowercase forms (verified on
 container 1.1.0), so `apt` is covered. The proxy serves CONNECT tunnels and
@@ -60,7 +68,9 @@ accept connections (not verified).
 (`docs/plan.md` §5.4), so it is deliberately narrow:
 
 - It lives only for the build, so it is never up during a credential-bearing
-  agent run unless a build is running at the same time.
+  agent run unless a build is running at the same time. The daemon's
+  policy-gated rebuild is such a build, so the next clause, not this one, is
+  what keeps a writer away from it.
 - It admits only connections addressed to the build network's gateway from
   that network's subnet. Ward's per-run writer networks cannot reach it, so it
   cannot bypass ward's allowlisting egress proxy, and a LAN peer that reaches
@@ -78,7 +88,8 @@ The decision record is `devlog/2026-09-20-1031-vpn-independent-host-paths.md`.
 **Operator proxy override:** A host that must egress through its own proxy
 sets `HTTPS_PROXY` (and optionally `HTTP_PROXY`, which defaults to
 `HTTPS_PROXY`) for a build script, or passes `-build-proxy` to `freesided
-onboard`; the managed proxy is then not started. That proxy must be
+onboard` or, for its rebuilds, to the production daemon; the managed proxy is
+then not started. That proxy must be
 CONNECT-capable, forward absolute-URI HTTP requests, and be reachable from
 guests at the vmnet gateway address (192.168.64.1 by default; a guest cannot
 reach the host's 127.0.0.1). The binding policy above becomes the operator's
@@ -90,7 +101,8 @@ need guest DNS. A `RUN` step that resolves names itself still does, and the
 vmnet gateway's DNS responder can fail even with no VPN running. For that
 case, reconfigure the BuildKit VM with a resolver trusted for the build's
 dependency lookups, `container builder start --dns 8.8.8.8`, or pass the
-repeatable `--dns` (agent scripts) or `-dns` (`freesided onboard`) option.
+repeatable `--dns` (agent scripts), `-dns` (`freesided onboard`), or
+`-build-dns` (the production daemon's rebuilds) option.
 This changes build DNS only; it does not configure or relax ward's runtime
 egress.
 
