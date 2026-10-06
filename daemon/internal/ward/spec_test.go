@@ -92,6 +92,24 @@ func TestHandoffSpecValidate(t *testing.T) {
 		{"missing agent command", func(s *HandoffSpec) { s.Agent.Command = nil }},
 		{"missing egress profile", func(s *HandoffSpec) { s.Agent.EgressProfile = "" }},
 		{"unenforceable wider egress profile", func(s *HandoffSpec) { s.Agent.EgressProfile = domain.EgressProviderWebRead }},
+		{"registry hosts under provider_only", func(s *HandoffSpec) {
+			s.RegistryHosts = []string{"registry.npmjs.org"}
+		}},
+		{"provider_registry without registry hosts", func(s *HandoffSpec) {
+			s.Agent.EgressProfile = domain.EgressProviderRegistry
+		}},
+		{"provider_registry with unsorted registry hosts", func(s *HandoffSpec) {
+			s.Agent.EgressProfile = domain.EgressProviderRegistry
+			s.RegistryHosts = []string{"registry.npmjs.org", "proxy.golang.org"}
+		}},
+		{"provider_registry with a reserved registry host", func(s *HandoffSpec) {
+			s.Agent.EgressProfile = domain.EgressProviderRegistry
+			s.RegistryHosts = []string{"registry.internal"}
+		}},
+		{"provider_registry with a registry authority", func(s *HandoffSpec) {
+			s.Agent.EgressProfile = domain.EgressProviderRegistry
+			s.RegistryHosts = []string{"registry.npmjs.org:443"}
+		}},
 		{"missing launch state", func(s *HandoffSpec) { s.Agent.LaunchState = "" }},
 		{"unknown launch state", func(s *HandoffSpec) { s.Agent.LaunchState = "shared" }},
 		{"workspace repository instructions", func(s *HandoffSpec) {
@@ -184,6 +202,19 @@ func TestHandoffSpecValidate(t *testing.T) {
 				t.Errorf("validate() = %v, want ErrInvalidHandoffSpec", err)
 			}
 		})
+	}
+}
+
+func testRegistryHandoffSpec() HandoffSpec {
+	hs := testHandoffSpec()
+	hs.Agent.EgressProfile = domain.EgressProviderRegistry
+	hs.RegistryHosts = []string{"proxy.golang.org", "registry.npmjs.org"}
+	return hs
+}
+
+func TestHandoffSpecValidateProviderRegistry(t *testing.T) {
+	if err := testRegistryHandoffSpec().validate(); err != nil {
+		t.Fatalf("provider_registry fixture: validate() = %v, want nil", err)
 	}
 }
 

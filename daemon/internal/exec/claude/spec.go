@@ -454,9 +454,11 @@ func (p claudeProvider) HandoffSpec(
 			"%w: credential mode %q is not subscription_contained",
 			ErrUnsupportedStart, spec.CredentialMode)
 	}
-	if spec.EgressProfile != domain.EgressProviderOnly {
+	if spec.EgressProfile != domain.EgressProviderOnly &&
+		spec.EgressProfile != domain.EgressProviderRegistry {
 		return ward.HandoffSpec{}, fmt.Errorf(
-			"%w: egress profile %q is not provider_only", ErrUnsupportedStart, spec.EgressProfile)
+			"%w: egress profile %q is not provider_only or provider_registry",
+			ErrUnsupportedStart, spec.EgressProfile)
 	}
 	if spec.AuthIdentityID == "" {
 		return ward.HandoffSpec{}, fmt.Errorf(

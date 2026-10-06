@@ -1,6 +1,7 @@
 package ward
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -8,10 +9,13 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -215,6 +219,193 @@ func TestHandoffSuccess(t *testing.T) {
 		}
 	}
 	fx.assertReaped(t)
+}
+
+// The egress observation is read from the run's own proxy: provider_only
+// reports the provider endpoints and no registry set.
+func TestHandoffRecordsProviderOnlyAllowlist(t *testing.T) {
+	fx := newHandoffFixture(t)
+	res, err := fx.run(t)
+	if err != nil {
+		t.Fatalf("Handoff = %v, want success", err)
+	}
+	if res.Egress.Profile != domain.EgressProviderOnly ||
+		!slices.Equal(res.Egress.Allowlist, []string{"provider.example:443"}) ||
+		res.Egress.RegistrySetDigest != "" {
+		t.Errorf("Egress = %+v, want provider_only over the provider endpoint alone", res.Egress)
+	}
+}
+
+func TestHandoffRecordsProviderRegistryAllowlist(t *testing.T) {
+	fx := newHandoffFixture(t)
+	hs := testRegistryHandoffSpec()
+	res, err := fx.backend(t).Handoff(context.Background(), hs)
+	if err != nil {
+		t.Fatalf("Handoff = %v, want success", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(res.ExportDir) })
+	set, err := domain.NewRegistrySet(hs.RegistryHosts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDigest, err := set.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"provider.example:443", "proxy.golang.org:443", "registry.npmjs.org:443"}
+	if res.Egress.Profile != domain.EgressProviderRegistry ||
+		!slices.Equal(res.Egress.Allowlist, want) ||
+		res.Egress.RegistrySetDigest != wantDigest || !res.Egress.HostOnly {
+		t.Errorf("Egress = %+v, want provider_registry over %v with digest %s", res.Egress, want, wantDigest)
+	}
+	fx.assertReaped(t)
+}
+
+// The writer's proxy is the registry-aware one: a declared registry is
+// admitted, resolved through the configured lookup, and dialed at the address
+// that lookup returned, while an undeclared authority is refused unresolved.
+func TestHandoffProxyResolvesDeclaredRegistries(t *testing.T) {
+	fx := newHandoffFixture(t)
+	hs := testRegistryHandoffSpec()
+	var (
+		mu     sync.Mutex
+		looked []string
+		dialed []string
+	)
+	fx.cfg.EgressLookupIP = func(_ context.Context, host string) ([]netip.Addr, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		looked = append(looked, host)
+		return []netip.Addr{netip.MustParseAddr("104.16.3.34")}, nil
+	}
+	fx.cfg.EgressDialContext = func(_ context.Context, _, address string) (net.Conn, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		dialed = append(dialed, address)
+		return nil, errors.New("scripted dial refusal")
+	}
+	connectStatus := func(proxy, authority string) string {
+		conn, err := net.DialTimeout("tcp4", proxy, time.Second)
+		if err != nil {
+			t.Fatalf("dial the writer's proxy: %v", err)
+		}
+		defer func() { _ = conn.Close() }()
+		if _, err := fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", authority, authority); err != nil {
+			t.Fatal(err)
+		}
+		status, err := bufio.NewReader(conn).ReadString('\n')
+		if err != nil {
+			t.Fatalf("read CONNECT response for %s: %v", authority, err)
+		}
+		return strings.TrimSpace(status)
+	}
+	// The writer's view: its own spec names the proxy, and the proxy is
+	// already serving when the writer is created.
+	statuses := map[string]string{}
+	fx.rt.onCreateContainer = func(spec ContainerSpec) error {
+		if spec.Name != namesFor(hs.RunID).Agent {
+			return nil
+		}
+		for _, env := range spec.Env {
+			proxyURL, ok := strings.CutPrefix(env, "HTTPS_PROXY=")
+			if !ok {
+				continue
+			}
+			proxy, err := proxyAddress(proxyURL)
+			if err != nil {
+				return err
+			}
+			for _, authority := range []string{"registry.npmjs.org:443", "undeclared.example:443"} {
+				statuses[authority] = connectStatus(proxy, authority)
+			}
+		}
+		return nil
+	}
+	res, err := fx.backend(t).Handoff(context.Background(), hs)
+	if err != nil {
+		t.Fatalf("Handoff = %v, want success", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(res.ExportDir) })
+	if got := statuses["registry.npmjs.org:443"]; got != "HTTP/1.1 502 Bad Gateway" {
+		t.Errorf("declared registry status = %q, want 502 from the scripted dial refusal", got)
+	}
+	if got := statuses["undeclared.example:443"]; got != "HTTP/1.1 403 Forbidden" {
+		t.Errorf("undeclared authority status = %q, want 403", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(looked, []string{"registry.npmjs.org"}) || !slices.Equal(dialed, []string{"104.16.3.34:443"}) {
+		t.Errorf("lookups = %v, dials = %v; want the declared registry resolved once and dialed at its address", looked, dialed)
+	}
+}
+
+// A spec whose profile and registry set disagree is refused before the gate
+// creates any runtime object.
+func TestHandoffRefusesMismatchedRegistrySetBeforeAnyObject(t *testing.T) {
+	for name, mutate := range map[string]func(*HandoffSpec){
+		"provider_only with a registry set": func(hs *HandoffSpec) {
+			hs.RegistryHosts = []string{"registry.npmjs.org"}
+		},
+		"provider_registry without a registry set": func(hs *HandoffSpec) {
+			hs.Agent.EgressProfile = domain.EgressProviderRegistry
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fx := newHandoffFixture(t)
+			hs := testHandoffSpec()
+			mutate(&hs)
+			if _, err := fx.backend(t).Handoff(context.Background(), hs); !errors.Is(err, ErrInvalidHandoffSpec) {
+				t.Fatalf("Handoff = %v, want ErrInvalidHandoffSpec", err)
+			}
+			if len(fx.rt.calls) != 0 {
+				t.Errorf("runtime calls before the refusal: %v", fx.rt.calls)
+			}
+		})
+	}
+}
+
+// The handoff trusts what the proxy reports it enforces, not what it was
+// configured with: any difference from the requested profile's allowlist
+// fails closed before the writer exists.
+func TestHandoffRejectsRealizedAllowlistMismatch(t *testing.T) {
+	const provider, registry = "provider.example:443", "registry.npmjs.org:443"
+	registrySpec := func() HandoffSpec {
+		hs := testHandoffSpec()
+		hs.Agent.EgressProfile = domain.EgressProviderRegistry
+		hs.RegistryHosts = []string{"registry.npmjs.org"}
+		return hs
+	}
+	for _, tc := range []struct {
+		name       string
+		spec       HandoffSpec
+		providers  []string
+		registries []string
+	}{
+		{"provider_only proxy admits a registry", testHandoffSpec(), []string{provider}, []string{registry}},
+		{"provider_only proxy admits an extra provider", testHandoffSpec(), []string{"other.example:443", provider}, nil},
+		{"provider_only proxy admits nothing", testHandoffSpec(), nil, nil},
+		{"provider_registry proxy omits the registry", registrySpec(), []string{provider}, nil},
+		{"provider_registry proxy admits an undeclared registry", registrySpec(), []string{provider}, []string{"other.example:443", registry}},
+		{"provider_registry proxy dials the registry by name", registrySpec(), []string{provider, registry}, nil},
+		{"provider_registry proxy omits the provider", registrySpec(), nil, []string{registry}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newHandoffFixture(t)
+			fx.cfg.readEgressAllowlist = func(*connectProxy) ([]string, []string) {
+				return tc.providers, tc.registries
+			}
+			res, err := fx.backend(t).Handoff(context.Background(), tc.spec)
+			if res != nil {
+				t.Fatal("mismatched allowlist returned a trusted result")
+			}
+			wantCheckFailure(t, err, CheckAgentEgress)
+			names := namesFor(tc.spec.RunID)
+			if slices.Contains(fx.rt.calls, "create-container "+names.Agent) {
+				t.Error("writer container was created after the allowlist mismatch")
+			}
+			fx.assertReaped(t)
+		})
+	}
 }
 
 func TestHandoffVendorInstructionTopology(t *testing.T) {

@@ -521,7 +521,8 @@ func (d *Driver) regateWithCurrentPolicy(
 	case i.Spec.CredentialMode != domain.CredentialSubscriptionContained:
 		return fmt.Errorf("%w: intent %s carries credential mode %q",
 			ErrUnsupportedStart, i.InvocationID, i.Spec.CredentialMode)
-	case i.Spec.EgressProfile != domain.EgressProviderOnly:
+	case i.Spec.EgressProfile != domain.EgressProviderOnly &&
+		i.Spec.EgressProfile != domain.EgressProviderRegistry:
 		return fmt.Errorf("%w: intent %s carries egress profile %q",
 			ErrUnsupportedStart, i.InvocationID, i.Spec.EgressProfile)
 	case i.Spec.AuthIdentityID == "":

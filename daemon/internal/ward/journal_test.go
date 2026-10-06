@@ -708,8 +708,22 @@ func TestSpecDigest(t *testing.T) {
 		t.Error("current and historical fixture encodings digest identically")
 	}
 
+	// A provider_only spec must keep the digest it had before RegistryHosts
+	// joined HandoffSpec: an open journal record from a run started by an
+	// earlier daemon recovers only while its spec still digests the same.
+	const providerOnlyFixtureDigest = "54fd54d9446397037569dbf8cc9a050e1399b574c66ae5b2450393a78d8f1ebc"
+	if a != providerOnlyFixtureDigest {
+		t.Errorf("provider_only digest = %q, want the pre-registry fixture %q", a, providerOnlyFixtureDigest)
+	}
+	emptySet := testHandoffSpec()
+	emptySet.RegistryHosts = []string{}
+	if got, err := specDigest(emptySet); err != nil || got != a {
+		t.Errorf("empty registry set digest = %q, %v; want the absent-field digest %q", got, err, a)
+	}
+
 	mutations := map[string]func(*HandoffSpec){
 		"run id":         func(s *HandoffSpec) { s.RunID = "other-run" },
+		"registry hosts": func(s *HandoffSpec) { s.RegistryHosts = []string{"registry.npmjs.org"} },
 		"agent command":  func(s *HandoffSpec) { s.Agent.Command = []string{"sh", "-c", "false"} },
 		"mount writable": func(s *HandoffSpec) { s.Agent.CredentialMounts[0].Writable = true },
 		"vendor instructions": func(s *HandoffSpec) {

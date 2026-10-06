@@ -122,6 +122,23 @@ func TestHandoffSpecBindsContainmentAndInstructions(t *testing.T) {
 	}
 }
 
+// The adapter accepts provider_registry and carries only the profile: the
+// registry set comes from the run's policy, which the stage driver reads.
+func TestHandoffSpecAcceptsProviderRegistry(t *testing.T) {
+	t.Parallel()
+	in := testProviderHandoffInput()
+	in.Spec.EgressProfile = domain.EgressProviderRegistry
+	hs, err := (claudeProvider{volumes: testAuthStoreVolumes{volume: "provider-volume"}}).
+		HandoffSpec(context.Background(), in)
+	if err != nil {
+		t.Fatalf("HandoffSpec: %v", err)
+	}
+	if hs.Agent.EgressProfile != domain.EgressProviderRegistry || len(hs.RegistryHosts) != 0 {
+		t.Errorf("handoff = %s with registries %v, want provider_registry and no adapter-chosen set",
+			hs.Agent.EgressProfile, hs.RegistryHosts)
+	}
+}
+
 func TestHandoffSpecRefusesUnsupportedContainment(t *testing.T) {
 	t.Parallel()
 	provider := claudeProvider{volumes: testAuthStoreVolumes{volume: "provider-volume"}}
