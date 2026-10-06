@@ -681,8 +681,8 @@ func evaluateComposition(
 				notRunCheck(manifest, image.check, "project-image provenance could not be read from the production database")
 				continue
 			}
-			if err := validatePreflightProjectImage(database.ProjectImage, database.ProjectImageFound, cfg); err != nil || database.ProjectImageError != nil {
-				failCheck(manifest, image.check, "implementer image has no matching approved project-image provenance", "build and record an image for this repository, base, recipe, and approved preparation command")
+			if err := validatePreflightProjectImage(ctx, database.ProjectImage, database.ProjectImageFound, cfg); err != nil || database.ProjectImageError != nil {
+				failCheck(manifest, image.check, "implementer image has no matching approved project-image provenance", "build and record an image for this repository, recipe, and approved preparation command whose environment inputs match this base")
 				continue
 			}
 		}
@@ -771,15 +771,27 @@ func validateCompositionRepositoryBase(cfg preflightConfig) error {
 	return nil
 }
 
+// validatePreflightProjectImage is the composition gate's image check run
+// from the operator's checkout: the record-only refusals, compatibility with
+// the configured base, and the approved recipe. An image built at another
+// commit is checked against the base tree read from cfg.RepositoryCheckout,
+// so preflight reports an incompatible base without minting a token.
 func validatePreflightProjectImage(
+	ctx context.Context,
 	image domain.ProjectImage,
 	found bool,
 	cfg preflightConfig,
 ) error {
 	if _, err := resolveProjectImagePreparation(image, found, claudeDriverConfig{
 		AgentImage: domain.ImageRef(cfg.AgentImage), Repo: cfg.Repo,
-		RepositoryID: cfg.RepositoryID, BaseSHA: cfg.BaseSHA,
+		RepositoryID: cfg.RepositoryID,
 	}); err != nil {
+		return err
+	}
+	if err := admitProjectImageAtBase(image, cfg.BaseSHA,
+		func() (domain.ProjectImageBaseInputs, error) {
+			return projectimage.ObserveBaseInputs(ctx, "git", cfg.RepositoryCheckout, cfg.BaseSHA)
+		}); err != nil {
 		return err
 	}
 	if image.RecipeDigest != cfg.ApprovedRecipe {

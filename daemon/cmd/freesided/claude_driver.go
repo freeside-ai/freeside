@@ -1391,13 +1391,15 @@ var ErrProjectImageComposition = errors.New("configured agent image has no match
 // immutable project_images provenance production publication already treats as
 // authority (engine.productionPublicationWorkflow.loadBinding), and returns the
 // workspace-hydration argv the launch command must run. It refuses when no
-// record names the image; when its recorded repository, repository ID, or
-// commit disagrees with the configured repo/base; or when the decoded
-// preparation command is not the fixed image-owned helper the builder and
-// onboarding policy admit (projectimage.PreparationPath). Naming each mismatch,
-// because the implementer must hydrate from an image built for exactly this
-// repository and base (a mismatched base would make the preparation helper's
-// manifest guard exit 42), running exactly the approved helper.
+// record names the image; when its recorded repository or repository ID
+// disagrees with the configured repository; or when the decoded preparation
+// command is not the fixed image-owned helper the builder and onboarding
+// policy admit (projectimage.PreparationPath). Each refusal names its
+// mismatch.
+//
+// These are the checks the record alone decides, so they run before anything
+// reaches the network. Whether the image may serve the configured base is
+// admitProjectImageAtBase's question, which can need the base tree.
 //
 // The command re-gate is the reconstruction trust boundary (AGENTS.md daemon
 // conventions): PreparationCommand is a store field decoded here, so a
@@ -1420,10 +1422,6 @@ func resolveProjectImagePreparation(
 		return nil, fmt.Errorf(
 			"project-image repository id %d disagrees with configured %d: %w",
 			image.RepositoryID, cfg.RepositoryID, ErrProjectImageComposition)
-	case image.CommitSHA != cfg.BaseSHA:
-		return nil, fmt.Errorf(
-			"project-image commit %s disagrees with configured base %s: %w",
-			image.CommitSHA, cfg.BaseSHA, ErrProjectImageComposition)
 	case !slices.Equal(image.PreparationCommand, []string{projectimage.PreparationPath}):
 		return nil, fmt.Errorf(
 			"project-image preparation command %q is not the approved %q: %w",
@@ -1432,10 +1430,82 @@ func resolveProjectImagePreparation(
 	return slices.Clone(image.PreparationCommand), nil
 }
 
-// composeClaudeDriver builds the production ward gate and Claude driver.
-// Nothing here reaches the network or the runtime; the caller runs the
-// conformance suite and the driver's restart reconciliation before the
-// engine loop starts.
+// projectImageBaseObserver reads what the configured base commit holds for
+// the inputs a project image's environment records.
+type projectImageBaseObserver func() (domain.ProjectImageBaseInputs, error)
+
+// admitProjectImageAtBase refuses a recorded image that may not serve a run at
+// baseSHA (domain.ProjectImage.AdmissibleAt). An image built at exactly
+// baseSHA is admitted from the record alone, so observe runs only for an
+// image built at another commit; that keeps the common start free of a base
+// read. A base the image is not compatible with is the same startup refusal
+// the run-482 defense gives a mismatched commit: without it the preparation
+// helper's manifest guard would exit 42 only after a run had spent
+// implementation.
+//
+// An observation that fails is reported as itself, not as
+// ErrProjectImageComposition: the image was not found incompatible, the base
+// could not be read.
+func admitProjectImageAtBase(
+	image domain.ProjectImage, baseSHA string, observe projectImageBaseObserver,
+) error {
+	if image.CommitSHA == baseSHA {
+		return nil
+	}
+	inputs, err := observe()
+	if err != nil {
+		return fmt.Errorf("observe project-image inputs at base %s: %w", baseSHA, err)
+	}
+	if inputs.CommitSHA != baseSHA {
+		return fmt.Errorf(
+			"project-image inputs were observed at %s, not the configured base %s: %w",
+			inputs.CommitSHA, baseSHA, ErrProjectImageComposition)
+	}
+	if err := image.AdmissibleAt(inputs, projectimage.PreparationDigest()); err != nil {
+		return errors.Join(ErrProjectImageComposition, err)
+	}
+	return nil
+}
+
+// exactBaseFetcher materializes the configured base at dir, which does not
+// exist yet, and reports the numeric identity of the repository it fetched
+// from. Production binds it to the publication transport's FetchBase.
+type exactBaseFetcher func(ctx context.Context, dir string) (repositoryID int64, err error)
+
+// observeCompositionBaseInputs fetches the configured base once into private
+// scratch and reads the project-image inputs from it. Startup has no checkout
+// of the managed repository, and the transport's exact-base fetch is the same
+// proof every later boundary uses: the checkout holds cfg.BaseSHA only when
+// the remote's base branch does.
+func observeCompositionBaseInputs(
+	ctx context.Context, fetch exactBaseFetcher, cfg claudeDriverConfig,
+) (domain.ProjectImageBaseInputs, error) {
+	scratch, err := os.MkdirTemp("", "freesided-project-image-base-")
+	if err != nil {
+		return domain.ProjectImageBaseInputs{}, fmt.Errorf("create base scratch: %w", err)
+	}
+	defer os.RemoveAll(scratch) //nolint:errcheck // best-effort cleanup of startup-owned observation state
+	dir := filepath.Join(scratch, "checkout")
+	repositoryID, err := fetch(ctx, dir)
+	if err != nil {
+		return domain.ProjectImageBaseInputs{}, fmt.Errorf("fetch exact base: %w", err)
+	}
+	if repositoryID != cfg.RepositoryID {
+		return domain.ProjectImageBaseInputs{}, fmt.Errorf(
+			"fetched base carries repository id %d, not the configured %d: %w",
+			repositoryID, cfg.RepositoryID, domain.ErrRepositoryIdentityMismatch)
+	}
+	// "git" from PATH is the binary the transport that fetched dir runs
+	// (claudeTransport leaves TransportOptions.GitPath at its default).
+	return projectimage.ObserveBaseInputs(ctx, "git", dir, cfg.BaseSHA)
+}
+
+// composeClaudeDriver builds the production ward gate and Claude driver. Its
+// network work is the publication transport's: the janitor's startup pass,
+// and one exact-base fetch when the project image was built at a commit other
+// than the configured base. It starts no runtime work unless cfg.RunConformance
+// asks for the suite; the caller runs the driver's restart reconciliation
+// before the engine loop starts.
 func composeClaudeDriver(
 	ctx context.Context, st *store.Store, blobs *signet.BlobStore, cfg claudeDriverConfig,
 	logger *slog.Logger,
@@ -1484,15 +1554,16 @@ func composeClaudeDriver(
 		return nil, fmt.Errorf("remediation prompt package roles: %w", err)
 	}
 	// Resolve the workspace-hydration command before any network-touching
-	// composition, so a base/image misconfiguration fails at startup. Only the
-	// unattended path runs a project image; the attended conversation-turn path
-	// carries no preparation and stays unchanged.
-	var preparation []string
+	// composition, so an image the record alone rules out fails at startup
+	// without a network round trip. Only the unattended path runs a project
+	// image; the attended conversation-turn path carries no preparation and
+	// stays unchanged.
+	var (
+		preparation []string
+		image       domain.ProjectImage
+	)
 	if cfg.OperatingMode == domain.ModeUnattended {
-		var (
-			image domain.ProjectImage
-			found bool
-		)
+		var found bool
 		if readErr := st.Read(ctx, func(tx *store.ReadTx) error {
 			var err error
 			image, found, err = tx.GetProjectImageByRef(ctx, cfg.AgentImage)
@@ -1521,6 +1592,29 @@ func composeClaudeDriver(
 			err = errors.Join(err, janitor.Close(context.Background()))
 		}
 	}()
+	if cfg.OperatingMode == domain.ModeUnattended {
+		// The base tree exists only on the remote at startup, so this half of
+		// the image gate waits for the transport. Stable coverage keeps the
+		// fetch's installation token from failing under a concurrent pass.
+		if err := admitProjectImageAtBase(image, cfg.BaseSHA,
+			func() (inputs domain.ProjectImageBaseInputs, err error) {
+				err = janitor.WithStableCoverage(func() error {
+					inputs, err = observeCompositionBaseInputs(ctx,
+						func(ctx context.Context, dir string) (int64, error) {
+							checkout, err := transport.FetchBase(
+								ctx, cfg.Repo, cfg.BaseRef, cfg.BaseSHA, dir)
+							if err != nil {
+								return 0, err
+							}
+							return checkout.RepositoryID(), nil
+						}, cfg)
+					return err
+				})
+				return inputs, err
+			}); err != nil {
+			return nil, err
+		}
+	}
 	adapters, adapterErr := wardstore.New(st)
 	if adapterErr != nil {
 		return nil, fmt.Errorf("compose ward store adapters: %w", adapterErr)
