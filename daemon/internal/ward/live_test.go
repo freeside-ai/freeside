@@ -30,6 +30,7 @@ import (
 	osexec "os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -541,6 +542,70 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 	if !credSurvives {
 		t.Error("caller-owned credential volume was deleted; containment must come from detachment, not deletion")
 	}
+
+	// The same gate under provider_registry: a second run declares one public
+	// registry, and its writer proves the registry reachable through the
+	// proxy (with the fronting witness refused) while a real registry the run
+	// did not declare, an undeclared name, a direct connection, and DNS all
+	// stay refused.
+	const liveRegistryHost, undeclaredRegistry = "registry.npmjs.org", "pypi.org:443"
+	registryRunID := runID + "-reg"
+	registryNames := namesFor(registryRunID)
+	t.Cleanup(func() {
+		for _, c := range []string{registryNames.Agent, registryNames.Exporter} {
+			_ = rt.StopContainer(ctx, c)
+			_ = rt.DeleteContainer(ctx, c)
+		}
+		_ = rt.DeleteNetwork(ctx, registryNames.Network)
+		_ = rt.DeleteVolume(ctx, registryNames.Workspace)
+	})
+	registryAuthority := net.JoinHostPort(liveRegistryHost, registryPort)
+	registryProbe := providerEgressProbeScript(append(slices.Clone(cfg.ProviderEndpoints), registryAuthority)) +
+		"proxy=${HTTPS_PROXY#http://}; " +
+		"test \"$(printf 'CONNECT %s HTTP/1.1\\r\\nHost: %s\\r\\n\\r\\n' " + undeclaredRegistry + " " + undeclaredRegistry +
+		" | nc -w 10 \"${proxy%:*}\" \"${proxy##*:}\" | head -n 1 | tr -d '\\r')\" = 'HTTP/1.1 403 Forbidden'; "
+	registryRes, err := b.Handoff(ctx, HandoffSpec{
+		RunID:           registryRunID,
+		Class:           LaunchWriter,
+		Size:            DefaultLaunchSize(LaunchWriter),
+		WorkspaceSizeMB: 64,
+		Seed:            WorkspaceSeed{Mode: SeedBlank},
+		RegistryHosts:   []string{liveRegistryHost},
+		Agent: AgentSpec{
+			Image:         liveImage,
+			EgressProfile: domain.EgressProviderRegistry,
+			LaunchState:   LaunchStateNone,
+			VendorInstructions: VendorInstructions{
+				Vendor: domain.AgentVendorClaude,
+			},
+			InstructionPolicy: ClaudeInvocationInstructionPolicy(),
+			Command: []string{
+				"sh", "-c",
+				"set -eu; " + registryProbe +
+					"cat /credentials/token > /dev/null && " +
+					"echo registry-output > /workspace/result.txt",
+			},
+			CredentialMounts: []CredentialMount{{
+				Volume: credVolume, Target: "/credentials",
+				Manifest: CredentialManifestOpaque,
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("provider_registry Handoff = %v, want success", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(registryRes.ExportDir) })
+	wantAllowlist := append(slices.Clone(cfg.ProviderEndpoints), registryAuthority)
+	slices.Sort(wantAllowlist)
+	if registryRes.Egress.Profile != domain.EgressProviderRegistry ||
+		!slices.Equal(registryRes.Egress.Allowlist, wantAllowlist) || registryRes.Egress.RegistrySetDigest == "" {
+		t.Errorf("provider_registry egress = %+v, want allowlist %v with a registry set digest",
+			registryRes.Egress, wantAllowlist)
+	}
+	if blob := readManifestBlob(t, registryRes, "result.txt"); string(blob) != "registry-output\n" {
+		t.Errorf("provider_registry result.txt = %q, want the writer's output after its probes", blob)
+	}
+
 	if err := rt.DeleteVolume(ctx, credVolume); err != nil {
 		t.Errorf("delete credential volume: %v", err)
 	}
