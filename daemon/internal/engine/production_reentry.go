@@ -273,15 +273,16 @@ func (w *productionPublicationWorkflow) loadReentryBinding(
 		binding.profile.Repo != base.Repo ||
 		binding.profile.RepositoryID != base.RepositoryID ||
 		binding.image.Repository != base.Repo ||
-		binding.image.RepositoryID != base.RepositoryID ||
-		// The image is checked against the base its producer was admitted at.
-		// The cycle keeps that image on its newer base (issue #502 non-goals).
-		binding.image.CommitSHA != base.BaseSHA {
+		binding.image.RepositoryID != base.RepositoryID {
 		return productionBinding{}, fmt.Errorf(
 			"production re-entry binding disagrees with durable authority: %w",
 			domain.ErrParentKeyMismatch)
 	}
 	cycle.admittedBaseSHA = base.BaseSHA
+	// The cycle keeps its producer's image and runs it on the re-entry base,
+	// so that is the base the image must serve. verifyReentry checks it before
+	// it builds a room; the predecessor's base decides nothing about the newer
+	// one.
 	binding.admission.Base.BaseSHA = task.Successor.Reentry.BaseSHA
 	binding.reentry = &cycle
 	return binding, nil
@@ -423,6 +424,9 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 		if reason, stop := reentryUnverifiableTreeReason(task, base.BaseSHA, err); stop {
 			return w.stopReentryCycle(ctx, task, reason, nil)
 		}
+		if reason, stop := reentryUnservedBaseReason(task, base.BaseSHA, err); stop {
+			return w.stopReentryCycle(ctx, task, reason, nil)
+		}
 		if err != nil {
 			return productionTaskOutcome{}, err
 		}
@@ -533,6 +537,21 @@ func reentryUnverifiableTreeReason(
 	return fmt.Sprintf(
 		"Readiness re-entry stopped because pull request head %s cannot be verified against base %s: %s (%s). Change the pull request so its tree can be verified.",
 		task.HeadSHA, baseSHA, cause, reentryQuoted(err.Error())), true
+}
+
+// reentryUnservedBaseReason reports the stop for a cycle whose image cannot
+// serve the base it re-entered on. The cycle keeps its producer's image and a
+// base advance is ordinary, so this ends the one cycle on an item a person can
+// read. As a lane error it would stop publication for every run on each pass.
+func reentryUnservedBaseReason(
+	task productionPublicationTask, baseSHA string, err error,
+) (string, bool) {
+	if !errors.Is(err, domain.ErrProjectImageIncompatible) {
+		return "", false
+	}
+	return fmt.Sprintf(
+		"Readiness re-entry stopped because the project image this run was admitted with cannot serve base %s, so pull request head %s was not verified against it (%s). Rerun the work with a project image that serves that base.",
+		baseSHA, task.HeadSHA, reentryQuoted(err.Error())), true
 }
 
 // reentryConflictReason names both commits and the conflicting paths. The
@@ -690,6 +709,13 @@ func (w *productionPublicationWorkflow) verifyReentry(
 	}
 	changes, diffStats, err := w.reentryDiff(ctx, checkoutDir, baseSHA, workspaceSHA, task.HeadSHA)
 	if err != nil {
+		return productionReentryCheckpoint{}, err
+	}
+	// The cycle's own base, not the one its producer was admitted at. The
+	// caller turns a refusal into this cycle's stop.
+	if err := requireProjectImageServesBase(
+		ctx, binding.image, checkoutDir, baseSHA, w.preparationDigest,
+	); err != nil {
 		return productionReentryCheckpoint{}, err
 	}
 	room, recipe, err := w.verificationRoomAndRecipe(ctx, task, binding)

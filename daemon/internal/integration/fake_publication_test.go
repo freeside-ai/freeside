@@ -651,6 +651,8 @@ type publicationHarness struct {
 	workDir                   string
 	baseDir                   string
 	baseSHA                   string
+	baseFiles                 map[string]string
+	projectImageInput         func(*domain.ProjectImageInput)
 	recipe                    []byte
 	recipeD                   domain.Digest
 	profile                   domain.AutomationTrustProfile
@@ -752,7 +754,7 @@ func newPublicationHarnessWithBaseFiles(t *testing.T, recipe []byte, files map[s
 	return &publicationHarness{
 		t: t, ctx: ctx, dbPath: dbPath, blobDir: blobDir,
 		workDir: filepath.Join(root, "publication"),
-		baseDir: base, baseSHA: baseSHA, recipe: recipe, recipeD: recipeDigest,
+		baseDir: base, baseSHA: baseSHA, baseFiles: files, recipe: recipe, recipeD: recipeDigest,
 		profile: profile, audit: audit, store: st,
 		attention: signet.NewService(st, signet.WithBlobStore(blobs)), blobs: blobs,
 		transport: &integrationTransport{t: t, baseDir: base, forge: forge},

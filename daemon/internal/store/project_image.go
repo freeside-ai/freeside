@@ -12,20 +12,24 @@ import (
 const (
 	recordProjectImageSQL = `
 INSERT INTO project_images
-    (id, repository, repository_id, commit_sha, recipe_digest, base_image_ref, image_ref, body)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    (id, repository, repository_id, commit_sha, recipe_digest, base_image_ref, image_ref,
+     environment_digest, body)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (image_ref) DO NOTHING`
 	getProjectImageSQL = `
-SELECT id, repository, repository_id, commit_sha, recipe_digest, base_image_ref, image_ref, body
+SELECT id, repository, repository_id, commit_sha, recipe_digest, base_image_ref, image_ref,
+    environment_digest, body
 FROM project_images WHERE id = ?`
 	getProjectImageBodySQL  = `SELECT body FROM project_images WHERE image_ref = ?`
 	getProjectImageByRefSQL = `
-SELECT id, repository, repository_id, commit_sha, recipe_digest, base_image_ref, image_ref, body
+SELECT id, repository, repository_id, commit_sha, recipe_digest, base_image_ref, image_ref,
+    environment_digest, body
 FROM project_images WHERE image_ref = ?`
 	projectImageRefRecordedSQL = `SELECT EXISTS(
 SELECT 1 FROM project_images WHERE image_ref = ?)`
 	listProjectImagesSQL = `
-SELECT id, repository, repository_id, commit_sha, recipe_digest, base_image_ref, image_ref, body
+SELECT id, repository, repository_id, commit_sha, recipe_digest, base_image_ref, image_ref,
+    environment_digest, body
 FROM project_images WHERE repository_id = ? ORDER BY rowid`
 )
 
@@ -37,9 +41,13 @@ func (tx *InternalTx) RecordProjectImage(ctx context.Context, image domain.Proje
 	if err != nil {
 		return fmt.Errorf("record project image %q: %w", image.ID, err)
 	}
+	environmentDigest, err := projectImageEnvironmentDigest(image)
+	if err != nil {
+		return fmt.Errorf("record project image %q: %w", image.ID, err)
+	}
 	if err := tx.putImmutable(ctx, recordProjectImageSQL, []any{
 		image.ID, image.Repository, image.RepositoryID, image.CommitSHA,
-		image.RecipeDigest, image.BaseImageRef, image.ImageRef, body,
+		image.RecipeDigest, image.BaseImageRef, image.ImageRef, environmentDigest, body,
 	}, getProjectImageBodySQL, []any{image.ImageRef}, body); err != nil {
 		return fmt.Errorf("record project image %q: %w", image.ID, err)
 	}
@@ -127,25 +135,47 @@ func (tx *ReadTx) ListProjectImages(ctx context.Context, repositoryID int64) ([]
 	return images, nil
 }
 
+// projectImageEnvironmentDigest is the environment_digest column value for one
+// record: NULL for a record without an environment, its content address
+// otherwise.
+func projectImageEnvironmentDigest(image domain.ProjectImage) (sql.NullString, error) {
+	if image.Environment == nil {
+		return sql.NullString{}, nil
+	}
+	digest, err := image.Environment.Digest()
+	if err != nil {
+		return sql.NullString{}, err
+	}
+	return sql.NullString{String: string(digest), Valid: true}, nil
+}
+
 func scanProjectImage(row scanner) (domain.ProjectImage, error) {
 	var (
 		id, repository, commitSHA, recipeDigest string
 		baseImageRef, imageRef                  string
 		repositoryID                            int64
+		environmentDigest                       sql.NullString
 		body                                    []byte
 	)
 	if err := row.Scan(&id, &repository, &repositoryID, &commitSHA,
-		&recipeDigest, &baseImageRef, &imageRef, &body); err != nil {
+		&recipeDigest, &baseImageRef, &imageRef, &environmentDigest, &body); err != nil {
 		return domain.ProjectImage{}, err
 	}
 	image, err := decode[domain.ProjectImage](body)
 	if err != nil {
 		return domain.ProjectImage{}, err
 	}
+	// The column is NULL exactly when the body has no environment, so a row
+	// cannot gain or lose compatibility evidence through either one alone.
+	wantEnvironmentDigest, err := projectImageEnvironmentDigest(image)
+	if err != nil {
+		return domain.ProjectImage{}, err
+	}
 	if string(image.ID) != id || image.Repository != repository ||
 		image.RepositoryID != repositoryID || image.CommitSHA != commitSHA ||
 		string(image.RecipeDigest) != recipeDigest ||
-		string(image.BaseImageRef) != baseImageRef || string(image.ImageRef) != imageRef {
+		string(image.BaseImageRef) != baseImageRef || string(image.ImageRef) != imageRef ||
+		environmentDigest != wantEnvironmentDigest {
 		return domain.ProjectImage{}, errRowInconsistent
 	}
 	return image, nil

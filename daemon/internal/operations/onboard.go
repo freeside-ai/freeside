@@ -317,6 +317,15 @@ func (o Onboard) Run(ctx context.Context, req OnboardRequest) (OnboardResult, er
 		return OnboardResult{}, errors.New(
 			"onboard: project image result is not bound to the approved request")
 	}
+	// A new build always records its environment, under this binary's own
+	// preparation implementation. A result without one could never be reused
+	// past its build commit, and one naming another implementation would be
+	// reused on evidence this binary did not produce.
+	if image.Environment == nil ||
+		image.Environment.PreparationDigest != projectimage.PreparationDigest() {
+		return OnboardResult{}, errors.New(
+			"onboard: project image result does not record this builder's environment")
+	}
 	var recorded domain.ProjectImage
 	if err := o.Store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
@@ -457,7 +466,15 @@ func sameProjectImage(a, b domain.ProjectImage) bool {
 		a.RecipeDigest == b.RecipeDigest &&
 		slices.Equal(a.PreparationCommand, b.PreparationCommand) &&
 		a.BaseImageRef == b.BaseImageRef &&
-		a.ImageRef == b.ImageRef
+		a.ImageRef == b.ImageRef &&
+		sameProjectImageEnvironment(a.Environment, b.Environment)
+}
+
+func sameProjectImageEnvironment(a, b *domain.ProjectImageEnvironment) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 func cloneResolvedPending(

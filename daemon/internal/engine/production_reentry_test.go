@@ -244,6 +244,43 @@ func TestReentryStopsOnlyOnRefusalsTheTreeCauses(t *testing.T) {
 	}
 }
 
+// TestReentryStopsOnBaseTheImageCannotServe: an image that cannot serve the
+// re-entry base ends the one cycle, and the reason still states the cause when
+// the refusal is longer than the excerpt the item quotes. Any other failure
+// stays an error.
+func TestReentryStopsOnBaseTheImageCannotServe(t *testing.T) {
+	t.Parallel()
+	task := newReentryTask("project-reentry", reentrySuccessorForTest(
+		productionReadyItemID("run-reentry"), domain.ReadinessInvalidationBaseAdvanced))
+	base := task.Successor.Reentry.BaseSHA
+	image, err := domain.NewProjectImage(domain.ProjectImageInput{
+		Repository: "freeside-ai/fixture", RepositoryID: 1,
+		CommitSHA:          strings.Repeat("a", 40),
+		RecipeDigest:       domain.Digest("sha256:" + strings.Repeat("b", 64)),
+		PreparationCommand: []string{"/usr/local/bin/freeside-project-prepare"},
+		BaseImageRef:       domain.ImageRef("127.0.0.1:5100/agent@sha256:" + strings.Repeat("c", 64)),
+		ImageRef:           domain.ImageRef("127.0.0.1:5100/project@sha256:" + strings.Repeat("d", 64)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refusal := image.AdmissibleAt(domain.ProjectImageBaseInputs{CommitSHA: base}, "")
+	reason, stop := reentryUnservedBaseReason(task, base, fmt.Errorf("verify: %w", refusal))
+	if !stop || !strings.Contains(reason, task.HeadSHA) || !strings.Contains(reason, base) ||
+		!strings.Contains(reason, "rebuild the image") || strings.Contains(reason, "\n") ||
+		len(reason) > 4*reentryQuotedTextLimit {
+		t.Errorf("stop = %t, reason (%d bytes) = %q", stop, len(reason), reason)
+	}
+	for _, cause := range []error{
+		nil, domain.ErrParentKeyMismatch, verify.ErrGitPlumbing, verify.ErrCommitFileUnreadable,
+		context.Canceled,
+	} {
+		if reason, stop := reentryUnservedBaseReason(task, base, cause); stop || reason != "" {
+			t.Errorf("%v: stop = %t, reason = %q; want an error the lane sees", cause, stop, reason)
+		}
+	}
+}
+
 // TestReentryDiffDescribesTheEvaluatedCommit: for a base advance the changes
 // are the ones the prospective merge makes to the new base, which excludes
 // what the base gained on its own, and the stats are labelled with the pull
