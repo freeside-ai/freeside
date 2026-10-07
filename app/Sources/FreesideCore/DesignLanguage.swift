@@ -364,23 +364,41 @@ enum FreesideFont {
         return .custom(name, size: size(of: style), relativeTo: style)
     }
 
-    /// The macOS eyebrow's base size (`--fs-eyebrow-size`). macOS's own
-    /// `.caption2` is 10pt, which leaves the tracked all-caps register too
-    /// faint to read as a heading; iOS's 11pt already reads, so the lift is
-    /// macOS-only.
-    static let macOSEyebrowSize: CGFloat = 10.5
-
-    /// The eyebrow's point size: the macOS lift in production, and the
-    /// platform's `.caption2` everywhere else, including inside the
-    /// screenshot bridge, which renders iOS metrics on purpose.
-    static func eyebrowPointSize() -> CGFloat {
-        #if canImport(AppKit)
-            if screenshotDynamicTypeSize == nil {
-                return macOSEyebrowSize
-            }
-        #endif
-        return size(of: .caption2)
+    /// A face the refined scale fixes at one point size on both platforms
+    /// (R10, survey card 4b), scaled by Dynamic Type through `style`. The
+    /// platform faces above follow each platform's own size for a text
+    /// style, which sets a card 13pt on macOS and 17pt on iOS; the card
+    /// scale is one set of sizes. `screenshotMetricBase` applies the iOS
+    /// ratio inside the screenshot bridge, where `relativeTo:` scales
+    /// nothing, so the accessibility digests still render enlarged.
+    private static func fixed(
+        _ name: String, _ size: CGFloat, relativeTo style: Font.TextStyle
+    ) -> Font {
+        .custom(name, size: screenshotMetricBase(size, relativeTo: style), relativeTo: style)
     }
+
+    // The card scale. Mono states a fact; sans speaks to the operator; the
+    // serif carries the ask and the statements worth reading as sentences.
+    static let cardBodySize: CGFloat = 14
+    static let keywordSize: CGFloat = 12.5
+    static let chipSize: CGFloat = 12
+    /// 0.08em at the keyword's size.
+    static let keywordTracking: CGFloat = 1.0
+    /// 0.04em at the chip's size.
+    static let chipTracking: CGFloat = 0.48
+
+    static var cardBody: Font { fixed("IBMPlexSans", cardBodySize, relativeTo: .body) }
+    /// What a card or a sheet asks: the one large serif line.
+    static var ask: Font { fixed("FreesideSerif-Medium", 25, relativeTo: .title2) }
+    /// A statement at text size: the agent's summary inside its quote.
+    static var statement: Font { fixed("FreesideSerif-Regular", 17, relativeTo: .body) }
+    /// A fact's label and a disclosure's label.
+    static var factLabel: Font { fixed("IBMPlexSans", 16, relativeTo: .callout) }
+    /// A fact's value.
+    static var monoValue: Font { fixed("IBMPlexMono", 14.5, relativeTo: .callout) }
+    /// The dim summary trailing a disclosure's label.
+    static var trailingSummary: Font { fixed("IBMPlexMono", 13.5, relativeTo: .footnote) }
+    static var actionLabel: Font { fixed("IBMPlexSans-Medm", 15, relativeTo: .body) }
 
     // The platform text styles, in the language's faces.
     static var title: Font { serif(.title2) }
@@ -393,15 +411,14 @@ enum FreesideFont {
     static var caption: Font { sans(.caption) }
     static var monoCallout: Font { mono(.callout) }
     static var monoCaption: Font { mono(.caption) }
-    /// Small-caps mono keyword used by banners and section headers: the
-    /// medium mono face `mono(.caption2, weight: .medium)` builds, at the
-    /// eyebrow's own base size.
-    static var keyword: Font {
-        .custom("IBMPlexMono-Medm", size: eyebrowPointSize(), relativeTo: .caption2)
-    }
-    /// Medium, not regular: the compact all-caps register stays readable
-    /// without asking semantic color to compensate for a light face.
-    static var chip: Font { mono(.caption2, weight: .medium) }
+    /// The uppercase mono keyword that heads a section, a banner, and a
+    /// card: a heading, so one size above the chip rather than a footnote.
+    /// Drawn tracked by `keywordTracking`.
+    static var keyword: Font { fixed("IBMPlexMono-Medm", keywordSize, relativeTo: .caption2) }
+    /// Medium, not regular: the compact register stays readable without
+    /// asking semantic color to compensate for a light face. Drawn tracked
+    /// by `chipTracking`.
+    static var chip: Font { fixed("IBMPlexMono-Medm", chipSize, relativeTo: .caption2) }
 }
 
 /// A bordered state chip: mono, lowercase, 1px border and text in the
@@ -455,7 +472,7 @@ struct StateChip: View {
             } else {
                 Text((glyph.map { "\($0) " } ?? "") + (cut == nil ? label.lowercased() : label))
                     .font(FreesideFont.chip)
-                    .tracking(0.6)
+                    .tracking(FreesideFont.chipTracking)
                     .lineLimit(cut == nil ? 1 : nil)
                     .fixedSize(horizontal: cut == nil, vertical: true)
                     .padding(.horizontal, 5)
@@ -492,7 +509,7 @@ struct KeywordLabel: View {
         Text(text)
             .textCase(.uppercase)
             .font(FreesideFont.keyword)
-            .tracking(0.8)
+            .tracking(FreesideFont.keywordTracking)
             .foregroundStyle(color)
     }
 }

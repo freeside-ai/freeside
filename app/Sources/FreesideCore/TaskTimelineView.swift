@@ -249,7 +249,7 @@ struct TaskTimelineView: View {
     private var eyebrow: some View {
         Text("TASK TIMELINE")
             .font(FreesideFont.keyword)
-            .tracking(0.8)
+            .tracking(FreesideFont.keywordTracking)
             .foregroundStyle(Color.inkDim)
             .contextMenu {
                 Button("Copy task ID") { Clipboard.copy(snapshot.task.id) }
