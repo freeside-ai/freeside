@@ -372,14 +372,22 @@ struct MessageComposerSheet: View {
                 }
                 messageField
                 if routeOptions.count > 1, let defaultRoute = routeOptions.first {
-                    FreesideSegmentedControl(
-                        accessibilityLabel: "What to do with the answer",
-                        segments: routeOptions.map {
-                            .init(value: $0, label: AgentQuestionPresentation.answerRouteLabel($0))
-                        },
-                        selection: Binding(
-                            get: { selectedRoute ?? defaultRoute },
-                            set: { chosenRoute = $0 }))
+                    // The daemon types the routes, so they are plain items:
+                    // no agent proposed the default, and the source states
+                    // no consequence for either (R29).
+                    VStack(alignment: .leading, spacing: 10) {
+                        KeywordLabel(text: "Route")
+                        ChoiceList(
+                            accessibilityLabel: "What to do with the answer",
+                            options: routeOptions.map {
+                                .init(
+                                    value: $0, label: AgentQuestionPresentation.answerRouteLabel($0),
+                                    register: .item)
+                            },
+                            selection: Binding(
+                                get: { selectedRoute ?? defaultRoute },
+                                set: { chosenRoute = $0 }))
+                    }
                 }
             }
             .padding(.horizontal, 16)
