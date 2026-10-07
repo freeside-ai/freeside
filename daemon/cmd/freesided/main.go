@@ -50,6 +50,9 @@ import (
 
 const defaultReconcileInterval = 100 * time.Millisecond
 
+// Approval wakes the filer immediately; this tick bounds recovery delay.
+const defaultFollowUpFilingInterval = time.Minute
+
 const defaultNtfyURL = "https://ntfy.sh"
 
 const defaultDoctorInterval = 24 * time.Hour
@@ -896,6 +899,9 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			}
 			return workflow.CommitTaskStop(stopCtx, taskID, commit)
 		}),
+		signet.WithFollowUpFiler(func() signet.FollowUpFiler {
+			return followUpFilerBinding(claudeWiring)
+		}),
 		signet.WithPairingKey(pairingKey),
 		signet.WithHostFacts(signet.HostFacts{DisplayName: hostName, ConnectionMode: connectionMode}),
 		signet.WithClock(cfg.now),
@@ -1396,7 +1402,16 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}()
 	}
 	if claudeSched != nil {
-		d.wg.Add(4)
+		d.wg.Add(5)
+		go func() {
+			defer d.wg.Done()
+			err := claudeWiring.followUpFiler.Run(ctx, defaultFollowUpFilingInterval, func(err error) {
+				if cfg.Logger != nil {
+					cfg.Logger.Error("follow-up filing pass failed", "error", err)
+				}
+			})
+			d.componentExited(parent, ctx, componentFollowUpFiling, err)
+		}()
 		doctorAvailable.Store(true)
 		// The production publication lane gets its own loop: one task holds a
 		// clone, a containerized verification, and GitHub calls for minutes,
