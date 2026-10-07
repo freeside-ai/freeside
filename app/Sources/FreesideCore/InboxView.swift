@@ -80,8 +80,11 @@ struct InboxView: View {
                 "No open items",
                 projectID == nil ? "Nothing needs you." : "Nothing in this project needs you."
             )
-        case .resolved, .all:
-            ("No \(scope.label.lowercased()) items", "Attention items in this scope will appear here.")
+        case .resolved:
+            ("No resolved items", "Attention items in this scope will appear here.")
+        case .all:
+            // "All" names no kind of item, so the title drops the scope word.
+            ("No items", "Attention items in this scope will appear here.")
         }
     }
 
