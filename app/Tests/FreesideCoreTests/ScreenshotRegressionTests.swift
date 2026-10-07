@@ -1711,6 +1711,40 @@
                     }
                 }
             }
+            // The three authors in one thread (R5): the operator bordered on
+            // the right, the daemon bordered on the left under its producer
+            // label, and the agent quoted on the left.
+            var authorsConversation = longConversation
+            authorsConversation.conversation.messages = [
+                .init(
+                    id: "msg-authors-user", conversation_id: longConversation.conversation.id, sequence: 1,
+                    author: .user, body: "Can the revised spec preserve the existing migration order?",
+                    attachments: [], created_at: screenshotNow.addingTimeInterval(-180)),
+                .init(
+                    id: "msg-authors-daemon", conversation_id: longConversation.conversation.id, sequence: 2,
+                    author: .daemon, body: "The agent's reply was not delivered. The question was sent again.",
+                    attachments: [], created_at: screenshotNow.addingTimeInterval(-120)),
+                .init(
+                    id: "msg-authors-agent", conversation_id: longConversation.conversation.id, sequence: 3,
+                    author: .agent, body: "Yes. The revision keeps the order and narrows the rollback step.",
+                    attachments: [], created_at: screenshotNow.addingTimeInterval(-60)),
+            ]
+            for scheme in [ColorScheme.light, .dark] {
+                surfaces.append(
+                    Surface(
+                        name: "conversation-authors-\(scheme)",
+                        width: 560, colorScheme: scheme, nativeAppearance: true,
+                        view: AnyView(
+                            ConversationView(
+                                snapshot: authorsConversation,
+                                attachments: store.attachments,
+                                loadsAttachments: false,
+                                now: screenshotNow,
+                                rendersInteractiveControls: false
+                            )
+                            .padding(16)
+                            .background(Color.ground))))
+            }
             var failedImplementation = approvalFixture.runs[0]
             failedImplementation.run.outcome = .failed
             failedImplementation.run.lifecycle = .finished

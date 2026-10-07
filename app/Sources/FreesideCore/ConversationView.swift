@@ -1,15 +1,42 @@
 import FreesideAPI
 import SwiftUI
 
-/// Bounded conversation messages (visual audit D04).
+#if os(iOS)
+    import UIKit
+#endif
+
+/// Bounded conversation messages (visual audit D04), and what a message
+/// says about itself without printing it (R5).
 enum ConversationPresentation {
     /// The lines a collapsed long body shows.
     static let collapsedLineLimit = 6
+
+    /// How much of the thread's width one message may take, so its side
+    /// reads as its author.
+    static let messageWidthFraction: CGFloat = 0.82
 
     /// The expanded set after the control under one message is pressed:
     /// only that message changes.
     static func toggling(_ messageID: String, in expanded: Set<String>) -> Set<String> {
         expanded.symmetricDifference([messageID])
+    }
+
+    static func authorLabel(_ author: Components.Schemas.Author) -> String {
+        switch author {
+        case .user: "You"
+        case .agent: "Agent"
+        case .daemon: "Freeside"
+        }
+    }
+
+    /// What VoiceOver reads for one message. The thread prints neither an
+    /// author nor a time (R5), so the spoken label leads with both and the
+    /// body follows.
+    static func accessibilityLabel(
+        for message: Components.Schemas.Message, now: Date
+    ) -> String {
+        let time = AttentionDisplay.relativeRowTime(message.created_at, now: now)
+        return "\(authorLabel(message.author)), \(time). \(message.body)"
     }
 }
 
@@ -35,6 +62,36 @@ private struct ProbeBoundedLayout: Layout {
     }
 }
 
+/// One message's row in the thread: the message hugs its text up to
+/// `messageWidthFraction` of the row and sits on its author's side.
+private struct MessageRowLayout: Layout {
+    let alignsTrailing: Bool
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let message = subviews[0].sizeThatFits(capped(proposal))
+        return CGSize(width: proposal.width ?? message.width, height: message.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let capped = capped(ProposedViewSize(width: bounds.width, height: nil))
+        let message = subviews[0].sizeThatFits(capped)
+        subviews[0].place(
+            at: CGPoint(x: alignsTrailing ? bounds.maxX - message.width : bounds.minX, y: bounds.minY),
+            proposal: ProposedViewSize(message))
+    }
+
+    private func capped(_ proposal: ProposedViewSize) -> ProposedViewSize {
+        ProposedViewSize(
+            width: proposal.width.map { $0 * ConversationPresentation.messageWidthFraction },
+            height: nil)
+    }
+}
+
+/// The thread (R5): the agent's messages quoted on the left, the operator's
+/// bordered on the right, and the daemon's bordered on the left under its
+/// producer label, since its side and shape alone do not say who spoke.
+/// No message prints an author or a time. VoiceOver reads both with every
+/// body, and the exact instant is one gesture away (R17).
 struct ConversationView: View {
     let snapshot: Components.Schemas.ConversationSnapshot
     let attachments: AttachmentLoader
@@ -66,45 +123,13 @@ struct ConversationView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("Conversation", systemImage: "bubble.left.and.bubble.right")
-                .font(FreesideFont.sans(.headline, weight: .semibold))
-                .foregroundStyle(Color.ink)
+            KeywordLabel(text: "Conversation")
+                .accessibilityAddTraits(.isHeader)
 
             ForEach(snapshot.conversation.messages.sorted(by: { $0.sequence < $1.sequence }), id: \.id) {
                 message in
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(authorLabel(message.author))
-                            .font(FreesideFont.sans(.callout, weight: .semibold))
-                            .foregroundStyle(Color.ink)
-                        Spacer()
-                        Text(AttentionDisplay.relativeRowTime(message.created_at, now: now))
-                            .font(FreesideFont.caption)
-                            .foregroundStyle(Color.inkDim)
-                    }
-                    messageBody(message)
-                    ForEach(Array(message.attachments.enumerated()), id: \.offset) { index, digest in
-                        DecisionDetailView.AttachmentRow(
-                            label: "Attachment \(index + 1)",
-                            digest: digest,
-                            attachments: attachments,
-                            loadsAttachments: loadsAttachments,
-                            rendersInteractiveControls: rendersInteractiveControls)
-                    }
-                }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    message.author == .user ? Color.accentWashSoft : Color.ground,
-                    in: RoundedRectangle(cornerRadius: 8)
-                )
-                .overlay(alignment: .leading) {
-                    if message.author == .user {
-                        Capsule()
-                            .fill(Color.accentText)
-                            .frame(width: 3)
-                            .padding(.vertical, 8)
-                    }
+                MessageRowLayout(alignsTrailing: message.author == .user) {
+                    exactTime(message, on: messageShape(message))
                 }
             }
 
@@ -116,21 +141,59 @@ struct ConversationView: View {
                         Image(systemName: "clock")
                     }
                     Text("Awaiting the agent's reply")
-                        .font(FreesideFont.callout)
+                        .font(FreesideFont.cardBody)
                         .foregroundStyle(Color.inkDim)
                 }
                 .accessibilityElement(children: .combine)
             }
         }
-        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .freesideCard()
+    }
+
+    @ViewBuilder
+    private func messageShape(_ message: Components.Schemas.Message) -> some View {
+        switch message.author {
+        case .agent:
+            messageContent(message)
+                .quoteSurface(cornerRadius: 8)
+        case .user, .daemon:
+            messageContent(message)
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.itemBorder, lineWidth: 1))
+        }
+    }
+
+    private func messageContent(_ message: Components.Schemas.Message) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if message.author == .daemon {
+                KeywordLabel(text: ConversationPresentation.authorLabel(message.author))
+                    // The spoken label already leads with the author.
+                    .accessibilityHidden(true)
+            }
+            messageBody(message)
+            ForEach(Array(message.attachments.enumerated()), id: \.offset) { index, digest in
+                DecisionDetailView.AttachmentRow(
+                    label: "Attachment \(index + 1)",
+                    digest: digest,
+                    attachments: attachments,
+                    loadsAttachments: loadsAttachments,
+                    rendersInteractiveControls: rendersInteractiveControls)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
     }
 
     /// The body in full when it fits the collapsed line limit, otherwise
-    /// bounded with the control that expands it in place.
+    /// bounded with the disclosure that expands it in place (R3).
     private func messageBody(_ message: Components.Schemas.Message) -> some View {
-        let isExpanded = expandedMessageIDs.contains(message.id)
+        let isExpanded = Binding(
+            get: { expandedMessageIDs.contains(message.id) },
+            set: { expanded in
+                if expanded != expandedMessageIDs.contains(message.id) {
+                    expandedMessageIDs = ConversationPresentation.toggling(
+                        message.id, in: expandedMessageIDs)
+                }
+            })
         return ProbeBoundedLayout {
             bodyText(message, bounded: true)
                 .hidden()
@@ -138,12 +201,8 @@ struct ConversationView: View {
             ViewThatFits(in: .vertical) {
                 bodyText(message, bounded: false)
                 VStack(alignment: .leading, spacing: 6) {
-                    bodyText(message, bounded: !isExpanded)
-                    Button(isExpanded ? "Show less" : "Read full message") {
-                        expandedMessageIDs = ConversationPresentation.toggling(
-                            message.id, in: expandedMessageIDs)
-                    }
-                    .buttonStyle(FreesideActionButtonStyle(tone: .tertiary))
+                    bodyText(message, bounded: !isExpanded.wrappedValue)
+                    SentenceDisclosure(label: "Full Message", isExpanded: isExpanded) {}
                 }
             }
         }
@@ -153,21 +212,48 @@ struct ConversationView: View {
     /// the text, so selection and copy are not handed a shortened string.
     private func bodyText(_ message: Components.Schemas.Message, bounded: Bool) -> some View {
         Text(message.body)
-            .font(FreesideFont.callout)
+            .font(message.author == .agent ? FreesideFont.message : FreesideFont.cardBody)
             .foregroundStyle(Color.ink)
             .lineLimit(bounded ? ConversationPresentation.collapsedLineLimit : nil)
             .fixedSize(horizontal: false, vertical: true)
-            .textSelection(.enabled)
+            .wholeBodySelection()
+            .accessibilityLabel(ConversationPresentation.accessibilityLabel(for: message, now: now))
     }
 
-    private func authorLabel(_ author: Components.Schemas.Author) -> String {
-        switch author {
-        case .user: "You"
-        case .agent: "Agent"
-        case .daemon: "Freeside"
-        }
+    /// The exact instant of a message (R17): hover help on the Mac. On iOS
+    /// one long-press menu carries it beside Copy Message, because a
+    /// selectable body would claim the long press for its own menu and leave
+    /// the time reachable only from the message's padding.
+    @ViewBuilder
+    private func exactTime(_ message: Components.Schemas.Message, on content: some View) -> some View {
+        #if os(iOS)
+            let exact = FreesideFormat.exactTime(message.created_at)
+            content.contextMenu {
+                Button("Copy Message") {
+                    UIPasteboard.general.string = message.body
+                }
+                Button("Copy \(exact)") {
+                    UIPasteboard.general.string = exact
+                }
+            }
+        #else
+            content.exactInstant(message.created_at)
+        #endif
     }
+}
 
+extension View {
+    /// Selection of a message body where a pointer can drag one. On iOS a
+    /// selectable `Text` offers only its own whole-body Copy, which the
+    /// message's long-press menu carries instead.
+    @ViewBuilder
+    fileprivate func wholeBodySelection() -> some View {
+        #if os(iOS)
+            self
+        #else
+            textSelection(.enabled)
+        #endif
+    }
 }
 
 struct MessageComposerSheet: View {

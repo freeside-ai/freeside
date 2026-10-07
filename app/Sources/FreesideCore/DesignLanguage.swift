@@ -393,6 +393,9 @@ enum FreesideFont {
     static var ask: Font { fixed("FreesideSerif-Medium", 25, relativeTo: .title2) }
     /// A statement at text size: the agent's summary inside its quote.
     static var statement: Font { fixed("FreesideSerif-Regular", 17, relativeTo: .body) }
+    /// An agent's message in a thread: the statement face a point smaller,
+    /// since a thread is read as running text, not as one summary.
+    static var message: Font { fixed("FreesideSerif-Regular", 16, relativeTo: .body) }
     /// An option's label: the statement face at medium weight, so the
     /// thing chosen reads above the text that qualifies it.
     static var optionLabel: Font { fixed("FreesideSerif-Medium", 17, relativeTo: .body) }
