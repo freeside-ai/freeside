@@ -1,28 +1,39 @@
 import SwiftUI
 
+/// A pane's empty or unavailable state. With no `systemImage` it draws the
+/// refined form (R13): the key, a serif line, and a dim sans line. A caller
+/// that still names a symbol keeps the system's own unavailable view until
+/// its surface is recomposed.
 struct UnavailableStateView: View {
     let title: String
-    let systemImage: String
+    var systemImage: String? = nil
     let description: String
 
     @ScaledMetric(relativeTo: .title) private var glyphSize: CGFloat = screenshotMetricBase(
         28, relativeTo: .title)
 
     var body: some View {
-        ContentUnavailableView {
-            Label {
-                Text(title).font(FreesideFont.title)
-            } icon: {
-                // ContentUnavailableView imposes its own image configuration;
-                // an inline symbol keeps the explicit font metrics in control.
-                Text(Image(systemName: systemImage))
-                    .font(.system(size: glyphSize, weight: .regular))
-                    .foregroundStyle(Color.inkDim)
+        if let systemImage {
+            ContentUnavailableView {
+                Label {
+                    Text(title).font(FreesideFont.title)
+                } icon: {
+                    // ContentUnavailableView imposes its own image configuration;
+                    // an inline symbol keeps the explicit font metrics in control.
+                    Text(Image(systemName: systemImage))
+                        .font(.system(size: glyphSize, weight: .regular))
+                        .foregroundStyle(Color.inkDim)
+                }
+            } description: {
+                Text(description).font(FreesideFont.callout)
             }
-        } description: {
-            Text(description).font(FreesideFont.callout)
+            .foregroundStyle(Color.inkDim)
+        } else {
+            KeyMarkEmptyState(title: title, description: description)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 40)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .foregroundStyle(Color.inkDim)
     }
 }
 
@@ -34,29 +45,42 @@ struct UnavailableStateView: View {
 /// or the window, open the way a fixed-height empty state did.
 struct SidebarEmptyState: View {
     let title: String
-    let systemImage: String
     let description: String
 
-    @ScaledMetric(relativeTo: .title) private var glyphSize: CGFloat = screenshotMetricBase(
-        28, relativeTo: .title)
+    var body: some View {
+        KeyMarkEmptyState(title: title, description: description)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal)
+            .padding(.top, 32)
+    }
+}
+
+/// The empty state itself (R13): the Freeside key at 32pt in faint ink, the
+/// statement in the serif, and one dim line under it, centered. The key is
+/// decoration, and the two lines read to VoiceOver as one element, the way
+/// the system's unavailable view reads its label and description.
+private struct KeyMarkEmptyState: View {
+    let title: String
+    let description: String
+
+    @ScaledMetric(relativeTo: .body) private var markHeight: CGFloat = screenshotMetricBase(
+        32, relativeTo: .body)
 
     var body: some View {
-        VStack(spacing: 8) {
-            // Decorative: the title and description carry the meaning, so keep
-            // this glyph out of the VoiceOver order the way the Label icon slot
-            // in ContentUnavailableView does.
-            Text(Image(systemName: systemImage))
-                .font(.system(size: glyphSize, weight: .regular))
+        VStack(spacing: 6) {
+            KeyMark()
+                .fill(Color.inkFaint, style: FillStyle(eoFill: true))
+                .frame(width: markHeight * KeyMark.aspectRatio, height: markHeight)
+                .padding(.bottom, 6)
                 .accessibilityHidden(true)
-            Text(title).font(FreesideFont.title)
+            Text(title)
+                .font(FreesideFont.statement)
+                .foregroundStyle(Color.ink)
             Text(description)
-                .font(FreesideFont.callout)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
+                .font(FreesideFont.cardBody)
+                .foregroundStyle(Color.inkDim)
         }
-        .foregroundStyle(Color.inkDim)
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal)
-        .padding(.top, 32)
+        .multilineTextAlignment(.center)
+        .accessibilityElement(children: .combine)
     }
 }

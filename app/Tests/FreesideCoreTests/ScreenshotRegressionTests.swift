@@ -194,7 +194,7 @@
                                 task: task.task,
                                 position: TaskDisplay.position(
                                     task.task, runs: runs, attentionItems: display.store.orderedSnapshots),
-                                schedules: [], isSelected: false, now: RunFixtures.screenshotInstant)
+                                isSelected: false, now: RunFixtures.screenshotInstant)
                             Divider()
                             RunTimelineView(coordinator: display, snapshot: published).header
                         }
@@ -596,6 +596,9 @@
                         replacementPhoneDarkDetail.screenshotCard(
                             superseded.item, at: dynamicTypeSize))))
 
+            // Selection draws one way whatever Differentiate Without Color
+            // says: the bar and the dropped border are geometry, so the pair
+            // below pins the cue that setting relies on.
             if let selected = inbox.first?.item {
                 surfaces.append(
                     Surface(
@@ -605,14 +608,12 @@
                             VStack(spacing: 8) {
                                 InboxRowView(
                                     item: selected,
-                                    now: screenshotNow,
-                                    differentiateWithoutColorOverride: true
+                                    now: screenshotNow
                                 )
                                 InboxRowView(
                                     item: selected,
                                     isSelected: true,
-                                    now: screenshotNow,
-                                    differentiateWithoutColorOverride: true
+                                    now: screenshotNow
                                 )
                             }
                             .padding()
@@ -626,14 +627,12 @@
                             VStack(spacing: 8) {
                                 InboxRowView(
                                     item: selected,
-                                    now: screenshotNow,
-                                    differentiateWithoutColorOverride: true
+                                    now: screenshotNow
                                 )
                                 InboxRowView(
                                     item: selected,
                                     isSelected: true,
-                                    now: screenshotNow,
-                                    differentiateWithoutColorOverride: true
+                                    now: screenshotNow
                                 )
                             }
                             .padding()
@@ -1340,7 +1339,6 @@
 
             let cache = InMemoryCacheStore()
             let runs = RunFixtures.defaultRuns()
-            let schedules = RunFixtures.defaultSchedules()
             try cache.save(
                 .init(
                     cursors: .init(
@@ -1350,7 +1348,8 @@
                     ),
                     attentionItems: inbox,
                     runs: runs,
-                    schedules: schedules,
+                    // The task timeline lists a task's armed schedules.
+                    schedules: RunFixtures.defaultSchedules(),
                     // The refreshed-history timeline is cached (not added to
                     // defaultTimelines) so its own run-timeline surface resolves
                     // review labels the way the app does, without churning the
@@ -1373,7 +1372,6 @@
                         TasksListView(
                             tasks: tasks,
                             runs: runs,
-                            schedules: schedules,
                             selection: .constant(retryTask.task.id)
                         ).screenshotContent(now: RunFixtures.screenshotInstant)
                     )))
@@ -1385,7 +1383,6 @@
                             TasksListView(
                                 tasks: tasks,
                                 runs: runs,
-                                schedules: schedules,
                                 selection: .constant(nil),
                                 initialScope: scope
                             ).screenshotContent(now: RunFixtures.screenshotInstant)
@@ -1410,7 +1407,6 @@
                                         TaskRowView(
                                             task: snapshot.task,
                                             position: TaskDisplay.position(snapshot.task, runs: runs),
-                                            schedules: TaskDisplay.armedSchedules(for: snapshot.task, in: schedules),
                                             isSelected: false,
                                             now: RunFixtures.screenshotInstant)
                                     }
@@ -1459,10 +1455,8 @@
                                     TaskRowView(
                                         task: retryTask.task,
                                         position: TaskDisplay.position(retryTask.task, runs: runs),
-                                        schedules: TaskDisplay.armedSchedules(for: retryTask.task, in: schedules),
                                         isSelected: isSelected,
-                                        now: RunFixtures.screenshotInstant,
-                                        differentiateWithoutColorOverride: true)
+                                        now: RunFixtures.screenshotInstant)
                                 }
                             }
                             .padding()
@@ -1476,7 +1470,6 @@
                         TaskRowView(
                             task: retryTask.task,
                             position: TaskDisplay.position(retryTask.task, runs: runs),
-                            schedules: TaskDisplay.armedSchedules(for: retryTask.task, in: schedules),
                             isSelected: true,
                             now: RunFixtures.screenshotInstant
                         )
@@ -1504,8 +1497,7 @@
                                             Text(name).font(FreesideFont.subheadline)
                                             TaskRowView(
                                                 task: fixture.task, position: fixture.position,
-                                                now: RunFixtures.screenshotInstant,
-                                                differentiateWithoutColorOverride: true)
+                                                now: RunFixtures.screenshotInstant)
                                         }
                                     }.padding())))
                     }
@@ -1525,8 +1517,7 @@
                                             Text(name).font(FreesideFont.subheadline)
                                             TaskRowView(
                                                 task: fixture.task, position: fixture.position,
-                                                now: RunFixtures.screenshotInstant,
-                                                differentiateWithoutColorOverride: true)
+                                                now: RunFixtures.screenshotInstant)
                                         }
                                     }.padding())))
                     }
@@ -2733,6 +2724,31 @@
                     view: AnyView(
                         selectedAlternativeDetail.screenshotCard(
                             realisticFindings, at: dynamicTypeSize))))
+            // The Open scope under a project filter that leaves nothing open
+            // (R13): the key, the statement, and the line that names the
+            // filter. The project's one item is resolved, so the filter
+            // survives and the scope is empty. Drawn last: ahead of another
+            // surface it moves that surface's glyph antialiasing (#1698).
+            var settled = try #require(inbox.first)
+            settled.item.project_id = "freeside-docs"
+            settled.item.status = .resolved
+            let emptyStore = InboxStore(client: client, now: { screenshotNow })
+            emptyStore.replaceAll(with: [settled])
+            emptyStore.selectProjectFilter("freeside-docs")
+            for colorScheme in [ColorScheme.light, .dark] {
+                surfaces.append(
+                    Surface(
+                        name: "inbox-empty-scope" + (colorScheme == .dark ? "-dark" : ""),
+                        width: 320,
+                        colorScheme: colorScheme,
+                        view: AnyView(
+                            InboxView(
+                                store: emptyStore,
+                                selection: .constant(nil),
+                                launchScope: nil,
+                                launchProjectID: nil
+                            ).screenshotSidebar(now: screenshotNow))))
+            }
             return surfaces
         }
 

@@ -275,8 +275,9 @@ A new command is accepted when its version is between 1 and the current
 revision, so unrelated revision movement no longer rejects it; a stale epoch
 or a greater version returns the current task snapshot and epoch.
 
-Open a task from Tasks on Mac or iPhone and choose **Stop task…**. Confirm the
-task and project to stop any remaining owned work and prevent further work.
+Open a task from Tasks on Mac or iPhone, open **More Actions**, and choose
+**Stop Task…**. Confirm the task and project to stop any remaining owned work
+and prevent further work.
 History and existing PRs remain available. Finished or administratively
 abandoned tasks can still have owned work, so their labels alone do not hide
 Stop. A task with a cancellation fence shows its daemon status instead.

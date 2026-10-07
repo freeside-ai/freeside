@@ -323,13 +323,15 @@ enum TaskDisplay {
         var facts: [String] = []
         if let position {
             let phases = position.rail.entries.map { entry in
+                // Each phase reads as a short sentence (6.1): the title
+                // leads and the state follows in lowercase.
                 let state =
                     position.historical && entry.state == .current
-                    ? "Last Recorded Phase" : entry.state.accessibilityLabel.capitalized
+                    ? "last recorded phase" : entry.state.accessibilityLabel
                 if entry.id == "specification", position.qualification != nil {
                     return entry.state == .pending
-                        ? "Specification Approval History Unavailable"
-                        : "Specification \(state), Approval History Unavailable"
+                        ? "Specification approval history unavailable"
+                        : "Specification \(state), approval history unavailable"
                 }
                 return "\(entry.title) \(state)"
             }
@@ -465,9 +467,9 @@ enum TaskDisplay {
             ?? .init(text: run.task_id, source: .identifier)
     }
 
-    /// The armed watches and deadlines attached to any of the task's runs
-    /// (plan §11: the tasks list shows attached watches and deadlines). A
-    /// schedule belongs to a run, so the task shows the union over its runs.
+    /// The armed watches and deadlines attached to any of the task's runs,
+    /// which the task timeline lists under Schedules. A schedule belongs to
+    /// a run, so the task shows the union over its runs.
     static func armedSchedules(
         for task: Components.Schemas.Task, in schedules: [Components.Schemas.ScheduleSnapshot]
     ) -> [Components.Schemas.ScheduleSnapshot] {

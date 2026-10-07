@@ -135,6 +135,9 @@ import Testing
         text(
             "waxText", FreesidePalette.waxText, on: "accentWashSoft",
             FreesidePalette.accentWashSoft),
+        // A selected sidebar row sits on the accent wash and can carry an
+        // urgent or a degraded chip.
+        text("waxText", FreesidePalette.waxText, on: "accentWash", FreesidePalette.accentWash),
 
         // Diff counts sit on a card or a section ground; diff lines sit on
         // their own wash.

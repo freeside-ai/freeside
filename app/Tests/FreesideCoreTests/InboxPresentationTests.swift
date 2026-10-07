@@ -63,4 +63,18 @@ import Testing
         #expect(tasks?.label == "Tasks")
         #expect(tasks?.count == nil)
     }
+
+    /// An empty Open scope answers for the project when one is filtered; a
+    /// scope that holds a record says only that nothing is in it (R13).
+    @Test func emptyOpenScopeNamesTheProjectOnlyUnderAFilter() {
+        let open = InboxView.emptyScope(.open, projectID: nil)
+        #expect(open.title == "No open items")
+        #expect(open.description == "Nothing needs you.")
+        let filtered = InboxView.emptyScope(.open, projectID: "freeside-docs")
+        #expect(filtered.title == "No open items")
+        #expect(filtered.description == "Nothing in this project needs you.")
+        let resolved = InboxView.emptyScope(.resolved, projectID: "freeside-docs")
+        #expect(resolved.title == "No resolved items")
+        #expect(resolved.description == "Attention items in this scope will appear here.")
+    }
 }

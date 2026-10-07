@@ -87,9 +87,11 @@ struct OperationalSummary: Equatable {
     }
 }
 
-/// The macOS detail column while nothing is selected. Every row that
-/// names something opens it: an item in the detail column, the task count
-/// on the Tasks screen. A row with nothing to name stays a plain fact.
+/// The macOS detail column while nothing is selected (6.7): how much is
+/// open, what to take first, and the daemon's state folded under one
+/// hairline. Every value that names something is a link that opens it: an
+/// item in the detail column, the task count on the Tasks screen. A value
+/// with nothing to name stays a plain fact.
 struct OperationalSummaryView: View {
     let summary: OperationalSummary
     let onSelectItem: (String) -> Void
@@ -97,6 +99,9 @@ struct OperationalSummaryView: View {
     /// Nil samples the clock each minute, as the inbox row does; a fixed
     /// value keeps the waiting-longest duration stable for screenshots.
     var now: Date? = nil
+    /// The reader's own choice for the Freshness fold; nil follows the
+    /// daemon state.
+    @State private var freshnessExpanded: Bool?
 
     var body: some View {
         if let now {
@@ -108,80 +113,81 @@ struct OperationalSummaryView: View {
         }
     }
 
-    private func content(at now: Date) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Freeside")
-                    .font(FreesideFont.title)
-                    .foregroundStyle(Color.ink)
-                Text("Operational summary")
-                    .font(FreesideFont.monoCaption)
-                    .foregroundStyle(Color.inkDim)
-            }
+    static func openStatement(_ openCount: Int) -> String {
+        openCount == 1 ? "1 open item" : "\(openCount) open items"
+    }
 
+    private func content(at now: Date) -> some View {
+        VStack(alignment: .leading, spacing: 22) {
             VStack(alignment: .leading, spacing: 12) {
-                summaryRow("Open decisions", value: "\(summary.openCount)")
+                CardEyebrow(keyword: "Inbox")
+                Text(Self.openStatement(summary.openCount))
+                    .font(FreesideFont.ask)
+                    .foregroundStyle(Color.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            VStack(alignment: .leading, spacing: 11) {
+                KeywordLabel(text: "Needs you first")
                 itemRow(
-                    "Highest priority",
+                    "Highest Priority",
                     value: summary.highestPriorityTitle.map {
                         "\($0) · \(summary.highestPriorityLabel ?? "")"
                     },
                     itemID: summary.highestPriorityID)
                 itemRow(
-                    "Waiting longest",
+                    "Waiting Longest",
                     value: summary.waitingLongestValue(now: now),
                     itemID: summary.waitingLongestID)
-                navigableRow("Active tasks", value: "\(summary.activeTaskCount)", action: onShowTasks)
-                summaryRow(
-                    "Daemon", value: summary.daemonState.rawValue,
+            }
+            VStack(alignment: .leading, spacing: 11) {
+                KeywordLabel(text: "Tasks")
+                FactLinkRow(
+                    label: "Active", value: "\(summary.activeTaskCount)", accessibilityName: "Active tasks",
+                    action: onShowTasks)
+            }
+            SentenceDisclosure(
+                label: "Freshness", summary: summary.daemonState.rawValue,
+                isExpanded: freshnessBinding
+            ) {
+                FactRow(
+                    label: "Daemon", value: summary.daemonState.rawValue,
                     valueColor: daemonStateColor)
             }
-            .padding(16)
-            .freesideCard()
+            .padding(.top, 18)
+            .overlay(alignment: .top) {
+                Color.rule.frame(height: 1)
+            }
         }
         .padding(28)
-        .frame(maxWidth: 560, alignment: .leading)
+        .frame(minWidth: 320, maxWidth: 560, alignment: .leading)
+        // A new daemon state takes the fold back from the reader's last
+        // choice, so a daemon that starts failing is never left folded away.
+        .onChange(of: summary.daemonState) { freshnessExpanded = nil }
+    }
+
+    private var freshnessBinding: Binding<Bool> {
+        Binding(
+            get: { freshnessExpanded ?? daemonNeedsAttention },
+            set: { freshnessExpanded = $0 })
     }
 
     @ViewBuilder
     private func itemRow(_ label: String, value: String?, itemID: String?) -> some View {
         if let value, let itemID {
-            navigableRow(label, value: value) { onSelectItem(itemID) }
+            FactLinkRow(label: label, value: value) { onSelectItem(itemID) }
         } else {
-            summaryRow(label, value: "None")
+            FactRow(label: label, value: "None")
         }
     }
 
-    /// The fact row as a plain button with the chevron the decision card's
-    /// navigable rows carry, so the card keeps its fact-row look.
-    private func navigableRow(
-        _ label: String, value: String, action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                summaryRow(label, value: value)
-                Image(systemName: "chevron.right")
-                    .font(FreesideFont.caption)
-                    .foregroundStyle(Color.accentText)
-            }
-            .contentShape(Rectangle())
+    private var daemonNeedsAttention: Bool {
+        switch summary.daemonState {
+        case .checking, .connected: false
+        case .unreachable, .syncFailing, .contractMismatch, .unauthenticated: true
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Open \(label): \(value)")
-    }
-
-    private func summaryRow(
-        _ label: String,
-        value: String,
-        valueColor: Color = .ink
-    ) -> some View {
-        FactRow(label: label, value: value, valueColor: valueColor)
     }
 
     private var daemonStateColor: Color {
-        switch summary.daemonState {
-        case .checking, .connected: .ink
-        case .unreachable, .syncFailing, .contractMismatch, .unauthenticated: .waxText
-        }
+        daemonNeedsAttention ? .waxText : .ink
     }
 }

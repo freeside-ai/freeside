@@ -70,7 +70,7 @@ struct TechnicalDetailRow: View {
                     Clipboard.copy(row.value)
                 } label: {
                     Image(systemName: "doc.on.doc")
-                        .font(FreesideFont.caption)
+                        .font(FreesideFont.keyword)
                         .foregroundStyle(Color.accentText)
                 }
                 .buttonStyle(.plain)
@@ -80,13 +80,17 @@ struct TechnicalDetailRow: View {
     }
 }
 
-/// A disclosure, collapsed by default and labeled "Technical details", holding
-/// a surface's exact identifiers, digests, and producer coordinates, each with
-/// a copy control. The primary views name the work; the values a reader
-/// occasionally needs to compare or paste live one disclosure from reach,
-/// unchanged from the daemon (#1379).
+/// The one disclosure (R2), collapsed by default and labeled "Technical
+/// Details", holding a surface's exact identifiers, digests, and producer
+/// coordinates, each with a copy control. The primary views name the work;
+/// the values a reader occasionally needs to compare or paste live one
+/// disclosure from reach, unchanged from the daemon (#1379).
 struct TechnicalDetailsSection: View {
     let rows: [AttentionDisplay.BindingRow]
+    /// What the closed disclosure says it holds: the surface's identity
+    /// line, so the facts a header used to print stay readable without
+    /// opening it. Nil draws the label alone.
+    var summary: String? = nil
     var rendersInteractiveControls = true
     /// A screenshot captures the expanded state by starting open; live use
     /// starts collapsed, as the contract requires.
@@ -94,27 +98,28 @@ struct TechnicalDetailsSection: View {
 
     init(
         rows: [AttentionDisplay.BindingRow],
+        summary: String? = nil,
         rendersInteractiveControls: Bool = true,
         startsExpanded: Bool = false
     ) {
         self.rows = rows
+        self.summary = summary
         self.rendersInteractiveControls = rendersInteractiveControls
         _expanded = State(initialValue: startsExpanded)
     }
 
     var body: some View {
         if !rows.isEmpty {
-            DisclosureGroup(isExpanded: $expanded) {
+            SentenceDisclosure(label: "Technical Details", summary: summary, isExpanded: $expanded) {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                         TechnicalDetailRow(row: row, rendersInteractiveControls: rendersInteractiveControls)
                     }
                 }
-                .padding(.top, 6)
-            } label: {
-                KeywordLabel(text: "Technical details")
+                // A stacked row hugs its text, and a disclosure centers
+                // content narrower than itself.
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .tint(.accentText)
         }
     }
 }

@@ -356,6 +356,55 @@ import Testing
         let campaign = try #require(run.campaign_id)
         let parent = try #require(run.parent_run_id)
         #expect(rows.map(\.value) == [run.id, run.task_id, campaign, parent, run.spec_digest])
+        #expect(RunTimelineView.technicalSummary(run: run) == "run · task · campaign · parent · digest")
+
+        // A recorded hold's exact code is a row here, not a line in the
+        // page's callout, and the closed summary names it.
+        let observed = Date(timeIntervalSince1970: 1_700_000_000)
+        let hold = Components.Schemas.RunHold(
+            run_id: run.id, reason: .verification_findings, first_observed_at: observed,
+            last_observed_at: observed)
+        let held = RunTimelineView.technicalRows(run: run, specificationLabel: "Approved specification", hold: hold)
+        #expect(held.last?.label == "Hold code")
+        #expect(held.last?.value == "verification_findings")
+        #expect(
+            RunTimelineView.technicalSummary(run: run, hold: hold)
+                == "run · task · campaign · parent · digest · hold code")
+        run.campaign_id = nil
+        run.parent_run_id = nil
+        #expect(RunTimelineView.technicalSummary(run: run) == "run · task · digest")
+    }
+
+    @Test func holdSentenceSaysWhetherTheHoldIsCurrent() throws {
+        var run = try #require(RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID }).run
+        let observed = Date(timeIntervalSince1970: 1_700_000_000)
+        let hold = Components.Schemas.RunHold(
+            run_id: run.id, reason: .verification_findings, first_observed_at: observed,
+            last_observed_at: observed)
+        run.lifecycle = .active
+        #expect(RunTimelineView.holdSentence(hold, run: run) == "Hold: Verification findings block publication")
+        run.lifecycle = .finished
+        #expect(
+            RunTimelineView.holdSentence(hold, run: run) == "Recorded hold: Verification findings block publication")
+    }
+
+    @Test func identityLineJoinsThePhaseItsRoundAndTheNewestMilestone() throws {
+        let run = try #require(RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID }).run
+        let heading = try #require(RunDisplay.stageHeading(run))
+        let milestone = try #require(run.latest_milestone?.value1)
+        #expect(
+            RunTimelineView.identityLine(run)
+                == [heading.label, heading.round, RunDisplay.label(milestone)].compactMap { $0 }
+                .joined(separator: " · "))
+        var bare = run
+        bare.stages = []
+        bare.latest_milestone = nil
+        // With no stage or milestone recorded, the line is whatever phase
+        // heading remains, or nothing at all.
+        let remaining = RunDisplay.stageHeading(bare).map {
+            [$0.label, $0.round].compactMap { $0 }.joined(separator: " · ")
+        }
+        #expect(RunTimelineView.identityLine(bare) == remaining)
     }
 
     @Test func specificationHeaderLabelDropsTheDigestLabelWhenApprovalIsUnavailable() {

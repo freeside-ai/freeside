@@ -887,15 +887,93 @@ struct ChronologyMarker: View {
 /// VoiceOver reads the title alone, since the chevron is decoration.
 struct FreesideLink: View {
     let title: String
-    /// The text style the link sits among: callout in a card or header,
-    /// caption inside a list row.
-    var style: Font.TextStyle = .callout
+    private let font: Font
+
+    /// A link in the platform face of the text style it sits among.
+    init(title: String, style: Font.TextStyle = .callout) {
+        self.title = title
+        font = FreesideFont.sans(style, weight: .medium)
+    }
+
+    /// A link in one of the fixed faces (`FreesideFont.noticeAction` in a
+    /// list row), which hold one point size on both platforms. The platform
+    /// caption a row link used to take draws below the 11.5pt floor (R10)
+    /// on macOS.
+    init(title: String, face: Font) {
+        self.title = title
+        font = face
+    }
 
     var body: some View {
         Text("\(title) ›")
-            .font(FreesideFont.sans(style, weight: .medium))
+            .font(font)
             .foregroundStyle(Color.accentText)
             .accessibilityLabel(title)
+    }
+}
+
+/// The Freeside key (R13): the mark an empty state leads with. Drawn from
+/// the one path of the handoff's `assets/key/freeside-key-mono.svg`, in that
+/// file's view box, so the mark sits where the image would. The path cuts
+/// the bow's openings out of the outline, so fill it with the even-odd rule
+/// (`FillStyle(eoFill: true)`).
+struct KeyMark: Shape {
+    private static let viewBox = CGRect(x: 153, y: 54, width: 242, height: 404)
+    /// Width over height, for a caller that sets one dimension.
+    static let aspectRatio = viewBox.width / viewBox.height
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x, y: y) }
+
+        // The outline: bit, stem, and bow.
+        path.move(to: point(211, 54))
+        path.addLine(to: point(352, 54))
+        path.addQuadCurve(to: point(358, 60), control: point(358, 54))
+        path.addLine(to: point(358, 90))
+        path.addQuadCurve(to: point(352, 96), control: point(358, 96))
+        path.addLine(to: point(270, 96))
+        path.addLine(to: point(270, 144))
+        path.addLine(to: point(331, 144))
+        path.addQuadCurve(to: point(337, 150), control: point(337, 144))
+        path.addLine(to: point(337, 178))
+        path.addQuadCurve(to: point(331, 184), control: point(337, 184))
+        path.addLine(to: point(270, 184))
+        path.addLine(to: point(270, 257))
+        path.addCurve(to: point(282, 279), control1: point(270, 270), control2: point(272, 276))
+        path.addCurve(to: point(328, 358), control1: point(282, 310), control2: point(298, 331))
+        path.addLine(to: point(240, 458))
+        path.addLine(to: point(153, 358))
+        path.addCurve(to: point(198, 279), control1: point(184, 330), control2: point(198, 311))
+        path.addCurve(to: point(210, 257), control1: point(208, 276), control2: point(210, 270))
+        path.addLine(to: point(210, 96))
+        path.addCurve(to: point(201, 83), control1: point(210, 88), control2: point(207, 86))
+        path.addCurve(to: point(190, 68), control1: point(194, 80), control2: point(190, 75))
+        path.addLine(to: point(190, 61))
+        path.addQuadCurve(to: point(197, 54), control: point(190, 54))
+        path.closeSubpath()
+
+        // The bow's two openings.
+        path.move(to: point(228, 317))
+        path.addCurve(to: point(205, 358), control1: point(212, 326), control2: point(205, 342))
+        path.addCurve(to: point(228, 412), control1: point(205, 379), control2: point(213, 396))
+        path.closeSubpath()
+        path.move(to: point(252, 317))
+        path.addLine(to: point(252, 412))
+        path.addCurve(to: point(276, 358), control1: point(268, 396), control2: point(276, 379))
+        path.addCurve(to: point(252, 317), control1: point(276, 342), control2: point(269, 326))
+        path.closeSubpath()
+
+        // The eye above them: the source's full-circle arc of radius 7.4
+        // hanging from (240.15, 295.45).
+        path.addEllipse(in: CGRect(x: 232.75, y: 295.45, width: 14.8, height: 14.8))
+
+        let box = Self.viewBox
+        let scale = min(rect.width / box.width, rect.height / box.height)
+        return path.applying(
+            CGAffineTransform(translationX: rect.midX, y: rect.midY)
+                .scaledBy(x: scale, y: scale)
+                .translatedBy(x: -box.midX, y: -box.midY))
     }
 }
 
@@ -962,6 +1040,53 @@ struct FactRow: View {
                 .font(FreesideFont.monoValue)
                 .foregroundStyle(valueColor ?? .ink)
         }
+    }
+}
+
+/// A fact whose value is a link (R6), laid out as `FactRow` lays out a
+/// plain value so linked and plain rows share one trailing column. The
+/// whole row is the button, so the target isn't only the value's width.
+struct FactLinkRow: View {
+    let label: String
+    let value: String
+    /// What VoiceOver names the row's destination; nil uses the label.
+    var accessibilityName: String? = nil
+    let action: () -> Void
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        Button(action: action) {
+            Group {
+                if FactRow.stacks(value, at: dynamicTypeSize) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        labelText
+                        valueLink
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    HStack(alignment: .firstTextBaseline) {
+                        labelText
+                        Spacer(minLength: 12)
+                        valueLink
+                            .multilineTextAlignment(.trailing)
+                    }
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open \(accessibilityName ?? label): \(value)")
+    }
+
+    private var labelText: some View {
+        Text(label)
+            .font(FreesideFont.factLabel)
+            .foregroundStyle(Color.ink)
+    }
+
+    private var valueLink: some View {
+        FreesideLink(title: value, face: FreesideFont.noticeAction)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 

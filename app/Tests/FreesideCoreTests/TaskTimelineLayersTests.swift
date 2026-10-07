@@ -16,12 +16,12 @@ import Testing
         let earlier = try #require(history.sections.last)
         let start = try #require(TaskTimelinePresentation.sectionStart(current))
         let now = start.addingTimeInterval(86_400)
-        let since = FreesideFormat.shortDate(start, now: now, locale: enUS, timeZone: utc)
+        let from = FreesideFormat.shortDate(start, now: now, locale: enUS, timeZone: utc)
         let attempts = current.runs.count == 1 ? "1 attempt" : "\(current.runs.count) attempts"
         #expect(
             TaskTimelinePresentation.sectionSummary(
                 current, isCurrent: true, now: now, locale: enUS, timeZone: utc)
-                == "current · \(attempts) · since \(since)")
+                == "current · \(attempts) · from \(from)")
         // An earlier campaign says how many runs and when, never why it
         // ended: no recorded fact carries that.
         let earlierSummary = TaskTimelinePresentation.sectionSummary(

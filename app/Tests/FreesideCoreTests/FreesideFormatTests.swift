@@ -27,19 +27,36 @@ import Testing
         #expect(!text.contains("27"))
     }
 
-    /// With the year shown, the format is the abbreviated-date,
-    /// shortened-time style the timelines printed before, so a prior-year
-    /// instant reads exactly as it did.
-    @Test func aDifferentYearMatchesTheAbbreviatedShortenedStyle() throws {
+    /// R8: the date, a comma, the time, with none of the words a locale's
+    /// own date-and-time pattern puts between them ("at", "um"). Unicode
+    /// sets a narrow no-break space ahead of the day period; the test reads
+    /// it as a plain space so the pinned string is the one a reader sees.
+    @Test func joinsTheDateAndTheTimeWithACommaAndNoWord() throws {
+        let date = try instant("2026-08-11T22:15:00Z")
+        let now = try instant("2026-09-18T12:00:00Z")
+        let expected = [
+            "en_US": "Aug 11, 10:15 PM", "en_GB": "11 Aug, 22:15", "de_DE": "11. Aug., 22:15",
+        ]
+        for (identifier, text) in expected {
+            let short = FreesideFormat.shortTime(
+                date, now: now, locale: Locale(identifier: identifier), timeZone: utc)
+            #expect(short.replacing("\u{202F}", with: " ") == text, "locale \(identifier)")
+        }
+    }
+
+    /// A prior-year instant keeps its year in the date half, and the same
+    /// comma joins the time.
+    @Test func aDifferentYearKeepsTheYearAheadOfTheComma() throws {
         let date = try instant("2025-12-31T18:05:00Z")
         let now = try instant("2026-01-02T00:00:00Z")
-        for identifier in ["en_US", "en_GB", "de_DE", "ja_JP"] {
-            let locale = Locale(identifier: identifier)
-            let expected = date.formatted(
-                Date.FormatStyle(date: .abbreviated, time: .shortened, locale: locale, timeZone: utc))
-            #expect(
-                FreesideFormat.shortTime(date, now: now, locale: locale, timeZone: utc) == expected,
-                "locale \(identifier)")
+        let expected = [
+            "en_US": "Dec 31, 2025, 6:05 PM", "en_GB": "31 Dec 2025, 18:05",
+            "de_DE": "31. Dez. 2025, 18:05", "ja_JP": "2025年12月31日, 18:05",
+        ]
+        for (identifier, text) in expected {
+            let short = FreesideFormat.shortTime(
+                date, now: now, locale: Locale(identifier: identifier), timeZone: utc)
+            #expect(short.replacing("\u{202F}", with: " ") == text, "locale \(identifier)")
         }
     }
 

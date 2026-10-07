@@ -1,5 +1,6 @@
 import Foundation
 import FreesideAPI
+import SwiftUI
 import Testing
 
 @testable import FreesideCore
@@ -145,4 +146,39 @@ import Testing
         #expect(summary.highestPriorityTitle == AttentionDisplay.title(retained.item))
         #expect(summary.waitingLongestTitle == AttentionDisplay.title(retained.item))
     }
+
+    @Test func openStatementCountsOneItemInTheSingular() {
+        #expect(OperationalSummaryView.openStatement(0) == "0 open items")
+        #expect(OperationalSummaryView.openStatement(1) == "1 open item")
+        #expect(OperationalSummaryView.openStatement(14) == "14 open items")
+    }
+
+    #if os(macOS)
+        /// A window can't be shorter than its content's minimum, which
+        /// SwiftUI measures by proposing no space at all. These panes sit
+        /// outside a scroll view, so a line that insists on its full wrapped
+        /// height would report it one character wide, hundreds of points
+        /// tall, and the window would open taller than the display.
+        @Test func panesOutsideAScrollViewKeepAWindowShort() throws {
+            func minimumHeight(_ view: some View) -> CGFloat {
+                NSHostingController(rootView: view).sizeThatFits(in: .zero).height
+            }
+            let summary = OperationalSummary(
+                openSnapshots: AttentionFixtures.defaultInbox(), tasks: TaskFixtures.defaultTasks(),
+                freshness: .fresh)
+            #expect(
+                minimumHeight(
+                    OperationalSummaryView(
+                        summary: summary, onSelectItem: { _ in }, onShowTasks: {}, now: Date(timeIntervalSince1970: 0))
+                ) < 500)
+            #expect(
+                minimumHeight(
+                    UnavailableStateView(title: "Tasks", description: "Select a task to inspect its history.")) < 200)
+            #expect(
+                minimumHeight(
+                    SidebarEmptyState(
+                        title: "No resolved items", description: "Attention items in this scope will appear here."))
+                    < 200)
+        }
+    #endif
 }

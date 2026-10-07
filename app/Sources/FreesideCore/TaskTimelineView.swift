@@ -48,6 +48,11 @@ struct TaskTimelineView: View {
     /// Which folds are open, per task id on this device. A screenshot
     /// passes its own instance over throwaway defaults.
     @State private var disclosures: TaskTimelineDisclosurePreferences
+    /// The task whose current campaign the reader folded. The current
+    /// campaign opens by default and the stored folds record only what is
+    /// open, so its fold lives with the view and a different task starts
+    /// open again.
+    @State private var foldedCurrentCampaignOf: String?
 
     init(
         coordinator: SyncCoordinator, snapshot: Components.Schemas.TaskSnapshot,
@@ -78,6 +83,7 @@ struct TaskTimelineView: View {
         if let screenshotTimeline {
             VStack(alignment: .leading, spacing: 22) {
                 header(screenshotTimeline)
+                schedules
                 content(screenshotTimeline)
             }
             .padding(24)
@@ -92,19 +98,19 @@ struct TaskTimelineView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 header
+                schedules
                 if let timeline {
                     content(timeline)
                 } else if coordinator.taskTimelineLoadStates[snapshot.task.id] == .unavailable {
                     UnavailableStateView(
                         title: "Timeline unavailable",
-                        systemImage: "exclamationmark.triangle",
                         description: "Freeside could not load the daemon's history for this task."
                     )
                     .frame(maxWidth: .infinity, minHeight: 180)
                 } else {
                     ProgressView("Loading timeline…")
                         .tint(.waterText)
-                        .font(FreesideFont.callout)
+                        .font(FreesideFont.cardBody)
                         .foregroundStyle(Color.inkDim)
                         .frame(maxWidth: .infinity, minHeight: 180)
                 }
@@ -139,29 +145,34 @@ struct TaskTimelineView: View {
         header(timeline)
     }
 
-    /// Layer 0: what the work is and where it stands, without scrolling.
+    /// Layer 0: what the work is and where it stands, without scrolling
+    /// (5.6): the screen's name with the state beside it, the task's name,
+    /// the hold when there is one, where to act, and the identity line
+    /// folded into Technical Details. Stop sits last, behind More Actions.
     /// Internal so a screenshot golden can draw the header on its own.
     func header(_ timeline: Components.Schemas.TaskTimeline?) -> some View {
         let task = snapshot.task
         let position = TaskDisplay.position(
             task, runs: coordinator.runs, attentionItems: coordinator.store.orderedSnapshots, history: timeline)
         let lines = TaskDisplay.rowLines(task, position: position)
-        return VStack(alignment: .leading, spacing: 10) {
-            eyebrow
+        return VStack(alignment: .leading, spacing: 12) {
+            // The task id lives in Technical Details; the copy menu keeps a
+            // quick path to it.
+            CardEyebrow(
+                keyword: "Task timeline",
+                chip: StateChip(label: lines.status, cut: TaskDisplay.statusCut(task, position: position))
+            )
+            .contextMenu {
+                Button("Copy task ID") { Clipboard.copy(snapshot.task.id) }
+            }
             TaskNameLabel(
                 name: TaskTimelinePresentation.headerName(timeline: timeline, snapshot: snapshot),
-                font: FreesideFont.largeTitle,
+                font: FreesideFont.ask,
                 monoFont: FreesideFont.mono(.title2),
                 lineLimit: 3)
-            StateChip(label: lines.status, cut: TaskDisplay.statusCut(task, position: position))
             if let hold = TaskDisplay.holdCallout(task, position: position) {
                 holdCallout(hold)
             }
-            Text(TaskTimelinePresentation.headerMetaLine(task))
-                .font(FreesideFont.monoCaption)
-                .foregroundStyle(Color.inkDim)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
             switch lines.visibleGuidance(attention: position?.attention == true) {
             case .link(let title):
                 // Link styling promises navigation, so it is drawn only
@@ -170,7 +181,7 @@ struct TaskTimelineView: View {
                     Button {
                         onOpenInboxItem(itemID)
                     } label: {
-                        FreesideLink(title: title)
+                        FreesideLink(title: title, face: FreesideFont.noticeAction)
                             .multilineTextAlignment(.leading)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -181,83 +192,67 @@ struct TaskTimelineView: View {
             case .sentence(let sentence): guidanceSentence(sentence)
             case nil: EmptyView()
             }
-            // Stop and the task's technical details share a row only while
-            // Stop is the bare button and the row fits; a Stop state that
-            // speaks in sentences takes its own row, as it always has.
-            let stop = TaskStopView(coordinator: coordinator, taskID: task.id)
-            if stop.showsOnlyTheStopButton {
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .firstTextBaseline, spacing: 16) {
-                        stop
-                        headerTechnicalDetails
-                    }
-                    VStack(alignment: .leading, spacing: 10) {
-                        stop
-                        headerTechnicalDetails
-                    }
-                }
-            } else {
-                stop
-                headerTechnicalDetails
-            }
+            TechnicalDetailsSection(
+                rows: TaskTimelinePresentation.technicalRows(taskID: task.id),
+                summary: TaskTimelinePresentation.headerMetaLine(task),
+                startsExpanded: expandsTechnicalDetails)
+            TaskStopView(coordinator: coordinator, taskID: task.id)
         }
     }
 
-    /// The current hold, set apart under the status so the reason the task
+    /// The current hold, set apart under the name so the reason the task
     /// waits is read before its history (visual audit D02). Every hold kind
     /// takes this one treatment: the hold's own words, the status chip, and
     /// the guidance sentence are what tell a capacity wait from a hold that
     /// needs the operator. VoiceOver reads the round, then the hold.
     private func holdCallout(_ hold: TaskDisplay.HoldCallout) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        SystemCallout {
             if let round = hold.round {
                 Text(round)
-                    .font(FreesideFont.callout)
+                    .font(FreesideFont.cardBody)
             }
             Text(hold.hold)
-                .font(FreesideFont.itemTitle)
+                .font(FreesideFont.statement)
         }
         .foregroundStyle(Color.ink)
         .fixedSize(horizontal: false, vertical: true)
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.accentWash)
-        .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(Color.accentText)
-                .frame(width: 3)
-                .accessibilityHidden(true)
-        }
         .accessibilityElement(children: .combine)
     }
 
     private func guidanceSentence(_ sentence: String) -> some View {
         Text(sentence)
-            .font(FreesideFont.callout)
+            .font(FreesideFont.cardBody)
             .foregroundStyle(Color.inkDim)
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    private var headerTechnicalDetails: some View {
-        TechnicalDetailsSection(
-            rows: TaskTimelinePresentation.technicalRows(taskID: snapshot.task.id),
-            startsExpanded: expandsTechnicalDetails)
-    }
-
-    /// The eyebrow names the screen. The task id moved to the header's
-    /// technical details; the copy menu keeps a quick path to it.
-    private var eyebrow: some View {
-        Text("TASK TIMELINE")
-            .font(FreesideFont.keyword)
-            .tracking(FreesideFont.keywordTracking)
-            .foregroundStyle(Color.inkDim)
-            .contextMenu {
-                Button("Copy task ID") { Clipboard.copy(snapshot.task.id) }
+    /// The task's armed watches and deadlines, each with when it next
+    /// fires. They sit on the task's own page, not on its list row (6.1),
+    /// and draw nothing while none is armed.
+    @ViewBuilder private var schedules: some View {
+        let armed = TaskDisplay.armedSchedules(for: snapshot.task, in: coordinator.schedules)
+        if !armed.isEmpty {
+            VStack(alignment: .leading, spacing: 11) {
+                KeywordLabel(text: "Schedules")
+                ForEach(armed, id: \.schedule.id) { snapshot in
+                    let schedule = snapshot.schedule
+                    if let fireAt = schedule.fire_at {
+                        FactRow(
+                            label: RunDisplay.label(schedule.kind),
+                            value: FreesideFormat.shortTime(fireAt, now: now, locale: locale, timeZone: timeZone)
+                        )
+                        .exactInstant(fireAt)
+                    } else {
+                        Text(RunDisplay.label(schedule.kind))
+                            .font(FreesideFont.factLabel)
+                    }
+                }
             }
+        }
     }
 
     /// Layer 1 is the current campaign, open; layer 3 is history, folded:
-    /// every earlier campaign as one disclosure row, then Task events.
+    /// every earlier campaign as one disclosure row, then Task Events.
     private func content(_ timeline: Components.Schemas.TaskTimeline) -> some View {
         let events = TaskTimelinePresentation.events(timeline)
         let disambiguate = TaskTimelinePresentation.campaignCount(timeline) > 1
@@ -266,30 +261,23 @@ struct TaskTimelineView: View {
                 state: coordinator.taskTimelineLoadStates[snapshot.task.id], freshness: coordinator.store.freshness)
             {
                 Text(message)
-                    .font(FreesideFont.callout)
+                    .font(FreesideFont.cardBody)
                     .foregroundStyle(Color.inkDim)
             }
             if timeline.sections.isEmpty {
                 Text("No campaigns or runs in this history.")
-                    .font(FreesideFont.callout)
+                    .font(FreesideFont.cardBody)
                     .foregroundStyle(Color.inkDim)
             }
             ForEach(Array(timeline.sections.enumerated()), id: \.offset) { index, section in
-                let title = TaskTimelinePresentation.sectionTitle(section, disambiguate: disambiguate)
-                let summary = TaskTimelinePresentation.sectionSummary(
-                    section, isCurrent: index == 0, now: now, locale: locale, timeZone: timeZone)
-                if index == 0 {
-                    VStack(alignment: .leading, spacing: 10) {
-                        keywordRow(title, summary: summary)
-                        sectionBody(section, in: timeline, leadsWithFullCard: true)
-                    }
-                } else {
-                    SentenceDisclosure(
-                        label: title, summary: summary, isExpanded: fold(.campaign(section.campaign_id))
-                    ) {
-                        sectionBody(section, in: timeline, leadsWithFullCard: false)
-                            .padding(.top, 10)
-                    }
+                SentenceDisclosure(
+                    label: TaskTimelinePresentation.sectionTitle(section, disambiguate: disambiguate),
+                    summary: TaskTimelinePresentation.sectionSummary(
+                        section, isCurrent: index == 0, now: now, locale: locale, timeZone: timeZone),
+                    isExpanded: index == 0 ? currentCampaignFold : fold(.campaign(section.campaign_id))
+                ) {
+                    sectionBody(section, in: timeline, leadsWithFullCard: index == 0)
+                        .padding(.top, 3)
                 }
             }
             SentenceDisclosure(
@@ -298,40 +286,24 @@ struct TaskTimelineView: View {
                     events, now: now, locale: locale, timeZone: timeZone),
                 isExpanded: fold(.taskEvents)
             ) {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(
-                        "Recorded workflow milestones, newest first. Historical results do not establish current readiness."
-                    )
-                    .font(FreesideFont.callout)
-                    .foregroundStyle(Color.inkDim)
-                    .fixedSize(horizontal: false, vertical: true)
+                Group {
                     if events.isEmpty {
                         Text("No recorded events in this history.")
-                            .font(FreesideFont.callout)
+                            .font(FreesideFont.cardBody)
                             .foregroundStyle(Color.inkDim)
                     } else {
                         eventRows(events, in: timeline)
                     }
                 }
-                .padding(.top, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
 
-    /// A keyword with its trailing mono summary, for the one section that
-    /// is always open and so needs no disclosure.
-    private func keywordRow(_ keyword: String, summary: String) -> some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                KeywordLabel(text: keyword)
-                Text(summary).font(FreesideFont.monoCaption).foregroundStyle(Color.inkDim)
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                KeywordLabel(text: keyword)
-                Text(summary).font(FreesideFont.monoCaption).foregroundStyle(Color.inkDim)
-            }
-        }
+    private var currentCampaignFold: Binding<Bool> {
+        Binding(
+            get: { foldedCurrentCampaignOf != snapshot.task.id },
+            set: { foldedCurrentCampaignOf = $0 ? nil : snapshot.task.id })
     }
 
     /// A section's technical details and runs. The current section leads
@@ -347,26 +319,29 @@ struct TaskTimelineView: View {
                 startsExpanded: expandsTechnicalDetails)
             ForEach(Array(section.runs.enumerated()), id: \.element.run_id) { index, run in
                 if leadsWithFullCard && index == 0 {
-                    card(padding: 14) {
-                        VStack(alignment: .leading, spacing: 12) {
+                    item(verticalPadding: 18, horizontalPadding: 20) {
+                        VStack(alignment: .leading, spacing: 16) {
                             openRunButton(run, in: timeline, showsTitle: true)
                             runBody(run, in: timeline)
                         }
                     }
                 } else {
-                    card(padding: 10) { priorRun(run, in: timeline) }
+                    item(verticalPadding: 12, horizontalPadding: 18) { priorRun(run, in: timeline) }
                 }
             }
         }
     }
 
-    private func card<Content: View>(padding: CGFloat, @ViewBuilder content: () -> Content) -> some View {
+    /// A run as a bordered item on the page's ground (R3): the border
+    /// alone sets it apart, with no fill of its own.
+    private func item<Content: View>(
+        verticalPadding: CGFloat, horizontalPadding: CGFloat, @ViewBuilder content: () -> Content
+    ) -> some View {
         content()
-            .padding(.vertical, padding)
-            .padding(.horizontal, 14)
+            .padding(.vertical, verticalPadding)
+            .padding(.horizontal, horizontalPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.ground2))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.rule, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.itemBorder, lineWidth: 1))
     }
 
     private func chip(
@@ -399,12 +374,12 @@ struct TaskTimelineView: View {
                         runTitle(run, in: timeline, dimmed: false)
                         Spacer(minLength: 8)
                     }
-                    FreesideLink(title: "Open run history")
+                    FreesideLink(title: "Open run history", face: FreesideFont.noticeAction)
                     if !showsTitle { Spacer(minLength: 0) }
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     if showsTitle { runTitle(run, in: timeline, dimmed: false) }
-                    FreesideLink(title: "Open run history")
+                    FreesideLink(title: "Open run history", face: FreesideFont.noticeAction)
                 }
             }
             .contentShape(Rectangle())
@@ -421,7 +396,7 @@ struct TaskTimelineView: View {
     ) -> some View {
         WrappingHStack(horizontalSpacing: 10, verticalSpacing: 4) {
             Text(TaskTimelinePresentation.runTitle(run))
-                .font(FreesideFont.sectionTitle)
+                .font(dimmed ? FreesideFont.factLabel : FreesideFont.statement)
                 .foregroundStyle(dimmed ? Color.inkDim : Color.ink)
             if let chip = chip(run, in: timeline) {
                 StateChip(label: chip.label, cut: chip.cut)
@@ -429,38 +404,52 @@ struct TaskTimelineView: View {
         }
     }
 
-    /// A prior run as one line (title, faint chip, newest milestone time)
-    /// that opens to the full card's content in place.
+    /// A prior run as one line (chevron, title, faint chip, newest
+    /// milestone time) that opens to the full card's content in place.
     private func priorRun(
         _ run: Components.Schemas.TaskTimelineRun, in timeline: Components.Schemas.TaskTimeline
     ) -> some View {
-        DisclosureGroup(isExpanded: fold(.run(run.run_id))) {
-            VStack(alignment: .leading, spacing: 12) {
+        let isExpanded = fold(.run(run.run_id))
+        return VStack(alignment: .leading, spacing: 16) {
+            Button {
+                isExpanded.wrappedValue.toggle()
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Image(systemName: "arrowtriangle.right.fill")
+                        .font(FreesideFont.disclosureGlyph)
+                        .foregroundStyle(Color.accentText)
+                        .rotationEffect(.degrees(isExpanded.wrappedValue ? 90 : 0))
+                        .accessibilityHidden(true)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            runTitle(run, in: timeline, dimmed: true)
+                            Spacer(minLength: 8)
+                            milestoneTime(run)
+                        }
+                        VStack(alignment: .leading, spacing: 4) {
+                            runTitle(run, in: timeline, dimmed: true)
+                            milestoneTime(run)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .freesideFocusRing(cornerRadius: 4)
+            .accessibilityValue(isExpanded.wrappedValue ? "Expanded" : "Collapsed")
+            if isExpanded.wrappedValue {
                 openRunButton(run, in: timeline, showsTitle: false)
                 runBody(run, in: timeline)
             }
-            .padding(.top, 10)
-        } label: {
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    runTitle(run, in: timeline, dimmed: true)
-                    Spacer(minLength: 8)
-                    milestoneTime(run)
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    runTitle(run, in: timeline, dimmed: true)
-                    milestoneTime(run)
-                }
-            }
         }
-        .tint(.accentText)
     }
 
     @ViewBuilder
     private func milestoneTime(_ run: Components.Schemas.TaskTimelineRun) -> some View {
         if let time = TaskTimelinePresentation.newestMilestoneTime(run) {
             Text(FreesideFormat.shortTime(time, now: now, locale: locale, timeZone: timeZone))
-                .font(FreesideFont.monoCaption)
+                .font(FreesideFont.trailingSummary)
                 .foregroundStyle(Color.inkDim)
                 .exactInstant(time)
         }
@@ -487,11 +476,11 @@ struct TaskTimelineView: View {
                 folds: .init(
                     facts: { fold(.roundFacts($0)) }, priorRounds: fold(.priorRounds(run.run_id))))
         }
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 11) {
             KeywordLabel(text: "Milestones")
             if run.milestones.isEmpty {
                 Text("No execution milestones in this run's task history.")
-                    .font(FreesideFont.callout)
+                    .font(FreesideFont.cardBody)
                     .foregroundStyle(Color.inkDim)
             } else {
                 StageRail(
@@ -513,51 +502,49 @@ struct TaskTimelineView: View {
                 isExpanded: fold(.runDetails(run.run_id))
             ) {
                 runDetails(run, in: timeline)
-                    .padding(.top, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         TechnicalDetailsSection(
             rows: TaskTimelinePresentation.technicalRows(run: run, in: timeline),
+            summary: TaskTimelinePresentation.technicalSummary(run: run, in: timeline),
             startsExpanded: expandsTechnicalDetails)
     }
 
-    /// The run's role, lineage, and recorded hold, in the words they have
-    /// always had.
+    /// The run's role, lineage, and recorded hold as facts. A run this
+    /// history holds is a link to its own timeline; one it doesn't hold is
+    /// named by its short id, with nowhere to go.
     private func runDetails(
         _ run: Components.Schemas.TaskTimelineRun, in timeline: Components.Schemas.TaskTimeline
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            WrappingHStack(horizontalSpacing: 14, verticalSpacing: 6) {
-                if let role = run.role?.value1 {
-                    Label(TaskTimelinePresentation.label(role), systemImage: "square.stack.3d.up")
-                }
-                if let successor = run.superseded_by {
-                    Label(
-                        "Superseded by \(TaskTimelinePresentation.runReference(successor, in: timeline))",
-                        systemImage: "arrow.turn.down.right")
-                }
+            if let role = run.role?.value1 {
+                FactRow(label: "Role", value: TaskTimelinePresentation.label(role))
             }
-            .font(FreesideFont.subheadline)
-            .foregroundStyle(Color.inkDim)
             if let reason = run.attempt_reason {
-                Text("Reason: \(reason)")
-                    .font(FreesideFont.callout)
-                    .foregroundStyle(Color.inkDim)
+                FactRow(label: "Reason", value: reason)
             }
             if let parent = run.parent_run_id {
-                Text("Parent run: \(TaskTimelinePresentation.runReference(parent, in: timeline))")
-                    .font(FreesideFont.callout)
-                    .foregroundStyle(Color.inkDim)
+                runFact("Parent", runID: parent, in: timeline)
+            }
+            if let successor = run.superseded_by {
+                runFact("Superseded By", runID: successor, in: timeline)
             }
             if let hold = run.hold?.value1 {
-                Label("Recorded hold: \(RunDisplay.label(hold.reason))", systemImage: "pause.circle.fill")
-                    .font(FreesideFont.caption)
-                    .foregroundStyle(Color.accentText)
-                Text("Hold code: \(hold.reason.rawValue)")
-                    .font(FreesideFont.monoCaption)
-                    .foregroundStyle(Color.inkDim)
+                FactRow(label: "Recorded Hold", value: RunDisplay.label(hold.reason))
+                FactRow(label: "Hold Code", value: hold.reason.rawValue, valueColor: .inkDim)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func runFact(
+        _ label: String, runID: String, in timeline: Components.Schemas.TaskTimeline
+    ) -> some View {
+        if let title = TaskTimelinePresentation.runLinkTitle(runID, in: timeline) {
+            FactLinkRow(label: label, value: title) { onOpenRun(runID) }
+        } else {
+            FactRow(label: label, value: ShortIdentifier.short(runID))
         }
     }
 
@@ -585,7 +572,7 @@ struct TaskTimelineView: View {
                         }
                         if let detail = TaskTimelinePresentation.detail(event, in: timeline) {
                             Text(detail)
-                                .font(FreesideFont.monoCaption)
+                                .font(FreesideFont.trailingSummary)
                                 .foregroundStyle(Color.inkDim)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .textSelection(.enabled)
@@ -607,7 +594,7 @@ struct TaskTimelineView: View {
             FreesideFormat.shortTime(
                 event.recorded_at, now: now, locale: locale, timeZone: timeZone)
         )
-        .font(FreesideFont.monoCaption)
+        .font(FreesideFont.trailingSummary)
         .foregroundStyle(Color.inkDim)
         .exactInstant(event.recorded_at)
     }
@@ -905,7 +892,7 @@ enum TaskTimelinePresentation {
     }
 
     /// The closed summary beside a section's keyword. The current section
-    /// reads `current · 2 attempts · since Sep 11`; an earlier one reads
+    /// reads `current · 2 attempts · from Sep 11`; an earlier one reads
     /// `1 run · Sep 10`. Why an earlier campaign ended is not a recorded
     /// fact, so the summary does not say.
     static func sectionSummary(
@@ -919,13 +906,13 @@ enum TaskTimelinePresentation {
         if isCurrent {
             return
                 (["current", "\(count) \(count == 1 ? "attempt" : "attempts")"]
-                + [start.map { "since \($0)" }]
+                + [start.map { "from \($0)" }]
                 .compactMap { $0 }).joined(separator: " · ")
         }
         return (["\(count) \(count == 1 ? "run" : "runs")"] + [start].compactMap { $0 }).joined(separator: " · ")
     }
 
-    /// `6 recorded · newest Sep 12 at 9:41 AM`. The events arrive newest
+    /// `6 recorded · newest Sep 12, 9:41 AM`. The events arrive newest
     /// first, so the newest is the first.
     static func eventsSummary(
         _ events: [Components.Schemas.TaskEvent], now: Date, locale: Locale = .current,
@@ -945,6 +932,31 @@ enum TaskTimelinePresentation {
             + [run.hold.map { "hold: \(RunDisplay.label($0.value1.reason))" }]
         let present = parts.compactMap { $0 }
         return present.isEmpty ? nil : present.joined(separator: " · ")
+    }
+
+    /// How a fact names a run this history holds, or nil for one it
+    /// doesn't: `runReference` in sentence case, as a value that leads its
+    /// own line. A run with neither role nor attempt number keeps its
+    /// short id as written.
+    static func runLinkTitle(_ runID: String, in timeline: Components.Schemas.TaskTimeline) -> String? {
+        guard let run = timeline.sections.lazy.flatMap(\.runs).first(where: { $0.run_id == runID }) else {
+            return nil
+        }
+        let reference = runReference(runID, in: timeline)
+        guard run.role != nil || run.attempt_number != nil else { return reference }
+        return reference.prefix(1).uppercased() + reference.dropFirst()
+    }
+
+    /// What a run's closed Technical Details says it holds: one word per
+    /// kind of identifier in `technicalRows(run:in:)`.
+    static func technicalSummary(
+        run: Components.Schemas.TaskTimelineRun, in timeline: Components.Schemas.TaskTimeline
+    ) -> String {
+        var parts = ["run"]
+        if run.parent_run_id != nil { parts.append("parent") }
+        if run.superseded_by != nil { parts.append("superseding") }
+        if !verificationItemIDs(for: run.run_id, in: timeline).isEmpty { parts.append("verification item") }
+        return parts.joined(separator: " · ")
     }
 
     static func hasRunDetails(_ run: Components.Schemas.TaskTimelineRun) -> Bool {
