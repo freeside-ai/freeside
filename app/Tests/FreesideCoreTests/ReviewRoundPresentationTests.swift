@@ -62,19 +62,19 @@ import Testing
     @Test func priorSummaryNamesTheRoundsNewestFirst() {
         let two = [RunFixtures.reviewRound(.completed, round: 2), RunFixtures.reviewRound(.completed, round: 1)]
         #expect(
-            ReviewRoundPresentation.priorSummary(two) == "Rounds 2 and 1 · clean at their bound heads · historical")
+            ReviewRoundPresentation.priorSummary(two) == "Rounds 2 and 1 · clean at their bound heads")
         // A single folded round leads with its title, which names the
         // attempt it reviewed only when the producer is proven.
         #expect(
             ReviewRoundPresentation.priorSummary([two[1]])
-                == "Review 1 · clean at its bound head · historical")
+                == "Review 1 · clean at its bound head")
         #expect(
             ReviewRoundPresentation.priorSummary([RunFixtures.reviewRound(.failed, round: 1)])
-                == "Review 1 · failed · historical")
+                == "Review 1 · failed")
         #expect(
             ReviewRoundPresentation.priorSummary(
                 [RemediationFixtures.findingsRound()], stages: RemediationFixtures.stages)
-                == "Review 1: Implementation · Pass 1 · Round 2 · findings · historical")
+                == "Review 1: Implementation · Pass 1 · Round 2 · findings")
         let mixed = [
             RunFixtures.reviewRound(.failed, round: 3),
             RunFixtures.reviewRound(.completed, round: 2, findings: true),
@@ -82,7 +82,7 @@ import Testing
         ]
         #expect(
             ReviewRoundPresentation.priorSummary(mixed)
-                == "Rounds 3, 2, and 1 · 1 with findings, 1 clean, 1 failed · historical")
+                == "Rounds 3, 2, and 1 · 1 with findings, 1 clean, 1 failed")
     }
 
     @Test func aRoundsTimeIsItsCompletionElseItsRequest() {

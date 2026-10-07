@@ -78,25 +78,25 @@ struct RunReviewSection: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 11) {
             KeywordLabel(text: "Review")
             let state = coordinator.timelineLoadStates[runID]
             let availability = Self.availabilityMessage(
                 hasTimeline: hasTimeline, state: state, freshness: coordinator.store.freshness)
             if let availability {
-                Text(availability).font(FreesideFont.callout).foregroundStyle(Color.inkDim)
+                Text(availability).font(FreesideFont.cardBody).foregroundStyle(Color.inkDim)
             }
             let rounds = RunHistoryPresentation.rounds(facts)
             if let current = rounds.first {
                 roundsBlock(current: current, prior: Array(rounds.dropFirst()), all: rounds)
             } else if hasTimeline && state == .loaded && availability == nil {
                 Text("No review requested yet")
-                    .font(FreesideFont.callout)
+                    .font(FreesideFont.cardBody)
                     .foregroundStyle(Color.inkDim)
             }
             if state != .loading && availability != nil {
-                Button("Retry review details") { retry += 1 }
-                    .font(FreesideFont.callout)
+                Button("Retry Review Details") { retry += 1 }
+                    .buttonStyle(FreesideActionButtonStyle(tone: .secondary, expands: false))
             }
         }
         .foregroundStyle(Color.ink)
@@ -108,15 +108,16 @@ struct RunReviewSection: View {
         }
     }
 
-    /// The rounds as one nested ground block: the newest round's verdict and
-    /// facts, then every earlier round folded to a single hollow-marker line.
+    /// The rounds, set apart by spacing alone (6.3, R26): the newest round's
+    /// verdict and facts, then every earlier round folded to a single
+    /// hollow-marker line.
     private func roundsBlock(
         current: Components.Schemas.RunReviewRound, prior: [Components.Schemas.RunReviewRound],
         all: [Components.Schemas.RunReviewRound]
     ) -> some View {
         let attention = ReviewRoundPresentation.hasOpenAdjudication(
             runID: runID, in: coordinator.store.orderedSnapshots)
-        return VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: 11) {
             roundRows(current, isCurrent: true, attention: attention, in: all)
             if !prior.isEmpty {
                 let showsPriorRounds = folds?.priorRounds ?? $showsPriorRounds
@@ -141,9 +142,7 @@ struct RunReviewSection: View {
                 }
             }
         }
-        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color.ground))
     }
 
     @ViewBuilder
@@ -172,17 +171,17 @@ struct RunReviewSection: View {
                         expandedFacts.remove(round.invocation_id)
                     }
                 })
-        // The link shares the disclosure's row while the closed label and
-        // the link fit on one line, and drops beneath it when they do not.
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .top, spacing: 12) {
-                roundFacts(round, isExpanded: expanded)
-                // This row is chosen only when the link fits whole, so it
-                // keeps that width and the disclosure takes the rest.
-                links(round, in: rounds).layoutPriority(1)
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                roundFacts(round, isExpanded: expanded)
+        // The link keeps a line of its own under the disclosure, in line
+        // with its label, so opening the facts never moves it.
+        VStack(alignment: .leading, spacing: 6) {
+            roundFacts(round, isExpanded: expanded)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                // The disclosure's own chevron, hidden: the indent that
+                // lines the link up with the label at every type size.
+                Image(systemName: "arrowtriangle.right.fill")
+                    .font(FreesideFont.disclosureGlyph)
+                    .hidden()
+                    .accessibilityHidden(true)
                 links(round, in: rounds)
             }
         }
@@ -215,7 +214,7 @@ struct RunReviewSection: View {
     private func timeText(_ time: Date?) -> some View {
         if let time {
             Text(formattedTime(time))
-                .font(FreesideFont.monoCaption)
+                .font(FreesideFont.trailingSummary)
                 .foregroundStyle(Color.inkDim)
                 .exactInstant(time)
         }
@@ -229,59 +228,55 @@ struct RunReviewSection: View {
         ) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(RunDisplay.reviewIdentity(round))
-                    .font(FreesideFont.callout)
+                    .font(FreesideFont.cardBody)
                 Text(round.outcome.map { "Outcome: \($0.value1.rawValue.capitalized)" } ?? "Outcome unavailable")
-                    .font(FreesideFont.callout)
+                    .font(FreesideFont.cardBody)
                 Text(round.findings_count.map { "\($0) findings" } ?? "Findings count unavailable")
-                    .font(FreesideFont.callout)
+                    .font(FreesideFont.cardBody)
                 if let counts = round.dispositions?.value1 {
                     Text(
                         "\(counts.fixed) fixed · \(counts.declined) declined · \(counts.deferred) deferred · \(counts.open) open"
                     )
-                    .font(FreesideFont.caption)
+                    .font(FreesideFont.cardBody)
                 }
                 if let failure = round.failure?.value1 {
                     Text("\(failure._class.capitalized): \(failure.reason)")
-                        .font(FreesideFont.callout)
+                        .font(FreesideFont.cardBody)
                         .textSelection(.enabled)
                 }
                 if round.retry_pending {
-                    Text("Retry pending").font(FreesideFont.callout)
+                    Text("Retry pending").font(FreesideFont.cardBody)
                 }
                 if let remediation = ReviewRoundPresentation.remediationLine(round) {
-                    Text(remediation).font(FreesideFont.callout)
+                    Text(remediation).font(FreesideFont.cardBody)
                     if let decided = round.remediation?.value1.decided_at {
                         Text("Adjudication decided: \(formattedTime(decided))")
-                            .font(FreesideFont.caption)
+                            .font(FreesideFont.cardBody)
                             .exactInstant(decided)
                     }
                 }
                 if let requested = round.requested_at {
                     Text("Requested: \(formattedTime(requested))")
-                        .font(FreesideFont.caption)
+                        .font(FreesideFont.cardBody)
                         .exactInstant(requested)
                 } else {
-                    Text("Request time unavailable").font(FreesideFont.caption)
+                    Text("Request time unavailable").font(FreesideFont.cardBody)
                 }
                 if let completed = round.completed_at {
                     Text("Completed: \(formattedTime(completed))")
-                        .font(FreesideFont.caption)
+                        .font(FreesideFont.cardBody)
                         .exactInstant(completed)
                 } else {
-                    Text(Self.missingCompletionMessage(round.state)).font(FreesideFont.caption)
+                    Text(Self.missingCompletionMessage(round.state)).font(FreesideFont.cardBody)
                 }
                 Text(Self.sourceLabel(round.source.kind))
-                    .font(FreesideFont.caption)
+                    .font(FreesideFont.cardBody)
                     .foregroundStyle(Color.inkDim)
                 if let status = round.source.status {
-                    Text("Source status: \(status)").font(FreesideFont.caption)
+                    Text("Source status: \(status)").font(FreesideFont.cardBody)
                 }
             }
-            .padding(.top, 6)
-            // The open facts must not decide whether the link shares the
-            // row: only the closed label's width does, so expanding never
-            // moves the link.
-            .frame(idealWidth: 0, maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -310,13 +305,12 @@ struct RunReviewSection: View {
     }
 
     private func evidenceLink(_ title: String, round: Components.Schemas.RunReviewRound) -> some View {
-        // No fixed width: beside the disclosure it is only chosen when it
-        // fits, and beneath it the label must wrap at large text sizes rather
+        // No fixed width: the label must wrap at large text sizes rather
         // than widen the block past its card.
         Button {
             selection = Selection(round: round)
         } label: {
-            FreesideLink(title: title)
+            FreesideLink(title: title, face: FreesideFont.noticeAction)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -325,7 +319,7 @@ struct RunReviewSection: View {
 
     private func evidenceNote(_ text: String) -> some View {
         Text(text)
-            .font(FreesideFont.caption)
+            .font(FreesideFont.cardBody)
             .foregroundStyle(Color.inkDim)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -455,7 +449,7 @@ enum ReviewRoundPresentation {
     }
 
     /// The folded line for every round after the newest, newest first:
-    /// `Rounds 2 and 1 · clean at their bound heads · historical`. A single
+    /// `Rounds 2 and 1 · clean at their bound heads`. A single
     /// folded round leads with its title, so it names what it reviewed.
     static func priorSummary(
         _ rounds: [Components.Schemas.RunReviewRound], in all: [Components.Schemas.RunReviewRound] = [],
@@ -485,7 +479,7 @@ enum ReviewRoundPresentation {
                 return rounds.count == 1 ? lone : "\(count) \(counted)"
             }.joined(separator: ", ")
         }
-        return "\(name) · \(verdicts) · historical"
+        return "\(name) · \(verdicts)"
     }
 }
 
