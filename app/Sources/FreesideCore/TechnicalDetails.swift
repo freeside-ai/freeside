@@ -70,7 +70,7 @@ struct TechnicalDetailRow: View {
                     Clipboard.copy(row.value)
                 } label: {
                     Image(systemName: "doc.on.doc")
-                        .font(FreesideFont.caption)
+                        .font(FreesideFont.keyword)
                         .foregroundStyle(Color.accentText)
                 }
                 .buttonStyle(.plain)
