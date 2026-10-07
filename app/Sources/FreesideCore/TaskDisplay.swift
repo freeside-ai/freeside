@@ -467,9 +467,9 @@ enum TaskDisplay {
             ?? .init(text: run.task_id, source: .identifier)
     }
 
-    /// The armed watches and deadlines attached to any of the task's runs
-    /// (plan §11: the tasks list shows attached watches and deadlines). A
-    /// schedule belongs to a run, so the task shows the union over its runs.
+    /// The armed watches and deadlines attached to any of the task's runs,
+    /// which the task timeline lists under Schedules. A schedule belongs to
+    /// a run, so the task shows the union over its runs.
     static func armedSchedules(
         for task: Components.Schemas.Task, in schedules: [Components.Schemas.ScheduleSnapshot]
     ) -> [Components.Schemas.ScheduleSnapshot] {

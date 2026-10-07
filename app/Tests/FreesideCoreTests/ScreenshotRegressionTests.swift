@@ -1348,6 +1348,8 @@
                     ),
                     attentionItems: inbox,
                     runs: runs,
+                    // The task timeline lists a task's armed schedules.
+                    schedules: RunFixtures.defaultSchedules(),
                     // The refreshed-history timeline is cached (not added to
                     // defaultTimelines) so its own run-timeline surface resolves
                     // review labels the way the app does, without churning the

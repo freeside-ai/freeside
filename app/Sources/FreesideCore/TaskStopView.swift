@@ -12,9 +12,9 @@ struct TaskStopView: View {
         coordinator.tasks.first { $0.task.id == taskID }
     }
 
-    /// True while the control is the Stop button alone, with no sentence
-    /// or second button. Only then can a host set it beside something else;
-    /// any state that speaks takes its own row.
+    /// True while the control is the More Actions menu alone, with no
+    /// sentence or second button: Stop is offered and nothing about it is
+    /// in flight.
     var showsOnlyTheStopButton: Bool {
         snapshot?.task.cancellation == nil && !model.sending.contains(taskID)
             && model.pending(for: taskID) == nil && model.unavailableReason == nil
@@ -47,21 +47,23 @@ struct TaskStopView: View {
                         .disabled(coordinator.store.freshness == .unauthenticated)
                 }
             } else if snapshot?.task.cancellation == nil {
-                Button(role: .destructive) {
-                    confirmation = model.prepare(taskID: taskID)
-                } label: {
-                    Label {
-                        Text("Stop task…")
-                    } icon: {
-                        Image(systemName: "stop.fill").font(.system(size: 9))
+                // Stop is the page's one consequential action, so it sits
+                // behind the overflow menu the decision card uses, never as
+                // a standing button beside the task's name (5.6). Only the
+                // offer folds away: every state above and below this branch
+                // stays on the page.
+                Menu {
+                    Button("Stop Task…", role: .destructive) {
+                        confirmation = model.prepare(taskID: taskID)
                     }
+                } label: {
+                    Text("More Actions \u{25BE}")
                 }
-                // The wax outline, never filled: the tone the consequence
-                // sheet uses for a destructive choice. It hugs its label so
-                // it can share the header row.
-                .buttonStyle(FreesideActionButtonStyle(tone: .destructive, compact: true, expands: false))
+                .menuStyle(.button)
+                .buttonStyle(FreesideActionButtonStyle(tone: .tertiary))
                 .disabled(model.unavailableReason != nil || snapshot == nil)
-                .accessibilityHint("Review what stopping this task will do")
+                .accessibilityLabel("More task actions")
+                .accessibilityHint("Holds Stop Task, which reviews what stopping this task will do")
             }
             if let reason = model.unavailableReason { Text(reason) }
             if let message = model.messages[taskID] { Text(message) }

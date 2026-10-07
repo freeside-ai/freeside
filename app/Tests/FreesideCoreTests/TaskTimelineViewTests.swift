@@ -681,6 +681,11 @@ import Testing
         #expect(TaskTimelinePresentation.runReference("run-0", in: timeline) == "run-0")
         let long = "run-\(String(repeating: "a", count: 64))"
         #expect(TaskTimelinePresentation.runReference(long, in: timeline) == "run-aaaaaaaa…")
+        // A fact links only a run this history holds, named in sentence
+        // case; a run it doesn't hold has no title to link.
+        #expect(TaskTimelinePresentation.runLinkTitle("run-2", in: timeline) == "Attempt 2")
+        #expect(TaskTimelinePresentation.runLinkTitle("run-0", in: timeline) == "run-0")
+        #expect(TaskTimelinePresentation.runLinkTitle("run-absent", in: timeline) == nil)
     }
 
     @Test func runReferenceRoleQualifiesAttemptOneWithinACampaign() {
@@ -802,6 +807,10 @@ import Testing
                 == ["Run ID", "Parent run ID", "Superseded by run ID", "Verification Inbox item ID"])
         #expect(runRows.map(\.value) == [runID, parentID, successorID, "item-ready"])
         #expect(TaskTimelinePresentation.technicalRows(taskID: "task-x").map(\.value) == ["task-x"])
+        // The closed disclosure names one word per kind of row it holds.
+        #expect(
+            TaskTimelinePresentation.technicalSummary(run: run, in: timeline)
+                == "run · parent · superseding · verification item")
     }
 
     @Test func runTechnicalRowsKeepEveryVerificationItemID() {
