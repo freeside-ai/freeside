@@ -551,7 +551,7 @@ struct TaskNameLabel: View {
                 text
                 + Text("  AGENT")
                 .font(FreesideFont.keyword)
-                .tracking(0.8)
+                .tracking(FreesideFont.keywordTracking)
                 .foregroundStyle(Color.inkDim)
         }
         return

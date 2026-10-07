@@ -139,8 +139,8 @@ struct NewTaskSheet: View {
     private var composerContent: some View {
         VStack(spacing: 0) {
             FreesideSheetHeader(
-                title: "New task",
-                prompt:
+                ask: "New task",
+                consequence:
                     "Describe the work in a sentence or a paragraph. The agent asks before it specifies when the source is a sketch."
             )
             VStack(alignment: .leading, spacing: 12) {

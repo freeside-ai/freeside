@@ -72,8 +72,9 @@ struct DevicesView: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
             FreesideSheetHeader(
-                title: "Devices",
-                prompt: "Devices paired with this daemon. A revoked device can't read or act until it pairs again.")
+                ask: "Devices",
+                consequence:
+                    "Devices paired with this daemon. A revoked device can't read or act until it pairs again.")
             VStack(alignment: .leading, spacing: 16) {
                 if let failure = model.revokeFailure {
                     Text(failure)

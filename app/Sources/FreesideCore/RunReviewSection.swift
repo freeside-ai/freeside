@@ -224,8 +224,8 @@ struct RunReviewSection: View {
     private func roundFacts(
         _ round: Components.Schemas.RunReviewRound, isExpanded: Binding<Bool>
     ) -> some View {
-        KeywordDisclosure(
-            keyword: "Round facts", summary: ReviewRoundPresentation.factsSummary(round), isExpanded: isExpanded
+        SentenceDisclosure(
+            label: "Round Facts", summary: ReviewRoundPresentation.factsSummary(round), isExpanded: isExpanded
         ) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(RunDisplay.reviewIdentity(round))

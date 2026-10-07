@@ -285,8 +285,8 @@ enum RunDisplay {
 
     static func label(_ value: Components.Schemas.RunOutcome) -> String {
         switch value {
-        case .unobserved: "Not observed"
-        case .pending: "In progress"
+        case .unobserved: "Not Observed"
+        case .pending: "In Progress"
         case .published: "Ready"
         case .completed: "Merged"
         case .blocked: "Blocked"

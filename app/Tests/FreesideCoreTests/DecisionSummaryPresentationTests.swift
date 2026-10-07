@@ -24,6 +24,35 @@ import Testing
         #expect(presentation.original.hasSuffix(DecisionSummaryFixtures.concern))
     }
 
+    /// The Full Report fold counts concerns only where the report's own
+    /// list does: a number the source does not state would be a new claim.
+    @Test(arguments: [
+        ("- First\n- Second", Optional(2)),
+        ("1. First\n2) Second\n   continued\n\n3. Third", Optional(3)),
+        ("* Only one", Optional(1)),
+        ("A question remains.", nil),
+        ("- First\nThen some prose.", nil),
+        ("  indented prose\n- First", nil),
+        ("-not a list item", nil),
+    ])
+    func concernsAreCountedOnlyWhenTheReportListsThem(concerns: String, count: Int?) {
+        let presentation = DecisionSummaryPresentation(
+            .init(
+                media_type: .text_sol_markdown,
+                content: "## Change\nLead\n## Remaining concerns\n\(concerns)"))
+        #expect(presentation.concerns == concerns)
+        #expect(presentation.concernCount == count)
+    }
+
+    @Test func unextractedConcernsAreNeverCounted() {
+        let legacy = DecisionSummaryPresentation(
+            .init(media_type: .text_sol_markdown, content: DecisionSummaryFixtures.legacy))
+        #expect(legacy.concernCount == nil)
+        let plain = DecisionSummaryPresentation(
+            .init(media_type: .text_sol_plain, content: "- First\n- Second"))
+        #expect(plain.concernCount == nil)
+    }
+
     @Test(arguments: [
         "Short complete report.", "A café changed. 🐦 Uncertainty remains.", "",
         "## Change\nSmall change\n## Remaining concerns\nA question remains.",

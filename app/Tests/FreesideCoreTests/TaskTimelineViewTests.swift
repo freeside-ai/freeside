@@ -613,7 +613,7 @@ import Testing
                 == "Run run-legacy")
         #expect(
             TaskTimelinePresentation.sectionTitle(.init(campaign_id: nil, events: [], runs: []))
-                == "Outside a campaign")
+                == "Outside a Campaign")
         #expect(TaskTimelinePresentation.sectionTitle(.init(campaign_id: "c", events: [], runs: [])) == "Campaign")
     }
 

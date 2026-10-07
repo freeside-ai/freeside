@@ -203,7 +203,7 @@ enum AttentionDisplay {
             // repeating them here made one datum render in three card modules
             // (#1107).
             guard let diff = item.diff_stats?.value1 else { return [] }
-            return [.init("Diff", diffStats(diff))]
+            return [.init(diffFactLabel, diffStats(diff))]
         case .publish_blocked:
             guard let block = item.publish_block?.value1 else { return [] }
             if let rule = block.trust_rule?.value1 {
@@ -480,9 +480,15 @@ enum AttentionDisplay {
             "Round 1: \(diffStats(first.cumulative)); round \(latest.round): \(latestSize)")
     }
 
+    /// The label of the fact that carries a candidate's whole diff.
+    static let diffFactLabel = "Diff"
+
+    static func fileCount(_ diff: Components.Schemas.DiffStats) -> String {
+        diff.files_changed == 1 ? "1 file" : "\(diff.files_changed) files"
+    }
+
     private static func diffStats(_ diff: Components.Schemas.DiffStats) -> String {
-        let files = diff.files_changed == 1 ? "1 file" : "\(diff.files_changed) files"
-        return "\(files), +\(diff.additions) -\(diff.deletions)"
+        return "\(fileCount(diff)), +\(diff.additions) -\(diff.deletions)"
     }
 
     static func label(_ action: Components.Schemas.Action) -> String {

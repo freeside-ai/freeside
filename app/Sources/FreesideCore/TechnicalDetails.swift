@@ -63,7 +63,6 @@ struct TechnicalDetailRow: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             FactRow(label: row.label, value: row.value, valueColor: .inkDim)
-                .font(FreesideFont.monoCaption)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if rendersInteractiveControls {

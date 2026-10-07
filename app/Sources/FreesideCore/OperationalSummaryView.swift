@@ -176,8 +176,6 @@ struct OperationalSummaryView: View {
         valueColor: Color = .ink
     ) -> some View {
         FactRow(label: label, value: value, valueColor: valueColor)
-            .font(FreesideFont.callout)
-            .foregroundStyle(Color.inkDim)
     }
 
     private var daemonStateColor: Color {

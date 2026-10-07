@@ -204,7 +204,7 @@ struct MessageComposerSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            FreesideSheetHeader(title: title, prompt: prompt)
+            FreesideSheetHeader(ask: title, consequence: prompt)
             VStack(alignment: .leading, spacing: 12) {
                 if rendersInteractiveControls {
                     TextEditor(text: $message)

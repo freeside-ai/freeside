@@ -112,11 +112,12 @@ import Testing
     }
 
     @Test func fourSpecializedCardsAreOnlyModuleOrderings() throws {
-        // Plan §9 revision 78 (visual audit D07): the diff joins the verdict
-        // ahead of the summary, and the review yield follows the actions.
+        // Plan §9 and survey card 4b (R10): the labeled change summary,
+        // then the diff and the verdict reached on it, and the review yield
+        // follows the actions.
         #expect(
             DecisionCardComposition.forType(.ready_for_final_review).modules == [
-                .recommendation, .checklist, .facts, .summary, .factBlock, .yieldChart, .claims,
+                .recommendation, .summary, .facts, .checklist, .factBlock, .yieldChart, .claims,
                 .evidence, .details,
             ])
         #expect(
@@ -140,15 +141,15 @@ import Testing
             !DecisionCardComposition.forType(.review_dispute).modules.contains(.recommendation))
         let ready = DecisionCardComposition.forType(.ready_for_final_review)
         // Revision 78 (D07): the review yield opens on demand below the
-        // actions, and View PR follows the summary instead of closing the
-        // card.
+        // actions, and View PR follows the verdict it rests on instead of
+        // closing the card.
         #expect(ready.actionInsertionIndex == ready.modules.firstIndex(of: .yieldChart))
         #expect(try #require(ready.modules.firstIndex(of: .summary)) < ready.actionInsertionIndex)
         #expect(
             try #require(ready.modules.firstIndex(of: .evidence)) < #require(ready.modules.firstIndex(of: .details)))
         #expect(
             try ready.reviewingActionInsertionIndex == #require(
-                ready.modules.firstIndex(of: .summary)) + 1)
+                ready.modules.firstIndex(of: .checklist)) + 1)
         #expect(
             DecisionCardComposition.forType(.execution_failure)
                 .reviewingActionInsertionIndex == nil)
@@ -204,19 +205,131 @@ import Testing
         }
     }
 
-    /// Visual audit D03: the four audited card types explain their
-    /// unverified label on demand, and every other type keeps the sentence
-    /// under each agent-written section, so those cards stay unchanged.
+    private static let unverifiedContexts: [DecisionCardComposition.UnverifiedContext] =
+        DecisionCardComposition.UnverifiedContext.Platform.allCases.flatMap { platform in
+            [false, true].flatMap { accessibilityLayout in
+                [false, true].map { recommended in
+                    .init(
+                        platform: platform, accessibilityLayout: accessibilityLayout,
+                        drawsUnverifiedRecommendation: recommended)
+                }
+            }
+        }
+
+    /// R7 and R25: every type explains its unverified label on demand, and
+    /// from one control. A card names each place it draws a visible
+    /// unverified keyword once, in reading order, and the first carries the
+    /// control, so no card has two and none with a visible keyword has
+    /// none (plan §9 revision 82).
     @Test(arguments: Components.Schemas.AttentionType.allCases)
-    func unverifiedExplanationIsOnDemandOnlyOnTheAuditedCards(
+    func unverifiedExplanationIsOnDemandFromOneControlOnEveryCard(
         type: Components.Schemas.AttentionType
     ) {
-        let audited: [Components.Schemas.AttentionType] = [
-            .agent_question, .ready_for_final_review, .review_dispute, .finding_adjudication,
-        ]
+        let item = AttentionFixtures.fixture(type: type).item
+        let composition = DecisionCardComposition.forType(type)
+        for context in Self.unverifiedContexts {
+            let slots = composition.unverifiedSlots(for: item, in: context)
+            #expect(Set(slots).count == slots.count)
+            #expect(composition.infoSlot(for: item, in: context) == slots.first)
+            if context.drawsUnverifiedRecommendation {
+                #expect(!slots.isEmpty)
+            }
+        }
+    }
+
+    /// The control sits on the first unverified keyword the operator reads:
+    /// the eyebrow where the card leads with the agent's question, otherwise
+    /// the summary or the claim the card leads with. On macOS a claim that
+    /// is not the card's lead reads beside the actions.
+    @Test func theExplanationControlSitsOnTheFirstUnverifiedKeyword() throws {
+        func infoSlot(
+            _ type: Components.Schemas.AttentionType,
+            on platform: DecisionCardComposition.UnverifiedContext.Platform
+        ) -> DecisionCardComposition.UnverifiedSlot? {
+            DecisionCardComposition.forType(type).infoSlot(
+                for: AttentionFixtures.fixture(type: type).item, in: .init(platform: platform))
+        }
+        func module(
+            _ module: DecisionCardModule, of type: Components.Schemas.AttentionType
+        ) throws -> DecisionCardComposition.UnverifiedSlot {
+            .module(try #require(DecisionCardComposition.forType(type).modules.firstIndex(of: module)))
+        }
+
+        for platform in DecisionCardComposition.UnverifiedContext.Platform.allCases {
+            #expect(infoSlot(.agent_question, on: platform) == .eyebrow)
+            #expect(
+                infoSlot(.ready_for_final_review, on: platform)
+                    == (try module(.summary, of: .ready_for_final_review)))
+            #expect(
+                infoSlot(.spec_approval, on: platform) == (try module(.summary, of: .spec_approval)))
+            #expect(
+                infoSlot(.review_dispute, on: platform)
+                    == (try module(.claims, of: .review_dispute)))
+        }
+        #expect(infoSlot(.execution_failure, on: .mac) == .actionRegion)
         #expect(
-            DecisionCardComposition.unverifiedExplanation(for: type)
-                == (audited.contains(type) ? .onDemand : .sentence))
+            infoSlot(.execution_failure, on: .phone)
+                == (try module(.claims, of: .execution_failure)))
+    }
+
+    /// A card whose only unverified keyword is a disclosure's own label has
+    /// no label to carry the control, so it names no slot and the section
+    /// explains itself when opened. The health card's one claim is an
+    /// attachment: macOS lists it in the inspector, and a phone folds the
+    /// supporting claims at an accessibility size.
+    @Test func aCardWithOnlyFoldedUnverifiedKeywordsNamesNoSlot() throws {
+        let item = AttentionFixtures.fixture(type: .system_health).item
+        let composition = DecisionCardComposition.forType(.system_health)
+        let claims = try #require(composition.modules.firstIndex(of: .claims))
+
+        #expect(composition.infoSlot(for: item, in: .init(platform: .phone)) == .module(claims))
+        #expect(
+            composition.infoSlot(
+                for: item, in: .init(platform: .phone, accessibilityLayout: true)) == nil)
+        #expect(composition.infoSlot(for: item, in: .init(platform: .mac)) == nil)
+    }
+
+    /// An agent-written reason under the ask is the first thing the agent
+    /// says on its card, so it carries the label and the control (plan §9,
+    /// Summary Provenance).
+    @Test func anAgentWrittenReasonUnderTheAskIsLabeled() throws {
+        var untyped = AttentionFixtures.fixture(type: .agent_question).item
+        untyped.agent_question = nil
+        let reason = try #require(DecisionCardComposition.reason(for: untyped))
+        #expect(reason.isAgentWritten)
+        #expect(reason.label == "Agent reason")
+        for platform in DecisionCardComposition.UnverifiedContext.Platform.allCases {
+            #expect(
+                DecisionCardComposition.forType(.agent_question)
+                    .infoSlot(for: untyped, in: .init(platform: platform)) == .reason)
+        }
+
+        var legacy = AttentionFixtures.fixture(type: .spec_approval).item
+        legacy.agent_claims.removeAll { $0.label == AgentClaimLabels.summary }
+        #expect(
+            DecisionCardComposition.forType(.spec_approval)
+                .infoSlot(for: legacy, in: .init(platform: .phone)) == .reason)
+    }
+
+    /// Plan §9 revision 82: the card's details carry the full reason on
+    /// every type, including a reason the card draws nowhere else, and an
+    /// agent-written one keeps its label there.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func detailsCarryTheFullReasonOnEveryType(type: Components.Schemas.AttentionType) throws {
+        let item = AttentionFixtures.fixture(type: type).item
+        let reason = try #require(DecisionCardComposition.reason(for: item))
+        #expect(reason.text == item.reason)
+        #expect(reason.isAgentWritten == [.spec_approval, .agent_question].contains(type))
+        #expect(reason.label == (reason.isAgentWritten ? "Agent reason" : "Reason"))
+    }
+
+    @Test func detailsCarryTheBindingLineADiminishingCardDoesNotDraw() throws {
+        var item = AttentionFixtures.fixture(type: .review_diminishing_returns).item
+        item.reason =
+            "Review yield has remained low under the resolved policy.\n"
+            + #"Binding: {"run_id":"run-1","round":3}"#
+        #expect(!DecisionCardComposition.forType(item._type).drawsReason(for: item))
+        #expect(try #require(DecisionCardComposition.reason(for: item)).text == item.reason)
     }
 
     /// Visual audit D06 and D08: the question and dispute cards fold their
@@ -281,18 +394,18 @@ import Testing
         #expect(placement.folded.isEmpty)
     }
 
-    /// Visual audit D06 to D09: the four decision-first cards move the
-    /// daemon's reason out of the boxed Context section, and every other
-    /// type keeps it there.
+    /// R0: no type keeps a boxed Context section. The reason draws under
+    /// the ask on every type but the three that lead with their own module
+    /// and have a per-item test for folding it (visual audit D06, D07, D09;
+    /// plan §9 revision 82). No other type folds.
     @Test(arguments: Components.Schemas.AttentionType.allCases)
-    func reasonLeavesTheContextSectionOnlyOnTheDecisionFirstCards(
+    func reasonFoldsOnlyOnTheCardsWithAPerItemTest(
         type: Components.Schemas.AttentionType
     ) {
         let expected: DecisionCardComposition.ReasonPlacement =
             switch type {
-            case .review_dispute: .underAsk
             case .agent_question, .ready_for_final_review, .finding_adjudication: .recordedContext
-            default: .context
+            default: .underAsk
             }
         #expect(DecisionCardComposition.reasonPlacement(for: type) == expected)
     }
@@ -307,23 +420,23 @@ import Testing
 
         #expect(DecisionRecommendationPresentation.of(recommended) != nil)
         #expect(DecisionCardComposition.reasonPlacement(for: recommended) == .recordedContext)
-        #expect(DecisionCardComposition.reasonPlacement(for: unrecommended) == .context)
+        #expect(DecisionCardComposition.reasonPlacement(for: unrecommended) == .underAsk)
     }
 
     /// Visual audit D06 to D08: the question card bounds only its options,
     /// the final review only the daemon's checklist, and the dispute reads
-    /// its claim as prose, so all three separate their agent sections by
-    /// spacing; every other type keeps the dashed card around agent prose.
+    /// its claim as prose, so all three quote their agent sections (R5);
+    /// every other type keeps the dashed card around agent prose.
     @Test(arguments: Components.Schemas.AttentionType.allCases)
-    func agentSectionsAreSpacedOnlyOnTheApprovedCards(
+    func agentSectionsAreQuotedOnlyOnTheApprovedCards(
         type: Components.Schemas.AttentionType
     ) {
-        let spaced: [Components.Schemas.AttentionType] = [
+        let quoted: [Components.Schemas.AttentionType] = [
             .agent_question, .ready_for_final_review, .review_dispute,
         ]
         #expect(
             DecisionCardComposition.agentSectionFrame(for: type)
-                == (spaced.contains(type) ? .spaced : .dashedCard))
+                == (quoted.contains(type) ? .quoted : .dashedCard))
     }
 
     /// Visual audit D08: the dispute leads with the claim the snapshot
@@ -433,14 +546,14 @@ import Testing
         var untyped = typed
         untyped.agent_question = nil
         #expect(DecisionCardComposition.rendersAsk(for: untyped))
-        #expect(DecisionCardComposition.reasonPlacement(for: untyped) == .context)
+        #expect(DecisionCardComposition.reasonPlacement(for: untyped) == .underAsk)
 
         var empty = typed
         var facts = try #require(empty.agent_question?.value1)
         facts.decisions = []
         empty.agent_question = .init(value1: facts)
         #expect(DecisionCardComposition.rendersAsk(for: empty))
-        #expect(DecisionCardComposition.reasonPlacement(for: empty) == .context)
+        #expect(DecisionCardComposition.reasonPlacement(for: empty) == .underAsk)
     }
 
     /// Only the question's placement depends on the item; every other type
@@ -475,7 +588,7 @@ import Testing
         #expect(!DecisionCardComposition.rendersAsk(for: item))
     }
 
-    /// A spaced claim folds its identifiers; every one of them stays one
+    /// A quoted claim folds its identifiers; every one of them stays one
     /// disclosure away, exact.
     @Test func foldedClaimSourceKeepsEveryIdentifier() throws {
         let item = AttentionFixtures.fixture(type: .agent_question).item
@@ -530,12 +643,14 @@ import Testing
         }
     }
 
-    /// Each type keeps its own lead: the readiness verdict, the failing stage,
-    /// and the disputed positions all outrank the identifier-shaped facts that
-    /// sit last before the actions.
+    /// Each type keeps its own lead: the final review's change summary, the
+    /// failing stage, and the disputed positions all outrank the
+    /// identifier-shaped facts that sit last before the actions. The final
+    /// review's diff sits between its summary and its verdict (survey card
+    /// 4b, R10).
     @Test func eachTypeLeadsWithItsOwnModuleNotWithItsFacts() {
         for (type, leading) in [
-            (Components.Schemas.AttentionType.ready_for_final_review, DecisionCardModule.checklist),
+            (Components.Schemas.AttentionType.ready_for_final_review, DecisionCardModule.summary),
             (.execution_failure, .stageRail),
             (.review_dispute, .comparison),
             (.review_diminishing_returns, .yieldChart),
@@ -561,6 +676,84 @@ import Testing
             #expect(reviewingActionInsertionIndex >= 0)
             #expect(reviewingActionInsertionIndex <= composition.modules.count)
         }
+    }
+
+    /// R10: the ladder survey card 4b settled, on the one card composed on
+    /// it so far. Every other type keeps the earlier scale until its sweep.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func onlyTheFinalReviewTakesTheRefinedScale(type: Components.Schemas.AttentionType) {
+        let scale = DecisionCardComposition.scale(for: type)
+        #expect(scale == (type == .ready_for_final_review ? .refined : .legacy))
+    }
+
+    @Test func refinedScaleIsTheLadderCard4bSettled() {
+        let scale = DecisionCardComposition.Scale.refined
+        #expect(scale.sectionGap == 22)
+        #expect(scale.moduleGap == 11)
+        #expect(scale.controlGap == 10)
+        #expect(scale.foldLead == 18)
+        #expect(scale.drawsFoldHairline)
+        #expect(scale.padding(compact: false) == .init(top: 28, leading: 28, bottom: 24, trailing: 28))
+        #expect(scale.padding(compact: true) == .init(top: 18, leading: 20, bottom: 18, trailing: 20))
+        #expect(!scale.drawsReturnGlyph)
+        #expect(!DecisionCardComposition.Scale.legacy.drawsFoldHairline)
+        #expect(DecisionCardComposition.Scale.legacy.drawsReturnGlyph)
+    }
+
+    /// The reviewing action opens the control group the action region
+    /// closes, and the folds are the modules straight after it, so a
+    /// composition can neither put the group's end ahead of its start nor
+    /// fold a module it does not have.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func controlGroupAndFoldsStayInsideTheModuleList(type: Components.Schemas.AttentionType) {
+        let composition = DecisionCardComposition.forType(type)
+        if let reviewing = composition.reviewingActionInsertionIndex {
+            #expect(reviewing <= composition.actionInsertionIndex)
+        }
+        #expect(
+            composition.actionInsertionIndex + composition.foldedModuleCount
+                <= composition.modules.count)
+    }
+
+    /// Survey card 4b: the review yield is the final review's one folded
+    /// module, and no other type folds a module yet.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func onlyTheFinalReviewFoldsAModuleUnderItsActions(type: Components.Schemas.AttentionType) {
+        let composition = DecisionCardComposition.forType(type)
+        let folded = composition.modules.dropFirst(composition.actionInsertionIndex)
+            .prefix(composition.foldedModuleCount)
+        #expect(Array(folded) == (type == .ready_for_final_review ? [.yieldChart] : []))
+    }
+
+    @Test func reviewYieldFoldSaysHowManyRoundsRanAndHowTheLastEnded() throws {
+        let item = AttentionFixtures.fixture(type: .ready_for_final_review).item
+        let history = try #require(item.yield_history?.value1)
+        let presentation = try #require(DecisionYieldPresentation(item))
+        let rounds = history.rounds.count == 1 ? "1 round" : "\(history.rounds.count) rounds"
+        let last =
+            switch history.terminal_outcome {
+            case .clean: "last clean"
+            case .findings: "last had findings"
+            }
+        #expect(presentation.foldSummary == "\(rounds) · \(last)")
+        #expect(DecisionYieldPresentation(rounds: []).foldSummary == "0 rounds")
+    }
+
+    /// R28: the Change row reads its counts aloud in words, since the plus
+    /// and minus signs carry the meaning only on screen.
+    @Test func changeRowSpeaksItsCountsInWords() {
+        #expect(
+            DecisionChangeRow.accessibilityLabel(
+                .init(
+                    files_changed: 9, additions: 412, deletions: 88, base_sha: "base",
+                    head_sha: "head"))
+                == "Change: 412 added, 88 removed, 9 files")
+        #expect(
+            DecisionChangeRow.accessibilityLabel(
+                .init(
+                    files_changed: 1, additions: 3, deletions: 0, base_sha: "base",
+                    head_sha: "head"))
+                == "Change: 3 added, 0 removed, 1 file")
     }
 
     @Test func checklistUsesNeutralSuccessAndFailureOnlyWhereTheFactFails() throws {
@@ -858,8 +1051,8 @@ import Testing
     }
 
     /// Only `spec_approval` carries the agent's summary in `reason`, so only
-    /// that card drops its Context section; every other type keeps rendering
-    /// the daemon's own context fact (#1098).
+    /// that card draws no reason of its own; every other type keeps
+    /// rendering the daemon's own sentence (#1098).
     @Test func onlySpecificationApprovalsCarryTheirSummaryAsReason() {
         #expect(DecisionCardComposition.reasonIsAgentSummary(.spec_approval))
         for type in AttentionFixtures.phase1Types where type != .spec_approval {
@@ -884,14 +1077,14 @@ import Testing
 
     /// A specification approval persisted before summary claims carries its
     /// `Specification` claim alone, so the card has no unverified layer to
-    /// move the reason into and keeps Context rather than dropping the text
-    /// entirely (#1098).
-    @Test func legacySpecificationApprovalsKeepTheirContextSection() {
+    /// move the reason into and keeps the reason rather than dropping the
+    /// text entirely (#1098).
+    @Test func legacySpecificationApprovalsKeepTheirReason() {
         let composition = DecisionCardComposition.forType(.spec_approval)
         var item = AttentionFixtures.fixture(type: .spec_approval).item
-        #expect(!composition.rendersContext(for: item))
+        #expect(!composition.drawsReason(for: item))
         item.agent_claims.removeAll { $0.label == AgentClaimLabels.summary }
-        #expect(composition.rendersContext(for: item))
+        #expect(composition.drawsReason(for: item))
     }
 
     /// Plan §7 "Routing": the diminishing-returns card leads with the verdict
@@ -907,7 +1100,7 @@ import Testing
 
     /// The daemon writes this item's reason as a summary line plus a
     /// `Binding: {…}` JSON line. With typed facts the card states the cause
-    /// from them and prints no Context; an item without facts has no other
+    /// from them and draws no reason; an item without facts has no other
     /// statement of its cause and keeps it.
     @Test func aDiminishingCardWithTypedFactsDropsTheBindingReason() {
         let composition = DecisionCardComposition.forType(.review_diminishing_returns)
@@ -915,15 +1108,15 @@ import Testing
         item.reason =
             "Review yield has remained low under the resolved policy.\n"
             + #"Binding: {"run_id":"run-1","round":3}"#
-        #expect(!composition.rendersContext(for: item))
+        #expect(!composition.drawsReason(for: item))
 
         item.review_diminishing = nil
-        #expect(composition.rendersContext(for: item))
+        #expect(composition.drawsReason(for: item))
     }
 
-    /// A type only drops Context because its summary layer renders the same
-    /// text, so every such type has to compose that module and render it in
-    /// the lead: dropping Context moved the reason out of the position §9
+    /// A type only drops the reason because its summary layer renders the
+    /// same text, so every such type has to compose that module and render
+    /// it in the lead: dropping the reason took it out of the position §9
     /// reserves for a plan-altitude summary, and the summary module has to
     /// take that position back (#1098).
     @Test func typesThatMoveTheirReasonLeadWithTheSummaryModule() throws {

@@ -377,8 +377,8 @@ import Testing
 
     @Test func outcomeVocabularyStaysUnchanged() {
         let cases: [(Components.Schemas.RunOutcome, String)] = [
-            (.pending, "In progress"), (.published, "Ready"), (.completed, "Merged"),
-            (.failed, "Failed"), (.lost, "Lost"), (.blocked, "Blocked"), (.unobserved, "Not observed"),
+            (.pending, "In Progress"), (.published, "Ready"), (.completed, "Merged"),
+            (.failed, "Failed"), (.lost, "Lost"), (.blocked, "Blocked"), (.unobserved, "Not Observed"),
         ]
         for (outcome, label) in cases { #expect(RunDisplay.label(outcome) == label) }
     }

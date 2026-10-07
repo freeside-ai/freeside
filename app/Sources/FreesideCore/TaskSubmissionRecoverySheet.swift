@@ -47,8 +47,9 @@ struct TaskSubmissionRecoverySheet: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
             FreesideSheetHeader(
-                title: "Unconfirmed submissions",
-                prompt: "These requests may already be accepted. Retry sends the original request to find its result.")
+                ask: "Unconfirmed submissions",
+                consequence:
+                    "These requests may already be accepted. Retry sends the original request to find its result.")
             VStack(alignment: .leading, spacing: 16) {
                 if model.pendingSubmissions.isEmpty {
                     Text("No unconfirmed submissions.").font(FreesideFont.callout)

@@ -1003,8 +1003,10 @@
                                                 .fixedSize(horizontal: false, vertical: true)
                                                 // Bound the expanded scroll viewport: a full ax5
                                                 // report exceeds the platform PNG height limit.
-                                                // Its tail pins the final concern and digest;
-                                                // collapsed captures retain the card/actions.
+                                                // The report opens in place under the summary, so
+                                                // the tail pins its final concern and digest with
+                                                // the actions below them; collapsed captures keep
+                                                // the whole card.
                                                 .frame(height: expanded ? 1_600 : nil, alignment: .bottom)
                                                 .clipped())))
                                 }
@@ -2563,6 +2565,8 @@
 
             surfaces.append(contentsOf: try taskStopSurfaces())
             surfaces.append(contentsOf: taskStyleSurfaces())
+            surfaces.append(contentsOf: cardStyleSurfaces())
+            surfaces.append(contentsOf: finalReviewFrameSurfaces(store: store, at: dynamicTypeSize))
 
             // Visual audit D08: the dispute card on both platforms and
             // themes with the positions the screenshot graphics supply, then
@@ -2620,7 +2624,7 @@
             }
 
             // Visual audit D06: a question that enumerates no options keeps
-            // the generic ask with its Context section under it.
+            // the generic ask with its reason under it.
             if var untyped = inbox.first(where: { $0.item._type == .agent_question })?.item {
                 untyped.agent_question = nil
                 let detail = DecisionDetailView(
@@ -2733,7 +2737,7 @@
         }
 
         /// The pieces the task surfaces share, by day and by dusk: the three
-        /// status-chip cuts (one long enough to wrap), a keyword disclosure
+        /// status-chip cuts (one long enough to wrap), a sentence disclosure
         /// closed and open, the navigation link, and a newest-first rail with
         /// its filled current marker over hollow prior rings.
         private func taskStyleSurfaces() -> [Surface] {
@@ -2758,12 +2762,12 @@
                             StateChip(
                                 label: "Failed to Stop · Execution May Continue · Inspect the Recorded Outcome",
                                 cut: .ink)
-                            KeywordDisclosure(
-                                keyword: "Task events", summary: "6 recorded · newest Sep 12, 9:41 AM",
+                            SentenceDisclosure(
+                                label: "Task Events", summary: "6 recorded · newest Sep 12, 9:41 AM",
                                 isExpanded: .constant(false)
                             ) { EmptyView() }
-                            KeywordDisclosure(
-                                keyword: "Run details", summary: "Implementation · retry of attempt 1",
+                            SentenceDisclosure(
+                                label: "Run Details", summary: "Implementation · retry of attempt 1",
                                 isExpanded: .constant(true)
                             ) {
                                 Text("Reason: retry").font(FreesideFont.callout)
@@ -2773,6 +2777,87 @@
                             StageRail(
                                 title: nil, presentation: rail, axis: .vertical, showsSummaryText: false,
                                 accessibilityStyle: .entries)
+                        }.padding(24).foregroundStyle(Color.ink).background(Color.ground)))
+            }
+        }
+
+        /// The pieces a decision card composes, by day and by dusk: the type
+        /// eyebrow with its chip and with the unverified register, the agent
+        /// quote with and without its producer label, the daemon's callout,
+        /// the three notice tones (one with an action), a compact mark, and
+        /// a fact row whose value is a chip.
+        /// Survey Part 2 card 4b: the final review at the frame's 560pt card,
+        /// day and dusk, on the clean fixture and on the degraded one the
+        /// frame draws. No test graphics: a production card carries none, so
+        /// View PR and Return to agent sit in one control group as the frame
+        /// has them.
+        private func finalReviewFrameSurfaces(
+            store: InboxStore, at dynamicTypeSize: DynamicTypeSize
+        ) -> [Surface] {
+            let clean = AttentionFixtures.fixture(type: .ready_for_final_review).item
+            let detail = DecisionDetailView(
+                store: store,
+                itemID: clean.id,
+                loadsAttachments: false,
+                showsValidationProgress: false,
+                now: screenshotNow)
+            let width = DecisionCardComposition.Scale.refined.columnWidth
+            return [("clean", clean), ("degraded", AttentionFixtures.degradedReady().item)].flatMap {
+                name, item in
+                [("light", ColorScheme.light), ("dark", ColorScheme.dark)].map { theme, scheme in
+                    Surface(
+                        name: "decision-ready-4b-\(name)-\(theme)",
+                        width: width,
+                        colorScheme: scheme,
+                        view: AnyView(
+                            detail.screenshotCard(item, at: dynamicTypeSize, detailWidth: width)))
+                }
+            }
+        }
+
+        private func cardStyleSurfaces() -> [Surface] {
+            [ColorScheme.light, .dark].map { scheme in
+                Surface(
+                    name: "card-style-\(scheme)", width: 390, colorScheme: scheme,
+                    view: AnyView(
+                        VStack(alignment: .leading, spacing: 12) {
+                            CardEyebrow(
+                                keyword: "Ready for Final Review",
+                                chip: StateChip(label: "High", cut: .attention))
+                            CardEyebrow(
+                                keyword: "Agent Question", carriesInfo: true,
+                                rendersInteractiveControls: false)
+                            QuoteBlock(
+                                producer: "Agent summary", carriesInfo: true,
+                                rendersInteractiveControls: false
+                            ) {
+                                Text("Both review rounds converged; one concern remains open.")
+                                    .font(FreesideFont.statement)
+                            }
+                            QuoteBlock {
+                                Text("The retry reuses the approved specification.")
+                                    .font(FreesideFont.cardBody)
+                            }
+                            SystemCallout {
+                                Text("Accepting publishes the pull request.")
+                                    .font(FreesideFont.cardBody)
+                            }
+                            Notice(
+                                tone: .neutral, keyword: "Stale",
+                                sentence: "The base advanced after this card was raised.")
+                            Notice(
+                                tone: .accent, keyword: "Revised",
+                                sentence: "A revised specification is ready.",
+                                action: .init(label: "Open", handler: {}))
+                            Notice(
+                                tone: .wax, keyword: "Failed",
+                                sentence: "The daemon could not confirm the submission.")
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text("Store first, then API").font(FreesideFont.cardBody)
+                                CompactMark(text: "Agent recommends")
+                            }
+                            FactRow(label: "Checks", chip: StateChip(label: "Degraded", cut: .attention))
+                            FactRow(label: "Pull request", value: "owner/repo#7")
                         }.padding(24).foregroundStyle(Color.ink).background(Color.ground)))
             }
         }
