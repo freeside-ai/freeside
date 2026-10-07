@@ -33,6 +33,24 @@ from reacting to any App comment.
   IDs, authors, and timestamps and treat malformed 201 responses as unknown.
 - A malformed listing must not reduce the recovery candidate count. The
   conversation-comment reader rejects the entire listing.
+- Independent review confirmed that a decoded head and its decoded digest
+  could agree without proving publication. Pending sends now reload the
+  pinned ready-item binding and recheck the reviewed head against it.
+- Independent review confirmed that pagination could follow another PR's
+  comments on the same API host. Conversation creates and listings now
+  validate `issue_url`; a wrong-resource next page fails the whole read.
+- Cancellation at each identity, token, and HTTP boundary, followed by closing
+  and reopening the store, produces at most one create. Only proven transient
+  rejection releases a dispatch claim. Recovery starts a fresh ten-minute
+  settle interval after restart because intent age does not prove send age.
+- A validated create response proves that response's new App-authored comment
+  without comparing GitHub's clock to the daemon's. Unknown-send recovery
+  still requires the recorded timestamp criterion, so skew there remains
+  ambiguous rather than risking adoption of an older comment. A dispatching
+  intent also settles after reviewer revocation; revocation prevents new sends,
+  not recovery of an irreversible request already attempted. That recovery
+  still compares the intent coordinates to the historical finding and ready
+  binding, so a revoked profile cannot authorize a mismatched decoded intent.
 - Extracting the create status classifier must preserve filing decisions.
   Its comparison test covers every HTTP status from 100 through 599, both
   decoded-body states, transport failure, and rate-limit header forms.
