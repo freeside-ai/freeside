@@ -184,6 +184,7 @@ import Testing
         #expect(taskID == nil)
         #expect(model.state == .lost)
         #expect(model.pendingSubmissions.count == 1)
+        #expect(model.promptHistory.entries.isEmpty)
     }
 
     @Test func lostResponseRetriesWithTheSameCommandID() async throws {

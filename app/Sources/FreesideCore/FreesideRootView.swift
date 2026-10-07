@@ -115,6 +115,15 @@ public struct FreesideRootView: View {
             pendingTaskSubmissions: coordinator.pendingTaskSubmissions.count,
             taskStops: coordinator.pendingTaskStops.values)
         return VStack(spacing: 0) {
+            if let warning = coordinator.promptHistory.saveWarning {
+                HStack {
+                    Text(warning).font(FreesideFont.callout)
+                    Button("Dismiss") { coordinator.promptHistory.saveWarning = nil }
+                }
+                .padding(8)
+                .foregroundStyle(Color.waxText)
+                .accessibilityElement(children: .contain)
+            }
             FreshnessBanner(
                 freshness: coordinator.store.freshness,
                 lastUpdatedAt: coordinator.lastUpdatedAt,

@@ -79,6 +79,7 @@ public final class TaskSubmissionModel {
     /// lifetime, not only when it opens: sync can fail while the operator
     /// composes.
     public var freshness: InboxStore.Freshness { coordinator.store.freshness }
+    public var promptHistory: TaskPromptHistory { coordinator.promptHistory }
 
     public var pendingSubmissions: [Components.Schemas.ClientCommand] {
         coordinator.pendingTaskSubmissions.values.sorted { $0.command_id < $1.command_id }
@@ -156,6 +157,10 @@ public final class TaskSubmissionModel {
                 else {
                     state = .lost
                     return nil
+                }
+                if case .submit_task(let payload) = command.payload {
+                    coordinator.promptHistory.record(
+                        projectID: payload.project_id, source: payload.source, taskID: record.task_id)
                 }
                 // Read-your-write: the task and its run must be visible before
                 // the caller routes to the task detail. `refreshAfterCommit`

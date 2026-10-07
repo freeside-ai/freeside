@@ -40,6 +40,7 @@ public final class SyncCoordinator {
     public private(set) var pendingTaskStops: [String: PendingTaskStop] = [:]
     @ObservationIgnored lazy var taskStop = TaskStopModel(coordinator: self)
     private let submissionDaemonID: String
+    public let promptHistory: TaskPromptHistory
     public private(set) var cursors: SyncCursors?
     public private(set) var runs: [Components.Schemas.RunSnapshot] = []
     public private(set) var schedules: [Components.Schemas.ScheduleSnapshot] = []
@@ -167,11 +168,14 @@ public final class SyncCoordinator {
         device: DeviceIdentity = .mock,
         cache: CacheStore,
         submissionDaemonID: String = "mock",
+        promptHistory: TaskPromptHistory? = nil,
         inboxOrderNow: @escaping () -> Date = Date.init
     ) {
         store = InboxStore(client: client, device: device, now: inboxOrderNow)
         self.cache = cache
         self.submissionDaemonID = submissionDaemonID
+        self.promptHistory =
+            promptHistory ?? TaskPromptHistory(deploymentID: submissionDaemonID, deviceID: device.deviceID)
         if let cached = cache.load() {
             if cached.stopDaemonID == submissionDaemonID {
                 pendingTaskStops = (cached.pendingTaskStops ?? [:]).filter { id, entry in
