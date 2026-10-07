@@ -2563,6 +2563,7 @@
 
             surfaces.append(contentsOf: try taskStopSurfaces())
             surfaces.append(contentsOf: taskStyleSurfaces())
+            surfaces.append(contentsOf: cardStyleSurfaces())
 
             // Visual audit D08: the dispute card on both platforms and
             // themes with the positions the screenshot graphics supply, then
@@ -2773,6 +2774,58 @@
                             StageRail(
                                 title: nil, presentation: rail, axis: .vertical, showsSummaryText: false,
                                 accessibilityStyle: .entries)
+                        }.padding(24).foregroundStyle(Color.ink).background(Color.ground)))
+            }
+        }
+
+        /// The pieces a decision card composes, by day and by dusk: the type
+        /// eyebrow with its chip and with the unverified register, the agent
+        /// quote with and without its producer label, the daemon's callout,
+        /// the three notice tones (one with an action), a compact mark, and
+        /// a fact row whose value is a chip.
+        private func cardStyleSurfaces() -> [Surface] {
+            [ColorScheme.light, .dark].map { scheme in
+                Surface(
+                    name: "card-style-\(scheme)", width: 390, colorScheme: scheme,
+                    view: AnyView(
+                        VStack(alignment: .leading, spacing: 12) {
+                            CardEyebrow(
+                                keyword: "Ready for Final Review",
+                                chip: StateChip(label: "High", cut: .attention))
+                            CardEyebrow(
+                                keyword: "Agent Question", carriesInfo: true,
+                                rendersInteractiveControls: false)
+                            QuoteBlock(
+                                producer: "Agent summary", carriesInfo: true,
+                                rendersInteractiveControls: false
+                            ) {
+                                Text("Both review rounds converged; one concern remains open.")
+                                    .font(FreesideFont.statement)
+                            }
+                            QuoteBlock {
+                                Text("The retry reuses the approved specification.")
+                                    .font(FreesideFont.cardBody)
+                            }
+                            SystemCallout {
+                                Text("Accepting publishes the pull request.")
+                                    .font(FreesideFont.cardBody)
+                            }
+                            Notice(
+                                tone: .neutral, keyword: "Stale",
+                                sentence: "The base advanced after this card was raised.")
+                            Notice(
+                                tone: .accent, keyword: "Revised",
+                                sentence: "A revised specification is ready.",
+                                action: .init(label: "Open", handler: {}))
+                            Notice(
+                                tone: .wax, keyword: "Failed",
+                                sentence: "The daemon could not confirm the submission.")
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text("Store first, then API").font(FreesideFont.cardBody)
+                                CompactMark(text: "Agent recommends")
+                            }
+                            FactRow(label: "Checks", chip: StateChip(label: "Degraded", cut: .attention))
+                            FactRow(label: "Pull request", value: "owner/repo#7")
                         }.padding(24).foregroundStyle(Color.ink).background(Color.ground)))
             }
         }
