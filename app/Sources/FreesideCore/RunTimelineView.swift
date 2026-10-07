@@ -710,7 +710,7 @@ struct InvocationPresentation {
         }
         let stale = invocation.observed_at > asOf || asOf.timeIntervalSince(invocation.observed_at) > 30
         if !isTerminal && stale {
-            label = "Observation gap"
+            label = "Observation Gap"
             symbol = "exclamationmark.triangle"
             color = .accentText
             glyph = nil

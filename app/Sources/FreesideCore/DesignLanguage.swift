@@ -425,12 +425,13 @@ enum FreesideFont {
     static var chip: Font { fixed("IBMPlexMono-Medm", chipSize, relativeTo: .caption2) }
 }
 
-/// A bordered state chip: mono, lowercase, 1px border and text in the
-/// state color, no fill. `dashed` marks the not-observed idle state.
+/// A bordered state chip: mono, the label in the case it is given (Title
+/// Case, R4), 1px border and text in the state color, no fill. `dashed`
+/// marks the not-observed idle state.
 ///
-/// A `cut` chip is the task surfaces' status chip: the same shape with the
-/// label in the case it was given, free to wrap (a task status is the
-/// daemon's full phrase), and the border and text toned separately.
+/// A `cut` chip is the task surfaces' status chip: the same shape, free to
+/// wrap (a task status is the daemon's full phrase), with the border and
+/// text toned separately.
 struct StateChip: View {
     /// Which of the three task-status tones a chip takes. A caller picks
     /// the cut from what the operator can do, never from the status word.
@@ -474,13 +475,13 @@ struct StateChip: View {
                 Text((glyph.map { "\($0) " } ?? "") + label)
                     .font(FreesideFont.callout)
             } else {
-                Text((glyph.map { "\($0) " } ?? "") + (cut == nil ? label.lowercased() : label))
+                Text((glyph.map { "\($0) " } ?? "") + label)
                     .font(FreesideFont.chip)
                     .tracking(FreesideFont.chipTracking)
                     .lineLimit(cut == nil ? 1 : nil)
                     .fixedSize(horizontal: cut == nil, vertical: true)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1.5)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
                     .overlay(
                         RoundedRectangle(cornerRadius: 3)
                             .strokeBorder(

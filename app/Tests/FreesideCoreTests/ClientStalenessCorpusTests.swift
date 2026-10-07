@@ -56,7 +56,7 @@ import Testing
         // A later response's as_of has advanced past the 30s window while the
         // observation is unchanged; liveness re-evaluates to a gap.
         let laterResponse = InvocationPresentation(observation, asOf: observedAt.addingTimeInterval(45))
-        #expect(laterResponse.label == "Observation gap")
+        #expect(laterResponse.label == "Observation Gap")
         #expect(laterResponse.symbol == "exclamationmark.triangle")
     }
 }

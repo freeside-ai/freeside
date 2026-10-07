@@ -246,7 +246,7 @@ struct InboxView: View {
     @ViewBuilder
     private func urgentChip(count: Int) -> some View {
         if count > 0 {
-            StateChip(label: "\(count) urgent", color: .waxText)
+            StateChip(label: "\(count) Urgent", color: .waxText)
         }
     }
 

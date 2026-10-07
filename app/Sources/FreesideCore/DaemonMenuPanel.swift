@@ -243,7 +243,7 @@
                     .font(FreesideFont.monoCaption)
                     .foregroundStyle(Color.inkDim)
                 if inbox.urgent > 0 {
-                    StateChip(label: "\(inbox.urgent) urgent", color: .waxText)
+                    StateChip(label: "\(inbox.urgent) Urgent", color: .waxText)
                 }
             }
         }

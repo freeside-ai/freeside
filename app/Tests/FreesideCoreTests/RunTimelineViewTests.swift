@@ -304,7 +304,7 @@ import Testing
 
         let presentation = InvocationPresentation(observation, asOf: now)
 
-        #expect(presentation.label == "Observation gap")
+        #expect(presentation.label == "Observation Gap")
         #expect(presentation.symbol == "exclamationmark.triangle")
     }
 
