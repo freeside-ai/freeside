@@ -2602,3 +2602,57 @@ The client work is #1732 and #1033.)
 (#1230's owner-approved contract, with the owner's recipe-clause decision of
 2026-10-06;
 [decision note](../../devlog/2026-10-06-0758-project-image-environment-compatibility.md).)
+
+---
+
+## Revision 82 ("The Reason and the Claim Marker on Every Card Type"):
+
+1. **One test places an item's `reason` on every item type.** Section [9](../plan.md#9-comprehension)
+   never said where the reason renders, and the refined-interfaces handoff
+   retires its labeled Context section (rule R0). The reason stays ahead of
+   the actions whenever nothing else there says what it says. It may fold
+   into *Recorded Context*, or sit in the card's details alone, when the
+   lead, a typed fact, or a revalidated recommendation already says it. A
+   labeled claim can stand in only for reason text the agent wrote. A reason
+   that carries a notice that never folds keeps its place unless one of the
+   first three states the same notice ahead of the actions. A binding
+   payload the daemon embeds for its own reconstruction need not be drawn
+   there. The card's details always carry the full reason
+   (Section [9](../plan.md#9-comprehension), Layering). Rejected: a per-type list of the types that
+   may fold (the handoff's frames fold on more types than its ledger names,
+   and reasons differ item by item within a type: an effect proposal's
+   reason is sometimes a fallback notice that nothing else on the card
+   states); leaving the plan silent (each sweep would then decide where a
+   daemon sentence may sit below the actions); and a second test between the
+   disclosure and the details (both are away from the actions, and the
+   details carry the reason either way).
+2. **Typed facts stay ahead of the actions outside the four decision-first
+   types.** The rule above moves only the reason. Rejected: extending
+   revision 78's split to more types, because no refined frame folds a typed
+   layer 1 fact on any of them.
+3. **A claim's source details may fold on every item type.** Revision 78
+   allowed it on four types; rule R7 needs it on all. The source details are
+   the claim's invocation ID, the claim's own digest, and its original
+   rendering. A digest that is a card fact is not one of them. The producer
+   or Unverified label stays next to the prose (Section [9](../plan.md#9-comprehension), Summary
+   Provenance). Rejected: reaching the claim digest by extending the
+   routine-coordinate split to three more types, which would also permit
+   folds that no frame draws.
+4. **The Unverified explanation may open on demand, from one control per
+   card.** The plan did not say where the explaining sentence prints; the
+   client repeated it under every agent section on ten types. The label
+   itself stays visible beside each claim. Rejected: leaving the placement
+   unstated (the on-demand form would then have no plan text that keeps the
+   label visible and the explanation reachable).
+5. **No other handoff rule changes Section [9](../plan.md#9-comprehension).** Rules R20, R21, R24,
+   R25, and R27 were checked against it and are compatible as written. A
+   recommendation still leads with its reason, a `project_policy`
+   recommendation still cites its policy key and digest, and the sentence
+   that a decision cannot be taken on this client is still required. The
+   trust rules, the daemon contract, and the action set are unchanged.
+
+(#1797's owner-approved contract, following the owner's acceptance of the
+[6 Oct 2026 refined-interfaces handoff](../design/handoff-2026-10-06-refined-interfaces/README.md)
+and decision on its rule R7, both of 2026-10-06;
+[decision note](../../devlog/2026-10-06-2147-reason-and-claim-marker-rules.md).
+The client work is #1798 to #1803.)
