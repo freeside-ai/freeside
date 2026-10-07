@@ -102,7 +102,6 @@ struct OperationalSummaryView: View {
     /// The reader's own choice for the Freshness fold; nil follows the
     /// daemon state.
     @State private var freshnessExpanded: Bool?
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         if let now {
@@ -142,8 +141,8 @@ struct OperationalSummaryView: View {
             }
             VStack(alignment: .leading, spacing: 11) {
                 KeywordLabel(text: "Tasks")
-                linkRow(
-                    "Active", value: "\(summary.activeTaskCount)", accessibilityName: "Active tasks",
+                FactLinkRow(
+                    label: "Active", value: "\(summary.activeTaskCount)", accessibilityName: "Active tasks",
                     action: onShowTasks)
             }
             SentenceDisclosure(
@@ -175,52 +174,10 @@ struct OperationalSummaryView: View {
     @ViewBuilder
     private func itemRow(_ label: String, value: String?, itemID: String?) -> some View {
         if let value, let itemID {
-            linkRow(label, value: value) { onSelectItem(itemID) }
+            FactLinkRow(label: label, value: value) { onSelectItem(itemID) }
         } else {
             FactRow(label: label, value: "None")
         }
-    }
-
-    /// A fact whose value is a link (R6), laid out as `FactRow` lays out a
-    /// plain value so the linked and the plain rows share one trailing
-    /// column. The whole row is the button, so the target isn't only the
-    /// value's width.
-    private func linkRow(
-        _ label: String, value: String, accessibilityName: String? = nil,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Group {
-                if FactRow.stacks(value, at: dynamicTypeSize) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        linkLabel(label)
-                        linkValue(value)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    HStack(alignment: .firstTextBaseline) {
-                        linkLabel(label)
-                        Spacer(minLength: 12)
-                        linkValue(value)
-                            .multilineTextAlignment(.trailing)
-                    }
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Open \(accessibilityName ?? label): \(value)")
-    }
-
-    private func linkLabel(_ label: String) -> some View {
-        Text(label)
-            .font(FreesideFont.factLabel)
-            .foregroundStyle(Color.ink)
-    }
-
-    private func linkValue(_ value: String) -> some View {
-        FreesideLink(title: value, face: FreesideFont.noticeAction)
-            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var daemonNeedsAttention: Bool {

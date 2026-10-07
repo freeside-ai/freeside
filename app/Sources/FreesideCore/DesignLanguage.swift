@@ -1043,6 +1043,53 @@ struct FactRow: View {
     }
 }
 
+/// A fact whose value is a link (R6), laid out as `FactRow` lays out a
+/// plain value so linked and plain rows share one trailing column. The
+/// whole row is the button, so the target isn't only the value's width.
+struct FactLinkRow: View {
+    let label: String
+    let value: String
+    /// What VoiceOver names the row's destination; nil uses the label.
+    var accessibilityName: String? = nil
+    let action: () -> Void
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        Button(action: action) {
+            Group {
+                if FactRow.stacks(value, at: dynamicTypeSize) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        labelText
+                        valueLink
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    HStack(alignment: .firstTextBaseline) {
+                        labelText
+                        Spacer(minLength: 12)
+                        valueLink
+                            .multilineTextAlignment(.trailing)
+                    }
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open \(accessibilityName ?? label): \(value)")
+    }
+
+    private var labelText: some View {
+        Text(label)
+            .font(FreesideFont.factLabel)
+            .foregroundStyle(Color.ink)
+    }
+
+    private var valueLink: some View {
+        FreesideLink(title: value, face: FreesideFont.noticeAction)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
 extension FactRow {
     /// A fact whose value is a state: the chip sits in the value slot.
     init(label: String, chip: StateChip) {
