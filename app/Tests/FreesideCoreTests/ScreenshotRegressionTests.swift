@@ -2672,6 +2672,7 @@
             surfaces.append(contentsOf: try taskStopSurfaces())
             surfaces.append(contentsOf: taskStyleSurfaces())
             surfaces.append(contentsOf: cardStyleSurfaces())
+            surfaces.append(contentsOf: choiceListSurfaces())
             surfaces.append(contentsOf: finalReviewFrameSurfaces(store: store, at: dynamicTypeSize))
 
             // Visual audit D08: the dispute card on both platforms and
@@ -2990,6 +2991,48 @@
                             FactRow(label: "Checks", chip: StateChip(label: "Degraded", cut: .attention))
                             FactRow(label: "Pull request", value: "owner/repo#7")
                         }.padding(24).foregroundStyle(Color.ink).background(Color.ground)))
+            }
+        }
+
+        /// The choice list (R29) in both registers, by day and by dusk: an
+        /// agent's routes as quotes with a consequence line and `PROPOSED`
+        /// on the default, the pick on the other one, and the daemon's
+        /// routes as bordered items with nothing but their labels.
+        private func choiceListSurfaces() -> [Surface] {
+            [ColorScheme.light, .dark].map { scheme in
+                Surface(
+                    name: "choice-list-\(scheme)", width: 390, colorScheme: scheme,
+                    view: AnyView(
+                        VStack(alignment: .leading, spacing: 22) {
+                            VStack(alignment: .leading, spacing: 10) {
+                                KeywordLabel(text: "Route")
+                                ChoiceList(
+                                    accessibilityLabel: "Route for finding 1",
+                                    options: [
+                                        .init(
+                                            value: "decline", label: "Decline the finding",
+                                            consequence:
+                                                "Nothing changes in the PR; the finding is recorded as declined.",
+                                            mark: "Proposed", register: .quote),
+                                        .init(
+                                            value: "fix", label: "Fix in this PR",
+                                            consequence:
+                                                "Starts a remediator limited to the run's allowed paths and re-reviews the PR.",
+                                            register: .quote),
+                                    ],
+                                    selection: .constant("fix"))
+                            }
+                            VStack(alignment: .leading, spacing: 10) {
+                                KeywordLabel(text: "Route")
+                                ChoiceList(
+                                    accessibilityLabel: "What to do with the answer",
+                                    options: [
+                                        .init(value: "retry", label: "Retry implementation", register: .item),
+                                        .init(value: "revise", label: "Revise specification", register: .item),
+                                    ],
+                                    selection: .constant("retry"))
+                            }
+                        }.padding(24).foregroundStyle(Color.ink).background(Color.ground2)))
             }
         }
 
