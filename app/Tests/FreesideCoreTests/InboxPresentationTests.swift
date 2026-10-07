@@ -76,5 +76,8 @@ import Testing
         let resolved = InboxView.emptyScope(.resolved, projectID: "freeside-docs")
         #expect(resolved.title == "No resolved items")
         #expect(resolved.description == "Attention items in this scope will appear here.")
+        let all = InboxView.emptyScope(.all, projectID: "freeside-docs")
+        #expect(all.title == "No items")
+        #expect(all.description == "Attention items in this scope will appear here.")
     }
 }
