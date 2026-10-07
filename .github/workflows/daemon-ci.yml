@@ -120,8 +120,8 @@ jobs:
           path: ${{ steps.go-cache.outputs.build }}
           key: ${{ steps.go-build-cache.outputs.cache-primary-key }}
 
-  race:
-    name: linux (race test)
+  race-integration:
+    name: linux (race test, integration)
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
@@ -152,23 +152,114 @@ jobs:
           restore-keys: |
             go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-
             go-build-${{ runner.os }}-${{ github.job }}-
-      # Per-package timeout raised from the 10m default (#849, incident
-      # #841) and again from 20m (incident thread #908). go test runs four
-      # packages at once on the 4-vCPU runner, so under -race the heavy
-      # suites (cmd/freesided, internal/engine, internal/integration,
-      # internal/signet, internal/store) share the cores and each package's
-      # wall time is the contended figure: the last passing run had engine
-      # at 1187s, store at 1123s, and signet at 979s of a 1200s budget, and
-      # from 2026-08-31 those three crossed it on every main push. No DATA
-      # RACE in any log and seconds of elapsed time on the running tests at
-      # the alarm: a runtime-vs-budget margin, not a hang. Trimming the
-      # suites so this ceiling can come back down is #1146.
-      # Execute every package for #1146's three post-merge measurements;
-      # restored test results would otherwise reduce cross-package contention.
-      - run: go test ./... -race -count=1 -timeout=40m
+      # Split the heavy suites onto their own runners to avoid shared-core
+      # contention: integration timed out at 2400s in 8 of 11 main runs
+      # (2026-10-06 to 2026-10-07); freesided peaked at 1880s. The shared
+      # race job took 44 to 50 minutes on timeout failures.
+      # Cold-cache PR run 37654716606: integration job 22m46s (package
+      # 1286.648s), freesided 17m30s (944.196s), rest 29m51s (slowest:
+      # publish 1152.816s). All passed without a package timeout.
+      # Keep the 40m per-package timeout and -count=1 so every push reruns
+      # every package. Further suite/schedule work and timeout reduction
+      # belong to #1829.
+      - run: go test ./internal/integration -race -count=1 -timeout=40m
       # Same restore/save split as the linux job. This job already runs
       # only on push, so the push guard changes nothing here; it is kept
-      # for uniformity across the four Go jobs.
+      # for uniformity across the Go jobs.
+      - name: Save Go build output
+        if: github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.go-cache.outputs.build }}
+          key: ${{ steps.go-build-cache.outputs.cache-primary-key }}
+
+  race-freesided:
+    name: linux (race test, freesided)
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: daemon/go.mod
+          cache: false
+      # Same two caches as the linux job, which carries the rationale. The
+      # github.job segment keeps race-instrumented build output isolated.
+      - name: Resolve Go cache paths
+        id: go-cache
+        run: |
+          echo "build=$(go env GOCACHE)" >>"$GITHUB_OUTPUT"
+          echo "mod=$(go env GOMODCACHE)" >>"$GITHUB_OUTPUT"
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.go-cache.outputs.mod }}
+          key: go-mod-${{ runner.os }}-${{ hashFiles('daemon/go.sum') }}
+          restore-keys: go-mod-${{ runner.os }}-
+      - name: Cache Go build output
+        id: go-build-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.go-cache.outputs.build }}
+          key: go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-
+            go-build-${{ runner.os }}-${{ github.job }}-
+      # See race-integration for the split, timing, and timeout rationale.
+      - run: go test ./cmd/freesided -race -count=1 -timeout=40m
+      # Same restore/save split as the linux job. This job already runs
+      # only on push, so the push guard changes nothing here; it is kept
+      # for uniformity across the Go jobs.
+      - name: Save Go build output
+        if: github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.go-cache.outputs.build }}
+          key: ${{ steps.go-build-cache.outputs.cache-primary-key }}
+
+  race-rest:
+    name: linux (race test, rest)
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: daemon/go.mod
+          cache: false
+      # Same two caches as the linux job, which carries the rationale. The
+      # github.job segment keeps race-instrumented build output isolated.
+      - name: Resolve Go cache paths
+        id: go-cache
+        run: |
+          echo "build=$(go env GOCACHE)" >>"$GITHUB_OUTPUT"
+          echo "mod=$(go env GOMODCACHE)" >>"$GITHUB_OUTPUT"
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.go-cache.outputs.mod }}
+          key: go-mod-${{ runner.os }}-${{ hashFiles('daemon/go.sum') }}
+          restore-keys: go-mod-${{ runner.os }}-
+      - name: Cache Go build output
+        id: go-build-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.go-cache.outputs.build }}
+          key: go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-
+            go-build-${{ runner.os }}-${{ github.job }}-
+      # See race-integration for the split, timing, and timeout rationale.
+      - run: |
+          set -euo pipefail
+          integration="$(go list ./internal/integration)"
+          freesided="$(go list ./cmd/freesided)"
+          packages="$(go list ./... | grep -Fxv -e "$integration" -e "$freesided")"
+          test -n "$packages"
+          go test $packages -race -count=1 -timeout=40m
+      # Same restore/save split as the linux job. This job already runs
+      # only on push, so the push guard changes nothing here; it is kept
+      # for uniformity across the Go jobs.
       - name: Save Go build output
         if: github.event_name == 'push'
         uses: actions/cache/save@v4
