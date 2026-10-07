@@ -86,9 +86,9 @@ func (w *stallWatch) poll() {
 	})
 }
 
-// finish runs once the writer wait has returned, whatever it returned. It
-// waits out an in-flight call so a late stall report cannot land after the
-// conclusion, then concludes a stall still reported.
+// finish runs after the wait observes the writer stopped, or after teardown
+// when the wait fails. It waits out an in-flight call so a late stall report
+// cannot land after the conclusion, then concludes a stall still reported.
 func (w *stallWatch) finish() {
 	if w == nil {
 		return

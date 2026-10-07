@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"net"
+	"os"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -232,4 +235,176 @@ func TestHandoffSpecStallHookLeavesJournalDigest(t *testing.T) {
 	if da != db {
 		t.Fatalf("spec digest %s with hook, %s without", db, da)
 	}
+}
+
+// Real socket accepts prevent synctest's clock from advancing. This listener
+// keeps the production proxy lifecycle but blocks durably inside the bubble.
+type stallTestListener struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (l *stallTestListener) Accept() (net.Conn, error) {
+	<-l.closed
+	return nil, net.ErrClosed
+}
+
+func (l *stallTestListener) Close() error {
+	l.once.Do(func() { close(l.closed) })
+	return nil
+}
+
+func (*stallTestListener) Addr() net.Addr { return &net.TCPAddr{Port: 12345} }
+
+func newStallHandoffFixture(t *testing.T) *handoffFixture {
+	t.Helper()
+	fx := newHandoffFixture(t)
+	fx.cfg.listenEgressProxy = func() (net.Listener, error) {
+		return &stallTestListener{closed: make(chan struct{})}, nil
+	}
+	fx.cfg.Sleep = sleepContext
+	fx.cfg.Now = time.Now
+	fx.cfg.PollInterval = time.Second
+	fx.cfg.WriterStopTimeout = 3 * time.Second
+	fx.cfg.ExporterTimeout = 3 * time.Second
+	fx.cfg.StallInterval = time.Second
+	return fx
+}
+
+func TestHandoffStallDeadlineDoesNotDelayWriterStop(t *testing.T) {
+	for _, cancelled := range []bool{false, true} {
+		name := "budget"
+		if cancelled {
+			name = "cancellation"
+		}
+		t.Run(name, func(t *testing.T) {
+			type outcome struct {
+				stop, returned, hookReturned time.Duration
+				err                          string
+				calls                        []bool
+			}
+			run := func(withHook bool) (got outcome) {
+				synctest.Test(t, func(t *testing.T) {
+					start := time.Now()
+					fx := newStallHandoffFixture(t)
+					hs := testHandoffSpec()
+					names := namesFor(hs.RunID)
+					fx.rt.runningInspects[names.Agent] = math.MaxInt - 1
+					fx.rt.onStop = func(id string) error {
+						if id == names.Agent {
+							got.stop = time.Since(start)
+						}
+						return nil
+					}
+					ctx, cancel := context.WithCancel(context.Background())
+					defer cancel()
+					if cancelled {
+						go func() {
+							time.Sleep(3500 * time.Millisecond)
+							cancel()
+						}()
+					}
+					if withHook {
+						hs.Stall = func(ctx context.Context, stalled bool) error {
+							got.calls = append(got.calls, stalled)
+							<-ctx.Done()
+							got.hookReturned = time.Since(start)
+							return ctx.Err()
+						}
+					}
+					_, err := fx.backend(t).Handoff(ctx, hs)
+					wantCheckFailure(t, err, CheckWriterTermination)
+					if cancelled && !strings.Contains(err.Error(), context.Canceled.Error()) {
+						t.Fatalf("error = %v, want caller cancellation", err)
+					}
+					got.err = err.Error()
+					got.returned = time.Since(start)
+					fx.assertReaped(t)
+				})
+				return got
+			}
+			baseline, got := run(false), run(true)
+			if baseline.stop == 0 || got.stop != baseline.stop {
+				t.Fatalf("writer stop with hook = %s, without = %s", got.stop, baseline.stop)
+			}
+			if got.err != baseline.err {
+				t.Fatalf("error with hook = %q, without = %q", got.err, baseline.err)
+			}
+			if !slices.Equal(got.calls, []bool{true}) {
+				t.Fatalf("calls = %v, want one failed raise and no clear", got.calls)
+			}
+			if got.hookReturned <= got.stop || got.returned < got.hookReturned {
+				t.Fatalf("notice was not joined after stop: %+v", got)
+			}
+		})
+	}
+}
+
+func TestHandoffStallClearFollowsRaiseAfterWriterStop(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fx := newStallHandoffFixture(t)
+		hs := testHandoffSpec()
+		names := namesFor(hs.RunID)
+		fx.rt.runningInspects[names.Agent] = math.MaxInt - 1
+		var stopped, raised, clearStarted, cleared time.Time
+		var calls []bool
+		fx.rt.onStop = func(id string) error {
+			if id == names.Agent {
+				stopped = time.Now()
+			}
+			return nil
+		}
+		hs.Stall = func(_ context.Context, stalled bool) error {
+			calls = append(calls, stalled)
+			if stalled {
+				time.Sleep(30 * time.Second)
+				raised = time.Now()
+			} else {
+				clearStarted = time.Now()
+				time.Sleep(30 * time.Second)
+				cleared = time.Now()
+			}
+			return nil
+		}
+		_, err := fx.backend(t).Handoff(context.Background(), hs)
+		wantCheckFailure(t, err, CheckWriterTermination)
+		if !slices.Equal(calls, []bool{true, false}) {
+			t.Fatalf("calls = %v, want raise then clear", calls)
+		}
+		if stopped.IsZero() || !stopped.Before(raised) || clearStarted.Before(raised) || !stopped.Before(clearStarted) {
+			t.Fatalf("stop %s, raise returned %s, clear started %s", stopped, raised, clearStarted)
+		}
+		if cleared.IsZero() || time.Now().Before(cleared) {
+			t.Fatal("handoff returned before the clear finished")
+		}
+		fx.assertReaped(t)
+	})
+}
+
+func TestHandoffStallRecoveryStillSucceeds(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fx := newStallHandoffFixture(t)
+		fx.cfg.WriterStopTimeout = 10 * time.Second
+		hs := testHandoffSpec()
+		fx.rt.runningInspects[namesFor(hs.RunID).Agent] = 3
+		var calls stallCalls
+		hs.Stall = calls.hook
+		fx.rt.onDeleteContainer = func(id string) (bool, error) {
+			if id == namesFor(hs.RunID).Agent {
+				if got := calls.got(); !slices.Equal(got, []bool{true, false}) {
+					t.Errorf("calls at writer deletion = %v, want completed raise and clear", got)
+				}
+			}
+			return false, nil
+		}
+		result, err := fx.backend(t).Handoff(context.Background(), hs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(result.ExportDir) })
+		if got := calls.got(); !slices.Equal(got, []bool{true, false}) {
+			t.Fatalf("calls = %v, want raise then clear", got)
+		}
+		fx.assertReaped(t)
+	})
 }
