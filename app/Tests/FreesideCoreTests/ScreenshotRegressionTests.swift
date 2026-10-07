@@ -2621,7 +2621,7 @@
             }
 
             // Visual audit D06: a question that enumerates no options keeps
-            // the generic ask with its Context section under it.
+            // the generic ask with its reason under it.
             if var untyped = inbox.first(where: { $0.item._type == .agent_question })?.item {
                 untyped.agent_question = nil
                 let detail = DecisionDetailView(
