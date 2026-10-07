@@ -216,7 +216,7 @@ struct DecisionCardComposition: Equatable {
         case context
         /// Unboxed and dim directly under the ask.
         case underAsk
-        /// A closed "Recorded context" disclosure below the actions.
+        /// A closed "Recorded Context" disclosure below the actions.
         case recordedContext
     }
 
@@ -423,7 +423,7 @@ enum DecisionDisclosure: Hashable {
 }
 
 /// Where each row of a card's `.facts` module renders: beside the decision,
-/// or inside the closed "Run and binding details" disclosure. Kept apart
+/// or inside the closed "Run and Binding Details" disclosure. Kept apart
 /// from the view so the split is testable without rendering.
 ///
 /// `AttentionDisplay.cardFacts` carries coordinates only (a stage, a run, a
@@ -432,7 +432,7 @@ enum DecisionDisclosure: Hashable {
 /// about the candidate the operator is deciding on, so it stays visible on
 /// every type.
 struct DecisionFactPlacement: Equatable {
-    static let foldedTitle = "Run and binding details"
+    static let foldedTitle = "Run and Binding Details"
 
     let visible: [AttentionDisplay.FactRow]
     let folded: [AttentionDisplay.FactRow]
@@ -1147,14 +1147,14 @@ struct DecisionYieldChartModuleView: View {
     @ScaledMetric(relativeTo: .caption) private var legendSwatch: CGFloat = 8
     let presentation: DecisionYieldPresentation
     var showsBars = true
-    /// When set, the rounds fold into a "Review yield" disclosure in place
+    /// When set, the rounds fold into a "Review Yield" disclosure in place
     /// of the module card: the final review reads its verdict first and the
     /// rounds that led to it on demand (D07).
     var isExpanded: Binding<Bool>? = nil
 
     var body: some View {
         if let isExpanded {
-            KeywordDisclosure(keyword: Self.title, isExpanded: isExpanded) {
+            SentenceDisclosure(label: Self.title, isExpanded: isExpanded) {
                 VStack(alignment: .leading, spacing: 8) {
                     rounds
                 }
@@ -1174,7 +1174,7 @@ struct DecisionYieldChartModuleView: View {
         }
     }
 
-    private static let title = "Review yield"
+    private static let title = "Review Yield"
 
     @ViewBuilder
     private var rounds: some View {

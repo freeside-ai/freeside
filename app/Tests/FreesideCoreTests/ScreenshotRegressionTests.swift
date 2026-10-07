@@ -2733,7 +2733,7 @@
         }
 
         /// The pieces the task surfaces share, by day and by dusk: the three
-        /// status-chip cuts (one long enough to wrap), a keyword disclosure
+        /// status-chip cuts (one long enough to wrap), a sentence disclosure
         /// closed and open, the navigation link, and a newest-first rail with
         /// its filled current marker over hollow prior rings.
         private func taskStyleSurfaces() -> [Surface] {
@@ -2758,12 +2758,12 @@
                             StateChip(
                                 label: "Failed to Stop · Execution May Continue · Inspect the Recorded Outcome",
                                 cut: .ink)
-                            KeywordDisclosure(
-                                keyword: "Task events", summary: "6 recorded · newest Sep 12, 9:41 AM",
+                            SentenceDisclosure(
+                                label: "Task Events", summary: "6 recorded · newest Sep 12, 9:41 AM",
                                 isExpanded: .constant(false)
                             ) { EmptyView() }
-                            KeywordDisclosure(
-                                keyword: "Run details", summary: "Implementation · retry of attempt 1",
+                            SentenceDisclosure(
+                                label: "Run Details", summary: "Implementation · retry of attempt 1",
                                 isExpanded: .constant(true)
                             ) {
                                 Text("Reason: retry").font(FreesideFont.callout)

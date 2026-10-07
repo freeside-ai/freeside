@@ -284,16 +284,16 @@ struct TaskTimelineView: View {
                         sectionBody(section, in: timeline, leadsWithFullCard: true)
                     }
                 } else {
-                    KeywordDisclosure(
-                        keyword: title, summary: summary, isExpanded: fold(.campaign(section.campaign_id))
+                    SentenceDisclosure(
+                        label: title, summary: summary, isExpanded: fold(.campaign(section.campaign_id))
                     ) {
                         sectionBody(section, in: timeline, leadsWithFullCard: false)
                             .padding(.top, 10)
                     }
                 }
             }
-            KeywordDisclosure(
-                keyword: "Task events",
+            SentenceDisclosure(
+                label: "Task Events",
                 summary: TaskTimelinePresentation.eventsSummary(
                     events, now: now, locale: locale, timeZone: timeZone),
                 isExpanded: fold(.taskEvents)
@@ -508,8 +508,8 @@ struct TaskTimelineView: View {
             }
         }
         if TaskTimelinePresentation.hasRunDetails(run) {
-            KeywordDisclosure(
-                keyword: "Run details", summary: TaskTimelinePresentation.runDetailsSummary(run),
+            SentenceDisclosure(
+                label: "Run Details", summary: TaskTimelinePresentation.runDetailsSummary(run),
                 isExpanded: fold(.runDetails(run.run_id))
             ) {
                 runDetails(run, in: timeline)
@@ -735,7 +735,7 @@ enum TaskTimelinePresentation {
     static func sectionTitle(
         _ section: Components.Schemas.TaskTimelineSection, disambiguate: Bool = false
     ) -> String {
-        guard let campaign = section.campaign_id else { return "Outside a campaign" }
+        guard let campaign = section.campaign_id else { return "Outside a Campaign" }
         return disambiguate ? "Campaign \(ShortIdentifier.short(campaign))" : "Campaign"
     }
 

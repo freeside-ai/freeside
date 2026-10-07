@@ -988,8 +988,8 @@ struct DecisionDetailView: View {
                         if let text = claim.text {
                             summaryText(text.content, mediaType: text.media_type)
                         }
-                        KeywordDisclosure(
-                            keyword: "Source and original report",
+                        SentenceDisclosure(
+                            label: "Source and Original Report",
                             isExpanded: disclosure(.claimSource(claim))
                         ) {
                             fullSummaryReport(
@@ -1141,8 +1141,8 @@ struct DecisionDetailView: View {
     @ViewBuilder
     private func recordedContext(_ item: Components.Schemas.AttentionItem) -> some View {
         if !item.reason.isEmpty {
-            KeywordDisclosure(
-                keyword: "Recorded context", isExpanded: disclosure(.recordedContext)
+            SentenceDisclosure(
+                label: "Recorded Context", isExpanded: disclosure(.recordedContext)
             ) {
                 Text(item.reason)
                     .font(FreesideFont.callout)
@@ -1187,8 +1187,8 @@ struct DecisionDetailView: View {
             }
         }
         if !placement.folded.isEmpty {
-            KeywordDisclosure(
-                keyword: DecisionFactPlacement.foldedTitle, isExpanded: disclosure(.runDetails)
+            SentenceDisclosure(
+                label: DecisionFactPlacement.foldedTitle, isExpanded: disclosure(.runDetails)
             ) {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(placement.folded) { fact in
@@ -1634,8 +1634,8 @@ struct DecisionDetailView: View {
         rendersInteractiveControls: Bool
     ) -> some View {
         summaryText(text.content, mediaType: text.media_type)
-        KeywordDisclosure(
-            keyword: "Source and supporting details",
+        SentenceDisclosure(
+            label: "Source and Supporting Details",
             isExpanded: disclosure(.claimSource(claim))
         ) {
             VStack(alignment: .leading, spacing: 6) {

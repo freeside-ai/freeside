@@ -588,48 +588,6 @@ struct UnverifiedLabel: View {
     }
 }
 
-/// The one folded section: a disclosure whose label is a keyword plus an
-/// optional trailing mono summary (a count or the newest time), so a closed
-/// section still says what it holds. The caller owns `isExpanded`, which is
-/// how a surface persists the state; every caller starts it collapsed.
-struct KeywordDisclosure<Content: View>: View {
-    let keyword: String
-    var summary: String? = nil
-    @Binding var isExpanded: Bool
-    @ViewBuilder let content: () -> Content
-
-    var body: some View {
-        DisclosureGroup(isExpanded: $isExpanded) {
-            content()
-        } label: {
-            if let summary {
-                // The keyword and its summary stay one line while they fit
-                // and stack when they do not (a long summary at a large text
-                // size), never truncating either.
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        KeywordLabel(text: keyword)
-                        summaryText(summary)
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        KeywordLabel(text: keyword)
-                        summaryText(summary)
-                    }
-                }
-            } else {
-                KeywordLabel(text: keyword)
-            }
-        }
-        .tint(.accentText)
-    }
-
-    private func summaryText(_ summary: String) -> some View {
-        Text(summary)
-            .font(FreesideFont.monoCaption)
-            .foregroundStyle(Color.inkDim)
-    }
-}
-
 /// The one disclosure (R2): an accent chevron, a sentence-case label in the
 /// fact-label face, and an optional trailing mono summary (a count, an id,
 /// the newest time), so a closed section still says what it holds. The
