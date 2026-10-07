@@ -70,7 +70,7 @@
                             .font(.headline)
                             .padding(.horizontal)
                             TasksListView(
-                                tasks: visible, runs: RunFixtures.defaultRuns(), schedules: [],
+                                tasks: visible, runs: RunFixtures.defaultRuns(),
                                 selection: .constant(nil), initialScope: .active
                             ).screenshotContent(now: RunFixtures.screenshotInstant)
                         }

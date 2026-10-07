@@ -422,7 +422,7 @@ import Testing
 
         var body: some View {
             TasksListView(
-                tasks: state.tasks, runs: [], schedules: [],
+                tasks: state.tasks, runs: [],
                 onLoadTimeline: { state.requests[$0, default: 0] += 1 }, selection: $state.selection
             )
             .onAppear { state.appeared = true }

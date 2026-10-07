@@ -49,7 +49,7 @@ import Testing
         let retryPosition = TaskDisplay.position(fixture.task.task, runs: [retry], history: fixture.history)
         #expect(
             TaskDisplay.progressLines(fixture.task.task, position: retryPosition).joined()
-                .contains("Specification Completed"))
+                .contains("Specification completed"))
         // A revised campaign starts with its own unapproved specification.
         var revised = fixture.runs[1]
         revised.run.id = "revised-specification"

@@ -86,13 +86,13 @@ import Testing
             let fixture = TaskProgressFixtures.make(name)
             let position = try #require(fixture.position)
             let text = TaskDisplay.progressLines(fixture.task, position: position).joined(separator: ". ")
-            #expect(text.contains("Specification Completed"))
+            #expect(text.contains("Specification completed"))
             for entry in position.rail.entries { #expect(text.contains(entry.title)) }
         }
         let unavailable = TaskProgressFixtures.make("History unavailable")
         let text = TaskDisplay.progressLines(unavailable.task, position: unavailable.position).joined()
-        #expect(text.contains("Specification Approval History Unavailable"))
-        #expect(!text.contains("Specification Pending"))
+        #expect(text.contains("Specification approval history unavailable"))
+        #expect(!text.contains("Specification pending"))
         let revised = TaskProgressFixtures.make("Approval required")
         #expect(revised.position?.rail.entries.first?.state != .completed)
     }
@@ -191,9 +191,9 @@ import Testing
         fixture.task.lifecycle = .stopped
         fixture.history = nil
         let text = TaskDisplay.progressLines(fixture.task, position: fixture.position).joined()
-        #expect(text.contains("Specification Last Recorded Phase, Approval History Unavailable"))
-        #expect(!text.contains("Specification Current"))
-        #expect(!text.contains("Specification Pending"))
+        #expect(text.contains("Specification last recorded phase, approval history unavailable"))
+        #expect(!text.contains("Specification current"))
+        #expect(!text.contains("Specification pending"))
     }
 }
 

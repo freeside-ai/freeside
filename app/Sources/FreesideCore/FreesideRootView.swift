@@ -346,7 +346,6 @@ public struct FreesideRootView: View {
                         TasksListView(
                             tasks: coordinator.tasks,
                             runs: coordinator.runs,
-                            schedules: coordinator.schedules,
                             attentionItems: coordinator.store.orderedSnapshots,
                             taskTimelines: coordinator.taskTimelinesByTaskID,
                             cursors: coordinator.cursors,
@@ -520,7 +519,6 @@ public struct FreesideRootView: View {
                 TasksListView(
                     tasks: coordinator.tasks,
                     runs: coordinator.runs,
-                    schedules: coordinator.schedules,
                     attentionItems: coordinator.store.orderedSnapshots,
                     taskTimelines: coordinator.taskTimelinesByTaskID,
                     cursors: coordinator.cursors,

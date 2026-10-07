@@ -10,9 +10,6 @@ struct TasksListView: View {
     let taskTimelines: [String: Components.Schemas.TaskTimeline]
     let cursors: SyncCursors?
     private let onLoadTimeline: @MainActor (String) async -> Void
-    /// The schedule list, so a row can show the armed watches and deadlines
-    /// attached to the task's runs.
-    let schedules: [Components.Schemas.ScheduleSnapshot]
     @Binding var selection: String?
     @State private var filter: TaskListFilter
     private let navigationPath: Binding<[String]>?
@@ -24,7 +21,6 @@ struct TasksListView: View {
     init(
         tasks: [Components.Schemas.TaskSnapshot],
         runs: [Components.Schemas.RunSnapshot],
-        schedules: [Components.Schemas.ScheduleSnapshot],
         attentionItems: [Components.Schemas.AttentionItemSnapshot] = [],
         taskTimelines: [String: Components.Schemas.TaskTimeline] = [:],
         cursors: SyncCursors? = nil,
@@ -41,7 +37,6 @@ struct TasksListView: View {
         self.taskTimelines = taskTimelines
         self.cursors = cursors
         self.onLoadTimeline = onLoadTimeline
-        self.schedules = schedules
         _selection = selection
         _filter = State(initialValue: TaskListFilter(scope: initialScope))
         self.navigationPath = navigationPath
@@ -62,7 +57,7 @@ struct TasksListView: View {
         VStack(spacing: 0) {
             if let newTaskBlockedReason {
                 Text(newTaskBlockedReason)
-                    .font(FreesideFont.caption)
+                    .font(FreesideFont.cardBody)
                     .foregroundStyle(Color.inkDim)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal)
@@ -185,7 +180,6 @@ struct TasksListView: View {
             task: snapshot.task,
             position: TaskDisplay.position(
                 snapshot.task, runs: runs, attentionItems: attentionItems, history: taskTimelines[snapshot.task.id]),
-            schedules: TaskDisplay.armedSchedules(for: snapshot.task, in: schedules),
             isSelected: selection == snapshot.task.id,
             now: now,
             showsIdentifier: ambiguousTaskIDs.contains(snapshot.task.id))
@@ -284,17 +278,14 @@ struct TaskListFilter {
     }
 }
 
-/// One task as a ground-2 card: the name, the status chip on its own line
-/// beneath it, the project, issue, and last-active meta line, the phase
-/// line, round and hold on one line, a guidance sentence only when it says
-/// more than "open this row", and the armed watches and deadlines of the
-/// task's runs. Selection uses a leading bar and wash, with a stronger wash
-/// under Differentiate Without Color.
+/// One task as a sidebar row (R31): the name, the status chip on its own
+/// line beneath it, the project, issue, and last-active meta line, the phase
+/// line, round and hold on one line, and a guidance sentence only when it
+/// says more than "open this row". Armed schedules are the task timeline's
+/// to show. Selection and hover are the inbox row's (`SidebarRowSurface`).
 struct TaskRowView: View {
-    @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
     let task: Components.Schemas.Task
     let position: TaskDisplay.Position?
-    var schedules: [Components.Schemas.ScheduleSnapshot] = []
     var isSelected = false
     /// A fixed clock for tests and screenshots. A live row leaves it nil and
     /// ticks its own, so the relative last-active text ages without a data
@@ -303,7 +294,6 @@ struct TaskRowView: View {
     /// Set when another visible task shares this one's name, so the meta line
     /// carries a short task id to tell the two rows apart.
     var showsIdentifier = false
-    var differentiateWithoutColorOverride: Bool?
 
     var body: some View {
         if let now {
@@ -316,33 +306,8 @@ struct TaskRowView: View {
     }
 
     private func card(at now: Date) -> some View {
-        HStack(spacing: 0) {
-            if isSelected {
-                Rectangle()
-                    .fill(Color.accentText)
-                    .frame(width: 4)
-                    .accessibilityHidden(true)
-            }
-            content(at: now)
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(
-                    isSelected
-                        ? (effectiveDifferentiateWithoutColor ? Color.accentWash : .accentWashSoft)
-                        : .ground2)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(isSelected ? Color.clear : .rule, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    private var effectiveDifferentiateWithoutColor: Bool {
-        differentiateWithoutColorOverride ?? differentiateWithoutColor
+        content(at: now)
+            .modifier(SidebarRowSurface(isSelected: isSelected, verticalPadding: 14))
     }
 
     /// The meta line, whose last-active segment is coarse; macOS hover
@@ -352,7 +317,7 @@ struct TaskRowView: View {
         let identifier = showsIdentifier ? " · \(ShortIdentifier.short(task.id))" : ""
         // VoiceOver keeps "last active"; the eye reads the time alone.
         let text = Text(TaskDisplay.metaLine(task, now: now, labelsActivity: false) + identifier)
-            .font(FreesideFont.monoCaption)
+            .font(FreesideFont.trailingSummary)
             .foregroundStyle(Color.inkDim)
             .accessibilityLabel(TaskDisplay.metaLine(task, now: now) + identifier)
         #if os(macOS)
@@ -363,9 +328,11 @@ struct TaskRowView: View {
     }
 
     private func content(at now: Date) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 6) {
             let lines = TaskDisplay.rowLines(task, position: position)
-            TaskNameLabel(name: task.display_names.task)
+            TaskNameLabel(
+                name: task.display_names.task, font: FreesideFont.statement,
+                monoFont: FreesideFont.monoValue)
             // The chip sits above the meta line, but VoiceOver reads the
             // status with the progress it heads, as it always has: the chip
             // is hidden and the progress block speaks every string in order.
@@ -380,7 +347,7 @@ struct TaskRowView: View {
                     // meta line, and an element needs a frame to be reached.
                     Color.clear.frame(height: 1)
                 } else {
-                    VStack(alignment: .leading, spacing: 7) {
+                    VStack(alignment: .leading, spacing: 6) {
                         if let phases = lines.phases {
                             progressText(phases)
                         }
@@ -388,7 +355,8 @@ struct TaskRowView: View {
                             progressText(lines.facts.joined(separator: " · "))
                         }
                         switch guidance {
-                        case .link(let title): FreesideLink(title: title, style: .caption)
+                        case .link(let title):
+                            FreesideLink(title: title, face: FreesideFont.noticeAction)
                         case .sentence(let sentence): progressText(sentence)
                         case nil: EmptyView()
                         }
@@ -397,13 +365,6 @@ struct TaskRowView: View {
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(lines.all.joined(separator: ", "))
-            if !schedules.isEmpty {
-                WrappingHStack(horizontalSpacing: 6, verticalSpacing: 6) {
-                    ForEach(schedules, id: \.schedule.id) { snapshot in
-                        ScheduleBadge(schedule: snapshot.schedule)
-                    }
-                }
-            }
         }
     }
 }
@@ -411,31 +372,8 @@ struct TaskRowView: View {
 extension TaskRowView {
     fileprivate func progressText(_ line: String) -> some View {
         Text(line)
-            .font(FreesideFont.caption)
+            .font(FreesideFont.cardBody)
             .foregroundStyle(Color.inkDim)
             .fixedSize(horizontal: false, vertical: true)
-    }
-}
-
-/// A ground-3 pill: mono, kind and fire time joined by a middle dot.
-private struct ScheduleBadge: View {
-    let schedule: Components.Schemas.Schedule
-
-    var body: some View {
-        Group {
-            if let fireAt = schedule.fire_at {
-                Text("\(RunDisplay.label(schedule.kind)) · \(fireAt.formatted(date: .omitted, time: .shortened))")
-            } else {
-                Text(RunDisplay.label(schedule.kind))
-            }
-        }
-        .font(FreesideFont.chip)
-        .textCase(.lowercase)
-        .lineLimit(1)
-        .fixedSize()
-        .foregroundStyle(Color.inkDim)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 3)
-        .background(Color.ground3, in: Capsule())
     }
 }

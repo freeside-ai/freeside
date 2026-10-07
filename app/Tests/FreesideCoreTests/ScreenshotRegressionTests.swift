@@ -194,7 +194,7 @@
                                 task: task.task,
                                 position: TaskDisplay.position(
                                     task.task, runs: runs, attentionItems: display.store.orderedSnapshots),
-                                schedules: [], isSelected: false, now: RunFixtures.screenshotInstant)
+                                isSelected: false, now: RunFixtures.screenshotInstant)
                             Divider()
                             RunTimelineView(coordinator: display, snapshot: published).header
                         }
@@ -1339,7 +1339,6 @@
 
             let cache = InMemoryCacheStore()
             let runs = RunFixtures.defaultRuns()
-            let schedules = RunFixtures.defaultSchedules()
             try cache.save(
                 .init(
                     cursors: .init(
@@ -1349,7 +1348,6 @@
                     ),
                     attentionItems: inbox,
                     runs: runs,
-                    schedules: schedules,
                     // The refreshed-history timeline is cached (not added to
                     // defaultTimelines) so its own run-timeline surface resolves
                     // review labels the way the app does, without churning the
@@ -1372,7 +1370,6 @@
                         TasksListView(
                             tasks: tasks,
                             runs: runs,
-                            schedules: schedules,
                             selection: .constant(retryTask.task.id)
                         ).screenshotContent(now: RunFixtures.screenshotInstant)
                     )))
@@ -1384,7 +1381,6 @@
                             TasksListView(
                                 tasks: tasks,
                                 runs: runs,
-                                schedules: schedules,
                                 selection: .constant(nil),
                                 initialScope: scope
                             ).screenshotContent(now: RunFixtures.screenshotInstant)
@@ -1409,7 +1405,6 @@
                                         TaskRowView(
                                             task: snapshot.task,
                                             position: TaskDisplay.position(snapshot.task, runs: runs),
-                                            schedules: TaskDisplay.armedSchedules(for: snapshot.task, in: schedules),
                                             isSelected: false,
                                             now: RunFixtures.screenshotInstant)
                                     }
@@ -1458,10 +1453,8 @@
                                     TaskRowView(
                                         task: retryTask.task,
                                         position: TaskDisplay.position(retryTask.task, runs: runs),
-                                        schedules: TaskDisplay.armedSchedules(for: retryTask.task, in: schedules),
                                         isSelected: isSelected,
-                                        now: RunFixtures.screenshotInstant,
-                                        differentiateWithoutColorOverride: true)
+                                        now: RunFixtures.screenshotInstant)
                                 }
                             }
                             .padding()
@@ -1475,7 +1468,6 @@
                         TaskRowView(
                             task: retryTask.task,
                             position: TaskDisplay.position(retryTask.task, runs: runs),
-                            schedules: TaskDisplay.armedSchedules(for: retryTask.task, in: schedules),
                             isSelected: true,
                             now: RunFixtures.screenshotInstant
                         )
@@ -1503,8 +1495,7 @@
                                             Text(name).font(FreesideFont.subheadline)
                                             TaskRowView(
                                                 task: fixture.task, position: fixture.position,
-                                                now: RunFixtures.screenshotInstant,
-                                                differentiateWithoutColorOverride: true)
+                                                now: RunFixtures.screenshotInstant)
                                         }
                                     }.padding())))
                     }
@@ -1524,8 +1515,7 @@
                                             Text(name).font(FreesideFont.subheadline)
                                             TaskRowView(
                                                 task: fixture.task, position: fixture.position,
-                                                now: RunFixtures.screenshotInstant,
-                                                differentiateWithoutColorOverride: true)
+                                                now: RunFixtures.screenshotInstant)
                                         }
                                     }.padding())))
                     }
