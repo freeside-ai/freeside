@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -302,6 +303,190 @@ func TestReadinessReentersAfterHeadChange(t *testing.T) {
 	if p.room.runs != 2 || p.transport.mergeCount() != 0 {
 		t.Fatalf("verification runs = %d, merges = %d, want 2 and 0",
 			p.room.runs, p.transport.mergeCount())
+	}
+}
+
+func TestReadinessReentryAtTheRoundLimitKeepsItsOwnItem(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"resolved dispute", "adjudication", "other head", "unoccupied", "open legacy exhaustion", "resolved legacy exhaustion"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			hardLimit := 1
+			if name == "adjudication" {
+				hardLimit = 2
+			}
+			p := newProductionPublicationHarnessWithPolicyKeys(t, "", []domain.PolicyKey{{
+				Key: "review.hard_round_limit", Value: fmt.Sprint(hardLimit),
+				Provenance: domain.KeyProvenance{
+					Source: domain.ProvenanceOverride,
+					Digest: submissionDigest("run-production-publication", "review-hard-round-limit"),
+				},
+			}})
+			ready := p.publishReady(t)
+			if name == "adjudication" {
+				p.seedReadinessRoundLimitAdjudication(t, ready)
+			}
+			head := p.replay.HeadSHA
+			occupied := productionReviewItemIDForTest(p.runID, hardLimit)
+			if name != "adjudication" && name != "unoccupied" {
+				itemType := domain.AttentionReviewDispute
+				actions := []domain.Action{domain.ActionDiscuss, domain.ActionStop}
+				if strings.Contains(name, "legacy exhaustion") {
+					itemType = domain.AttentionReviewDiminishing
+					actions = []domain.Action{domain.ActionFinishNow}
+				}
+				seeded, err := domain.NewAttentionItem(domain.AttentionItemInput{
+					ID: occupied, ProjectID: ready.ProjectID, Subject: ready.Subject,
+					Type: itemType, Priority: domain.PriorityNormal,
+					Reason:            "The earlier cycle used the round-limit identity.",
+					RequestedDecision: actions, PRHeadSHA: head, ItemVersion: 1,
+					InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
+					CreatedAt: &p.now, DisplayNames: ready.DisplayNames,
+				}, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := p.attention.PutItem(p.ctx, seeded); err != nil {
+					t.Fatal(err)
+				}
+				if name != "open legacy exhaustion" {
+					seeded.ItemVersion, seeded.Status = 2, domain.StatusResolved
+					if err := p.attention.PutItem(p.ctx, seeded); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			fact := domain.ReadinessInvalidation{
+				Reason: domain.ReadinessInvalidationBaseAdvanced, Bound: p.baseSHA,
+			}
+			if name == "other head" {
+				head = p.pushToPullRequest(t, "FOLLOWUP.md", "pushed after readiness\n")
+				fact.Reason, fact.Bound, fact.Observed = domain.ReadinessInvalidationHeadChanged, p.replay.HeadSHA, head
+			} else {
+				fact.Observed = p.advanceBase(t, "UPSTREAM.md", "upstream change\n")
+			}
+			if _, started := p.invalidateReady(t, fact); !started {
+				t.Fatal("invalidation started no re-entry")
+			}
+			reviews := p.recordReviews(t)
+			if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 {
+				t.Fatalf("re-entry result = %#v, %v", result, err)
+			}
+			end := p.externalReviewEnd(t)
+			if len(end.reviewItems) != 1 || end.readyItem || end.pending != 0 {
+				t.Fatalf("cycle end = %#v", end)
+			}
+			want := domain.ItemID("production-readiness-review-exhaustion-" +
+				strings.TrimPrefix(string(end.successor.PublicationID()), "publish-reentry-"))
+			if name == "open legacy exhaustion" {
+				want = occupied
+			}
+			item := end.reviewItems[0]
+			if item.ID != want || item.Type != domain.AttentionReviewDiminishing || item.PRHeadSHA != head {
+				t.Fatalf("exhaustion item = %#v, want %s on %s", item, want, head)
+			}
+			if len(reviews.requests) != 0 || p.room.runs != 2 {
+				t.Fatalf("review requests = %d, verification runs = %d", len(reviews.requests), p.room.runs)
+			}
+			var before []store.Snapshotted[domain.AttentionItem]
+			if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+				var err error
+				before, err = tx.ListAttentionItems(p.ctx)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 || result.PublicationTasksCompleted != 0 {
+				t.Fatalf("converged replay = %#v, %v", result, err)
+			}
+			if after := p.externalReviewEnd(t); !reflect.DeepEqual(end, after) || len(reviews.requests) != 0 || p.room.runs != 2 {
+				t.Fatalf("second pass changed the cycle: %#v", after)
+			}
+			if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+				after, err := tx.ListAttentionItems(p.ctx)
+				if err == nil && !reflect.DeepEqual(before, after) {
+					t.Fatal("second pass changed attention items")
+				}
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// Seed a later review and its resolved adjudication through the store's
+// validated writers. Re-entry starts after this latest round, so the old
+// exhaustion writer collides with the card at the hard limit of two.
+func (p *productionPublicationHarness) seedReadinessRoundLimitAdjudication(t *testing.T, ready domain.AttentionItem) {
+	t.Helper()
+	finding := domain.Finding{
+		ID: "round-limit-finding", RunID: p.runID, Source: "codex_local", Severity: domain.FindingSeverityP2,
+		Location: &domain.FindingLocation{Path: "README.md", StartLine: 1, EndLine: 1},
+		Message:  "outside the approved task", RawText: "outside the approved task", CreatedAt: p.now,
+	}
+	entry, err := domain.NewModelAdjudicationEntry(finding.ID, domain.GoalContradictory, nil,
+		domain.RouteDecline, domain.ConfidenceHigh, "outside the approved task",
+		nil, []string{"AGENTS.md"}, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var artifact domain.FindingAdjudication
+	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		record, err := tx.LatestReviewRecord(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		record.InvocationID, record.Round = engine.ProductionReviewInvocationID(p.runID, 2), 2
+		record.Outcome, record.FindingIDs = domain.ReviewFindings, []domain.FindingID{finding.ID}
+		if err := tx.PutReviewRecord(p.ctx, record, []domain.Finding{finding}); err != nil {
+			return err
+		}
+		run, err := tx.GetRun(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		artifact, err = domain.NewFindingAdjudication(p.runID, 2, run.SpecDigest, record.InstructionDigest,
+			run.PolicyDigest, []domain.FindingAdjudicationEntry{entry}, "", p.now)
+		if err != nil {
+			return err
+		}
+		return tx.PutFindingAdjudication(p.ctx, artifact)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	card, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: productionReviewItemIDForTest(p.runID, 2), ProjectID: ready.ProjectID, Subject: ready.Subject,
+		Type: domain.AttentionFindingAdjudication, Priority: domain.PriorityHigh,
+		Reason: "Choose the finding route.",
+		RequestedDecision: []domain.Action{
+			domain.ActionAcceptRecommendedRoute, domain.ActionDiscuss,
+			domain.ActionStop, domain.ActionChooseAlternativeRoute,
+		},
+		PRHeadSHA: p.replay.HeadSHA, ItemVersion: 1,
+		InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
+		CreatedAt: &p.now, DisplayNames: ready.DisplayNames,
+		FindingAdjudication: &domain.FindingAdjudicationBinding{
+			RunID: artifact.RunID, Round: artifact.Round, AdjudicationDigest: artifact.Digest,
+			Proposals: []domain.FindingAdjudicationProposal{{
+				FindingID: finding.ID, FindingMessage: finding.Message, FindingLocation: finding.Location,
+				Producer: entry.Producer, GoalRelationship: entry.GoalRelationship,
+				Compatibility: entry.Compatibility, Route: entry.Route, Rationale: entry.Rationale,
+				Evidence: entry.Evidence, CitedRules: entry.CitedRules, Assumptions: entry.Assumptions,
+				OpenQuestions: entry.OpenQuestions, Confidence: entry.Confidence,
+				OfferedAlternatives: entry.OfferedAlternatives,
+			}},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.attention.PutItem(p.ctx, card); err != nil {
+		t.Fatal(err)
+	}
+	card.ItemVersion, card.Status = 2, domain.StatusResolved
+	if err := p.attention.PutItem(p.ctx, card); err != nil {
+		t.Fatal(err)
 	}
 }
 

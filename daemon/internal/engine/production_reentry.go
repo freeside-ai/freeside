@@ -157,6 +157,14 @@ func reentryVerificationInvocationID(successor domain.PublicationSuccessor) doma
 		"verify-" + strings.TrimPrefix(string(successor.PublicationID()), "publish-"))
 }
 
+// A re-entry needs its own exhaustion identity: an earlier cycle may have
+// resolved a different item at the hard-limit round. The predecessor key
+// distinguishes cycles even when they start at the same review round.
+func readinessReentryExhaustionItemID(successor domain.PublicationSuccessor) domain.ItemID {
+	return domain.ItemID("production-readiness-review-exhaustion-" +
+		strings.TrimPrefix(string(successor.PublicationID()), "publish-reentry-"))
+}
+
 // newReentryTask builds the task row of one re-entered cycle from its sealed
 // authority. Every coordinate derives from the authority, so validateReentry
 // can re-derive and compare each one on decode.
