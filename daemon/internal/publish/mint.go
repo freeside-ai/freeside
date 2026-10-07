@@ -21,6 +21,7 @@ type Permissions struct {
 	Administration string `json:"administration,omitempty"`
 	Contents       string `json:"contents,omitempty"`
 	Environments   string `json:"environments,omitempty"`
+	Issues         string `json:"issues,omitempty"`
 	PullRequests   string `json:"pull_requests,omitempty"`
 	Metadata       string `json:"metadata,omitempty"`
 }
@@ -39,6 +40,29 @@ var PublishPermissions = Permissions{
 	PullRequests:   "write",
 	Metadata:       "read",
 }
+
+// FollowUpFilingPermissions grants only issue filing on one repository.
+// Publication uses its own permission set even when this grant is unavailable.
+var FollowUpFilingPermissions = Permissions{Issues: "write", Metadata: "read"}
+
+var followUpFilingPermissionScopes = map[string]string{
+	"issues":   FollowUpFilingPermissions.Issues,
+	"metadata": FollowUpFilingPermissions.Metadata,
+}
+
+// RegistrationPermissions declares all capabilities the App may need; each
+// token source narrows its mint to the effect it performs.
+var RegistrationPermissions = func() Permissions {
+	permissions := PublishPermissions
+	permissions.Issues = "write"
+	return permissions
+}()
+
+var registrationPermissionScopes = func() map[string]string {
+	scopes := maps.Clone(publishPermissionScopes)
+	scopes["issues"] = RegistrationPermissions.Issues
+	return scopes
+}()
 
 // WorkflowAuditPermissions is the read-only subset used before onboarding has
 // activated repository trust. The App registration can publish, but the

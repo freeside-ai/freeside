@@ -290,9 +290,9 @@ func TestManifestForm(t *testing.T) {
 				t.Errorf("manifest identity = {Name:%q Public:%t}, want {Name:%q Public:%t}",
 					got.Name, got.Public, tt.wantName, tt.wantPublic)
 			}
-			if got.URL != input.URL || got.DefaultPermissions != publish.PublishPermissions {
+			if got.URL != input.URL || got.DefaultPermissions != publish.RegistrationPermissions {
 				t.Errorf("manifest = %+v, want URL %q and pinned permissions %+v",
-					got, input.URL, publish.PublishPermissions)
+					got, input.URL, publish.RegistrationPermissions)
 			}
 		})
 	}

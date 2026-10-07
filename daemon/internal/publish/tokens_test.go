@@ -3,6 +3,7 @@ package publish_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -14,7 +15,144 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
+
+func TestFollowUpFilingTokenSourceScopesCacheAndAudit(t *testing.T) {
+	t.Parallel()
+	clock, mints := fixtureTime, 0
+	want := publish.Permissions{Issues: "write", Metadata: "read"}
+	srv := newMintServer(t, func(w http.ResponseWriter, r *http.Request) {
+		mints++
+		var request struct {
+			RepositoryIDs []int64           `json:"repository_ids"`
+			Permissions   map[string]string `json:"permissions"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		if len(request.RepositoryIDs) != 1 || request.RepositoryIDs[0] != fixtureRepositoryID ||
+			len(request.Permissions) != 2 || request.Permissions["issues"] != "write" || request.Permissions["metadata"] != "read" {
+			t.Errorf("filing mint request = %+v", request)
+		}
+		writeFilingTokenResponse(t, w, map[string]string{"issues": "write", "metadata": "read"})
+	})
+	defer srv.Close()
+	s := newTestStore(t)
+	recorder, err := publish.NewStoreRecorder(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := func() time.Time { return clock }
+	m := newCoveredMinter(newRegisteredKeystore(t), srv.Client(), srv.URL, recorder, conformantTrust(t), now)
+	source := publish.NewFollowUpFilingTokenSource(m, now)
+	for _, offset := range []time.Duration{0, 30 * time.Minute, 59 * time.Minute} {
+		clock = fixtureTime.Add(offset)
+		token, err := source.Token(context.Background(), testTrustRepo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if token.Permissions != want {
+			t.Errorf("permissions = %+v, want %+v", token.Permissions, want)
+		}
+	}
+	if mints != 2 {
+		t.Fatalf("mints = %d, want 2", mints)
+	}
+	if err := s.Read(context.Background(), func(tx *store.ReadTx) error {
+		audits, err := tx.ListMintAudits(context.Background())
+		if err != nil {
+			return err
+		}
+		if len(audits) != 2 {
+			t.Fatalf("audits = %d, want 2", len(audits))
+		}
+		for _, audit := range audits {
+			requested := publish.Permissions{
+				Actions: audit.RequestedActions, Administration: audit.RequestedAdministration,
+				Contents: audit.RequestedContents, Environments: audit.RequestedEnvironments, Issues: audit.RequestedIssues,
+				PullRequests: audit.RequestedPullRequests, Metadata: audit.RequestedMetadata,
+			}
+			granted := publish.Permissions{
+				Actions: audit.GrantedActions, Administration: audit.GrantedAdministration,
+				Contents: audit.GrantedContents, Environments: audit.GrantedEnvironments, Issues: audit.GrantedIssues,
+				PullRequests: audit.GrantedPullRequests, Metadata: audit.GrantedMetadata,
+			}
+			if requested != want || granted != want {
+				t.Errorf("audit scopes requested=%+v granted=%+v", requested, granted)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeFilingTokenResponse(t *testing.T, w http.ResponseWriter, scopes map[string]string) {
+	t.Helper()
+	w.WriteHeader(http.StatusCreated)
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"token": fixtureTokenValue, "expires_at": fixtureTime.Add(time.Hour),
+		"permissions": scopes, "repository_selection": "selected",
+		"repositories": []map[string]any{{"id": fixtureRepositoryID, "name": "evidence-repo"}},
+	}); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestFollowUpFilingTokenSourceRejectsDifferentGrants(t *testing.T) {
+	t.Parallel()
+	for name, scopes := range map[string]map[string]string{
+		"missing issues":    {"metadata": "read"},
+		"read only issues":  {"issues": "read", "metadata": "read"},
+		"publication scope": {"issues": "write", "metadata": "read", "contents": "write"},
+		"unknown scope":     {"issues": "write", "metadata": "read", "unexpected": "read"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := newMintServer(t, func(w http.ResponseWriter, _ *http.Request) { writeFilingTokenResponse(t, w, scopes) })
+			defer srv.Close()
+			recorder := &captureRecorder{}
+			m := newCoveredMinter(newRegisteredKeystore(t), srv.Client(), srv.URL, recorder, conformantTrust(t), fixedNow)
+			token, err := publish.NewFollowUpFilingTokenSource(m, fixedNow).Token(context.Background(), testTrustRepo)
+			if !errors.Is(err, publish.ErrGrantMismatch) || token.Token.Reveal() != "" {
+				t.Fatal("different grant returned a token or lacked ErrGrantMismatch")
+			}
+			if len(recorder.records) != 0 {
+				t.Fatal("rejected grant reached the successful-mint audit")
+			}
+		})
+	}
+}
+
+func TestFollowUpFilingTokenSourceRevalidatesInstallationBeforeCacheHit(t *testing.T) {
+	t.Parallel()
+	discoveries, mints := 0, 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
+			discoveries++
+			if discoveries == 1 {
+				_, _ = fmt.Fprintf(w, `[{"id":777,"app_id":%d,"target_id":%d,"repository_selection":"selected","account":{"login":"freeside-ai","id":%d}}]`, fixtureAppID, testOwnerID, testOwnerID)
+			} else {
+				_, _ = fmt.Fprint(w, `[]`)
+			}
+			return
+		}
+		mints++
+		writeFilingTokenResponse(t, w, map[string]string{"issues": "write", "metadata": "read"})
+	}))
+	defer srv.Close()
+	m := newCoveredMinter(newRegisteredKeystore(t), srv.Client(), srv.URL, &captureRecorder{}, conformantTrust(t), fixedNow)
+	source := publish.NewFollowUpFilingTokenSource(m, fixedNow)
+	if _, err := source.Token(context.Background(), testTrustRepo); err != nil {
+		t.Fatal(err)
+	}
+	if token, err := source.Token(context.Background(), testTrustRepo); !errors.Is(err, publish.ErrNoInstallation) || token.Token.Reveal() != "" {
+		t.Fatal("cached token survived installation removal")
+	}
+	if mints != 1 {
+		t.Errorf("mints = %d, want 1", mints)
+	}
+}
 
 // newMintCountingSource stands up a fixture-backed mint endpoint and a
 // CachedTokenSource over it, returning the source and a pointer to the

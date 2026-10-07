@@ -23,6 +23,8 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
 
@@ -40,6 +42,12 @@ func parseTestPEM(raw []byte) (*rsa.PrivateKey, error) {
 // acceptance 1: CI documents these as Not run). It needs an
 // already-registered App (registration requires a browser).
 func newLiveMinter(t *testing.T) (m *publish.Minter, repo string, profile domain.AutomationTrustProfile) {
+	t.Helper()
+	m, repo, profile, _ = newLiveMinterWithKeystore(t)
+	return m, repo, profile
+}
+
+func newLiveMinterWithKeystore(t *testing.T) (m *publish.Minter, repo string, profile domain.AutomationTrustProfile, keystore *publish.Keystore) {
 	t.Helper()
 	if os.Getenv("FREESIDE_PUBLISH_LIVE_TEST") != "1" {
 		t.Skip("live GitHub integration is opt-in: set FREESIDE_PUBLISH_LIVE_TEST=1, " +
@@ -114,7 +122,7 @@ func newLiveMinter(t *testing.T) (m *publish.Minter, repo string, profile domain
 	client := &http.Client{Timeout: 30 * time.Second}
 	profile = trustProfileForRepoID(t, repo, repositoryID)
 	trust := memoryTrustSource{profile: &profile}
-	return newCoveredMinter(ks, client, "https://api.github.com", rec, trust, time.Now), repo, profile
+	return newCoveredMinter(ks, client, "https://api.github.com", rec, trust, time.Now), repo, profile, ks
 }
 
 // TestLiveMintInstallationToken exercises the App JWT and
@@ -655,4 +663,174 @@ func liveInt64(t *testing.T, name string) int64 {
 		t.Fatalf("%s: %v", name, err)
 	}
 	return value
+}
+
+// TestLiveFollowUpFilingEffectivelyOnce files two approved proposals in the
+// opt-in repository. The second create commits at GitHub but loses its reply;
+// reopening the store must adopt it without another POST. No labels or
+// milestone are assigned, and cleanup closes only issues this test created.
+func TestLiveFollowUpFilingEffectivelyOnce(t *testing.T) {
+	m, repo, profile, ks := newLiveMinterWithKeystore(t)
+	ctx := context.Background()
+	const baseURL = "https://api.github.com"
+	tokens := publish.NewFollowUpFilingTokenSource(m, time.Now)
+	client := &http.Client{Timeout: 30 * time.Second}
+	// The older publication fixture did not need the App slug. Resolve it
+	// from the authenticated registration for the filer's real identity source.
+	apps, err := ks.ListApps()
+	if err != nil || len(apps) != 1 {
+		t.Fatalf("live registration: %v", err)
+	}
+	app := apps[0]
+	jwt, err := publish.AppJWT(app.Key, app.AppID, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/app", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveAuthed(request, jwt.Reveal())
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal("read live App identity failed")
+	}
+	var identity struct {
+		ID   int64  `json:"id"`
+		Slug string `json:"slug"`
+	}
+	decodeErr := json.NewDecoder(response.Body).Decode(&identity)
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK || decodeErr != nil || identity.ID != app.AppID || identity.Slug == "" {
+		t.Fatal("live App identity did not match the registration")
+	}
+	app.Slug = identity.Slug
+	if err := ks.SaveApp(app); err != nil {
+		t.Fatal(err)
+	}
+	resolver, err := publish.NewGitHubAppBotIdentityResolver(tokens, ks, client, baseURL, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	transport := &liveFilingTransport{path: "/repos/" + repo + "/issues", next: http.DefaultTransport}
+	filingClient := &http.Client{Transport: transport, Timeout: 30 * time.Second}
+	t.Cleanup(func() {
+		for _, number := range transport.created {
+			token, err := tokens.Token(context.Background(), repo)
+			if err != nil {
+				t.Errorf("cleanup issue %d: cannot mint filing token", number)
+				continue
+			}
+			req, err := http.NewRequest(http.MethodPatch, fmt.Sprintf("%s/repos/%s/issues/%d", baseURL, repo, number), strings.NewReader(`{"state":"closed"}`))
+			if err != nil {
+				t.Error(err)
+				continue
+			}
+			liveAuthed(req, token.Token.Reveal())
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Errorf("cleanup issue %d: request failed", number)
+				continue
+			}
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("cleanup issue %d: HTTP %d", number, resp.StatusCode)
+			}
+		}
+	})
+
+	path := filepath.Join(t.TempDir(), "filing.db")
+	st := storetest.Open(t, path, store.Options{})
+	h := &filingHarness{t: t, store: st}
+	project := domain.Project{ID: "project-filing-live", Repo: repo, RepositoryID: profile.RepositoryID}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error { return tx.RegisterProject(ctx, project) }); err != nil {
+		t.Fatal(err)
+	}
+	run := seedFilingRun(t, st, project, "live-"+strconv.FormatInt(time.Now().UnixNano(), 10), nil, nil)
+	clock := time.Now().UTC()
+	compose := func() *publish.FollowUpFiler {
+		filer, err := publish.NewFollowUpFiler(h.store, tokens, filingClient, baseURL, resolver, func() time.Time { return clock })
+		if err != nil {
+			t.Fatal(err)
+		}
+		return filer
+	}
+	filer := compose()
+	first := h.approve(run, 0)
+	if err := filer.Pass(ctx); err != nil {
+		t.Fatal(err)
+	}
+	firstRow := h.filed(first.ID)
+	if transport.creates != 1 || len(transport.created) != 1 || firstRow == nil || firstRow.IssueNumber != transport.created[0] {
+		t.Fatal("first filing did not create and ledger exactly one issue")
+	}
+	second := h.approve(run, 1)
+	transport.drop = true
+	if err := filer.Pass(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if transport.creates != 2 || len(transport.created) != 2 || h.filed(second.ID) != nil {
+		t.Fatal("dropped response did not leave exactly one unledgered creation")
+	}
+	if err := h.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	h.store = storetest.Open(t, path, store.Options{})
+	clock = clock.Add(pastSettle)
+	filer = compose()
+	if err := filer.Pass(ctx); err != nil {
+		t.Fatal(err)
+	}
+	secondRow := h.filed(second.ID)
+	if secondRow == nil || secondRow.IssueNumber != transport.created[1] || secondRow.RepositoryID != project.RepositoryID {
+		t.Fatal("recovery did not adopt the issue whose response was dropped")
+	}
+	if err := filer.Pass(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if transport.creates != 2 {
+		t.Fatalf("create requests = %d, want 2", transport.creates)
+	}
+}
+
+// liveFilingTransport retains cleanup identities before dropping the response.
+// It never retries: recovery must discover the committed issue through GitHub.
+type liveFilingTransport struct {
+	next    http.RoundTripper
+	path    string
+	drop    bool
+	creates int
+	created []int
+}
+
+func (r *liveFilingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	creation := req.Method == http.MethodPost && req.URL.Path == r.path
+	if creation {
+		r.creates++
+	}
+	resp, err := r.next.RoundTrip(req)
+	if err != nil || !creation || resp.StatusCode != http.StatusCreated {
+		return resp, err
+	}
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		return nil, errors.New("live filing response read failed")
+	}
+	var issue struct {
+		Number int `json:"number"`
+	}
+	if err := json.Unmarshal(body, &issue); err != nil || issue.Number <= 0 {
+		return nil, errors.New("live filing response has no cleanup identity")
+	}
+	r.created = append(r.created, issue.Number)
+	if r.drop {
+		r.drop = false
+		return nil, errors.New("live test dropped committed create response")
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	return resp, nil
 }

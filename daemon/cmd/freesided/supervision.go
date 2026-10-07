@@ -64,6 +64,7 @@ const (
 	componentProductionPublication componentKind = "production_publication"
 	componentActiveResource        componentKind = "active_resource"
 	componentLabelIntake           componentKind = "label_intake"
+	componentFollowUpFiling        componentKind = "follow_up_filing"
 	componentPanic                 componentKind = "panic"
 )
 
@@ -77,6 +78,7 @@ var AllComponentKinds = []componentKind{
 	componentProductionPublication,
 	componentActiveResource,
 	componentLabelIntake,
+	componentFollowUpFiling,
 	componentPanic,
 }
 
@@ -90,6 +92,7 @@ func (k componentKind) valid() bool {
 		componentProductionPublication,
 		componentActiveResource,
 		componentLabelIntake,
+		componentFollowUpFiling,
 		componentPanic:
 		return true
 	default:
@@ -128,7 +131,8 @@ func classifyComponentExit(kind componentKind) exitDisposition {
 		componentScheduler,
 		componentProductionPublication,
 		componentActiveResource,
-		componentLabelIntake:
+		componentLabelIntake,
+		componentFollowUpFiling:
 		return exitDurableStop
 	case componentHTTP, componentPairingControl:
 		return exitRestartSafe

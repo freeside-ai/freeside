@@ -378,8 +378,25 @@ drift axis needs both a preterminal refusal and a terminal-fact adoption case.
 
 The default publish identity is one public GitHub App owned by the operator's
 personal account. A fresh operator registers it through GitHub's manifest flow;
-Freeside generates the suggested name, pins the publish permission set, and
-writes the conversion key directly to the protected credentials directory.
+Freeside generates the suggested name, requests the publish permission set
+plus `issues: write`, and writes the conversion key directly to the protected
+credentials directory. Publication tokens keep their original permissions.
+
+Follow-up filing mints a separate token with only `issues: write` and
+`metadata: read` for the one target repository. Its issue calls and App bot
+identity reads use that token. An existing installation gains the permission
+only after its owner accepts the App's permission change on GitHub. Until
+then, filing is refused before dispatch with a `follow_up_filing_refused`
+attention item naming the missing permission; publication can continue.
+The deployed App's managed installations accepted this change under #1416 on
+2026-09-20.
+
+The Claude driver sweeps approved filings at startup and every minute; an
+approval also wakes the filer immediately. The fake driver records approvals
+but does not file issues. The opt-in `TestLiveFollowUpFilingEffectivelyOnce`
+test uses the `FREESIDE_PUBLISH_LIVE_TEST` gate and the
+[live-test environment](internal/publish/live_test.go) to file two issues,
+recover a dropped create response, and close both issues in cleanup.
 
 Repository onboarding uses GitHub's native installation page:
 `https://github.com/apps/<app-slug>/installations/new`. Select only the

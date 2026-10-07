@@ -45,6 +45,7 @@ func TestExitClassificationIsComplete(t *testing.T) {
 		componentProductionPublication: exitDurableStop,
 		componentActiveResource:        exitDurableStop,
 		componentLabelIntake:           exitDurableStop,
+		componentFollowUpFiling:        exitDurableStop,
 		componentPanic:                 exitInvoluntary,
 	}
 	if len(want) != len(AllComponentKinds) {
