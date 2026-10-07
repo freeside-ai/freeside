@@ -344,25 +344,35 @@ func filingDigest(fill string) domain.Digest {
 // keys and, when boundIssue is set, a declaration bound to that issue.
 func (h *filingHarness) seedRun(name string, extra map[string]string, boundIssue *int) filingRun {
 	h.t.Helper()
+	keys := map[string]string{
+		domain.PolicyFollowUpFilingLabels:    "lane:spine,deferral",
+		domain.PolicyFollowUpFilingMilestone: "1B",
+	}
+	for key, value := range extra {
+		keys[key] = value
+	}
+	return seedFilingRun(h.t, h.store,
+		domain.Project{ID: "project-filing", Repo: filingRepo, RepositoryID: testRepoID}, name, keys, boundIssue)
+}
+
+func seedFilingRun(t *testing.T, st *store.Store, project domain.Project, name string, extra map[string]string, boundIssue *int) filingRun {
+	t.Helper()
 	ctx := context.Background()
 	runID := domain.RunID(name)
 	provenance := domain.KeyProvenance{Source: domain.ProvenanceOverride, Digest: filingDigest("a")}
 	keys := []domain.PolicyKey{
 		{Key: "paths", Value: "daemon/", Provenance: provenance},
-		{Key: domain.PolicyFollowUpFilingLabels, Value: "lane:spine,deferral", Provenance: provenance},
-		{Key: domain.PolicyFollowUpFilingMilestone, Value: "1B", Provenance: provenance},
 	}
 	for key, value := range extra {
 		keys = append(keys, domain.PolicyKey{Key: key, Value: value, Provenance: provenance})
 	}
 	policy, err := domain.NewResolvedPolicy(runID, keys)
 	if err != nil {
-		h.t.Fatal(err)
+		t.Fatal(err)
 	}
-	project := domain.Project{ID: "project-filing", Repo: filingRepo, RepositoryID: testRepoID}
 	target, err := domain.DeriveFollowUpFilingTarget(project, policy)
 	if err != nil {
-		h.t.Fatal(err)
+		t.Fatal(err)
 	}
 	var findings []domain.Finding
 	var ids []domain.FindingID
@@ -379,7 +389,7 @@ func (h *filingHarness) seedRun(name string, extra map[string]string, boundIssue
 			id, domain.GoalAdjacent, nil, domain.RouteDefer, domain.ConfidenceHigh,
 			"adjacent to the goal", nil, nil, nil, nil, nil)
 		if err != nil {
-			h.t.Fatal(err)
+			t.Fatal(err)
 		}
 		entries = append(entries, entry)
 	}
@@ -391,14 +401,14 @@ func (h *filingHarness) seedRun(name string, extra map[string]string, boundIssue
 		CompletionEvidence: filingDigest("e"), Outcome: domain.ReviewFindings, FindingIDs: ids,
 	})
 	if err != nil {
-		h.t.Fatal(err)
+		t.Fatal(err)
 	}
 	adjudication, err := domain.NewFindingAdjudication(
 		runID, 1, filingDigest("f"), review.InstructionDigest, policy.Digest, entries, "", filingAt.Add(time.Minute))
 	if err != nil {
-		h.t.Fatal(err)
+		t.Fatal(err)
 	}
-	if err := h.store.Write(ctx, func(tx *store.WriteTx) error {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutRun(ctx, domain.Run{
 			ID: runID, ProjectID: project.ID, SpecDigest: filingDigest("f"),
 			PolicyDigest: policy.Digest, Stages: []domain.Stage{},
@@ -440,7 +450,7 @@ func (h *filingHarness) seedRun(name string, extra map[string]string, boundIssue
 		}
 		return nil
 	}); err != nil {
-		h.t.Fatalf("seed run %q: %v", name, err)
+		t.Fatalf("seed run %q: %v", name, err)
 	}
 	return filingRun{id: runID, policy: policy, target: target, adjudication: adjudication, findings: findings}
 }
