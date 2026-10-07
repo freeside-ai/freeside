@@ -24,6 +24,19 @@ import Testing
                 .contrast == .increased)
     }
 
+    @Test func screenshotContrastLeavesExistingPreferencesIntact() throws {
+        let suite = "FreesideScreenshotContrastTest-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("increased", forKey: "FreesideContrast")
+        LaunchInputs.$screenshotIncreasedContrast.withValue(false) {
+            #expect(LaunchInputs.accessibilityContrastOverride(defaults: defaults) == .standard)
+            #expect(defaults.string(forKey: "FreesideContrast") == "increased")
+        }
+        #expect(LaunchInputs.accessibilityContrastOverride(defaults: defaults) == .increased)
+        #expect(defaults.string(forKey: "FreesideContrast") == "increased")
+    }
+
     @Test(arguments: [nil, "high", "Increased", ""] as [String?])
     func unrecognizedContrastFollowsTheSystem(raw: String?) {
         #expect(

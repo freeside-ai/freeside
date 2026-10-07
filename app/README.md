@@ -178,6 +178,85 @@ pkill -x FreesideMac
 
 Repeat for `light|dark` crossed with `standard|increased` to capture all four cuts, then compare the `sips` outputs: the set must be dimension-identical, and a mismatch means a launch picked up stray window state — re-capture rather than shipping it.
 
+### Screenshot Regression Determinism
+
+The macOS package tests compare exact dimensions-plus-RGBA digests at six
+Dynamic Type sizes. Capture draws through `ImageRenderer.render` into an
+explicit sRGB bitmap; comparison and recording use that same path. Explicit
+contrast is scoped in memory, and screenshot disclosure preferences use
+separate temporary suites. Ordinary launch inputs and host contrast behavior
+remain unchanged.
+
+To reproduce order and process-isolation checks without changing a baseline:
+
+```sh
+# From the repository root; OUTPUT must be a new directory.
+bash app/scripts/check-screenshot-determinism.sh --probes-only /tmp/screenshot-probes
+```
+
+For the fixed-commit stress experiment, commit the implementation first and
+provide another checkout for concurrent builds:
+
+```sh
+bash app/scripts/check-screenshot-determinism.sh /tmp/screenshot-stress /path/to/load-checkout
+```
+
+Use the same implementation for every simultaneous screenshot process.
+Older versions write shared `FreesideContrast` preferences and can change the
+fallback input while this version draws a surface with no explicit override.
+Keep those legacy screenshot runs stopped during the experiment. Ordinary
+builds are the intended concurrent load.
+
+The script keeps commands, environment metadata, timestamps, every exit status,
+and complete logs. It checks selected keys individually, in reversed order,
+after extra fixture construction, and after extra rendering. It runs opposite
+contrast captures simultaneously with separate scratch builds and output paths.
+The full experiment also runs `bash scripts/check.sh app test` five times
+without background builds and five times alongside recorded release builds.
+The script checks for external builds before each quiet run and samples the
+process tree once per second during it, excluding that test command's own
+build children. An observed external build invalidates the quiet run. Keep
+that checkout and the host free of other builds for the entire quiet phase.
+Opposite-contrast rendering intervals must overlap. During each loaded run,
+at least one capture must overlap an observed compiler from its load build;
+the script samples those build processes every 100 ms. Command startup alone
+does not establish either overlap. Any failure makes the experiment fail. It never
+retries failures or records baselines. `FREESIDE_DETERMINISM_RUNS=1` is useful
+for a smoke check but does not satisfy the five-plus-five requirement.
+
+For a narrow diagnostic, set `FREESIDE_SCREENSHOT_PROBE_KEYS` to comma-separated
+primary-surface manifest keys (supplemental fixtures are not supported by the
+probe), set `FREESIDE_SCREENSHOT_OUTPUT` to a separate directory,
+and run `swift test --package-path app --filter
+ScreenshotRegressionTests/probeScreenshotDeterminism`. The optional
+`FREESIDE_SCREENSHOT_PROBE_MODE` is `selected` (the default), `reverse`,
+`construct`, `render`, `prefix`, or `contrast`. Every mode constructs the
+ordinary fixture set;
+`construct` adds another unrendered set, while `render` also draws that extra
+set before the selected keys. `prefix` renders the ordinary fixtures preceding
+the first selected key. `FREESIDE_SCREENSHOT_PROBE_REPETITIONS` repeats selected
+captures and checks that their digests agree. Sample diagnostics include the key, dimensions,
+and digest. A diagnostic subset refuses `FREESIDE_RECORD_SCREENSHOTS=1` and
+cannot replace the full manifest. `FREESIDE_SCREENSHOT_TRACE=1` adds the same
+sample diagnostics to a complete matrix run.
+
+`FREESIDE_PAIRING_PROBE_REPETITIONS` repeats the four mounted countdown pairs
+after the complete matrix in the same process. Its default is one; a diagnostic
+value such as `500` stops at the first mismatch and retains both images in
+`FREESIDE_SCREENSHOT_OUTPUT`, along with clock bounds and pixel digests.
+It does not retry a failed pair or reduce the ordinary matrix.
+
+The `contrast` mode precedes each selected capture with an Increased Contrast
+capture of the same surface. `FREESIDE_SCREENSHOT_PROBE_CONTRAST` can force
+`standard` or `increased` for selected diagnostic captures. Trace output also
+records capture start/end timestamps, the explicit contrast, current launch/defaults fallback, and host
+contrast at each sample boundary; it does not establish their values during
+an earlier capture.
+
+Baseline recording still requires the designated local macOS version and
+reviewed images. Hosted-runner overrides still require hosted image evidence;
+local pixels cannot establish an override.
+
 ## Structure
 
 - `Freeside.xcodeproj` contains the two application targets. Both consume the local `FreesideCore` Swift package product.

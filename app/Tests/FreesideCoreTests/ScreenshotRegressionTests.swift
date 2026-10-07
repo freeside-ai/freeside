@@ -1,6 +1,5 @@
 #if os(macOS)
     import AppKit
-    import CryptoKit
     import FreesideAPI
     import SwiftUI
     import Testing
@@ -73,6 +72,23 @@
                     operatingSystemKey, baselineKey: baselineOperatingSystemKey)
             }
             let expected = try loadManifest(overrides: overrides)
+            if recording {
+                let sourceURL = URL(fileURLWithPath: #filePath)
+                    .deletingLastPathComponent()
+                    .appendingPathComponent("Resources/ScreenshotDigests.json")
+                try await ScreenshotCapture.record(to: sourceURL) {
+                    try await captureSurfaces(expected: expected, recording: true)
+                }
+            } else {
+                let actual = try await captureSurfaces(expected: expected, recording: false)
+                #expect(actual.count == expected.count)
+                #expect(
+                    Set(actual.values).count > 45,
+                    "The six-size matrix must exercise more than the prior two-state rendering")
+            }
+        }
+
+        private func captureSurfaces(expected: [String: String], recording: Bool) async throws -> [String: String] {
             var actual: [String: String] = [:]
 
             for size in textSizes {
@@ -85,7 +101,7 @@
                             width: surface.width ?? canvasWidth,
                             colorScheme: surface.colorScheme,
                             contrast: surface.contrast,
-                            nativeAppearance: surface.nativeAppearance)
+                            nativeAppearance: surface.nativeAppearance, key: key)
                         actual[key] = try digest(image)
                         if ProcessInfo.processInfo.environment["FREESIDE_DUMP_SCREENSHOTS"] == "1" {
                             _ = try dump(image, named: key)
@@ -110,7 +126,7 @@
                             supplemental.view,
                             at: size.value,
                             width: supplemental.width ?? canvasWidth,
-                            colorScheme: supplemental.colorScheme)
+                            colorScheme: supplemental.colorScheme, key: key)
                         actual[key] = try digest(image)
                         if ProcessInfo.processInfo.environment["FREESIDE_DUMP_SCREENSHOTS"] == "1" {
                             _ = try dump(image, named: key)
@@ -127,20 +143,98 @@
                 }
             }
 
-            // Keep the mounted countdown check after the golden renders.
-            // Rendering it first changes initial text antialiasing by one
-            // channel value, making the first golden depend on test order.
-            for remaining in [30.0, 270.0, 330.0, 870.0] {
-                try mountedTimelineMatchesWallClock(remaining: remaining)
+            // Exercise the mounted countdown after the complete matrix so
+            // this check also covers rendering state left by other surfaces.
+            guard
+                let pairingRepetitions = Int(
+                    ProcessInfo.processInfo.environment["FREESIDE_PAIRING_PROBE_REPETITIONS"] ?? "1"),
+                pairingRepetitions > 0
+            else { throw ScreenshotError.invalidDiagnosticSelection }
+            for repetition in 0..<pairingRepetitions {
+                if pairingRepetitions > 1 { print("PAIRING_PROBE repetition=\(repetition + 1)") }
+                for remaining in [30.0, 270.0, 330.0, 870.0] {
+                    try mountedTimelineMatchesWallClock(remaining: remaining)
+                }
             }
 
-            if recording {
-                try writeManifest(actual)
-            } else {
-                #expect(actual.count == expected.count)
-                #expect(
-                    Set(actual.values).count > 45,
-                    "The six-size matrix must exercise more than the prior two-state rendering")
+            return actual
+        }
+
+        /// Diagnostic captures never enter the recording path. The selectors
+        /// name existing matrix keys, so a subset cannot replace the manifest.
+        @Test func probeScreenshotDeterminism() async throws {
+            let environment = ProcessInfo.processInfo.environment
+            guard let selection = environment["FREESIDE_SCREENSHOT_PROBE_KEYS"] else { return }
+            guard environment["FREESIDE_RECORD_SCREENSHOTS"] != "1" else {
+                throw ScreenshotError.diagnosticRecordingRefused
+            }
+            _ = FreesideFont.registration
+            let keys = Set(selection.split(separator: ",").map(String.init))
+            var found: Set<String> = []
+            let mode = environment["FREESIDE_SCREENSHOT_PROBE_MODE"] ?? "selected"
+            let probeContrast = environment["FREESIDE_SCREENSHOT_PROBE_CONTRAST"].flatMap(
+                LaunchInputs.Contrast.init(rawValue:))
+            if environment["FREESIDE_SCREENSHOT_PROBE_CONTRAST"] != nil, probeContrast == nil {
+                throw ScreenshotError.invalidDiagnosticSelection
+            }
+            guard let repetitions = Int(environment["FREESIDE_SCREENSHOT_PROBE_REPETITIONS"] ?? "1"), repetitions > 0
+            else {
+                throw ScreenshotError.invalidDiagnosticSelection
+            }
+            guard ["selected", "reverse", "construct", "render", "prefix", "contrast"].contains(mode) else {
+                throw ScreenshotError.invalidDiagnosticSelection
+            }
+            for size in textSizes where keys.contains(where: { $0.hasSuffix("-\(size.name)") }) {
+                try await FreesideFont.$screenshotDynamicTypeSize.withValue(size.value) {
+                    let surfaces = try await makeSurfaces(at: size.value)
+                    // Constructing extra fixtures and rendering them are
+                    // distinct probes: their effects need not have one cause.
+                    let extras: [Surface]
+                    if mode == "prefix" {
+                        extras = Array(surfaces.prefix { !keys.contains("\($0.name)-\(size.name)") })
+                    } else {
+                        extras = mode == "construct" || mode == "render" ? try await makeSurfaces(at: size.value) : []
+                    }
+                    if mode == "render" || mode == "prefix" {
+                        for surface in extras {
+                            _ = try await render(
+                                surface.view, at: size.value, width: surface.width ?? canvasWidth,
+                                colorScheme: surface.colorScheme, contrast: surface.contrast,
+                                nativeAppearance: surface.nativeAppearance,
+                                key: "extra-\(surface.name)-\(size.name)")
+                        }
+                    }
+                    let selected = surfaces.filter { keys.contains("\($0.name)-\(size.name)") }
+                    for surface in mode == "reverse" ? Array(selected.reversed()) : selected {
+                        let key = "\(surface.name)-\(size.name)"
+                        var firstDigest: String?
+                        for repetition in 0..<repetitions {
+                            if mode == "contrast" {
+                                _ = try await render(
+                                    surface.view, at: size.value, width: surface.width ?? canvasWidth,
+                                    colorScheme: surface.colorScheme, contrast: .increased,
+                                    nativeAppearance: surface.nativeAppearance, key: "increased-\(key)")
+                            }
+                            let image = try await render(
+                                surface.view, at: size.value, width: surface.width ?? canvasWidth,
+                                colorScheme: surface.colorScheme, contrast: probeContrast ?? surface.contrast,
+                                nativeAppearance: surface.nativeAppearance, key: key)
+                            let actual = try digest(image)
+                            print("SCREENSHOT_RESULT \(key) \(image.width)x\(image.height) \(actual)")
+                            if let firstDigest {
+                                #expect(actual == firstDigest, "\(key), repetition \(repetition + 1)")
+                            } else {
+                                firstDigest = actual
+                            }
+                            _ = try dump(image, named: repetitions == 1 ? key : "\(key)-repeat-\(repetition + 1)")
+                        }
+                        found.insert(key)
+                    }
+                    withExtendedLifetime(extras) {}
+                }
+            }
+            guard found == keys, !found.isEmpty else {
+                throw ScreenshotError.invalidDiagnosticSelection
             }
         }
 
@@ -226,6 +320,27 @@
             try validateRecordingHost(hosted: false)
             #expect(throws: ScreenshotError.self) {
                 try validateRecordingHost(hosted: true)
+            }
+        }
+
+        @Test func explicitContrastReachesCaptureWithoutPersistentWrites() async throws {
+            let prior = UserDefaults.standard.object(forKey: "FreesideContrast") as? String
+            for nativeAppearance in [false, true] {
+                let view = AnyView(Color.rule.frame(height: 8))
+                let standard = try await render(
+                    view, at: .large, width: 8, colorScheme: .light,
+                    contrast: .standard, nativeAppearance: nativeAppearance)
+                let increased = try await render(
+                    view, at: .large, width: 8, colorScheme: .light,
+                    contrast: .increased, nativeAppearance: nativeAppearance)
+                #expect(try digest(standard) != digest(increased))
+                await #expect(throws: ScreenshotCapture.Failure.self) {
+                    _ = try await render(
+                        view, at: .large, width: 0, colorScheme: .light,
+                        contrast: .increased, nativeAppearance: nativeAppearance)
+                }
+                #expect(LaunchInputs.screenshotIncreasedContrast == nil)
+                #expect(UserDefaults.standard.object(forKey: "FreesideContrast") as? String == prior)
             }
         }
 
@@ -1014,12 +1129,12 @@
                     }
                     // The card carries this item's commit-plan fact, so the
                     // inspector beside it must not repeat a Facts section.
-                    let readyPreferencesSuite = "FreesideScreenshotReadyPreferences"
+                    let readyPreferencesSuite = "FreesideScreenshotReadyPreferences-\(UUID().uuidString)"
                     guard let readyDefaults = UserDefaults(suiteName: readyPreferencesSuite)
                     else {
                         throw ScreenshotError.preferencesUnavailable
                     }
-                    readyDefaults.removePersistentDomain(forName: readyPreferencesSuite)
+                    defer { readyDefaults.removePersistentDomain(forName: readyPreferencesSuite) }
                     let readyPreferences = DecisionSectionPreferences(defaults: readyDefaults)
                     readyPreferences.claimsExpanded = true
                     readyPreferences.evidenceExpanded = true
@@ -1059,12 +1174,12 @@
                     // inspector shows nothing and the card keeps its rows, so
                     // recording that state would pin a card identical to the
                     // one above and catch no pointer regression at all.
-                    let openEvidenceSuite = "FreesideScreenshotReadyInspectorOpenPreferences"
+                    let openEvidenceSuite = "FreesideScreenshotReadyInspectorOpenPreferences-\(UUID().uuidString)"
                     guard let openEvidenceDefaults = UserDefaults(suiteName: openEvidenceSuite)
                     else {
                         throw ScreenshotError.preferencesUnavailable
                     }
-                    openEvidenceDefaults.removePersistentDomain(forName: openEvidenceSuite)
+                    defer { openEvidenceDefaults.removePersistentDomain(forName: openEvidenceSuite) }
                     let openEvidencePreferences = DecisionSectionPreferences(
                         defaults: openEvidenceDefaults)
                     openEvidencePreferences.evidenceExpanded = true
@@ -1195,11 +1310,11 @@
                                     at: dynamicTypeSize,
                                     compactLayout: true))))
 
-                    let preferencesSuite = "FreesideScreenshotDiminishingPreferences"
+                    let preferencesSuite = "FreesideScreenshotDiminishingPreferences-\(UUID().uuidString)"
                     guard let preferencesDefaults = UserDefaults(suiteName: preferencesSuite) else {
                         throw ScreenshotError.preferencesUnavailable
                     }
-                    preferencesDefaults.removePersistentDomain(forName: preferencesSuite)
+                    defer { preferencesDefaults.removePersistentDomain(forName: preferencesSuite) }
                     let inspectorPreferences = DecisionSectionPreferences(
                         defaults: preferencesDefaults)
                     inspectorPreferences.detailsExpanded = true
@@ -1230,11 +1345,11 @@
                 loadsAttachments: false,
                 showsValidationProgress: false
             )
-            let preferencesSuite = "FreesideScreenshotInspectorPreferences"
+            let preferencesSuite = "FreesideScreenshotInspectorPreferences-\(UUID().uuidString)"
             guard let preferencesDefaults = UserDefaults(suiteName: preferencesSuite) else {
                 throw ScreenshotError.preferencesUnavailable
             }
-            preferencesDefaults.removePersistentDomain(forName: preferencesSuite)
+            defer { preferencesDefaults.removePersistentDomain(forName: preferencesSuite) }
             let inspectorPreferences = DecisionSectionPreferences(defaults: preferencesDefaults)
             inspectorPreferences.claimsExpanded = true
             inspectorPreferences.evidenceExpanded = true
@@ -2643,11 +2758,11 @@
                 guard let item = inbox.first(where: { $0.item._type == type })?.item else {
                     continue
                 }
-                let suite = "FreesideScreenshotCardInspectorPreferences"
+                let suite = "FreesideScreenshotCardInspectorPreferences-\(UUID().uuidString)"
                 guard let defaults = UserDefaults(suiteName: suite) else {
                     throw ScreenshotError.preferencesUnavailable
                 }
-                defaults.removePersistentDomain(forName: suite)
+                defer { defaults.removePersistentDomain(forName: suite) }
                 let preferences = DecisionSectionPreferences(defaults: defaults)
                 preferences.claimsExpanded = true
                 preferences.evidenceExpanded = true
@@ -3153,7 +3268,8 @@
             width: CGFloat,
             colorScheme: ColorScheme,
             contrast: LaunchInputs.Contrast? = nil,
-            nativeAppearance: Bool = false
+            nativeAppearance: Bool = false,
+            key: String = "supplemental"
         ) async throws -> CGImage {
             guard let timeZone = TimeZone(secondsFromGMT: 0) else {
                 throw ScreenshotError.missingGMT
@@ -3170,77 +3286,45 @@
                 .fixedSize(horizontal: false, vertical: true)
                 .background(Color.ground)
                 .transformEnvironment(\.colorScheme) { if nativeAppearance { $0 = colorScheme } }
-            // ImageRenderer can transiently return an incomplete glyph raster
-            // under CI load. Baselines must come from a settled frame, and an
-            // unstable surface fails closed instead of blessing random pixels.
-            var priorDigest: String?
-            for _ in 0..<3 {
+            return try await ScreenshotCapture.settled(key: key) {
+                let tracing = ProcessInfo.processInfo.environment["FREESIDE_SCREENSHOT_TRACE"] == "1"
+                if tracing {
+                    print(
+                        "SCREENSHOT_INPUT \(key) explicit=\(contrast?.rawValue ?? "none") fallback=\(LaunchInputs.accessibilityContrastOverride()?.rawValue ?? "host") hostIncreased=\(NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast)"
+                    )
+                }
                 let renderer = ImageRenderer(content: root)
                 renderer.proposedSize = ProposedViewSize(width: width, height: nil)
                 renderer.scale = 1
-                // Use the same contrast override as deterministic app launches.
-                // Restore it before yielding so other tests keep their defaults.
-                let image: CGImage? = {
+                let started = UInt64(Date().timeIntervalSince1970 * 1_000_000_000)
+                defer {
+                    if tracing {
+                        let ended = UInt64(Date().timeIntervalSince1970 * 1_000_000_000)
+                        print("SCREENSHOT_CAPTURE \(key) \(started) \(ended)")
+                    }
+                }
+                return try LaunchInputs.$screenshotIncreasedContrast.withValue(contrast.map { $0 == .increased }) {
                     if nativeAppearance {
-                        var image: CGImage?
+                        var result: Result<CGImage, Error>?
                         NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)?
-                            .performAsCurrentDrawingAppearance { image = renderer.cgImage }
-                        return image
+                            .performAsCurrentDrawingAppearance {
+                                result = Result { try ScreenshotCapture.bitmap(renderer) }
+                            }
+                        guard let result else { throw ScreenshotError.renderFailed }
+                        return try result.get()
                     }
-                    guard let contrast else { return renderer.cgImage }
-                    let defaults = UserDefaults.standard
-                    let prior = defaults.object(forKey: "FreesideContrast")
-                    defaults.set(contrast.rawValue, forKey: "FreesideContrast")
-                    defer {
-                        if let prior {
-                            defaults.set(prior, forKey: "FreesideContrast")
-                        } else {
-                            defaults.removeObject(forKey: "FreesideContrast")
-                        }
-                    }
-                    return renderer.cgImage
-                }()
-                guard let image else {
-                    throw ScreenshotError.renderFailed
+                    return try ScreenshotCapture.bitmap(renderer)
                 }
-                let currentDigest = try digest(image)
-                if currentDigest == priorDigest {
-                    return image
-                }
-                priorDigest = currentDigest
-                await Task.yield()
             }
-            throw ScreenshotError.unstableRender
         }
 
         private func digest(_ image: CGImage) throws -> String {
-            let bytesPerRow = image.width * 4
-            var pixels = Data(count: bytesPerRow * image.height)
-            try pixels.withUnsafeMutableBytes { bytes in
-                guard
-                    let context = CGContext(
-                        data: bytes.baseAddress,
-                        width: image.width,
-                        height: image.height,
-                        bitsPerComponent: 8,
-                        bytesPerRow: bytesPerRow,
-                        space: CGColorSpaceCreateDeviceRGB(),
-                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-                    )
-                else { throw ScreenshotError.bitmapContextFailed }
-                context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
-            }
-            var input = Data("\(image.width)x\(image.height):\(bytesPerRow)\n".utf8)
-            input.append(pixels)
-            return SHA256.hash(data: input).map { String(format: "%02x", $0) }.joined()
+            try ScreenshotCapture.digest(image)
         }
 
-        /// The override manifest holds the hosted GitHub Actions runner's
-        /// rasters, keyed by the runner's OS. They are not OS-version renders:
-        /// the runner draws the same text-heavy surfaces differently from a
-        /// local host on the identical macOS build (26.6.2, 25G83, #1139), so a
-        /// local run always compares against the universal baseline and only a
-        /// hosted runner applies the block for its OS.
+        /// Optional hosted-runner overrides layer on the universal baseline.
+        /// The current macOS 26.6 runner passes without one; a local run
+        /// always uses the universal baseline.
         private func loadManifest(
             overrides: [String: [String: String]]
         ) throws -> [String: String] {
@@ -3260,9 +3344,8 @@
             ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true"
         }
 
-        /// A hosted runner renders the override rasters, never the universal
-        /// baseline, so recording there would bless runner pixels for every
-        /// host.
+        /// Recording stays refused on hosted runners even when no override
+        /// applies, so runner pixels cannot replace the universal baseline.
         private func validateRecordingHost(hosted: Bool) throws {
             guard !hosted else { throw ScreenshotError.recordingRefusedOnHostedRunner }
         }
@@ -3292,17 +3375,6 @@
             return "macOS-\(version.majorVersion).\(version.minorVersion)"
         }
 
-        private func writeManifest(_ manifest: [String: String]) throws {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-            let sourceURL = URL(fileURLWithPath: #filePath)
-                .deletingLastPathComponent()
-                .appendingPathComponent("Resources/ScreenshotDigests.json")
-            var data = try encoder.encode(manifest)
-            data.append(0x0A)
-            try data.write(to: sourceURL, options: .atomic)
-        }
-
         private func dump(_ image: CGImage, named name: String) throws -> URL {
             // Separate evidence from concurrent worktrees without changing
             // which pixels are compared or accepted.
@@ -3325,7 +3397,8 @@
     }
 
     private enum ScreenshotError: Error {
-        case bitmapContextFailed
+        case diagnosticRecordingRefused
+        case invalidDiagnosticSelection
         case missingActiveRun
         case missingActiveTimeline
         case missingRetryTask
@@ -3337,6 +3410,5 @@
         case recordingRefusedOnHostedRunner
         case recordingRequiresBaselineOperatingSystem(expected: String, actual: String)
         case renderFailed
-        case unstableRender
     }
 #endif
