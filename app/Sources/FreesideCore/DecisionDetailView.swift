@@ -1981,7 +1981,8 @@ struct DecisionDetailView: View {
     ) -> some View {
         if let keyword = card.producerUnverifiedKeyword {
             UnverifiedLabel(
-                text: keyword, rendersInteractiveControls: rendersInteractiveControls)
+                text: keyword, carriesInfo: true,
+                rendersInteractiveControls: rendersInteractiveControls)
         } else {
             KeywordLabel(text: card.producerLabel)
         }
@@ -2332,7 +2333,7 @@ struct DecisionDetailView: View {
             title: Group {
                 if let register, register.explanation == .onDemand {
                     UnverifiedLabel(
-                        text: recommendation.label,
+                        text: recommendation.label, carriesInfo: true,
                         rendersInteractiveControls: register.rendersInteractiveControls)
                 } else {
                     KeywordLabel(text: recommendation.label)
@@ -2451,7 +2452,7 @@ struct DecisionDetailView: View {
                 KeywordLabel(text: "\(title) (unverified)")
             case .onDemand:
                 UnverifiedLabel(
-                    text: title,
+                    text: title, carriesInfo: true,
                     rendersInteractiveControls: unverified.rendersInteractiveControls
                         && !isDisclosureLabel)
             }

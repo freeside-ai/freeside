@@ -399,6 +399,10 @@ enum FreesideFont {
     /// The dim summary trailing a disclosure's label.
     static var trailingSummary: Font { fixed("IBMPlexMono", 13.5, relativeTo: .footnote) }
     static var actionLabel: Font { fixed("IBMPlexSans-Medm", 15, relativeTo: .body) }
+    /// A text action inside a notice: the card body size, medium.
+    static var noticeAction: Font { fixed("IBMPlexSans-Medm", cardBodySize, relativeTo: .body) }
+    /// The disclosure chevron, sized as a glyph beside the fact label.
+    static var disclosureGlyph: Font { fixed("IBMPlexSans", 11, relativeTo: .callout) }
 
     // The platform text styles, in the language's faces.
     static var title: Font { serif(.title2) }
@@ -528,6 +532,10 @@ struct UnverifiedLabel: View {
     static let explanation = "Written by the agent, not checked by the daemon."
 
     let text: String
+    /// Whether this label draws the card's explanation control. A card has
+    /// one, on its first unverified keyword in reading order (R25), so every
+    /// other label is the keyword and its register alone.
+    var carriesInfo = false
     var rendersInteractiveControls = true
 
     @State private var showsExplanation = false
@@ -537,33 +545,39 @@ struct UnverifiedLabel: View {
         // final word rather than beside its first line.
         HStack(alignment: .lastTextBaseline, spacing: 6) {
             KeywordLabel(text: "\(text) (unverified)")
-            if rendersInteractiveControls {
-                Button {
-                    showsExplanation = true
-                } label: {
-                    glyph
-                        // A touch target larger than the glyph, without
-                        // growing the label's line.
-                        .padding(12)
-                        .contentShape(Rectangle())
-                        .padding(-12)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("About unverified content")
-                .popover(isPresented: $showsExplanation) {
-                    Text(Self.explanation)
-                        .font(FreesideFont.callout)
-                        .foregroundStyle(Color.ink)
-                        .frame(maxWidth: 280, alignment: .leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(12)
-                        // A phone keeps the popover anchored to the label
-                        // rather than promoting one sentence to a sheet.
-                        .presentationCompactAdaptation(.popover)
-                }
-            } else {
-                glyph.accessibilityHidden(true)
+            if carriesInfo {
+                infoControl
             }
+        }
+    }
+
+    @ViewBuilder private var infoControl: some View {
+        if rendersInteractiveControls {
+            Button {
+                showsExplanation = true
+            } label: {
+                glyph
+                    // A touch target larger than the glyph, without
+                    // growing the label's line.
+                    .padding(12)
+                    .contentShape(Rectangle())
+                    .padding(-12)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("About unverified content")
+            .popover(isPresented: $showsExplanation) {
+                Text(Self.explanation)
+                    .font(FreesideFont.callout)
+                    .foregroundStyle(Color.ink)
+                    .frame(maxWidth: 280, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(12)
+                    // A phone keeps the popover anchored to the label
+                    // rather than promoting one sentence to a sheet.
+                    .presentationCompactAdaptation(.popover)
+            }
+        } else {
+            glyph.accessibilityHidden(true)
         }
     }
 
@@ -613,6 +627,278 @@ struct KeywordDisclosure<Content: View>: View {
         Text(summary)
             .font(FreesideFont.monoCaption)
             .foregroundStyle(Color.inkDim)
+    }
+}
+
+/// The one disclosure (R2): an accent chevron, a sentence-case label in the
+/// fact-label face, and an optional trailing mono summary (a count, an id,
+/// the newest time), so a closed section still says what it holds. The
+/// summary sits beside the label while both fit one line and stacks under it
+/// when they do not (R22), never truncating either. The caller owns
+/// `isExpanded`, which is how a surface persists the state.
+struct SentenceDisclosure<Content: View>: View {
+    let label: String
+    var summary: String? = nil
+    @Binding var isExpanded: Bool
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            Button {
+                isExpanded.toggle()
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "arrowtriangle.right.fill")
+                        .font(FreesideFont.disclosureGlyph)
+                        .foregroundStyle(Color.accentText)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        .accessibilityHidden(true)
+                    labelText
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                // A touch target taller than the line, without spreading the
+                // folds a card stacks 12pt apart.
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+                .padding(.vertical, -8)
+            }
+            .buttonStyle(.plain)
+            .freesideFocusRing(cornerRadius: 4)
+            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            if isExpanded {
+                content()
+            }
+        }
+    }
+
+    @ViewBuilder private var labelText: some View {
+        if let summary {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    title
+                    summaryText(summary)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    title
+                    summaryText(summary)
+                }
+            }
+        } else {
+            title
+        }
+    }
+
+    private var title: some View {
+        Text(label)
+            .font(FreesideFont.factLabel)
+            .foregroundStyle(Color.ink)
+            .multilineTextAlignment(.leading)
+    }
+
+    private func summaryText(_ summary: String) -> some View {
+        Text(summary)
+            .font(FreesideFont.trailingSummary)
+            .foregroundStyle(Color.inkDim)
+            .multilineTextAlignment(.leading)
+    }
+}
+
+/// The agent's voice (R5): its prose on the quote wash behind a 3pt rule, so
+/// a summary, a claim, or a reason the agent wrote never reads as the
+/// daemon's own statement. With a `producer` the block opens with that
+/// keyword and the unverified register (R7); a caller that heads the block
+/// with its own label passes none.
+struct QuoteBlock<Content: View>: View {
+    var producer: String? = nil
+    /// Whether the producer label draws the card's one explanation control.
+    var carriesInfo = false
+    var rendersInteractiveControls = true
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let producer {
+                UnverifiedLabel(
+                    text: producer, carriesInfo: carriesInfo,
+                    rendersInteractiveControls: rendersInteractiveControls)
+            }
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        // The rule sits inside the leading padding's edge, so the wash and
+        // the rule clip to one 6pt corner.
+        .padding(.leading, 3)
+        .background(alignment: .leading) { Color.quoteRule.frame(width: 3) }
+        .background(Color.quoteWash)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+}
+
+/// The daemon's own statement set apart inside a card (R5): the accent wash
+/// behind a 4pt accent bar, the same pairing a selected row takes (R19). It
+/// is never drawn around agent prose, which takes `QuoteBlock`.
+struct SystemCallout<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .padding(.leading, 4)
+        .background(alignment: .leading) { Color.accentBorder.frame(width: 4) }
+        .background(Color.accentWash)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+}
+
+/// The one notice (R14): a full-width wash, a keyword in the tone's tint, a
+/// dim sentence, and an optional trailing text action in the same tint. The
+/// sentence sits beside the keyword while the line fits and stacks under it
+/// when it does not. A notice never folds and never takes the accent bar.
+struct Notice: View {
+    enum Tone: CaseIterable {
+        /// A record of something done: nothing to act on.
+        case neutral
+        /// Worth a look, and usually carries the action that resolves it.
+        case accent
+        /// A failure or a stop.
+        case wax
+
+        var wash: Color {
+            switch self {
+            case .neutral: .neutralWash
+            case .accent: .noticeAccentWash
+            case .wax: .noticeWaxWash
+            }
+        }
+
+        var tint: Color {
+            switch self {
+            case .neutral: .inkDim
+            case .accent: .accentText
+            case .wax: .waxText
+            }
+        }
+    }
+
+    struct Action {
+        let label: String
+        let handler: () -> Void
+    }
+
+    let tone: Tone
+    let keyword: String
+    let sentence: String
+    var action: Action? = nil
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                KeywordLabel(text: keyword, color: tone.tint)
+                sentenceText
+                Spacer(minLength: 0)
+                actionButton
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                KeywordLabel(text: keyword, color: tone.tint)
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    sentenceText
+                    Spacer(minLength: 0)
+                    actionButton
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 6).fill(tone.wash))
+    }
+
+    private var sentenceText: some View {
+        Text(sentence)
+            .font(FreesideFont.cardBody)
+            .foregroundStyle(Color.inkDim)
+            .multilineTextAlignment(.leading)
+    }
+
+    @ViewBuilder private var actionButton: some View {
+        if let action {
+            Button(action.label, action: action.handler)
+                .buttonStyle(.plain)
+                .font(FreesideFont.noticeAction)
+                .foregroundStyle(tone.tint)
+                .fixedSize()
+                .freesideFocusRing(cornerRadius: 4)
+        }
+    }
+}
+
+/// The type eyebrow every card opens with (R27): the type keyword on the
+/// left and the card's state on the right. When the card's lead is
+/// agent-authored the keyword carries the unverified register and the card's
+/// one explanation control. The trailing slot drops to its own line at an
+/// accessibility size (R22).
+struct CardEyebrow<Trailing: View>: View {
+    let keyword: String
+    var carriesInfo = false
+    var rendersInteractiveControls = true
+    @ViewBuilder let trailing: () -> Trailing
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 8) {
+                keywordLabel
+                trailing()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            HStack(alignment: .center, spacing: 12) {
+                keywordLabel
+                Spacer(minLength: 0)
+                trailing()
+            }
+        }
+    }
+
+    @ViewBuilder private var keywordLabel: some View {
+        if carriesInfo {
+            UnverifiedLabel(
+                text: keyword, carriesInfo: true,
+                rendersInteractiveControls: rendersInteractiveControls)
+        } else {
+            KeywordLabel(text: keyword)
+                .accessibilityAddTraits(.isHeader)
+        }
+    }
+}
+
+extension CardEyebrow where Trailing == StateChip? {
+    /// An eyebrow whose state is one chip, or none.
+    init(
+        keyword: String, chip: StateChip? = nil, carriesInfo: Bool = false,
+        rendersInteractiveControls: Bool = true
+    ) {
+        self.init(
+            keyword: keyword, carriesInfo: carriesInfo,
+            rendersInteractiveControls: rendersInteractiveControls
+        ) { chip }
+    }
+}
+
+/// A compact mark (R21): `AGENT`, `PROPOSED`, `AGENT RECOMMENDS` trailing
+/// the line it marks, in the accent. It never carries a glyph or the
+/// explanation control (R25); the card's one control sits on a full label.
+struct CompactMark: View {
+    let text: String
+
+    var body: some View {
+        KeywordLabel(text: text, color: .accentText)
     }
 }
 
@@ -679,6 +965,9 @@ struct FactRow: View {
     /// Set where the value carries its own color. Nil leaves a trailing
     /// value inheriting the row's foreground style.
     var valueColor: Color? = nil
+    /// A state drawn in the value slot in place of the text (R9). `value`
+    /// holds the chip's label, so the stacking rule reads one string.
+    private(set) var chip: StateChip? = nil
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
@@ -686,9 +975,13 @@ struct FactRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(label)
                     .foregroundStyle(Color.inkDim)
-                Text(value)
-                    .foregroundStyle(valueColor ?? .ink)
-                    .fixedSize(horizontal: false, vertical: true)
+                if let chip {
+                    chip
+                } else {
+                    Text(value)
+                        .foregroundStyle(valueColor ?? .ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         } else {
             // An explicit trailing column on both platforms: macOS's
@@ -706,11 +999,20 @@ struct FactRow: View {
 
     @ViewBuilder private var valueText: some View {
         let text = Text(value)
-        if let valueColor {
+        if let chip {
+            chip
+        } else if let valueColor {
             text.foregroundStyle(valueColor)
         } else {
             text
         }
+    }
+}
+
+extension FactRow {
+    /// A fact whose value is a state: the chip sits in the value slot.
+    init(label: String, chip: StateChip) {
+        self.init(label: label, value: chip.label, chip: chip)
     }
 }
 
@@ -953,12 +1255,56 @@ extension View {
         #endif
     }
 
+    /// The pointer-hover state (R19): the `hover` cut behind a control that
+    /// has no fill of its own. A disabled control does not respond.
+    func freesideHover(cornerRadius: CGFloat = 6) -> some View {
+        modifier(FreesideHover(cornerRadius: cornerRadius))
+    }
+
+    /// The keyboard-focus state (R19): a 1pt accent ring in place of the
+    /// system focus effect, which is drawn in the system's own color.
+    func freesideFocusRing(cornerRadius: CGFloat = 6) -> some View {
+        modifier(FreesideFocusRing(cornerRadius: cornerRadius))
+    }
+
     /// A card: ground-2 on ground, 1px rule border, 8pt radius.
     func freesideCard(border: Color = .rule, dashed: Bool = false, cornerRadius: CGFloat = 8) -> some View {
         background(RoundedRectangle(cornerRadius: cornerRadius).fill(Color.ground2))
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius)
                     .strokeBorder(border, style: StrokeStyle(lineWidth: 1, dash: dashed ? [4, 3] : []))
+            )
+    }
+}
+
+private struct FreesideHover: ViewModifier {
+    let cornerRadius: CGFloat
+    @State private var isHovered = false
+    @Environment(\.isEnabled) private var isEnabled
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .fill(isHovered && isEnabled ? Color.hover : .clear)
+            )
+            .onHover { isHovered = $0 }
+    }
+}
+
+private struct FreesideFocusRing: ViewModifier {
+    let cornerRadius: CGFloat
+    @FocusState private var isFocused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .focused($isFocused)
+            .focusEffectDisabled()
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .strokeBorder(isFocused ? Color.accentBorder : .clear, lineWidth: 1)
+                    // The ring sits just outside the label it frames.
+                    .padding(-3)
             )
     }
 }
