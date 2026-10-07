@@ -678,12 +678,13 @@ import Testing
         }
     }
 
-    /// R10: the ladder survey card 4b settled, on the one card composed on
-    /// it so far. Every other type keeps the earlier scale until its sweep.
+    /// R10: the ladder survey card 4b settled, on the cards composed on it
+    /// so far. Every other type keeps the earlier scale until its sweep.
     @Test(arguments: Components.Schemas.AttentionType.allCases)
-    func onlyTheFinalReviewTakesTheRefinedScale(type: Components.Schemas.AttentionType) {
+    func onlyTheComposedCardsTakeTheRefinedScale(type: Components.Schemas.AttentionType) {
+        let refined: Set<Components.Schemas.AttentionType> = [.ready_for_final_review, .agent_question]
         let scale = DecisionCardComposition.scale(for: type)
-        #expect(scale == (type == .ready_for_final_review ? .refined : .legacy))
+        #expect(scale == (refined.contains(type) ? .refined : .legacy))
     }
 
     @Test func refinedScaleIsTheLadderCard4bSettled() {

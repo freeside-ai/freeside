@@ -257,14 +257,15 @@ struct DecisionCardComposition: Equatable {
         }
     }
 
-    /// The final review is the card the refined ladder was proved on; every
-    /// other type keeps the earlier one until its own sweep composes it. The
-    /// switch is exhaustive so a new type has to answer the question.
+    /// The final review is the card the refined ladder was proved on, and
+    /// the agent question the second composed on it; every other type keeps
+    /// the earlier one until its own sweep composes it. The switch is
+    /// exhaustive so a new type has to answer the question.
     static func scale(for type: Components.Schemas.AttentionType) -> Scale {
         switch type {
-        case .ready_for_final_review:
+        case .ready_for_final_review, .agent_question:
             return .refined
-        case .agent_question, .review_dispute, .spec_approval, .execution_failure,
+        case .review_dispute, .spec_approval, .execution_failure,
             .review_diminishing_returns, .review_contradiction, .review_configuration,
             .finding_adjudication, .publish_blocked, .task_proposal, .effect_proposal,
             .system_health, .blocked:
