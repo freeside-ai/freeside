@@ -606,9 +606,10 @@ type HandoffSpec struct {
 	// reported. Calls run off the wait's path, so a slow or failing hook
 	// never changes the handoff's result or the writer's budget; a failed
 	// call is retried on a later poll. The handoff returns only after the
-	// last call, each bounded by Config.TeardownTimeout. It is a runtime
-	// observer, not part of the frozen spec, so the journal digest never
-	// sees it.
+	// last call, each bounded by Config.TeardownTimeout. When the wait fails
+	// or is cancelled, writer teardown precedes joining the remaining calls.
+	// It is a runtime observer, not part of the frozen spec, so the journal
+	// digest never sees it.
 	Stall func(ctx context.Context, stalled bool) error `json:"-"`
 }
 

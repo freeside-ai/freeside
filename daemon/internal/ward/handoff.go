@@ -211,6 +211,7 @@ type runState struct {
 	exporter            objectClaim
 	network             objectClaim
 	proxy               *connectProxy
+	stall               *stallWatch
 	// archiveDir holds the exported rootfs archive; always removed once
 	// verification is done or the run fails (the archive is never returned).
 	archiveDir string
@@ -429,6 +430,8 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 			}
 			jcancel()
 		}
+		// Advisory writes must not delay writer teardown or journal closure.
+		st.stall.finish()
 		// The archive is transient once verified; the output dir is kept only
 		// when the caller actually receives it: the run reached its successful
 		// return and teardown left the result intact. Any other unwind removes
@@ -759,14 +762,16 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	// intent (a second VM cannot attach a volume a live VM holds rw; only
 	// observed "stopped" proves the attachment is gone). The stall watch
 	// rides the same polls and can only report; it never moves the budget.
-	stall := newStallWatch(ctx, b.cfg, hs, st.proxy.LastProviderByte)
+	// Join it here when the writer stopped, or after teardown on failure.
+	st.stall = newStallWatch(ctx, b.cfg, hs, st.proxy.LastProviderByte)
 	err = b.runtimeOps.waitStoppedObserving(
-		ctx, names.Agent, st.agent, st.ownershipLabel, b.cfg.WriterStopTimeout, stall.poll,
+		ctx, names.Agent, st.agent, st.ownershipLabel, b.cfg.WriterStopTimeout, st.stall.poll,
 	)
-	stall.finish()
 	if err != nil {
 		return nil, failf(CheckWriterTermination, "agent: %v", err)
 	}
+	st.stall.finish()
+	st.stall = nil
 	// The boot log goes with the container, so read it before the delete.
 	st.agentLaunch = b.runtimeOps.memoryLimitKilled(ctx, names.Agent)
 	if err := b.rt.DeleteContainer(ctx, names.Agent); err != nil {

@@ -425,7 +425,7 @@ func newRegistryProxy(t *testing.T) *registryProxy {
 		context.Background(), "127.0.0.1", "127.0.0.0/24",
 		[]string{testProviderAuthority},
 		registryRoutes{authorities: []string{testRegistryAuthority}, lookup: lookup},
-		time.Second, dial, time.Now,
+		time.Second, dial, time.Now, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -655,7 +655,7 @@ func TestConnectProxyProviderOutranksRegistryDeclaration(t *testing.T) {
 		context.Background(), "127.0.0.1", "127.0.0.0/24",
 		[]string{testProviderAuthority},
 		registryRoutes{authorities: []string{testRegistryAuthority, testProviderAuthority}},
-		time.Second, nil, time.Now,
+		time.Second, nil, time.Now, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
