@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 82
+revision: 83
 status: active
-updated: 2026-10-06
+updated: 2026-10-07
 ---
 
 # Freeside
@@ -5692,7 +5692,7 @@ supported permanently.
 
 Phase 1A exit targets, verified on a clean VM or spare machine (that
 clean-machine proof was owner-deferred to #428 at the 1A exit, recorded on #231
-on 2026-08-01, and lands in wave 8):
+on 2026-08-01):
 
 - fresh machine to first run in under one hour; and
 - repository onboarding in under thirty minutes with exactly one Freeside
@@ -5700,6 +5700,12 @@ on 2026-08-01, and lands in wave 8):
   approval are already complete. GitHub's native installation or approval is an
   account-onboarding prerequisite that is measured separately. After it
   completes, `freesided onboard` resumes the same onboarding transaction.
+
+The owner removed the clean-machine proof (#428) and its machine-and-credential
+prerequisite (#1621) from wave 8 on 2026-10-07. Both remain open and
+unscheduled. Their future placement, including whether they are required for
+the 1B.1 exit, is undecided. These timing targets remain the acceptance targets
+for #428; no clean-machine result is claimed.
 
 ## 11. Roadmap, Build Order, and Coordination
 
@@ -5797,7 +5803,8 @@ Exit requires:
 - `setup`, `onboard`, and `doctor` packaging the proven manual operations,
   including that same project-image builder, and meeting the Section [10](#10-operations-and-onboarding)
   targets (the clean-machine proof of those targets was owner-deferred to #428
-  at the 1A exit and lands in wave 8).
+  at the 1A exit; its future placement is undecided, as recorded in Section
+  [10](#10-operations-and-onboarding)).
 
 #### Phase 1A Build Order
 
@@ -5897,9 +5904,8 @@ audit. The internal exit is evaluated once all four have closed.
   adjudicated deferred dispositions record (Section [7](#7-review-policy)). It also delivers the
   doctor credential-integrity probe (Section [10](#10-operations-and-onboarding)), the stall heartbeat (Section
   [5.12](#512-workflow-definition-initiators-and-artifacts)), the external daemon-liveness probe (Section [5.2](#52-the-daemon-and-its-supervisor)), held-work and
-  stopped-operation signals, the clean-machine onboarding proof, the registry
-  egress profile and the policy-gated image rebuild, and re-entry of
-  published-PR activity.
+  stopped-operation signals, the registry egress profile and the policy-gated
+  image rebuild, and re-entry of published-PR activity.
 - **Providers close (wave 9).** This wave delivers one agent vocabulary across
   execution, review, and daemon judgment (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); the Codex execution
   driver and its enrollment cutover; and pi specification.
@@ -5982,7 +5988,7 @@ Contracts and fakes coordinate implementation. CI keeps lanes honest.
 | **5 (1B.0): loop depth** | Parallel lanes | Specifier and daemon research fetching with the spec-approval gate; label-initiator intake; the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) classifier and diagnostic sites; the provenance-gated EvidencePublisher (first slice: the Section [7](#7-review-policy) disposition history at publication, #525); the runs list and run timeline; the `max_parallel_executions` experiment. The contract track drains the Section [6](#6-verification) state algebra, then the effect-registry retrofit of `run_proposal`. The supervision core consumes the revision-27 Section [5.2](#52-the-daemon-and-its-supervisor) contract, pulled forward by owner fiat: #454's daemon side and the app-side LaunchAgent and menu-bar unit. |
 | **6 (1B.0): convergence and yield** | Integrated | Convergence policy and the Section [7](#7-review-policy) finding-adjudication routing (#697; the spine assigns its contract splits at wave planning); the Claude shadow arm with second adjudication and sampled classification accuracy; automatic re-review of remediation heads as a standing integration test; yield history on ready-for-final-review; the full chain on the real backlog. iOS on-device install (Section [10](#10-operations-and-onboarding)). 1B.0 exit. |
 | **7 (1B.1): the decision surface** | Parallel lanes | The decision surface closes and reads from the phone. Contract-first, positions assessed by the spine at planning (unassessed pairs serialize): the revision-40 attention-presentation cluster (the Section [4](#4-the-attention-model) recommendation shape and Section [9](#9-comprehension) typed minimum card facts, #917, which must retire `adjudicate` or reassign it to an executable `review_dispute` transaction before client adoption; decision-surface identity, #942; per-type card facts, #724; adjudication finding context, #892; per-invocation cost observations, #901), then transaction closure for the remaining Phase 1 pending actions (#918, #919, #920, #921) and the retirement of `choose_alternate_profile` (#936), then Section [5.15](#515-evidence-and-images) evidence metadata (#922), pairing identity facts (#923), readiness rendering (#982), and the Section [8](#8-observability-and-optimization-telemetry)/9 comprehension-telemetry contracts the wave-11 exit evaluation reads (#924, the first unit to slip to wave 8 if review bandwidth binds). Beside the chain: the daemon fact producers, client adoption (the provisional Swift `ActionOutcome` and mock server converge with the daemon's `discuss` and spec-approval `request_changes`), and the Section [9](#9-comprehension) summary layer (#723, stage-agent-sourced, no daemon-inference call). The adjudication-size contract (#961) is placed here or in wave 9 at planning. Deferral drain: the attention-presentation and card-fact clusters only. Exit proof: every rendered Phase 1 action executes on Mac and iPhone; no action stays pending, disabled, or decorative; every card is self-contained at its Section [9](#9-comprehension) altitude; facts stay distinct from claims. |
-| **8 (1B.1): operational closure** | Parallel lanes | Freeside runs unattended, says when it is stuck, and lets published-PR activity back in. The `effect_proposal` card, arriving with the source-issue closure proposal (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) and reused by human-gated follow-up filing (Section [5.17](#517-follow-up-issue-filing)); the doctor credential-integrity probe (Section [10](#10-operations-and-onboarding)); the stall heartbeat (Section [5.12](#512-workflow-definition-initiators-and-artifacts)); the external daemon-liveness probe (Section [5.2](#52-the-daemon-and-its-supervisor), #510); the held-work item (#766); the review drift audit (Section [7](#7-review-policy); the #1048 contract, then #1049–#1053, floor before model site); the standing stopped-operation indicator (#980); device listing and revocation (#981); the clean-machine onboarding proof (#428); and the egress floor's first capabilities above it (Sections [5.4](#54-credential-modes-egress-profiles-and-concurrency), [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, `kind:contract` because `EgressProfile` is a domain enum carried in the admission record, then (b) the policy-gated project-image rebuild in the reusable builder, `starts-after` (a) because its gate reads the registry set (a) declares; both build on merged #302 and #334. Ward container limits (#1597, revision 72) launch every ward container with a declared CPU cap and memory limit and measure real peak memory, so wave 9's memory budget reserves against recorded sizes; it has no open prerequisite and is startable at wave start. Re-entry after a ready-item invalidation (#502; the spine splits its contract half at planning) and external review ingestion on published PRs (#524) share the re-entry trigger shape and land together. Deferral drain: the operational and re-entry clusters, plus #1597. Exit proof: a clean machine reaches an unattended real run; daemon death, crash loops, stalls, held work, a stopped state, a review loop that grows past its specification, and external review each alert without terminal patrol or manual polling. |
+| **8 (1B.1): operational closure** | Parallel lanes | Freeside runs unattended, says when it is stuck, and lets published-PR activity back in. The `effect_proposal` card, arriving with the source-issue closure proposal (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) and reused by human-gated follow-up filing (Section [5.17](#517-follow-up-issue-filing)); the doctor credential-integrity probe (Section [10](#10-operations-and-onboarding)); the stall heartbeat (Section [5.12](#512-workflow-definition-initiators-and-artifacts)); the external daemon-liveness probe (Section [5.2](#52-the-daemon-and-its-supervisor), #510); the held-work item (#766); the review drift audit (Section [7](#7-review-policy); the #1048 contract, then #1049–#1053, floor before model site); the standing stopped-operation indicator (#980); device listing and revocation (#981); and the egress floor's first capabilities above it (Sections [5.4](#54-credential-modes-egress-profiles-and-concurrency), [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, `kind:contract` because `EgressProfile` is a domain enum carried in the admission record, then (b) the policy-gated project-image rebuild in the reusable builder, `starts-after` (a) because its gate reads the registry set (a) declares; both build on merged #302 and #334. Ward container limits (#1597, revision 72) launch every ward container with a declared CPU cap and memory limit and measure real peak memory, so wave 9's memory budget reserves against recorded sizes; it has no open prerequisite and is startable at wave start. Re-entry after a ready-item invalidation (#502; the spine splits its contract half at planning) and external review ingestion on published PRs (#524) share the re-entry trigger shape and land together. Deferral drain: the operational and re-entry clusters, plus #1597. Exit proof: an unattended real run completes; daemon death, crash loops, stalls, held work, a stopped state, a review loop that grows past its specification, and external review each alert without terminal patrol or manual polling. |
 | **9 (1B.1): provider diversity** | Parallel lanes; split-eligible | One agent vocabulary and a second real provider. The agent-vocabulary contract chain, positions assigned at planning: review admission and provenance (#898), the cross-lane failure model (#899), judgment roles in the lineup (#900, decided in revision 65: every agent activity is a lineup role), the role-name lineup keys and wardless admission class that decision needs (#1421, `starts-after` #900), then agent and run facts in the clients (#979). The Codex tail: the adapter registration (#406, `starts-after` the merged admitted-agent contract #894), ward's second vendor topology (#407), the continuation compatibility digest (#873), then #397 by explicit owner decision on shadow evidence (none existed at the wave-6 exit because the shadow configuration was never approved for a project, #1001; #397 `starts-after` #898 and #869 `starts-after` #899 are recorded under the ambiguity rule for wave-9 planning to confirm), then the StageDriver binding (#408, `merges-after` #873; Section [7](#7-review-policy) keeps #397 ahead of it so that Codex-implements plus Codex-reviews does not become the default pairing); the alternate-provider retry card (#869, `starts-after` #406 and #408). The Codex account-probe spike (#866) finishes as a negative result: local account facts replace the proposed app-server probe, while its harness supports the usage spike. Guided enrollment with the two-step cutover (#867) `starts-after` #1421, because `freesided auth adopt` emits the first real lineup and must not emit stage-named keys (owner decision, revision 65); until then #867 no longer starts early by fiat. The local doctor account facts (#868) `starts-after` #406 and the completed #866 spike; replan #868 after the revision-80 policy PR (#1758) merges. The pi adapter, enrollment, and specification agent (#895) `starts-after` #897 and #867, specification only, with its pre-adoption gates run against the pinned build. The capacity cluster (revisions 72 and 73), its contract units placed in the same chain at planning: the shared-identity writer lease (#1585), per-pool execution limits (#1596, `starts-after` #1585), the host memory budget and machine-capacity hold (#1598, `starts-after` #898 and #1597), and task lines (#1600, `starts-after` #1421). #1585's prerequisite has merged, so it may start before the wave by fiat once the spine gives it a chain position. Beside the chain: the budget command (#1595, `starts-after` #1598), the task-line change command (#1601, `starts-after` #1600), the hold wording in the clients (#1599, `starts-after` #1596 and #1598), and the New Task agent picker (#1602, `starts-after` #1600 and #979). The spine splits this wave into 9a (contracts) and 9b (adapters) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because a wave tracker is titled `Wave N: <Name>`. Deferral drain: the agent, provider, and capacity clusters. Exit proof: a real unattended Codex run and a pi specification; provider switching explicit in the lineup and visible in the clients; correct cost and independence records (#901); quota and capacity failures recover through the retry card, never a silent fallback. |
 | **10 (1B.1): subscription operations** | Parallel lanes | The operator sees each subscription's allowance and chooses where work runs. Contract-first, positions assessed by the spine at planning (unassessed pairs serialize): the usage-observation record keyed by usage pool and provider window (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation), `starts-after` the per-pool record (#1596), with the sync-visibility question (#1145) resolved before the client projection adopts its freshness contract; then the client contract for the account usage view, for reassigning a pool's collector, and for changing a waiting task's line from a client (the client half that #1601 leaves to its own contract unit). Beside the chain: the Codex and Claude usage spikes (the Codex spike #1714 `starts-after` #866, accepts its negative account-probe result, and measures fresh and near-expiry usage reads under Section [10](#10-operations-and-onboarding); the Claude spike proves what the pinned CLI answers under the setup-token credential), the collectors those spikes prove, the refresh lifecycle (Section [10](#10-operations-and-onboarding)), the daemon's operator-facing projection, the Mac and iPhone account usage view, and the usage facts beside the agent choices of #1602, #1601, and #869's alternate-agent retry card (wave 10 owns that projection: the reading cannot sit beside the card until the observation record exists, and #869 ships the card without it). Quota, expiry, and capacity failures keep #869's retry card; no usage-specific failure surface is added. Deferral drain: the subscription-usage cluster. Exit proof: on Mac and iPhone the operator inspects a real pool's windows, reset times, and freshness; chooses an agent on that pool for new work; changes a waiting task's role; and reads the recorded admission showing the chosen identity ran, with a stale reading shown as stale and an unsupported provider shown as unsupported. 1B.1 exit evaluation. |
 | **11 (1B.2): the initiative view** | Integrated | Many work units become one picture. Typed relationship kinds in the Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection) capture records (#884, its position assessed by the spine at planning), the frontier projection, and the deterministic initiative view rendering the dependency graph (#885). 1B exit evaluation against recorded comprehension and operational evidence. |
@@ -6142,57 +6148,20 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 82 ("The Reason and the Claim Marker on Every Card Type"):
+Revision 83 ("Clean-Machine Proof Leaves Wave 8"):
 
-1. **One test places an item's `reason` on every item type.** Section [9](#9-comprehension)
-   never said where the reason renders, and the refined-interfaces handoff
-   retires its labeled Context section (rule R0). The reason stays ahead of
-   the actions whenever nothing else there says what it says. It may fold
-   into *Recorded Context*, or sit in the card's details alone, when the
-   lead, a typed fact, or a revalidated recommendation already says it. A
-   labeled claim can stand in only for reason text the agent wrote. A reason
-   that carries a notice that never folds keeps its place unless one of the
-   first three states the same notice ahead of the actions. A binding
-   payload the daemon embeds for its own reconstruction need not be drawn
-   there. The card's details always carry the full reason
-   (Section [9](#9-comprehension), Layering). Rejected: a per-type list of the types that
-   may fold (the handoff's frames fold on more types than its ledger names,
-   and reasons differ item by item within a type: an effect proposal's
-   reason is sometimes a fallback notice that nothing else on the card
-   states); leaving the plan silent (each sweep would then decide where a
-   daemon sentence may sit below the actions); and a second test between the
-   disclosure and the details (both are away from the actions, and the
-   details carry the reason either way).
-2. **Typed facts stay ahead of the actions outside the four decision-first
-   types.** The rule above moves only the reason. Rejected: extending
-   revision 78's split to more types, because no refined frame folds a typed
-   layer 1 fact on any of them.
-3. **A claim's source details may fold on every item type.** Revision 78
-   allowed it on four types; rule R7 needs it on all. The source details are
-   the claim's invocation ID, the claim's own digest, and its original
-   rendering. A digest that is a card fact is not one of them. The producer
-   or Unverified label stays next to the prose (Section [9](#9-comprehension), Summary
-   Provenance). Rejected: reaching the claim digest by extending the
-   routine-coordinate split to three more types, which would also permit
-   folds that no frame draws.
-4. **The Unverified explanation may open on demand, from one control per
-   card.** The plan did not say where the explaining sentence prints; the
-   client repeated it under every agent section on ten types. The label
-   itself stays visible beside each claim. Rejected: leaving the placement
-   unstated (the on-demand form would then have no plan text that keeps the
-   label visible and the explanation reachable).
-5. **No other handoff rule changes Section [9](#9-comprehension).** Rules R20, R21, R24,
-   R25, and R27 were checked against it and are compatible as written. A
-   recommendation still leads with its reason, a `project_policy`
-   recommendation still cites its policy key and digest, and the sentence
-   that a decision cannot be taken on this client is still required. The
-   trust rules, the daemon contract, and the action set are unchanged.
+1. **Wave 8 no longer requires the clean-machine proof.** Remove #428 and
+   its owner-run prerequisite #1621 from the wave's scope and exit proof.
+   The remaining operational alert checks, unattended real-run evidence,
+   and fresh-context adversarial review still gate wave closure.
+2. **Future placement stays undecided.** Both issues remain open and
+   unscheduled. This decision neither makes the proof a 1B.1 exit requirement
+   nor grants a permanent exemption from it. Section [10](#10-operations-and-onboarding)'s timing
+   targets still govern the proof when it runs; the earlier 1A deferral
+   remains part of the record.
 
-(#1797's owner-approved contract, following the owner's acceptance of the
-[6 Oct 2026 refined-interfaces handoff](design/handoff-2026-10-06-refined-interfaces/README.md)
-and decision on its rule R7, both of 2026-10-06;
-[decision note](../devlog/2026-10-06-2147-reason-and-claim-marker-rules.md).
-The client work is #1798 to #1803.)
+(Owner decision of 2026-10-07, #1826;
+[decision note](../devlog/2026-10-07-1050-clean-machine-wave-placement.md).)
 
 ## 14. Risks
 
