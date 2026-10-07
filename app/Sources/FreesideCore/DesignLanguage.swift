@@ -70,6 +70,35 @@ enum FreesidePalette {
     // Stage-rail decoration pairs with labels and does not carry meaning alone.
     static let milestonePrior = FreesideColorCuts(day: 0xB9AF92, dusk: 0x4A3F2C)
     static let milestoneConnector = FreesideColorCuts(day: 0xDDD4B9, dusk: 0x292117)
+
+    // The refined-interfaces cuts (handoff of 2026-10-06). By day each one
+    // repeats an existing cut under the name of its job. By dusk the token
+    // mirror leaves a wash or a hairline invisible on ground-2, so the quote,
+    // the bordered item, and the notices take a cut lifted one step.
+
+    /// The agent's voice (R5): a soft wash behind a leading rule.
+    static let quoteWash = FreesideColorCuts(day: accentWashSoft.day, dusk: ground3.dusk)
+    static let quoteRule = FreesideColorCuts(day: ruleStrong.day, dusk: accentBorder.dusk)
+    /// A bordered item's hairline. Structural, so Increased Contrast
+    /// promotes it to ruleStrong as it does `rule`.
+    static let itemBorder = FreesideColorCuts(
+        day: rule.day, dusk: milestonePrior.dusk,
+        dayIC: ruleStrong.day, duskIC: ruleStrong.dusk)
+    static let noticeAccentWash = FreesideColorCuts(day: accentWash.day, dusk: 0x2C2412)
+    static let noticeWaxWash = FreesideColorCuts(day: waxWash.day, dusk: 0x2E1812)
+    // A hovered control (R19). The handoff lifts dusk to #2F261A, which
+    // leaves a wax-outlined control's label at 4.27:1; ground-3 is the
+    // lightest dusk fill that keeps it at the 4.5:1 text floor.
+    static let hover = FreesideColorCuts(day: ground3.day, dusk: ground3.dusk)
+
+    // Diff counts and diff lines only (R28). The day cuts are darker than
+    // the handoff's #3B7A47 and #B0412F, which are 4.46:1 on ground-2 and
+    // 4.08:1 and 4.27:1 on their own washes; these are the nearest that
+    // clear the 4.5:1 text floor on both.
+    static let diffAdd = FreesideColorCuts(day: 0x377142, dusk: 0x7FB38A)
+    static let diffRemove = FreesideColorCuts(day: 0xA93E2D, dusk: 0xE07A62)
+    static let diffAddWash = FreesideColorCuts(day: 0xDCE8D9, dusk: 0x16261A)
+    static let diffRemoveWash = FreesideColorCuts(day: 0xF0D9D2, dusk: 0x2E1812)
 }
 
 extension Color {
@@ -147,6 +176,21 @@ extension Color {
     static let waterWash = freeside(FreesidePalette.waterWash)
     static let milestonePrior = freeside(FreesidePalette.milestonePrior)
     static let milestoneConnector = freeside(FreesidePalette.milestoneConnector)
+
+    /// The quote: the wash and leading rule behind an agent's own words.
+    static let quoteWash = freeside(FreesidePalette.quoteWash)
+    static let quoteRule = freeside(FreesidePalette.quoteRule)
+    /// The hairline around a bordered item inside a card.
+    static let itemBorder = freeside(FreesidePalette.itemBorder)
+    static let noticeAccentWash = freeside(FreesidePalette.noticeAccentWash)
+    static let noticeWaxWash = freeside(FreesidePalette.noticeWaxWash)
+    /// The fill of a hovered control.
+    static let hover = freeside(FreesidePalette.hover)
+    /// Additions and removals, in a diff count or a diff line and nowhere else.
+    static let diffAdd = freeside(FreesidePalette.diffAdd)
+    static let diffRemove = freeside(FreesidePalette.diffRemove)
+    static let diffAddWash = freeside(FreesidePalette.diffAddWash)
+    static let diffRemoveWash = freeside(FreesidePalette.diffRemoveWash)
 }
 
 #if canImport(AppKit)

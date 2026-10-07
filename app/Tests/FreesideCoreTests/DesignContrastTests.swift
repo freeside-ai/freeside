@@ -26,6 +26,8 @@ import Testing
         #expect(FreesidePalette.secondaryBorder.duskIC == FreesidePalette.ruleStrong.dusk)
         #expect(FreesidePalette.inkFaint.dayIC == FreesidePalette.inkDim.day)
         #expect(FreesidePalette.inkFaint.duskIC == FreesidePalette.inkDim.dusk)
+        #expect(FreesidePalette.itemBorder.dayIC == FreesidePalette.ruleStrong.day)
+        #expect(FreesidePalette.itemBorder.duskIC == FreesidePalette.ruleStrong.dusk)
 
         for pair in Self.usedPairs {
             for cut in Cut.allCases {
@@ -93,6 +95,61 @@ import Testing
             "waterText", FreesidePalette.waterText, on: "waterWash",
             FreesidePalette.waterWash),
 
+        // The refined-interfaces cuts. The quote holds the agent's prose and
+        // a dim source line; a notice holds its tinted keyword, its sentence,
+        // and a dim trailing clause; a system callout sets ink on the accent
+        // wash.
+        text("ink", FreesidePalette.ink, on: "quoteWash", FreesidePalette.quoteWash),
+        text("inkDim", FreesidePalette.inkDim, on: "quoteWash", FreesidePalette.quoteWash),
+        text(
+            "accentText", FreesidePalette.accentText, on: "quoteWash",
+            FreesidePalette.quoteWash),
+        text("ink", FreesidePalette.ink, on: "accentWash", FreesidePalette.accentWash),
+        text(
+            "ink", FreesidePalette.ink, on: "noticeAccentWash",
+            FreesidePalette.noticeAccentWash),
+        text(
+            "inkDim", FreesidePalette.inkDim, on: "noticeAccentWash",
+            FreesidePalette.noticeAccentWash),
+        text(
+            "accentText", FreesidePalette.accentText, on: "noticeAccentWash",
+            FreesidePalette.noticeAccentWash),
+        text("ink", FreesidePalette.ink, on: "noticeWaxWash", FreesidePalette.noticeWaxWash),
+        text(
+            "inkDim", FreesidePalette.inkDim, on: "noticeWaxWash",
+            FreesidePalette.noticeWaxWash),
+        text(
+            "waxText", FreesidePalette.waxText, on: "noticeWaxWash",
+            FreesidePalette.noticeWaxWash),
+        text("ink", FreesidePalette.ink, on: "neutralWash", FreesidePalette.neutralWash),
+
+        // A control's label on its hover fill and its press fill, in every
+        // label color a control takes.
+        text("ink", FreesidePalette.ink, on: "hover", FreesidePalette.hover),
+        text("inkDim", FreesidePalette.inkDim, on: "hover", FreesidePalette.hover),
+        text("accentText", FreesidePalette.accentText, on: "hover", FreesidePalette.hover),
+        text("waxText", FreesidePalette.waxText, on: "hover", FreesidePalette.hover),
+        text(
+            "inkDim", FreesidePalette.inkDim, on: "accentWashSoft",
+            FreesidePalette.accentWashSoft),
+        text(
+            "waxText", FreesidePalette.waxText, on: "accentWashSoft",
+            FreesidePalette.accentWashSoft),
+
+        // Diff counts sit on a card or a section ground; diff lines sit on
+        // their own wash.
+        text("diffAdd", FreesidePalette.diffAdd, on: "ground", FreesidePalette.ground),
+        text("diffAdd", FreesidePalette.diffAdd, on: "ground2", FreesidePalette.ground2),
+        text(
+            "diffAdd", FreesidePalette.diffAdd, on: "diffAddWash",
+            FreesidePalette.diffAddWash),
+        text("diffRemove", FreesidePalette.diffRemove, on: "ground", FreesidePalette.ground),
+        text(
+            "diffRemove", FreesidePalette.diffRemove, on: "ground2", FreesidePalette.ground2),
+        text(
+            "diffRemove", FreesidePalette.diffRemove, on: "diffRemoveWash",
+            FreesidePalette.diffRemoveWash),
+
         // Disabled and validating text. It must stay readable while reading
         // as unavailable, so it clears the disabled floor rather than the
         // body one, on every ground a disabled control can sit on.
@@ -132,6 +189,13 @@ import Testing
             "ruleStrong", FreesidePalette.ruleStrong, on: "sidebarGround",
             FreesidePalette.sidebarGround),
 
+        border(
+            "quoteRule", FreesidePalette.quoteRule, on: "quoteWash", FreesidePalette.quoteWash),
+
+        // itemBorder is intentionally absent, as rule and secondaryBorder
+        // are: a structural hairline that relies on the Increased Contrast
+        // promotion to ruleStrong, asserted above.
+        //
         // milestonePrior and milestoneConnector are intentionally absent:
         // stage-rail decoration is paired with mono labels and never carries
         // state or meaning alone.
