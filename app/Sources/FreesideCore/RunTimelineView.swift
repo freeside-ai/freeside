@@ -47,6 +47,10 @@ struct RunTimelineView: View {
         coordinator.timelinesByRunID[snapshot.run.id]
     }
 
+    private var task: Components.Schemas.Task? {
+        coordinator.tasks.first { $0.task.id == snapshot.run.task_id }?.task
+    }
+
     @ViewBuilder var body: some View {
         if let screenshotTimeline {
             composition(screenshotTimeline)
@@ -63,12 +67,7 @@ struct RunTimelineView: View {
             VStack(alignment: .leading, spacing: 22) {
                 header
                 if let timeline {
-                    if let hold = timeline.hold?.value1 {
-                        holdCard(hold)
-                    }
-                    reviewSection(timeline)
-                    timelineSection(timeline)
-                    invocationSection(timeline)
+                    sections(timeline)
                 } else if coordinator.timelineLoadStates[snapshot.run.id] == .unavailable {
                     UnavailableStateView(
                         title: "Timeline unavailable",
@@ -78,10 +77,11 @@ struct RunTimelineView: View {
                 } else {
                     ProgressView("Loading timeline…")
                         .tint(.waterText)
-                        .font(FreesideFont.callout)
+                        .font(FreesideFont.cardBody)
                         .foregroundStyle(Color.inkDim)
                         .frame(maxWidth: .infinity, minHeight: 180)
                 }
+                folds(hold: timeline?.hold?.value1)
             }
             .padding(24)
             .frame(maxWidth: 820, alignment: .leading)
@@ -112,60 +112,87 @@ struct RunTimelineView: View {
     private func composition(_ timeline: Components.Schemas.RunTimeline) -> some View {
         VStack(alignment: .leading, spacing: 22) {
             header
-            if let hold = timeline.hold?.value1 {
-                holdCard(hold)
-            }
-            reviewSection(timeline, persistsFolds: false)
-            timelineSection(timeline)
-            invocationSection(timeline)
+            sections(timeline, persistsFolds: false)
+            folds(hold: timeline.hold?.value1)
         }
     }
 
+    /// What the daemon recorded for the run, each under its own keyword:
+    /// the hold, the review rounds, the milestones, and the invocations.
+    @ViewBuilder
+    private func sections(
+        _ timeline: Components.Schemas.RunTimeline, persistsFolds: Bool = true
+    ) -> some View {
+        if let hold = timeline.hold?.value1 {
+            holdCallout(hold)
+        }
+        reviewSection(timeline, persistsFolds: persistsFolds)
+        timelineSection(timeline)
+        invocationSection(timeline)
+    }
+
+    /// The page's one hairline, then its fold (R26): the exact identifiers
+    /// sit under everything the page says in words.
+    private func folds(hold: Components.Schemas.RunHold?) -> some View {
+        TechnicalDetailsSection(
+            rows: RunTimelineView.technicalRows(
+                run: snapshot.run, specificationLabel: specificationLabel, hold: hold),
+            summary: RunTimelineView.technicalSummary(run: snapshot.run, hold: hold),
+            startsExpanded: expandsTechnicalDetails
+        )
+        .padding(.top, 18)
+        .overlay(alignment: .top) {
+            Color.rule.frame(height: 1)
+        }
+    }
+
+    /// The run's name and where it stands (6.2): the screen and its task
+    /// with the outcome beside them, the attempt, and one identity line.
     var header: some View {
-        // The outcome chip takes its own line under the title at every
-        // size, as the task surfaces' status chips do.
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 4) {
-                eyebrow
-                Text(RunDisplay.timelineTitle(snapshot.run))
-                    .font(FreesideFont.largeTitle)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+        VStack(alignment: .leading, spacing: 12) {
+            eyebrow
+            Text(RunDisplay.timelineTitle(snapshot.run))
+                .font(FreesideFont.ask)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if let identity = RunTimelineView.identityLine(
+                snapshot.run, task: task, attentionItems: coordinator.store.orderedSnapshots)
+            {
+                Text(identity)
+                    .font(FreesideFont.trailingSummary)
+                    .foregroundStyle(Color.inkDim)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            RunOutcomeBadge(outcome: snapshot.run.outcome)
-            HStack(spacing: 14) {
-                if let heading = RunDisplay.stageHeading(
-                    snapshot.run,
-                    task: coordinator.tasks.first { $0.task.id == snapshot.run.task_id }?.task,
-                    attentionItems: coordinator.store.orderedSnapshots)
-                {
-                    Label(heading.label, systemImage: "square.stack.3d.up")
-                    if let round = heading.round {
-                        Label(round, systemImage: "arrow.triangle.2.circlepath")
-                    }
-                }
-                if let milestone = snapshot.run.latest_milestone?.value1 {
-                    Label(RunDisplay.label(milestone), systemImage: "point.topleft.down.to.point.bottomright.curvepath")
-                }
-            }
-            .font(FreesideFont.subheadline)
-            .foregroundStyle(Color.inkDim)
             VStack(alignment: .leading, spacing: 4) {
                 if let reason = snapshot.run.attempt_reason {
                     Text("Reason: \(reason)")
-                        .font(FreesideFont.callout)
                 }
                 Text(RunDisplay.specificationHeaderLabel(snapshot.run, approval: specificationApproval))
-                    .font(FreesideFont.callout)
                 if let qualification = specificationApproval.qualification {
                     Text(qualification)
-                        .font(FreesideFont.caption)
                 }
             }
+            .font(FreesideFont.cardBody)
             .foregroundStyle(Color.inkDim)
-            TechnicalDetailsSection(rows: technicalRows, startsExpanded: expandsTechnicalDetails)
-            KeywordLabel(text: "Daemon observations")
         }
+    }
+
+    /// The header's identity line: the phase, its round, and the newest
+    /// milestone, the three facts the header used to print as icon labels.
+    /// Nil when the run has recorded none of them.
+    static func identityLine(
+        _ run: Components.Schemas.Run, task: Components.Schemas.Task? = nil,
+        attentionItems: [Components.Schemas.AttentionItemSnapshot] = []
+    ) -> String? {
+        var parts: [String] = []
+        if let heading = RunDisplay.stageHeading(run, task: task, attentionItems: attentionItems) {
+            parts.append(heading.label)
+            if let round = heading.round { parts.append(round) }
+        }
+        if let milestone = run.latest_milestone?.value1 {
+            parts.append(RunDisplay.label(milestone))
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     /// The review folds persist with the task's other folds, so a round
@@ -186,16 +213,13 @@ struct RunTimelineView: View {
                     priorRounds: folds.binding(.priorRounds(snapshot.run.id), taskID: taskID)))
     }
 
-    private var technicalRows: [AttentionDisplay.BindingRow] {
-        RunTimelineView.technicalRows(run: snapshot.run, specificationLabel: specificationLabel)
-    }
-
-    /// The header's technical details: the exact run, task, campaign, and
-    /// parent ids, and the specification digest under its own label. The
-    /// primary text names the specification; the digest stays here to compare
-    /// or paste. Pure, so a test can check each value against its source field.
+    /// The page's technical details: the exact run, task, campaign, and
+    /// parent ids, the specification digest under its own label, and the
+    /// recorded hold's code. The primary text names the specification and
+    /// the hold; the exact values stay here to compare or paste. Pure, so
+    /// a test can check each value against its source field.
     static func technicalRows(
-        run: Components.Schemas.Run, specificationLabel: String
+        run: Components.Schemas.Run, specificationLabel: String, hold: Components.Schemas.RunHold? = nil
     ) -> [AttentionDisplay.BindingRow] {
         var rows: [AttentionDisplay.BindingRow] = [
             .init(label: "Run ID", value: run.id),
@@ -208,7 +232,21 @@ struct RunTimelineView: View {
             rows.append(.init(label: "Parent run ID", value: parent))
         }
         rows.append(.init(label: specificationLabel, value: run.spec_digest))
+        if let hold {
+            rows.append(.init(label: "Hold code", value: hold.reason.rawValue))
+        }
         return rows
+    }
+
+    /// What the closed Technical Details says it holds: one word per row
+    /// of `technicalRows`.
+    static func technicalSummary(run: Components.Schemas.Run, hold: Components.Schemas.RunHold? = nil) -> String {
+        var parts = ["run", "task"]
+        if run.campaign_id != nil { parts.append("campaign") }
+        if run.parent_run_id != nil { parts.append("parent") }
+        parts.append("digest")
+        if hold != nil { parts.append("hold code") }
+        return parts.joined(separator: " · ")
     }
 
     var specificationApproval: TaskDisplay.SpecificationApproval {
@@ -226,21 +264,44 @@ struct RunTimelineView: View {
 
     /// The eyebrow names the screen and the task the run belongs to, in the
     /// task's own label style (mono for an identifier fallback, the Agent
-    /// keyword after an agent-proposed name). The run id stays in the copy
+    /// keyword after an agent-proposed name), with the run's outcome
+    /// trailing as a card's state does (R27). The chip drops under the
+    /// keyword at an accessibility size. The run id stays in the copy
     /// context menu and, for a run outside a campaign, in the title.
     private var eyebrow: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            KeywordLabel(text: "Run timeline")
-            Text("·")
-                .font(FreesideFont.keyword)
-                .foregroundStyle(Color.inkDim)
-                .accessibilityHidden(true)
-            TaskNameLabel(
-                name: TaskDisplay.name(for: snapshot.run, tasks: coordinator.tasks),
-                font: FreesideFont.subheadline,
-                monoFont: FreesideFont.monoCaption,
-                color: .inkDim,
-                lineLimit: 1)
+        let keyword = KeywordLabel(text: "Run timeline")
+            .accessibilityAddTraits(.isHeader)
+        let chip = RunOutcomeBadge(outcome: snapshot.run.outcome)
+        // One line where the keyword, the whole name, and the chip fit; a
+        // phone's width or an accessibility size gives the name its own line
+        // instead of truncating it beside a wrapped keyword.
+        return ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 12) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    keyword
+                        .fixedSize()
+                    Text("·")
+                        .font(FreesideFont.keyword)
+                        .foregroundStyle(Color.inkDim)
+                        .accessibilityHidden(true)
+                    eyebrowName(lineLimit: 1)
+                }
+                Spacer(minLength: 0)
+                chip
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                if dynamicTypeSize.isAccessibilitySize {
+                    keyword
+                    chip
+                } else {
+                    HStack(alignment: .center, spacing: 12) {
+                        keyword
+                        Spacer(minLength: 0)
+                        chip
+                    }
+                }
+                eyebrowName(lineLimit: 2)
+            }
         }
         .contextMenu {
             Button("Copy run ID") {
@@ -249,39 +310,44 @@ struct RunTimelineView: View {
         }
     }
 
-    /// Mirrors the run list: a hold is attention, but on a failed or
-    /// lost run it reads as part of the failure and keeps wax.
-    private var holdIsFailure: Bool {
-        switch snapshot.run.outcome {
-        case .failed, .lost: true
-        case .unobserved, .pending, .published, .blocked, .completed: false
-        }
+    private func eyebrowName(lineLimit: Int) -> some View {
+        TaskNameLabel(
+            name: TaskDisplay.name(for: snapshot.run, tasks: coordinator.tasks),
+            font: FreesideFont.cardBody,
+            monoFont: FreesideFont.trailingSummary,
+            color: .inkDim,
+            lineLimit: lineLimit)
     }
 
-    private func holdCard(_ hold: Components.Schemas.RunHold) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            KeywordLabel(text: "Recorded hold", color: holdIsFailure ? .waxText : .accentText)
-            Text(RunDisplay.label(hold.reason))
-                .font(FreesideFont.sectionTitle)
+    /// The recorded hold in the one system callout, the shape the task
+    /// page gives its hold: the round, the hold in words, and when the
+    /// daemon observed it. A finished run's hold is a past fact and says
+    /// so. The exact code sits in Technical Details.
+    private func holdCallout(_ hold: Components.Schemas.RunHold) -> some View {
+        SystemCallout {
+            if let round = RunDisplay.stageHeading(
+                snapshot.run, task: task, attentionItems: coordinator.store.orderedSnapshots)?.round
+            {
+                Text(round)
+                    .font(FreesideFont.cardBody)
+            }
+            Text(RunTimelineView.holdSentence(hold, run: snapshot.run))
+                .font(FreesideFont.statement)
             Text(
                 "Observed \(shortTime(hold.first_observed_at)) to "
                     + hold.last_observed_at.formatted(
                         Date.FormatStyle(date: .omitted, time: .shortened, locale: locale, timeZone: timeZone))
             )
-            .font(FreesideFont.monoCaption)
+            .font(FreesideFont.trailingSummary)
             .foregroundStyle(Color.inkDim)
             .exactInstants(hold.first_observed_at, to: hold.last_observed_at)
-            Text("Hold code: \(hold.reason.rawValue)")
-                .font(FreesideFont.monoCaption)
-                .foregroundStyle(Color.inkDim)
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8).fill(holdIsFailure ? Color.waxWash : Color.accentWash))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8).strokeBorder(
-                holdIsFailure ? Color.waxText : Color.accentBorder, lineWidth: 1)
-        )
+        .foregroundStyle(Color.ink)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    static func holdSentence(_ hold: Components.Schemas.RunHold, run: Components.Schemas.Run) -> String {
+        "\(run.lifecycle == .finished ? "Recorded hold" : "Hold"): \(RunDisplay.label(hold.reason))"
     }
 
     private func timelineSection(_ timeline: Components.Schemas.RunTimeline) -> some View {
@@ -291,12 +357,15 @@ struct RunTimelineView: View {
             context: { attemptContext(invocationID: $0, in: timeline) },
             reviewRounds: timeline.review?.value1.rounds ?? [],
             now: pinnedNow ?? Date(), locale: locale, timeZone: timeZone)
-        return StageRail(
-            title: "Stage, Round & Decision History",
-            presentation: .timeline(entries: entries),
-            axis: .vertical,
-            showsSummaryText: false,
-            accessibilityStyle: .entries)
+        return VStack(alignment: .leading, spacing: 11) {
+            KeywordLabel(text: "Milestones")
+            StageRail(
+                title: nil,
+                presentation: .timeline(entries: entries),
+                axis: .vertical,
+                showsSummaryText: false,
+                accessibilityStyle: .entries)
+        }
     }
 
     private func invocationSection(_ timeline: Components.Schemas.RunTimeline) -> some View {
@@ -304,16 +373,15 @@ struct RunTimelineView: View {
             invocations: timeline.invocations, stages: snapshot.run.stages,
             reviewRounds: timeline.review?.value1.rounds ?? [],
             milestones: timeline.milestones)
-        return VStack(alignment: .leading, spacing: 10) {
-            Text("Latest Invocation Observations")
-                .font(FreesideFont.title)
+        return VStack(alignment: .leading, spacing: 11) {
+            KeywordLabel(text: "Latest invocation observations")
             ForEach(groups) { group in
-                KeywordLabel(text: group.label)
-                    .padding(.top, 4)
-                ForEach(Array(group.invocations.enumerated()), id: \.element.invocation_id) { index, invocation in
-                    if index > 0 {
-                        Divider().overlay(Color.rule)
-                    }
+                // Spacing alone sets the groups and their rows apart: the
+                // page's one hairline belongs to its folds (R26).
+                Text(group.label)
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.inkDim)
+                ForEach(group.invocations, id: \.invocation_id) { invocation in
                     invocationRow(invocation, in: timeline)
                 }
             }
@@ -323,25 +391,36 @@ struct RunTimelineView: View {
     private func invocationRow(
         _ invocation: Components.Schemas.InvocationObservation, in timeline: Components.Schemas.RunTimeline
     ) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(
-                    attemptContext(invocationID: invocation.invocation_id, in: timeline)
-                        ?? invocation.invocation_id
-                )
-                .font(FreesideFont.sans(.headline, weight: .semibold))
-                // The observed time is freshness (the daemon's last look), not
-                // the attempt's place in history; the "Observed" prefix says so.
-                Text("Observed \(shortTime(invocation.observed_at))")
-                    .font(FreesideFont.monoCaption)
-                    .foregroundStyle(Color.inkDim)
-                    .exactInstant(invocation.observed_at)
-            }
-            Spacer()
-            let presentation = InvocationPresentation(invocation, asOf: timeline.as_of)
-            StateChip(label: presentation.label, color: presentation.color, glyph: presentation.glyph)
+        let presentation = InvocationPresentation(invocation, asOf: timeline.as_of)
+        let chip = StateChip(label: presentation.label, color: presentation.color, glyph: presentation.glyph)
+        let lines = VStack(alignment: .leading, spacing: 3) {
+            Text(
+                attemptContext(invocationID: invocation.invocation_id, in: timeline)
+                    ?? invocation.invocation_id
+            )
+            .font(FreesideFont.sans(.headline, weight: .semibold))
+            // The observed time is freshness (the daemon's last look), not
+            // the attempt's place in history; the "Observed" prefix says so.
+            Text("Observed \(shortTime(invocation.observed_at))")
+                .font(FreesideFont.trailingSummary)
+                .foregroundStyle(Color.inkDim)
+                .exactInstant(invocation.observed_at)
         }
-        .padding(.vertical, 6)
+        // Beside its chip an accessibility-size title breaks mid-word.
+        return Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 6) {
+                    lines
+                    chip
+                }
+            } else {
+                HStack {
+                    lines
+                    Spacer()
+                    chip
+                }
+            }
+        }
     }
 
     /// Labels from the timeline being rendered, not the coordinator's copy,
