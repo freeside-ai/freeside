@@ -55,23 +55,22 @@ jobs:
             if ((total_count != jobs_count || total_count > 100)); then
               incident_classification="incomplete jobs API response: total=$total_count returned=$jobs_count"
             else
-              race_count="$(jq -er '[.jobs[] | select(.name == "linux (race test)")] | length' <<<"$jobs_json")"
-              if [[ "$race_count" != "1" ]]; then
-                incident_classification="exact race job count: $race_count"
+              race_names="$(jq -c '[.jobs[] | select(.name | startswith("linux (race test")) | .name] | sort' <<<"$jobs_json")"
+              expected_names='["linux (race test, freesided)","linux (race test, integration)","linux (race test, rest)"]'
+              if [[ "$race_names" != "$expected_names" ]]; then
+                incident_classification="unexpected race job names: $race_names"
               else
-                race_conclusion="$(jq -c '.jobs[] | select(.name == "linux (race test)") | .conclusion' <<<"$jobs_json")"
-                case "$race_conclusion" in
-                  '"failure"'|'"timed_out"'|'"startup_failure"'|'"stale"'|'"action_required"')
-                    incident_classification="race job conclusion: $race_conclusion"
-                    ;;
-                  '"success"'|'"cancelled"'|'"skipped"'|'"neutral"')
-                    printf 'race job conclusion %s; no incident required\n' "$race_conclusion"
-                    exit 0
-                    ;;
-                  *)
-                    incident_classification="unknown race job conclusion: $race_conclusion"
-                    ;;
-                esac
+                race_conclusions="$(jq -c '[.jobs[] | select(.name | startswith("linux (race test")) | {name, conclusion}]' <<<"$jobs_json")"
+                failed_jobs="$(jq -c '[.[] | select(.conclusion as $c | ["failure", "timed_out", "startup_failure", "stale", "action_required"] | index($c))]' <<<"$race_conclusions")"
+                unknown_jobs="$(jq -c '[.[] | select(.conclusion as $c | ["success", "cancelled", "skipped", "neutral", "failure", "timed_out", "startup_failure", "stale", "action_required"] | index($c) | not)]' <<<"$race_conclusions")"
+                if [[ "$failed_jobs" != "[]" ]]; then
+                  incident_classification="race job failures: $failed_jobs"
+                elif [[ "$unknown_jobs" != "[]" ]]; then
+                  incident_classification="unknown race job conclusions: $unknown_jobs"
+                else
+                  printf 'race job conclusions %s; no incident required\n' "$race_conclusions"
+                  exit 0
+                fi
               fi
             fi
           fi
