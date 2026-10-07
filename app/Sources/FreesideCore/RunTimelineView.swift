@@ -72,7 +72,6 @@ struct RunTimelineView: View {
                 } else if coordinator.timelineLoadStates[snapshot.run.id] == .unavailable {
                     UnavailableStateView(
                         title: "Timeline unavailable",
-                        systemImage: "exclamationmark.triangle",
                         description: "Freeside could not load daemon observations for this run."
                     )
                     .frame(maxWidth: .infinity, minHeight: 180)

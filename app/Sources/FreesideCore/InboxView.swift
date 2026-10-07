@@ -67,16 +67,31 @@ struct InboxView: View {
         self.onRevealTechnicalDetails = onRevealTechnicalDetails
     }
 
+    /// What an empty scope says (R13). The Open scope answers the question
+    /// the inbox exists for, naming the project when one is filtered; the
+    /// detail pane beside it says the same two lines. The other scopes hold
+    /// a record, so they say only that nothing is here yet.
+    static func emptyScope(
+        _ scope: InboxStore.Scope, projectID: String?
+    ) -> (title: String, description: String) {
+        switch scope {
+        case .open:
+            (
+                "No open items",
+                projectID == nil ? "Nothing needs you." : "Nothing in this project needs you."
+            )
+        case .resolved, .all:
+            ("No \(scope.label.lowercased()) items", "Attention items in this scope will appear here.")
+        }
+    }
+
     var body: some View {
         Group {
             switch store.loadState {
             case .idle, .loading:
                 ProgressView()
             case .failed(let message):
-                UnavailableStateView(
-                    title: "Couldn't load the inbox",
-                    systemImage: "exclamationmark.triangle",
-                    description: message)
+                UnavailableStateView(title: "Couldn't load the inbox", description: message)
             case .loaded:
                 VStack(spacing: 0) {
                     scopeBar
@@ -88,18 +103,13 @@ struct InboxView: View {
                         .padding(.bottom, 8)
 
                     if store.rows.isEmpty {
+                        let empty = Self.emptyScope(store.scope, projectID: store.projectID)
                         #if os(macOS)
                             Spacer(minLength: 0)
-                            SidebarEmptyState(
-                                title: "No \(store.scope.label.lowercased()) items",
-                                systemImage: "checklist",
-                                description: "Attention items in this scope will appear here.")
+                            SidebarEmptyState(title: empty.title, description: empty.description)
                             Spacer(minLength: 0)
                         #else
-                            UnavailableStateView(
-                                title: "No \(store.scope.label.lowercased()) items",
-                                systemImage: "checklist",
-                                description: "Attention items in this scope will appear here.")
+                            UnavailableStateView(title: empty.title, description: empty.description)
                         #endif
                     } else {
                         #if os(iOS)
@@ -307,7 +317,8 @@ struct InboxView: View {
     /// The sidebar chrome as the operator sees it on macOS: the section
     /// switcher with the open count, the scope control and urgent chip, the
     /// project trigger (its label standing in for the Menu, which
-    /// ImageRenderer cannot open), and the first rows on the sidebar ground.
+    /// ImageRenderer cannot open), and the first rows on the sidebar ground,
+    /// or the empty state when the scope holds none.
     func screenshotSidebar(now: Date) -> some View {
         VStack(spacing: 0) {
             FreesideSegmentedControl(
@@ -322,16 +333,22 @@ struct InboxView: View {
             FreesideMenuTriggerLabel(title: store.projectID ?? "All projects")
                 .padding(.horizontal)
                 .padding(.bottom, 8)
-            VStack(spacing: 8) {
-                ForEach(Array(store.rows.prefix(2)), id: \.item.id) { snapshot in
-                    InboxRowView(
-                        item: snapshot.item,
-                        isSelected: selection == snapshot.item.id,
-                        now: now)
+            if store.rows.isEmpty {
+                let empty = Self.emptyScope(store.scope, projectID: store.projectID)
+                SidebarEmptyState(title: empty.title, description: empty.description)
+                    .padding(.bottom, 32)
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(Array(store.rows.prefix(2)), id: \.item.id) { snapshot in
+                        InboxRowView(
+                            item: snapshot.item,
+                            isSelected: selection == snapshot.item.id,
+                            now: now)
+                    }
                 }
+                .padding(.horizontal)
+                .padding(.bottom)
             }
-            .padding(.horizontal)
-            .padding(.bottom)
         }
         .background(Color.sidebarGround)
     }

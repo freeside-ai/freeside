@@ -570,7 +570,6 @@ public struct FreesideRootView: View {
                     } else {
                         UnavailableStateView(
                             title: "Not available",
-                            systemImage: "questionmark.circle",
                             description: "This task or run is no longer available.")
                     }
                 }
@@ -613,9 +612,10 @@ public struct FreesideRootView: View {
                     )
                     .id(attentionSelection)
                 } else if showsInboxClearResult {
-                    UnavailableStateView(
-                        title: "Inbox clear", systemImage: "checkmark",
-                        description: "There are no open attention items.")
+                    // The same two lines the empty Open scope draws in the
+                    // sidebar, so the two panes agree.
+                    let empty = InboxView.emptyScope(.open, projectID: coordinator.store.projectID)
+                    UnavailableStateView(title: empty.title, description: empty.description)
                 } else {
                     OperationalSummaryView(
                         summary: OperationalSummary(
@@ -640,7 +640,7 @@ public struct FreesideRootView: View {
                             RunTimelineView(coordinator: coordinator, snapshot: run)
                         } else {
                             UnavailableStateView(
-                                title: "Run unavailable", systemImage: "questionmark.circle",
+                                title: "Run unavailable",
                                 description: "This run is no longer available.")
                         }
                     }
@@ -656,8 +656,7 @@ public struct FreesideRootView: View {
                     .id(taskSelection)
                 } else {
                     UnavailableStateView(
-                        title: "Tasks", systemImage: "checklist",
-                        description: "Select a task to inspect its history.")
+                        title: "Tasks", description: "Select a task to inspect its history.")
                 }
             }
         }

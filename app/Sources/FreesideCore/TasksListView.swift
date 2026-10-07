@@ -101,15 +101,11 @@ struct TasksListView: View {
                 #if os(macOS)
                     Spacer(minLength: 0)
                     SidebarEmptyState(
-                        title: emptyTitle,
-                        systemImage: "checklist",
-                        description: "Tasks in this scope will appear here.")
+                        title: emptyTitle, description: "Tasks in this scope will appear here.")
                     Spacer(minLength: 0)
                 #else
                     UnavailableStateView(
-                        title: emptyTitle,
-                        systemImage: "checklist",
-                        description: "Tasks in this scope will appear here.")
+                        title: emptyTitle, description: "Tasks in this scope will appear here.")
                 #endif
             } else {
                 #if os(iOS)

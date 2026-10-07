@@ -2733,6 +2733,31 @@
                     view: AnyView(
                         selectedAlternativeDetail.screenshotCard(
                             realisticFindings, at: dynamicTypeSize))))
+            // The Open scope under a project filter that leaves nothing open
+            // (R13): the key, the statement, and the line that names the
+            // filter. The project's one item is resolved, so the filter
+            // survives and the scope is empty. Drawn last: ahead of another
+            // surface it moves that surface's glyph antialiasing (#1698).
+            var settled = try #require(inbox.first)
+            settled.item.project_id = "freeside-docs"
+            settled.item.status = .resolved
+            let emptyStore = InboxStore(client: client, now: { screenshotNow })
+            emptyStore.replaceAll(with: [settled])
+            emptyStore.selectProjectFilter("freeside-docs")
+            for colorScheme in [ColorScheme.light, .dark] {
+                surfaces.append(
+                    Surface(
+                        name: "inbox-empty-scope" + (colorScheme == .dark ? "-dark" : ""),
+                        width: 320,
+                        colorScheme: colorScheme,
+                        view: AnyView(
+                            InboxView(
+                                store: emptyStore,
+                                selection: .constant(nil),
+                                launchScope: nil,
+                                launchProjectID: nil
+                            ).screenshotSidebar(now: screenshotNow))))
+            }
             return surfaces
         }
 
