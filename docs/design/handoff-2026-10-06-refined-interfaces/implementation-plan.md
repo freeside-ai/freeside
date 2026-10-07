@@ -45,6 +45,18 @@ The handoff calls itself presentation only, and it changes no contract. Two of
 its rules still contradict `docs/plan.md` §9 (revision 78) as written, so a
 material-document unit precedes sweep 0, as #1730 preceded the 2 Oct units.
 
+Satisfied by plan revision 82 (#1797). The "§9 says" column below quotes
+revision 78, the wording this section was planned against. Revision 82 widens
+the R7 allowance to every item type and places the reason by a test on the
+item, not by a list of types: the reason folds or leaves the card face only
+when the rest of the card already says it ahead of the actions. Where a later
+step in this file assigns a reason placement by type (the Composition step
+for `reasonPlacement(for:)`), read it as that type's default: revision 82's
+test decides each item. The per-type placement test is in
+`DecisionCardCompositionTests`, not `DecisionModelComprehensionTests`.
+Decision record:
+[`devlog/2026-10-06-2147-reason-and-claim-marker-rules.md`](../../../devlog/2026-10-06-2147-reason-and-claim-marker-rules.md).
+
 | §9 says | The handoff needs | Rule |
 | --- | --- | --- |
 | On the four decision-first card types, a summary's invocation ID and original rendering may sit in on-demand source details; the producer or Unverified label stays beside the prose | The same allowance on all 14 types: `unverifiedExplanation → .onDemand` everywhere, the `Written by the agent…` sentence no longer repeated under every section | R7 |

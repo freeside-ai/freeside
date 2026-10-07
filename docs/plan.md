@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 81
+revision: 82
 status: active
 updated: 2026-10-06
 ---
@@ -5059,7 +5059,44 @@ below governs which layers each type carries:
 
 A group that mixes the two is split, never folded whole. Every folded fact
 stays reachable from the card by pointer, keyboard, touch, and VoiceOver.
-Every other item type keeps all its layer 1 facts ahead of its actions.
+Every other item type keeps all its layer 1 facts ahead of its actions; the
+item's `reason` follows its own rule, next (revision 82).
+
+**Where an item's `reason` renders (revision 82).** On every item type, the
+card draws the `reason` (Section [4](#4-the-attention-model)) in one of three places. The test is
+what the rest of the card already says ahead of its actions, and it reads the
+item, not only its type:
+
+- **Ahead of the actions, under the ask where the card draws one.** This is
+  the default. It is required whenever the reason says something that nothing
+  else ahead of the actions says, and whenever the test cannot be decided for
+  the item.
+- **In a named disclosure, *Recorded Context*, which may sit below the
+  actions.** Only when the card already says, ahead of the actions,
+  everything the reason says. The card's lead, a typed fact, or a revalidated
+  recommendation can say it. A labeled claim can say it only for reason text
+  the agent wrote.
+- **Off the card face, in the card's details alone.** Under the same
+  condition. Whether such a card draws the disclosure is a presentation
+  choice: neither placement is ahead of the actions, and the details carry
+  the reason either way. For example, a card that renders its reason as a
+  labeled claim, because the agent wrote it, needs no disclosure that repeats
+  the claim.
+
+An item that lacks the lead, the typed fact, the claim, or the revalidated
+recommendation that would say what its reason says keeps the reason ahead of
+the actions. A reason that carries a stale or base-advanced state, a degraded
+or waived result, a missing decision capability, an action's consequence, or
+a commit-plan notice is neither folded nor left to the details, unless the
+card's lead, a typed fact, or a revalidated recommendation states the same
+notice ahead of the actions. A machine-readable binding payload that the
+daemon embeds in a reason for its own reconstruction, such as a `Binding:`
+JSON line, is not a statement to the reader: it need not be drawn ahead of
+the actions, and the details carry it. Summary Provenance still governs
+reason text the agent wrote, which renders as a labeled claim wherever the
+card draws it. The card's on-demand details always carry the full reason,
+reachable from the card by pointer, keyboard, touch, and VoiceOver. This rule
+moves only the reason; it folds no typed fact.
 
 A client renders only the requested decisions it can faithfully collect and
 execute. An action outside the client's capability is omitted from the action
@@ -5116,13 +5153,17 @@ question or a proposal's intent line. It renders as a labeled claim, never as
 unlabeled authoritative text.
 
 In Phase 1 the summarizer is the stage agent whose work the card concerns,
-labeled with its `producer_invocation_id`. On the four card types that take
-the decision-first order under Layering (revision 78), a summary's or leading
-claim's invocation ID and original rendering may sit in source details beside
-it, reachable by pointer, keyboard, touch, and VoiceOver; the producer or
-Unverified label stays next to the prose. An independent invocation would
-still be `producer_class: agent`. So independence buys no trust-class upgrade,
-only resistance to self-serving framing. Composition bounds that risk instead.
+labeled with its `producer_invocation_id`. On every item type (revision 82),
+a summary's or leading claim's invocation ID, the claim's own digest, and
+its original rendering may sit in source details beside it, reachable by
+pointer, keyboard, touch, and VoiceOver; the producer or Unverified label
+stays next to the prose. The sentence that explains the Unverified label may open on
+demand on every item type, from one control per card (revision 82). The
+producer or Unverified label itself stays visible beside each claim, and the
+explanation stays reachable by pointer, keyboard, touch, and VoiceOver. An
+independent invocation would still be `producer_class: agent`. So
+independence buys no trust-class upgrade, only resistance to self-serving
+framing. Composition bounds that risk instead.
 A summary may not assert a verifiable fact except by citing the daemon fact or
 linking the artifact digest it compresses. Every summary is itself a trust
 surface: producer identified, uncertainty and dissent preserved, evidence
@@ -6101,40 +6142,57 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 81 ("Project Images Bind to Their Environment"):
+Revision 82 ("The Reason and the Claim Marker on Every Card Type"):
 
-1. **Environment compatibility replaces exact-base equality.** A project image
-   was admissible only at the commit it was built from, so every base advance
-   cost a rebuild and a re-pin even when nothing the image baked had changed.
-   The image record now carries its environment inputs, and the image serves
-   any base that leaves them unchanged (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Golden Agent and
-   Project Images). Rejected: keeping equality; and comparing package versions
-   alone, which misses installation configuration, the toolchain, and the
-   preparation implementation.
-2. **Each boundary re-derives the verdict.** Preflight, daemon start,
-   publication, and readiness re-entry each read the exact base tree and
-   decide again from the immutable image record. Rejected: storing a
-   compatibility verdict on the admission, a trust bit no later boundary could
-   re-check.
-3. **Legacy records stay exact-commit.** A record without environment evidence
-   proves nothing about another commit. Rejected: backfilling evidence the
-   builder never observed.
-4. **Readiness re-entry checks its own base.** A re-entered cycle keeps its
-   producer's image on a newer base; it previously checked that image only
-   against the producer's base. It now applies the same rule to the base it
-   runs on, and a refusal stops that one cycle on an attention item. Rejected:
-   a lane error, which would stop publication for every run because one base
-   advanced.
-5. **The recipe clause refuses a contradiction, not an absence.** A base whose
-   tree declares a different recipe is refused. A base that declares none is
-   compatible, because the image runs the recipe it baked and approval still
-   gates that recipe; repositories onboarded with a recipe supplied outside
-   the tree never declare one. Rejected: requiring an in-tree recipe at the
-   base, which would leave those repositories unable to reuse an image at all.
+1. **One test places an item's `reason` on every item type.** Section [9](#9-comprehension)
+   never said where the reason renders, and the refined-interfaces handoff
+   retires its labeled Context section (rule R0). The reason stays ahead of
+   the actions whenever nothing else there says what it says. It may fold
+   into *Recorded Context*, or sit in the card's details alone, when the
+   lead, a typed fact, or a revalidated recommendation already says it. A
+   labeled claim can stand in only for reason text the agent wrote. A reason
+   that carries a notice that never folds keeps its place unless one of the
+   first three states the same notice ahead of the actions. A binding
+   payload the daemon embeds for its own reconstruction need not be drawn
+   there. The card's details always carry the full reason
+   (Section [9](#9-comprehension), Layering). Rejected: a per-type list of the types that
+   may fold (the handoff's frames fold on more types than its ledger names,
+   and reasons differ item by item within a type: an effect proposal's
+   reason is sometimes a fallback notice that nothing else on the card
+   states); leaving the plan silent (each sweep would then decide where a
+   daemon sentence may sit below the actions); and a second test between the
+   disclosure and the details (both are away from the actions, and the
+   details carry the reason either way).
+2. **Typed facts stay ahead of the actions outside the four decision-first
+   types.** The rule above moves only the reason. Rejected: extending
+   revision 78's split to more types, because no refined frame folds a typed
+   layer 1 fact on any of them.
+3. **A claim's source details may fold on every item type.** Revision 78
+   allowed it on four types; rule R7 needs it on all. The source details are
+   the claim's invocation ID, the claim's own digest, and its original
+   rendering. A digest that is a card fact is not one of them. The producer
+   or Unverified label stays next to the prose (Section [9](#9-comprehension), Summary
+   Provenance). Rejected: reaching the claim digest by extending the
+   routine-coordinate split to three more types, which would also permit
+   folds that no frame draws.
+4. **The Unverified explanation may open on demand, from one control per
+   card.** The plan did not say where the explaining sentence prints; the
+   client repeated it under every agent section on ten types. The label
+   itself stays visible beside each claim. Rejected: leaving the placement
+   unstated (the on-demand form would then have no plan text that keeps the
+   label visible and the explanation reachable).
+5. **No other handoff rule changes Section [9](#9-comprehension).** Rules R20, R21, R24,
+   R25, and R27 were checked against it and are compatible as written. A
+   recommendation still leads with its reason, a `project_policy`
+   recommendation still cites its policy key and digest, and the sentence
+   that a decision cannot be taken on this client is still required. The
+   trust rules, the daemon contract, and the action set are unchanged.
 
-(#1230's owner-approved contract, with the owner's recipe-clause decision of
-2026-10-06;
-[decision note](../devlog/2026-10-06-0758-project-image-environment-compatibility.md).)
+(#1797's owner-approved contract, following the owner's acceptance of the
+[6 Oct 2026 refined-interfaces handoff](design/handoff-2026-10-06-refined-interfaces/README.md)
+and decision on its rule R7, both of 2026-10-06;
+[decision note](../devlog/2026-10-06-2147-reason-and-claim-marker-rules.md).
+The client work is #1798 to #1803.)
 
 ## 14. Risks
 
