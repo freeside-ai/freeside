@@ -1559,7 +1559,7 @@ struct DecisionDetailView: View {
         ) -> some View {
             VStack(spacing: 0) {
                 FreesideSheetHeader(
-                    title: reader == .specification ? "Specification" : "Specification changes")
+                    ask: reader == .specification ? "Specification" : "Specification changes")
                 SpecApprovalReaderViewport {
                     specApprovalReaderContent(reader, item: item)
                 }
@@ -3016,7 +3016,7 @@ struct DecisionDetailView: View {
 
         var body: some View {
             VStack(spacing: 0) {
-                FreesideSheetHeader(title: label)
+                FreesideSheetHeader(ask: label)
                 GeometryReader { _ in
                     platformImage(image)
                         .resizable()
@@ -3083,7 +3083,7 @@ struct DecisionDetailView: View {
 
         var body: some View {
             VStack(spacing: 0) {
-                FreesideSheetHeader(title: label)
+                FreesideSheetHeader(ask: label)
                 Group {
                     if let text = preview.text {
                         VStack(alignment: .leading, spacing: 8) {
@@ -3534,7 +3534,7 @@ struct TaskProposalRevisionSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            FreesideSheetHeader(title: "Start with changes")
+            FreesideSheetHeader(ask: "Start with changes")
             Form {
                 LabeledContent("Intent", value: "Implement subject")
                     .listRowBackground(Color.ground2)
@@ -3660,7 +3660,7 @@ struct EffectProposalRevisionSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            FreesideSheetHeader(title: "Approve with changes")
+            FreesideSheetHeader(ask: "Approve with changes")
             Form {
                 Toggle(toggleTitle, isOn: $resolves)
                     .listRowBackground(Color.ground2)
@@ -3756,7 +3756,7 @@ struct TaskProposalSnoozeSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            FreesideSheetHeader(title: "Snooze proposal")
+            FreesideSheetHeader(ask: "Snooze proposal")
             Form {
                 DatePicker(
                     "Snooze until", selection: $until, in: now...,

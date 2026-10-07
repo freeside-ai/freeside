@@ -1101,27 +1101,39 @@ private struct FreesideActionButtonBody: View {
     }
 }
 
-/// The title a sheet opens with in place of a navigation bar: the serif
-/// section title over an optional prompt, 16pt in from the edge.
+/// What a sheet opens with in place of a navigation bar (R11): an optional
+/// eyebrow keyword naming the kind of sheet, the serif ask, the consequence
+/// of answering it in dim sans, and the binding the answer applies to in
+/// mono, 16pt in from the edge.
 struct FreesideSheetHeader: View {
-    let title: String
-    var prompt: String? = nil
+    var eyebrow: String? = nil
+    let ask: String
+    var consequence: String? = nil
+    var binding: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            // Two lines at most: an attachment sheet's title is the agent's
+            if let eyebrow {
+                KeywordLabel(text: eyebrow)
+            }
+            // Two lines at most: an attachment sheet's ask is the agent's
             // claim label, which the contract admits at any length, and this
-            // header never compresses vertically, so an unbounded title would
+            // header never compresses vertically, so an unbounded ask would
             // push the sheet body and its Done footer off-screen. The system
             // navigation title this header replaces truncated to one line.
-            Text(title)
+            Text(ask)
                 .font(FreesideFont.sectionTitle)
                 .foregroundStyle(Color.ink)
                 .lineLimit(2)
                 .accessibilityAddTraits(.isHeader)
-            if let prompt {
-                Text(prompt)
+            if let consequence {
+                Text(consequence)
                     .font(FreesideFont.callout)
+                    .foregroundStyle(Color.inkDim)
+            }
+            if let binding {
+                Text(binding)
+                    .font(FreesideFont.monoCaption)
                     .foregroundStyle(Color.inkDim)
             }
         }
