@@ -36,9 +36,10 @@ enum FreesidePalette {
     static let rule = FreesideColorCuts(
         day: 0xD6CDB2, dusk: 0x322A1E,
         dayIC: ruleStrong.day, duskIC: ruleStrong.dusk)
-    // A secondary control's outline: quiet enough that a filled primary
-    // still leads, and promoted to ruleStrong under Increased Contrast the
-    // way every other structural hairline is.
+    // The outline of quiet chrome (the faint chip, the segmented control,
+    // the menu panel): promoted to ruleStrong under Increased Contrast the
+    // way every other structural hairline is. An outlined action takes
+    // ruleStrong itself (R6), since its outline is what makes it a button.
     static let secondaryBorder = FreesideColorCuts(
         day: 0xC9BFA2, dusk: 0x3D3426,
         dayIC: ruleStrong.day, duskIC: ruleStrong.dusk)
@@ -976,6 +977,11 @@ extension FactRow {
 /// and a disabled state drawn as its own rule-bordered, faint-text shape.
 /// Disabled is never the enabled look faded out, because opacity dims the
 /// border and the label together and leaves neither reliably legible.
+///
+/// Weight means state (R6): the fill is the one forward action, an outline
+/// is any other command, the wax outline is destructive, and text is the
+/// overflow. Every control is cut with the 6pt radius the rest of the card
+/// chrome uses, and takes the five interaction states of R19.
 struct FreesideActionButtonStyle: ButtonStyle {
     enum Tone {
         /// The one recommended action: filled, and at most one per region.
@@ -988,28 +994,40 @@ struct FreesideActionButtonStyle: ButtonStyle {
         case destructive
     }
 
-    /// The corner the control is cut with: cards use the 6pt radius the
-    /// rest of the card chrome uses, sheet submits use the spec's pill.
-    enum Corners {
-        case rounded
-        case pill
-    }
-
     let tone: Tone
-    var corners: Corners = .rounded
     /// A dense-chrome control (the menu-bar panel): 28pt minimum height in
-    /// place of the 44 a sheet or card control takes, at every type size.
+    /// place of the 46 a sheet or card control takes, at every type size.
     var compact: Bool = false
     /// Whether the control fills its row. A tertiary button always hugs its
     /// label: a full-width control with no fill and no border reads as a
     /// row of dead space rather than as a button.
     var expands: Bool = true
-    @Environment(\.isEnabled) private var isEnabled
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     func makeBody(configuration: Configuration) -> some View {
+        FreesideActionButtonBody(
+            tone: tone, compact: compact, expands: expands, configuration: configuration)
+    }
+}
+
+/// The style's drawing, as a view so it can hold the hover state and read
+/// the keyboard focus a `ButtonStyle` is not handed.
+private struct FreesideActionButtonBody: View {
+    typealias Tone = FreesideActionButtonStyle.Tone
+
+    let tone: Tone
+    let compact: Bool
+    let expands: Bool
+    let configuration: ButtonStyleConfiguration
+    @State private var isHovered = false
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.isFocused) private var isFocused
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    private let shape = RoundedRectangle(cornerRadius: 6)
+
+    var body: some View {
         configuration.label
-            .font(FreesideFont.sans(.body, weight: .medium))
+            .font(FreesideFont.actionLabel)
             .foregroundStyle(labelColor)
             .lineLimit(2)
             .fixedSize(horizontal: false, vertical: true)
@@ -1017,9 +1035,16 @@ struct FreesideActionButtonStyle: ButtonStyle {
             .padding(.vertical, verticalPadding)
             .frame(minHeight: minHeight)
             .frame(maxWidth: hugsLabel ? nil : .infinity)
-            .background(shape.fill(fillColor(isPressed: configuration.isPressed)))
+            .background(shape.fill(fillColor))
             .overlay(shape.strokeBorder(borderColor, lineWidth: 1))
+            // Keyboard focus is its own 1pt accent ring outside the border,
+            // so it reads on a filled control and an outlined one alike.
+            .overlay(
+                shape.inset(by: -3)
+                    .strokeBorder(isFocused && isEnabled ? Color.accentBorder : .clear, lineWidth: 1)
+            )
             .contentShape(shape)
+            .onHover { isHovered = $0 }
     }
 
     private var hugsLabel: Bool {
@@ -1033,17 +1058,7 @@ struct FreesideActionButtonStyle: ButtonStyle {
 
     private var minHeight: CGFloat {
         if compact { return 28 }
-        return dynamicTypeSize >= .accessibility1 ? 52 : 44
-    }
-
-    /// One shape for fill, border, and hit target. A pill is the spec's
-    /// 999pt radius rather than a `Capsule`, so both corner styles are the
-    /// same concrete type and the border still strokes inside its bounds.
-    private var shape: RoundedRectangle {
-        switch corners {
-        case .rounded: RoundedRectangle(cornerRadius: 6)
-        case .pill: RoundedRectangle(cornerRadius: 999)
-        }
+        return dynamicTypeSize >= .accessibility1 ? 56 : 46
     }
 
     /// Disabled resolves before tone: every disabled label takes the same
@@ -1067,19 +1082,22 @@ struct FreesideActionButtonStyle: ButtonStyle {
         guard isEnabled else { return tone == .tertiary ? .clear : .rule }
         switch tone {
         case .primary: return .accentBorder
-        case .secondary: return .secondaryBorder
+        case .secondary: return .ruleStrong
         case .tertiary: return .clear
         case .destructive: return .waxText
         }
     }
 
-    private func fillColor(isPressed: Bool) -> Color {
+    /// Hover and press are one cut each on every tone that has no fill of
+    /// its own (R19). The filled primary keeps its fill: it is already the
+    /// heaviest thing in its region, and neither wash is legible under its
+    /// ground-2 label.
+    private var fillColor: Color {
         guard isEnabled else { return .clear }
-        switch tone {
-        case .primary: return .accentText
-        case .tertiary: return .clear
-        case .secondary, .destructive: return isPressed ? .ground3 : .ground2
-        }
+        if tone == .primary { return .accentText }
+        if configuration.isPressed { return .accentWashSoft }
+        if isHovered { return .hover }
+        return tone == .tertiary ? .clear : .ground2
     }
 }
 
@@ -1114,10 +1132,10 @@ struct FreesideSheetHeader: View {
 }
 
 /// The submit row a sheet ends with: Cancel as a tertiary text button and
-/// the submit as a pill, primary by default and wax-outlined for a
-/// consequential confirmation, both hugging their labels. It carries the
+/// the submit filled by default and wax-outlined for a consequential
+/// confirmation (R11), both hugging their labels. It carries the
 /// Return and Escape bindings the system toolbar placements used to supply.
-/// A reader's footer (`done`) has the one secondary pill and no Cancel.
+/// A reader's footer (`done`) has the one secondary button and no Cancel.
 struct FreesideSheetActionRow: View {
     let submitLabel: String
     var tone: FreesideActionButtonStyle.Tone = .primary
@@ -1131,7 +1149,7 @@ struct FreesideSheetActionRow: View {
     let cancel: (() -> Void)?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
-    /// A reader or attachment sheet's footer: one secondary Done pill on
+    /// A reader or attachment sheet's footer: one secondary Done button on
     /// the right, dismissed by Return and Escape alike.
     static func done(_ dismiss: @escaping () -> Void) -> FreesideSheetActionRow {
         FreesideSheetActionRow(submitLabel: "Done", tone: .secondary, submit: dismiss, cancel: nil)
@@ -1150,7 +1168,7 @@ struct FreesideSheetActionRow: View {
         if let cancel {
             // Side by side the two labels cannot both hug their text at an
             // accessibility size without wrapping mid-word, so they stack
-            // and the submit takes the full width, keeping the pill a pill.
+            // and the submit takes the full width.
             if dynamicTypeSize.isAccessibilitySize {
                 VStack(spacing: 12) {
                     submitButton(expands: true)
@@ -1191,7 +1209,7 @@ struct FreesideSheetActionRow: View {
     private func submitButton(expands: Bool) -> some View {
         Button(submitLabel, action: submit)
             .buttonStyle(
-                FreesideActionButtonStyle(tone: tone, corners: .pill, expands: expands)
+                FreesideActionButtonStyle(tone: tone, expands: expands)
             )
             .keyboardShortcut(.defaultAction)
             .disabled(!isSubmitEnabled)
