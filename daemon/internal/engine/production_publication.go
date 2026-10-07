@@ -3449,6 +3449,14 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		itemID := productionReviewHardLimitItemID(task.RunID, hardLimit, recoveredContradiction)
 		if task.answersExternalReview() {
 			itemID = externalReviewExhaustionItemID(task.RunID, task.Successor.ReviewRound)
+		} else if task.reentersInPlace() {
+			legacyOpen, err := w.readinessLegacyExhaustionOpen(ctx, task, itemID)
+			if err != nil {
+				return productionReviewPending, err
+			}
+			if !legacyOpen {
+				itemID = readinessReentryExhaustionItemID(*task.Successor)
+			}
 		}
 		if err := w.putReviewAttentionWithID(ctx, task, record,
 			fmt.Sprintf("Review exhausted the resolved hard limit of %d rounds.", hardLimit),
@@ -3826,6 +3834,30 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		return productionReviewPending, err
 	}
 	return productionReviewPassed, nil
+}
+
+// An upgrade may resume after the old writer created an exhaustion item but
+// before it finished the task. Only an open item with matching coordinates
+// proves a person is still being asked; a resolved item may be an older cycle's.
+func (w *productionPublicationWorkflow) readinessLegacyExhaustionOpen(
+	ctx context.Context, task productionPublicationTask, itemID domain.ItemID,
+) (bool, error) {
+	open := false
+	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		item, err := tx.GetAttentionItem(ctx, itemID)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		open = item.Status == domain.StatusOpen && item.Type == domain.AttentionReviewDiminishing &&
+			item.ProjectID == task.ProjectID && item.Subject.Type == domain.SubjectRun &&
+			item.Subject.ID == domain.SubjectID(task.RunID) && item.Subject.RunID != nil &&
+			*item.Subject.RunID == task.RunID && item.PRHeadSHA == task.HeadSHA
+		return nil
+	})
+	return open, err
 }
 
 func (w *productionPublicationWorkflow) classifyReviewFindings(

@@ -26,3 +26,33 @@ func TestProductionReviewHardLimitItemIDPreservesLegacyAndSeparatesRecovery(t *t
 		t.Fatalf("recovered hard-limit id %q reused its contradiction carrier", recovered)
 	}
 }
+
+func TestReadinessReentryExhaustionItemIDSeparatesCyclesAndNamespaces(t *testing.T) {
+	successor := domain.PublicationSuccessor{
+		RunID: "run", PredecessorItemID: "production-ready-run", ReviewRound: 2,
+		Origin: domain.PublicationSuccessorReadinessInvalidation,
+	}
+	itemID := readinessReentryExhaustionItemID(successor)
+	if got := readinessReentryExhaustionItemID(successor); got != itemID {
+		t.Fatalf("same cycle changed identity: %q != %q", got, itemID)
+	}
+	// A later cycle remains distinct even if it starts at the same round.
+	successor.PredecessorItemID = "production-ready-reentry-later"
+	if got := readinessReentryExhaustionItemID(successor); got == itemID {
+		t.Fatalf("later cycle reused exhaustion identity %q", itemID)
+	}
+	// The fixed prefixes diverge before any run coordinate. Even run IDs
+	// that resemble the new namespace cannot enter it through another writer.
+	for _, runID := range []domain.RunID{"run", "readiness-review-exhaustion-run", domain.RunID(itemID)} {
+		for _, other := range []domain.ItemID{
+			productionReviewItemID(runID, 1),
+			productionReviewHardLimitItemID(runID, 1, false),
+			productionReviewHardLimitItemID(runID, 1, true),
+			externalReviewExhaustionItemID(runID, 2),
+		} {
+			if itemID == other {
+				t.Fatalf("readiness exhaustion identity %q collides for run %q", itemID, runID)
+			}
+		}
+	}
+}
