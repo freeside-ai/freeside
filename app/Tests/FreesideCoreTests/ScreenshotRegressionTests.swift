@@ -596,6 +596,9 @@
                         replacementPhoneDarkDetail.screenshotCard(
                             superseded.item, at: dynamicTypeSize))))
 
+            // Selection draws one way whatever Differentiate Without Color
+            // says: the bar and the dropped border are geometry, so the pair
+            // below pins the cue that setting relies on.
             if let selected = inbox.first?.item {
                 surfaces.append(
                     Surface(
@@ -605,14 +608,12 @@
                             VStack(spacing: 8) {
                                 InboxRowView(
                                     item: selected,
-                                    now: screenshotNow,
-                                    differentiateWithoutColorOverride: true
+                                    now: screenshotNow
                                 )
                                 InboxRowView(
                                     item: selected,
                                     isSelected: true,
-                                    now: screenshotNow,
-                                    differentiateWithoutColorOverride: true
+                                    now: screenshotNow
                                 )
                             }
                             .padding()
@@ -626,14 +627,12 @@
                             VStack(spacing: 8) {
                                 InboxRowView(
                                     item: selected,
-                                    now: screenshotNow,
-                                    differentiateWithoutColorOverride: true
+                                    now: screenshotNow
                                 )
                                 InboxRowView(
                                     item: selected,
                                     isSelected: true,
-                                    now: screenshotNow,
-                                    differentiateWithoutColorOverride: true
+                                    now: screenshotNow
                                 )
                             }
                             .padding()

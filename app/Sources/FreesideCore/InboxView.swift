@@ -370,15 +370,61 @@ struct InboxView: View {
     }
 }
 
-/// One inbox row as a ground-2 card. Selection adds geometry as well as
-/// color, so Differentiate Without Color retains a visible state change.
+/// The surface a sidebar row sits on (R19), shared by the inbox and task
+/// rows so the two lists select and hover alike. An unselected row is a
+/// bordered item on ground-2; the selected row drops the border for the
+/// accent wash under a 4pt accent bar, so selection adds geometry as well as
+/// color and reads the same with Differentiate Without Color. On macOS an
+/// unselected row takes the hover cut under the pointer.
+struct SidebarRowSurface: ViewModifier {
+    let isSelected: Bool
+    /// 12 for an inbox row, 14 for a task row, as the frames draw them.
+    let verticalPadding: CGFloat
+
+    func body(content: Content) -> some View {
+        HStack(spacing: 0) {
+            if isSelected {
+                Rectangle()
+                    .fill(Color.accentText)
+                    .frame(width: 4)
+                    .accessibilityHidden(true)
+            }
+            hoverable(
+                content
+                    .padding(.vertical, verticalPadding)
+                    .padding(.leading, isSelected ? 12 : 14)
+                    .padding(.trailing, 14)
+                    .frame(maxWidth: .infinity, alignment: .leading))
+        }
+        .background(RoundedRectangle(cornerRadius: 8).fill(isSelected ? Color.accentWash : .ground2))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(isSelected ? Color.clear : .itemBorder, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    @ViewBuilder
+    private func hoverable(_ row: some View) -> some View {
+        #if os(macOS)
+            if isSelected {
+                row
+            } else {
+                row.freesideHover(cornerRadius: 8)
+            }
+        #else
+            row
+        #endif
+    }
+}
+
+/// One inbox row (R31): the type as a keyword with its chips trailing, the
+/// summary, and one context line.
 struct InboxRowView: View {
     let item: Components.Schemas.AttentionItem
     var isSelected = false
     var now: Date?
     var onRevealTechnicalDetails: () -> Void = {}
-    var differentiateWithoutColorOverride: Bool?
-    @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
@@ -396,73 +442,54 @@ struct InboxRowView: View {
 
     private func row(at now: Date) -> some View {
         let context = AttentionDisplay.rowContext(item)
-        return HStack(spacing: 0) {
-            if isSelected {
-                Rectangle()
-                    .fill(Color.accentText)
-                    .frame(width: 4)
-                    .accessibilityHidden(true)
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                if Self.stacksHeader(at: dynamicTypeSize) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        rowTitle
-                        if hasBadges {
-                            rowBadges
-                        }
-                    }
-                } else {
-                    HStack(alignment: .firstTextBaseline) {
-                        rowTitle
-                        Spacer()
+        return VStack(alignment: .leading, spacing: 6) {
+            if Self.stacksHeader(at: dynamicTypeSize) {
+                VStack(alignment: .leading, spacing: 5) {
+                    rowTitle
+                    if hasBadges {
                         rowBadges
                     }
                 }
-                // The summary says what needs attention, so it takes the
-                // serif face and the main ink; the type name above it is the
-                // quiet line (visual audit D01).
-                Text(AttentionDisplay.rowSummary(item))
-                    .font(FreesideFont.serif(.subheadline))
-                    .foregroundStyle(Color.ink)
-                    .lineLimit(2)
-                HStack(spacing: 6) {
-                    contextSegment(context.project)
-                    if let workUnit = context.workUnit {
-                        separator
-                        contextSegment(workUnit)
-                        if workUnit.isAgentClaim {
-                            KeywordLabel(text: "Agent")
-                        }
-                    }
-                    if let relativeTime = AttentionDisplay.relativeRowTime(item, now: now) {
-                        Spacer(minLength: 8)
-                        timeText(relativeTime, now: now)
-                            .fixedSize()
-                    }
+            } else {
+                HStack(alignment: .center, spacing: 10) {
+                    rowTitle
+                    Spacer(minLength: 0)
+                    rowBadges
                 }
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // The summary says what needs attention, so it takes the serif
+            // and the main ink; the type above it is the quiet line (visual
+            // audit D01).
+            Text(AttentionDisplay.rowSummary(item))
+                .font(FreesideFont.statement)
+                .foregroundStyle(Color.ink)
+                .lineLimit(2)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                contextSegment(context.project)
+                if let workUnit = context.workUnit {
+                    separator
+                    contextSegment(workUnit)
+                    if workUnit.isAgentClaim {
+                        CompactMark(text: "Agent")
+                    }
+                }
+                if let relativeTime = AttentionDisplay.relativeRowTime(item, now: now) {
+                    Spacer(minLength: 8)
+                    timeText(relativeTime, now: now)
+                        .fixedSize()
+                }
+            }
         }
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(
-                    isSelected
-                        ? (effectiveDifferentiateWithoutColor ? Color.accentWash : .accentWashSoft)
-                        : .ground2)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(isSelected ? Color.clear : .rule, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .modifier(SidebarRowSurface(isSelected: isSelected, verticalPadding: 12))
     }
 
+    /// The word the decision card's eyebrow uses for this item (R27), so the
+    /// row and the card it opens name the type alike. Sized to its own
+    /// height so a long type wraps at the large text sizes; left flexible,
+    /// the stacked header truncated it.
     private var rowTitle: some View {
-        Text(AttentionDisplay.title(item._type))
-            .font(FreesideFont.caption)
-            .foregroundStyle(Color.inkDim)
+        KeywordLabel(text: DecisionCardComposition.eyebrow(for: item).keyword)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var rowBadges: some View {
@@ -489,13 +516,9 @@ struct InboxRowView: View {
         dynamicTypeSize >= .xxxLarge
     }
 
-    private var effectiveDifferentiateWithoutColor: Bool {
-        differentiateWithoutColorOverride ?? differentiateWithoutColor
-    }
-
     private var separator: some View {
         Text("·")
-            .font(FreesideFont.caption)
+            .font(FreesideFont.trailingSummary)
             .foregroundStyle(Color.inkDim)
             .accessibilityHidden(true)
     }
@@ -503,7 +526,7 @@ struct InboxRowView: View {
     @ViewBuilder
     private func contextSegment(_ segment: AttentionDisplay.RowContext.Segment) -> some View {
         let text = Text(segment.value)
-            .font(segment.isIdentifier ? FreesideFont.monoCaption : FreesideFont.caption)
+            .font(FreesideFont.trailingSummary)
             .foregroundStyle(Color.inkDim)
             .lineLimit(1)
             .truncationMode(.middle)
@@ -517,7 +540,7 @@ struct InboxRowView: View {
     @ViewBuilder
     private func timeText(_ relativeTime: String, now: Date) -> some View {
         let text = Text(relativeTime)
-            .font(FreesideFont.caption)
+            .font(FreesideFont.trailingSummary)
             .foregroundStyle(Color.inkDim)
             .lineLimit(1)
         #if os(macOS)
@@ -548,7 +571,7 @@ struct InboxRowView: View {
             }
         }
         Divider()
-        Button("Reveal in Technical details") { onRevealTechnicalDetails() }
+        Button("Reveal in Technical Details") { onRevealTechnicalDetails() }
     }
 
     private func copy(_ value: String) {
