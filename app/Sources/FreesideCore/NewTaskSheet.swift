@@ -34,6 +34,7 @@ struct NewTaskSheet: View {
 
     @State private var projectID: String
     @State private var source: String
+    @State private var promptBrowse = TaskPromptBrowseState()
     @State private var name: String
     @State private var isSubmitting = false
     /// The in-flight submit, held so dismissing the sheet cancels it
@@ -133,6 +134,9 @@ struct NewTaskSheet: View {
         // while a submit is still in flight; cancel the task so its completion
         // does not route the operator to a task they navigated away from.
         .onDisappear { submitTask?.cancel() }
+        .onChange(of: projectID) {
+            if let draft = promptBrowse.end() { source = draft }
+        }
     }
 
     // Keep the form scrollable at large text sizes, with fixed actions.
@@ -222,7 +226,7 @@ struct NewTaskSheet: View {
 
     @ViewBuilder private var sourceField: some View {
         if rendersInteractiveControls {
-            TextEditor(text: $source)
+            sourceEditor
                 .font(FreesideFont.callout)
                 .scrollContentBackground(.hidden)
                 .padding(8)
@@ -252,6 +256,15 @@ struct NewTaskSheet: View {
                 .background(Color.ground, in: RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.rule))
         }
+    }
+
+    @ViewBuilder private var sourceEditor: some View {
+        #if os(macOS)
+            TaskPromptEditor(
+                text: $source, history: model.promptHistory.prompts(for: projectID), browse: promptBrowse)
+        #else
+            TextEditor(text: $source)
+        #endif
     }
 
     @ViewBuilder private var nameField: some View {

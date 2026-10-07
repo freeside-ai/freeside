@@ -109,6 +109,23 @@ Signing needs an `Apple Development` identity, which Xcode mints from the free p
 
 **Sync-contract churn.** When a sync-contract change lands (the app's generated API client changes shape), the installed build is stale against the daemon and must be reinstalled; the weekly re-sign cadence makes that reinstall routine rather than a special step.
 
+## New Task Prompt History
+
+On Mac, press **Up** in **Work to do** on the first visual line with no
+selection to recall the selected project's most recent confirmed prompt.
+Further Up/Down presses browse older/newer prompts; Down past the newest
+restores your exact draft. Editing a recalled prompt makes it the current
+draft. Switching projects restores the pre-browse draft. Modified arrows,
+selections, and input-method composition keep their native behavior.
+
+The live app retains up to 50 prompt entries locally across restarts, scoped
+to the deployment and paired device. Consecutive identical prompts for a
+project are coalesced; the oldest entries are evicted first. Mock and ephemeral
+sessions keep history only in memory. Recall changes neither the project nor
+the optional name and sends nothing. Only a confirmed submission (including
+a successful recovery) enters history. A history-save failure reports a
+notice without changing task success.
+
 ## New Task Recovery
 
 Each Submit creates separate work, even with identical
