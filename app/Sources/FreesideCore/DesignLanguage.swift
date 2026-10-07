@@ -898,12 +898,11 @@ struct FreesideLink: View {
     }
 }
 
-/// One label-and-value fact: the shared rule that decides between a
-/// trailing value and a stacked one, used by the decision detail facts,
-/// the pairing details, and the operational summary.
-///
-/// Font and row-level color stay with the caller, so each surface keeps
-/// its own register.
+/// One label-and-value fact (R9): a sans label and a mono value, both in
+/// ink, with the shared rule that decides between a trailing value and a
+/// stacked one. Used by the decision detail facts, the stop cause, the
+/// pairing details, the operational summary, and technical details, so a
+/// fact reads the same on every surface.
 struct FactRow: View {
     /// A value longer than this stacks at every type size
     /// (`--fs-fact-row-stack-threshold`). A digest or an invocation id has
@@ -921,8 +920,7 @@ struct FactRow: View {
 
     let label: String
     let value: String
-    /// Set where the value carries its own color. Nil leaves a trailing
-    /// value inheriting the row's foreground style.
+    /// Set where the value carries its own color; nil draws it in ink.
     var valueColor: Color? = nil
     /// A state drawn in the value slot in place of the text (R9). `value`
     /// holds the chip's label, so the stacking rule reads one string.
@@ -931,39 +929,37 @@ struct FactRow: View {
 
     var body: some View {
         if Self.stacks(value, at: dynamicTypeSize) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(label)
-                    .foregroundStyle(Color.inkDim)
-                if let chip {
-                    chip
-                } else {
-                    Text(value)
-                        .foregroundStyle(valueColor ?? .ink)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+            VStack(alignment: .leading, spacing: 3) {
+                labelText
+                valueContent
+                    .fixedSize(horizontal: false, vertical: true)
             }
         } else {
             // An explicit trailing column on both platforms: macOS's
             // LabeledContent set the value inline after the label, so the
             // summary's values never lined up.
             HStack(alignment: .firstTextBaseline) {
-                Text(label)
-                    .foregroundStyle(Color.inkDim)
-                Spacer(minLength: 8)
-                valueText
+                labelText
+                Spacer(minLength: 12)
+                valueContent
                     .multilineTextAlignment(.trailing)
             }
         }
     }
 
-    @ViewBuilder private var valueText: some View {
-        let text = Text(value)
+    private var labelText: some View {
+        Text(label)
+            .font(FreesideFont.factLabel)
+            .foregroundStyle(Color.ink)
+    }
+
+    @ViewBuilder private var valueContent: some View {
         if let chip {
             chip
-        } else if let valueColor {
-            text.foregroundStyle(valueColor)
         } else {
-            text
+            Text(value)
+                .font(FreesideFont.monoValue)
+                .foregroundStyle(valueColor ?? .ink)
         }
     }
 }

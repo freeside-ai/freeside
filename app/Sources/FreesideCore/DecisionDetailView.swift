@@ -778,7 +778,7 @@ struct DecisionDetailView: View {
             {
                 cardSection("Authenticated proposal") {
                     ForEach(effectRows) { fact in
-                        factRow(fact.label, value: fact.value, monospaced: fact.monospaced)
+                        factRow(fact.label, value: fact.value)
                     }
                 }
             }
@@ -1182,7 +1182,7 @@ struct DecisionDetailView: View {
         if !placement.visible.isEmpty {
             cardSection("Facts") {
                 ForEach(placement.visible) { fact in
-                    factRow(fact.label, value: fact.value, monospaced: fact.monospaced)
+                    factRow(fact.label, value: fact.value)
                 }
             }
         }
@@ -1192,7 +1192,7 @@ struct DecisionDetailView: View {
             ) {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(placement.folded) { fact in
-                        factRow(fact.label, value: fact.value, monospaced: fact.monospaced)
+                        factRow(fact.label, value: fact.value)
                     }
                 }
                 .font(FreesideFont.callout)
@@ -2001,7 +2001,7 @@ struct DecisionDetailView: View {
             Text(card.rationale)
                 .fixedSize(horizontal: false, vertical: true)
             ForEach(card.proposalRows) { fact in
-                factRow(fact.label, value: fact.value, monospaced: fact.monospaced)
+                factRow(fact.label, value: fact.value)
             }
             if !card.evidence.isEmpty {
                 findingList(card.evidenceTitle, values: card.evidence)
@@ -2011,7 +2011,7 @@ struct DecisionDetailView: View {
             // mixed into the producer's content around them (#892).
             findingSection("Daemon facts") {
                 ForEach(card.daemonFacts) { fact in
-                    factRow(fact.label, value: fact.value, monospaced: fact.monospaced)
+                    factRow(fact.label, value: fact.value)
                 }
             }
             if !card.assumptions.isEmpty {
@@ -2381,7 +2381,7 @@ struct DecisionDetailView: View {
             DisclosureGroup(isExpanded: $provenanceExpanded) {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(recommendation.sourceFacts) { fact in
-                        factRow(fact.label, value: fact.value, monospaced: fact.monospaced)
+                        factRow(fact.label, value: fact.value)
                     }
                 }
                 .padding(.top, 6)
@@ -2582,17 +2582,8 @@ struct DecisionDetailView: View {
         .freesideCard(dashed: unverified != nil)
     }
 
-    private func factRow(
-        _ label: String,
-        value: String,
-        monospaced: Bool = false
-    ) -> some View {
-        // No `valueColor`: a trailing value inherits the row's own ink, so a
-        // monospaced fact stays dim in the row, and a stacked value keeps the
-        // full-ink contrast against its dim label.
+    private func factRow(_ label: String, value: String) -> some View {
         FactRow(label: label, value: value)
-            .font(monospaced ? FreesideFont.monoCaption : FreesideFont.callout)
-            .foregroundStyle(monospaced ? Color.inkDim : Color.ink)
     }
 
     /// One labeled attachment row. Content leads in the evidence layer and its
