@@ -29,6 +29,35 @@ struct DecisionSummaryPresentation {
         }
     }
 
+    /// How many concerns the report lists, when its concerns section is a
+    /// flat Markdown list and so counts itself. Prose is not counted: a
+    /// number the source does not state would be a new claim.
+    var concernCount: Int? {
+        guard let concerns else { return nil }
+        var count = 0
+        for line in concerns.split(separator: "\n", omittingEmptySubsequences: true) {
+            guard !line.allSatisfy(\.isWhitespace) else { continue }
+            if line.first?.isWhitespace == true {
+                // A continuation of the item above; before any item it is
+                // prose.
+                guard count > 0 else { return nil }
+            } else if Self.startsListItem(line) {
+                count += 1
+            } else {
+                return nil
+            }
+        }
+        return count > 0 ? count : nil
+    }
+
+    private static func startsListItem(_ line: Substring) -> Bool {
+        if line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("+ ") { return true }
+        let digits = line.prefix { $0.isASCII && $0.isNumber }
+        guard !digits.isEmpty else { return false }
+        let rest = line.dropFirst(digits.count)
+        return rest.hasPrefix(". ") || rest.hasPrefix(") ")
+    }
+
     private static func excerpt(_ source: String) -> String {
         guard source.count > 800 else { return source }
         let prefix = source.prefix(800)

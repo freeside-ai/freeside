@@ -112,11 +112,12 @@ import Testing
     }
 
     @Test func fourSpecializedCardsAreOnlyModuleOrderings() throws {
-        // Plan §9 revision 78 (visual audit D07): the diff joins the verdict
-        // ahead of the summary, and the review yield follows the actions.
+        // Plan §9 and survey card 4b (R10): the labeled change summary,
+        // then the diff and the verdict reached on it, and the review yield
+        // follows the actions.
         #expect(
             DecisionCardComposition.forType(.ready_for_final_review).modules == [
-                .recommendation, .checklist, .facts, .summary, .factBlock, .yieldChart, .claims,
+                .recommendation, .summary, .facts, .checklist, .factBlock, .yieldChart, .claims,
                 .evidence, .details,
             ])
         #expect(
@@ -140,15 +141,15 @@ import Testing
             !DecisionCardComposition.forType(.review_dispute).modules.contains(.recommendation))
         let ready = DecisionCardComposition.forType(.ready_for_final_review)
         // Revision 78 (D07): the review yield opens on demand below the
-        // actions, and View PR follows the summary instead of closing the
-        // card.
+        // actions, and View PR follows the verdict it rests on instead of
+        // closing the card.
         #expect(ready.actionInsertionIndex == ready.modules.firstIndex(of: .yieldChart))
         #expect(try #require(ready.modules.firstIndex(of: .summary)) < ready.actionInsertionIndex)
         #expect(
             try #require(ready.modules.firstIndex(of: .evidence)) < #require(ready.modules.firstIndex(of: .details)))
         #expect(
             try ready.reviewingActionInsertionIndex == #require(
-                ready.modules.firstIndex(of: .summary)) + 1)
+                ready.modules.firstIndex(of: .checklist)) + 1)
         #expect(
             DecisionCardComposition.forType(.execution_failure)
                 .reviewingActionInsertionIndex == nil)
@@ -642,12 +643,14 @@ import Testing
         }
     }
 
-    /// Each type keeps its own lead: the readiness verdict, the failing stage,
-    /// and the disputed positions all outrank the identifier-shaped facts that
-    /// sit last before the actions.
+    /// Each type keeps its own lead: the final review's change summary, the
+    /// failing stage, and the disputed positions all outrank the
+    /// identifier-shaped facts that sit last before the actions. The final
+    /// review's diff sits between its summary and its verdict (survey card
+    /// 4b, R10).
     @Test func eachTypeLeadsWithItsOwnModuleNotWithItsFacts() {
         for (type, leading) in [
-            (Components.Schemas.AttentionType.ready_for_final_review, DecisionCardModule.checklist),
+            (Components.Schemas.AttentionType.ready_for_final_review, DecisionCardModule.summary),
             (.execution_failure, .stageRail),
             (.review_dispute, .comparison),
             (.review_diminishing_returns, .yieldChart),
@@ -673,6 +676,84 @@ import Testing
             #expect(reviewingActionInsertionIndex >= 0)
             #expect(reviewingActionInsertionIndex <= composition.modules.count)
         }
+    }
+
+    /// R10: the ladder survey card 4b settled, on the one card composed on
+    /// it so far. Every other type keeps the earlier scale until its sweep.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func onlyTheFinalReviewTakesTheRefinedScale(type: Components.Schemas.AttentionType) {
+        let scale = DecisionCardComposition.scale(for: type)
+        #expect(scale == (type == .ready_for_final_review ? .refined : .legacy))
+    }
+
+    @Test func refinedScaleIsTheLadderCard4bSettled() {
+        let scale = DecisionCardComposition.Scale.refined
+        #expect(scale.sectionGap == 22)
+        #expect(scale.moduleGap == 11)
+        #expect(scale.controlGap == 10)
+        #expect(scale.foldLead == 18)
+        #expect(scale.drawsFoldHairline)
+        #expect(scale.padding(compact: false) == .init(top: 28, leading: 28, bottom: 24, trailing: 28))
+        #expect(scale.padding(compact: true) == .init(top: 18, leading: 20, bottom: 18, trailing: 20))
+        #expect(!scale.drawsReturnGlyph)
+        #expect(!DecisionCardComposition.Scale.legacy.drawsFoldHairline)
+        #expect(DecisionCardComposition.Scale.legacy.drawsReturnGlyph)
+    }
+
+    /// The reviewing action opens the control group the action region
+    /// closes, and the folds are the modules straight after it, so a
+    /// composition can neither put the group's end ahead of its start nor
+    /// fold a module it does not have.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func controlGroupAndFoldsStayInsideTheModuleList(type: Components.Schemas.AttentionType) {
+        let composition = DecisionCardComposition.forType(type)
+        if let reviewing = composition.reviewingActionInsertionIndex {
+            #expect(reviewing <= composition.actionInsertionIndex)
+        }
+        #expect(
+            composition.actionInsertionIndex + composition.foldedModuleCount
+                <= composition.modules.count)
+    }
+
+    /// Survey card 4b: the review yield is the final review's one folded
+    /// module, and no other type folds a module yet.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func onlyTheFinalReviewFoldsAModuleUnderItsActions(type: Components.Schemas.AttentionType) {
+        let composition = DecisionCardComposition.forType(type)
+        let folded = composition.modules.dropFirst(composition.actionInsertionIndex)
+            .prefix(composition.foldedModuleCount)
+        #expect(Array(folded) == (type == .ready_for_final_review ? [.yieldChart] : []))
+    }
+
+    @Test func reviewYieldFoldSaysHowManyRoundsRanAndHowTheLastEnded() throws {
+        let item = AttentionFixtures.fixture(type: .ready_for_final_review).item
+        let history = try #require(item.yield_history?.value1)
+        let presentation = try #require(DecisionYieldPresentation(item))
+        let rounds = history.rounds.count == 1 ? "1 round" : "\(history.rounds.count) rounds"
+        let last =
+            switch history.terminal_outcome {
+            case .clean: "last clean"
+            case .findings: "last had findings"
+            }
+        #expect(presentation.foldSummary == "\(rounds) · \(last)")
+        #expect(DecisionYieldPresentation(rounds: []).foldSummary == "0 rounds")
+    }
+
+    /// R28: the Change row reads its counts aloud in words, since the plus
+    /// and minus signs carry the meaning only on screen.
+    @Test func changeRowSpeaksItsCountsInWords() {
+        #expect(
+            DecisionChangeRow.accessibilityLabel(
+                .init(
+                    files_changed: 9, additions: 412, deletions: 88, base_sha: "base",
+                    head_sha: "head"))
+                == "Change: 412 added, 88 removed, 9 files")
+        #expect(
+            DecisionChangeRow.accessibilityLabel(
+                .init(
+                    files_changed: 1, additions: 3, deletions: 0, base_sha: "base",
+                    head_sha: "head"))
+                == "Change: 3 added, 0 removed, 1 file")
     }
 
     @Test func checklistUsesNeutralSuccessAndFailureOnlyWhereTheFactFails() throws {

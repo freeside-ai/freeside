@@ -1003,8 +1003,10 @@
                                                 .fixedSize(horizontal: false, vertical: true)
                                                 // Bound the expanded scroll viewport: a full ax5
                                                 // report exceeds the platform PNG height limit.
-                                                // Its tail pins the final concern and digest;
-                                                // collapsed captures retain the card/actions.
+                                                // The report opens in place under the summary, so
+                                                // the tail pins its final concern and digest with
+                                                // the actions below them; collapsed captures keep
+                                                // the whole card.
                                                 .frame(height: expanded ? 1_600 : nil, alignment: .bottom)
                                                 .clipped())))
                                 }
@@ -2564,6 +2566,7 @@
             surfaces.append(contentsOf: try taskStopSurfaces())
             surfaces.append(contentsOf: taskStyleSurfaces())
             surfaces.append(contentsOf: cardStyleSurfaces())
+            surfaces.append(contentsOf: finalReviewFrameSurfaces(store: store, at: dynamicTypeSize))
 
             // Visual audit D08: the dispute card on both platforms and
             // themes with the positions the screenshot graphics supply, then
@@ -2783,6 +2786,35 @@
         /// quote with and without its producer label, the daemon's callout,
         /// the three notice tones (one with an action), a compact mark, and
         /// a fact row whose value is a chip.
+        /// Survey Part 2 card 4b: the final review at the frame's 560pt card,
+        /// day and dusk, on the clean fixture and on the degraded one the
+        /// frame draws. No test graphics: a production card carries none, so
+        /// View PR and Return to agent sit in one control group as the frame
+        /// has them.
+        private func finalReviewFrameSurfaces(
+            store: InboxStore, at dynamicTypeSize: DynamicTypeSize
+        ) -> [Surface] {
+            let clean = AttentionFixtures.fixture(type: .ready_for_final_review).item
+            let detail = DecisionDetailView(
+                store: store,
+                itemID: clean.id,
+                loadsAttachments: false,
+                showsValidationProgress: false,
+                now: screenshotNow)
+            let width = DecisionCardComposition.Scale.refined.columnWidth
+            return [("clean", clean), ("degraded", AttentionFixtures.degradedReady().item)].flatMap {
+                name, item in
+                [("light", ColorScheme.light), ("dark", ColorScheme.dark)].map { theme, scheme in
+                    Surface(
+                        name: "decision-ready-4b-\(name)-\(theme)",
+                        width: width,
+                        colorScheme: scheme,
+                        view: AnyView(
+                            detail.screenshotCard(item, at: dynamicTypeSize, detailWidth: width)))
+                }
+            }
+        }
+
         private func cardStyleSurfaces() -> [Surface] {
             [ColorScheme.light, .dark].map { scheme in
                 Surface(

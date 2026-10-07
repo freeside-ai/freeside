@@ -43,6 +43,10 @@ struct DecisionCardComposition: Equatable {
     /// claim exists. Elsewhere a claim without text stays supporting
     /// context.
     var leadsWithItsClaim = false
+    /// How many modules directly after the action region are closed folds.
+    /// They draw with Recorded Context under the card's one hairline rather
+    /// than as sections of their own.
+    var foldedModuleCount = 0
 
     /// A claim module leads when it renders above the action region: that is
     /// the whole meaning of prominence here, so it is read from
@@ -211,6 +215,60 @@ struct DecisionCardComposition: Equatable {
             .review_contradiction, .review_configuration, .finding_adjudication,
             .publish_blocked, .task_proposal, .effect_proposal, .system_health, .blocked:
             return .dashedCard
+        }
+    }
+
+    /// A card's gap ladder, padding, and corner (R10). The refined ladder is
+    /// the one survey card 4b settled: 22 between sections, 11 inside a
+    /// module, 10 within a control group, and 18 above the folds, which sit
+    /// under the card's one hairline.
+    enum Scale: Equatable {
+        case legacy
+        case refined
+
+        var sectionGap: CGFloat { self == .refined ? 22 : 16 }
+        /// Between the eyebrow and the ask.
+        var headGap: CGFloat { self == .refined ? 12 : 16 }
+        var moduleGap: CGFloat { self == .refined ? 11 : 8 }
+        var controlGap: CGFloat { self == .refined ? 10 : 8 }
+        var foldGap: CGFloat { self == .refined ? 12 : 16 }
+        /// The space between the hairline and the first fold.
+        var foldLead: CGFloat { 18 }
+        var drawsFoldHairline: Bool { self == .refined }
+        /// Returning the work is a plain outlined command on the refined
+        /// card (R6).
+        var drawsReturnGlyph: Bool { self == .legacy }
+        var cornerRadius: CGFloat { self == .refined ? 12 : 8 }
+        /// The widest a one-column card grows with the detail's 16pt margin
+        /// around it: the refined card itself is 560 wide.
+        var columnWidth: CGFloat { self == .refined ? 592 : 560 }
+
+        /// A phone's card is 20 from each side and 18 from the top and
+        /// bottom; a Mac's sits 28 in, with 24 under its last line.
+        func padding(compact: Bool) -> EdgeInsets {
+            switch self {
+            case .legacy:
+                EdgeInsets(top: 14, leading: 14, bottom: 14, trailing: 14)
+            case .refined:
+                compact
+                    ? EdgeInsets(top: 18, leading: 20, bottom: 18, trailing: 20)
+                    : EdgeInsets(top: 28, leading: 28, bottom: 24, trailing: 28)
+            }
+        }
+    }
+
+    /// The final review is the card the refined ladder was proved on; every
+    /// other type keeps the earlier one until its own sweep composes it. The
+    /// switch is exhaustive so a new type has to answer the question.
+    static func scale(for type: Components.Schemas.AttentionType) -> Scale {
+        switch type {
+        case .ready_for_final_review:
+            return .refined
+        case .agent_question, .review_dispute, .spec_approval, .execution_failure,
+            .review_diminishing_returns, .review_contradiction, .review_configuration,
+            .finding_adjudication, .publish_blocked, .task_proposal, .effect_proposal,
+            .system_health, .blocked:
+            return .legacy
         }
     }
 
@@ -448,9 +506,6 @@ struct DecisionCardComposition: Equatable {
             // size, and its keyword is that disclosure's label.
             return !drawn.isEmpty && (claimsAreProminent(at: index) || !context.accessibilityLayout)
         case .details:
-            if item._type == .ready_for_final_review, !summaries(from: item.agent_claims).isEmpty {
-                return true
-            }
             // A phone draws Details open in the card at an ordinary size, so
             // an agent-written reason there shows its keyword.
             return context.platform == .phone && !context.accessibilityLayout
@@ -496,18 +551,20 @@ struct DecisionCardComposition: Equatable {
     static func forType(_ type: Components.Schemas.AttentionType) -> Self {
         switch type {
         case .ready_for_final_review:
-            // Plan §9 (revision 78, audit D07): the verdict and the diff it
-            // was reached on lead, then the change summary, then View PR, so
-            // the supported next step follows what it rests on. Returning the
-            // work sits below any fact block; the review's round-by-round
-            // yield is history, so it follows the actions.
+            // Plan §9 (revision 78, audit D07) and survey card 4b: what the
+            // agent says changed, then the diff and the daemon's verdict on
+            // it, then View PR, so the supported next step follows what it
+            // rests on. Returning the work sits below any fact block; the
+            // review's round-by-round yield is history, so it folds under
+            // the actions.
             return .init(
                 modules: [
-                    .recommendation, .checklist, .facts, .summary, .factBlock, .yieldChart,
+                    .recommendation, .summary, .facts, .checklist, .factBlock, .yieldChart,
                     .claims, .evidence, .details,
                 ],
                 actionInsertionIndex: 5,
-                reviewingActionInsertionIndex: 4)
+                reviewingActionInsertionIndex: 4,
+                foldedModuleCount: 1)
         case .execution_failure:
             return .init(
                 modules: [
@@ -839,14 +896,6 @@ struct DecisionChecklistPresentation: Equatable {
         case note
         case passed
 
-        var marker: String {
-            switch self {
-            case .failed, .waived, .advisory: "!"
-            case .note: "•"
-            case .passed: "✓"
-            }
-        }
-
         var accessibilityState: String {
             switch self {
             case .failed: "needs attention"
@@ -1065,21 +1114,33 @@ struct DecisionYieldPresentation: Equatable {
 
     let rounds: [Round]
     let summary: String
+    /// What the closed Review Yield fold says of itself: how many rounds
+    /// ran, and how the daemon recorded the last one where it did.
+    let foldSummary: String
 
-    init(rounds: [Round]) {
+    init(rounds: [Round], lastRound: String? = nil) {
         self.rounds = rounds
         summary = "Review yield: " + rounds.map(\.text).joined(separator: "; ") + "."
+        foldSummary =
+            ([rounds.count == 1 ? "1 round" : "\(rounds.count) rounds", lastRound] as [String?])
+            .compactMap { $0 }.joined(separator: " · ")
     }
 
     init?(_ item: Components.Schemas.AttentionItem) {
         guard let history = item.yield_history?.value1 else { return nil }
+        let lastRound =
+            switch history.terminal_outcome {
+            case .clean: "last clean"
+            case .findings: "last had findings"
+            }
         self.init(
             rounds: history.rounds.map {
                 .init(
                     number: $0.round,
                     newFindings: $0.new_findings,
                     recurringFindings: $0.recurring_findings)
-            })
+            },
+            lastRound: lastRound)
     }
 }
 
@@ -1235,40 +1296,78 @@ struct DecisionModuleContainer<Content: View>: View {
     }
 }
 
+/// The final review's diff as one row (R28): the keyword, then the counts in
+/// the diff cuts and the file count in mono.
+struct DecisionChangeRow: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    let diff: Components.Schemas.DiffStats
+
+    var body: some View {
+        let layout =
+            dynamicTypeSize >= .accessibility1
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 3))
+            : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 12))
+        layout {
+            KeywordLabel(text: "Change")
+            if dynamicTypeSize < .accessibility1 {
+                Spacer(minLength: 12)
+            }
+            Text(
+                "\(Text("+\(diff.additions)").foregroundStyle(Color.diffAdd)) \(Text("\u{2212}\(diff.deletions)").foregroundStyle(Color.diffRemove)) · \(AttentionDisplay.fileCount(diff))"
+            )
+            .font(FreesideFont.monoValue)
+            .foregroundStyle(Color.ink)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(Self.accessibilityLabel(diff)))
+    }
+
+    static func accessibilityLabel(_ diff: Components.Schemas.DiffStats) -> String {
+        "Change: \(diff.additions) added, \(diff.deletions) removed, \(AttentionDisplay.fileCount(diff))"
+    }
+}
+
+/// The daemon's readiness verdict as a bordered item (survey card 4b): the
+/// verdict chip and the row counts, the rows that need reading, and the
+/// passed ones one disclosure away.
 struct DecisionChecklistModuleView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .callout) private var markerDiameter: CGFloat = screenshotMetricBase(
+        8, relativeTo: .callout)
     @State private var passedExpanded = false
     let presentation: DecisionChecklistPresentation
 
+    private static let rowGap = DecisionCardComposition.Scale.refined.moduleGap
+
     var body: some View {
-        DecisionModuleContainer(title: "Readiness checklist") {
+        VStack(alignment: .leading, spacing: Self.rowGap) {
+            KeywordLabel(text: "Readiness checklist")
             verdictLine
             ForEach(presentation.leadingRows) { row in
                 checklistRow(row)
             }
             let passed = presentation.passedRows
             if !passed.isEmpty {
-                DisclosureGroup(isExpanded: $passedExpanded) {
-                    VStack(alignment: .leading, spacing: 4) {
+                // Closed, the labels still name every passed requirement, so
+                // no row drops out of the surface.
+                SentenceDisclosure(
+                    label: "\(passed.count) Passed",
+                    summary: passedExpanded ? nil : passed.map(\.label).joined(separator: " · "),
+                    isExpanded: $passedExpanded
+                ) {
+                    VStack(alignment: .leading, spacing: Self.rowGap) {
                         ForEach(passed) { row in
                             checklistRow(row)
-                        }
-                    }
-                    .padding(.top, 4)
-                } label: {
-                    VStack(alignment: .leading, spacing: 2) {
-                        KeywordLabel(text: "\(passed.count) passed")
-                        // Closed, the labels still name every passed
-                        // requirement, so no row drops out of the surface.
-                        if !passedExpanded {
-                            Text(passed.map(\.label).joined(separator: " · "))
-                                .font(FreesideFont.monoCaption)
-                                .foregroundStyle(Color.inkDim)
                         }
                     }
                 }
             }
         }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.itemBorder))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(presentation.accessibilitySummary))
     }
@@ -1281,18 +1380,18 @@ struct DecisionChecklistModuleView: View {
         // wrapping its counts into a narrow trailing column.
         let layout =
             dynamicTypeSize >= .accessibility1
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
-            : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 8))
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 3))
+            : AnyLayout(HStackLayout(alignment: .center, spacing: 10))
         layout {
             if let verdict = presentation.verdict {
-                Text(verdict.value)
-                    .font(FreesideFont.sans(.callout, weight: .semibold))
-                    .foregroundStyle(verdict.result == .failed ? Color.waxText : Color.ink)
+                StateChip(
+                    label: verdict.value, color: .ink,
+                    cut: verdict.result == .failed ? .attention : .ink)
             }
             if !presentation.countSummary.isEmpty {
                 Text(presentation.countSummary)
-                    .font(FreesideFont.monoCaption)
-                    .foregroundStyle(Color.inkDim)
+                    .font(FreesideFont.monoValue)
+                    .foregroundStyle(Color.ink)
             }
         }
     }
@@ -1300,35 +1399,32 @@ struct DecisionChecklistModuleView: View {
     @ViewBuilder private func checklistRow(
         _ row: DecisionChecklistPresentation.Row
     ) -> some View {
-        let markerColor: Color =
-            switch row.result {
-            case .failed, .waived: .waxText
-            case .advisory, .note: .inkDim
-            case .passed: .ink
-            }
-        let valueColor: Color = row.result == .failed || row.result == .waived ? .waxText : .inkDim
-        let marker = Text(row.result.marker)
-            .font(FreesideFont.sans(.callout, weight: .bold))
-            .foregroundStyle(markerColor)
+        // The dot says only whether the row needs reading; the value beside
+        // it names the state in words.
+        let needsReading = row.result == .failed || row.result == .waived
+        let label = HStack(alignment: .center, spacing: 10) {
+            Circle()
+                .fill(needsReading ? Color.waxText : Color.ink)
+                .frame(width: markerDiameter, height: markerDiameter)
+            Text(row.label)
+                .font(FreesideFont.factLabel)
+                .foregroundStyle(Color.ink)
+        }
         let value = Text(row.value)
-            .font(FreesideFont.monoCaption)
-            .foregroundStyle(valueColor)
+            .font(FreesideFont.monoValue)
+            .foregroundStyle(Color.ink)
         // The fact-row rule owns when a value is too long for a trailing
         // column; the marker keeps the checklist's own row shape.
         if FactRow.stacks(row.value, at: dynamicTypeSize) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    marker
-                    Text(row.label)
-                }
+            VStack(alignment: .leading, spacing: 3) {
+                label
                 value.fixedSize(horizontal: false, vertical: true)
             }
         } else {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                marker
-                Text(row.label)
-                Spacer(minLength: 8)
-                value
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                label
+                Spacer(minLength: 12)
+                value.multilineTextAlignment(.trailing)
             }
         }
     }
@@ -1347,7 +1443,9 @@ struct DecisionYieldChartModuleView: View {
 
     var body: some View {
         if let isExpanded {
-            SentenceDisclosure(label: Self.title, isExpanded: isExpanded) {
+            SentenceDisclosure(
+                label: Self.title, summary: presentation.foldSummary, isExpanded: isExpanded
+            ) {
                 VStack(alignment: .leading, spacing: 8) {
                     rounds
                 }

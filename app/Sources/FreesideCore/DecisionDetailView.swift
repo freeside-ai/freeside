@@ -26,14 +26,8 @@ struct TechnicalDetailsRevealRequest: Equatable {
 /// and exactly the item's requested actions. Actions stay disabled until
 /// the model's revalidation of current state succeeds.
 struct DecisionDetailView: View {
-    private struct SummaryRevealRequest: Equatable {
-        let identity: DecisionSummaryIdentity
-        let nonce = UUID()
-    }
-
     private enum ScrollTarget: Hashable {
         case technicalDetails
-        case summaryReport(DecisionSummaryIdentity)
     }
 
     /// A consequential action awaiting its seal. Identified by action and
@@ -85,7 +79,6 @@ struct DecisionDetailView: View {
     /// stay in the first viewport (#1107).
     @State private var expandedFindings: Set<String>
     @State private var expandedSummaryReports: Set<DecisionSummaryIdentity> = []
-    @State private var summaryRevealRequest: SummaryRevealRequest?
     @State private var expandedDisclosures: Set<DecisionDisclosure>
     private let expandsSummaryReports: Bool
     private let attachments: AttachmentLoader
@@ -160,24 +153,16 @@ struct DecisionDetailView: View {
                                 wideLayout: usesWideLayout,
                                 inspectorPresented: inspectorBinding.wrappedValue
                             )
-                            .padding(14)
-                            .freesideCard()
-                            .padding()
-                            .frame(
-                                maxWidth: usesWideLayout ? 1_040 : 560,
-                                alignment: .topLeading)
+                            .decisionCardChrome(
+                                DecisionCardComposition.scale(for: snapshot.item._type),
+                                compactLayout: horizontalSizeClass == .compact,
+                                wideLayout: usesWideLayout)
                         }
                         .coordinateSpace(name: "decision-card-scroll")
                         .onGeometryChange(for: CGFloat.self) { geometry in
                             geometry.size.width
                         } action: { width in
                             detailWidth = width
-                        }
-                        .onChange(of: summaryRevealRequest) {
-                            if let summaryRevealRequest {
-                                scrollProxy.scrollTo(
-                                    ScrollTarget.summaryReport(summaryRevealRequest.identity), anchor: .top)
-                            }
                         }
                         .onChange(of: detailsRevealRequest) {
                             revealTechnicalDetailsIfRequested(using: scrollProxy)
@@ -518,19 +503,30 @@ struct DecisionDetailView: View {
         actionRegionFrameChanged: ((CGRect) -> Void)? = nil
     ) -> some View {
         let composition = DecisionCardComposition.forType(item._type)
+        let scale = DecisionCardComposition.scale(for: item._type)
         let register = unverified(
             item,
             effectProposalFacts: effectProposalFacts,
             accessibilityLayout: accessibilityLayout,
             rendersInteractiveControls: rendersInteractiveControls)
-        VStack(alignment: .leading, spacing: 16) {
-            eyebrow(item, register: register, accessibilityLayout: accessibilityLayout)
-            banner(accessibilityLayout: accessibilityLayout)
-            if DecisionCardComposition.rendersAsk(for: item) {
-                Text(AttentionDisplay.ask(item))
-                    .font(FreesideFont.sectionTitle)
-                    .foregroundStyle(Color.ink)
-                    .fixedSize(horizontal: false, vertical: true)
+        let modules = CardModules(
+            item: item,
+            composition: composition,
+            proposalFacts: proposalFacts,
+            effectProposalFacts: effectProposalFacts,
+            register: register,
+            accessibilityLayout: accessibilityLayout,
+            inspectorPresented: inspectorPresented)
+        VStack(alignment: .leading, spacing: scale.sectionGap) {
+            VStack(alignment: .leading, spacing: scale.headGap) {
+                eyebrow(item, register: register, accessibilityLayout: accessibilityLayout)
+                banner(accessibilityLayout: accessibilityLayout)
+                if DecisionCardComposition.rendersAsk(for: item) {
+                    Text(AttentionDisplay.ask(item))
+                        .font(scale == .refined ? FreesideFont.ask : FreesideFont.sectionTitle)
+                        .foregroundStyle(Color.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             // The ask and the reason are one question and its answer, so
             // nothing renders between them (R0). A type whose reason is the
@@ -567,6 +563,8 @@ struct DecisionDetailView: View {
                 .buttonStyle(FreesideActionButtonStyle(tone: .secondary))
             }
 
+            let actionIndex = composition.actionInsertionIndex
+            let reviewingIndex = composition.reviewingActionInsertionIndex
             #if os(macOS)
                 if wideLayout {
                     // The two columns are read side by side, so the action
@@ -575,58 +573,22 @@ struct DecisionDetailView: View {
                     // a composition places ahead of actionInsertionIndex must
                     // still precede the actions, so they render full width
                     // above the split rather than beside it.
-                    ForEach(
-                        Array(
-                            composition.modules.prefix(composition.actionInsertionIndex)
-                                .enumerated()), id: \.offset
-                    ) {
-                        index, module in
-                        cardModule(
-                            module,
-                            moduleIndex: index,
-                            item: item,
-                            composition: composition,
-                            proposalFacts: proposalFacts,
-                            effectProposalFacts: effectProposalFacts,
-                            register: register.at(.module(index)),
-                            accessibilityLayout: accessibilityLayout,
-                            inspectorPresented: inspectorPresented)
-                        if index + 1 == composition.reviewingActionInsertionIndex {
-                            reviewingAction(item)
-                        }
+                    cardModules(0..<(reviewingIndex ?? actionIndex), modules)
+                    if let reviewingIndex {
+                        reviewingAction(item)
+                        cardModules(reviewingIndex..<actionIndex, modules)
                     }
                     HStack(alignment: .top, spacing: 16) {
-                        VStack(alignment: .leading, spacing: 16) {
-                            ForEach(
-                                Array(
-                                    composition.modules.enumerated()
-                                        .dropFirst(composition.actionInsertionIndex)),
-                                id: \.offset
-                            ) {
-                                index, module in
-                                cardModule(
-                                    module,
-                                    moduleIndex: index,
-                                    item: item,
-                                    composition: composition,
-                                    proposalFacts: proposalFacts,
-                                    effectProposalFacts: effectProposalFacts,
-                                    register: register.at(.module(index)),
-                                    accessibilityLayout: accessibilityLayout,
-                                    inspectorPresented: inspectorPresented)
-                                if index + 1 == composition.reviewingActionInsertionIndex {
-                                    reviewingAction(item)
-                                }
-                            }
+                        VStack(alignment: .leading, spacing: scale.sectionGap) {
+                            cardModules(actionIndex..<composition.modules.count, modules)
                         }
                         .frame(maxWidth: 560, alignment: .topLeading)
 
-                        VStack(alignment: .leading, spacing: 16) {
+                        VStack(alignment: .leading, spacing: scale.sectionGap) {
                             actionRegion(
                                 item,
                                 stackedLayout: accessibilityLayout || compactLayout,
-                                includesReviewing: composition.reviewingActionInsertionIndex
-                                    == nil,
+                                includesReviewing: reviewingIndex == nil,
                                 register: register.at(.actionRegion)
                             )
                             if reasonPlacement == .recordedContext {
@@ -636,70 +598,133 @@ struct DecisionDetailView: View {
                         .frame(width: 360, alignment: .topLeading)
                     }
                 } else {
-                    ForEach(Array(composition.modules.enumerated()), id: \.offset) {
-                        index, module in
-                        cardModule(
-                            module,
-                            moduleIndex: index,
-                            item: item,
-                            composition: composition,
-                            proposalFacts: proposalFacts,
-                            effectProposalFacts: effectProposalFacts,
-                            register: register.at(.module(index)),
-                            accessibilityLayout: accessibilityLayout,
-                            inspectorPresented: inspectorPresented)
-                        if index + 1 == composition.actionInsertionIndex {
-                            actionRegion(
-                                item,
-                                stackedLayout: accessibilityLayout || compactLayout,
-                                includesReviewing: composition.reviewingActionInsertionIndex == nil,
-                                register: register.at(.actionRegion)
-                            )
-                            .onGeometryChange(for: CGRect.self) { geometry in
-                                geometry.frame(in: .named(Self.cardCoordinateSpace))
-                            } action: { frame in
-                                actionRegionFrameChanged?(frame)
-                            }
-                            if reasonPlacement == .recordedContext {
-                                recordedContext(item, register: register)
-                            }
-                        }
-                        if index + 1 == composition.reviewingActionInsertionIndex {
-                            reviewingAction(item)
-                        }
-                    }
+                    cardColumn(
+                        modules,
+                        scale: scale,
+                        stackedLayout: accessibilityLayout || compactLayout,
+                        foldsReason: reasonPlacement == .recordedContext,
+                        actionRegionFrameChanged: actionRegionFrameChanged)
                 }
             #else
-                ForEach(Array(composition.modules.enumerated()), id: \.offset) {
-                    index, module in
-                    cardModule(
-                        module,
-                        moduleIndex: index,
-                        item: item,
-                        composition: composition,
-                        proposalFacts: proposalFacts,
-                        effectProposalFacts: effectProposalFacts,
-                        register: register.at(.module(index)),
-                        accessibilityLayout: accessibilityLayout,
-                        inspectorPresented: inspectorPresented)
-                    if index + 1 == composition.actionInsertionIndex {
-                        actions(
-                            item,
-                            stackedLayout: accessibilityLayout || compactLayout,
-                            includesReviewing: composition.reviewingActionInsertionIndex == nil)
-                        if reasonPlacement == .recordedContext {
-                            recordedContext(item, register: register)
-                        }
-                    }
-                    if index + 1 == composition.reviewingActionInsertionIndex {
-                        reviewingAction(item)
-                    }
-                }
+                cardColumn(
+                    modules,
+                    scale: scale,
+                    stackedLayout: accessibilityLayout || compactLayout,
+                    foldsReason: reasonPlacement == .recordedContext,
+                    actionRegionFrameChanged: actionRegionFrameChanged)
             #endif
         }
         // The card's own space, so a measurement reads from the card's top
         // edge rather than the scroll view's (#1107).
         .coordinateSpace(name: Self.cardCoordinateSpace)
+    }
+
+    /// What every module of one card draws from.
+    private struct CardModules {
+        let item: Components.Schemas.AttentionItem
+        let composition: DecisionCardComposition
+        let proposalFacts: Components.Schemas.TaskProposalFactsSnapshot?
+        let effectProposalFacts: Components.Schemas.EffectProposalFactsSnapshot?
+        let register: UnverifiedRegister
+        let accessibilityLayout: Bool
+        let inspectorPresented: Bool
+    }
+
+    private func cardModules(_ range: Range<Int>, _ modules: CardModules) -> some View {
+        ForEach(Array(modules.composition.modules.enumerated())[range], id: \.offset) {
+            index, module in
+            cardModule(
+                module,
+                moduleIndex: index,
+                item: modules.item,
+                composition: modules.composition,
+                proposalFacts: modules.proposalFacts,
+                effectProposalFacts: modules.effectProposalFacts,
+                register: modules.register.at(.module(index)),
+                accessibilityLayout: modules.accessibilityLayout,
+                inspectorPresented: modules.inspectorPresented)
+        }
+    }
+
+    /// The card in one column: the modules a decision rests on, the control
+    /// group, the folds, and then the supporting modules.
+    @ViewBuilder
+    private func cardColumn(
+        _ modules: CardModules,
+        scale: DecisionCardComposition.Scale,
+        stackedLayout: Bool,
+        foldsReason: Bool,
+        actionRegionFrameChanged: ((CGRect) -> Void)?
+    ) -> some View {
+        let item = modules.item
+        let composition = modules.composition
+        let actionIndex = composition.actionInsertionIndex
+        let reviewingIndex = composition.reviewingActionInsertionIndex
+        let foldEnd = actionIndex + composition.foldedModuleCount
+        cardModules(0..<(reviewingIndex ?? actionIndex), modules)
+        // The reviewing action and the action region are one control group
+        // (R10), whatever a composition draws between them.
+        VStack(alignment: .leading, spacing: scale.controlGap) {
+            if let reviewingIndex {
+                reviewingAction(item)
+                cardModules(reviewingIndex..<actionIndex, modules)
+            }
+            #if os(macOS)
+                actionRegion(
+                    item,
+                    stackedLayout: stackedLayout,
+                    includesReviewing: reviewingIndex == nil,
+                    register: modules.register.at(.actionRegion)
+                )
+                .onGeometryChange(for: CGRect.self) { geometry in
+                    geometry.frame(in: .named(Self.cardCoordinateSpace))
+                } action: { frame in
+                    actionRegionFrameChanged?(frame)
+                }
+            #else
+                actions(
+                    item,
+                    stackedLayout: stackedLayout,
+                    includesReviewing: reviewingIndex == nil)
+            #endif
+        }
+        let foldsReason = foldsReason && DecisionCardComposition.reason(for: item) != nil
+        let foldedModules = actionIndex..<foldEnd
+        if scale.drawsFoldHairline {
+            // The card's one hairline (R26) sits above its folds, so a card
+            // with nothing folded draws none.
+            if foldsReason || foldedModules.contains(where: { foldDraws(at: $0, modules) }) {
+                VStack(alignment: .leading, spacing: scale.foldGap) {
+                    cardModules(foldedModules, modules)
+                    if foldsReason {
+                        recordedContext(item, register: modules.register)
+                    }
+                }
+                .padding(.top, scale.foldLead)
+                .overlay(alignment: .top) {
+                    Color.rule.frame(height: 1)
+                }
+            }
+        } else {
+            if foldsReason {
+                recordedContext(item, register: modules.register)
+            }
+            cardModules(foldedModules, modules)
+        }
+        cardModules(foldEnd..<composition.modules.count, modules)
+    }
+
+    /// Whether a folded module has anything to draw, which is what decides
+    /// if the folds' hairline has a fold under it.
+    private func foldDraws(at index: Int, _ modules: CardModules) -> Bool {
+        switch modules.composition.modules[index] {
+        case .yieldChart:
+            (graphics.diminishingYield ?? DecisionYieldPresentation(modules.item)) != nil
+        case .facts, .agentQuestion, .specRevision, .specification, .recommendation, .checklist,
+            .stageRail, .comparison, .stopCause, .findingFacts, .factBlock, .summary, .claims,
+            .evidence, .details:
+            true
+        }
     }
 
     /// The card content's coordinate space: the first-viewport budget is
@@ -714,7 +739,8 @@ struct DecisionDetailView: View {
             includesReviewing: Bool,
             register: UnverifiedRegister
         ) -> some View {
-            VStack(alignment: .leading, spacing: 16) {
+            let scale = DecisionCardComposition.scale(for: item._type)
+            VStack(alignment: .leading, spacing: scale.sectionGap) {
                 let recommendation = drawnRecommendation(item)
                 if let recommendation {
                     recommendationBlock(recommendation, item: item, register: register)
@@ -904,9 +930,6 @@ struct DecisionDetailView: View {
                     rendersInteractiveControls: rendersInteractiveControls)
             #endif
         case .details:
-            if item._type == .ready_for_final_review {
-                summaryReports(item, register: register)
-            }
             #if os(iOS)
                 details(item, accessibilityLayout: accessibilityLayout, register: register)
             #endif
@@ -977,80 +1000,91 @@ struct DecisionDetailView: View {
         }
     }
 
+    /// The final review's summary (survey card 4b): the agent's account of
+    /// the change in its own voice, and the whole report one disclosure away
+    /// in place (R3).
     @ViewBuilder
     private func readySummary(
         _ item: Components.Schemas.AttentionItem, register: UnverifiedRegister
     ) -> some View {
         let claims = DecisionCardComposition.forType(item._type).summaries(from: item.agent_claims)
-        let rendersInteractiveControls = register.rendersInteractiveControls
-        cardSection("Agent summary", unverified: register) {
+        let scale = DecisionCardComposition.scale(for: item._type)
+        VStack(alignment: .leading, spacing: scale.controlGap) {
+            sectionTitle("Agent summary", unverified: register)
             if claims.isEmpty {
                 Text("Inline summary unavailable. Any retained report is listed with the claim attachments.")
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.ink)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             ForEach(Array(claims.enumerated()), id: \.offset) { _, claim in
                 if let text = claim.text {
                     let presentation = DecisionSummaryPresentation(text)
                     if presentation.isExcerpt {
-                        Text("Report excerpt (incomplete)").font(FreesideFont.caption)
+                        Text("Report excerpt (incomplete)")
+                            .font(FreesideFont.cardBody)
+                            .foregroundStyle(Color.ink)
                     }
-                    summaryText(presentation.lead, mediaType: text.media_type)
-                    if presentation.isExcerpt { Text("…").accessibilityLabel("Excerpt ends here") }
-                    if let concerns = presentation.concerns {
-                        Text("Remaining concerns").font(FreesideFont.sans(.callout, weight: .semibold))
-                        summaryText(concerns, mediaType: text.media_type)
+                    QuoteBlock {
+                        VStack(alignment: .leading, spacing: scale.moduleGap) {
+                            summaryText(
+                                presentation.lead, mediaType: text.media_type,
+                                font: FreesideFont.statement)
+                            if presentation.isExcerpt {
+                                Text("…").accessibilityLabel("Excerpt ends here")
+                            }
+                            if let concerns = presentation.concerns {
+                                KeywordLabel(text: "Remaining concerns")
+                                summaryText(
+                                    concerns, mediaType: text.media_type,
+                                    font: FreesideFont.statement)
+                            }
+                        }
                     }
                     if presentation.concernsUnknown {
                         Text(
                             "Concerns have not been extracted; read the full report. Concerns may be outside this excerpt."
                         )
+                        .font(FreesideFont.cardBody)
                         .foregroundStyle(Color.inkDim)
+                        .fixedSize(horizontal: false, vertical: true)
                     }
-                    if rendersInteractiveControls {
-                        Button("Read full report") {
-                            let identity = DecisionSummaryIdentity(itemID: item.id, claim: claim)
-                            expandedSummaryReports.insert(identity)
-                            summaryRevealRequest = SummaryRevealRequest(identity: identity)
-                        }
-                    } else {
-                        Text("Read full report ↓").foregroundStyle(Color.inkDim)
+                    SentenceDisclosure(
+                        label: "Full Report",
+                        summary: Self.fullReportSummary(claim, presentation: presentation),
+                        isExpanded: summaryReportExpanded(
+                            DecisionSummaryIdentity(itemID: item.id, claim: claim))
+                    ) {
+                        fullSummaryReport(
+                            claim, rendersInteractiveControls: register.rendersInteractiveControls
+                        )
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    @ViewBuilder
-    private func summaryReports(
-        _ item: Components.Schemas.AttentionItem, register: UnverifiedRegister
-    ) -> some View {
-        let claims = DecisionCardComposition.forType(item._type).summaries(from: item.agent_claims)
-        let rendersInteractiveControls = register.rendersInteractiveControls
-        ForEach(Array(claims.enumerated()), id: \.offset) { index, claim in
-            let identity = DecisionSummaryIdentity(itemID: item.id, claim: claim)
-            let expanded = Binding(
-                get: { expandedSummaryReports.contains(identity) || expandsSummaryReports },
-                set: {
-                    if $0 {
-                        expandedSummaryReports.insert(identity)
-                    } else {
-                        expandedSummaryReports.remove(identity)
-                        summaryRevealRequest = nil
-                    }
-                })
-            cardSection(
-                "Full agent report", unverified: index == 0 ? register : register.withoutInfo
-            ) {
-                if rendersInteractiveControls {
-                    DisclosureGroup("Complete original report", isExpanded: expanded) {
-                        fullSummaryReport(claim, rendersInteractiveControls: true)
-                    }
+    private func summaryReportExpanded(_ identity: DecisionSummaryIdentity) -> Binding<Bool> {
+        Binding(
+            get: { expandedSummaryReports.contains(identity) || expandsSummaryReports },
+            set: {
+                if $0 {
+                    expandedSummaryReports.insert(identity)
                 } else {
-                    Text(expanded.wrappedValue ? "▾ Complete original report" : "▸ Complete original report")
-                    if expanded.wrappedValue { fullSummaryReport(claim, rendersInteractiveControls: false) }
+                    expandedSummaryReports.remove(identity)
                 }
-            }
-            .id(ScrollTarget.summaryReport(identity))
-        }
+            })
+    }
+
+    /// What the closed report says about itself: who wrote it, and how many
+    /// concerns it lists when the report counts them itself.
+    static func fullReportSummary(
+        _ claim: Components.Schemas.AgentClaim, presentation: DecisionSummaryPresentation
+    ) -> String {
+        let concerns = presentation.concernCount.map { $0 == 1 ? "1 concern" : "\($0) concerns" }
+        return [producerInvocationID(claim), concerns].compactMap { $0 }.joined(separator: " · ")
     }
 
     private func fullSummaryReport(
@@ -1065,14 +1099,16 @@ struct DecisionDetailView: View {
         }
     }
 
-    private func summaryText(_ content: String, mediaType: Components.Schemas.ClaimText.media_typePayload) -> some View
-    {
+    private func summaryText(
+        _ content: String, mediaType: Components.Schemas.ClaimText.media_typePayload,
+        font: Font = FreesideFont.callout
+    ) -> some View {
         let attributed =
             mediaType == .text_sol_markdown
             ? try? AttributedString(
                 markdown: content, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) : nil
         return Text(attributed ?? AttributedString(content))
-            .font(FreesideFont.callout)
+            .font(font)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1176,9 +1212,20 @@ struct DecisionDetailView: View {
     ) -> some View {
         let placement = DecisionFactPlacement(
             item, includesCommitPlan: includesCommitPlan, now: now)
-        if !placement.visible.isEmpty {
+        // A refined card draws its diff as the Change row (R28); the rows
+        // around it keep the Facts section.
+        let change =
+            DecisionCardComposition.scale(for: item._type) == .refined
+            ? item.diff_stats?.value1 : nil
+        let rows = placement.visible.filter {
+            change == nil || $0.label != AttentionDisplay.diffFactLabel
+        }
+        if let change, placement.visible.count != rows.count {
+            DecisionChangeRow(diff: change)
+        }
+        if !rows.isEmpty {
             cardSection("Facts") {
-                ForEach(placement.visible) { fact in
+                ForEach(rows) { fact in
                     factRow(fact.label, value: fact.value)
                 }
             }
@@ -1854,10 +1901,10 @@ struct DecisionDetailView: View {
             inspectorPresented: inspectorPresented,
             actionRegionFrameChanged: actionRegionFrameChanged
         )
-        .padding(14)
-        .freesideCard()
-        .padding()
-        .frame(maxWidth: wideLayout ? 1_040 : 560, alignment: .topLeading)
+        .decisionCardChrome(
+            DecisionCardComposition.scale(for: item._type),
+            compactLayout: compactLayout,
+            wideLayout: wideLayout)
     }
 
     func screenshotBanner() -> some View {
@@ -3255,7 +3302,8 @@ struct DecisionDetailView: View {
         includesReviewing: Bool
     ) -> some View {
         let ranking = actionRanking(item)
-        VStack(alignment: .leading, spacing: 8) {
+        let controlGap = DecisionCardComposition.scale(for: item._type).controlGap
+        VStack(alignment: .leading, spacing: controlGap) {
             if showsValidationProgress && model.validation == .pending {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small).tint(.waterText)
@@ -3284,13 +3332,13 @@ struct DecisionDetailView: View {
                 // Keyed by position: requested_decision does not enforce
                 // uniqueness, and duplicate identities may not drop a button.
                 if stackedLayout {
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: controlGap) {
                         ForEach(Array(ranking.principal.enumerated()), id: \.offset) { _, action in
                             actionButton(action, item: item, tone: .secondary)
                         }
                     }
                 } else {
-                    HStack(alignment: .top, spacing: 8) {
+                    HStack(alignment: .top, spacing: controlGap) {
                         ForEach(Array(ranking.principal.enumerated()), id: \.offset) { _, action in
                             actionButton(action, item: item, tone: .secondary)
                         }
@@ -3416,7 +3464,12 @@ struct DecisionDetailView: View {
         item: Components.Schemas.AttentionItem,
         showsIcon: Bool = true
     ) -> some View {
-        if showsIcon, let systemImage = AttentionDisplay.systemImage(action) {
+        // The refined card draws returning the work as a plain outlined
+        // command (R6); the other types keep the glyph until their sweep.
+        let returnsPlain =
+            action == .return_to_agent
+            && !DecisionCardComposition.scale(for: item._type).drawsReturnGlyph
+        if showsIcon, !returnsPlain, let systemImage = AttentionDisplay.systemImage(action) {
             Label(AttentionDisplay.label(action, for: item), systemImage: systemImage)
         } else {
             Text(AttentionDisplay.label(action, for: item))
@@ -3873,5 +3926,18 @@ struct HealthPostureBadge: View {
         case .blocking: return .waxText
         case .advisory: return .inkDim
         }
+    }
+}
+
+extension View {
+    /// The decision card's own padding, ground, and border, inside the
+    /// detail's margin.
+    fileprivate func decisionCardChrome(
+        _ scale: DecisionCardComposition.Scale, compactLayout: Bool, wideLayout: Bool
+    ) -> some View {
+        padding(scale.padding(compact: compactLayout))
+            .freesideCard(cornerRadius: scale.cornerRadius)
+            .padding()
+            .frame(maxWidth: wideLayout ? 1_040 : scale.columnWidth, alignment: .topLeading)
     }
 }
