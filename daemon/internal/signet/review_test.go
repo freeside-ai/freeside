@@ -501,6 +501,19 @@ func TestRunReviewRemediationLineageFailsClosed(t *testing.T) {
 			t.Fatalf("unreported finding accepted: %v", err)
 		}
 	})
+	t.Run("remediation names a successor the run does not hold", func(t *testing.T) {
+		// An external review cycle's remediation names its authority, which
+		// admits findings outside the record (issue #1767). A successor the
+		// store cannot read admits nothing.
+		f := newReviewSubjectFixture(t)
+		f.decideRemediation(t, func(intent *domain.RemediationInvocationIntent) {
+			intent.SuccessorPublicationID = "publication-missing"
+			intent.FindingIDs = []domain.FindingID{f.finding.ID, "finding-not-reported"}
+		})
+		if _, err := f.service.GetRunTimeline(context.Background(), f.run.ID); !errors.Is(err, domain.ErrParentKeyMismatch) {
+			t.Fatalf("unreadable successor accepted: %v", err)
+		}
+	})
 	t.Run("remediation names another adjudication", func(t *testing.T) {
 		f := newReviewSubjectFixture(t)
 		f.decideRemediation(t, func(intent *domain.RemediationInvocationIntent) { intent.AdjudicationDigest = subjectDigest("e") })

@@ -307,63 +307,6 @@ func TestExternalReviewCycleDisputeNamesTheFinding(t *testing.T) {
 	}
 }
 
-// TestExternalReviewCycleStartsNoRemediation: adjudication judges that an
-// admitted finding needs a fix in this pull request. An external review cycle
-// starts no remediation, so the cycle ends on a person, on an item of its own
-// that names the finding. Nothing is dispatched and no outcome is recorded.
-func TestExternalReviewCycleStartsNoRemediation(t *testing.T) {
-	t.Parallel()
-	p := newProductionPublicationHarness(t, "")
-	driver := p.configureAdjudicator(t)
-	_, findings := p.startAdjudicatedExternalReview(t, "this leaks the handle", "rename this too")
-	head := p.replay.HeadSHA
-
-	p.scriptCleanReview(2, p.baseSHA, head)
-	scriptAdjudication(t, driver, remediateVerdict(findings[0].ID), declineVerdict(findings[1].ID))
-	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 {
-		t.Fatalf("cycle result = %#v, %v", result, err)
-	}
-	end := p.externalReviewEnd(t)
-	if len(end.reviewItems) != 1 || end.readyItem || end.pending != 0 {
-		t.Fatalf("cycle end = %d review items, ready item %t, %d tasks pending",
-			len(end.reviewItems), end.readyItem, end.pending)
-	}
-	item := end.reviewItems[0]
-	if item.Type != domain.AttentionReviewDispute || item.PRHeadSHA != head ||
-		item.ID != domain.ItemID("production-external-review-handoff-"+string(p.runID)+"-2") {
-		t.Fatalf("handoff item = %#v", item)
-	}
-	for _, want := range []string{
-		"An external review cycle starts no remediation, so a person must decide.",
-		`maintainer on review_comment/1: "this leaks the handle"`,
-		`maintainer on review_comment/2: "rename this too"`,
-	} {
-		if !strings.Contains(item.Reason, want) {
-			t.Errorf("handoff item reason lacks %q:\n%s", want, item.Reason)
-		}
-	}
-	if dispositions := p.externalDispositions(t); len(dispositions) != 0 {
-		t.Fatalf("a cycle that ended on a person recorded outcomes: %#v", dispositions)
-	}
-	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
-		_, err := tx.GetOutbox(p.ctx, "inv-remediate-2-"+string(p.runID))
-		if !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("remediation dispatch intent = %v, want none", err)
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	// A later pass changes nothing.
-	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 {
-		t.Fatalf("converged replay = %#v, %v", result, err)
-	}
-	if again := p.externalReviewEnd(t); len(again.reviewItems) != 1 ||
-		again.reviewItems[0].ItemVersion != item.ItemVersion || len(adjudicatorRequests(driver)) != 1 {
-		t.Fatalf("converged replay rewrote the item or adjudicated again: %#v", again.reviewItems)
-	}
-}
-
 // parkVerdict judges a finding to need work outside this work unit, a route
 // only a person can accept.
 func parkVerdict(id domain.FindingID) adjudicatorVerdict {
@@ -484,7 +427,7 @@ func TestExternalReviewCycleCardNamesTheFinding(t *testing.T) {
 				t.Fatalf("decided cycle items = %#v", end.reviewItems)
 			}
 			for _, want := range []string{
-				"Adjudication left a finding that is neither declined nor deferred.",
+				"Adjudication left a finding that is neither declined, deferred, nor fixed in this pull request.",
 				`maintainer on review_comment/1: "this leaks the handle"`,
 			} {
 				if !strings.Contains(end.reviewItems[0].Reason, want) {

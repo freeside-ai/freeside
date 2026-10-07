@@ -79,15 +79,14 @@ func TestFindingAdjudicationCardNamesExternalFindings(t *testing.T) {
 }
 
 // TestExternalRoundCardSaysWhatAcceptingDoes: an external review cycle's
-// first round starts no remediator and records outcomes only for a card of
-// declines and deferrals, so its card promises neither a fix nor an outcome
-// for any other set of routes. The card and the round ask one function
-// whether the routes end the cycle on a person, so the card says so exactly
-// when accepting does.
+// first round acts on a card of declines, deferrals, and fixes, so its card
+// promises neither a fix nor an outcome for any other set of routes. The
+// card and the round ask one function whether the routes end the cycle on a
+// person, so the card says so exactly when accepting does.
 func TestExternalRoundCardSaysWhatAcceptingDoes(t *testing.T) {
 	t.Parallel()
-	const handsOff = "Accepting fixes nothing and records no outcome: an external review cycle starts no remediator, " +
-		"and it records outcomes only when every finding is declined or deferred. " +
+	const handsOff = "Accepting fixes nothing and records no outcome: an external review cycle acts on a card " +
+		"only when every finding is declined, deferred, or fixed in this pull request. " +
 		"The cycle ends, and a new item hands the findings to a person."
 	external := externalFindingForTest(t, 0, "maintainer", "this leaks the handle")
 	own := domain.Finding{ID: "finding-own"}
@@ -99,7 +98,8 @@ func TestExternalRoundCardSaysWhatAcceptingDoes(t *testing.T) {
 		handsOff      bool
 	}{
 		{"a fix beside a parked finding", domain.RouteRemediate, domain.RouteParkSeparateWork, true},
-		{"a fix beside a decline", domain.RouteRemediate, domain.RouteDecline, true},
+		{"a fix beside a decline", domain.RouteRemediate, domain.RouteDecline, false},
+		{"fixes only", domain.RouteRemediate, domain.RouteRemediate, false},
 		{"a parked finding beside a deferral", domain.RouteDefer, domain.RouteParkSeparateWork, true},
 		{"a dispute beside a decline", domain.RouteDecline, domain.RouteDispute, true},
 		{"a human decision beside a deferral", domain.RouteDefer, domain.RouteAttentionHumanDecision, true},
@@ -122,9 +122,14 @@ func TestExternalRoundCardSaysWhatAcceptingDoes(t *testing.T) {
 			}
 			ordinary := findingAdjudicationReason(artifact, nil, findings, []string{"daemon/**"}, nil)
 			if !tc.handsOff {
-				// A card the cycle acts on reads as any other round's does.
-				if want := "Accepting records each finding's outcome, and the run continues."; lines[0] != want {
-					t.Errorf("lead = %q, want %q", lines[0], want)
+				// A card the cycle acts on reads as any other round's does: it
+				// records the outcomes, or starts the remediator.
+				wantLead := "Accepting records each finding's outcome, and the run continues."
+				if tc.ownRoute == domain.RouteRemediate || tc.externalRoute == domain.RouteRemediate {
+					wantLead = "Accepting starts a remediator that edits this PR."
+				}
+				if !strings.HasPrefix(lines[0], wantLead) {
+					t.Errorf("lead = %q, want prefix %q", lines[0], wantLead)
 				}
 				if reason != ordinary {
 					t.Errorf("card reason =\n%s\nwant the ordinary round's:\n%s", reason, ordinary)

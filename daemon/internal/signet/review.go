@@ -352,13 +352,46 @@ func authenticateRemediationLineage(ctx context.Context, tx *store.ReadTx, runID
 		return domain.FindingAdjudication{}, err
 	}
 	if review.RunID != runID || review.Round != intent.Round || review.BaseSHA != intent.BaseSHA ||
-		review.HeadSHA != intent.HeadSHA || review.Outcome != domain.ReviewFindings || len(intent.FindingIDs) == 0 {
+		review.HeadSHA != intent.HeadSHA || len(intent.FindingIDs) == 0 {
 		return domain.FindingAdjudication{}, mismatch
 	}
-	for _, finding := range intent.FindingIDs {
-		if !slices.Contains(review.FindingIDs, finding) {
+	// An external review cycle's first round may fix the cycle's admitted
+	// external findings, which no review record lists, and may answer a clean
+	// record when it fixes nothing of the record's own (issue #1767). The
+	// cycle's admitted findings are read through the store's own gate.
+	var (
+		externalRound bool
+		external      []domain.Finding
+	)
+	if intent.SuccessorPublicationID != "" {
+		successor, err := tx.GetPublicationSuccessor(ctx, runID, intent.SuccessorPublicationID)
+		if errors.Is(err, store.ErrNotFound) {
 			return domain.FindingAdjudication{}, mismatch
 		}
+		if err != nil {
+			return domain.FindingAdjudication{}, err
+		}
+		if successor.EffectiveOrigin() == domain.PublicationSuccessorExternalReview &&
+			successor.Reentry != nil && intent.Round == successor.ReviewRound {
+			externalRound = true
+			if external, err = tx.ExternalReviewCycleFindings(ctx, runID, intent.SuccessorPublicationID); err != nil {
+				return domain.FindingAdjudication{}, err
+			}
+		}
+	}
+	reviewed := 0
+	for _, finding := range intent.FindingIDs {
+		if slices.Contains(review.FindingIDs, finding) {
+			reviewed++
+			continue
+		}
+		if !slices.ContainsFunc(external, func(admitted domain.Finding) bool { return admitted.ID == finding }) {
+			return domain.FindingAdjudication{}, mismatch
+		}
+	}
+	if review.Outcome != domain.ReviewFindings &&
+		(review.Outcome != domain.ReviewClean || !externalRound || reviewed != 0) {
+		return domain.FindingAdjudication{}, mismatch
 	}
 	adjudication, err := tx.GetFindingAdjudication(ctx, intent.AdjudicationDigest)
 	if errors.Is(err, store.ErrNotFound) {
@@ -369,6 +402,17 @@ func authenticateRemediationLineage(ctx context.Context, tx *store.ReadTx, runID
 	}
 	if adjudication.Digest != intent.AdjudicationDigest || adjudication.RunID != runID || adjudication.Round != intent.Round {
 		return domain.FindingAdjudication{}, mismatch
+	}
+	// The cycle answers an external finding whether or not this adjudication
+	// sent it to a fix, so one outside the record must be an entry the
+	// adjudication routes to remediate, as the store's producer gate requires.
+	for _, finding := range intent.FindingIDs {
+		if !slices.Contains(review.FindingIDs, finding) &&
+			!slices.ContainsFunc(adjudication.Entries, func(entry domain.FindingAdjudicationEntry) bool {
+				return entry.FindingID == finding && entry.Route == domain.RouteRemediate
+			}) {
+			return domain.FindingAdjudication{}, mismatch
+		}
 	}
 	return adjudication, nil
 }

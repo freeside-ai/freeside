@@ -472,12 +472,17 @@ func (task productionPublicationTask) readyItemID() domain.ItemID {
 	return productionReadyItemID(task.RunID)
 }
 
+// reentryCheckpointKey names a re-entered cycle's verification checkpoint.
+// Run plus head is not enough: a base-advance re-entry keeps its
+// predecessor's head, so the key names the cycle.
+func reentryCheckpointKey(runID domain.RunID, headSHA string, publicationID domain.InvocationID) string {
+	return productionVerificationCheckpointKey(runID, headSHA, "") +
+		"/reentry/" + string(publicationID)
+}
+
 func (task productionPublicationTask) verificationCheckpointKey() string {
 	if task.reentersInPlace() {
-		// Run plus head is not enough here: a base-advance re-entry keeps
-		// its predecessor's head, so the key names the cycle.
-		return productionVerificationCheckpointKey(task.RunID, task.HeadSHA, "") +
-			"/reentry/" + string(task.Successor.PublicationID())
+		return reentryCheckpointKey(task.RunID, task.HeadSHA, task.Successor.PublicationID())
 	}
 	commandID := ""
 	if task.reevaluation != nil {
@@ -879,6 +884,7 @@ func RecordProductionExecutionExport(
 		run               domain.Run
 		publication       ProductionPublication
 		remediation       *remediationInvocationRequest
+		transition        authenticatedRemediationTransition
 		previousTask      *productionPublicationTask
 		alreadyReplaced   bool
 		legacyNoop        bool
@@ -922,10 +928,10 @@ func RecordProductionExecutionExport(
 			request := verified.request
 			latestReview, err := tx.LatestReviewRecord(ctx, run.ID)
 			if err != nil || latestReview.InvocationID != request.ReviewInvocationID ||
-				latestReview.Round != request.Round || latestReview.Outcome != domain.ReviewFindings {
+				latestReview.Round != request.Round || !verified.admitsReviewOutcome(latestReview.Outcome) {
 				return errors.Join(err, domain.ErrParentKeyMismatch)
 			}
-			remediation = &request
+			remediation, transition = &request, verified
 			taskEntry, err := productionTaskForInvocation(ctx, tx, run.ID, executionExport.InvocationID)
 			if errors.Is(err, store.ErrNotFound) && request.SuccessorPublicationID != "" {
 				cycle, readErr := tx.GetPublicationSuccessor(ctx, run.ID, request.SuccessorPublicationID)
@@ -943,6 +949,19 @@ func RecordProductionExecutionExport(
 			current, err := decodeProductionPublicationTask(taskEntry)
 			if err != nil {
 				return err
+			}
+			if current.reentersInPlace() {
+				// A re-entered cycle has no publication of its own and no
+				// producer. The one remediation it starts is its external
+				// review first round's; the new row inherits the producer's
+				// publication the request already proved.
+				if !remediatesExternalFindings(*current.Successor, round) {
+					return domain.ErrImmutableTransition
+				}
+				publication, successor = verified.publication, current.Successor
+				previous := current
+				previousTask = &previous
+				return nil
 			}
 			if !reflect.DeepEqual(current.Publication, verified.publication) {
 				return domain.ErrParentKeyMismatch
@@ -993,7 +1012,7 @@ func RecordProductionExecutionExport(
 			return fmt.Errorf("remediation export disagrees with its request: %w", domain.ErrParentKeyMismatch)
 		}
 		if previousTask != nil && (previousTask.HeadSHA != remediation.HeadSHA ||
-			previousTask.Replay.ObservedBaseSHA != remediation.BaseSHA) {
+			previousTask.admittedBaseSHA() != remediation.BaseSHA) {
 			return fmt.Errorf("remediation export does not supersede the current candidate: %w",
 				domain.ErrParentKeyMismatch)
 		}
@@ -1115,7 +1134,7 @@ func RecordProductionExecutionExport(
 		}
 		latestReview, err := tx.LatestReviewRecord(ctx, task.RunID)
 		if err != nil || latestReview.InvocationID != remediation.ReviewInvocationID ||
-			latestReview.Round != remediation.Round || latestReview.Outcome != domain.ReviewFindings {
+			latestReview.Round != remediation.Round || !transition.admitsReviewOutcome(latestReview.Outcome) {
 			return errors.Join(err, domain.ErrParentKeyMismatch)
 		}
 		currentEntry, err := tx.GetOutbox(ctx, key)
@@ -2494,7 +2513,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		return w.startPublicationContinuation(ctx, task, checkoutDir)
 	}
 	if binding.remediation != nil {
-		sourceTree, err := w.loadRemediationSourceTree(ctx, task, binding)
+		sourceTree, err := w.loadRemediationSourceTree(ctx, task, binding, checkoutDir)
 		if err != nil {
 			if errors.Is(err, errRemediationSourceIdentity) {
 				return w.completeRemediationSourceIdentityDissent(ctx, task, binding, imported)
@@ -3724,6 +3743,11 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		}
 		for _, disposition := range remediationOutcome.dispositions {
 			if err := tx.PutFindingDisposition(ctx, disposition); err != nil {
+				return err
+			}
+		}
+		for _, disposition := range remediationOutcome.externalDispositions {
+			if err := tx.PutExternalFindingDisposition(ctx, disposition); err != nil {
 				return err
 			}
 		}
@@ -6365,10 +6389,14 @@ func (w *productionPublicationWorkflow) loadCheckpoint(
 // identity from the daemon-authored verification checkpoint. Commit identity
 // is deliberately insufficient here: every stage invocation receives a fresh
 // commit date, so identical content normally reconstructs a different commit.
+//
+// checkoutDir is a checkout holding the request's base. Only the re-entry
+// branch reads it, to rebuild the tree its checkpoint must name.
 func (w *productionPublicationWorkflow) loadRemediationSourceTree(
 	ctx context.Context,
 	task productionPublicationTask,
 	binding productionBinding,
+	checkoutDir string,
 ) (string, error) {
 	if binding.remediation == nil {
 		return "", errors.Join(errRemediationSourceIdentity, domain.ErrParentKeyMismatch)
@@ -6377,6 +6405,9 @@ func (w *productionPublicationWorkflow) loadRemediationSourceTree(
 	round, ok := remediationRoundForInvocation(task.RunID, task.ProducingInvocationID)
 	if !ok || request.Round != round {
 		return "", errors.Join(errRemediationSourceIdentity, domain.ErrParentKeyMismatch)
+	}
+	if task.Successor != nil && remediatesExternalFindings(*task.Successor, request.Round) {
+		return w.loadReentryRemediationSourceTree(ctx, task, binding, request, checkoutDir)
 	}
 	var (
 		entry  store.QueueEntry
@@ -6502,6 +6533,126 @@ func (w *productionPublicationWorkflow) loadRemediationSourceTree(
 		}
 	}
 	return checkpoint.Imported.TreeSHA, nil
+}
+
+// loadReentryRemediationSourceTree is loadRemediationSourceTree for the
+// remediation an external review cycle's first round started. That cycle
+// verified its head as a re-entered cycle: under its own checkpoint kind,
+// with no import account and no stored authorization. The tree the
+// remediator's import is compared with is the one that checkpoint recorded,
+// re-bound to the request and the run the way the ordinary checkpoint is.
+//
+// The ordinary checkpoint's outcome and tree are bound through its stored
+// authorization. This one has none, so the row is trusted for neither. The
+// outcome is read back from the cycle's verification report. The tree is held
+// to the remediation input the request authenticates: it carries the
+// base-to-head patch the remediator starts from, derived apart from the
+// checkpoint, and the tree that patch rebuilds on the base in checkoutDir
+// must be the recorded one.
+func (w *productionPublicationWorkflow) loadReentryRemediationSourceTree(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+	request remediationInvocationRequest,
+	checkoutDir string,
+) (string, error) {
+	// The re-entered task's key: the cycle's head under the cycle's
+	// publication, which the remediated task shares.
+	key := reentryCheckpointKey(task.RunID, request.HeadSHA, task.Successor.PublicationID())
+	var entry store.QueueEntry
+	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		entry, err = tx.GetInbox(ctx, key)
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return "", errors.Join(errRemediationSourceIdentity, err)
+	}
+	if err != nil {
+		return "", remediationSourceReadError(ctx, err)
+	}
+	if entry.Kind != productionReentryCheckpointKind {
+		return "", errors.Join(errRemediationSourceIdentity, domain.ErrParentKeyMismatch)
+	}
+	var checkpoint productionReentryCheckpoint
+	if err := strictjson.Decode(
+		entry.Payload, &checkpoint, strictjson.TolerateInvalidUTF8, strictjson.NoLimit,
+	); err != nil {
+		return "", fmt.Errorf("decode re-entry remediation source checkpoint: %w",
+			errors.Join(errRemediationSourceIdentity, err, domain.ErrParentKeyMismatch))
+	}
+	evidenceDigest, err := domain.ComputeEvidenceSnapshotDigest(checkpoint.Artifacts)
+	if err != nil {
+		return "", errors.Join(errRemediationSourceIdentity, err)
+	}
+	// An external review cycle evaluates its head itself, never a merge, so
+	// the recorded tree is the head's. A checkpoint from before the tree was
+	// recorded has no source identity to offer.
+	if checkpoint.Version != productionReentryCheckpointVersion ||
+		checkpoint.TaskKey != task.intentKey() ||
+		checkpoint.BaseSHA != request.BaseSHA || checkpoint.HeadSHA != request.HeadSHA ||
+		checkpoint.EvaluatedSHA != "" || !checkpoint.clean() ||
+		!validCommitSHA(checkpoint.TreeSHA) ||
+		checkpoint.EvidenceSnapshotDigest != evidenceDigest {
+		return "", errors.Join(errRemediationSourceIdentity, domain.ErrParentKeyMismatch)
+	}
+	// The checkpoint is held to the image the cycle verified its head under,
+	// as loadReentryCheckpoint holds it: the admitted image, or the rebuild
+	// the run bound to that head (production_rebuild.go), which keeps the
+	// admitted recipe. It is never held to an image it names itself: another
+	// registered image of the same repository, with its own recipe, is
+	// self-consistent and still not the one the cycle verified under.
+	source := binding
+	if err := w.resolveVerificationImage(ctx, &source, request.HeadSHA); err != nil {
+		if errors.Is(err, domain.ErrParentKeyMismatch) {
+			return "", errors.Join(errRemediationSourceIdentity, err)
+		}
+		return "", remediationSourceReadError(ctx, err)
+	}
+	if checkpoint.ProjectImage != source.verificationImage().ID ||
+		checkpoint.RecipeDigest != binding.image.RecipeDigest {
+		return "", errors.Join(errRemediationSourceIdentity, domain.ErrParentKeyMismatch)
+	}
+	for _, artifact := range checkpoint.Artifacts {
+		if err := verifyFakePublicationBlob(w.artifacts, artifact); err != nil {
+			return "", fmt.Errorf("verify re-entry remediation source checkpoint artifact: %w",
+				retryableOrTerminal(ctx, err, errRemediationSourceIdentity))
+		}
+	}
+	// The clean outcome is the verifier's to state, as loadReentryCheckpoint
+	// holds it: read back from the cycle's own report, not from the row.
+	raw, err := loadVerificationReport(
+		w.artifacts, checkpoint.Artifacts, reentryVerificationInvocationID(*task.Successor))
+	if err != nil {
+		return "", fmt.Errorf("load re-entry remediation source report: %w",
+			retryableOrTerminal(ctx, err, errRemediationSourceIdentity))
+	}
+	report, err := verify.ParseReport(raw)
+	if err != nil || !checkpoint.reportAgrees(report, request.BaseSHA, request.HeadSHA, "") {
+		return "", errors.Join(errRemediationSourceIdentity, err, domain.ErrParentKeyMismatch)
+	}
+	input, _, err := loadRemediationInput(w.artifacts, request.InputArtifactDigest)
+	if err != nil {
+		return "", fmt.Errorf("load re-entry remediation source input: %w",
+			retryableOrTerminal(ctx, err, errRemediationSourceIdentity))
+	}
+	if input.BaseSHA != request.BaseSHA || input.HeadSHA != request.HeadSHA {
+		return "", errors.Join(errRemediationSourceIdentity, domain.ErrParentKeyMismatch)
+	}
+	scratch, err := os.MkdirTemp(w.workDir, ".remediation-source-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(scratch) //nolint:errcheck // daemon-owned scratch
+	_, rebuilt, err := patchedTree(ctx, scratch, checkoutDir, request.BaseSHA, input.CandidatePatchBase64)
+	if err != nil {
+		return "", fmt.Errorf("rebuild re-entry remediation source tree: %w",
+			retryableOrTerminal(ctx, err, errRemediationSourceIdentity))
+	}
+	if rebuilt != checkpoint.TreeSHA {
+		return "", errors.Join(errRemediationSourceIdentity, domain.ErrParentKeyMismatch)
+	}
+	return checkpoint.TreeSHA, nil
 }
 
 // retryableOrTerminal keeps a transient open/read/close fault on a
