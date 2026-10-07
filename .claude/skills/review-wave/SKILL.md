@@ -184,36 +184,53 @@ text itself.
    - shape the findings summary as: (a) a one-line verdict on whether
      the wave's written close condition is met and what blocks it;
      (b) a findings table keyed by issue number, giving the gap in
-     plain terms, severity, current tracking status, and disposition;
+     plain terms, severity, current tracking status, exit relevance,
+     and disposition;
      (c) the blocking-versus-deferrable split stated against the
-     wave's actual written close rule, naming what blocks it as
-     literally written, what the reviewer nonetheless recommends
-     fixing (one-line reason each), and each defensible deferral (its
-     reason and a "revisit when" trigger); then (d) the per-finding
-     detail; and (e) the required risk-class disposition record, kept
-     as a compact table or appendix beneath the summary, never as the
-     lead;
+     wave's actual written close rule: distinguish literal blockers
+     (cite the unmet clause and missing proof), recommended fixes
+     before the exit exercise (one-line risk reason each), fixes needed
+     before a particular activity (name that activity and whether the
+     exit exercise uses it), and findings that can remain outside exit
+     work (give the deferral reason and a "revisit when" trigger).
+     Severity alone does not make a finding an exit blocker. Where the
+     close rule permits closure, deferral, or a recorded decline, the
+     requirement is that disposition, not that every issue be fixed.
+     A recommendation does not amend the written close rule; required
+     run or alert evidence remains required even if findings are
+     deferred. Then (d) the per-finding detail; and (e) the required
+     risk-class disposition record, kept as a compact table or appendix
+     beneath the summary, never as the lead;
    - post beneath it a proposed remediation plan (a proposal, not a
-     schedule) modeled on a tracker's Status and Units sections, i.e.
-     `docs/tracker-format.md` with Freeside's additions in
-     `docs/coordination.md` (Tracking Issues), which the reviewer has:
-     one compact unit
-     line per proposed remediation unit (the filed finding issue it
-     closes, a one-line objective, lane and kind, and its key typed
-     dependency), since the full contract already lives in the filed
-     issue and is not restated; put a `needs-human` finding under an
-     Owner-run group instead of a lane, since it stays fiat-only and
-     outside the schedulable phases until a maintainer acts; then **Startable now**, the typed
-     `starts-after`, `merges-after`, `stacked-on`, and `exclusive-with`
-     relationships, and the maximum concurrent fronts; and a Mermaid
-     diagram drawn per those two documents, with the format's legend.
+     schedule). Have the reviewer read the current
+     `docs/tracker-format.md` and `docs/coordination.md` (Tracking Issues)
+     before composing the comment, and use their template, section order,
+     diagram rules, and structural **Startable now** projection. The intro
+     names the proposed exit fixes and distinguishes literal requirements
+     from reviewer recommendations. Select `## Units` from that subset,
+     not the full findings list; include an activity-specific fix only
+     when that activity is part of the proposed exit exercise. Inclusion
+     in the findings table does not make a fix an exit condition.
+     `## Status` starts with the Mermaid diagram, followed immediately by
+     the verbatim legend and the labeled status bullets. `## Units` uses
+     only bare task-list references (`- [ ] #N`), grouped under
+     `### lane:<name>` or `### Owner-run`; no title, objective, kind, or
+     dependency text goes on a unit line. Keep the written tracker-level
+     gate in `## Exit`; identify any additional recommended checks as
+     proposals, not adopted requirements. Put rationale, activity-specific
+     prerequisites, proposed relationship changes, concurrency bounds, and
+     explicit deferrals with revisit conditions in the dated, collapsed
+     `## Notes` block. Other findings stay linked there, not as optional
+     tail units in the exit chain or on its critical path. Derive diagram edges
+     from the issues' Dependencies fields; a preferred review order is not
+     an existing dependency or fence. Record proposed changes as proposals
+     without silently making them the diagram's authority. Before posting,
+     check the rendered structure against the current tracker template.
      Order the contract units as a serial `kind:contract` phase first
      (anything touching `daemon/internal/domain`, `daemon/migrations`,
      `api/`, or shared interfaces, sequenced by dependency under the
      repo-wide contract exclusivity), then parallel per-lane sequential
-     fix phases, with any recommended-optional unit placed last so
-     deferring it stops the chain early; state explicit deferral
-     proposals with reasons;
+     fix phases for the selected exit units;
    - the mandatory decision note: an adversarial audit whose
      confirmed findings change policy or implementation direction is
      on the AGENTS.md mandatory-note list, so when that trigger
