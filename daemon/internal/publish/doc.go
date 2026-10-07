@@ -8,7 +8,8 @@
 // §10); App JWT construction (AppJWT); repository-owner resolution to
 // a trusted registration and installation (InstallationResolver);
 // trust-gated per-repository installation tokens with the pinned
-// minimum permission set (Minter, PublishPermissions); a per-mint audit
+// minimum permission sets (Minter, PublishPermissions,
+// FollowUpFilingPermissions); a per-mint audit
 // record naming the registration (MintRecord, Recorder); and the
 // redaction boundary every credential value lives behind (Secret).
 // Public registration and per-machine-key onboarding (issue #248) composes

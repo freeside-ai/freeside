@@ -483,6 +483,9 @@ func TestStoreRecorder(t *testing.T) {
 		t.Errorf("MintedAt = %v, want %v", got.MintedAt, fixtureTime)
 	}
 	want := publish.PublishPermissions
+	if got.RequestedIssues != "" || got.GrantedIssues != "" {
+		t.Error("publication audit carries an issues scope")
+	}
 	if got.RequestedContents != want.Contents || got.RequestedPullRequests != want.PullRequests ||
 		got.RequestedMetadata != want.Metadata || got.GrantedContents != want.Contents ||
 		got.GrantedPullRequests != want.PullRequests || got.GrantedMetadata != want.Metadata {

@@ -122,7 +122,7 @@ func TestSetupCommandRegistersAppAndInitializesAuthority(t *testing.T) {
 				"client_id": "Iv1.example",
 				"permissions": map[string]string{
 					"actions": "read", "administration": "read", "contents": "write",
-					"environments": "read", "pull_requests": "write", "metadata": "read",
+					"environments": "read", "pull_requests": "write", "metadata": "read", "issues": "write",
 				},
 				"pem": string(keyPEM),
 				"owner": map[string]any{
@@ -479,7 +479,7 @@ func TestSetupCommandKeepsRegistrationCodeOutOfProcessArgumentsAndOutput(t *test
 				"client_id": "Iv1.example",
 				"permissions": map[string]string{
 					"actions": "read", "administration": "read", "contents": "write",
-					"environments": "read", "pull_requests": "write", "metadata": "read",
+					"environments": "read", "pull_requests": "write", "metadata": "read", "issues": "write",
 				},
 				"pem":   string(keyPEM),
 				"owner": map[string]any{"login": "example", "id": 42, "type": "User"},

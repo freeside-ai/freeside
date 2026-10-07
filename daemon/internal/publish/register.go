@@ -169,7 +169,7 @@ func (r *Registrar) ManifestForm(
 	// presentation only; the manifest always carries the topology's
 	// visibility and the package's pinned minimum permission set.
 	m.Public = target.Visibility == AppVisibilityPublic
-	m.DefaultPermissions = PublishPermissions
+	m.DefaultPermissions = RegistrationPermissions
 	data, err := json.Marshal(m)
 	if err != nil {
 		return "", nil, fmt.Errorf("register: encode manifest: %w", err)
@@ -296,7 +296,7 @@ func (r *Registrar) exchangeCode(
 			target.OwnerID,
 		)
 	}
-	if !maps.Equal(conv.Permissions, publishPermissionScopes) {
+	if !maps.Equal(conv.Permissions, registrationPermissionScopes) {
 		return AppCredentials{}, errors.New("register: converted app permissions differ from the required set")
 	}
 

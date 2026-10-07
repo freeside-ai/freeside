@@ -183,6 +183,48 @@ func (s *CachedTokenSource) Token(ctx context.Context, repo string) (Installatio
 	return tok, nil
 }
 
+// FollowUpFilingTokenSource caches only the issue-filing grant, separately from
+// publication credentials. Each read revalidates trust and the App binding.
+type FollowUpFilingTokenSource struct {
+	minter *Minter
+	now    func() time.Time
+	mu     sync.Mutex
+	tokens map[tokenCacheKey]InstallationToken
+}
+
+func NewFollowUpFilingTokenSource(m *Minter, now func() time.Time) *FollowUpFilingTokenSource {
+	return &FollowUpFilingTokenSource{minter: m, now: now, tokens: map[tokenCacheKey]InstallationToken{}}
+}
+
+// Token resolves the current trusted installation before looking in the cache,
+// so a registration change cannot be hidden by an unexpired filing token.
+func (s *FollowUpFilingTokenSource) Token(ctx context.Context, repo string) (InstallationToken, error) {
+	if s == nil || s.minter == nil || s.now == nil {
+		return InstallationToken{}, errors.New("filing token: nil dependency")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	binding, parsed, repositoryID, err := s.minter.resolveTrusted(ctx, repo)
+	if err != nil {
+		return InstallationToken{}, err
+	}
+	key := tokenCacheKey{
+		registrationID: binding.RegistrationID,
+		installationID: binding.InstallationID,
+		repositoryID:   repositoryID,
+	}
+	if tok, ok := s.tokens[key]; ok && tok.ExpiresAt.After(s.now().Add(tokenExpirySkew)) {
+		return tok, nil
+	}
+	tok, err := s.minter.mintResolved(ctx, binding, parsed, repositoryID,
+		FollowUpFilingPermissions, followUpFilingPermissionScopes)
+	if err != nil {
+		return InstallationToken{}, err
+	}
+	s.tokens[key] = tok
+	return tok, nil
+}
+
 // OnboardingGate exposes the janitor's two distinct reconciliation signals:
 // trusted bindings may operate, while a pending binding may only mint the
 // read-only audit token used to construct its one-time review.
