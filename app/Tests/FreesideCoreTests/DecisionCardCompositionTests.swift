@@ -1351,6 +1351,22 @@ import Testing
                 == "Accept recommended route")
     }
 
+    /// The option's compact mark prints no register (R21), so the spoken
+    /// label carries "unverified", on the recommended option alone and in
+    /// the order the option is drawn.
+    @Test func theRecommendedOptionStillReadsAsUnverified() {
+        let recommended = AgentQuestionPresentation.Option(
+            label: "Store first, then API", tradeoffs: "Existing rows migrate first.", recommended: true)
+        let other = AgentQuestionPresentation.Option(
+            label: "API first, then store", tradeoffs: "Clients move immediately.", recommended: false)
+        #expect(
+            DecisionDetailView.agentQuestionOptionAccessibilityLabel(recommended, number: 1)
+                == "Option 1, Store first, then API, Agent recommends (unverified), Existing rows migrate first.")
+        #expect(
+            DecisionDetailView.agentQuestionOptionAccessibilityLabel(other, number: 2)
+                == "Option 2, API first, then store, Clients move immediately.")
+    }
+
     /// The card's Evidence module points at the open inspector rather than
     /// drawing the same attachments beside it, and the pointer counts them in
     /// the operator's words (#1107).
