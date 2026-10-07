@@ -217,26 +217,32 @@ struct DecisionDetailView: View {
                 switch editor {
                 case .discuss:
                     MessageComposerSheet(
-                        title: "Discuss",
-                        prompt: "Send a message to the agent. The item stays open while it replies.",
-                        submitLabel: "Send"
+                        eyebrow: AttentionDisplay.label(.discuss),
+                        ask: "What do you want to ask the agent?",
+                        consequence: "The item stays open while the agent replies.",
+                        submitLabel: "Send",
+                        thread: model.conversation.map {
+                            .init(
+                                snapshot: $0, attachments: attachments,
+                                loadsAttachments: loadsAttachments, now: now)
+                        }
                     ) { message, _ in
                         await model.submitDiscuss(message: message)
                     }
                 case .requestChanges:
                     MessageComposerSheet(
-                        title: "Request changes",
-                        prompt: "Describe the revision the specification needs.",
-                        submitLabel: "Request changes",
+                        eyebrow: AttentionDisplay.label(.request_changes),
+                        ask: "What should the specification change?",
+                        submitLabel: AttentionDisplay.label(.request_changes),
                         byteLimit: 8192
                     ) { message, _ in
                         await model.submitRequestChanges(message: message)
                     }
                 case .answerAndRetry:
                     MessageComposerSheet(
-                        title: "Answer and retry",
-                        prompt: "Answer the agent's question and choose what to do next.",
-                        submitLabel: "Answer and retry", byteLimit: 8192,
+                        eyebrow: AttentionDisplay.label(.answer_and_retry),
+                        ask: "What is your answer?",
+                        submitLabel: AttentionDisplay.label(.answer_and_retry), byteLimit: 8192,
                         routeOptions: AgentQuestionPresentation.answerRoutes(for: model.snapshot?.item)
                     ) { message, route in
                         await model.submitAnswer(
@@ -246,17 +252,19 @@ struct DecisionDetailView: View {
                     }
                 case .answerWithoutRetry:
                     MessageComposerSheet(
-                        title: "Answer without retry",
-                        prompt: "Record the answer and conclude the question without restarting work.",
+                        eyebrow: AttentionDisplay.label(.answer_without_retry),
+                        ask: "What is your answer?",
+                        consequence: "The question concludes without restarting work.",
                         submitLabel: "Record answer", byteLimit: 8192
                     ) { message, _ in
                         await model.submitAnswer(.answer_without_retry, message: message)
                     }
                 case .returnToAgent:
                     MessageComposerSheet(
-                        title: "Return to agent",
-                        prompt: "Describe what the agent should change before the work returns for review.",
-                        submitLabel: "Return to agent", byteLimit: 8192
+                        eyebrow: AttentionDisplay.label(.return_to_agent),
+                        ask: "What should the agent change?",
+                        consequence: "The work returns for review after the agent changes it.",
+                        submitLabel: AttentionDisplay.label(.return_to_agent), byteLimit: 8192
                     ) { message, _ in
                         await model.submitReturnToAgent(message: message)
                     }

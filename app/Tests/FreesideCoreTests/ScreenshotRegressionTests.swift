@@ -455,8 +455,8 @@
                     width: 480,
                     view: AnyView(
                         MessageComposerSheet(
-                            title: "Request changes",
-                            prompt: "Describe the revision the specification needs.",
+                            eyebrow: "Request changes",
+                            ask: "What should the specification change?",
                             submitLabel: "Request changes",
                             byteLimit: 8192,
                             rendersInteractiveControls: false,
@@ -467,8 +467,8 @@
                     width: 390,
                     view: AnyView(
                         MessageComposerSheet(
-                            title: "Request changes",
-                            prompt: "Describe the revision the specification needs.",
+                            eyebrow: "Request changes",
+                            ask: "What should the specification change?",
                             submitLabel: "Request changes",
                             byteLimit: 8192,
                             rendersInteractiveControls: false,
@@ -480,8 +480,8 @@
                     colorScheme: .dark,
                     view: AnyView(
                         MessageComposerSheet(
-                            title: "Request changes",
-                            prompt: "Describe the revision the specification needs.",
+                            eyebrow: "Request changes",
+                            ask: "What should the specification change?",
                             submitLabel: "Request changes",
                             byteLimit: 8192,
                             rendersInteractiveControls: false,
@@ -493,12 +493,43 @@
                     colorScheme: .dark,
                     view: AnyView(
                         MessageComposerSheet(
-                            title: "Request changes",
-                            prompt: "Describe the revision the specification needs.",
+                            eyebrow: "Request changes",
+                            ask: "What should the specification change?",
                             submitLabel: "Request changes",
                             byteLimit: 8192,
                             rendersInteractiveControls: false,
                             submit: { _, _ in true }))))
+
+            // The Discuss composer (R11): the item's thread above the field
+            // on Mac and phone, and a first message, which has no thread
+            // section to draw.
+            let discussThread = AttentionFixtures.defaultConversations()[0]
+            for (name, width, scheme, drawsThread) in [
+                ("discuss-composer", CGFloat(480), ColorScheme.light, true),
+                ("discuss-composer-phone", CGFloat(390), ColorScheme.light, true),
+                ("discuss-composer-dark", CGFloat(480), ColorScheme.dark, true),
+                ("discuss-composer-phone-dark", CGFloat(390), ColorScheme.dark, true),
+                ("discuss-composer-first", CGFloat(480), ColorScheme.light, false),
+            ] {
+                surfaces.append(
+                    Surface(
+                        name: name,
+                        width: width,
+                        colorScheme: scheme,
+                        view: AnyView(
+                            MessageComposerSheet(
+                                eyebrow: "Discuss",
+                                ask: "What do you want to ask the agent?",
+                                consequence: "The item stays open while the agent replies.",
+                                submitLabel: "Send",
+                                rendersInteractiveControls: false,
+                                thread: drawsThread
+                                    ? .init(
+                                        snapshot: discussThread, attachments: store.attachments,
+                                        loadsAttachments: false, now: screenshotNow)
+                                    : nil,
+                                submit: { _, _ in true }))))
+            }
 
             // The New Task composer (#1330): the project picker trigger, the
             // source field, and the optional name, empty and filled, on Mac
@@ -585,8 +616,8 @@
                         colorScheme: scheme,
                         view: AnyView(
                             MessageComposerSheet(
-                                title: "Answer and retry",
-                                prompt: "Answer the agent's question and choose what to do next.",
+                                eyebrow: "Answer and retry",
+                                ask: "What is your answer?",
                                 submitLabel: "Answer and retry",
                                 byteLimit: 8192,
                                 rendersInteractiveControls: false,

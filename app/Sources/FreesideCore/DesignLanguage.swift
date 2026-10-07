@@ -1432,21 +1432,23 @@ struct FreesideSheetHeader: View {
     let ask: String
     var consequence: String? = nil
     var binding: String? = nil
+    /// Two lines by default: an attachment sheet's ask is the agent's claim
+    /// label, which the contract admits at any length, and this header never
+    /// compresses vertically, so an unbounded ask would push the sheet body
+    /// and its Done footer off-screen. The system navigation title this
+    /// header replaces truncated to one line. A sheet that scrolls its
+    /// header passes `nil`, so its own ask stays whole at every text size.
+    var askLineLimit: Int? = 2
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let eyebrow {
                 KeywordLabel(text: eyebrow)
             }
-            // Two lines at most: an attachment sheet's ask is the agent's
-            // claim label, which the contract admits at any length, and this
-            // header never compresses vertically, so an unbounded ask would
-            // push the sheet body and its Done footer off-screen. The system
-            // navigation title this header replaces truncated to one line.
             Text(ask)
                 .font(FreesideFont.sectionTitle)
                 .foregroundStyle(Color.ink)
-                .lineLimit(2)
+                .lineLimit(askLineLimit)
                 .accessibilityAddTraits(.isHeader)
             if let consequence {
                 Text(consequence)
@@ -1477,6 +1479,9 @@ struct FreesideSheetActionRow: View {
     /// a destructive submit carries.
     var submitHint: String? = nil
     var isSubmitEnabled: Bool = true
+    /// The refined footer (R11): Cancel as an outline that shares the row
+    /// equally with the submit, in place of the hugging text button.
+    var cancelIsOutlined = false
     let submit: () -> Void
     /// `nil` for a reader's single dismiss: no Cancel is drawn and Escape
     /// routes to `submit`, so both keys close the sheet.
@@ -1508,6 +1513,11 @@ struct FreesideSheetActionRow: View {
                     submitButton(expands: true)
                     cancelButton(cancel).frame(maxWidth: .infinity)
                 }
+            } else if cancelIsOutlined {
+                HStack(spacing: 10) {
+                    cancelButton(cancel)
+                    submitButton(expands: true)
+                }
             } else {
                 HStack(spacing: 12) {
                     cancelButton(cancel)
@@ -1536,7 +1546,10 @@ struct FreesideSheetActionRow: View {
 
     private func cancelButton(_ cancel: @escaping () -> Void) -> some View {
         Button("Cancel", action: cancel)
-            .buttonStyle(FreesideActionButtonStyle(tone: .tertiary))
+            .buttonStyle(
+                FreesideActionButtonStyle(
+                    tone: cancelIsOutlined ? .secondary : .tertiary, expands: cancelIsOutlined)
+            )
             .keyboardShortcut(.cancelAction)
     }
 

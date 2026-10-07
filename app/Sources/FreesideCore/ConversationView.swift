@@ -256,11 +256,40 @@ extension View {
     }
 }
 
+extension View {
+    /// Opens a scroll view on the end of its content. Before iOS 18 and
+    /// macOS 15 the anchor also pins content shorter than the view to its
+    /// bottom, so those systems keep opening on the start.
+    @ViewBuilder
+    fileprivate func opensOnItsEnd(_ opens: Bool) -> some View {
+        if #available(iOS 18, macOS 15, *) {
+            defaultScrollAnchor(opens ? .bottom : nil, for: .initialOffset)
+        } else {
+            self
+        }
+    }
+}
+
 struct MessageComposerSheet: View {
+    /// The conversation a composer draws above its field, so the operator
+    /// writes with the thread in view.
+    struct Thread {
+        let snapshot: Components.Schemas.ConversationSnapshot
+        let attachments: AttachmentLoader
+        let loadsAttachments: Bool
+        var now = Date.now
+    }
+
+    static let fieldPlaceholder = "Write to the agent\u{2026}"
+
     @Environment(\.dismiss) private var dismiss
     @State private var message = ""
-    let title: String
-    let prompt: String
+    /// The keyword naming the command the sheet carries out.
+    let eyebrow: String
+    /// What the operator is asked to write.
+    let ask: String
+    /// What sending does, where there is more to say than what to type.
+    var consequence: String? = nil
     let submitLabel: String
     var byteLimit: Int?
     var rendersInteractiveControls = true
@@ -268,12 +297,21 @@ struct MessageComposerSheet: View {
     /// display order; empty for a composer that carries no route (#1083). The
     /// first is the default selection.
     var routeOptions: [Components.Schemas.AnswerRoute] = []
+    /// `nil` for every use but Discuss, and for a first message, which has
+    /// no thread to draw.
+    var thread: Thread? = nil
     let submit: (String, Components.Schemas.AnswerRoute?) async -> Bool
     @State private var isSubmitting = false
     @State private var chosenRoute: Components.Schemas.AnswerRoute?
+    @FocusState private var fieldIsFocused: Bool
 
     private var selectedRoute: Components.Schemas.AnswerRoute? {
         chosenRoute ?? routeOptions.first
+    }
+
+    /// The thread the sheet draws: none for a first message.
+    private var drawnThread: Thread? {
+        thread.flatMap { $0.snapshot.conversation.messages.isEmpty ? nil : $0 }
     }
 
     private var trimmedMessage: String {
@@ -290,31 +328,49 @@ struct MessageComposerSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            FreesideSheetHeader(ask: title, consequence: prompt)
-            VStack(alignment: .leading, spacing: 12) {
-                if rendersInteractiveControls {
-                    TextEditor(text: $message)
-                        .font(FreesideFont.callout)
-                        .scrollContentBackground(.hidden)
-                        .padding(8)
-                        .background(Color.ground, in: RoundedRectangle(cornerRadius: 8))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.rule))
-                        .accessibilityLabel("Message")
-                } else {
-                    Text("Message")
-                        .font(FreesideFont.callout)
-                        .foregroundStyle(Color.inkDim)
-                        .padding(8)
-                        .frame(maxWidth: .infinity, minHeight: 190, alignment: .topLeading)
-                        .background(Color.ground, in: RoundedRectangle(cornerRadius: 8))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.rule))
+            // The header, the thread, and the field scroll together; the
+            // footer stays put (R11).
+            if rendersInteractiveControls {
+                // The thread is history: a sheet that draws one opens on
+                // the field under it, not on the oldest message with the
+                // field out of view.
+                ScrollView { composerContent }
+                    .opensOnItsEnd(drawnThread != nil)
+            } else {
+                composerContent
+            }
+
+            // The submit lives in the sheet body rather than a toolbar so it
+            // carries the design language's primary recipe; the row keeps
+            // the Return and Escape bindings the placements supplied.
+            FreesideSheetActionRow(
+                submitLabel: submitLabel,
+                isSubmitEnabled: canSubmit && !isSubmitting,
+                cancelIsOutlined: true,
+                submit: performSubmit,
+                cancel: { dismiss() })
+        }
+        .background(Color.ground2)
+        .freesideSheetPresentation()
+        .frame(minWidth: 380, minHeight: 340)
+    }
+
+    private var composerContent: some View {
+        VStack(spacing: 0) {
+            // The header scrolls with the field, so the ask can take the
+            // lines it needs at the largest text sizes.
+            FreesideSheetHeader(
+                eyebrow: eyebrow, ask: ask, consequence: consequence, askLineLimit: nil)
+            VStack(alignment: .leading, spacing: 22) {
+                if let thread = drawnThread {
+                    ConversationView(
+                        snapshot: thread.snapshot,
+                        attachments: thread.attachments,
+                        loadsAttachments: thread.loadsAttachments,
+                        now: thread.now,
+                        rendersInteractiveControls: rendersInteractiveControls)
                 }
-                if let byteLimit {
-                    Text("\(byteCount) of \(byteLimit) bytes")
-                        .font(FreesideFont.caption)
-                        .foregroundStyle(byteCount > byteLimit ? Color.waxText : Color.inkDim)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                }
+                messageField
                 if routeOptions.count > 1, let defaultRoute = routeOptions.first {
                     FreesideSegmentedControl(
                         accessibilityLabel: "What to do with the answer",
@@ -327,22 +383,82 @@ struct MessageComposerSheet: View {
                 }
             }
             .padding(.horizontal, 16)
+            .padding(.top, 6)
             .padding(.bottom, 16)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            // The submit lives in the sheet body rather than a toolbar so it
-            // carries the design language's primary recipe; the row keeps
-            // the Return and Escape bindings the placements supplied.
-            FreesideSheetActionRow(
-                submitLabel: submitLabel,
-                isSubmitEnabled: canSubmit && !isSubmitting,
-                submit: performSubmit,
-                cancel: { dismiss() })
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Color.ground2)
-        .freesideSheetPresentation()
-        .frame(minWidth: 380, minHeight: 300)
     }
+
+    private var messageField: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            KeywordLabel(text: "Message")
+                // The editor carries the same name.
+                .accessibilityHidden(true)
+            if rendersInteractiveControls {
+                TextEditor(text: $message)
+                    .font(FreesideFont.callout)
+                    .foregroundStyle(Color.ink)
+                    .scrollContentBackground(.hidden)
+                    .focused($fieldIsFocused)
+                    .padding(Self.editorPadding)
+                    .frame(minHeight: Self.fieldMinHeight)
+                    .background(fieldFrame(isFocused: fieldIsFocused))
+                    // A TextEditor has no prompt of its own. This one is
+                    // drawn over the empty editor, never written into
+                    // `message`, and leaves clicks and VoiceOver to the
+                    // editor beneath it.
+                    .overlay(alignment: .topLeading) {
+                        if message.isEmpty {
+                            placeholder
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
+                        }
+                    }
+                    .accessibilityLabel("Message")
+            } else {
+                placeholder
+                    .frame(maxWidth: .infinity, minHeight: Self.fieldMinHeight, alignment: .topLeading)
+                    .background(fieldFrame(isFocused: false))
+            }
+            if let byteLimit {
+                Text("\(byteCount) of \(byteLimit) bytes")
+                    .font(FreesideFont.caption)
+                    .foregroundStyle(byteCount > byteLimit ? Color.waxText : Color.inkDim)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+        }
+    }
+
+    private var placeholder: some View {
+        Text(Self.fieldPlaceholder)
+            .font(FreesideFont.callout)
+            .foregroundStyle(Color.inkFaint)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+    }
+
+    /// The field's frame: a strong rule on the sheet's own ground, and the
+    /// accent ring just outside it while the editor has keyboard focus
+    /// (R19).
+    private func fieldFrame(isFocused: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 6)
+            .strokeBorder(Color.ruleStrong, lineWidth: 1)
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(isFocused ? Color.accentBorder : .clear, lineWidth: 1)
+                    .padding(-3))
+    }
+
+    private static let fieldMinHeight: CGFloat = 120
+
+    // A TextEditor insets a line by 5pt on both platforms, and UITextView
+    // adds 8pt above and below the text; the padding makes up the rest of
+    // the field's 12pt by 10pt.
+    #if os(iOS)
+        private static let editorPadding = EdgeInsets(top: 2, leading: 7, bottom: 2, trailing: 7)
+    #else
+        private static let editorPadding = EdgeInsets(top: 10, leading: 7, bottom: 10, trailing: 7)
+    #endif
 
     private func performSubmit() {
         let draft = trimmedMessage
