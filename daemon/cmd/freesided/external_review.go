@@ -22,17 +22,6 @@ const (
 	externalReviewDismissedState = "DISMISSED"
 )
 
-// The thread ID forms an external finding carries (issue #524, decision 3).
-// A reply joins its thread's first comment, so every comment of one thread
-// shares one ID. #1636 addresses its replies by these IDs.
-func externalReviewThreadID(reviewID int64) string {
-	return fmt.Sprintf("review/%d", reviewID)
-}
-
-func externalReviewCommentThreadID(rootCommentID int64) string {
-	return fmt.Sprintf("review_comment/%d", rootCommentID)
-}
-
 // buildExternalFindings normalizes one raw observation of a published pull
 // request's review activity into external findings (plan §5.19, §7; issue
 // #524): one for each submitted review that has a body and is neither an
@@ -92,7 +81,7 @@ func buildExternalFindings(
 		}
 		add("review", rv.ID, domain.ExternalFindingInput{
 			ReviewerAccountID: rv.AuthorID, ReviewerLogin: rv.AuthorLogin,
-			ThreadID: externalReviewThreadID(rv.ID), HeadSHA: rv.CommitID,
+			ThreadID: publish.ExternalReviewThreadID(rv.ID), HeadSHA: rv.CommitID,
 			RawText: rv.Body, CreatedAt: rv.SubmittedAt.UTC(),
 		})
 	}
@@ -118,7 +107,7 @@ func buildExternalFindings(
 		}
 		add("review comment", c.ID, domain.ExternalFindingInput{
 			ReviewerAccountID: c.AuthorID, ReviewerLogin: c.AuthorLogin,
-			ThreadID: externalReviewCommentThreadID(root), HeadSHA: c.OriginalCommitID,
+			ThreadID: publish.ExternalReviewCommentThreadID(root), HeadSHA: c.OriginalCommitID,
 			Location: reviewCommentLocation(c.Path, startLine, c.OriginalLine),
 			RawText:  c.Body, CreatedAt: c.CreatedAt.UTC(),
 		})

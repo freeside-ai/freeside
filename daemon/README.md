@@ -1315,6 +1315,35 @@ when the daemon is later given `-base-build-ref` or the policy changes. It
 reruns as any failed verification does: after a revised trust profile,
 through the item's rerun action, or in a new run.
 
+## External Review Replies
+
+With the Claude driver, the daemon checks recorded external-review outcomes
+at startup and once a minute. It replies only while the finding's reviewer
+is admitted by the repository's active trust profile. Inline findings receive
+a reply in their original thread. Findings on a review body receive a pull
+request conversation comment linking that review.
+
+Declined and deferred replies include the screened reason. Fixed replies wait
+until a head reviewed in the remediation round or later has been published.
+They name the published commit and say that Freeside has not proven the finding
+fixed. The fake driver posts no replies.
+
+The following advisory, acknowledge-only health items describe reply failures:
+
+- `external_review_reply_refused`: the reason failed screening, the thread
+  could not receive a reply, the App identity changed, or GitHub rejected the
+  request. The reply will not be retried.
+- `external_review_reply_ambiguous`: the request may have posted, but recovery
+  could not identify exactly one new comment from the recorded App account.
+  Check the pull request by hand. Acknowledging the item does not resend it.
+- `external_review_reply_unreadable`: stored dispositions could not be
+  reconstructed. Replies for that run wait until the records can be read.
+
+An uncertain send is never repeated. Recovery waits ten minutes before looking
+for its comment; a restart begins that wait again. Only a proven rate-limit
+rejection allows retry, at most three attempts per daemon process and at least
+one minute apart. These notices do not block publication or review.
+
 ## Run Observation Contract
 
 The run-monitoring contract (issue #394; plan §8) lets an operator client

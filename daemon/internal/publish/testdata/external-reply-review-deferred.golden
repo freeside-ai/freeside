@@ -1,0 +1,5 @@
+In response to [review 42](/owner/repo/pull/7#pullrequestreview-42):
+
+Freeside deferred this finding.
+
+Reason: <code>The &lt;input&gt; is already checked by `Validate`.</code>

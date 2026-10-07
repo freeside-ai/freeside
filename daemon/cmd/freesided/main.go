@@ -1402,7 +1402,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}()
 	}
 	if claudeSched != nil {
-		d.wg.Add(5)
+		d.wg.Add(6)
 		go func() {
 			defer d.wg.Done()
 			err := claudeWiring.followUpFiler.Run(ctx, defaultFollowUpFilingInterval, func(err error) {
@@ -1413,6 +1413,16 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			d.componentExited(parent, ctx, componentFollowUpFiling, err)
 		}()
 		doctorAvailable.Store(true)
+		go func() {
+			defer d.wg.Done()
+			err := claudeWiring.reviewReplier.Run(ctx, time.Minute, func(err error) {
+				if cfg.Logger != nil {
+					cfg.Logger.Warn("external review reply sweep", "error", err)
+				}
+			})
+			d.componentExited(parent, ctx, componentReviewReplies, err)
+		}()
+
 		// The production publication lane gets its own loop: one task holds a
 		// clone, a containerized verification, and GitHub calls for minutes,
 		// which inside the reconcile loop would stall every other run,
