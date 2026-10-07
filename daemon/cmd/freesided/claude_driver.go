@@ -1347,6 +1347,7 @@ type claudeComposition struct {
 	publicationTransport            engine.PublicationTransport
 	publisher                       *publish.Publisher
 	followUpFiler                   *publish.FollowUpFiler
+	reviewReplier                   *publish.ExternalReviewReplier
 	reviewSource                    exec.ReviewSource
 	shadowReviewSource              exec.ReviewSource
 	reviewRecovery                  func(context.Context) error
@@ -1601,7 +1602,7 @@ func composeClaudeDriver(
 	if err != nil {
 		return nil, err
 	}
-	transport, publisher, commitAuthors, followUpFiler, janitor, reconciler, err := claudeTransport(ctx, st, cfg, authority)
+	transport, publisher, commitAuthors, followUpFiler, janitor, reconciler, reviewReplier, err := claudeTransport(ctx, st, cfg, authority)
 	if err != nil {
 		return nil, err
 	}
@@ -1850,6 +1851,7 @@ func composeClaudeDriver(
 		driver: driver, backend: backend, authority: authority,
 		selectionFailure: selectionFailure,
 		followUpFiler:    followUpFiler,
+		reviewReplier:    reviewReplier,
 		observeBaseTip: func(obsCtx context.Context, watch domain.ScheduleBaseWatch) (string, error) {
 			obs, err := reconciler.ReconcileRef(obsCtx, watch.Repo, watch.BaseRef)
 			if err != nil {
@@ -2237,26 +2239,26 @@ func claudeTransport(
 	st *store.Store,
 	cfg claudeDriverConfig,
 	authority *publish.InstallationAuthorityStore,
-) (*publish.Transport, *publish.Publisher, *publish.GitHubAppBotIdentityResolver, *publish.FollowUpFiler, *janitorSession, *publish.Reconciler, error) {
+) (*publish.Transport, *publish.Publisher, *publish.GitHubAppBotIdentityResolver, *publish.FollowUpFiler, *janitorSession, *publish.Reconciler, *publish.ExternalReviewReplier, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	keystore, err := publish.NewKeystore(cfg.CredentialsDir, cfg.StateRoot)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, nil, err
 	}
 	recorder, err := publish.NewStoreRecorder(st)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, nil, err
 	}
 	janitor, err := publish.NewInstallationJanitor(
 		keystore, client, defaultGitHubAPIBase, authority, authority, recorder, time.Now,
 		defaultJanitorRemovalBound,
 	)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, nil, err
 	}
 	trust, err := publish.NewStoreTrustSource(st)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, nil, err
 	}
 	minter := publish.NewMinterWithJanitor(
 		keystore, client, defaultGitHubAPIBase, recorder, trust, time.Now, janitor,
@@ -2266,45 +2268,49 @@ func claudeTransport(
 		tokens, keystore, client, defaultGitHubAPIBase, time.Now,
 	)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, nil, err
 	}
 	followUpFiler, err := composeFollowUpFiler(st, minter, keystore, client, defaultGitHubAPIBase)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, nil, err
+	}
+	reviewReplier, err := publish.NewExternalReviewReplier(st, tokens, client, defaultGitHubAPIBase, commitAuthors, time.Now)
+	if err != nil {
+		return nil, nil, nil, nil, nil, nil, nil, err
 	}
 	transport, err := publish.NewTransport(
 		tokens,
 		publish.TransportOptions{RemoteBase: defaultGitHubRemoteBase},
 	)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, nil, err
 	}
 	auditor, err := publish.NewGitHubWorkflowAuditor(
 		tokens, client, defaultGitHubAPIBase, time.Now,
 	)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, nil, err
 	}
 	ledger, err := publish.NewStoreLedger(st)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, nil, err
 	}
 	authorizations, err := publish.NewStoreAuthorizationSource(st)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, nil, err
 	}
 	publisher := publish.NewPublisher(
 		tokens, client, defaultGitHubAPIBase, auditor, ledger, trust, authorizations,
 	)
 	if err := transport.AuthorizePublisher(publisher); err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, nil, err
 	}
 	apps, err := keystore.ListApps()
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, nil, err
 	}
 	if len(apps) == 0 {
-		return nil, nil, nil, nil, nil, nil, publish.ErrNoAppCredentials
+		return nil, nil, nil, nil, nil, nil, nil, publish.ErrNoAppCredentials
 	}
 	registrationIDs := make([]int64, 0, len(apps))
 	for _, app := range apps {
@@ -2312,10 +2318,10 @@ func claudeTransport(
 	}
 	session, err := startJanitorSession(ctx, janitor, registrationIDs)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, fmt.Errorf("start installation janitor: %w", err)
+		return nil, nil, nil, nil, nil, nil, nil, fmt.Errorf("start installation janitor: %w", err)
 	}
 	return transport, publisher, commitAuthors, followUpFiler, session,
-		publish.NewReconciler(tokens, client, defaultGitHubAPIBase), nil
+		publish.NewReconciler(tokens, client, defaultGitHubAPIBase), reviewReplier, nil
 }
 
 // composeFollowUpFiler keeps both issue calls and bot identity reads on the

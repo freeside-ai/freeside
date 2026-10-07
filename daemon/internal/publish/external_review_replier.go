@@ -440,7 +440,7 @@ func (r *ExternalReviewReplier) send(ctx context.Context, run domain.Run, d doma
 	}
 	r.settleAfter[i.key()] = r.now().Add(externalReplySettle)
 	r.attempts[i.key()]++
-	result, sendErr := r.forge.sendReviewReply(req)
+	result, sendErr := r.forge.sendReviewReply(req, repo, i.PRNumber, thread.root)
 	switch classifyForgeCreate(result.Status, result.Header, result.Comment != nil, sendErr) {
 	case domain.FollowUpFilingResponseSuccess:
 		c := result.Comment
