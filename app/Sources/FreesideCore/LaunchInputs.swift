@@ -131,8 +131,15 @@ public struct LaunchInputs {
             devicesPresented: defaults.bool(forKey: "FreesideDevices"))
     }
 
+    /// Screenshot capture scopes this input to the synchronous AppKit color
+    /// callback. Normal launches retain the argument/defaults and host fallback.
+    @TaskLocal static var screenshotIncreasedContrast: Bool?
+
     static func accessibilityContrastOverride(defaults: UserDefaults = .standard) -> Contrast? {
-        Contrast(rawValue: defaults.string(forKey: "FreesideContrast") ?? "")
+        if let increased = screenshotIncreasedContrast {
+            return increased ? .increased : .standard
+        }
+        return Contrast(rawValue: defaults.string(forKey: "FreesideContrast") ?? "")
     }
 
     private static func dynamicTypeSize(rawValue: String?) -> DynamicTypeSize? {

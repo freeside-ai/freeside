@@ -56,10 +56,40 @@ struct PairingExpiryTests {
         func mountedTimelineMatchesWallClock(remaining: TimeInterval) throws {
             _ = FreesideFont.registration
             var facts = MockServer.pairingFacts
-            facts.code_expires_at = Date().addingTimeInterval(remaining)
+            let started = Date()
+            facts.code_expires_at = started.addingTimeInterval(remaining)
             let live = try renderPairingDetails(PairingView.detailsContent(facts))
-            let fixed = try renderPairingDetails(PairingView.detailsContent(facts, now: Date()))
-            #expect(live == fixed)
+            let fixedAt = Date()
+            let fixed = try renderPairingDetails(PairingView.detailsContent(facts, now: fixedAt))
+            let ended = Date()
+            let matches = live == fixed
+            if !matches {
+                let liveImage = try #require(NSBitmapImageRep(data: live)?.cgImage)
+                let fixedImage = try #require(NSBitmapImageRep(data: fixed)?.cgImage)
+                let liveSample = ScreenshotCapture.Sample(
+                    width: liveImage.width, height: liveImage.height, digest: try ScreenshotCapture.digest(liveImage))
+                let fixedSample = ScreenshotCapture.Sample(
+                    width: fixedImage.width, height: fixedImage.height, digest: try ScreenshotCapture.digest(fixedImage)
+                )
+                let labels = [started, fixedAt, ended].map {
+                    PairingView.expiryText(until: facts.code_expires_at, at: $0)
+                }
+                let urgency = [started, fixedAt, ended].map {
+                    PairingView.expiryIsUrgent(until: facts.code_expires_at, at: $0)
+                }
+                print(
+                    "PAIRING_CAPTURE remaining=\(remaining) times=\([started, fixedAt, ended].map(\.timeIntervalSince1970)) elapsed=\(ended.timeIntervalSince(started)) labels=\(labels) urgency=\(urgency) live=\(liveSample) fixed=\(fixedSample) contrast=\(LaunchInputs.accessibilityContrastOverride()?.rawValue ?? "host")"
+                )
+                if let output = ProcessInfo.processInfo.environment["FREESIDE_SCREENSHOT_OUTPUT"] {
+                    let directory = URL(fileURLWithPath: output, isDirectory: true)
+                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                    try live.write(to: directory.appendingPathComponent("pairing-live-\(Int(remaining)).png"))
+                    try fixed.write(to: directory.appendingPathComponent("pairing-fixed-\(Int(remaining)).png"))
+                }
+            }
+            // A recording must stop before replacing the manifest if its
+            // live countdown check fails, just as it does for an unstable raster.
+            try #require(matches, "Mounted pairing countdown differs from its fixed-clock render")
         }
 
         private func renderPairingDetails(_ content: some View) throws -> Data {
@@ -72,7 +102,7 @@ struct PairingExpiryTests {
                     .frame(width: 480)
                     .fixedSize(horizontal: false, vertical: true)
                     .background(Color.ground))
-            let image = try #require(renderer.cgImage)
+            let image = try ScreenshotCapture.bitmap(renderer)
             return try #require(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
         }
     }
