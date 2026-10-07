@@ -13,8 +13,8 @@ import Testing
 
         #expect(
             composition.modules == [
-                .recommendation, .agentQuestion, .facts, .factBlock, .summary, .claims,
-                .evidence, .details,
+                .recommendation, .agentQuestion, .facts, .foldedFacts, .factBlock, .summary,
+                .claims, .evidence, .details,
             ])
         let lead = try? #require(composition.modules.firstIndex(of: .agentQuestion))
         #expect(lead.map { $0 < composition.actionInsertionIndex } == true)
@@ -22,7 +22,7 @@ import Testing
         // actions, so nothing unrelated stands between the ask and answering.
         let question = AttentionFixtures.fixture(type: .agent_question).item
         let claims = composition.claims(
-            from: question.agent_claims, at: 5, prominentClaimIndex: nil)
+            from: question.agent_claims, at: 6, prominentClaimIndex: nil)
         #expect(claims.map(\.label).contains(AttentionFixtures.agentQuestionClaimLabel))
         #expect(
             composition.modules.firstIndex(of: .claims).map { $0 > composition.actionInsertionIndex }
@@ -47,9 +47,9 @@ import Testing
     @Test func moduleVocabularyIsClosedAndShared() {
         #expect(
             Set(DecisionCardComposition.sharedModuleSet) == [
-                .facts, .agentQuestion, .specRevision, .specification, .factBlock, .findingFacts,
-                .recommendation, .stopCause, .checklist, .stageRail, .comparison, .yieldChart,
-                .summary, .claims, .evidence, .details,
+                .facts, .foldedFacts, .agentQuestion, .specRevision, .specification, .factBlock,
+                .findingFacts, .recommendation, .stopCause, .checklist, .stageRail, .comparison,
+                .yieldChart, .summary, .claims, .evidence, .details,
             ])
     }
 
@@ -717,13 +717,30 @@ import Testing
     }
 
     /// Survey card 4b: the review yield is the final review's one folded
-    /// module, and no other type folds a module yet.
+    /// module. The question card folds its run and binding details the same
+    /// way, and no other type folds a module yet.
     @Test(arguments: Components.Schemas.AttentionType.allCases)
-    func onlyTheFinalReviewFoldsAModuleUnderItsActions(type: Components.Schemas.AttentionType) {
+    func onlyTheComposedCardsFoldAModuleUnderTheirActions(type: Components.Schemas.AttentionType) {
         let composition = DecisionCardComposition.forType(type)
         let folded = composition.modules.dropFirst(composition.actionInsertionIndex)
             .prefix(composition.foldedModuleCount)
-        #expect(Array(folded) == (type == .ready_for_final_review ? [.yieldChart] : []))
+        let expected: [DecisionCardModule] =
+            switch type {
+            case .ready_for_final_review: [.yieldChart]
+            case .agent_question: [.foldedFacts]
+            default: []
+            }
+        #expect(Array(folded) == expected)
+    }
+
+    /// The closed fold names what it holds: the folded rows' values in row
+    /// order. A type that folds no routine fact has nothing to name.
+    @Test func foldedFactsSummaryJoinsTheFoldedValues() {
+        let question = AttentionFixtures.fixture(type: .agent_question).item
+        let placement = DecisionFactPlacement(question, includesCommitPlan: false, now: .now)
+        #expect(placement.foldedSummary == "Implementation \u{00B7} Owner decision")
+        let review = AttentionFixtures.fixture(type: .ready_for_final_review).item
+        #expect(DecisionFactPlacement(review, includesCommitPlan: false, now: .now).foldedSummary == nil)
     }
 
     @Test func reviewYieldFoldSaysHowManyRoundsRanAndHowTheLastEnded() throws {

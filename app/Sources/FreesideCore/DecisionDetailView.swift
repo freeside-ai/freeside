@@ -728,6 +728,8 @@ struct DecisionDetailView: View {
         switch modules.composition.modules[index] {
         case .yieldChart:
             (graphics.diminishingYield ?? DecisionYieldPresentation(modules.item)) != nil
+        case .foldedFacts:
+            !DecisionFactPlacement(modules.item, includesCommitPlan: false, now: now).folded.isEmpty
         case .facts, .agentQuestion, .specRevision, .specification, .recommendation, .checklist,
             .stageRail, .comparison, .stopCause, .findingFacts, .factBlock, .summary, .claims,
             .evidence, .details:
@@ -790,10 +792,14 @@ struct DecisionDetailView: View {
     ) -> some View {
         let rendersInteractiveControls = register.rendersInteractiveControls
         switch module {
+        case .foldedFacts:
+            foldedFacts(
+                DecisionFactPlacement(item, includesCommitPlan: false, now: now), summarized: true)
         case .facts:
             factsSection(
                 item,
-                includesCommitPlan: !composition.modules.contains(.checklist))
+                includesCommitPlan: !composition.modules.contains(.checklist),
+                drawsFold: !composition.modules.contains(.foldedFacts))
             if let proposalFacts {
                 cardSection("Authenticated proposal") {
                     proposalRows(proposalFacts)
@@ -1212,11 +1218,14 @@ struct DecisionDetailView: View {
     /// composition places ahead of its action region; a type whose lead is its
     /// own module contributes no rows and the section disappears rather than
     /// rendering an empty container. `DecisionFactPlacement` decides which
-    /// rows stay beside the decision and which fold.
+    /// rows stay beside the decision and which fold. The fold draws here,
+    /// above the actions, unless the composition places it as its own
+    /// `.foldedFacts` module.
     @ViewBuilder
     private func factsSection(
         _ item: Components.Schemas.AttentionItem,
-        includesCommitPlan: Bool
+        includesCommitPlan: Bool,
+        drawsFold: Bool
     ) -> some View {
         let placement = DecisionFactPlacement(
             item, includesCommitPlan: includesCommitPlan, now: now)
@@ -1238,9 +1247,21 @@ struct DecisionDetailView: View {
                 }
             }
         }
+        if drawsFold {
+            foldedFacts(placement, summarized: false)
+        }
+    }
+
+    /// The routine facts behind their disclosure. Under the actions the
+    /// closed fold names what it holds (R2); above them it stays the bare
+    /// label a legacy card has always drawn.
+    @ViewBuilder
+    private func foldedFacts(_ placement: DecisionFactPlacement, summarized: Bool) -> some View {
         if !placement.folded.isEmpty {
             SentenceDisclosure(
-                label: DecisionFactPlacement.foldedTitle, isExpanded: disclosure(.runDetails)
+                label: DecisionFactPlacement.foldedTitle,
+                summary: summarized ? placement.foldedSummary : nil,
+                isExpanded: disclosure(.runDetails)
             ) {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(placement.folded) { fact in
