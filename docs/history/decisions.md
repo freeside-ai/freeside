@@ -2565,3 +2565,40 @@ The client work is #1732 and #1033.)
 (Owner decision of 2026-10-05, #1758, following #866;
 [decision note](../../devlog/2026-10-05-1145-codex-observation-boundary.md) and
 [ADR 0004](../decisions/0004-read-codex-account-facts-locally.md).)
+
+---
+
+## Revision 81 ("Project Images Bind to Their Environment"):
+
+1. **Environment compatibility replaces exact-base equality.** A project image
+   was admissible only at the commit it was built from, so every base advance
+   cost a rebuild and a re-pin even when nothing the image baked had changed.
+   The image record now carries its environment inputs, and the image serves
+   any base that leaves them unchanged (Section [5.7](../plan.md#57-the-ward-runners-handoff-gate-and-operating-modes), Golden Agent and
+   Project Images). Rejected: keeping equality; and comparing package versions
+   alone, which misses installation configuration, the toolchain, and the
+   preparation implementation.
+2. **Each boundary re-derives the verdict.** Preflight, daemon start,
+   publication, and readiness re-entry each read the exact base tree and
+   decide again from the immutable image record. Rejected: storing a
+   compatibility verdict on the admission, a trust bit no later boundary could
+   re-check.
+3. **Legacy records stay exact-commit.** A record without environment evidence
+   proves nothing about another commit. Rejected: backfilling evidence the
+   builder never observed.
+4. **Readiness re-entry checks its own base.** A re-entered cycle keeps its
+   producer's image on a newer base; it previously checked that image only
+   against the producer's base. It now applies the same rule to the base it
+   runs on, and a refusal stops that one cycle on an attention item. Rejected:
+   a lane error, which would stop publication for every run because one base
+   advanced.
+5. **The recipe clause refuses a contradiction, not an absence.** A base whose
+   tree declares a different recipe is refused. A base that declares none is
+   compatible, because the image runs the recipe it baked and approval still
+   gates that recipe; repositories onboarded with a recipe supplied outside
+   the tree never declare one. Rejected: requiring an in-tree recipe at the
+   base, which would leave those repositories unable to reuse an image at all.
+
+(#1230's owner-approved contract, with the owner's recipe-clause decision of
+2026-10-06;
+[decision note](../../devlog/2026-10-06-0758-project-image-environment-compatibility.md).)
