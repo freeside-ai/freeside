@@ -23,12 +23,18 @@ import (
 // The caller still validates a success response's issue as it would any
 // candidate before ledgering it.
 func classifyFollowUpFilingCreate(result issueCreateResult, sendErr error) domain.FollowUpFilingResponseClass {
+	return classifyForgeCreate(result.Status, result.Header, result.Issue != nil, sendErr)
+}
+
+// classifyForgeCreate shares the proven-rejection table across non-idempotent
+// forge creates. A decoded object still requires the caller's identity checks.
+func classifyForgeCreate(status int, header http.Header, decoded bool, sendErr error) domain.FollowUpFilingResponseClass {
 	if sendErr != nil {
 		return domain.FollowUpFilingResponseUnproven
 	}
-	switch result.Status {
+	switch status {
 	case http.StatusCreated:
-		if result.Issue != nil {
+		if decoded {
 			return domain.FollowUpFilingResponseSuccess
 		}
 	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusNotFound,
@@ -37,7 +43,7 @@ func classifyFollowUpFilingCreate(result issueCreateResult, sendErr error) domai
 	case http.StatusTooManyRequests:
 		return domain.FollowUpFilingResponseTransientRejection
 	case http.StatusForbidden:
-		if result.Header.Get("X-RateLimit-Remaining") == "0" || result.Header.Get("Retry-After") != "" {
+		if header.Get("X-RateLimit-Remaining") == "0" || header.Get("Retry-After") != "" {
 			return domain.FollowUpFilingResponseTransientRejection
 		}
 		return domain.FollowUpFilingResponseDefiniteRejection
