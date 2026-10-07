@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -305,6 +306,9 @@ type Config struct {
 	// it to model a proxy that realized another allowlist than the one
 	// requested. Nil reads the proxy.
 	readEgressAllowlist func(*connectProxy) (providers, registries []string)
+	// listenEgressProxy supplies a TCP-addressed listener for tests. Nil
+	// opens the real provider proxy listener.
+	listenEgressProxy func() (net.Listener, error)
 }
 
 // withDefaults returns cfg with unset optional fields filled.

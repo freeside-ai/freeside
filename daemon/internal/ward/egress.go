@@ -85,7 +85,7 @@ type connectProxy struct {
 
 // startConnectProxy starts a proxy that admits the provider endpoints only.
 func startConnectProxy(parent context.Context, gateway, subnet string, allowed []string, timeout time.Duration, dial dialContextFunc, now func() time.Time) (*connectProxy, error) {
-	return startRegistryConnectProxy(parent, gateway, subnet, allowed, registryRoutes{}, timeout, dial, now)
+	return startRegistryConnectProxy(parent, gateway, subnet, allowed, registryRoutes{}, timeout, dial, now, nil)
 }
 
 // startRegistryConnectProxy starts a proxy that admits the provider endpoints
@@ -94,7 +94,7 @@ func startConnectProxy(parent context.Context, gateway, subnet string, allowed [
 // name. A registry authority comes from project policy, whose host check is
 // only syntactic, so the proxy resolves the name itself and refuses it unless
 // every address is public (dialRegistry).
-func startRegistryConnectProxy(parent context.Context, gateway, subnet string, providers []string, registry registryRoutes, timeout time.Duration, dial dialContextFunc, now func() time.Time) (*connectProxy, error) {
+func startRegistryConnectProxy(parent context.Context, gateway, subnet string, providers []string, registry registryRoutes, timeout time.Duration, dial dialContextFunc, now func() time.Time, listen func() (net.Listener, error)) (*connectProxy, error) {
 	ip := net.ParseIP(gateway)
 	if ip == nil || ip.To4() == nil {
 		return nil, errors.New("egress network reported an invalid IPv4 gateway")
@@ -117,7 +117,12 @@ func startRegistryConnectProxy(parent context.Context, gateway, subnet string, p
 	// Bind the ephemeral provider proxy on all host interfaces and advertise
 	// only the host-only gateway into the writer. Keeping unrelated daemon
 	// listeners off this gateway is the separate listener-isolation contract.
-	listener, err := net.Listen("tcp4", "0.0.0.0:0") //nolint:gosec // vmnet's guest-visible gateway is not host-bindable; source admission is restricted to its attested per-run /24 below
+	if listen == nil {
+		listen = func() (net.Listener, error) {
+			return net.Listen("tcp4", "0.0.0.0:0") //nolint:gosec // vmnet's guest-visible gateway is not host-bindable; source admission is restricted to its attested per-run /24 below
+		}
+	}
+	listener, err := listen()
 	if err != nil {
 		return nil, fmt.Errorf("listen for provider proxy: %w", err)
 	}
@@ -708,6 +713,7 @@ func (b *Backend) prepareProviderEgress(ctx context.Context, hs HandoffSpec, nam
 		b.cfg.EgressProxyTimeout,
 		b.cfg.EgressDialContext,
 		b.cfg.Now,
+		b.cfg.listenEgressProxy,
 	)
 	if err != nil {
 		return NetworkReport{}, "", nil, failf(CheckAgentEgress, "start provider proxy: %v", err)
