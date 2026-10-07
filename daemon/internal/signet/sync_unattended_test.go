@@ -2,11 +2,16 @@ package signet_test
 
 import (
 	"context"
+	"database/sql"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // currentCommandOn builds a command against an item's stored entity version,
@@ -27,7 +32,90 @@ func bootstrapUnattended(t *testing.T, service *signet.Service) signet.Unattende
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
+	heartbeat, err := service.Revision(context.Background())
+	if err != nil {
+		t.Fatalf("Revision: %v", err)
+	}
+	if !reflect.DeepEqual(heartbeat.UnattendedOperation, bootstrap.UnattendedOperation) {
+		t.Fatalf("heartbeat = %+v, bootstrap = %+v", heartbeat.UnattendedOperation, bootstrap.UnattendedOperation)
+	}
 	return bootstrap.UnattendedOperation
+}
+
+func TestRevisionTracksLiveBackupHealthWithoutRevisionChange(t *testing.T) {
+	ctx := context.Background()
+	health := domain.BackupHealth{
+		Encryption: domain.BackupHealthHealthy, CheckpointCurrency: domain.BackupHealthHealthy,
+		ArtifactClosure: domain.BackupHealthHealthy, RestoreTestAge: domain.BackupHealthHealthy,
+	}
+	s := storetest.Open(t, t.TempDir()+"/signet.db", store.Options{
+		BackupHealthSource: store.BackupHealthSourceFunc(func(context.Context, store.BackupHealthContext) (domain.BackupHealth, error) {
+			return health, nil
+		}),
+	})
+	service := signet.NewService(s)
+	posture := domain.HealthPostureBlocking
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "waiver-notice", ProjectID: "proj-1",
+		Subject: domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
+		Type:    domain.AttentionSystemHealth, Priority: domain.PriorityNormal,
+		Reason: "Backup encryption waiver", RequestedDecision: []domain.Action{domain.ActionAcknowledge},
+		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
+		Posture: &posture, Status: domain.StatusOpen,
+		BlockingSupersession: &domain.BlockingSupersession{
+			Kind: domain.SupersessionBackupEncryptionWaiver, RepositoryID: 424242,
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.PutItem(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+	initial, err := service.Revision(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, encryption := range []domain.BackupHealthStatus{
+		domain.BackupHealthHealthy, domain.BackupHealthUnhealthy, domain.BackupHealthHealthy,
+	} {
+		health.Encryption = encryption
+		got := bootstrapUnattended(t, service)
+		if encryption == domain.BackupHealthHealthy {
+			requireOpen(t, "healthy backup", got)
+		} else if got.Admission != domain.UnattendedAdmissionStopped || len(got.Stops) != 1 ||
+			got.Stops[0].Kind != domain.UnattendedStopBlockingSystemHealth ||
+			got.Stops[0].ItemID == nil || *got.Stops[0].ItemID != item.ID {
+			t.Fatalf("unhealthy backup = %+v, want the waiver notice stop", got)
+		}
+		current, err := service.Revision(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if current.SyncEpoch != initial.SyncEpoch || current.Revision != initial.Revision {
+			t.Fatalf("backup health moved cursor: initial=%+v, current=%+v", initial, current)
+		}
+	}
+}
+
+func TestRevisionFailsWhenUnattendedGateCannotBeRead(t *testing.T) {
+	f := newFixture(t)
+	item := seedHealthItem(t, f, "broken-health")
+	db, err := sql.Open("sqlite", f.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.ExecContext(t.Context(), `UPDATE attention_items SET health_posture = 'advisory' WHERE id = ?`, item.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.service.Revision(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "unattended operation gate:") {
+		t.Fatalf("Revision error = %v, want gate read failure", err)
+	}
+	if !reflect.DeepEqual(got, signet.ServerRevision{}) {
+		t.Fatalf("failed heartbeat returned a payload: %+v", got)
+	}
 }
 
 func requireOpen(t *testing.T, when string, got signet.UnattendedOperationSnapshot) {

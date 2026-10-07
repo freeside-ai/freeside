@@ -37,10 +37,12 @@ var errNoProposalSnoozeRelease = errors.New("no proposal snooze release pending"
 
 // ServerRevision is the revision heartbeat payload. A changed SyncEpoch
 // invalidates every client cache; a higher Revision tells a client that it
-// missed one or more invalidations and must refetch or bootstrap.
+// missed one or more invalidations and must refetch or bootstrap. A changed
+// UnattendedOperation also requires bootstrap, even at the same revision.
 type ServerRevision struct {
-	SyncEpoch string `json:"sync_epoch"`
-	Revision  int64  `json:"revision"`
+	SyncEpoch           string                      `json:"sync_epoch"`
+	Revision            int64                       `json:"revision"`
+	UnattendedOperation UnattendedOperationSnapshot `json:"unattended_operation"`
 }
 
 // AttentionItemSnapshot is an AttentionItem with its store-stamped sync
@@ -249,8 +251,8 @@ type ScheduleSnapshot struct {
 // matching api/openapi.yaml: the verdict of the one gate admission enforces
 // (store.UnattendedOperationGate) and every stop that closes it. It carries
 // no sync metadata of its own because it is not an entity: it is derived
-// inside the bootstrap read, so the enclosing snapshot's revision is its
-// revision.
+// at the read that produced it. Live inputs can change the verdict without
+// moving the sync revision.
 type UnattendedOperationSnapshot struct {
 	Admission domain.UnattendedAdmission `json:"admission"`
 	Stops     []UnattendedStop           `json:"stops"`
@@ -426,20 +428,36 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 	return out, nil
 }
 
-// Revision returns the cheap periodic heartbeat. Only Bootstrap advances the
-// client's full-snapshot cursor; this value exists to reveal a revision gap.
+// Revision returns the periodic heartbeat. Only Bootstrap advances the
+// client's full-snapshot cursor; this value reveals revision gaps and gate
+// changes caused by live inputs that move no revision.
 func (s *Service) Revision(ctx context.Context) (ServerRevision, error) {
 	if err := s.convergeProposalSnoozes(ctx, s.now().UTC()); err != nil {
 		return ServerRevision{}, fmt.Errorf("sync revision proposal snoozes: %w", err)
 	}
-	state, err := s.store.ServerState(ctx)
+	var out ServerRevision
+	err := s.store.Read(ctx, func(tx *store.ReadTx) error {
+		state, err := tx.ServerState(ctx)
+		if err != nil {
+			return err
+		}
+		if err := validateServerState(state); err != nil {
+			return err
+		}
+		gate, err := tx.UnattendedOperationGate(ctx)
+		if err != nil {
+			return fmt.Errorf("unattended operation gate: %w", err)
+		}
+		out = ServerRevision{
+			SyncEpoch: state.SyncEpoch, Revision: state.Revision,
+			UnattendedOperation: unattendedOperationSnapshot(gate),
+		}
+		return nil
+	})
 	if err != nil {
 		return ServerRevision{}, fmt.Errorf("sync revision: %w", err)
 	}
-	if err := validateServerState(state); err != nil {
-		return ServerRevision{}, fmt.Errorf("sync revision: %w", err)
-	}
-	return ServerRevision{SyncEpoch: state.SyncEpoch, Revision: state.Revision}, nil
+	return out, nil
 }
 
 // ListAttentionItems returns a partial resource fetch. Its snapshots are

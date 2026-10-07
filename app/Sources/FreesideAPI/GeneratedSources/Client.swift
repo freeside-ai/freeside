@@ -199,17 +199,20 @@ public struct Client: APIProtocol {
             }
         )
     }
-    /// The current server revision and sync epoch
+    /// The current server revision, sync epoch, and unattended admission
     ///
     /// The periodic revision heartbeat that catches lost invalidations
-    /// (plan §5.14; sync test 11): a client polls this cheap read and
+    /// (plan §5.14; sync test 11): a client polls this read and
     /// compares `revision` against its
     /// `highest_observed_server_revision`. A gap means invalidations were
     /// missed, so the client refetches affected resources or bootstraps;
     /// it never marks the whole cache current from this response (only a
     /// bootstrap advances `last_full_snapshot_revision`). A changed
     /// `sync_epoch` (a daemon restore) forces cache discard and a fresh
-    /// bootstrap.
+    /// bootstrap. A same-epoch `unattended_operation` that differs from
+    /// the adopted snapshot also triggers a bootstrap, even without a
+    /// revision gap. Live backup health can change that verdict without a
+    /// transaction. The client never adopts the heartbeat's verdict directly.
     ///
     ///
     /// - Remark: HTTP `GET /sync/revision`.

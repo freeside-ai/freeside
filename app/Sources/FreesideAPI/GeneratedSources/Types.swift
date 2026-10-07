@@ -46,17 +46,20 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /sync/bootstrap`.
     /// - Remark: Generated from `#/paths//sync/bootstrap/get(getSyncBootstrap)`.
     func getSyncBootstrap(_ input: Operations.getSyncBootstrap.Input) async throws -> Operations.getSyncBootstrap.Output
-    /// The current server revision and sync epoch
+    /// The current server revision, sync epoch, and unattended admission
     ///
     /// The periodic revision heartbeat that catches lost invalidations
-    /// (plan §5.14; sync test 11): a client polls this cheap read and
+    /// (plan §5.14; sync test 11): a client polls this read and
     /// compares `revision` against its
     /// `highest_observed_server_revision`. A gap means invalidations were
     /// missed, so the client refetches affected resources or bootstraps;
     /// it never marks the whole cache current from this response (only a
     /// bootstrap advances `last_full_snapshot_revision`). A changed
     /// `sync_epoch` (a daemon restore) forces cache discard and a fresh
-    /// bootstrap.
+    /// bootstrap. A same-epoch `unattended_operation` that differs from
+    /// the adopted snapshot also triggers a bootstrap, even without a
+    /// revision gap. Live backup health can change that verdict without a
+    /// transaction. The client never adopts the heartbeat's verdict directly.
     ///
     ///
     /// - Remark: HTTP `GET /sync/revision`.
@@ -395,17 +398,20 @@ extension APIProtocol {
     public func getSyncBootstrap(headers: Operations.getSyncBootstrap.Input.Headers = .init()) async throws -> Operations.getSyncBootstrap.Output {
         try await getSyncBootstrap(Operations.getSyncBootstrap.Input(headers: headers))
     }
-    /// The current server revision and sync epoch
+    /// The current server revision, sync epoch, and unattended admission
     ///
     /// The periodic revision heartbeat that catches lost invalidations
-    /// (plan §5.14; sync test 11): a client polls this cheap read and
+    /// (plan §5.14; sync test 11): a client polls this read and
     /// compares `revision` against its
     /// `highest_observed_server_revision`. A gap means invalidations were
     /// missed, so the client refetches affected resources or bootstraps;
     /// it never marks the whole cache current from this response (only a
     /// bootstrap advances `last_full_snapshot_revision`). A changed
     /// `sync_epoch` (a daemon restore) forces cache discard and a fresh
-    /// bootstrap.
+    /// bootstrap. A same-epoch `unattended_operation` that differs from
+    /// the adopted snapshot also triggers a bootstrap, even without a
+    /// revision gap. Live backup health can change that verdict without a
+    /// transaction. The client never adopts the heartbeat's verdict directly.
     ///
     ///
     /// - Remark: HTTP `GET /sync/revision`.
@@ -973,7 +979,7 @@ public enum Components {
                 case unattended_operation
             }
         }
-        /// Whether the daemon admits new unattended work, and what stops it (plan §4 stop_unattended, §5.7). It is the verdict of the one gate admission enforces, read in the bootstrap transaction, so it is current as of the enclosing snapshot's revision and carries no sync metadata of its own. A client renders it as a standing indicator and never infers the state from attention items: acknowledging or dismissing an item does not change it.
+        /// Whether the daemon admits new unattended work, and what stops it (plan §4 stop_unattended, §5.7). It is the verdict of the one gate admission enforces at the read that produced it. Live inputs can change the verdict without moving the sync revision, so it carries no sync metadata of its own. A client renders it as a standing indicator and never infers the state from attention items: acknowledging or dismissing an item does not change it.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/UnattendedOperationSnapshot`.
@@ -5785,7 +5791,7 @@ public enum Components {
                 case resolution
             }
         }
-        /// The revision heartbeat's payload (plan §5.14; sync test 11): the daemon's current ServerState, cheap enough to poll. Carries no entity data; a revision gap tells the client to refetch, never to mark its cache current.
+        /// The revision heartbeat's payload (plan §5.14; sync test 11): the daemon's current ServerState and unattended-admission verdict from one read transaction. A revision gap or a changed verdict tells the client to bootstrap, never to adopt state from this payload.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/ServerRevision`.
@@ -5799,21 +5805,27 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/ServerRevision/revision`.
             public var revision: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/ServerRevision/unattended_operation`.
+            public var unattended_operation: Components.Schemas.UnattendedOperationSnapshot
             /// Creates a new `ServerRevision`.
             ///
             /// - Parameters:
             ///   - sync_epoch: The daemon's sync epoch at the moment of the read; a change (only ever a restore) invalidates every client cache.
             ///   - revision: The server revision at the moment of the read.
+            ///   - unattended_operation:
             public init(
                 sync_epoch: Swift.String,
-                revision: Swift.Int64
+                revision: Swift.Int64,
+                unattended_operation: Components.Schemas.UnattendedOperationSnapshot
             ) {
                 self.sync_epoch = sync_epoch
                 self.revision = revision
+                self.unattended_operation = unattended_operation
             }
             public enum CodingKeys: String, CodingKey {
                 case sync_epoch
                 case revision
+                case unattended_operation
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -5825,9 +5837,14 @@ public enum Components {
                     Swift.Int64.self,
                     forKey: .revision
                 )
+                self.unattended_operation = try container.decode(
+                    Components.Schemas.UnattendedOperationSnapshot.self,
+                    forKey: .unattended_operation
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "sync_epoch",
-                    "revision"
+                    "revision",
+                    "unattended_operation"
                 ])
             }
         }
@@ -14471,17 +14488,20 @@ public enum Operations {
             }
         }
     }
-    /// The current server revision and sync epoch
+    /// The current server revision, sync epoch, and unattended admission
     ///
     /// The periodic revision heartbeat that catches lost invalidations
-    /// (plan §5.14; sync test 11): a client polls this cheap read and
+    /// (plan §5.14; sync test 11): a client polls this read and
     /// compares `revision` against its
     /// `highest_observed_server_revision`. A gap means invalidations were
     /// missed, so the client refetches affected resources or bootstraps;
     /// it never marks the whole cache current from this response (only a
     /// bootstrap advances `last_full_snapshot_revision`). A changed
     /// `sync_epoch` (a daemon restore) forces cache discard and a fresh
-    /// bootstrap.
+    /// bootstrap. A same-epoch `unattended_operation` that differs from
+    /// the adopted snapshot also triggers a bootstrap, even without a
+    /// revision gap. Live backup health can change that verdict without a
+    /// transaction. The client never adopts the heartbeat's verdict directly.
     ///
     ///
     /// - Remark: HTTP `GET /sync/revision`.
@@ -14538,7 +14558,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// The server's current sync epoch and revision.
+            /// The server's current sync epoch, revision, and admission verdict.
             ///
             /// - Remark: Generated from `#/paths//sync/revision/get(getSyncRevision)/responses/200`.
             ///

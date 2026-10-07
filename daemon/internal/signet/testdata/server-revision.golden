@@ -1,4 +1,8 @@
 {
   "sync_epoch": "sync-epoch-569",
-  "revision": 23
+  "revision": 23,
+  "unattended_operation": {
+    "admission": "open",
+    "stops": []
+  }
 }
