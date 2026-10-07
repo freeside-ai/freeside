@@ -664,12 +664,12 @@ public struct FreesideRootView: View {
                 Button {
                     navigation.closeRun()
                 } label: {
-                    Label("Back to task", systemImage: "chevron.left")
+                    Label("Back to Task", systemImage: "chevron.left")
                         .font(FreesideFont.callout)
                         .foregroundStyle(Color.accentText)
                 }
                 .buttonStyle(.plain)
-                .help("Back to task")
+                .help("Back to Task")
                 Spacer()
             }
             .padding(.horizontal, 24)
