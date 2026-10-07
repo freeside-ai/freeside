@@ -392,10 +392,9 @@ import Testing
         let utcEntries = TaskTimelinePresentation.milestoneEntries(run, locale: locale, timeZone: utc)
         let westEntries = TaskTimelinePresentation.milestoneEntries(run, locale: locale, timeZone: west)
         #expect(utcEntries.map(\.timestamp) != westEntries.map(\.timestamp))
-        #expect(
-            utcEntries[0].timestamp
-                == run.milestones[0].recorded_at.formatted(
-                    Date.FormatStyle(date: .abbreviated, time: .shortened, locale: locale, timeZone: utc)))
+        // The short-time grammar: the date and the clock joined by a comma,
+        // with the year because the milestone isn't from this one.
+        #expect(utcEntries[0].timestamp?.replacing("\u{202F}", with: " ") == "Nov 14, 2023, 10:13 PM")
     }
 
     @Test(arguments: [false, true]) @MainActor

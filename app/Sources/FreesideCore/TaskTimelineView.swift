@@ -905,7 +905,7 @@ enum TaskTimelinePresentation {
     }
 
     /// The closed summary beside a section's keyword. The current section
-    /// reads `current · 2 attempts · since Sep 11`; an earlier one reads
+    /// reads `current · 2 attempts · from Sep 11`; an earlier one reads
     /// `1 run · Sep 10`. Why an earlier campaign ended is not a recorded
     /// fact, so the summary does not say.
     static func sectionSummary(
@@ -919,13 +919,13 @@ enum TaskTimelinePresentation {
         if isCurrent {
             return
                 (["current", "\(count) \(count == 1 ? "attempt" : "attempts")"]
-                + [start.map { "since \($0)" }]
+                + [start.map { "from \($0)" }]
                 .compactMap { $0 }).joined(separator: " · ")
         }
         return (["\(count) \(count == 1 ? "run" : "runs")"] + [start].compactMap { $0 }).joined(separator: " · ")
     }
 
-    /// `6 recorded · newest Sep 12 at 9:41 AM`. The events arrive newest
+    /// `6 recorded · newest Sep 12, 9:41 AM`. The events arrive newest
     /// first, so the newest is the first.
     static func eventsSummary(
         _ events: [Components.Schemas.TaskEvent], now: Date, locale: Locale = .current,
