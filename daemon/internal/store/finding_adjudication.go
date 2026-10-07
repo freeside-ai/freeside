@@ -488,11 +488,23 @@ func (tx *ReadTx) reconstructFindingAdjudication(
 		(artifact.PredecessorDigest != nil && string(*artifact.PredecessorDigest) != row.predecessorDigest.String) {
 		return domain.FindingAdjudication{}, errRowInconsistent
 	}
+	key := row.validationKey(publicationReadPath(ctx))
+	marks := tx.reviewValidation.marks
+	if marks != nil && marks.adjudications[key] {
+		if err := ctx.Err(); err != nil {
+			return domain.FindingAdjudication{}, err
+		}
+		return artifact, nil
+	}
+	tx.reviewValidation.adjudicationChecks++
 	if err := tx.validateFindingAdjudicationBinding(ctx, artifact); err != nil {
 		return domain.FindingAdjudication{}, err
 	}
 	if err := tx.validateFindingAdjudicationSuccessor(ctx, artifact, false); err != nil {
 		return domain.FindingAdjudication{}, err
+	}
+	if marks != nil {
+		marks.adjudications[key] = true
 	}
 	return artifact, nil
 }

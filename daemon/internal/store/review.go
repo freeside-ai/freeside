@@ -140,6 +140,19 @@ func (tx *ReadTx) GetReviewRecord(
 		string(record.Outcome) != outcome || formatTime(record.CompletedAt) != completedAt {
 		return domain.ReviewRecord{}, fmt.Errorf("get review record %q: %w", id, errRowInconsistent)
 	}
+	key := reviewValidationKey{
+		invocationID: string(id), runID: runID, round: round,
+		baseSHA: baseSHA, headSHA: headSHA, outcome: outcome, completedAt: completedAt,
+		bodyDigest: bodyDigest, body: string(body),
+	}
+	marks := tx.reviewValidation.marks
+	if marks != nil && marks.reviews[key] {
+		if err := ctx.Err(); err != nil {
+			return domain.ReviewRecord{}, err
+		}
+		return record, nil
+	}
+	tx.reviewValidation.reviewRecordChecks++
 	if err := tx.ensureInvocationNotShadowRecorded(ctx, record.InvocationID); err != nil {
 		return domain.ReviewRecord{}, fmt.Errorf(
 			"get review record %q shadow invocation binding: %w", id, err)
@@ -169,6 +182,9 @@ func (tx *ReadTx) GetReviewRecord(
 			return domain.ReviewRecord{}, fmt.Errorf("get review record %q shadow finding %q: %w",
 				id, findingID, err)
 		}
+	}
+	if marks != nil {
+		marks.reviews[key] = true
 	}
 	return record, nil
 }
@@ -250,6 +266,15 @@ func (tx *ReadTx) validateFindingDispositionBindingWithDiminishing(
 	if err != nil {
 		return err
 	}
+	return tx.validateFindingDispositionAuthority(ctx, disposition, adjudication, allowDiminishing)
+}
+
+// The caller has already authenticated the disposition's scope. Keeping that
+// result local avoids a second scope check without sharing decoded artifacts.
+func (tx *ReadTx) validateFindingDispositionAuthority(
+	ctx context.Context, disposition domain.ReviewDispositionRecord,
+	adjudication domain.FindingAdjudication, allowDiminishing bool,
+) error {
 	if disposition.Disposition == domain.ReviewDispositionFixed {
 		return nil
 	}
@@ -271,6 +296,7 @@ func (tx *ReadTx) validateFindingDispositionBindingWithDiminishing(
 func (tx *ReadTx) validateFindingDispositionScope(
 	ctx context.Context, disposition domain.ReviewDispositionRecord,
 ) (domain.FindingAdjudication, error) {
+	tx.reviewValidation.scopeChecks++
 	finding, err := tx.GetFinding(ctx, disposition.FindingID)
 	if err != nil {
 		return domain.FindingAdjudication{}, err
@@ -400,6 +426,8 @@ func (tx *ReadTx) ListFindingDispositions(
 // loadFindingDispositions reconstructs the complete table before any lookup
 // or run filter is applied. A copied key is untrusted too: selecting by it
 // first would let corruption move an immutable record out of every keyed read.
+// Every call reads all rows and checks their digest, decode, and copied columns.
+// Cross-row checks may reuse a success in the same snapshot or read-only call.
 func (tx *ReadTx) loadFindingDispositions(
 	ctx context.Context,
 ) ([]domain.ReviewDispositionRecord, error) {
@@ -409,6 +437,12 @@ func (tx *ReadTx) loadFindingDispositions(
 func (tx *ReadTx) loadFindingDispositionsAtDecision(
 	ctx context.Context, boundaryRunID domain.RunID, boundaryRound int,
 ) ([]domain.ReviewDispositionRecord, error) {
+	if tx.reviewValidation.marks == nil {
+		tx.reviewValidation.marks = newReviewValidationMarks()
+		defer func() { tx.reviewValidation.marks = nil }()
+	}
+	marks := tx.reviewValidation.marks
+	path := publicationReadPath(ctx)
 	type rawDisposition struct {
 		findingID, runID, class, reason, remediationInvocationID, bodyDigest string
 		createdAt                                                            string
@@ -456,17 +490,38 @@ func (tx *ReadTx) loadFindingDispositionsAtDecision(
 			formatTime(disposition.CreatedAt) != item.createdAt {
 			return nil, fmt.Errorf("row %d: %w", index+1, errRowInconsistent)
 		}
-		if _, err := tx.validateFindingDispositionScope(ctx, disposition); err != nil {
+		key := dispositionValidationKey{
+			findingID: item.findingID, runID: item.runID, round: item.round,
+			class: item.class, reason: item.reason, remediationInvocationID: item.remediationInvocationID,
+			createdAt: item.createdAt, bodyDigest: item.bodyDigest, body: string(item.body), path: path,
+		}
+		var adjudication domain.FindingAdjudication
+		if !marks.scopes[key] {
+			adjudication, err = tx.validateFindingDispositionScope(ctx, disposition)
+			if err != nil {
+				return nil, fmt.Errorf("row %d scope: %w", index+1, err)
+			}
+			marks.scopes[key] = true
+		} else if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("row %d scope: %w", index+1, err)
 		}
 		if boundaryRunID != "" && (disposition.RunID != boundaryRunID ||
 			disposition.Round >= boundaryRound) {
 			continue
 		}
-		if err := tx.validateFindingDispositionBindingWithDiminishing(
-			ctx, disposition, true,
-		); err != nil {
-			return nil, fmt.Errorf("row %d binding: %w", index+1, err)
+		if !marks.bindings[key] {
+			// A prior decision-time load may have checked only scope. Read a
+			// fresh artifact for binding; its own cross-row checks can reuse marks.
+			if adjudication.Digest == "" && disposition.Disposition != domain.ReviewDispositionFixed {
+				adjudication, err = tx.GetFindingAdjudication(ctx, disposition.AdjudicationDigest)
+				if err != nil {
+					return nil, fmt.Errorf("row %d binding: %w", index+1, err)
+				}
+			}
+			if err := tx.validateFindingDispositionAuthority(ctx, disposition, adjudication, true); err != nil {
+				return nil, fmt.Errorf("row %d binding: %w", index+1, err)
+			}
+			marks.bindings[key] = true
 		}
 		out = append(out, disposition)
 	}

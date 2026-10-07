@@ -32,6 +32,9 @@ type ReadTx struct {
 	// their own mutations rather than reuse authenticated authority.
 	initialAttemptAuthorities map[initialAttemptAuthorityKey]bool
 	publicationSuccessorReads map[string]domain.PublicationSuccessor
+	// Review validation also reuses checks within one read-only load in a
+	// write transaction, but never between calls that could straddle a write.
+	reviewValidation reviewValidationState
 	// approvedRecipes is the store's boundary policy set (see
 	// Options.ApprovedRecipes), carried on every transaction so a Get can
 	// re-derive an evidence artifact's publish_eligibility instead of trusting
@@ -182,6 +185,7 @@ func (s *Store) Read(ctx context.Context, fn func(*ReadTx) error) error {
 	readTx := s.newReadTx(tx)
 	readTx.initialAttemptAuthorities = make(map[initialAttemptAuthorityKey]bool)
 	readTx.publicationSuccessorReads = make(map[string]domain.PublicationSuccessor)
+	readTx.reviewValidation.marks = newReviewValidationMarks()
 	if err := fn(&readTx); err != nil {
 		return err
 	}
