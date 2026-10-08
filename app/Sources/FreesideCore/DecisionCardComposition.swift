@@ -198,92 +198,30 @@ struct DecisionCardComposition: Equatable {
         return !Self.reasonIsAgentSummary(item._type) || summaries(from: item.agent_claims).isEmpty
     }
 
-    /// How a card frames its agent-written sections. The unverified label
-    /// names the register in both; the frame is only how the section is set
-    /// apart from its neighbors.
-    enum AgentSectionFrame: Equatable {
-        /// A dashed card around the section, with every claim's source
-        /// identifiers printed beside its text.
-        case dashedCard
-        /// The label and then the agent's prose in a `QuoteBlock` (R5), with
-        /// the source identifiers one disclosure away.
-        case quoted
-    }
-
-    /// The visual audit keeps a bounded card for an independent item or
-    /// option and separates ordinary sections by spacing, on the surfaces it
-    /// approved only. The question card (D06) draws its options as the
-    /// bounded panels, the final review (D07) keeps its one card for the
-    /// daemon's checklist, and the dispute (D08) reads its claim as prose
-    /// beside the actions, so their agent sections drop their own card and
-    /// quote the agent instead. Every other type keeps the dashed card until
-    /// its own sweep. The switch is exhaustive so a new type has to answer
-    /// the question.
-    static func agentSectionFrame(
-        for type: Components.Schemas.AttentionType
-    ) -> AgentSectionFrame {
-        switch type {
-        case .agent_question, .ready_for_final_review, .review_dispute, .system_health, .blocked,
-            .execution_failure, .task_proposal, .effect_proposal, .review_diminishing_returns,
-            .spec_approval, .finding_adjudication, .review_contradiction, .review_configuration,
-            .publish_blocked:
-            return .quoted
-        }
-    }
-
-    /// A card's gap ladder, padding, and corner (R10). The refined ladder is
-    /// the one survey card 4b settled: 22 between sections, 11 inside a
-    /// module, 10 within a control group, and 18 above the folds, which sit
-    /// under the card's one hairline.
-    enum Scale: Equatable {
-        case legacy
-        case refined
-
-        var sectionGap: CGFloat { self == .refined ? 22 : 16 }
+    /// A card's gap ladder, padding, and corner (R10), as survey card 4b
+    /// settled them: 22 between sections, 11 inside a module, 10 within a
+    /// control group, and 18 above the folds, which sit under the card's
+    /// one hairline. Every decision type draws on it.
+    enum Scale {
+        static let sectionGap: CGFloat = 22
         /// Between the eyebrow and the ask.
-        var headGap: CGFloat { self == .refined ? 12 : 16 }
-        var moduleGap: CGFloat { self == .refined ? 11 : 8 }
-        var controlGap: CGFloat { self == .refined ? 10 : 8 }
-        var foldGap: CGFloat { self == .refined ? 12 : 16 }
+        static let headGap: CGFloat = 12
+        static let moduleGap: CGFloat = 11
+        static let controlGap: CGFloat = 10
+        static let foldGap: CGFloat = 12
         /// The space between the hairline and the first fold.
-        var foldLead: CGFloat { 18 }
-        var drawsFoldHairline: Bool { self == .refined }
-        /// Returning the work is a plain outlined command on the refined
-        /// card (R6).
-        var drawsReturnGlyph: Bool { self == .legacy }
-        /// The overflow trigger's words, in Title Case on the refined card
-        /// (R30).
-        var overflowLabel: String { self == .refined ? "More Actions" : "More actions" }
-        var cornerRadius: CGFloat { self == .refined ? 12 : 8 }
+        static let foldLead: CGFloat = 18
+        static let cornerRadius: CGFloat = 12
         /// The widest a one-column card grows with the detail's 16pt margin
-        /// around it: the refined card itself is 560 wide.
-        var columnWidth: CGFloat { self == .refined ? 592 : 560 }
+        /// around it: the card itself is 560 wide.
+        static let columnWidth: CGFloat = 592
 
         /// A phone's card is 20 from each side and 18 from the top and
         /// bottom; a Mac's sits 28 in, with 24 under its last line.
-        func padding(compact: Bool) -> EdgeInsets {
-            switch self {
-            case .legacy:
-                EdgeInsets(top: 14, leading: 14, bottom: 14, trailing: 14)
-            case .refined:
-                compact
-                    ? EdgeInsets(top: 18, leading: 20, bottom: 18, trailing: 20)
-                    : EdgeInsets(top: 28, leading: 28, bottom: 24, trailing: 28)
-            }
-        }
-    }
-
-    /// The final review is the card the refined ladder was proved on, and
-    /// the agent question the second composed on it; every other type keeps
-    /// the earlier one until its own sweep composes it. The switch is
-    /// exhaustive so a new type has to answer the question.
-    static func scale(for type: Components.Schemas.AttentionType) -> Scale {
-        switch type {
-        case .ready_for_final_review, .agent_question, .system_health, .blocked,
-            .execution_failure, .task_proposal, .effect_proposal, .review_diminishing_returns,
-            .review_dispute, .spec_approval, .finding_adjudication, .review_contradiction,
-            .review_configuration, .publish_blocked:
-            return .refined
+        static func padding(compact: Bool) -> EdgeInsets {
+            compact
+                ? EdgeInsets(top: 18, leading: 20, bottom: 18, trailing: 20)
+                : EdgeInsets(top: 28, leading: 28, bottom: 24, trailing: 28)
         }
     }
 
@@ -1753,7 +1691,7 @@ struct DecisionChecklistModuleView: View {
     @State private var passedExpanded = false
     let presentation: DecisionChecklistPresentation
 
-    private static let rowGap = DecisionCardComposition.Scale.refined.moduleGap
+    private static let rowGap = DecisionCardComposition.Scale.moduleGap
 
     var body: some View {
         VStack(alignment: .leading, spacing: Self.rowGap) {
@@ -1872,7 +1810,7 @@ struct DecisionYieldChartModuleView: View {
                 .accessibilityLabel(Text(presentation.summary))
             }
         } else {
-            VStack(alignment: .leading, spacing: DecisionCardComposition.Scale.refined.moduleGap) {
+            VStack(alignment: .leading, spacing: DecisionCardComposition.Scale.moduleGap) {
                 KeywordLabel(text: Self.title)
                 rounds
             }
@@ -1956,10 +1894,9 @@ struct DecisionComparisonModuleView: View {
     var rendersInteractiveControls = true
 
     var body: some View {
-        let scale = DecisionCardComposition.Scale.refined
-        VStack(alignment: .leading, spacing: scale.sectionGap) {
+        VStack(alignment: .leading, spacing: DecisionCardComposition.Scale.sectionGap) {
             ForEach(Array(presentation.positions.enumerated()), id: \.element.id) { index, position in
-                VStack(alignment: .leading, spacing: scale.moduleGap) {
+                VStack(alignment: .leading, spacing: DecisionCardComposition.Scale.moduleGap) {
                     UnverifiedLabel(
                         text: position.title, carriesInfo: carriesInfo && index == 0,
                         rendersInteractiveControls: rendersInteractiveControls)

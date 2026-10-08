@@ -259,7 +259,7 @@ import Testing
 
     @Test func iconsAreLimitedToNavigationRetryAndLossRisk() {
         let iconActions: [Components.Schemas.Action] = [
-            .open_pr, .retry, .snooze, .stop, .stop_unattended, .return_to_agent,
+            .open_pr, .retry, .snooze, .stop, .stop_unattended,
         ]
         for action in AttentionFixtures.phase1Actions {
             #expect((AttentionDisplay.systemImage(action) != nil) == iconActions.contains(action))

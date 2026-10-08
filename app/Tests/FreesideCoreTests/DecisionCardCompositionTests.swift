@@ -521,25 +521,6 @@ import Testing
         #expect(DecisionCardComposition.reasonPlacement(for: unrecommended) == .underAsk)
     }
 
-    /// Visual audit D06 to D08: the question card bounds only its options,
-    /// the final review only the daemon's checklist, and the dispute reads
-    /// its claim as prose, so all three quote their agent sections (R5);
-    /// every other type keeps the dashed card around agent prose.
-    @Test(arguments: Components.Schemas.AttentionType.allCases)
-    func agentSectionsAreQuotedOnlyOnTheApprovedCards(
-        type: Components.Schemas.AttentionType
-    ) {
-        let quoted: [Components.Schemas.AttentionType] = [
-            .agent_question, .ready_for_final_review, .review_dispute, .system_health, .blocked,
-            .execution_failure, .task_proposal, .effect_proposal, .review_diminishing_returns,
-            .spec_approval, .finding_adjudication, .review_contradiction, .review_configuration,
-            .publish_blocked,
-        ]
-        #expect(
-            DecisionCardComposition.agentSectionFrame(for: type)
-                == (quoted.contains(type) ? .quoted : .dashedCard))
-    }
-
     /// Visual audit D08: the dispute leads with the claim the snapshot
     /// supplies, and a supporting attachment stays below the actions.
     @Test func disputeLeadsWithItsReadableClaim() {
@@ -877,34 +858,16 @@ import Testing
         }
     }
 
-    /// R10: the ladder survey card 4b settled, on the cards composed on it
-    /// so far. Every other type keeps the earlier scale until its sweep.
-    @Test(arguments: Components.Schemas.AttentionType.allCases)
-    func onlyTheComposedCardsTakeTheRefinedScale(type: Components.Schemas.AttentionType) {
-        let refined: Set<Components.Schemas.AttentionType> = [
-            .ready_for_final_review, .agent_question, .system_health, .blocked,
-            .execution_failure, .task_proposal, .effect_proposal, .review_diminishing_returns,
-            .review_dispute, .spec_approval, .finding_adjudication, .review_contradiction,
-            .review_configuration, .publish_blocked,
-        ]
-        let scale = DecisionCardComposition.scale(for: type)
-        #expect(scale == (refined.contains(type) ? .refined : .legacy))
-    }
-
-    @Test func refinedScaleIsTheLadderCard4bSettled() {
-        let scale = DecisionCardComposition.Scale.refined
+    /// R10: the ladder survey card 4b settled, which every decision type
+    /// now draws on.
+    @Test func theCardScaleIsTheLadderCard4bSettled() {
+        let scale = DecisionCardComposition.Scale.self
         #expect(scale.sectionGap == 22)
         #expect(scale.moduleGap == 11)
         #expect(scale.controlGap == 10)
         #expect(scale.foldLead == 18)
-        #expect(scale.drawsFoldHairline)
         #expect(scale.padding(compact: false) == .init(top: 28, leading: 28, bottom: 24, trailing: 28))
         #expect(scale.padding(compact: true) == .init(top: 18, leading: 20, bottom: 18, trailing: 20))
-        #expect(!scale.drawsReturnGlyph)
-        #expect(scale.overflowLabel == "More Actions")
-        #expect(DecisionCardComposition.Scale.legacy.overflowLabel == "More actions")
-        #expect(!DecisionCardComposition.Scale.legacy.drawsFoldHairline)
-        #expect(DecisionCardComposition.Scale.legacy.drawsReturnGlyph)
     }
 
     /// The reviewing action opens the control group the action region

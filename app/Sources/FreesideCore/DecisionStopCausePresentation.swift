@@ -147,16 +147,14 @@ struct DecisionStopCauseModuleView: View {
     var carriesInfo = false
     var rendersInteractiveControls = true
 
-    private var scale: DecisionCardComposition.Scale { .refined }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: scale.sectionGap) {
+        VStack(alignment: .leading, spacing: DecisionCardComposition.Scale.sectionGap) {
             Text(presentation.cause)
                 .font(FreesideFont.statement)
                 .foregroundStyle(Color.ink)
                 .fixedSize(horizontal: false, vertical: true)
             if let audit = presentation.audit {
-                VStack(alignment: .leading, spacing: scale.moduleGap) {
+                VStack(alignment: .leading, spacing: DecisionCardComposition.Scale.moduleGap) {
                     KeywordLabel(text: "Drift Audit")
                     FactRow(label: "Verdict", value: audit.verdict)
                     FactRow(label: "Confidence", value: audit.confidence)
@@ -164,7 +162,7 @@ struct DecisionStopCauseModuleView: View {
                 // Quoted, like every model-written section on the card: the
                 // explanation and the reversal text are the audit model's
                 // words, not values the daemon computed.
-                VStack(alignment: .leading, spacing: scale.moduleGap) {
+                VStack(alignment: .leading, spacing: DecisionCardComposition.Scale.moduleGap) {
                     UnverifiedLabel(
                         text: audit.keyword, carriesInfo: carriesInfo,
                         rendersInteractiveControls: rendersInteractiveControls)
@@ -182,7 +180,7 @@ struct DecisionStopCauseModuleView: View {
                             label: audit.moreFixesLabel, summary: audit.totalFixes,
                             isExpanded: $showsEveryReversal
                         ) {
-                            VStack(alignment: .leading, spacing: scale.moduleGap) {
+                            VStack(alignment: .leading, spacing: DecisionCardComposition.Scale.moduleGap) {
                                 ForEach(audit.foldedReversals) { reversal in
                                     fix(reversal)
                                 }

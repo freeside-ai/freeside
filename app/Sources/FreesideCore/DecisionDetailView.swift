@@ -2,6 +2,8 @@ import Foundation
 import FreesideAPI
 import SwiftUI
 
+private typealias CardScale = DecisionCardComposition.Scale
+
 #if os(iOS)
     import UIKit
 #elseif os(macOS)
@@ -177,7 +179,6 @@ struct DecisionDetailView: View {
                                 inspectorPresented: inspectorBinding.wrappedValue
                             )
                             .decisionCardChrome(
-                                DecisionCardComposition.scale(for: snapshot.item._type),
                                 compactLayout: horizontalSizeClass == .compact,
                                 wideLayout: usesWideLayout)
                         }
@@ -539,7 +540,6 @@ struct DecisionDetailView: View {
         actionRegionFrameChanged: ((CGRect) -> Void)? = nil
     ) -> some View {
         let composition = DecisionCardComposition.forType(item._type)
-        let scale = DecisionCardComposition.scale(for: item._type)
         let register = unverified(
             item,
             effectProposalFacts: effectProposalFacts,
@@ -553,13 +553,13 @@ struct DecisionDetailView: View {
             register: register,
             accessibilityLayout: accessibilityLayout,
             inspectorPresented: inspectorPresented)
-        VStack(alignment: .leading, spacing: scale.sectionGap) {
-            VStack(alignment: .leading, spacing: scale.headGap) {
+        VStack(alignment: .leading, spacing: CardScale.sectionGap) {
+            VStack(alignment: .leading, spacing: CardScale.headGap) {
                 eyebrow(item, register: register, accessibilityLayout: accessibilityLayout)
                 banner(accessibilityLayout: accessibilityLayout)
                 if DecisionCardComposition.rendersAsk(for: item) {
                     Text(AttentionDisplay.ask(item))
-                        .font(scale == .refined ? FreesideFont.ask : FreesideFont.sectionTitle)
+                        .font(FreesideFont.ask)
                         .foregroundStyle(Color.ink)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -633,12 +633,12 @@ struct DecisionDetailView: View {
                         cardModules(reviewingIndex..<actionIndex, modules)
                     }
                     HStack(alignment: .top, spacing: 16) {
-                        VStack(alignment: .leading, spacing: scale.sectionGap) {
+                        VStack(alignment: .leading, spacing: CardScale.sectionGap) {
                             cardModules(actionIndex..<composition.modules.count, modules)
                         }
                         .frame(maxWidth: 560, alignment: .topLeading)
 
-                        VStack(alignment: .leading, spacing: scale.sectionGap) {
+                        VStack(alignment: .leading, spacing: CardScale.sectionGap) {
                             actionRegion(
                                 item,
                                 stackedLayout: accessibilityLayout || compactLayout,
@@ -654,7 +654,6 @@ struct DecisionDetailView: View {
                 } else {
                     cardColumn(
                         modules,
-                        scale: scale,
                         stackedLayout: accessibilityLayout || compactLayout,
                         foldsReason: reasonPlacement == .recordedContext,
                         actionRegionFrameChanged: actionRegionFrameChanged)
@@ -662,7 +661,6 @@ struct DecisionDetailView: View {
             #else
                 cardColumn(
                     modules,
-                    scale: scale,
                     stackedLayout: accessibilityLayout || compactLayout,
                     foldsReason: reasonPlacement == .recordedContext,
                     actionRegionFrameChanged: actionRegionFrameChanged)
@@ -705,7 +703,6 @@ struct DecisionDetailView: View {
     @ViewBuilder
     private func cardColumn(
         _ modules: CardModules,
-        scale: DecisionCardComposition.Scale,
         stackedLayout: Bool,
         foldsReason: Bool,
         actionRegionFrameChanged: ((CGRect) -> Void)?
@@ -726,7 +723,7 @@ struct DecisionDetailView: View {
         // (survey frame 5.5) rather than an empty one that still takes a
         // section's gap.
         if Self.drawsControlGroup(item) {
-            VStack(alignment: .leading, spacing: scale.controlGap) {
+            VStack(alignment: .leading, spacing: CardScale.controlGap) {
                 if let reviewingIndex {
                     if reviewingLeads {
                         reviewingAction(item)
@@ -755,26 +752,19 @@ struct DecisionDetailView: View {
         }
         let foldsReason = foldsReason && DecisionCardComposition.reason(for: item) != nil
         let foldedModules = actionIndex..<foldEnd
-        if scale.drawsFoldHairline {
-            // The card's one hairline (R26) sits above its folds, so a card
-            // with nothing folded draws none.
-            if foldsReason || foldedModules.contains(where: { foldDraws(at: $0, modules) }) {
-                VStack(alignment: .leading, spacing: scale.foldGap) {
-                    cardModules(foldedModules, modules)
-                    if foldsReason {
-                        recordedContext(item, register: modules.register)
-                    }
-                }
-                .padding(.top, scale.foldLead)
-                .overlay(alignment: .top) {
-                    Color.rule.frame(height: 1)
+        // The card's one hairline (R26) sits above its folds, so a card
+        // with nothing folded draws none.
+        if foldsReason || foldedModules.contains(where: { foldDraws(at: $0, modules) }) {
+            VStack(alignment: .leading, spacing: CardScale.foldGap) {
+                cardModules(foldedModules, modules)
+                if foldsReason {
+                    recordedContext(item, register: modules.register)
                 }
             }
-        } else {
-            if foldsReason {
-                recordedContext(item, register: modules.register)
+            .padding(.top, CardScale.foldLead)
+            .overlay(alignment: .top) {
+                Color.rule.frame(height: 1)
             }
-            cardModules(foldedModules, modules)
         }
         cardModules(foldEnd..<composition.modules.count, modules)
     }
@@ -814,8 +804,7 @@ struct DecisionDetailView: View {
             includesReviewing: Bool,
             register: UnverifiedRegister
         ) -> some View {
-            let scale = DecisionCardComposition.scale(for: item._type)
-            VStack(alignment: .leading, spacing: scale.sectionGap) {
+            VStack(alignment: .leading, spacing: CardScale.sectionGap) {
                 let recommendation = drawnRecommendation(item)
                 if let recommendation {
                     recommendationBlock(recommendation, item: item, register: register)
@@ -1073,37 +1062,21 @@ struct DecisionDetailView: View {
         if !claims.isEmpty {
             cardSection("Agent summary", unverified: unverified) {
                 ForEach(Array(claims.enumerated()), id: \.offset) { _, claim in
-                    switch unverified.frame {
-                    case .dashedCard:
-                        Text("Source: agent invocation `\(Self.producerInvocationID(claim))`")
-                            .font(FreesideFont.caption)
-                            .foregroundStyle(Color.inkDim)
-                            .textSelection(.enabled)
-                        AttachmentRow(
-                            label: "Summary",
-                            digest: claim.digest,
-                            metadata: claim.metadata,
-                            attachments: attachments,
-                            loadsAttachments: loadsAttachments,
-                            text: claim.text,
-                            rendersInteractiveControls: unverified.rendersInteractiveControls)
-                    case .quoted:
-                        if let text = claim.text {
-                            QuoteBlock {
-                                summaryText(text.content, mediaType: text.media_type)
-                            }
+                    if let text = claim.text {
+                        QuoteBlock {
+                            summaryText(text.content, mediaType: text.media_type)
                         }
-                        SentenceDisclosure(
-                            label: "Source and Original Report",
-                            isExpanded: disclosure(.claimSource(claim))
-                        ) {
-                            fullSummaryReport(
-                                claim,
-                                rendersInteractiveControls: unverified.rendersInteractiveControls
-                            )
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.top, 8)
-                        }
+                    }
+                    SentenceDisclosure(
+                        label: "Source and Original Report",
+                        isExpanded: disclosure(.claimSource(claim))
+                    ) {
+                        fullSummaryReport(
+                            claim,
+                            rendersInteractiveControls: unverified.rendersInteractiveControls
+                        )
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 8)
                     }
                 }
             }
@@ -1118,8 +1091,7 @@ struct DecisionDetailView: View {
         _ item: Components.Schemas.AttentionItem, register: UnverifiedRegister
     ) -> some View {
         let claims = DecisionCardComposition.forType(item._type).summaries(from: item.agent_claims)
-        let scale = DecisionCardComposition.scale(for: item._type)
-        VStack(alignment: .leading, spacing: scale.controlGap) {
+        VStack(alignment: .leading, spacing: CardScale.controlGap) {
             sectionTitle("Agent summary", unverified: register)
             if claims.isEmpty {
                 Text("Inline summary unavailable. Any retained report is listed with the claim attachments.")
@@ -1136,7 +1108,7 @@ struct DecisionDetailView: View {
                             .foregroundStyle(Color.ink)
                     }
                     QuoteBlock {
-                        VStack(alignment: .leading, spacing: scale.moduleGap) {
+                        VStack(alignment: .leading, spacing: CardScale.moduleGap) {
                             summaryText(
                                 presentation.lead, mediaType: text.media_type,
                                 font: FreesideFont.statement)
@@ -1334,11 +1306,9 @@ struct DecisionDetailView: View {
     ) -> some View {
         let placement = DecisionFactPlacement(
             item, includesCommitPlan: includesCommitPlan, now: now)
-        // A refined card draws its diff as the Change row (R28); the rows
-        // around it keep the Facts section.
-        let change =
-            DecisionCardComposition.scale(for: item._type) == .refined
-            ? item.diff_stats?.value1 : nil
+        // The diff draws as the Change row (R28); the rows around it keep
+        // the Facts section.
+        let change = item.diff_stats?.value1
         let rows = placement.visible.filter {
             change == nil || $0.label != AttentionDisplay.diffFactLabel
         }
@@ -1346,17 +1316,9 @@ struct DecisionDetailView: View {
             DecisionChangeRow(diff: change)
         }
         if !rows.isEmpty {
-            if DecisionCardComposition.scale(for: item._type) == .refined {
-                keywordSection(DecisionCardComposition.factsKeyword(for: item._type)) {
-                    ForEach(rows) { fact in
-                        factRow(fact)
-                    }
-                }
-            } else {
-                cardSection("Facts") {
-                    ForEach(rows) { fact in
-                        factRow(fact)
-                    }
+            keywordSection(DecisionCardComposition.factsKeyword(for: item._type)) {
+                ForEach(rows) { fact in
+                    factRow(fact)
                 }
             }
         }
@@ -1367,7 +1329,7 @@ struct DecisionDetailView: View {
 
     /// The routine facts behind their disclosure. Under the actions the
     /// closed fold names what it holds (R2); above them it stays the bare
-    /// label a legacy card has always drawn.
+    /// label.
     @ViewBuilder
     private func foldedFacts(_ placement: DecisionFactPlacement, summarized: Bool) -> some View {
         if !placement.folded.isEmpty {
@@ -1443,7 +1405,6 @@ struct DecisionDetailView: View {
         register: UnverifiedRegister
     ) -> some View {
         if let presentation = AgentQuestionPresentation(item) {
-            let scale = DecisionCardComposition.scale(for: item._type)
             if let scope = presentation.scopeConflict {
                 // The daemon's own statement inside the agent's question
                 // (R5): the accent bar, never the quote.
@@ -1472,8 +1433,8 @@ struct DecisionDetailView: View {
                 eyebrowLabelsLead && presentation.scopeConflict == nil && model.conversation == nil
                 && !drawsRecommendationModule(item)
             ForEach(Array(presentation.decisions.enumerated()), id: \.offset) { index, decision in
-                VStack(alignment: .leading, spacing: scale.sectionGap) {
-                    VStack(alignment: .leading, spacing: scale.headGap) {
+                VStack(alignment: .leading, spacing: CardScale.sectionGap) {
+                    VStack(alignment: .leading, spacing: CardScale.headGap) {
                         if index > 0 || !eyebrowLabelsLead {
                             sectionTitle(
                                 "Agent question",
@@ -1491,7 +1452,7 @@ struct DecisionDetailView: View {
                         }
                     }
                     if !decision.options.isEmpty {
-                        VStack(alignment: .leading, spacing: scale.moduleGap) {
+                        VStack(alignment: .leading, spacing: CardScale.moduleGap) {
                             ForEach(Array(decision.options.enumerated()), id: \.offset) { optionIndex, option in
                                 agentQuestionOption(option, number: optionIndex + 1)
                             }
@@ -1499,7 +1460,7 @@ struct DecisionDetailView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, index == 0 && leadFollowsEyebrow ? scale.headGap - scale.sectionGap : 0)
+                .padding(.top, index == 0 && leadFollowsEyebrow ? CardScale.headGap - CardScale.sectionGap : 0)
             }
         }
     }
@@ -1859,13 +1820,13 @@ struct DecisionDetailView: View {
         // Position is the only stable identity: two claims may bind the same
         // artifact under different labels and neither field is unique.
         ForEach(Array(claims.enumerated()), id: \.offset) { _, claim in
-            if unverified.frame == .quoted, let text = claim.text {
+            if let text = claim.text {
                 claimProse(
                     claim, text: text,
                     rendersInteractiveControls: unverified.rendersInteractiveControls)
             } else {
-                // A claim without inline text keeps the attachment row in
-                // every frame: its loading, unavailable, and failed states
+                // A claim without inline text keeps the attachment row: its
+                // loading, unavailable, and failed states
                 // and their retry are that row's own.
                 AttachmentRow(
                     label: claim.label, digest: claim.digest,
@@ -1878,10 +1839,10 @@ struct DecisionDetailView: View {
         }
     }
 
-    /// A text claim on a card whose agent sections are quoted: the claim's
-    /// own words lead in the quote (R5), and the identifiers that bind them (its label, media
-    /// type, producing invocation, and digest) sit one disclosure away with
-    /// a copy control each.
+    /// A text claim: its own words lead in the quote (R5), and the
+    /// identifiers that bind them (its label, media type, producing
+    /// invocation, and digest) sit one disclosure away with a copy control
+    /// each.
     @ViewBuilder
     private func claimProse(
         _ claim: Components.Schemas.AgentClaim,
@@ -2107,7 +2068,6 @@ struct DecisionDetailView: View {
             actionRegionFrameChanged: actionRegionFrameChanged
         )
         .decisionCardChrome(
-            DecisionCardComposition.scale(for: item._type),
             compactLayout: compactLayout,
             wideLayout: wideLayout)
     }
@@ -2189,7 +2149,7 @@ struct DecisionDetailView: View {
         // The findings are one module, so they stand a module gap apart
         // rather than a section gap, which keeps two realistic findings
         // above the actions in the first viewport (#1141).
-        VStack(alignment: .leading, spacing: DecisionCardComposition.Scale.refined.moduleGap) {
+        VStack(alignment: .leading, spacing: CardScale.moduleGap) {
             ForEach(Array(binding.proposals.enumerated()), id: \.element.finding_id) {
                 index, proposal in
                 let card = FindingCardPresentation(proposal, number: index + 1, binding: binding)
@@ -2637,7 +2597,7 @@ struct DecisionDetailView: View {
         item: Components.Schemas.AttentionItem,
         register: UnverifiedRegister
     ) -> some View {
-        VStack(alignment: .leading, spacing: DecisionCardComposition.scale(for: item._type).moduleGap) {
+        VStack(alignment: .leading, spacing: CardScale.moduleGap) {
             if recommendation.register.isUnverifiedClaim {
                 UnverifiedLabel(
                     text: DecisionRecommendationPresentation.keyword,
@@ -2711,12 +2671,11 @@ struct DecisionDetailView: View {
     }
 
     /// A section's unverified register: set when an agent wrote the section's
-    /// content. The "(unverified)" label, the frame, and whether the label
-    /// carries the card's one explanation control all follow from this one
-    /// value rather than from the title's text, so a section cannot claim
-    /// one and draw another.
+    /// content. The "(unverified)" label and whether the label carries the
+    /// card's one explanation control both follow from this one value
+    /// rather than from the title's text, so a section cannot claim one and
+    /// draw another.
     struct UnverifiedRegister {
-        let frame: DecisionCardComposition.AgentSectionFrame
         let rendersInteractiveControls: Bool
         /// The slot whose first label carries the explanation control (R25).
         /// Nil when every unverified keyword on the card is a disclosure's
@@ -2754,7 +2713,6 @@ struct DecisionDetailView: View {
                 != nil,
             prominentClaimIndex: graphics.prominentClaimIndex)
         return UnverifiedRegister(
-            frame: DecisionCardComposition.agentSectionFrame(for: item._type),
             rendersInteractiveControls: rendersInteractiveControls,
             infoSlot: DecisionCardComposition.forType(item._type)
                 .infoSlot(for: item, in: context))
@@ -2820,8 +2778,8 @@ struct DecisionDetailView: View {
     ) -> some View {
         cardSection(
             title: sectionTitle(title, unverified: unverified),
-            dashed: unverified != nil,
-            boxed: unverified?.frame != .quoted,
+            dashed: false,
+            boxed: unverified == nil,
             border: border,
             fill: fill,
             content: content)
@@ -2858,12 +2816,12 @@ struct DecisionDetailView: View {
         }
     }
 
-    /// A section the refined card sets apart by spacing alone (R1, R26):
+    /// A section set apart by spacing alone (R1, R26):
     /// its keyword, then its content on the module gap, with no box.
     private func keywordSection(
         _ title: String, @ViewBuilder content: () -> some View
     ) -> some View {
-        VStack(alignment: .leading, spacing: DecisionCardComposition.Scale.refined.moduleGap) {
+        VStack(alignment: .leading, spacing: CardScale.moduleGap) {
             KeywordLabel(text: title)
             content()
         }
@@ -2888,13 +2846,13 @@ struct DecisionDetailView: View {
             } label: {
                 sectionTitle(title, unverified: unverified, isDisclosureLabel: true)
             }
-            if unverified?.frame == .quoted {
+            if unverified != nil {
                 disclosure.frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 disclosure
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .freesideCard(dashed: unverified != nil)
+                    .freesideCard()
             }
         } else {
             cardSection(title, unverified: unverified) {
@@ -3575,7 +3533,7 @@ struct DecisionDetailView: View {
         includesReviewing: Bool
     ) -> some View {
         let ranking = actionRanking(item)
-        let controlGap = DecisionCardComposition.scale(for: item._type).controlGap
+        let controlGap = CardScale.controlGap
         let filledAction = DecisionCardComposition.filledAction(for: item, ranking: ranking)
         // Position, because a repeated action fills only its first button.
         let filled = filledAction.flatMap(ranking.principal.firstIndex(of:))
@@ -3696,7 +3654,7 @@ struct DecisionDetailView: View {
                     }
                 }
             } label: {
-                Text("\(DecisionCardComposition.scale(for: item._type).overflowLabel) \u{25BE}")
+                Text("More Actions \u{25BE}")
             }
             .menuStyle(.button)
             .buttonStyle(FreesideActionButtonStyle(tone: .tertiary))
@@ -3737,12 +3695,7 @@ struct DecisionDetailView: View {
         item: Components.Schemas.AttentionItem,
         showsIcon: Bool = true
     ) -> some View {
-        // The refined card draws returning the work as a plain outlined
-        // command (R6); the other types keep the glyph until their sweep.
-        let returnsPlain =
-            action == .return_to_agent
-            && !DecisionCardComposition.scale(for: item._type).drawsReturnGlyph
-        if showsIcon, !returnsPlain, let systemImage = AttentionDisplay.systemImage(action) {
+        if showsIcon, let systemImage = AttentionDisplay.systemImage(action) {
             Label(AttentionDisplay.label(action, for: item), systemImage: systemImage)
         } else {
             Text(AttentionDisplay.label(action, for: item))
@@ -4208,12 +4161,10 @@ extension StateChip {
 extension View {
     /// The decision card's own padding, ground, and border, inside the
     /// detail's margin.
-    fileprivate func decisionCardChrome(
-        _ scale: DecisionCardComposition.Scale, compactLayout: Bool, wideLayout: Bool
-    ) -> some View {
-        padding(scale.padding(compact: compactLayout))
-            .freesideCard(cornerRadius: scale.cornerRadius)
+    fileprivate func decisionCardChrome(compactLayout: Bool, wideLayout: Bool) -> some View {
+        padding(CardScale.padding(compact: compactLayout))
+            .freesideCard(cornerRadius: CardScale.cornerRadius)
             .padding()
-            .frame(maxWidth: wideLayout ? 1_040 : scale.columnWidth, alignment: .topLeading)
+            .frame(maxWidth: wideLayout ? 1_040 : CardScale.columnWidth, alignment: .topLeading)
     }
 }

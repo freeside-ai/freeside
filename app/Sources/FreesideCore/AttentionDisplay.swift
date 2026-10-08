@@ -667,8 +667,7 @@ enum AttentionDisplay {
         case .retry: return "arrow.clockwise"
         case .snooze: return "clock"
         case .stop, .stop_unattended: return "stop.fill"
-        case .return_to_agent: return "return"
-        case .approve, .request_changes, .discuss, .finish_now, .apply_then_finish,
+        case .return_to_agent, .approve, .request_changes, .discuss, .finish_now, .apply_then_finish,
             .continue_under_policy, .convert_to_policy,
             .retry_with_capabilities, .answer_and_retry, .answer_without_retry,
             .rerun_trust_evaluation,

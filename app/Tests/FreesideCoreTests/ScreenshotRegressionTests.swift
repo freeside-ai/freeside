@@ -3029,7 +3029,7 @@
                 loadsAttachments: false,
                 showsValidationProgress: false,
                 now: screenshotNow)
-            let width = DecisionCardComposition.Scale.refined.columnWidth
+            let width = DecisionCardComposition.Scale.columnWidth
             return [("clean", clean), ("degraded", AttentionFixtures.degradedReady().item)].flatMap {
                 name, item in
                 [("light", ColorScheme.light), ("dark", ColorScheme.dark)].map { theme, scheme in
