@@ -418,6 +418,16 @@ enum FreesideFont {
     static func railDetail(emphasized: Bool) -> Font {
         fixed(emphasized ? "IBMPlexSans-Medm" : "IBMPlexSans", cardBodySize, relativeTo: .body)
     }
+    /// An attachment row's facts under its label, its media type, size,
+    /// and digest: mono at the keyword's size (frame 6.9). The platform
+    /// caption styles these lines used are 10pt on macOS, under the
+    /// 11.5pt floor.
+    static var attachmentFact: Font { fixed("IBMPlexMono", keywordSize, relativeTo: .caption2) }
+    /// An attachment row's state lines (not an image, loading, failed):
+    /// sans at the same size, semibold on the line that names the state.
+    static func attachmentState(emphasized: Bool = false) -> Font {
+        fixed(emphasized ? "IBMPlexSans-SmBld" : "IBMPlexSans", keywordSize, relativeTo: .caption)
+    }
     /// The disclosure chevron, sized as a glyph beside the fact label.
     static var disclosureGlyph: Font { fixed("IBMPlexSans", 11, relativeTo: .callout) }
 

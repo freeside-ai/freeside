@@ -1853,7 +1853,8 @@ struct DecisionDetailView: View {
     @ViewBuilder
     private func claimRows(
         _ claims: [Components.Schemas.AgentClaim],
-        unverified: UnverifiedRegister
+        unverified: UnverifiedRegister,
+        boxed: Bool = false
     ) -> some View {
         // Position is the only stable identity: two claims may bind the same
         // artifact under different labels and neither field is unique.
@@ -1872,7 +1873,8 @@ struct DecisionDetailView: View {
                     attachments: attachments,
                     loadsAttachments: loadsAttachments,
                     text: claim.text,
-                    rendersInteractiveControls: unverified.rendersInteractiveControls)
+                    rendersInteractiveControls: unverified.rendersInteractiveControls,
+                    boxed: boxed)
             }
         }
     }
@@ -2062,7 +2064,7 @@ struct DecisionDetailView: View {
                         isExpanded: claimsExpanded,
                         unverified: register
                     ) {
-                        claimRows(attachmentClaims, unverified: register)
+                        claimRows(attachmentClaims, unverified: register, boxed: true)
                     }
                 }
                 if !item.evidence_snapshot.isEmpty {
@@ -2078,7 +2080,8 @@ struct DecisionDetailView: View {
                                 metadata: artifact.metadata,
                                 attachments: attachments,
                                 loadsAttachments: loadsAttachments,
-                                rendersInteractiveControls: rendersInteractiveControls)
+                                rendersInteractiveControls: rendersInteractiveControls,
+                                boxed: true)
                         }
                     }
                     .id(ScrollTarget.evidence)
@@ -3058,6 +3061,10 @@ struct DecisionDetailView: View {
         let loadsAttachments: Bool
         var text: Components.Schemas.ClaimText? = nil
         var rendersInteractiveControls = true
+        /// Draws the row in its own 1pt box, as the inspector lists its
+        /// attachments (frame 6.9). A row inside a card section or a
+        /// message is already set apart and draws none.
+        var boxed = false
 
         // Task identity for the attachment load: the digest fixes the content,
         // and availability is the one mutable field that must re-trigger the
@@ -3110,6 +3117,13 @@ struct DecisionDetailView: View {
                     }
                 }
                 digestCaption
+            }
+            .padding(.vertical, boxed ? 8 : 0)
+            .padding(.horizontal, boxed ? 10 : 0)
+            .overlay {
+                if boxed {
+                    RoundedRectangle(cornerRadius: 6).strokeBorder(Color.itemBorder, lineWidth: 1)
+                }
             }
             .onAppear {
                 guard rendersInteractiveControls else { return }
@@ -3189,7 +3203,7 @@ struct DecisionDetailView: View {
                         Label("Open attachment", systemImage: "arrow.up.forward.app")
                     }
                 }
-                .font(FreesideFont.caption)
+                .font(FreesideFont.attachmentState())
                 .sheet(
                     isPresented: $showsNonImagePreview,
                     onDismiss: { nonImagePreview = nil },
@@ -3202,9 +3216,9 @@ struct DecisionDetailView: View {
             case .unavailable:
                 VStack(alignment: .leading, spacing: 4) {
                     Label("No bytes available", systemImage: "photo.badge.exclamationmark")
-                        .font(FreesideFont.sans(.caption, weight: .semibold))
+                        .font(FreesideFont.attachmentState(emphasized: true))
                     Text("The daemon reports the attachment bytes are not available")
-                        .font(FreesideFont.caption)
+                        .font(FreesideFont.attachmentState())
                 }
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -3216,13 +3230,15 @@ struct DecisionDetailView: View {
             case .fetchFailed:
                 VStack(alignment: .leading, spacing: 6) {
                     Label("Couldn't load", systemImage: "arrow.clockwise.circle")
-                        .font(FreesideFont.sans(.caption, weight: .semibold))
+                        .font(FreesideFont.attachmentState(emphasized: true))
                     Text("The fetch failed. Try again.")
-                        .font(FreesideFont.caption)
+                        .font(FreesideFont.attachmentState())
                     if rendersInteractiveControls, loadsAttachments {
                         Button("Retry") { retryFetch() }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
+                            // A small control's own face is 11pt on macOS.
+                            .font(FreesideFont.attachmentState())
                             .accessibilityLabel("Retry loading \(label) attachment")
                     }
                 }
@@ -3237,7 +3253,7 @@ struct DecisionDetailView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     VStack(alignment: .leading, spacing: 4) {
                         Label("Too large here", systemImage: "arrow.up.left.and.arrow.down.right")
-                            .font(FreesideFont.sans(.caption, weight: .semibold))
+                            .font(FreesideFont.attachmentState(emphasized: true))
                         switch reason {
                         case .download(let bytesSeenAtLeast, _):
                             Text("At least \(byteCount(bytesSeenAtLeast))")
@@ -3276,7 +3292,7 @@ struct DecisionDetailView: View {
                             "Load \(label) attachment image, replacing retained images if needed")
                     }
                 }
-                .font(FreesideFont.caption)
+                .font(FreesideFont.attachmentState())
                 .foregroundStyle(Color.inkDim)
             case .loading, nil:
                 HStack(spacing: 8) {
@@ -3288,7 +3304,7 @@ struct DecisionDetailView: View {
                     }
                     Text("fetching by digest…")
                 }
-                .font(FreesideFont.caption)
+                .font(FreesideFont.attachmentState())
                 .foregroundStyle(Color.inkDim)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("\(label) attachment loading")
@@ -3301,7 +3317,7 @@ struct DecisionDetailView: View {
             _ metadata: Components.Schemas.EvidenceMetadata
         ) -> some View {
             Text("\(metadata.media_type.rawValue) · \(byteCount(Int(metadata.size_bytes)))")
-                .font(FreesideFont.mono(.caption2))
+                .font(FreesideFont.attachmentFact)
                 .foregroundStyle(Color.inkDim)
                 .lineLimit(1)
                 .textSelection(.enabled)
@@ -3313,7 +3329,7 @@ struct DecisionDetailView: View {
         @ViewBuilder private var digestCaption: some View {
             let caption = HStack(spacing: 8) {
                 Text("Digest \(digest)")
-                    .font(FreesideFont.mono(.caption2))
+                    .font(FreesideFont.attachmentFact)
                     .foregroundStyle(Color.inkDim)
                     .lineLimit(1)
                     .truncationMode(.middle)
