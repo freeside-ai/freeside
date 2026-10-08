@@ -791,12 +791,22 @@ struct Notice: View {
 
     struct Action {
         let label: String
+        /// Read by VoiceOver in place of the label, where the short label
+        /// alone does not say what it acts on.
+        var accessibilityLabel: String? = nil
+        /// False while the action cannot run. The label stays in place in
+        /// the faint cut every disabled control takes.
+        var isEnabled = true
         let handler: () -> Void
     }
 
     let tone: Tone
     let keyword: String
     let sentence: String
+    /// The sentence as styled text in place of the plain string, where a
+    /// span takes another face, such as a digest in mono. `sentence` holds
+    /// the same line as plain text.
+    var drawn: Text? = nil
     var action: Action? = nil
 
     var body: some View {
@@ -823,7 +833,7 @@ struct Notice: View {
     }
 
     private var sentenceText: some View {
-        Text(sentence)
+        (drawn ?? Text(sentence))
             .font(FreesideFont.cardBody)
             .foregroundStyle(Color.inkDim)
             .multilineTextAlignment(.leading)
@@ -834,9 +844,11 @@ struct Notice: View {
             Button(action.label, action: action.handler)
                 .buttonStyle(.plain)
                 .font(FreesideFont.noticeAction)
-                .foregroundStyle(tone.tint)
+                .foregroundStyle(action.isEnabled ? tone.tint : Color.inkFaint)
                 .fixedSize()
                 .freesideFocusRing(cornerRadius: 4)
+                .disabled(!action.isEnabled)
+                .accessibilityLabel(action.accessibilityLabel ?? action.label)
         }
     }
 }
@@ -1510,9 +1522,12 @@ private struct FreesideActionButtonBody: View {
 /// What a sheet opens with in place of a navigation bar (R11): an optional
 /// eyebrow keyword naming the kind of sheet, the serif ask, the consequence
 /// of answering it in dim sans, and the binding the answer applies to in
-/// mono, 16pt in from the edge.
+/// mono, 16pt in from the edge. A chip, when the sheet has a state or a
+/// count to show, trails the eyebrow the way a card's does.
 struct FreesideSheetHeader: View {
     var eyebrow: String? = nil
+    /// Drawn only beside an eyebrow.
+    var chip: StateChip? = nil
     let ask: String
     var consequence: String? = nil
     var binding: String? = nil
@@ -1527,7 +1542,11 @@ struct FreesideSheetHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let eyebrow {
-                KeywordLabel(text: eyebrow)
+                if let chip {
+                    CardEyebrow(keyword: eyebrow) { chip }
+                } else {
+                    KeywordLabel(text: eyebrow)
+                }
             }
             Text(ask)
                 .font(FreesideFont.sectionTitle)
@@ -1541,7 +1560,7 @@ struct FreesideSheetHeader: View {
             }
             if let binding {
                 Text(binding)
-                    .font(FreesideFont.monoCaption)
+                    .font(FreesideFont.monoValue)
                     .foregroundStyle(Color.inkDim)
             }
         }
