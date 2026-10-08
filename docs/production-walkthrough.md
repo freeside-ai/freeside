@@ -1,10 +1,17 @@
 # Production Walkthrough And Recovery
 
-`scripts/run-real-work.sh` keeps the production daemon and its rig holder alive
-after publication and final verification. The same database, state root and
-listener remain available to the paired Mac and iPhone. The production deadline
-ends at publication; the walkthrough has no automatic deadline or stdin prompt.
-Closing the shell is an interruption, not a request to complete the walkthrough.
+After ready publication and its final verification, `scripts/run-real-work.sh`
+keeps the production daemon and its rig holder alive. The same database, state
+root and listener remain available to the paired Mac and iPhone. The production
+deadline ends at publication; the walkthrough has no automatic deadline or
+stdin prompt. Closing the shell is an interruption, not a request to complete
+the walkthrough.
+
+Completed-history verification is different: it verifies the selected run's
+authenticated completion and remote merge, then exits through the ordinary
+cleanup path. It does not start a walkthrough, retain a client endpoint, or
+provide Mac or iPhone acceptance evidence. If you need access to completed
+history, use the existing retained-session restoration procedure below.
 
 For a task-specific Stop exercise, follow the
 [controlled cancellation check](task-cancellation-check.md). It records runtime
@@ -68,9 +75,11 @@ renamed to `<dir>.moved-to-prod-<timestamp>`, so a stale variable fails loudly.
 It never deletes them; remove them yourself once a run has published through
 `prod`'s directories.
 
-Keep the harness shell open. It prints the retained session directory, then the
-implementation run, invocation, endpoint and exact completion command. Sessions
-default to `~/Library/Logs/Freeside/real-work-session.*`; set
+Keep the harness shell open. It prints the retained session directory. For a
+verified ready publication, it also prints the implementation run, invocation,
+endpoint and exact completion command. Completed-history verification reports
+its authenticated history and exits through cleanup instead. Sessions default
+to `~/Library/Logs/Freeside/real-work-session.*`; set
 `FREESIDE_REAL_RUN_DIAGNOSTIC_DIR` to an existing directory outside the source
 checkout to use another destination. Each session is private and retains the
 built binary, submission input copies, rig acquisition material and diagnostics.
@@ -637,9 +646,12 @@ implementation run from its recorded run list, follows it to publication, and
 runs the same `TestRealWorkItemCompletesProductionPipeline` verifier with every
 existing assertion. In this mode it additionally requires that the verified run
 belongs to the selected task and to `FREESIDE_REAL_RUN_PROJECT`, and that the
-task is neither cancelled nor stopped. The walkthrough, and the session's
-`verify`, `complete`, and `recover` commands, then operate on the selected
-target's run and invocation, never the seed's.
+task is neither cancelled nor stopped. A ready publication continues to the
+walkthrough, and the session's `verify`, `complete`, and `recover` commands
+operate on the selected target's run and invocation, never the seed's. A
+completed-history verification instead reports its completion and remote-merge
+evidence, exits through cleanup, and leaves any live Mac or iPhone acceptance
+evidence outstanding.
 
 `--resume-session` of a client-target session that already saved a target
 copies the recorded mode and selection into the new session and rebinds to the

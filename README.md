@@ -210,9 +210,12 @@ Prepare these pieces in order, using the linked instructions:
 
 Keep a paired client open to approve or revise the specification. This path
 runs real agents and can publish a pull request to the configured repository.
-The script retains the running session after verification; finish it using
-the exact completion command it prints, following the runbook's restoration
-steps. Closing its terminal is an interruption, not normal completion.
+After ready-publication verification, the script retains the running session;
+finish it using the exact completion command it prints, following the runbook's
+restoration steps. Completed-history verification instead reports authenticated
+completion and remote merge, then exits through cleanup without an endpoint or
+completion command; it supplies no live client acceptance evidence. Closing a
+retained session's terminal is an interruption, not normal completion.
 
 There is not yet a single guided flow that assembles all these inputs. The
 roadmap's [operations and onboarding section](docs/plan.md#10-operations-and-onboarding)
