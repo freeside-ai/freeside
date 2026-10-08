@@ -1216,9 +1216,12 @@ struct FactRow: View {
     static let stackThreshold = 40
 
     /// An accessibility size stacks every row; below that, only a value
-    /// too long for the trailing column does.
-    static func stacks(_ value: String, at size: DynamicTypeSize) -> Bool {
-        size >= .accessibility1 || value.count > stackThreshold
+    /// too long for the trailing column does. `always` is a pane's own
+    /// rule that every row stacks (R22): in a pane too narrow for a
+    /// trailing column, a value under the threshold still breaks
+    /// mid-token.
+    static func stacks(_ value: String, at size: DynamicTypeSize, always: Bool = false) -> Bool {
+        always || size >= .accessibility1 || value.count > stackThreshold
     }
 
     let label: String
@@ -1232,10 +1235,13 @@ struct FactRow: View {
     /// in the diff cuts (R28). `value` holds the same line as plain text, so
     /// the stacking rule reads one string.
     var drawn: Text? = nil
+    /// Stacks the value under its label whatever its length. Off by
+    /// default; the decision inspector turns it on.
+    var stacksAlways = false
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        if Self.stacks(value, at: dynamicTypeSize) {
+        if Self.stacks(value, at: dynamicTypeSize, always: stacksAlways) {
             VStack(alignment: .leading, spacing: 3) {
                 labelText
                 valueContent

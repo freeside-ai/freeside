@@ -2087,7 +2087,8 @@ struct DecisionDetailView: View {
                     detailsReason(item, register: register)
                     ForEach(Array(detailRows(item).enumerated()), id: \.offset) { _, row in
                         TechnicalDetailRow(
-                            row: row, rendersInteractiveControls: rendersInteractiveControls)
+                            row: row, rendersInteractiveControls: rendersInteractiveControls,
+                            stacksAlways: true)
                     }
                 }
                 .id(ScrollTarget.technicalDetails)
