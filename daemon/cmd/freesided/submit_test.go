@@ -841,6 +841,9 @@ func TestSubmitCommandReplaysMatchingPreSpecificationProductionRun(t *testing.T)
 	keys = slices.DeleteFunc(keys, func(key domain.PolicyKey) bool {
 		return key.Key == "specification.max_iterations"
 	})
+	// This row predates the intake egress gate. Its lookup must remain readable
+	// even though new submissions with the same declaration are refused.
+	keys = append(keys, domain.PolicyKey{Key: domain.EgressProfilePolicyKey, Value: "provider_unknown", Provenance: keys[0].Provenance})
 	legacyPolicy, err := json.Marshal(keys)
 	if err != nil {
 		t.Fatal(err)

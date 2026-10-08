@@ -59,6 +59,9 @@ func loadManualSubmissionConfig(path string) (func(domain.ProjectID) (engine.Man
 			if err := engine.SubmittedPathBoundary(policy); err != nil {
 				return nil, fmt.Errorf("manual submission config project %d: %w", index, err)
 			}
+			if err := engine.SubmittedEgressPolicy(policy); err != nil {
+				return nil, fmt.Errorf("manual submission config project %d: %w", index, err)
+			}
 			if _, err := specify.ParsePolicy(policy); err != nil {
 				return nil, fmt.Errorf("manual submission config project %d: %w", index, err)
 			}

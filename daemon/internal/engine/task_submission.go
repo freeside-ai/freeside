@@ -123,6 +123,9 @@ func (t *TaskSubmitter) submit(ctx context.Context, tx *store.WriteTx, in signet
 	if err := SubmittedPathBoundary(resolvedPolicy); err != nil {
 		return signet.TaskSubmissionResult{}, err
 	}
+	if err := SubmittedEgressPolicy(resolvedPolicy); err != nil {
+		return signet.TaskSubmissionResult{}, err
+	}
 	policyBytes, err := json.Marshal(resolvedPolicy.Keys)
 	if err != nil {
 		return signet.TaskSubmissionResult{}, err

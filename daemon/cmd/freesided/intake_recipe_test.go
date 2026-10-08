@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -124,6 +125,7 @@ func TestIntakePreChangeOccurrenceReplaysLiteralRecord(t *testing.T) {
 	t.Parallel()
 	f := newIntakeFixture(t)
 	init := intakeInitiatorFor(t, domain.InitiatorModeAutoStart, domain.ProvenanceOverride, 1)
+	init.PolicyKeys = withSubmissionEgress(init.PolicyKeys, map[string]string{domain.EgressProfilePolicyKey: "provider_unknown"})
 	var occurrence domain.IntakeOccurrence
 	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
 		var err error
@@ -154,12 +156,55 @@ func TestIntakePreChangeOccurrenceReplaysLiteralRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	workItem := submissionBytes(intakeWorkItemDocument(occurrence))
+	resolvedPolicy, err := domain.NewResolvedPolicy(specificationRunID, init.PolicyKeys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyBody, err := json.Marshal(resolvedPolicy.Keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workItemArtifact, err := engine.SubmissionArtifact(domain.ArtifactKindSpecification, workItem.digest, domain.EvidenceMediaTextMarkdown, int64(len(workItem.body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyArtifact, err := engine.SubmissionArtifact(domain.ArtifactKindPolicy, resolvedPolicy.Digest, domain.EvidenceMediaApplicationJSON, int64(len(policyBody)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.blobs.Put(workItem.digest, bytes.NewReader(workItem.body)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.blobs.Put(resolvedPolicy.Digest, bytes.NewReader(policyBody)); err != nil {
+		t.Fatal(err)
+	}
+	reserved := engine.NewReservedSpecificationRun(specificationRunID, init.ProjectID, workItem.digest, resolvedPolicy.Digest)
+	reserved.CampaignID, reserved.AttemptNumber = campaignID, 1
+	project, err := domain.NewProject(init.ProjectID, init.Repo, init.RepositoryID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
-		return tx.PutProductionAttempt(t.Context(), domain.ProductionAttempt{
+		if err := engine.RegisterSubmissionArtifact(t.Context(), tx, workItemArtifact); err != nil {
+			return err
+		}
+		if err := engine.RegisterSubmissionArtifact(t.Context(), tx, policyArtifact); err != nil {
+			return err
+		}
+		if err := tx.PutProductionAttempt(t.Context(), domain.ProductionAttempt{
 			CampaignID: campaignID, AttemptNumber: 1, Kind: domain.ProductionAttemptInitial,
 			SourceDigest: workItem.digest, PublicationDigest: submissionBytes(literal).digest, Publication: literal,
 			SpecificationRunID: specificationRunID, ImplementationRunID: implementationRunID,
-		})
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutRun(t.Context(), reserved); err != nil {
+			return err
+		}
+		if err := tx.PutResolvedPolicy(t.Context(), resolvedPolicy); err != nil {
+			return err
+		}
+		return tx.RegisterProject(t.Context(), project)
 	}); err != nil {
 		t.Fatal(err)
 	}
