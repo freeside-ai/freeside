@@ -493,31 +493,32 @@ private struct ReviewEvidenceView: View {
     @State private var failed = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text("Reviewer output").font(FreesideFont.title)
-                Spacer()
-                Button("Done") { dismiss() }
-            }
-            Text("Agent claims · Round \(round.round) · Head \(round.head_sha.prefix(8))")
-                .font(FreesideFont.caption)
-            Text("Private, sensitive output. Not publishable verifier evidence.")
-                .font(FreesideFont.caption).foregroundStyle(Color.inkDim)
-            if let evidence {
-                if evidence.availability == .available, let presentation {
-                    ScrollView {
-                        ReviewEvidenceContent(round: round, evidence: evidence, presentation: presentation)
+        VStack(alignment: .leading, spacing: 0) {
+            ReviewEvidenceContent.sheetHeader(for: round)
+            Group {
+                if let evidence {
+                    if evidence.availability == .available, let presentation {
+                        ScrollView {
+                            ReviewEvidenceContent(round: round, evidence: evidence, presentation: presentation)
+                                .padding(.horizontal, 16)
+                                .padding(.bottom, 16)
+                        }
+                    } else {
+                        state(evidence.availability == .unknown ? "Evidence unknown" : "Evidence unavailable")
                     }
+                } else if failed {
+                    state("Evidence could not be authenticated or loaded.")
                 } else {
-                    Text(evidence.availability == .unknown ? "Evidence unknown" : "Evidence unavailable")
+                    ProgressView("Loading reviewer output…")
+                        .font(FreesideFont.cardBody)
+                        .padding(.horizontal, 16)
                 }
-            } else if failed {
-                Text("Evidence could not be authenticated or loaded.")
-            } else {
-                ProgressView("Loading reviewer output…")
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            FreesideSheetActionRow.done { dismiss() }
         }
-        .padding(24)
+        .background(Color.ground2)
+        .freesideSheetPresentation()
         .frame(minWidth: 280, minHeight: 280)
         .task {
             do {
@@ -539,6 +540,13 @@ private struct ReviewEvidenceView: View {
             }
         }
     }
+
+    private func state(_ sentence: String) -> some View {
+        Text(sentence)
+            .font(FreesideFont.cardBody)
+            .foregroundStyle(Color.ink)
+            .padding(.horizontal, 16)
+    }
 }
 
 struct ReviewEvidenceContent: View {
@@ -546,6 +554,17 @@ struct ReviewEvidenceContent: View {
     let evidence: Components.Schemas.ReviewEvidence
     let presentation: ReviewEvidencePresentation
     @State private var showsRaw = false
+
+    /// The sheet's header (R11), shared with the screenshot surfaces: whose
+    /// claim this is, what it is, how far to trust it, and the round and
+    /// head it was recorded against.
+    static func sheetHeader(for round: Components.Schemas.RunReviewRound) -> FreesideSheetHeader {
+        FreesideSheetHeader(
+            eyebrow: "Agent claims",
+            ask: "Reviewer output",
+            consequence: "Private, sensitive output. Not publishable verifier evidence.",
+            binding: "Round \(round.round) · Head \(round.head_sha.prefix(8))")
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -557,7 +576,7 @@ struct ReviewEvidenceContent: View {
                 }
                 if let count = round.findings_count { Text("\(count) findings recorded") }
                 Text("Reviewed head \(round.head_sha.prefix(8)) · Base \(round.base_sha.prefix(8))")
-                    .font(FreesideFont.monoCaption)
+                    .font(FreesideFont.trailingSummary)
                 if let exit = presentation.exitStatus { Text("Collected process exit status: \(exit)") }
             }
             Divider()
@@ -566,13 +585,13 @@ struct ReviewEvidenceContent: View {
                 switch presentation.conclusion {
                 case .noFindings:
                     Text("The reviewer reported no findings.")
-                        .font(FreesideFont.sans(.headline, weight: .semibold))
+                        .font(FreesideFont.statement)
                 case .findings(let findings):
                     Text("The reviewer reported \(findings.count) findings.")
                     ForEach(Array(findings.enumerated()), id: \.offset) { _, finding in
                         VStack(alignment: .leading, spacing: 6) {
                             Text("\(finding.severity) · \(finding.location.label)")
-                                .font(FreesideFont.monoCaption)
+                                .font(FreesideFont.trailingSummary)
                             Text(finding.explanation)
                         }
                         .padding(12)
@@ -601,7 +620,7 @@ struct ReviewEvidenceContent: View {
                 Text("Agent messages: \(presentation.messageCount) · Commands: \(presentation.commandCount)")
                 Text(presentation.terminalState ?? "No terminal turn state recorded")
                 Text("This transcript shows recorded activity, not independent verification of the review.")
-                    .font(FreesideFont.caption).foregroundStyle(Color.inkDim)
+                    .font(FreesideFont.cardBody).foregroundStyle(Color.inkDim)
                 LazyVStack(alignment: .leading, spacing: 12) {
                     ForEach(presentation.entries.filter { !$0.isDiagnostic }) { entry in
                         entryView(entry)
@@ -612,7 +631,7 @@ struct ReviewEvidenceContent: View {
                 VStack(alignment: .leading, spacing: 8) {
                     heading("Diagnostics and unsupported output")
                     Text("\(presentation.diagnosticCount) entries · Separate from reviewer activity")
-                        .font(FreesideFont.caption).foregroundStyle(Color.inkDim)
+                        .font(FreesideFont.cardBody).foregroundStyle(Color.inkDim)
                     LazyVStack(alignment: .leading, spacing: 12) {
                         ForEach(presentation.entries.filter(\.isDiagnostic)) { entry in
                             entryView(entry)
@@ -628,38 +647,39 @@ struct ReviewEvidenceContent: View {
                         heading("Result · Raw retained bytes")
                         ReviewOutputText(bytes: Array(evidence.result?.data ?? []))
                     }
-                    .font(FreesideFont.monoCaption)
+                    .font(FreesideFont.trailingSummary)
                 }
             }
         }
-        .font(FreesideFont.callout)
+        .font(FreesideFont.cardBody)
         .foregroundStyle(Color.ink)
         .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func heading(_ title: String) -> some View {
-        Text(title).font(FreesideFont.sans(.headline, weight: .semibold))
+        KeywordLabel(text: title).accessibilityAddTraits(.isHeader)
     }
 
     private func entryView(_ entry: ReviewEvidencePresentation.Entry) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(entry.kind.rawValue).font(FreesideFont.caption).foregroundStyle(Color.inkDim)
+            Text(entry.kind.rawValue).font(FreesideFont.trailingSummary).foregroundStyle(Color.inkDim)
             if let command = entry.command {
-                Text(command).font(FreesideFont.monoCaption)
+                Text(command).font(FreesideFont.trailingSummary)
                 if let exit = entry.exitCode {
-                    Text("Exit code: \(exit)").font(FreesideFont.caption)
+                    Text("Exit code: \(exit)").font(FreesideFont.cardBody)
                 } else {
-                    Text("Exit code not recorded").font(FreesideFont.caption)
+                    Text("Exit code not recorded").font(FreesideFont.cardBody)
                 }
-                if let status = entry.status { Text("Status: \(status)").font(FreesideFont.caption) }
+                if let status = entry.status { Text("Status: \(status)").font(FreesideFont.cardBody) }
             }
             if entry.invalidUTF8 {
                 Text("Invalid UTF-8 is shown with replacement characters. Retained bytes are unchanged.")
-                    .font(FreesideFont.caption).foregroundStyle(Color.inkDim)
+                    .font(FreesideFont.cardBody).foregroundStyle(Color.inkDim)
             }
             Text(entry.text)
-                .font(entry.kind == .command || entry.isDiagnostic ? FreesideFont.monoCaption : FreesideFont.callout)
+                .font(
+                    entry.kind == .command || entry.isDiagnostic ? FreesideFont.trailingSummary : FreesideFont.cardBody)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -676,7 +696,7 @@ struct ReviewOutputText: View {
         VStack(alignment: .leading, spacing: 8) {
             if hasReplacementCharacters {
                 Text("Invalid UTF-8 is shown with replacement characters. Retained bytes are unchanged.")
-                    .font(FreesideFont.caption).foregroundStyle(Color.inkDim)
+                    .font(FreesideFont.cardBody).foregroundStyle(Color.inkDim)
             }
             Text(String(decoding: bytes, as: UTF8.self))
         }

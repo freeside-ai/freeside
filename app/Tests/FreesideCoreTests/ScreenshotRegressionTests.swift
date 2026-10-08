@@ -2141,15 +2141,14 @@
                                     "review-evidence-\(name)-\(Int(width))-\(colorScheme == .dark ? "dark" : "light")",
                                 width: width, colorScheme: colorScheme, nativeAppearance: true,
                                 view: AnyView(
-                                    VStack(alignment: .leading, spacing: 14) {
-                                        Text("Reviewer output").font(FreesideFont.title)
-                                        Text("Agent claims · Round \(round.round) · Head \(round.head_sha.prefix(8))")
-                                            .font(FreesideFont.caption)
-                                        Text("Private, sensitive output. Not publishable verifier evidence.")
-                                            .font(FreesideFont.caption).foregroundStyle(Color.inkDim)
+                                    VStack(alignment: .leading, spacing: 0) {
+                                        ReviewEvidenceContent.sheetHeader(for: round)
                                         ReviewEvidenceContent(
-                                            round: round, evidence: evidence, presentation: presentation)
-                                    }.padding(24))))
+                                            round: round, evidence: evidence, presentation: presentation
+                                        )
+                                        .padding(.horizontal, 16)
+                                        .padding(.bottom, 16)
+                                    }.background(Color.ground2))))
                     }
                     surfaces.append(
                         Surface(
@@ -2157,7 +2156,7 @@
                             width: width, colorScheme: colorScheme, nativeAppearance: true,
                             view: AnyView(
                                 ReviewOutputText(bytes: Array("Retained reviewer output: ".utf8) + [0xff, 0xfe])
-                                    .font(FreesideFont.monoCaption)
+                                    .font(FreesideFont.trailingSummary)
                                     .foregroundStyle(Color.ink)
                                     .padding(24))))
                     var unknownRound = RunFixtures.reviewRound(.completed, availability: .unknown)
