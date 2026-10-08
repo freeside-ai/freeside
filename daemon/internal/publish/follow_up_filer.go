@@ -533,9 +533,10 @@ func (f *FollowUpFiler) filingDepth(ctx context.Context, runID domain.RunID, lim
 // filingTarget is the live GitHub state one create or listing needs, each
 // field read through the filing token and checked against the stored target.
 type filingTarget struct {
-	repo      repoRef
-	bot       AppBotIdentity
-	milestone *int
+	repo         repoRef
+	repositoryID int64
+	bot          AppBotIdentity
+	milestone    *int
 }
 
 // filingPreconditionError marks a precondition failure no retry changes. Its
@@ -576,6 +577,7 @@ func (f *FollowUpFiler) resolveTarget(ctx context.Context, view filingView, with
 	if repositoryID != view.params.Repository.RepositoryID {
 		return filingTarget{}, &filingPreconditionError{"the repository name now resolves to a different repository"}
 	}
+	target.repositoryID = repositoryID
 	target.bot, err = f.identity.Resolve(ctx, repo.path())
 	if err != nil {
 		return filingTarget{}, definite(err)
@@ -595,7 +597,8 @@ func (f *FollowUpFiler) resolveTarget(ctx context.Context, view filingView, with
 
 // admits reports whether an issue can be this intent's create. It reads the
 // author's numeric identity, the creation time, and the pre-dispatch set,
-// never issue text.
+// never issue text. The forge decoder has already proved repository membership;
+// resolveTarget binds that requested repository to the intent's numeric ID.
 func admits(issue filedIssue, bot AppBotIdentity, intent domain.FollowUpFilingIntent) bool {
 	return !issue.PullRequest && authoredBy(issue, bot) &&
 		!issue.CreatedAt.Before(candidateWindowStart(intent)) &&
@@ -655,7 +658,7 @@ func dispatchIdentityMissing(set *domain.FollowUpFilingPreDispatchSet) string {
 func (f *FollowUpFiler) listBotIssues(
 	ctx context.Context, target filingTarget, intent domain.FollowUpFilingIntent,
 ) ([]filedIssue, error) {
-	issues, err := f.forge.listIssuesCreatedBy(ctx, target.repo, target.bot.AppSlug+"[bot]", candidateWindowStart(intent))
+	issues, err := f.forge.listIssuesCreatedBy(ctx, target.repo, target.repositoryID, target.bot.AppSlug+"[bot]", candidateWindowStart(intent))
 	if err != nil {
 		return nil, err
 	}
@@ -755,7 +758,7 @@ func (f *FollowUpFiler) dispatch(ctx context.Context, filing approvedFiling, vie
 	}); err != nil {
 		return err
 	}
-	result, sendErr := f.forge.sendCreateIssue(request)
+	result, sendErr := f.forge.sendCreateIssue(request, target.repo)
 	class := classifyFollowUpFilingCreate(result, sendErr)
 	// Returned-object boundary: a 201 is ledgered only when its issue would
 	// also pass as a candidate. One that would not is unproven, and the
