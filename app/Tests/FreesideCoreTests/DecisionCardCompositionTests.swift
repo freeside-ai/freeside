@@ -529,6 +529,27 @@ import Testing
         #expect(!DecisionCardComposition.reviewingActionIsFilled(recommended))
     }
 
+    /// The question card fills Answer and Retry, once, and gives the fill up
+    /// to a recommendation block. No other type fills a principal action.
+    @Test func answerAndRetryTakesTheQuestionCardsOneFill() {
+        let plain = DecisionActionRanking(requested: [.answer_without_retry, .answer_and_retry, .stop])
+        #expect(plain.principal.contains(.answer_and_retry))
+        #expect(
+            DecisionCardComposition.filledPrincipalIndex(for: .agent_question, ranking: plain)
+                == plain.principal.firstIndex(of: .answer_and_retry))
+
+        let repeated = DecisionActionRanking(requested: [.answer_and_retry, .answer_and_retry])
+        #expect(DecisionCardComposition.filledPrincipalIndex(for: .agent_question, ranking: repeated) == 0)
+
+        let recommended = DecisionActionRanking(
+            requested: [.answer_and_retry, .answer_without_retry, .stop], recommendedAction: .stop)
+        #expect(DecisionCardComposition.filledPrincipalIndex(for: .agent_question, ranking: recommended) == nil)
+
+        let withoutRetry = DecisionActionRanking(requested: [.answer_without_retry, .stop])
+        #expect(DecisionCardComposition.filledPrincipalIndex(for: .agent_question, ranking: withoutRetry) == nil)
+        #expect(DecisionCardComposition.filledPrincipalIndex(for: .spec_approval, ranking: plain) == nil)
+    }
+
     /// Visual audit D06: the agent's own question leads, so the shell's
     /// generic ask is dropped only when a typed decision is there to replace
     /// it. No card is ever left without a lead.
@@ -697,6 +718,8 @@ import Testing
         #expect(scale.padding(compact: false) == .init(top: 28, leading: 28, bottom: 24, trailing: 28))
         #expect(scale.padding(compact: true) == .init(top: 18, leading: 20, bottom: 18, trailing: 20))
         #expect(!scale.drawsReturnGlyph)
+        #expect(scale.overflowLabel == "More Actions")
+        #expect(DecisionCardComposition.Scale.legacy.overflowLabel == "More actions")
         #expect(!DecisionCardComposition.Scale.legacy.drawsFoldHairline)
         #expect(DecisionCardComposition.Scale.legacy.drawsReturnGlyph)
     }

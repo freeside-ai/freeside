@@ -616,9 +616,9 @@
                         colorScheme: scheme,
                         view: AnyView(
                             MessageComposerSheet(
-                                eyebrow: "Answer and retry",
+                                eyebrow: "Answer and Retry",
                                 ask: "What is your answer?",
-                                submitLabel: "Answer and retry",
+                                submitLabel: "Answer and Retry",
                                 byteLimit: 8192,
                                 rendersInteractiveControls: false,
                                 routeOptions: routedComposer,

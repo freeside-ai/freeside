@@ -242,6 +242,9 @@ struct DecisionCardComposition: Equatable {
         /// Returning the work is a plain outlined command on the refined
         /// card (R6).
         var drawsReturnGlyph: Bool { self == .legacy }
+        /// The overflow trigger's words, in Title Case on the refined card
+        /// (R30).
+        var overflowLabel: String { self == .refined ? "More Actions" : "More actions" }
         var cornerRadius: CGFloat { self == .refined ? 12 : 8 }
         /// The widest a one-column card grows with the detail's 16pt margin
         /// around it: the refined card itself is 560 wide.
@@ -519,6 +522,18 @@ struct DecisionCardComposition: Equatable {
             .comparison, .yieldChart, .evidence:
             return false
         }
+    }
+
+    /// Which of a card's principal actions draws filled, by position.
+    /// Answering and retrying is the question card's supported next step, so
+    /// it takes the card's one filled button unless a recommendation block
+    /// already holds it. `requested_decision` may repeat an action, so only
+    /// the first one takes the fill and no card draws two.
+    static func filledPrincipalIndex(
+        for type: Components.Schemas.AttentionType, ranking: DecisionActionRanking
+    ) -> Int? {
+        guard type == .agent_question, ranking.recommended == nil else { return nil }
+        return ranking.principal.firstIndex(of: .answer_and_retry)
     }
 
     /// Whether a card's own reviewing action draws filled. View PR is the

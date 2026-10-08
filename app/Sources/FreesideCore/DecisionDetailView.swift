@@ -255,7 +255,7 @@ struct DecisionDetailView: View {
                         eyebrow: AttentionDisplay.label(.answer_without_retry),
                         ask: "What is your answer?",
                         consequence: "The question concludes without restarting work.",
-                        submitLabel: "Record answer", byteLimit: 8192
+                        submitLabel: "Record Answer", byteLimit: 8192
                     ) { message, _ in
                         await model.submitAnswer(.answer_without_retry, message: message)
                     }
@@ -3381,6 +3381,7 @@ struct DecisionDetailView: View {
     ) -> some View {
         let ranking = actionRanking(item)
         let controlGap = DecisionCardComposition.scale(for: item._type).controlGap
+        let filled = DecisionCardComposition.filledPrincipalIndex(for: item._type, ranking: ranking)
         VStack(alignment: .leading, spacing: controlGap) {
             if showsValidationProgress && model.validation == .pending {
                 HStack(spacing: 8) {
@@ -3411,14 +3412,14 @@ struct DecisionDetailView: View {
                 // uniqueness, and duplicate identities may not drop a button.
                 if stackedLayout {
                     VStack(alignment: .leading, spacing: controlGap) {
-                        ForEach(Array(ranking.principal.enumerated()), id: \.offset) { _, action in
-                            actionButton(action, item: item, tone: .secondary)
+                        ForEach(Array(ranking.principal.enumerated()), id: \.offset) { index, action in
+                            actionButton(action, item: item, tone: index == filled ? .primary : .secondary)
                         }
                     }
                 } else {
                     HStack(alignment: .top, spacing: controlGap) {
-                        ForEach(Array(ranking.principal.enumerated()), id: \.offset) { _, action in
-                            actionButton(action, item: item, tone: .secondary)
+                        ForEach(Array(ranking.principal.enumerated()), id: \.offset) { index, action in
+                            actionButton(action, item: item, tone: index == filled ? .primary : .secondary)
                         }
                     }
                 }
@@ -3501,7 +3502,7 @@ struct DecisionDetailView: View {
                     }
                 }
             } label: {
-                Text("More actions \u{25BE}")
+                Text("\(DecisionCardComposition.scale(for: item._type).overflowLabel) \u{25BE}")
             }
             .menuStyle(.button)
             .buttonStyle(FreesideActionButtonStyle(tone: .tertiary))
