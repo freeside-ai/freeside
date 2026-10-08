@@ -150,6 +150,39 @@ case $OUT in
   *) pass=$((pass + 1)) ;;
 esac
 
+begin_case "daemon test remains the complete unsharded command"
+stub=$(make_stub go 0)
+PATH="$TMP:$PATH" run_check daemon test
+assert_rc 0
+OUT=$(cat "$stub.args")
+if [[ $OUT == $'test\n./...' ]]; then pass=$((pass + 1)); else report_failure 'default Go command changed'; fi
+
+begin_case "daemon shard selection and evidence pass through the check runner"
+stub=$(make_stub python3 0)
+PATH="$TMP:$PATH" DAEMON_TEST_SHARD_KIND=integration DAEMON_TEST_SHARD_INDEX=2 \
+  DAEMON_TEST_SHARD_COUNT=3 DAEMON_TEST_INTEGRATION_SHARDS=3 \
+  DAEMON_TEST_EVIDENCE_DIR="$TMP/evidence path" run_check daemon test
+assert_rc 0
+OUT=$(cat "$stub.args")
+assert_contains $'scripts/daemon-test-shards.py\nrun\n--kind\nintegration\n--index\n2\n--count\n3'
+assert_contains $'--integration-count\n3\n--evidence-dir\n'
+assert_contains "$TMP/evidence path"
+
+begin_case "partial or malformed shard inputs fail before a child runs"
+PATH="$TMP:$PATH" DAEMON_TEST_SHARD_COUNT=2 run_check daemon test
+assert_rc 2
+PATH="$TMP:$PATH" DAEMON_TEST_SHARD_KIND=unknown DAEMON_TEST_SHARD_INDEX=1 \
+  DAEMON_TEST_SHARD_COUNT=2 run_check daemon test
+assert_rc 2
+PATH="$TMP:$PATH" DAEMON_TEST_EVIDENCE_DIR="$TMP/evidence" run_check daemon test
+assert_rc 2
+
+begin_case "daemon shard child failure propagates"
+stub=$(make_stub python3 7)
+PATH="$TMP:$PATH" DAEMON_TEST_SHARD_KIND=rest DAEMON_TEST_SHARD_INDEX=1 \
+  DAEMON_TEST_SHARD_COUNT=1 run_check daemon test
+assert_rc 7
+
 echo "assertions: $pass passed, $fail failed"
 if [ "$fail" -ne 0 ]; then
   exit 1

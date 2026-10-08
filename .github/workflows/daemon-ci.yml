@@ -10,11 +10,15 @@ on:
     paths:
       - "daemon/**"
       - "scripts/check.sh"
+      - "scripts/daemon-test-shards.py"
+      - "scripts/daemon-test-shards.json"
       - ".github/workflows/daemon-ci.yml"
   pull_request:
     paths:
       - "daemon/**"
       - "scripts/check.sh"
+      - "scripts/daemon-test-shards.py"
+      - "scripts/daemon-test-shards.json"
       - ".github/workflows/daemon-ci.yml"
 
 permissions:
@@ -29,8 +33,8 @@ defaults:
     working-directory: daemon
 
 jobs:
-  linux:
-    name: linux (build, test, vet, lint)
+  linux-build:
+    name: linux (build, vet, lint)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -91,27 +95,11 @@ jobs:
           restore-keys: |
             go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-
             go-build-${{ runner.os }}-${{ github.job }}-
-      - name: build, test, vet (scripts/check.sh)
-        # The step list lives in scripts/check.sh so local runs and CI
-        # cannot drift; the exporter cross-compile guard (#73 acceptance
-        # 4) is part of its build step.
+            go-build-${{ runner.os }}-linux-${{ hashFiles('daemon/go.sum') }}-
+            go-build-${{ runner.os }}-linux-
+      - name: build, vet (scripts/check.sh)
         working-directory: .
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/daemon-evidence"
-          git rev-parse HEAD > "$RUNNER_TEMP/daemon-evidence/tested-merge.txt"
-          go version > "$RUNNER_TEMP/daemon-evidence/toolchain.txt"
-          bash scripts/check.sh daemon build
-          (cd daemon && go test -json -count=1 ./...) | tee "$RUNNER_TEMP/daemon-evidence/tests.jsonl"
-          bash scripts/check.sh daemon vet
-      - name: Save baseline test evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: daemon-baseline-${{ runner.os }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/daemon-evidence
-          if-no-files-found: error
+        run: bash scripts/check.sh daemon build vet
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
@@ -134,6 +122,89 @@ jobs:
         with:
           path: ${{ steps.go-cache.outputs.build }}
           key: ${{ steps.go-build-cache.outputs.cache-primary-key }}
+
+  linux-tests:
+    name: linux (test, ${{ matrix.kind }} ${{ matrix.index }}/${{ matrix.count }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {kind: rest, index: 1, count: 1}
+          - {kind: integration, index: 1, count: 3}
+          - {kind: integration, index: 2, count: 3}
+          - {kind: integration, index: 3, count: 3}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: daemon/go.mod
+          cache: false
+      - name: Resolve Go cache paths
+        id: go-cache
+        run: |
+          echo "build=$(go env GOCACHE)" >>"$GITHUB_OUTPUT"
+          echo "mod=$(go env GOMODCACHE)" >>"$GITHUB_OUTPUT"
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.go-cache.outputs.mod }}
+          key: go-mod-${{ runner.os }}-${{ hashFiles('daemon/go.sum') }}
+          restore-keys: go-mod-${{ runner.os }}-
+      - name: Cache Go build output
+        id: go-build-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.go-cache.outputs.build }}
+          # Distinct savers avoid collisions; legacy fallback keeps the first
+          # comparison on the same warm main caches as the baseline.
+          key: go-build-${{ runner.os }}-${{ github.job }}-${{ matrix.kind }}-${{ matrix.index }}-${{ hashFiles('daemon/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-build-${{ runner.os }}-${{ github.job }}-${{ matrix.kind }}-${{ matrix.index }}-${{ hashFiles('daemon/go.sum') }}-
+            go-build-${{ runner.os }}-${{ github.job }}-${{ matrix.kind }}-${{ matrix.index }}-
+            go-build-${{ runner.os }}-linux-${{ hashFiles('daemon/go.sum') }}-
+            go-build-${{ runner.os }}-linux-
+      - name: Discover and run default test shard
+        working-directory: .
+        env:
+          DAEMON_TEST_SHARD_KIND: ${{ matrix.kind }}
+          DAEMON_TEST_SHARD_INDEX: ${{ matrix.index }}
+          DAEMON_TEST_SHARD_COUNT: ${{ matrix.count }}
+          DAEMON_TEST_INTEGRATION_SHARDS: 3
+          DAEMON_TEST_EVIDENCE_DIR: ${{ runner.temp }}/daemon-evidence
+        run: |
+          mkdir -p "$DAEMON_TEST_EVIDENCE_DIR"
+          git rev-parse HEAD HEAD^1 HEAD^2 > "$DAEMON_TEST_EVIDENCE_DIR/tested-merge.txt"
+          go version > "$DAEMON_TEST_EVIDENCE_DIR/toolchain.txt"
+          bash scripts/check.sh daemon test
+      - name: Save shard evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-${{ runner.os }}-${{ matrix.kind }}-${{ matrix.index }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/daemon-evidence
+          if-no-files-found: error
+      - name: Save Go build output
+        if: github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.go-cache.outputs.build }}
+          key: ${{ steps.go-build-cache.outputs.cache-primary-key }}
+
+  linux:
+    name: linux (build, test, vet, lint)
+    needs: [linux-build, linux-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require every child job to succeed
+        working-directory: .
+        env:
+          CHILD_RESULTS: ${{ toJSON(needs) }}
+        run: python3 scripts/daemon-test-shards.py gate --needs "$CHILD_RESULTS" --expected linux-build linux-tests
 
   race-integration:
     name: linux (race test, integration)
@@ -282,8 +353,8 @@ jobs:
           path: ${{ steps.go-cache.outputs.build }}
           key: ${{ steps.go-build-cache.outputs.cache-primary-key }}
 
-  macos:
-    name: macos (build, test)
+  macos-build:
+    name: macos (build)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -312,23 +383,11 @@ jobs:
           restore-keys: |
             go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-
             go-build-${{ runner.os }}-${{ github.job }}-
-      - name: build, test (scripts/check.sh)
+            go-build-${{ runner.os }}-macos-${{ hashFiles('daemon/go.sum') }}-
+            go-build-${{ runner.os }}-macos-
+      - name: build (scripts/check.sh)
         working-directory: .
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/daemon-evidence"
-          git rev-parse HEAD > "$RUNNER_TEMP/daemon-evidence/tested-merge.txt"
-          go version > "$RUNNER_TEMP/daemon-evidence/toolchain.txt"
-          bash scripts/check.sh daemon build
-          (cd daemon && go test -json -count=1 ./...) | tee "$RUNNER_TEMP/daemon-evidence/tests.jsonl"
-      - name: Save baseline test evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: daemon-baseline-${{ runner.os }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/daemon-evidence
-          if-no-files-found: error
+        run: bash scripts/check.sh daemon build
       # Last step so a failed job saves nothing; push-only so PR runs are
       # restore-only. See the linux job for the full rationale.
       - name: Save Go build output
@@ -337,3 +396,85 @@ jobs:
         with:
           path: ${{ steps.go-cache.outputs.build }}
           key: ${{ steps.go-build-cache.outputs.cache-primary-key }}
+  macos-tests:
+    name: macos (test, ${{ matrix.kind }} ${{ matrix.index }}/${{ matrix.count }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {kind: rest, index: 1, count: 1}
+          - {kind: integration, index: 1, count: 3}
+          - {kind: integration, index: 2, count: 3}
+          - {kind: integration, index: 3, count: 3}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: daemon/go.mod
+          cache: false
+      - name: Resolve Go cache paths
+        id: go-cache
+        run: |
+          echo "build=$(go env GOCACHE)" >>"$GITHUB_OUTPUT"
+          echo "mod=$(go env GOMODCACHE)" >>"$GITHUB_OUTPUT"
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.go-cache.outputs.mod }}
+          key: go-mod-${{ runner.os }}-${{ hashFiles('daemon/go.sum') }}
+          restore-keys: go-mod-${{ runner.os }}-
+      - name: Cache Go build output
+        id: go-build-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.go-cache.outputs.build }}
+          # Distinct savers avoid collisions; legacy fallback keeps the first
+          # comparison on the same warm main caches as the baseline.
+          key: go-build-${{ runner.os }}-${{ github.job }}-${{ matrix.kind }}-${{ matrix.index }}-${{ hashFiles('daemon/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-build-${{ runner.os }}-${{ github.job }}-${{ matrix.kind }}-${{ matrix.index }}-${{ hashFiles('daemon/go.sum') }}-
+            go-build-${{ runner.os }}-${{ github.job }}-${{ matrix.kind }}-${{ matrix.index }}-
+            go-build-${{ runner.os }}-macos-${{ hashFiles('daemon/go.sum') }}-
+            go-build-${{ runner.os }}-macos-
+      - name: Discover and run default test shard
+        working-directory: .
+        env:
+          DAEMON_TEST_SHARD_KIND: ${{ matrix.kind }}
+          DAEMON_TEST_SHARD_INDEX: ${{ matrix.index }}
+          DAEMON_TEST_SHARD_COUNT: ${{ matrix.count }}
+          DAEMON_TEST_INTEGRATION_SHARDS: 3
+          DAEMON_TEST_EVIDENCE_DIR: ${{ runner.temp }}/daemon-evidence
+        run: |
+          mkdir -p "$DAEMON_TEST_EVIDENCE_DIR"
+          git rev-parse HEAD HEAD^1 HEAD^2 > "$DAEMON_TEST_EVIDENCE_DIR/tested-merge.txt"
+          go version > "$DAEMON_TEST_EVIDENCE_DIR/toolchain.txt"
+          bash scripts/check.sh daemon test
+      - name: Save shard evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-${{ runner.os }}-${{ matrix.kind }}-${{ matrix.index }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/daemon-evidence
+          if-no-files-found: error
+      - name: Save Go build output
+        if: github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.go-cache.outputs.build }}
+          key: ${{ steps.go-build-cache.outputs.cache-primary-key }}
+
+  macos:
+    name: macos (build, test)
+    needs: [macos-build, macos-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require every child job to succeed
+        working-directory: .
+        env:
+          CHILD_RESULTS: ${{ toJSON(needs) }}
+        run: python3 scripts/daemon-test-shards.py gate --needs "$CHILD_RESULTS" --expected macos-build macos-tests

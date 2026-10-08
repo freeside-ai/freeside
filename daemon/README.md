@@ -277,6 +277,71 @@ database from the CLI, restart the daemon, change work or grant paired devices
 host authority. A wrong or unavailable endpoint fails. The network API offers
 only the existing pairing preview and redemption, never code minting.
 
+## Running Test Shards
+
+`bash scripts/check.sh daemon` remains the complete local build, test, vet,
+and lint check. Its test step runs `go test ./...` with the default timeout,
+concurrency, caching, and opt-in live-test skips.
+
+Standard CI runs one rest-of-daemon test shard and three integration shards on
+each platform, alongside independent build/static checks. Both final gates
+require every child job to succeed, including every matrix member. A skipped,
+cancelled, failed, or missing child cannot make a gate green. Push-only race
+jobs retain their separate schedule and recipes.
+
+Run a shard from the repository root:
+
+```sh
+DAEMON_TEST_SHARD_KIND=integration DAEMON_TEST_SHARD_INDEX=1 \
+  DAEMON_TEST_SHARD_COUNT=3 DAEMON_TEST_EVIDENCE_DIR=/tmp/daemon-shard-1 \
+  bash scripts/check.sh daemon test
+```
+
+Repeat with indices `2` and `3` for the other integration shards. Use kind `rest`,
+index `1`, and count `1` for every other package. Set
+`DAEMON_TEST_INTEGRATION_SHARDS=3` on the rest shard to match CI's integration
+count. Selection inputs must be complete and consistent; evidence
+output alone does not enable sharding.
+
+The runner discovers packages with `go list` and default test, example, and
+fuzz families with compiled `go test -list` output. Integration shards compile
+discovery for their package only; the rest shard discovers every package.
+It partitions whole
+integration families deterministically using measured weight hints; new
+families join automatically and removed weight entries cannot omit tests.
+Every partition must be nonempty and cover each discovered family exactly
+once. Shards use `-json -count=1` and preserve Go's default timeout and
+concurrency. Execution must finish every selected family and package. The
+evidence directory contains the inventory, partition, raw JSON events, and
+an execution report written only after successful accounting.
+
+Compare a platform's complete shard union with successful uncached unsharded
+JSON output:
+
+```sh
+python3 scripts/daemon-test-shards.py compare --baseline /tmp/baseline.jsonl \
+  /tmp/daemon-rest/execution.json /tmp/daemon-shard-1/execution.json \
+  /tmp/daemon-shard-2/execution.json /tmp/daemon-shard-3/execution.json
+```
+
+Measure hosted attempts, including failures and cancellations:
+
+```sh
+bash scripts/ci-run-durations.sh daemon-ci.yml --branch YOUR_BRANCH \
+  --event pull_request --attempts all --whole-gate
+```
+
+Whole-gate time starts with the first required daemon work job and ends when
+both stable gates finish. It includes child work, cache setup, and artifact
+upload. Initial queue delay is separate. A qualifying attempt must run the
+complete work graph; rerunning only failed gates cannot count as a complete
+sample. Compare at least three successful uncached baseline attempts with
+three consecutive successful comparison attempts on the same underlying
+daemon implementation, pinned tools, and runner labels. Save tested
+head/base/merge identities, JSON case and package timings, cache restore
+keys, and every attempted run. Test-result caching stays disabled while
+module/build caches stay comparably warm and PR runs remain restore-only.
+
 ## Testing conventions
 
 **Template store.** Use `storetest.Open(t, path, opts)` from

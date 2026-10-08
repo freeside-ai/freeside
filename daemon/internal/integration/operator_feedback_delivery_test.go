@@ -24,8 +24,10 @@ func (s feedbackInputSource) OpenContext(_ context.Context, digest domain.Digest
 }
 
 func TestProductionReturnToAgentPreflightsCompletePrompt(t *testing.T) {
+	t.Parallel()
 	for _, persisted := range []bool{false, true} {
 		t.Run(map[bool]string{false: "new feedback", true: "retained pending feedback"}[persisted], func(t *testing.T) {
+			t.Parallel()
 			p := newProductionPublicationHarness(t, "")
 			if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
 				policy, err := tx.GetResolvedPolicy(p.ctx, p.runID)

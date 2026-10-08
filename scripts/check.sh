@@ -28,6 +28,16 @@
 #   VACUUM         command for the OpenAPI linter (default: `go run`
 #                  of the pinned vacuum module, ~7 minutes cold)
 #
+# Optional daemon test sharding (all three selection inputs are required):
+#   DAEMON_TEST_SHARD_KIND   rest or integration
+#   DAEMON_TEST_SHARD_INDEX  one-based index (rest requires 1)
+#   DAEMON_TEST_SHARD_COUNT  number of shards (rest requires 1)
+#   DAEMON_TEST_INTEGRATION_SHARDS  total integration shards (default: 2)
+#   DAEMON_TEST_EVIDENCE_DIR  directory for inventory and execution evidence
+# With no selection inputs, the complete `go test ./...` command is unchanged.
+# Shards use compiled discovery, -json, and -count=1; they retain Go's default
+# concurrency, timeout, and opt-in live-test behavior.
+#
 # The daemon's opt-in live suites are skipped by `go test` unless their
 # environment is set (FREESIDE_PUBLISH_LIVE_TEST, FREESIDE_WARD_LIVE_TEST,
 # FREESIDE_CLAUDE_TOKEN_LIVE_TEST, FREESIDE_CODEX_ENROLLMENT_LIVE_TEST,
@@ -95,7 +105,28 @@ daemon_build() {
   in_dir "$ROOT/daemon" env CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
     go build -o /dev/null ./cmd/freeside-export
 }
-daemon_test() { in_dir "$ROOT/daemon" go test ./...; }
+daemon_test() {
+  local kind=${DAEMON_TEST_SHARD_KIND:-} index=${DAEMON_TEST_SHARD_INDEX:-}
+  local count=${DAEMON_TEST_SHARD_COUNT:-} integration=${DAEMON_TEST_INTEGRATION_SHARDS:-}
+  if [[ -z $kind$index$count${DAEMON_TEST_INTEGRATION_SHARDS:-}${DAEMON_TEST_EVIDENCE_DIR:-} ]]; then
+    in_dir "$ROOT/daemon" go test ./...
+    return
+  fi
+  if [[ -z $integration ]]; then
+    integration=2
+    if [[ $kind == integration ]]; then integration=$count; fi
+  fi
+  if [[ ! $kind =~ ^(rest|integration)$ || ! $index =~ ^[1-9][0-9]*$ ||
+        ! $count =~ ^[1-9][0-9]*$ || ! $integration =~ ^[1-9][0-9]*$ ]]; then
+    echo 'daemon test: require valid shard kind, index, and count together' >&2
+    return 2
+  fi
+  local args=(run --kind "$kind" --index "$index" --count "$count" --integration-count "$integration")
+  if [[ -n ${DAEMON_TEST_EVIDENCE_DIR:-} ]]; then
+    args+=(--evidence-dir "$DAEMON_TEST_EVIDENCE_DIR")
+  fi
+  in_dir "$ROOT" python3 scripts/daemon-test-shards.py "${args[@]}"
+}
 daemon_vet() { in_dir "$ROOT/daemon" go vet ./...; }
 daemon_lint() {
   # shellcheck disable=SC2086 # GOLANGCI_LINT may carry arguments

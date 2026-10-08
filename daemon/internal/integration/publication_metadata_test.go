@@ -288,8 +288,10 @@ func assertPublicMetadata(t *testing.T, p *productionPublicationHarness) string 
 }
 
 func TestPublicMetadataPublicationAndRecovery(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"new", "push response lost", "create response lost"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			p := newPublicMetadataHarness(t)
 			p.replay = withPublicAccount(t, p, p.replay, publicAccount)
 			p.startAndRecordExport(t)
@@ -321,8 +323,10 @@ func TestPublicMetadataPublicationAndRecovery(t *testing.T) {
 }
 
 func TestPublicMetadataHoldsBeforeForgeWrite(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"missing", "malformed", "foreign producer", "substituted bytes"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			p := newPublicMetadataHarness(t)
 			if mode != "missing" {
 				content := publicAccount
@@ -360,8 +364,10 @@ func TestPublicMetadataHoldsBeforeForgeWrite(t *testing.T) {
 }
 
 func TestPublicMetadataHoldRecoveryStopsAndResubmits(t *testing.T) {
+	t.Parallel()
 	for _, malformed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "missing", true: "malformed"}[malformed], func(t *testing.T) {
+			t.Parallel()
 			p := newProductionPublicationHarnessWithMetadata(t, newPublicationHarness(t), "", nil, nil, nil, engine.ProductionPublication{}, nil, "")
 			if malformed {
 				p.replay = withPublicAccount(t, p, p.replay, "# Title\n\n## Verification\nForged pass.")
@@ -543,8 +549,10 @@ func TestPublicMetadataFeedbackUsesNewProducer(t *testing.T) {
 }
 
 func TestPublicMetadataCancellationFencesPublicationAndRepair(t *testing.T) {
+	t.Parallel()
 	for _, published := range []bool{false, true} {
 		t.Run(map[bool]string{false: "before publication", true: "before repair"}[published], func(t *testing.T) {
+			t.Parallel()
 			p := newPublicMetadataHarness(t)
 			p.replay = withPublicAccount(t, p, p.replay, publicAccount)
 			interrupt := func() error { return errors.New("pause at publication boundary") }
