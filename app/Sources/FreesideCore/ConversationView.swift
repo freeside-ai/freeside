@@ -1,15 +1,42 @@
 import FreesideAPI
 import SwiftUI
 
-/// Bounded conversation messages (visual audit D04).
+#if os(iOS)
+    import UIKit
+#endif
+
+/// Bounded conversation messages (visual audit D04), and what a message
+/// says about itself without printing it (R5).
 enum ConversationPresentation {
     /// The lines a collapsed long body shows.
     static let collapsedLineLimit = 6
+
+    /// How much of the thread's width one message may take, so its side
+    /// reads as its author.
+    static let messageWidthFraction: CGFloat = 0.82
 
     /// The expanded set after the control under one message is pressed:
     /// only that message changes.
     static func toggling(_ messageID: String, in expanded: Set<String>) -> Set<String> {
         expanded.symmetricDifference([messageID])
+    }
+
+    static func authorLabel(_ author: Components.Schemas.Author) -> String {
+        switch author {
+        case .user: "You"
+        case .agent: "Agent"
+        case .daemon: "Freeside"
+        }
+    }
+
+    /// What VoiceOver reads for one message. The thread prints neither an
+    /// author nor a time (R5), so the spoken label leads with both and the
+    /// body follows.
+    static func accessibilityLabel(
+        for message: Components.Schemas.Message, now: Date
+    ) -> String {
+        let time = AttentionDisplay.relativeRowTime(message.created_at, now: now)
+        return "\(authorLabel(message.author)), \(time). \(message.body)"
     }
 }
 
@@ -35,6 +62,36 @@ private struct ProbeBoundedLayout: Layout {
     }
 }
 
+/// One message's row in the thread: the message hugs its text up to
+/// `messageWidthFraction` of the row and sits on its author's side.
+private struct MessageRowLayout: Layout {
+    let alignsTrailing: Bool
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let message = subviews[0].sizeThatFits(capped(proposal))
+        return CGSize(width: proposal.width ?? message.width, height: message.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let capped = capped(ProposedViewSize(width: bounds.width, height: nil))
+        let message = subviews[0].sizeThatFits(capped)
+        subviews[0].place(
+            at: CGPoint(x: alignsTrailing ? bounds.maxX - message.width : bounds.minX, y: bounds.minY),
+            proposal: ProposedViewSize(message))
+    }
+
+    private func capped(_ proposal: ProposedViewSize) -> ProposedViewSize {
+        ProposedViewSize(
+            width: proposal.width.map { $0 * ConversationPresentation.messageWidthFraction },
+            height: nil)
+    }
+}
+
+/// The thread (R5): the agent's messages quoted on the left, the operator's
+/// bordered on the right, and the daemon's bordered on the left under its
+/// producer label, since its side and shape alone do not say who spoke.
+/// No message prints an author or a time. VoiceOver reads both with every
+/// body, and the exact instant is one gesture away (R17).
 struct ConversationView: View {
     let snapshot: Components.Schemas.ConversationSnapshot
     let attachments: AttachmentLoader
@@ -66,45 +123,13 @@ struct ConversationView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("Conversation", systemImage: "bubble.left.and.bubble.right")
-                .font(FreesideFont.sans(.headline, weight: .semibold))
-                .foregroundStyle(Color.ink)
+            KeywordLabel(text: "Conversation")
+                .accessibilityAddTraits(.isHeader)
 
             ForEach(snapshot.conversation.messages.sorted(by: { $0.sequence < $1.sequence }), id: \.id) {
                 message in
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(authorLabel(message.author))
-                            .font(FreesideFont.sans(.callout, weight: .semibold))
-                            .foregroundStyle(Color.ink)
-                        Spacer()
-                        Text(AttentionDisplay.relativeRowTime(message.created_at, now: now))
-                            .font(FreesideFont.caption)
-                            .foregroundStyle(Color.inkDim)
-                    }
-                    messageBody(message)
-                    ForEach(Array(message.attachments.enumerated()), id: \.offset) { index, digest in
-                        DecisionDetailView.AttachmentRow(
-                            label: "Attachment \(index + 1)",
-                            digest: digest,
-                            attachments: attachments,
-                            loadsAttachments: loadsAttachments,
-                            rendersInteractiveControls: rendersInteractiveControls)
-                    }
-                }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    message.author == .user ? Color.accentWashSoft : Color.ground,
-                    in: RoundedRectangle(cornerRadius: 8)
-                )
-                .overlay(alignment: .leading) {
-                    if message.author == .user {
-                        Capsule()
-                            .fill(Color.accentText)
-                            .frame(width: 3)
-                            .padding(.vertical, 8)
-                    }
+                MessageRowLayout(alignsTrailing: message.author == .user) {
+                    exactTime(message, on: messageShape(message))
                 }
             }
 
@@ -116,21 +141,59 @@ struct ConversationView: View {
                         Image(systemName: "clock")
                     }
                     Text("Awaiting the agent's reply")
-                        .font(FreesideFont.callout)
+                        .font(FreesideFont.cardBody)
                         .foregroundStyle(Color.inkDim)
                 }
                 .accessibilityElement(children: .combine)
             }
         }
-        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .freesideCard()
+    }
+
+    @ViewBuilder
+    private func messageShape(_ message: Components.Schemas.Message) -> some View {
+        switch message.author {
+        case .agent:
+            messageContent(message)
+                .quoteSurface(cornerRadius: 8)
+        case .user, .daemon:
+            messageContent(message)
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.itemBorder, lineWidth: 1))
+        }
+    }
+
+    private func messageContent(_ message: Components.Schemas.Message) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if message.author == .daemon {
+                KeywordLabel(text: ConversationPresentation.authorLabel(message.author))
+                    // The spoken label already leads with the author.
+                    .accessibilityHidden(true)
+            }
+            messageBody(message)
+            ForEach(Array(message.attachments.enumerated()), id: \.offset) { index, digest in
+                DecisionDetailView.AttachmentRow(
+                    label: "Attachment \(index + 1)",
+                    digest: digest,
+                    attachments: attachments,
+                    loadsAttachments: loadsAttachments,
+                    rendersInteractiveControls: rendersInteractiveControls)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
     }
 
     /// The body in full when it fits the collapsed line limit, otherwise
-    /// bounded with the control that expands it in place.
+    /// bounded with the disclosure that expands it in place (R3).
     private func messageBody(_ message: Components.Schemas.Message) -> some View {
-        let isExpanded = expandedMessageIDs.contains(message.id)
+        let isExpanded = Binding(
+            get: { expandedMessageIDs.contains(message.id) },
+            set: { expanded in
+                if expanded != expandedMessageIDs.contains(message.id) {
+                    expandedMessageIDs = ConversationPresentation.toggling(
+                        message.id, in: expandedMessageIDs)
+                }
+            })
         return ProbeBoundedLayout {
             bodyText(message, bounded: true)
                 .hidden()
@@ -138,12 +201,8 @@ struct ConversationView: View {
             ViewThatFits(in: .vertical) {
                 bodyText(message, bounded: false)
                 VStack(alignment: .leading, spacing: 6) {
-                    bodyText(message, bounded: !isExpanded)
-                    Button(isExpanded ? "Show less" : "Read full message") {
-                        expandedMessageIDs = ConversationPresentation.toggling(
-                            message.id, in: expandedMessageIDs)
-                    }
-                    .buttonStyle(FreesideActionButtonStyle(tone: .tertiary))
+                    bodyText(message, bounded: !isExpanded.wrappedValue)
+                    SentenceDisclosure(label: "Full Message", isExpanded: isExpanded) {}
                 }
             }
         }
@@ -153,28 +212,84 @@ struct ConversationView: View {
     /// the text, so selection and copy are not handed a shortened string.
     private func bodyText(_ message: Components.Schemas.Message, bounded: Bool) -> some View {
         Text(message.body)
-            .font(FreesideFont.callout)
+            .font(message.author == .agent ? FreesideFont.message : FreesideFont.cardBody)
             .foregroundStyle(Color.ink)
             .lineLimit(bounded ? ConversationPresentation.collapsedLineLimit : nil)
             .fixedSize(horizontal: false, vertical: true)
-            .textSelection(.enabled)
+            .wholeBodySelection()
+            .accessibilityLabel(ConversationPresentation.accessibilityLabel(for: message, now: now))
     }
 
-    private func authorLabel(_ author: Components.Schemas.Author) -> String {
-        switch author {
-        case .user: "You"
-        case .agent: "Agent"
-        case .daemon: "Freeside"
+    /// The exact instant of a message (R17): hover help on the Mac. On iOS
+    /// one long-press menu carries it beside Copy Message, because a
+    /// selectable body would claim the long press for its own menu and leave
+    /// the time reachable only from the message's padding.
+    @ViewBuilder
+    private func exactTime(_ message: Components.Schemas.Message, on content: some View) -> some View {
+        #if os(iOS)
+            let exact = FreesideFormat.exactTime(message.created_at)
+            content.contextMenu {
+                Button("Copy Message") {
+                    UIPasteboard.general.string = message.body
+                }
+                Button("Copy \(exact)") {
+                    UIPasteboard.general.string = exact
+                }
+            }
+        #else
+            content.exactInstant(message.created_at)
+        #endif
+    }
+}
+
+extension View {
+    /// Selection of a message body where a pointer can drag one. On iOS a
+    /// selectable `Text` offers only its own whole-body Copy, which the
+    /// message's long-press menu carries instead.
+    @ViewBuilder
+    fileprivate func wholeBodySelection() -> some View {
+        #if os(iOS)
+            self
+        #else
+            textSelection(.enabled)
+        #endif
+    }
+}
+
+extension View {
+    /// Opens a scroll view on the end of its content. Before iOS 18 and
+    /// macOS 15 the anchor also pins content shorter than the view to its
+    /// bottom, so those systems keep opening on the start.
+    @ViewBuilder
+    fileprivate func opensOnItsEnd(_ opens: Bool) -> some View {
+        if #available(iOS 18, macOS 15, *) {
+            defaultScrollAnchor(opens ? .bottom : nil, for: .initialOffset)
+        } else {
+            self
         }
     }
-
 }
 
 struct MessageComposerSheet: View {
+    /// The conversation a composer draws above its field, so the operator
+    /// writes with the thread in view.
+    struct Thread {
+        let snapshot: Components.Schemas.ConversationSnapshot
+        let attachments: AttachmentLoader
+        let loadsAttachments: Bool
+        var now = Date.now
+    }
+
+    static let fieldPlaceholder = "Write to the agent\u{2026}"
+
     @Environment(\.dismiss) private var dismiss
     @State private var message = ""
-    let title: String
-    let prompt: String
+    /// The keyword naming the command the sheet carries out.
+    let eyebrow: String
+    /// What the operator is asked to write.
+    let ask: String
+    /// What sending does, where there is more to say than what to type.
+    var consequence: String? = nil
     let submitLabel: String
     var byteLimit: Int?
     var rendersInteractiveControls = true
@@ -182,12 +297,21 @@ struct MessageComposerSheet: View {
     /// display order; empty for a composer that carries no route (#1083). The
     /// first is the default selection.
     var routeOptions: [Components.Schemas.AnswerRoute] = []
+    /// `nil` for every use but Discuss, and for a first message, which has
+    /// no thread to draw.
+    var thread: Thread? = nil
     let submit: (String, Components.Schemas.AnswerRoute?) async -> Bool
     @State private var isSubmitting = false
     @State private var chosenRoute: Components.Schemas.AnswerRoute?
+    @FocusState private var fieldIsFocused: Bool
 
     private var selectedRoute: Components.Schemas.AnswerRoute? {
         chosenRoute ?? routeOptions.first
+    }
+
+    /// The thread the sheet draws: none for a first message.
+    private var drawnThread: Thread? {
+        thread.flatMap { $0.snapshot.conversation.messages.isEmpty ? nil : $0 }
     }
 
     private var trimmedMessage: String {
@@ -204,45 +328,17 @@ struct MessageComposerSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            FreesideSheetHeader(ask: title, consequence: prompt)
-            VStack(alignment: .leading, spacing: 12) {
-                if rendersInteractiveControls {
-                    TextEditor(text: $message)
-                        .font(FreesideFont.callout)
-                        .scrollContentBackground(.hidden)
-                        .padding(8)
-                        .background(Color.ground, in: RoundedRectangle(cornerRadius: 8))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.rule))
-                        .accessibilityLabel("Message")
-                } else {
-                    Text("Message")
-                        .font(FreesideFont.callout)
-                        .foregroundStyle(Color.inkDim)
-                        .padding(8)
-                        .frame(maxWidth: .infinity, minHeight: 190, alignment: .topLeading)
-                        .background(Color.ground, in: RoundedRectangle(cornerRadius: 8))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.rule))
-                }
-                if let byteLimit {
-                    Text("\(byteCount) of \(byteLimit) bytes")
-                        .font(FreesideFont.caption)
-                        .foregroundStyle(byteCount > byteLimit ? Color.waxText : Color.inkDim)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                }
-                if routeOptions.count > 1, let defaultRoute = routeOptions.first {
-                    FreesideSegmentedControl(
-                        accessibilityLabel: "What to do with the answer",
-                        segments: routeOptions.map {
-                            .init(value: $0, label: AgentQuestionPresentation.answerRouteLabel($0))
-                        },
-                        selection: Binding(
-                            get: { selectedRoute ?? defaultRoute },
-                            set: { chosenRoute = $0 }))
-                }
+            // The header, the thread, and the field scroll together; the
+            // footer stays put (R11).
+            if rendersInteractiveControls {
+                // The thread is history: a sheet that draws one opens on
+                // the field under it, not on the oldest message with the
+                // field out of view.
+                ScrollView { composerContent }
+                    .opensOnItsEnd(drawnThread != nil)
+            } else {
+                composerContent
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 16)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             // The submit lives in the sheet body rather than a toolbar so it
             // carries the design language's primary recipe; the row keeps
@@ -250,13 +346,129 @@ struct MessageComposerSheet: View {
             FreesideSheetActionRow(
                 submitLabel: submitLabel,
                 isSubmitEnabled: canSubmit && !isSubmitting,
+                cancelIsOutlined: true,
                 submit: performSubmit,
                 cancel: { dismiss() })
         }
         .background(Color.ground2)
         .freesideSheetPresentation()
-        .frame(minWidth: 380, minHeight: 300)
+        .frame(minWidth: 380, minHeight: 340)
     }
+
+    private var composerContent: some View {
+        VStack(spacing: 0) {
+            // The header scrolls with the field, so the ask can take the
+            // lines it needs at the largest text sizes.
+            FreesideSheetHeader(
+                eyebrow: eyebrow, ask: ask, consequence: consequence, askLineLimit: nil)
+            VStack(alignment: .leading, spacing: 22) {
+                if let thread = drawnThread {
+                    ConversationView(
+                        snapshot: thread.snapshot,
+                        attachments: thread.attachments,
+                        loadsAttachments: thread.loadsAttachments,
+                        now: thread.now,
+                        rendersInteractiveControls: rendersInteractiveControls)
+                }
+                messageField
+                if routeOptions.count > 1, let defaultRoute = routeOptions.first {
+                    // The daemon types the routes, so they are plain items:
+                    // no agent proposed the default, and the source states
+                    // no consequence for either (R29).
+                    VStack(alignment: .leading, spacing: 10) {
+                        KeywordLabel(text: "Route")
+                        ChoiceList(
+                            accessibilityLabel: "What to do with the answer",
+                            options: routeOptions.map {
+                                .init(
+                                    value: $0, label: AgentQuestionPresentation.answerRouteLabel($0),
+                                    register: .item)
+                            },
+                            selection: Binding(
+                                get: { selectedRoute ?? defaultRoute },
+                                set: { chosenRoute = $0 }))
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 6)
+            .padding(.bottom, 16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var messageField: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            KeywordLabel(text: "Message")
+                // The editor carries the same name.
+                .accessibilityHidden(true)
+            if rendersInteractiveControls {
+                TextEditor(text: $message)
+                    .font(FreesideFont.callout)
+                    .foregroundStyle(Color.ink)
+                    .scrollContentBackground(.hidden)
+                    .focused($fieldIsFocused)
+                    .padding(Self.editorPadding)
+                    .frame(minHeight: Self.fieldMinHeight)
+                    .background(fieldFrame(isFocused: fieldIsFocused))
+                    // A TextEditor has no prompt of its own. This one is
+                    // drawn over the empty editor, never written into
+                    // `message`, and leaves clicks and VoiceOver to the
+                    // editor beneath it.
+                    .overlay(alignment: .topLeading) {
+                        if message.isEmpty {
+                            placeholder
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
+                        }
+                    }
+                    .accessibilityLabel("Message")
+            } else {
+                placeholder
+                    .frame(maxWidth: .infinity, minHeight: Self.fieldMinHeight, alignment: .topLeading)
+                    .background(fieldFrame(isFocused: false))
+            }
+            if let byteLimit {
+                // A fixed face: the platform caption draws under the 11.5pt
+                // floor on macOS.
+                Text("\(byteCount) of \(byteLimit) bytes")
+                    .font(FreesideFont.trailingSummary)
+                    .foregroundStyle(byteCount > byteLimit ? Color.waxText : Color.inkDim)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+        }
+    }
+
+    private var placeholder: some View {
+        Text(Self.fieldPlaceholder)
+            .font(FreesideFont.callout)
+            .foregroundStyle(Color.inkFaint)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+    }
+
+    /// The field's frame: a strong rule on the sheet's own ground, and the
+    /// accent ring just outside it while the editor has keyboard focus
+    /// (R19).
+    private func fieldFrame(isFocused: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 6)
+            .strokeBorder(Color.ruleStrong, lineWidth: 1)
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(isFocused ? Color.accentBorder : .clear, lineWidth: 1)
+                    .padding(-3))
+    }
+
+    private static let fieldMinHeight: CGFloat = 120
+
+    // A TextEditor insets a line by 5pt on both platforms, and UITextView
+    // adds 8pt above and below the text; the padding makes up the rest of
+    // the field's 12pt by 10pt.
+    #if os(iOS)
+        private static let editorPadding = EdgeInsets(top: 2, leading: 7, bottom: 2, trailing: 7)
+    #else
+        private static let editorPadding = EdgeInsets(top: 10, leading: 7, bottom: 10, trailing: 7)
+    #endif
 
     private func performSubmit() {
         let draft = trimmedMessage

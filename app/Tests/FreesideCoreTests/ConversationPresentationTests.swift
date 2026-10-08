@@ -42,7 +42,7 @@ import Testing
             #expect(seven > six)
             #expect(seven == height(thread(lines(70)), expanded: [], width: 560))
             // Expanded, the body returns in full and the control stays
-            // under it as "Show less".
+            // under it.
             let expanded = height(thread(lines(7)), expanded: ["msg-probe"], width: 560)
             #expect(expanded > seven)
             #expect(
@@ -51,8 +51,10 @@ import Testing
 
         @Test func boundFollowsTheLayoutNotTheCharacterCount() {
             // One paragraph that fits six lines in the wide column and
-            // wraps past them in a narrow one.
-            let paragraph = thread(String(repeating: "word ", count: 70))
+            // wraps past them in a narrow one. A message takes at most
+            // `messageWidthFraction` of the column, so the paragraph is
+            // sized to that width, not to the column's.
+            let paragraph = thread(String(repeating: "word ", count: 50))
             #expect(
                 height(paragraph, expanded: [], width: 560) == height(paragraph, expanded: ["msg-probe"], width: 560))
             #expect(

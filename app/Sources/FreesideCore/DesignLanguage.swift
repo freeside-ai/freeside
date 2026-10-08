@@ -393,6 +393,12 @@ enum FreesideFont {
     static var ask: Font { fixed("FreesideSerif-Medium", 25, relativeTo: .title2) }
     /// A statement at text size: the agent's summary inside its quote.
     static var statement: Font { fixed("FreesideSerif-Regular", 17, relativeTo: .body) }
+    /// An agent's message in a thread: the statement face a point smaller,
+    /// since a thread is read as running text, not as one summary.
+    static var message: Font { fixed("FreesideSerif-Regular", 16, relativeTo: .body) }
+    /// An option's label: the statement face at medium weight, so the
+    /// thing chosen reads above the text that qualifies it.
+    static var optionLabel: Font { fixed("FreesideSerif-Medium", 17, relativeTo: .body) }
     /// A fact's label and a disclosure's label.
     static var factLabel: Font { fixed("IBMPlexSans", 16, relativeTo: .callout) }
     /// A fact's value.
@@ -862,6 +868,197 @@ struct CompactMark: View {
     }
 }
 
+/// The choice list (R29): where the operator picks one of several, the
+/// options are the control. Each option leads with a binary mark (filled ink
+/// for the pick, hollow for the rest) and draws in the register of whoever
+/// wrote it; the pick is outlined in ink. Picking only moves the selection:
+/// a list never submits, so the surface that composes it owns the submit.
+///
+/// The list is one focus stop, as a radio group is: Tab lands on it, the
+/// arrows move the pick, and the ring sits on the picked option. VoiceOver
+/// reads each option as a button with the selected trait, inside a group
+/// named by `accessibilityLabel`.
+struct ChoiceList<Value: Hashable>: View {
+    /// Whose words an option is, which decides its shape.
+    enum Register {
+        /// An agent wrote it: the quote.
+        case quote
+        /// The daemon typed it: a bordered item.
+        case item
+    }
+
+    struct Option: Identifiable {
+        let value: Value
+        let label: String
+        /// What picking this option does, in dim under the label.
+        var consequence: String? = nil
+        /// A compact mark trailing the label (`PROPOSED` on a default an
+        /// agent proposed).
+        var mark: String? = nil
+        let register: Register
+        var id: Value { value }
+    }
+
+    /// What the list chooses ("What to do with the answer"): spoken, never
+    /// drawn. A caller that wants a visible head draws its own keyword.
+    let accessibilityLabel: String
+    let options: [Option]
+    @Binding var selection: Value
+
+    @FocusState private var isFocused: Bool
+    @State private var hoveredOption: Value?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(options) { optionButton($0) }
+        }
+        .focusable()
+        .focused($isFocused)
+        .focusEffectDisabled()
+        .onKeyPress(.upArrow) { move(by: -1) }
+        .onKeyPress(.downArrow) { move(by: 1) }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private func optionButton(_ option: Option) -> some View {
+        let isSelected = option.value == selection
+        return Button {
+            selection = option.value
+        } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                optionLabel(option)
+                if let consequence = option.consequence {
+                    Text(consequence)
+                        .font(FreesideFont.cardBody)
+                        .foregroundStyle(Color.inkDim)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .buttonStyle(
+            ChoiceOptionStyle(
+                register: option.register,
+                isSelected: isSelected,
+                isHovered: hoveredOption == option.value,
+                isFocused: isFocused && isSelected)
+        )
+        // Not a Tab stop of its own: the list is the single stop.
+        .focusable(false)
+        .onHover { hovering in
+            if hovering {
+                hoveredOption = option.value
+            } else if hoveredOption == option.value {
+                hoveredOption = nil
+            }
+        }
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    /// The label with its mark trailing on the same line while both fit,
+    /// and under it when they do not (R22).
+    @ViewBuilder
+    private func optionLabel(_ option: Option) -> some View {
+        let label = Text(option.label)
+            .font(FreesideFont.optionLabel)
+            .foregroundStyle(Color.ink)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+        if let mark = option.mark {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    label
+                    Spacer(minLength: 0)
+                    CompactMark(text: mark)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    label
+                    CompactMark(text: mark)
+                }
+            }
+        } else {
+            label
+        }
+    }
+
+    private func move(by offset: Int) -> KeyPress.Result {
+        guard let index = options.firstIndex(where: { $0.value == selection }) else {
+            return .ignored
+        }
+        let next = index + offset
+        guard options.indices.contains(next) else { return .handled }
+        selection = options[next].value
+        return .handled
+    }
+}
+
+/// One option of a `ChoiceList`: the mark, then the option in its register.
+/// Hover and press take one cut each (R19) in place of the option's own
+/// ground, and keyboard focus is the 1pt accent ring outside the shape.
+private struct ChoiceOptionStyle<Value: Hashable>: ButtonStyle {
+    let register: ChoiceList<Value>.Register
+    let isSelected: Bool
+    let isHovered: Bool
+    let isFocused: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            mark
+                .padding(.top, 4)
+            surface(
+                configuration.label
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10),
+                wash: fill(isPressed: configuration.isPressed)
+            )
+            .overlay(shape.strokeBorder(border, lineWidth: 1))
+            .overlay(
+                shape.inset(by: -3)
+                    .strokeBorder(isFocused ? Color.accentBorder : .clear, lineWidth: 1)
+            )
+        }
+        .contentShape(Rectangle())
+    }
+
+    private var shape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: register == .quote ? 6 : 8)
+    }
+
+    @ViewBuilder
+    private func surface(_ content: some View, wash: Color) -> some View {
+        switch register {
+        case .quote: content.quoteSurface(wash: wash)
+        case .item: content.background(wash).clipShape(shape)
+        }
+    }
+
+    /// The binary mark: filled is the pick, hollow is not.
+    private var mark: some View {
+        Group {
+            if isSelected {
+                Circle().fill(Color.ink)
+            } else {
+                Circle().strokeBorder(Color.ruleStrong, lineWidth: 1.5)
+            }
+        }
+        .frame(width: 14, height: 14)
+        .accessibilityHidden(true)
+    }
+
+    private var border: Color {
+        if isSelected { return .ink }
+        return register == .quote ? .clear : .itemBorder
+    }
+
+    private func fill(isPressed: Bool) -> Color {
+        if isPressed { return .accentWashSoft }
+        if isHovered { return .hover }
+        return register == .quote ? .quoteWash : .clear
+    }
+}
+
 /// The one chronology marker: every newest-first list (milestones, review
 /// rounds, task events) marks entry 0 with a filled ink dot and every later
 /// entry with a hollow ring. The stage rail draws the same two markers.
@@ -1235,21 +1432,23 @@ struct FreesideSheetHeader: View {
     let ask: String
     var consequence: String? = nil
     var binding: String? = nil
+    /// Two lines by default: an attachment sheet's ask is the agent's claim
+    /// label, which the contract admits at any length, and this header never
+    /// compresses vertically, so an unbounded ask would push the sheet body
+    /// and its Done footer off-screen. The system navigation title this
+    /// header replaces truncated to one line. A sheet that scrolls its
+    /// header passes `nil`, so its own ask stays whole at every text size.
+    var askLineLimit: Int? = 2
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let eyebrow {
                 KeywordLabel(text: eyebrow)
             }
-            // Two lines at most: an attachment sheet's ask is the agent's
-            // claim label, which the contract admits at any length, and this
-            // header never compresses vertically, so an unbounded ask would
-            // push the sheet body and its Done footer off-screen. The system
-            // navigation title this header replaces truncated to one line.
             Text(ask)
                 .font(FreesideFont.sectionTitle)
                 .foregroundStyle(Color.ink)
-                .lineLimit(2)
+                .lineLimit(askLineLimit)
                 .accessibilityAddTraits(.isHeader)
             if let consequence {
                 Text(consequence)
@@ -1280,6 +1479,9 @@ struct FreesideSheetActionRow: View {
     /// a destructive submit carries.
     var submitHint: String? = nil
     var isSubmitEnabled: Bool = true
+    /// The refined footer (R11): Cancel as an outline that shares the row
+    /// equally with the submit, in place of the hugging text button.
+    var cancelIsOutlined = false
     let submit: () -> Void
     /// `nil` for a reader's single dismiss: no Cancel is drawn and Escape
     /// routes to `submit`, so both keys close the sheet.
@@ -1311,6 +1513,11 @@ struct FreesideSheetActionRow: View {
                     submitButton(expands: true)
                     cancelButton(cancel).frame(maxWidth: .infinity)
                 }
+            } else if cancelIsOutlined {
+                HStack(spacing: 10) {
+                    cancelButton(cancel)
+                    submitButton(expands: true)
+                }
             } else {
                 HStack(spacing: 12) {
                     cancelButton(cancel)
@@ -1339,7 +1546,10 @@ struct FreesideSheetActionRow: View {
 
     private func cancelButton(_ cancel: @escaping () -> Void) -> some View {
         Button("Cancel", action: cancel)
-            .buttonStyle(FreesideActionButtonStyle(tone: .tertiary))
+            .buttonStyle(
+                FreesideActionButtonStyle(
+                    tone: cancelIsOutlined ? .secondary : .tertiary, expands: cancelIsOutlined)
+            )
             .keyboardShortcut(.cancelAction)
     }
 
@@ -1375,6 +1585,17 @@ extension View {
     /// system focus effect, which is drawn in the system's own color.
     func freesideFocusRing(cornerRadius: CGFloat = 6) -> some View {
         modifier(FreesideFocusRing(cornerRadius: cornerRadius))
+    }
+
+    /// The quote's ground (R5) under content that sets its own padding: the
+    /// 3pt rule inside the leading edge of the wash, both clipped to one
+    /// corner. `QuoteBlock` is the same ground with a card section's padding;
+    /// a conversation message and a choice-list option size themselves.
+    func quoteSurface(wash: Color = .quoteWash, cornerRadius: CGFloat = 6) -> some View {
+        padding(.leading, 3)
+            .background(alignment: .leading) { Color.quoteRule.frame(width: 3) }
+            .background(wash)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
     }
 
     /// A card: ground-2 on ground, 1px rule border, 8pt radius.

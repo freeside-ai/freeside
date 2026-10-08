@@ -217,26 +217,32 @@ struct DecisionDetailView: View {
                 switch editor {
                 case .discuss:
                     MessageComposerSheet(
-                        title: "Discuss",
-                        prompt: "Send a message to the agent. The item stays open while it replies.",
-                        submitLabel: "Send"
+                        eyebrow: AttentionDisplay.label(.discuss),
+                        ask: "What do you want to ask the agent?",
+                        consequence: "The item stays open while the agent replies.",
+                        submitLabel: "Send",
+                        thread: model.conversation.map {
+                            .init(
+                                snapshot: $0, attachments: attachments,
+                                loadsAttachments: loadsAttachments, now: now)
+                        }
                     ) { message, _ in
                         await model.submitDiscuss(message: message)
                     }
                 case .requestChanges:
                     MessageComposerSheet(
-                        title: "Request changes",
-                        prompt: "Describe the revision the specification needs.",
-                        submitLabel: "Request changes",
+                        eyebrow: AttentionDisplay.label(.request_changes),
+                        ask: "What should the specification change?",
+                        submitLabel: AttentionDisplay.label(.request_changes),
                         byteLimit: 8192
                     ) { message, _ in
                         await model.submitRequestChanges(message: message)
                     }
                 case .answerAndRetry:
                     MessageComposerSheet(
-                        title: "Answer and retry",
-                        prompt: "Answer the agent's question and choose what to do next.",
-                        submitLabel: "Answer and retry", byteLimit: 8192,
+                        eyebrow: AttentionDisplay.label(.answer_and_retry),
+                        ask: "What is your answer?",
+                        submitLabel: AttentionDisplay.label(.answer_and_retry), byteLimit: 8192,
                         routeOptions: AgentQuestionPresentation.answerRoutes(for: model.snapshot?.item)
                     ) { message, route in
                         await model.submitAnswer(
@@ -246,17 +252,19 @@ struct DecisionDetailView: View {
                     }
                 case .answerWithoutRetry:
                     MessageComposerSheet(
-                        title: "Answer without retry",
-                        prompt: "Record the answer and conclude the question without restarting work.",
-                        submitLabel: "Record answer", byteLimit: 8192
+                        eyebrow: AttentionDisplay.label(.answer_without_retry),
+                        ask: "What is your answer?",
+                        consequence: "The question concludes without restarting work.",
+                        submitLabel: "Record Answer", byteLimit: 8192
                     ) { message, _ in
                         await model.submitAnswer(.answer_without_retry, message: message)
                     }
                 case .returnToAgent:
                     MessageComposerSheet(
-                        title: "Return to agent",
-                        prompt: "Describe what the agent should change before the work returns for review.",
-                        submitLabel: "Return to agent", byteLimit: 8192
+                        eyebrow: AttentionDisplay.label(.return_to_agent),
+                        ask: "What should the agent change?",
+                        consequence: "The work returns for review after the agent changes it.",
+                        submitLabel: AttentionDisplay.label(.return_to_agent), byteLimit: 8192
                     ) { message, _ in
                         await model.submitReturnToAgent(message: message)
                     }
@@ -720,6 +728,8 @@ struct DecisionDetailView: View {
         switch modules.composition.modules[index] {
         case .yieldChart:
             (graphics.diminishingYield ?? DecisionYieldPresentation(modules.item)) != nil
+        case .foldedFacts:
+            !DecisionFactPlacement(modules.item, includesCommitPlan: false, now: now).folded.isEmpty
         case .facts, .agentQuestion, .specRevision, .specification, .recommendation, .checklist,
             .stageRail, .comparison, .stopCause, .findingFacts, .factBlock, .summary, .claims,
             .evidence, .details:
@@ -782,10 +792,14 @@ struct DecisionDetailView: View {
     ) -> some View {
         let rendersInteractiveControls = register.rendersInteractiveControls
         switch module {
+        case .foldedFacts:
+            foldedFacts(
+                DecisionFactPlacement(item, includesCommitPlan: false, now: now), summarized: true)
         case .facts:
             factsSection(
                 item,
-                includesCommitPlan: !composition.modules.contains(.checklist))
+                includesCommitPlan: !composition.modules.contains(.checklist),
+                drawsFold: !composition.modules.contains(.foldedFacts))
             if let proposalFacts {
                 cardSection("Authenticated proposal") {
                     proposalRows(proposalFacts)
@@ -1204,11 +1218,14 @@ struct DecisionDetailView: View {
     /// composition places ahead of its action region; a type whose lead is its
     /// own module contributes no rows and the section disappears rather than
     /// rendering an empty container. `DecisionFactPlacement` decides which
-    /// rows stay beside the decision and which fold.
+    /// rows stay beside the decision and which fold. The fold draws here,
+    /// above the actions, unless the composition places it as its own
+    /// `.foldedFacts` module.
     @ViewBuilder
     private func factsSection(
         _ item: Components.Schemas.AttentionItem,
-        includesCommitPlan: Bool
+        includesCommitPlan: Bool,
+        drawsFold: Bool
     ) -> some View {
         let placement = DecisionFactPlacement(
             item, includesCommitPlan: includesCommitPlan, now: now)
@@ -1230,9 +1247,21 @@ struct DecisionDetailView: View {
                 }
             }
         }
+        if drawsFold {
+            foldedFacts(placement, summarized: false)
+        }
+    }
+
+    /// The routine facts behind their disclosure. Under the actions the
+    /// closed fold names what it holds (R2); above them it stays the bare
+    /// label a legacy card has always drawn.
+    @ViewBuilder
+    private func foldedFacts(_ placement: DecisionFactPlacement, summarized: Bool) -> some View {
         if !placement.folded.isEmpty {
             SentenceDisclosure(
-                label: DecisionFactPlacement.foldedTitle, isExpanded: disclosure(.runDetails)
+                label: DecisionFactPlacement.foldedTitle,
+                summary: summarized ? placement.foldedSummary : nil,
+                isExpanded: disclosure(.runDetails)
             ) {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(placement.folded) { fact in
@@ -1301,85 +1330,124 @@ struct DecisionDetailView: View {
         register: UnverifiedRegister
     ) -> some View {
         if let presentation = AgentQuestionPresentation(item) {
+            let scale = DecisionCardComposition.scale(for: item._type)
             if let scope = presentation.scopeConflict {
-                VStack(alignment: .leading, spacing: 8) {
+                // The daemon's own statement inside the agent's question
+                // (R5): the accent bar, never the quote.
+                SystemCallout {
                     KeywordLabel(text: "Required work outside scope")
                     Text(scope.paths.joined(separator: ", "))
-                        .font(FreesideFont.itemTitle)
-                    Text("Allowed paths: \(scope.declared_paths.joined(separator: ", "))")
-                    Text("Candidate: \(AttentionDisplay.shortRevision(scope.head_sha))")
-                    Text(
-                        "Answer to keep scope and record the unmet work. To widen scope, stop and start a new run with a newly approved path policy."
-                    )
+                        .font(FreesideFont.statement)
+                    Group {
+                        Text("Allowed paths: \(scope.declared_paths.joined(separator: ", "))")
+                        Text("Candidate: \(AttentionDisplay.shortRevision(scope.head_sha))")
+                        Text(
+                            "Answer to keep scope and record the unmet work. To widen scope, stop and start a new run with a newly approved path policy."
+                        )
+                    }
+                    .font(FreesideFont.cardBody)
                 }
-                .font(FreesideFont.callout)
+                .foregroundStyle(Color.ink)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .freesideCard()
             }
             // The eyebrow names the first question's register directly
             // above it (R27), so only a later question repeats the label.
             let eyebrowLabelsLead = DecisionCardComposition.eyebrow(for: item).carriesInfo
+            // With nothing drawn between them, the first question is the
+            // card's ask and sits the head's gap under the eyebrow.
+            let leadFollowsEyebrow =
+                eyebrowLabelsLead && presentation.scopeConflict == nil && model.conversation == nil
+                && !drawsRecommendationModule(item)
             ForEach(Array(presentation.decisions.enumerated()), id: \.offset) { index, decision in
-                VStack(alignment: .leading, spacing: 8) {
-                    if index > 0 || !eyebrowLabelsLead {
-                        sectionTitle(
-                            "Agent question",
-                            unverified: index == 0 ? register : register.withoutInfo)
+                VStack(alignment: .leading, spacing: scale.sectionGap) {
+                    VStack(alignment: .leading, spacing: scale.headGap) {
+                        if index > 0 || !eyebrowLabelsLead {
+                            sectionTitle(
+                                "Agent question",
+                                unverified: index == 0 ? register : register.withoutInfo)
+                        }
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(decision.question)
+                                .font(FreesideFont.ask)
+                                .foregroundStyle(Color.ink)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text(decision.whyBlocking)
+                                .font(FreesideFont.cardBody)
+                                .foregroundStyle(Color.inkDim)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
-                    Text(decision.question)
-                        .font(FreesideFont.sectionTitle)
-                        .foregroundStyle(Color.ink)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text(decision.whyBlocking)
-                        .font(FreesideFont.callout)
-                        .foregroundStyle(Color.inkDim)
-                        .fixedSize(horizontal: false, vertical: true)
-                    ForEach(Array(decision.options.enumerated()), id: \.offset) { optionIndex, option in
-                        agentQuestionOption(option, number: optionIndex + 1)
-                            .padding(.top, optionIndex == 0 ? 4 : 0)
+                    if !decision.options.isEmpty {
+                        VStack(alignment: .leading, spacing: scale.moduleGap) {
+                            ForEach(Array(decision.options.enumerated()), id: \.offset) { optionIndex, option in
+                                agentQuestionOption(option, number: optionIndex + 1)
+                            }
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, index == 0 && leadFollowsEyebrow ? scale.headGap - scale.sectionGap : 0)
             }
         }
     }
 
-    /// One alternative the agent enumerated, bounded as its own panel so the
-    /// label, the recommendation, and the complete tradeoff read as one
-    /// option. A panel describes a choice and is not the control that makes
-    /// it: the answer still goes through the card's answer actions, so it is
-    /// one accessibility element with no tap target.
+    /// One alternative the agent enumerated, drawn as a quote (R5) so the
+    /// label and the complete tradeoff read as the agent's words. The
+    /// recommended one carries the compact mark trailing its keyword (R21),
+    /// with no glyph and no explanation control: the card's one control sits
+    /// on the eyebrow (R25). A quote describes a choice and is not the
+    /// control that makes it: the answer still goes through the card's
+    /// answer actions, so it is one accessibility element with no tap target.
     private func agentQuestionOption(
         _ option: AgentQuestionPresentation.Option,
         number: Int
     ) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            KeywordLabel(text: "Option \(number)")
-            Text(option.label)
-                .font(FreesideFont.itemTitle)
-                .foregroundStyle(Color.ink)
-                .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 4) {
             if option.recommended {
-                Label("Agent recommends (unverified)", systemImage: "quote.bubble")
-                    .font(FreesideFont.caption)
-                    .foregroundStyle(Color.accentText)
+                // The mark trails the keyword while the line holds both and
+                // drops under it at a text size where it does not.
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        KeywordLabel(text: "Option \(number)")
+                        Spacer(minLength: 0)
+                        CompactMark(text: Self.recommendedOptionMark)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        KeywordLabel(text: "Option \(number)")
+                        CompactMark(text: Self.recommendedOptionMark)
+                    }
+                }
+            } else {
+                KeywordLabel(text: "Option \(number)")
             }
+            Text(option.label)
+                .font(FreesideFont.optionLabel)
+                .foregroundStyle(Color.ink)
+                .fixedSize(horizontal: false, vertical: true)
             Text(option.tradeoffs)
-                .font(FreesideFont.callout)
+                .font(FreesideFont.cardBody)
                 .foregroundStyle(Color.ink)
                 .fixedSize(horizontal: false, vertical: true)
         }
+        .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .padding(.leading, 13)
-        .padding(.trailing, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.neutralWash)
-        .overlay(alignment: .leading) {
-            Rectangle().fill(Color.rule).frame(width: 3)
-        }
-        .accessibilityElement(children: .combine)
+        .quoteSurface()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Self.agentQuestionOptionAccessibilityLabel(option, number: number))
+    }
+
+    static let recommendedOptionMark = "Agent recommends"
+
+    /// What VoiceOver reads for one option. The compact mark prints no
+    /// "(unverified)" (R21), so the spoken label keeps it, in the order the
+    /// option has always been read: number, label, recommendation, tradeoffs.
+    static func agentQuestionOptionAccessibilityLabel(
+        _ option: AgentQuestionPresentation.Option, number: Int
+    ) -> String {
+        let recommendation = option.recommended ? ["\(recommendedOptionMark) (unverified)"] : []
+        return (["Option \(number)", option.label] + recommendation + [option.tradeoffs])
+            .joined(separator: ", ")
     }
 
     @ViewBuilder
@@ -2541,6 +2609,16 @@ struct DecisionDetailView: View {
         return recommendation
     }
 
+    /// Whether the card draws the recommendation as a module ahead of its
+    /// lead. Only iPhone does; the Mac draws it in the action region.
+    private func drawsRecommendationModule(_ item: Components.Schemas.AttentionItem) -> Bool {
+        #if os(iOS)
+            drawnRecommendation(item) != nil
+        #else
+            false
+        #endif
+    }
+
     /// A disclosure's own label draws the keyword without the control: the
     /// label is what opens the section, so a second button inside it would
     /// hand touch and VoiceOver the disclosure rather than the explanation.
@@ -3303,6 +3381,7 @@ struct DecisionDetailView: View {
     ) -> some View {
         let ranking = actionRanking(item)
         let controlGap = DecisionCardComposition.scale(for: item._type).controlGap
+        let filled = DecisionCardComposition.filledPrincipalIndex(for: item._type, ranking: ranking)
         VStack(alignment: .leading, spacing: controlGap) {
             if showsValidationProgress && model.validation == .pending {
                 HStack(spacing: 8) {
@@ -3333,14 +3412,14 @@ struct DecisionDetailView: View {
                 // uniqueness, and duplicate identities may not drop a button.
                 if stackedLayout {
                     VStack(alignment: .leading, spacing: controlGap) {
-                        ForEach(Array(ranking.principal.enumerated()), id: \.offset) { _, action in
-                            actionButton(action, item: item, tone: .secondary)
+                        ForEach(Array(ranking.principal.enumerated()), id: \.offset) { index, action in
+                            actionButton(action, item: item, tone: index == filled ? .primary : .secondary)
                         }
                     }
                 } else {
                     HStack(alignment: .top, spacing: controlGap) {
-                        ForEach(Array(ranking.principal.enumerated()), id: \.offset) { _, action in
-                            actionButton(action, item: item, tone: .secondary)
+                        ForEach(Array(ranking.principal.enumerated()), id: \.offset) { index, action in
+                            actionButton(action, item: item, tone: index == filled ? .primary : .secondary)
                         }
                     }
                 }
@@ -3423,7 +3502,7 @@ struct DecisionDetailView: View {
                     }
                 }
             } label: {
-                Text("More actions \u{25BE}")
+                Text("\(DecisionCardComposition.scale(for: item._type).overflowLabel) \u{25BE}")
             }
             .menuStyle(.button)
             .buttonStyle(FreesideActionButtonStyle(tone: .tertiary))

@@ -455,8 +455,8 @@
                     width: 480,
                     view: AnyView(
                         MessageComposerSheet(
-                            title: "Request changes",
-                            prompt: "Describe the revision the specification needs.",
+                            eyebrow: "Request changes",
+                            ask: "What should the specification change?",
                             submitLabel: "Request changes",
                             byteLimit: 8192,
                             rendersInteractiveControls: false,
@@ -467,8 +467,8 @@
                     width: 390,
                     view: AnyView(
                         MessageComposerSheet(
-                            title: "Request changes",
-                            prompt: "Describe the revision the specification needs.",
+                            eyebrow: "Request changes",
+                            ask: "What should the specification change?",
                             submitLabel: "Request changes",
                             byteLimit: 8192,
                             rendersInteractiveControls: false,
@@ -480,8 +480,8 @@
                     colorScheme: .dark,
                     view: AnyView(
                         MessageComposerSheet(
-                            title: "Request changes",
-                            prompt: "Describe the revision the specification needs.",
+                            eyebrow: "Request changes",
+                            ask: "What should the specification change?",
                             submitLabel: "Request changes",
                             byteLimit: 8192,
                             rendersInteractiveControls: false,
@@ -493,12 +493,43 @@
                     colorScheme: .dark,
                     view: AnyView(
                         MessageComposerSheet(
-                            title: "Request changes",
-                            prompt: "Describe the revision the specification needs.",
+                            eyebrow: "Request changes",
+                            ask: "What should the specification change?",
                             submitLabel: "Request changes",
                             byteLimit: 8192,
                             rendersInteractiveControls: false,
                             submit: { _, _ in true }))))
+
+            // The Discuss composer (R11): the item's thread above the field
+            // on Mac and phone, and a first message, which has no thread
+            // section to draw.
+            let discussThread = AttentionFixtures.defaultConversations()[0]
+            for (name, width, scheme, drawsThread) in [
+                ("discuss-composer", CGFloat(480), ColorScheme.light, true),
+                ("discuss-composer-phone", CGFloat(390), ColorScheme.light, true),
+                ("discuss-composer-dark", CGFloat(480), ColorScheme.dark, true),
+                ("discuss-composer-phone-dark", CGFloat(390), ColorScheme.dark, true),
+                ("discuss-composer-first", CGFloat(480), ColorScheme.light, false),
+            ] {
+                surfaces.append(
+                    Surface(
+                        name: name,
+                        width: width,
+                        colorScheme: scheme,
+                        view: AnyView(
+                            MessageComposerSheet(
+                                eyebrow: "Discuss",
+                                ask: "What do you want to ask the agent?",
+                                consequence: "The item stays open while the agent replies.",
+                                submitLabel: "Send",
+                                rendersInteractiveControls: false,
+                                thread: drawsThread
+                                    ? .init(
+                                        snapshot: discussThread, attachments: store.attachments,
+                                        loadsAttachments: false, now: screenshotNow)
+                                    : nil,
+                                submit: { _, _ in true }))))
+            }
 
             // The New Task composer (#1330): the project picker trigger, the
             // source field, and the optional name, empty and filled, on Mac
@@ -585,9 +616,9 @@
                         colorScheme: scheme,
                         view: AnyView(
                             MessageComposerSheet(
-                                title: "Answer and retry",
-                                prompt: "Answer the agent's question and choose what to do next.",
-                                submitLabel: "Answer and retry",
+                                eyebrow: "Answer and Retry",
+                                ask: "What is your answer?",
+                                submitLabel: "Answer and Retry",
                                 byteLimit: 8192,
                                 rendersInteractiveControls: false,
                                 routeOptions: routedComposer,
@@ -1451,6 +1482,17 @@
                     view: AnyView(
                         destructiveRecommendation.screenshotCard(
                             question, at: dynamicTypeSize))))
+            // The question card in the Mac's two-column layout, where the
+            // action region sits beside the card's modules, not above them.
+            surfaces.append(
+                Surface(
+                    name: "decision-agent_question-1200",
+                    width: 1_200,
+                    view: AnyView(
+                        destructiveRecommendation.screenshotCard(
+                            AttentionFixtures.fixture(type: .agent_question).item,
+                            at: dynamicTypeSize,
+                            detailWidth: 1_200))))
 
             let cache = InMemoryCacheStore()
             let runs = RunFixtures.defaultRuns()
@@ -1710,6 +1752,40 @@
                                     .background(Color.ground))))
                     }
                 }
+            }
+            // The three authors in one thread (R5): the operator bordered on
+            // the right, the daemon bordered on the left under its producer
+            // label, and the agent quoted on the left.
+            var authorsConversation = longConversation
+            authorsConversation.conversation.messages = [
+                .init(
+                    id: "msg-authors-user", conversation_id: longConversation.conversation.id, sequence: 1,
+                    author: .user, body: "Can the revised spec preserve the existing migration order?",
+                    attachments: [], created_at: screenshotNow.addingTimeInterval(-180)),
+                .init(
+                    id: "msg-authors-daemon", conversation_id: longConversation.conversation.id, sequence: 2,
+                    author: .daemon, body: "The agent's reply was not delivered. The question was sent again.",
+                    attachments: [], created_at: screenshotNow.addingTimeInterval(-120)),
+                .init(
+                    id: "msg-authors-agent", conversation_id: longConversation.conversation.id, sequence: 3,
+                    author: .agent, body: "Yes. The revision keeps the order and narrows the rollback step.",
+                    attachments: [], created_at: screenshotNow.addingTimeInterval(-60)),
+            ]
+            for scheme in [ColorScheme.light, .dark] {
+                surfaces.append(
+                    Surface(
+                        name: "conversation-authors-\(scheme)",
+                        width: 560, colorScheme: scheme, nativeAppearance: true,
+                        view: AnyView(
+                            ConversationView(
+                                snapshot: authorsConversation,
+                                attachments: store.attachments,
+                                loadsAttachments: false,
+                                now: screenshotNow,
+                                rendersInteractiveControls: false
+                            )
+                            .padding(16)
+                            .background(Color.ground))))
             }
             var failedImplementation = approvalFixture.runs[0]
             failedImplementation.run.outcome = .failed
@@ -2672,6 +2748,7 @@
             surfaces.append(contentsOf: try taskStopSurfaces())
             surfaces.append(contentsOf: taskStyleSurfaces())
             surfaces.append(contentsOf: cardStyleSurfaces())
+            surfaces.append(contentsOf: choiceListSurfaces())
             surfaces.append(contentsOf: finalReviewFrameSurfaces(store: store, at: dynamicTypeSize))
 
             // Visual audit D08: the dispute card on both platforms and
@@ -2990,6 +3067,48 @@
                             FactRow(label: "Checks", chip: StateChip(label: "Degraded", cut: .attention))
                             FactRow(label: "Pull request", value: "owner/repo#7")
                         }.padding(24).foregroundStyle(Color.ink).background(Color.ground)))
+            }
+        }
+
+        /// The choice list (R29) in both registers, by day and by dusk: an
+        /// agent's routes as quotes with a consequence line and `PROPOSED`
+        /// on the default, the pick on the other one, and the daemon's
+        /// routes as bordered items with nothing but their labels.
+        private func choiceListSurfaces() -> [Surface] {
+            [ColorScheme.light, .dark].map { scheme in
+                Surface(
+                    name: "choice-list-\(scheme)", width: 390, colorScheme: scheme,
+                    view: AnyView(
+                        VStack(alignment: .leading, spacing: 22) {
+                            VStack(alignment: .leading, spacing: 10) {
+                                KeywordLabel(text: "Route")
+                                ChoiceList(
+                                    accessibilityLabel: "Route for finding 1",
+                                    options: [
+                                        .init(
+                                            value: "decline", label: "Decline the finding",
+                                            consequence:
+                                                "Nothing changes in the PR; the finding is recorded as declined.",
+                                            mark: "Proposed", register: .quote),
+                                        .init(
+                                            value: "fix", label: "Fix in this PR",
+                                            consequence:
+                                                "Starts a remediator limited to the run's allowed paths and re-reviews the PR.",
+                                            register: .quote),
+                                    ],
+                                    selection: .constant("fix"))
+                            }
+                            VStack(alignment: .leading, spacing: 10) {
+                                KeywordLabel(text: "Route")
+                                ChoiceList(
+                                    accessibilityLabel: "What to do with the answer",
+                                    options: [
+                                        .init(value: "retry", label: "Retry implementation", register: .item),
+                                        .init(value: "revise", label: "Revise specification", register: .item),
+                                    ],
+                                    selection: .constant("retry"))
+                            }
+                        }.padding(24).foregroundStyle(Color.ink).background(Color.ground2)))
             }
         }
 

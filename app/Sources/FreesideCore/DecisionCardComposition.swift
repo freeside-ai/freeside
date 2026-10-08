@@ -3,6 +3,10 @@ import SwiftUI
 
 enum DecisionCardModule: String, CaseIterable {
     case facts
+    /// The routine facts a card folds (`DecisionFactPlacement.folded`), as
+    /// a module of their own so a composition can place the fold under its
+    /// actions while `.facts` stays ahead of them.
+    case foldedFacts
     case agentQuestion
     case specRevision
     case specification
@@ -238,6 +242,9 @@ struct DecisionCardComposition: Equatable {
         /// Returning the work is a plain outlined command on the refined
         /// card (R6).
         var drawsReturnGlyph: Bool { self == .legacy }
+        /// The overflow trigger's words, in Title Case on the refined card
+        /// (R30).
+        var overflowLabel: String { self == .refined ? "More Actions" : "More actions" }
         var cornerRadius: CGFloat { self == .refined ? 12 : 8 }
         /// The widest a one-column card grows with the detail's 16pt margin
         /// around it: the refined card itself is 560 wide.
@@ -257,14 +264,15 @@ struct DecisionCardComposition: Equatable {
         }
     }
 
-    /// The final review is the card the refined ladder was proved on; every
-    /// other type keeps the earlier one until its own sweep composes it. The
-    /// switch is exhaustive so a new type has to answer the question.
+    /// The final review is the card the refined ladder was proved on, and
+    /// the agent question the second composed on it; every other type keeps
+    /// the earlier one until its own sweep composes it. The switch is
+    /// exhaustive so a new type has to answer the question.
     static func scale(for type: Components.Schemas.AttentionType) -> Scale {
         switch type {
-        case .ready_for_final_review:
+        case .ready_for_final_review, .agent_question:
             return .refined
-        case .agent_question, .review_dispute, .spec_approval, .execution_failure,
+        case .review_dispute, .spec_approval, .execution_failure,
             .review_diminishing_returns, .review_contradiction, .review_configuration,
             .finding_adjudication, .publish_blocked, .task_proposal, .effect_proposal,
             .system_health, .blocked:
@@ -510,10 +518,22 @@ struct DecisionCardComposition: Equatable {
             // an agent-written reason there shows its keyword.
             return context.platform == .phone && !context.accessibilityLayout
                 && Self.reason(for: item)?.isAgentWritten == true
-        case .specRevision, .specification, .stopCause, .checklist, .stageRail, .comparison,
-            .yieldChart, .evidence:
+        case .foldedFacts, .specRevision, .specification, .stopCause, .checklist, .stageRail,
+            .comparison, .yieldChart, .evidence:
             return false
         }
+    }
+
+    /// Which of a card's principal actions draws filled, by position.
+    /// Answering and retrying is the question card's supported next step, so
+    /// it takes the card's one filled button unless a recommendation block
+    /// already holds it. `requested_decision` may repeat an action, so only
+    /// the first one takes the fill and no card draws two.
+    static func filledPrincipalIndex(
+        for type: Components.Schemas.AttentionType, ranking: DecisionActionRanking
+    ) -> Int? {
+        guard type == .agent_question, ranking.recommended == nil else { return nil }
+        return ranking.principal.firstIndex(of: .answer_and_retry)
     }
 
     /// Whether a card's own reviewing action draws filled. View PR is the
@@ -620,11 +640,15 @@ struct DecisionCardComposition: Equatable {
             // and any supporting context.
             return .init(
                 modules: [
-                    .recommendation, .agentQuestion, .facts, .factBlock, .summary, .claims,
-                    .evidence, .details,
+                    .recommendation, .agentQuestion, .facts, .foldedFacts, .factBlock, .summary,
+                    .claims, .evidence, .details,
                 ],
                 actionInsertionIndex: 3,
-                reviewingActionInsertionIndex: nil)
+                reviewingActionInsertionIndex: nil,
+                // The run and stage the question came from are where to look
+                // next, not what to decide on, so they fold under the
+                // actions with Recorded Context (R26).
+                foldedModuleCount: 1)
         case .spec_approval:
             // Plan §9 has this card lead with the ask and a plan-altitude
             // summary and put the full specification below, so `.summary`
@@ -686,6 +710,12 @@ struct DecisionFactPlacement: Equatable {
 
     let visible: [AttentionDisplay.FactRow]
     let folded: [AttentionDisplay.FactRow]
+
+    /// What the closed fold says it holds: the folded rows' values in row
+    /// order, so the stage and what it waits on read without opening it.
+    var foldedSummary: String? {
+        folded.isEmpty ? nil : folded.map(\.value).joined(separator: " \u{00B7} ")
+    }
 
     init(
         _ item: Components.Schemas.AttentionItem,
