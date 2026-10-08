@@ -90,6 +90,73 @@ import Testing
                 .inboxScope == nil)
     }
 
+    @Test(arguments: [
+        ("discuss", "item-spec_approval", LaunchInputs.Composer.discuss),
+        ("request_changes", "item-spec_approval", .requestChanges),
+        ("return_to_agent", "item-ready_for_final_review", .returnToAgent),
+        ("answer_and_retry", "item-agent_question", .answerAndRetry),
+        ("answer_without_retry", "item-agent_question", .answerWithoutRetry),
+    ])
+    func composerIsAcceptedOnAnItemThatOffersIt(
+        raw: String, itemID: String, composer: LaunchInputs.Composer
+    ) {
+        let inputs = LaunchInputs(colorSchemeRaw: nil, selectionRaw: itemID, composerRaw: raw)
+        #expect(inputs.composer == composer)
+        #expect(inputs.selection == itemID)
+    }
+
+    /// The argument takes the API's action names, so each case must name
+    /// its own action and no two may share one.
+    @Test func everyComposerNamesItsAPIAction() {
+        let composers = LaunchInputs.Composer.allCases
+        #expect(composers.map(\.rawValue) == composers.map(\.action.rawValue))
+        #expect(
+            composers.map(\.rawValue) == [
+                "discuss", "request_changes", "return_to_agent", "answer_and_retry",
+                "answer_without_retry",
+            ])
+    }
+
+    @Test(arguments: ["nope", "Discuss", "stop", ""])
+    func aValueThatNamesNoComposerIsIgnored(raw: String) {
+        #expect(
+            LaunchInputs(colorSchemeRaw: nil, selectionRaw: "item-spec_approval", composerRaw: raw)
+                .composer == nil)
+    }
+
+    @Test func aComposerTheSelectedItemDoesNotOfferIsIgnored() {
+        let inputs = LaunchInputs(
+            colorSchemeRaw: nil, selectionRaw: "item-agent_question", composerRaw: "discuss")
+        #expect(inputs.composer == nil)
+        // Only the composer is dropped: the item still opens.
+        #expect(inputs.selection == "item-agent_question")
+    }
+
+    @Test func aComposerWithoutASelectedInboxItemIsIgnored() {
+        #expect(
+            LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil, composerRaw: "discuss").composer
+                == nil)
+        #expect(
+            LaunchInputs(colorSchemeRaw: nil, selectionRaw: "item-nope", composerRaw: "discuss")
+                .composer == nil)
+        // The tasks screen selects a task or run, never an inbox item.
+        #expect(
+            LaunchInputs(
+                colorSchemeRaw: nil, selectionRaw: "item-spec_approval", screenRaw: "tasks",
+                composerRaw: "discuss"
+            ).composer == nil)
+        #expect(
+            LaunchInputs(
+                colorSchemeRaw: nil, selectionRaw: TaskFixtures.retryTaskID, screenRaw: "tasks",
+                composerRaw: "discuss"
+            ).composer == nil)
+    }
+
+    @Test func unsetComposerStaysUnset() {
+        #expect(
+            LaunchInputs(colorSchemeRaw: nil, selectionRaw: "item-spec_approval").composer == nil)
+    }
+
     @Test func tasksScreenAcceptsTaskAndRunFixtureSelections() {
         let task = LaunchInputs(
             colorSchemeRaw: nil, selectionRaw: TaskFixtures.retryTaskID, screenRaw: "tasks")

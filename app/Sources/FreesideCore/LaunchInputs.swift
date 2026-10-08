@@ -29,6 +29,27 @@ public struct LaunchInputs {
         case run(taskID: String, runID: String)
     }
 
+    /// What `-FreesideComposer` names: a decision card's message composer, by
+    /// the API action whose button opens it. Five cases, not the whole
+    /// `Action` type, so a launch can't name an action that has no composer.
+    public enum Composer: String, CaseIterable, Sendable {
+        case discuss
+        case requestChanges = "request_changes"
+        case returnToAgent = "return_to_agent"
+        case answerAndRetry = "answer_and_retry"
+        case answerWithoutRetry = "answer_without_retry"
+
+        public var action: Components.Schemas.Action {
+            switch self {
+            case .discuss: .discuss
+            case .requestChanges: .request_changes
+            case .returnToAgent: .return_to_agent
+            case .answerAndRetry: .answer_and_retry
+            case .answerWithoutRetry: .answer_without_retry
+            }
+        }
+    }
+
     /// `-FreesideScreen inbox|tasks`; defaults to the attention inbox.
     public let screen: Screen
 
@@ -66,11 +87,21 @@ public struct LaunchInputs {
     /// capture needs no click on the toolbar.
     public let devicesPresented: Bool
 
+    /// `-FreesideComposer <action>`: the selected inbox item's composer for
+    /// that action is presented at launch, so a capture of the sheet needs no
+    /// click. Nil unless the value names a composer, `-FreesideSelect` names
+    /// an inbox item, and that item's fixture offers the action; anything
+    /// else is ignored with a stderr note, as an unknown selection is. The
+    /// card still waits until the action's button is enabled before it opens
+    /// the composer.
+    public let composer: Composer?
+
     public init(
         colorSchemeRaw: String?, contrastRaw: String? = nil, selectionRaw: String?,
         inboxScopeRaw: String? = nil, projectIDRaw: String? = nil,
         detailsExpanded: Bool = false, screenRaw: String? = nil,
-        dynamicTypeSizeRaw: String? = nil, devicesPresented: Bool = false
+        dynamicTypeSizeRaw: String? = nil, devicesPresented: Bool = false,
+        composerRaw: String? = nil
     ) {
         screen = Screen(rawValue: screenRaw ?? "") ?? .inbox
         colorScheme =
@@ -92,6 +123,14 @@ public struct LaunchInputs {
         projectID = projectIDRaw
         self.detailsExpanded = detailsExpanded
         self.devicesPresented = devicesPresented
+        switch Self.resolveComposer(composerRaw, screen: screen, selection: selection) {
+        case .resolved(let resolved):
+            composer = resolved
+        case .ignored(let reason):
+            composer = nil
+            FileHandle.standardError.write(
+                Data("FreesideComposer ignored: \(reason)\n".utf8))
+        }
     }
 
     /// The screen decides which fixture ids a selection may name. On the
@@ -115,6 +154,31 @@ public struct LaunchInputs {
         }
     }
 
+    private enum ComposerResolution {
+        /// Nil when the argument is unset.
+        case resolved(Composer?)
+        case ignored(reason: String)
+    }
+
+    /// A composer needs an inbox item that offers its action, checked against
+    /// the same fixtures that decide which ids a selection may name.
+    private static func resolveComposer(
+        _ raw: String?, screen: Screen, selection: String?
+    ) -> ComposerResolution {
+        guard let raw else { return .resolved(nil) }
+        guard let composer = Composer(rawValue: raw) else {
+            return .ignored(reason: "\(raw) names no composer")
+        }
+        guard screen == .inbox, let selection else {
+            return .ignored(reason: "\(raw) needs an inbox item from FreesideSelect")
+        }
+        let item = AttentionFixtures.defaultInbox().first { $0.item.id == selection }?.item
+        guard item?.requested_decision.contains(composer.action) == true else {
+            return .ignored(reason: "\(selection) does not offer \(raw)")
+        }
+        return .resolved(composer)
+    }
+
     /// The process's launch arguments, via the UserDefaults argument
     /// domain (`-Key value` pairs).
     public static func standard() -> LaunchInputs {
@@ -128,7 +192,8 @@ public struct LaunchInputs {
             detailsExpanded: defaults.bool(forKey: "FreesideDetailsExpanded"),
             screenRaw: defaults.string(forKey: "FreesideScreen"),
             dynamicTypeSizeRaw: defaults.string(forKey: "FreesideDynamicType"),
-            devicesPresented: defaults.bool(forKey: "FreesideDevices"))
+            devicesPresented: defaults.bool(forKey: "FreesideDevices"),
+            composerRaw: defaults.string(forKey: "FreesideComposer"))
     }
 
     /// Screenshot capture scopes this input to the synchronous AppKit color
