@@ -21,6 +21,22 @@ struct TechnicalDetailsRevealRequest: Equatable {
     }
 }
 
+/// Whether a launch may present a composer: exactly when a click on that
+/// action's button could, so `-FreesideComposer` never opens a sheet the
+/// operator couldn't reach.
+enum DecisionLaunchComposerGate {
+    static func canPresent(
+        _ action: Components.Schemas.Action,
+        requested: [Components.Schemas.Action],
+        unavailable: [Components.Schemas.Action],
+        actionsEnabled: Bool,
+        isSubmittable: Bool
+    ) -> Bool {
+        requested.contains(action) && !unavailable.contains(action)
+            && actionsEnabled && isSubmittable
+    }
+}
+
 /// One item's self-contained decision card: header, reason, evidence,
 /// labeled agent claims, the bindings the decision will commit against,
 /// and exactly the item's requested actions. Actions stay disabled until
@@ -89,6 +105,8 @@ struct DecisionDetailView: View {
     private let itemID: String
     private let externalDetailsRevealRequest: TechnicalDetailsRevealRequest?
     private let onConsumeDetailsRevealRequest: (UUID) -> Void
+    private let launchComposer: LaunchInputs.Composer?
+    private let onConsumeLaunchComposer: () -> Void
     private let externalInspectorPresented: Binding<Bool>?
     private let onSelectItem: (String) -> Void
 
@@ -103,6 +121,8 @@ struct DecisionDetailView: View {
         expandedDisclosures: Set<DecisionDisclosure> = [],
         detailsRevealRequest: TechnicalDetailsRevealRequest? = nil,
         onConsumeDetailsRevealRequest: @escaping (UUID) -> Void = { _ in },
+        launchComposer: LaunchInputs.Composer? = nil,
+        onConsumeLaunchComposer: @escaping () -> Void = {},
         graphics: DecisionGraphicPresentations = .init(),
         loadsAttachments: Bool = true,
         showsValidationProgress: Bool = true,
@@ -130,6 +150,8 @@ struct DecisionDetailView: View {
         self.expandsSummaryReports = expandsSummaryReports
         self.externalDetailsRevealRequest = detailsRevealRequest
         self.onConsumeDetailsRevealRequest = onConsumeDetailsRevealRequest
+        self.launchComposer = launchComposer
+        self.onConsumeLaunchComposer = onConsumeLaunchComposer
         externalInspectorPresented = inspectorPresented
         self.onSelectItem = onSelectItem
         self.graphics = graphics
@@ -192,6 +214,11 @@ struct DecisionDetailView: View {
                 // Fetch the device's action surface separately, after the open
                 // is recorded (plan §8).
                 await model.refreshActionSurface()
+            }
+            // Not from `init`: the sheet would open before validation, a
+            // state a click can't reach.
+            .onChange(of: canPresentLaunchComposer, initial: true) {
+                presentLaunchComposerIfReady()
             }
             .sheet(item: $proposalEditor) { editor in
                 switch editor {
@@ -3553,6 +3580,25 @@ struct DecisionDetailView: View {
         } else {
             Text(AttentionDisplay.label(action, for: item))
         }
+    }
+
+    private var canPresentLaunchComposer: Bool {
+        guard let launchComposer, let item = model.snapshot?.item else { return false }
+        return DecisionLaunchComposerGate.canPresent(
+            launchComposer.action,
+            requested: item.requested_decision,
+            unavailable: actionRanking(item).unavailable,
+            actionsEnabled: model.actionsEnabled,
+            isSubmittable: model.isSubmittable(launchComposer.action))
+    }
+
+    /// Opens the launch's composer through the path its button takes, then
+    /// consumes the request so reselecting the item doesn't reopen it.
+    private func presentLaunchComposerIfReady() {
+        guard canPresentLaunchComposer, let launchComposer, let item = model.snapshot?.item
+        else { return }
+        trigger(launchComposer.action, item: item)
+        onConsumeLaunchComposer()
     }
 
     private func trigger(

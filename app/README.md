@@ -39,6 +39,7 @@ Launch arguments also pin the presentation per launch (`LaunchInputs`), so scree
 - `-FreesideProject <project-id>`: select the inbox project filter for a screenshot or automation launch.
 - `-FreesideDetailsExpanded YES`: open the selected decision card's Details disclosure at launch.
 - `-FreesideDevices YES`: open the Devices sheet at launch. The mock lists three devices (this one, another active one, and a revoked one), so one capture shows every state.
+- `-FreesideComposer discuss|request_changes|return_to_agent|answer_and_retry|answer_without_retry`: present that action's message composer on the item `-FreesideSelect` names, once per launch. The values are the API's action names. In the default mock inbox, `discuss` opens on `item-spec_approval`, `item-execution_failure`, `item-review_dispute`, `item-review_configuration`, and `item-finding_adjudication`; `request_changes` on `item-spec_approval`; `return_to_agent` on `item-ready_for_final_review`; and both answer composers on `item-agent_question`. The composer opens as soon as the action's button is enabled, the way one click on it would, so it follows the card's validation. A value that names no composer, a launch with no inbox item selected, and an item that doesn't offer the action are each ignored with a note on stderr. Don't combine it with `-FreesideDevices YES`: that asks for two sheets at once.
 
 ## Running a Dev Daemon
 
@@ -177,6 +178,24 @@ pkill -x FreesideMac
 ```
 
 Repeat for `light|dark` crossed with `standard|increased` to capture all four cuts, then compare the `sips` outputs: the set must be dimension-identical, and a mismatch means a launch picked up stray window state — re-capture rather than shipping it.
+
+A composer sheet takes one more argument and one change to the lookup. On the Mac a sheet is a second window the app owns, so the lookup prints two ids. Either id captures the main window with the sheet over it, so take the first:
+
+```sh
+open -n "$APP" --args -ApplePersistenceIgnoreState YES \
+  -FreesideMock YES -FreesideColorScheme light -FreesideContrast standard \
+  -FreesideSelect item-agent_question -FreesideComposer answer_and_retry
+sleep 3
+WID=$(swift -e 'import CoreGraphics
+let windows = CGWindowListCopyWindowInfo(
+    [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+) as? [[String: Any]] ?? []
+for w in windows where w[kCGWindowOwnerName as String] as? String == "Freeside Ephemeral" {
+    if let id = w[kCGWindowNumber as String] as? Int { print(id) }
+}' | head -1)
+screencapture -l "$WID" -o composer-light.png
+pkill -x FreesideMac
+```
 
 ### Screenshot Regression Determinism
 

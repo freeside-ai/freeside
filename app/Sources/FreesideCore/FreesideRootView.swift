@@ -489,6 +489,8 @@ public struct FreesideRootView: View {
                             detailsExpanded: launchDetailsExpanded,
                             detailsRevealRequest: technicalDetailsRequest,
                             onConsumeDetailsRevealRequest: consumeTechnicalDetailsRequest,
+                            launchComposer: navigation.launchComposer(for: itemID),
+                            onConsumeLaunchComposer: navigation.consumeLaunchComposer,
                             onSelectItem: { navigation.route(to: .attentionItem($0)) },
                             onConclusion: { conclusion in
                                 handleConclusion(conclusion, coordinator: coordinator)
@@ -602,6 +604,8 @@ public struct FreesideRootView: View {
                         detailsExpanded: launchDetailsExpanded,
                         detailsRevealRequest: technicalDetailsRequest,
                         onConsumeDetailsRevealRequest: consumeTechnicalDetailsRequest,
+                        launchComposer: navigation.launchComposer(for: attentionSelection),
+                        onConsumeLaunchComposer: navigation.consumeLaunchComposer,
                         inspectorPresented: Bindable(navigation).inspectorPresented,
                         onSelectItem: { navigation.route(to: .attentionItem($0)) },
                         onConclusion: { conclusion in
