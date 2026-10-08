@@ -14,9 +14,19 @@ enum AttentionDisplay {
     /// card shows it under. Identifiers and digests render monospaced so a
     /// fact that must be compared by eye reads as one.
     struct FactRow: Equatable, Identifiable {
+        /// How a card draws the value. `value` is the same reading as plain
+        /// text on every form, for a summary, a test, or a stacking rule.
+        enum Form: Equatable {
+            case plain
+            /// Counts in the diff cuts (R28): successive measurements of one
+            /// diff, earliest first.
+            case diffs([DiffCounts])
+        }
+
         let label: String
         let value: String
         let monospaced: Bool
+        let form: Form
 
         var id: String { label }
 
@@ -24,6 +34,14 @@ enum AttentionDisplay {
             self.label = label
             self.value = value
             self.monospaced = monospaced
+            self.form = .plain
+        }
+
+        init(_ label: String, diffs: [DiffCounts]) {
+            self.label = label
+            self.value = DiffCounts.plain(diffs)
+            self.monospaced = true
+            self.form = .diffs(diffs)
         }
     }
 
@@ -459,36 +477,45 @@ enum AttentionDisplay {
             + (cost.complete ? "" : ", still accruing")
     }
 
-    /// The change's cumulative diff size at round 1 beside the latest round
-    /// the daemon measured, both from `yield_history` (plan §9). A round
-    /// without `diff_metrics` is a gap: with no round-1 measurement there is
-    /// nothing to grow from, so the row names the latest measured round
-    /// alone, and with no measurement at all there is no row.
+    /// The change's cumulative diff at round 1 beside the latest round the
+    /// daemon measured, both from `yield_history` (plan §9), as counts the
+    /// card draws in the diff cuts (R28). A round without `diff_metrics` is a
+    /// gap, and the label names the round wherever a gap would otherwise hide
+    /// it: with no round-1 measurement there is nothing to grow from, so the
+    /// row is the latest measured round's size alone; growth that stops short
+    /// of the last round says where it stops; and with no measurement at all
+    /// there is no row.
     private static func diffGrowth(_ item: Components.Schemas.AttentionItem) -> FactRow? {
         let rounds = item.yield_history?.value1.rounds ?? []
         guard let latest = rounds.last(where: { $0.diff_metrics != nil }),
             let latestMetrics = latest.diff_metrics
         else { return nil }
-        let latestSize = diffStats(latestMetrics.cumulative)
+        let latestSize = diffCounts(latestMetrics.cumulative)
         guard latest.round != 1,
             let first = rounds.first(where: { $0.round == 1 })?.diff_metrics
         else {
-            return .init("Diff size", "Round \(latest.round): \(latestSize)")
+            return .init("Diff Size at Round \(latest.round)", diffs: [latestSize])
         }
         return .init(
-            "Diff growth",
-            "Round 1: \(diffStats(first.cumulative)); round \(latest.round): \(latestSize)")
+            latest.round == rounds.last?.round
+                ? "Diff Growth" : "Diff Growth to Round \(latest.round)",
+            diffs: [diffCounts(first.cumulative), latestSize])
     }
 
     /// The label of the fact that carries a candidate's whole diff.
     static let diffFactLabel = "Diff"
 
-    static func fileCount(_ diff: Components.Schemas.DiffStats) -> String {
-        diff.files_changed == 1 ? "1 file" : "\(diff.files_changed) files"
+    static func fileCount(_ count: Int) -> String {
+        count == 1 ? "1 file" : "\(count) files"
     }
 
+    static func diffCounts(_ diff: Components.Schemas.DiffStats) -> DiffCounts {
+        .init(added: diff.additions, removed: diff.deletions)
+    }
+
+    /// A whole diff as one plain line, in the order the Change row draws it.
     private static func diffStats(_ diff: Components.Schemas.DiffStats) -> String {
-        return "\(fileCount(diff)), +\(diff.additions) -\(diff.deletions)"
+        "\(diffCounts(diff).plain) · \(fileCount(diff.files_changed))"
     }
 
     static func label(_ action: Components.Schemas.Action) -> String {

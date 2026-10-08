@@ -1211,6 +1211,10 @@ struct FactRow: View {
     /// A state drawn in the value slot in place of the text (R9). `value`
     /// holds the chip's label, so the stacking rule reads one string.
     private(set) var chip: StateChip? = nil
+    /// The value as styled text in place of the plain string, such as counts
+    /// in the diff cuts (R28). `value` holds the same line as plain text, so
+    /// the stacking rule reads one string.
+    var drawn: Text? = nil
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
@@ -1243,11 +1247,48 @@ struct FactRow: View {
         if let chip {
             chip
         } else {
-            Text(value)
+            (drawn ?? Text(value))
                 .font(FreesideFont.monoValue)
                 .foregroundStyle(valueColor ?? .ink)
         }
     }
+}
+
+/// One + / − pair in the diff cuts (R28): the added count in the add color
+/// and the removed count, behind a typographic minus, in the remove color.
+/// The cuts are `Text`, so a caller sets the pair inside a longer mono line.
+struct DiffCounts: Equatable {
+    let added: Int
+    let removed: Int
+
+    /// The pair as the plain line the cuts draw.
+    var plain: String { "+\(added) \u{2212}\(removed)" }
+
+    /// The pair as VoiceOver reads it, in words instead of signs.
+    var spoken: String { "\(added) added, \(removed) removed" }
+
+    var text: Text {
+        Text(
+            "\(Text("+\(added)").foregroundStyle(Color.diffAdd)) \(Text("\u{2212}\(removed)").foregroundStyle(Color.diffRemove))"
+        )
+    }
+
+    /// Successive measurements of one diff, earliest first.
+    static func plain(_ measurements: [DiffCounts]) -> String {
+        measurements.map(\.plain).joined(separator: growthSeparator)
+    }
+
+    static func spoken(_ measurements: [DiffCounts]) -> String {
+        measurements.map(\.spoken).joined(separator: ", then ")
+    }
+
+    static func text(_ measurements: [DiffCounts]) -> Text {
+        measurements.dropFirst().reduce(measurements.first?.text ?? Text(verbatim: "")) {
+            Text("\($0)\(growthSeparator)\($1.text)")
+        }
+    }
+
+    private static let growthSeparator = " \u{2192} "
 }
 
 /// A fact whose value is a link (R6), laid out as `FactRow` lays out a

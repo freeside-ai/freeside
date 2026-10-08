@@ -1270,7 +1270,7 @@ struct DecisionDetailView: View {
         if !rows.isEmpty {
             cardSection("Facts") {
                 ForEach(rows) { fact in
-                    factRow(fact.label, value: fact.value)
+                    factRow(fact)
                 }
             }
         }
@@ -1292,7 +1292,7 @@ struct DecisionDetailView: View {
             ) {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(placement.folded) { fact in
-                        factRow(fact.label, value: fact.value)
+                        factRow(fact)
                     }
                 }
                 .font(FreesideFont.callout)
@@ -1483,11 +1483,10 @@ struct DecisionDetailView: View {
             let priorIteration = Self.priorSpecRevisionIteration(in: item)
         {
             cardSection("Specification revision") {
-                Text(
-                    "Revision \(revision.iteration), supersedes revision \(priorIteration), +\(revision.diff.lines_added) −\(revision.diff.lines_removed) lines"
-                )
-                .font(FreesideFont.sans(.callout, weight: .semibold))
-                .fixedSize(horizontal: false, vertical: true)
+                Text("Revision \(revision.iteration), supersedes revision \(priorIteration)")
+                    .font(FreesideFont.sans(.callout, weight: .semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+                DecisionChangeRow(specification: revision.diff, sinceRevision: priorIteration)
 
                 Divider()
                 Text("Agent responses are unverified.")
@@ -2764,6 +2763,21 @@ struct DecisionDetailView: View {
 
     private func factRow(_ label: String, value: String) -> some View {
         FactRow(label: label, value: value)
+    }
+
+    /// A card fact in the form its value takes. A diff fact draws its counts
+    /// in the diff cuts (R28) and reads them aloud in words, since the signs
+    /// carry the meaning only on screen.
+    @ViewBuilder
+    private func factRow(_ fact: AttentionDisplay.FactRow) -> some View {
+        switch fact.form {
+        case .plain:
+            factRow(fact.label, value: fact.value)
+        case .diffs(let diffs):
+            FactRow(label: fact.label, value: fact.value, drawn: DiffCounts.text(diffs))
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text("\(fact.label): \(DiffCounts.spoken(diffs))"))
+        }
     }
 
     /// One labeled attachment row. Content leads in the evidence layer and its

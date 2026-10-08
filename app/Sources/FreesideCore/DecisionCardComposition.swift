@@ -1363,11 +1363,32 @@ struct DecisionModuleContainer<Content: View>: View {
     }
 }
 
-/// The final review's diff as one row (R28): the keyword, then the counts in
-/// the diff cuts and the file count in mono.
+/// A change as one row (R28): the keyword, then the counts in the diff cuts
+/// and what they count in mono. The final review counts a diff's files; a
+/// revised specification counts lines against the revision it supersedes.
 struct DecisionChangeRow: View {
+    /// What the counts measure, which the row draws after them.
+    enum Measure: Equatable {
+        case files(Int)
+        case lines
+    }
+
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    let diff: Components.Schemas.DiffStats
+    let keyword: String
+    let counts: DiffCounts
+    let measure: Measure
+
+    init(diff: Components.Schemas.DiffStats) {
+        keyword = "Change"
+        counts = AttentionDisplay.diffCounts(diff)
+        measure = .files(diff.files_changed)
+    }
+
+    init(specification diff: Components.Schemas.SpecDiff, sinceRevision prior: Int) {
+        keyword = "Change Since Revision \(prior)"
+        counts = .init(added: diff.lines_added, removed: diff.lines_removed)
+        measure = .lines
+    }
 
     var body: some View {
         let layout =
@@ -1375,23 +1396,35 @@ struct DecisionChangeRow: View {
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 3))
             : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 12))
         layout {
-            KeywordLabel(text: "Change")
+            KeywordLabel(text: keyword)
             if dynamicTypeSize < .accessibility1 {
                 Spacer(minLength: 12)
             }
-            Text(
-                "\(Text("+\(diff.additions)").foregroundStyle(Color.diffAdd)) \(Text("\u{2212}\(diff.deletions)").foregroundStyle(Color.diffRemove)) · \(AttentionDisplay.fileCount(diff))"
-            )
-            .font(FreesideFont.monoValue)
-            .foregroundStyle(Color.ink)
+            Text("\(counts.text)\(trailing)")
+                .font(FreesideFont.monoValue)
+                .foregroundStyle(Color.ink)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(Self.accessibilityLabel(diff)))
+        .accessibilityLabel(Text(spokenLabel))
     }
 
-    static func accessibilityLabel(_ diff: Components.Schemas.DiffStats) -> String {
-        "Change: \(diff.additions) added, \(diff.deletions) removed, \(AttentionDisplay.fileCount(diff))"
+    private var trailing: String {
+        switch measure {
+        case .files(let count): " · \(AttentionDisplay.fileCount(count))"
+        case .lines: " lines"
+        }
+    }
+
+    /// The row in words, since the plus and minus signs carry the meaning
+    /// only on screen.
+    var spokenLabel: String {
+        switch measure {
+        case .files(let count):
+            "\(keyword): \(counts.spoken), \(AttentionDisplay.fileCount(count))"
+        case .lines:
+            "\(keyword): \(counts.added) lines added, \(counts.removed) removed"
+        }
     }
 }
 

@@ -845,21 +845,29 @@ import Testing
         #expect(DecisionYieldPresentation(rounds: []).foldSummary == "0 rounds")
     }
 
-    /// R28: the Change row reads its counts aloud in words, since the plus
+    /// R28: a change row reads its counts aloud in words, since the plus
     /// and minus signs carry the meaning only on screen.
-    @Test func changeRowSpeaksItsCountsInWords() {
+    @Test func changeRowSpeaksItsCountsInWords() throws {
         #expect(
-            DecisionChangeRow.accessibilityLabel(
-                .init(
+            DecisionChangeRow(
+                diff: .init(
                     files_changed: 9, additions: 412, deletions: 88, base_sha: "base",
-                    head_sha: "head"))
-                == "Change: 412 added, 88 removed, 9 files")
+                    head_sha: "head")
+            ).spokenLabel == "Change: 412 added, 88 removed, 9 files")
         #expect(
-            DecisionChangeRow.accessibilityLabel(
-                .init(
+            DecisionChangeRow(
+                diff: .init(
                     files_changed: 1, additions: 3, deletions: 0, base_sha: "base",
-                    head_sha: "head"))
-                == "Change: 3 added, 0 removed, 1 file")
+                    head_sha: "head")
+            ).spokenLabel == "Change: 3 added, 0 removed, 1 file")
+
+        let revision = try #require(
+            AttentionFixtures.revisedSpecification().item
+                .spec_revision?.value1)
+        let row = DecisionChangeRow(specification: revision.diff, sinceRevision: 1)
+        #expect(row.keyword == "Change Since Revision 1")
+        #expect(row.counts.plain == "+2 \u{2212}1")
+        #expect(row.spokenLabel == "Change Since Revision 1: 2 lines added, 1 removed")
     }
 
     @Test func checklistUsesNeutralSuccessAndFailureOnlyWhereTheFactFails() throws {
