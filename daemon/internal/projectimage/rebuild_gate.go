@@ -62,12 +62,18 @@ func EvaluateRebuild(
 	headSHA string,
 	policy domain.ResolvedPolicy,
 ) (RebuildDecision, error) {
+	reader, err := verify.OpenCommitReader(ctx, gitPath, checkoutDir)
+	if err != nil {
+		return RebuildDecision{}, fmt.Errorf("observe project-image inputs at head %s: observe %s at run base: %w",
+			headSHA, unsupportedInputNames[0], err)
+	}
+	defer reader.Close()
 	refuse := func(head domain.ProjectImageBaseInputs, clause RebuildRefusal, format string, args ...any) RebuildDecision {
 		return RebuildDecision{
 			Needed: true, Refusal: clause, Detail: fmt.Sprintf(format, args...), Head: head,
 		}
 	}
-	head, err := ObserveBaseInputs(ctx, gitPath, checkoutDir, headSHA)
+	head, err := observeBaseInputs(ctx, reader, headSHA)
 	if errors.Is(err, verify.ErrCommitFileUnreadable) {
 		if image.Environment == nil {
 			return RebuildDecision{Head: domain.ProjectImageBaseInputs{CommitSHA: headSHA}}, nil
@@ -91,7 +97,7 @@ func EvaluateRebuild(
 		return refuse(head, RebuildRefusalUnsupportedInput,
 			"the candidate contains %s", strings.Join(head.UnsupportedInputs, ", ")), nil
 	}
-	base, err := ObserveBaseInputs(ctx, gitPath, checkoutDir, baseSHA)
+	base, err := observeBaseInputs(ctx, reader, baseSHA)
 	if err != nil {
 		return RebuildDecision{}, fmt.Errorf("observe project-image inputs at base %s: %w", baseSHA, err)
 	}
@@ -110,8 +116,7 @@ func EvaluateRebuild(
 			"the run's policy declares no %s", domain.RegistrySetPolicyKey), nil
 	}
 	read := func(commitSHA, name string) ([]byte, error) {
-		content, present, err := verify.ReadFileAtCommit(
-			ctx, gitPath, checkoutDir, commitSHA, name, maxManifestBytes)
+		content, present, err := reader.ReadFile(ctx, commitSHA, name, maxManifestBytes)
 		if err != nil {
 			return nil, fmt.Errorf("read %s at %s: %w", name, commitSHA, err)
 		}

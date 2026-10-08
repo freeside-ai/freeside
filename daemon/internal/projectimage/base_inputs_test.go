@@ -2,11 +2,13 @@ package projectimage
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
@@ -234,5 +236,80 @@ func TestObserveBaseInputsRefusesANonRegularManifest(t *testing.T) {
 	}
 	if _, err := ObserveBaseInputs(t.Context(), "git", repo.dir, "HEAD"); !errors.Is(err, verify.ErrInvalidOptions) {
 		t.Fatalf("symbolic revision = %v, want ErrInvalidOptions", err)
+	}
+}
+
+func countedCommitGit(t *testing.T) (string, func(int, int)) {
+	t.Helper()
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls")
+	script := filepath.Join(dir, "git")
+	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
+	body := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" >> %s\nexec %s \"$@\"\n", quote(log), quote(realGit))
+	// A concurrent fork must not inherit the executable's write descriptor.
+	syscall.ForkLock.RLock()
+	err = os.WriteFile(script, []byte(body), 0o700) //nolint:gosec // G306: test-owned executable
+	syscall.ForkLock.RUnlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return script, func(trees, blobs int) {
+		t.Helper()
+		data, err := os.ReadFile(log) //nolint:gosec // G304: test-owned invocation log in t.TempDir.
+		if err != nil {
+			t.Fatal(err)
+		}
+		counts := map[string]int{}
+		for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
+			args := strings.Fields(line)
+			command := ""
+			for i, arg := range args {
+				if arg == "ls-tree" || arg == "cat-file" {
+					command = arg
+					break
+				}
+				if arg == "rev-parse" && i+1 < len(args) {
+					command = args[i+1]
+					break
+				}
+			}
+			counts[command]++
+		}
+		want := map[string]int{"--absolute-git-dir": 1, "--show-object-format": 1, "ls-tree": trees, "cat-file": blobs}
+		if len(counts) != len(want) {
+			t.Fatalf("git commands = %v, want only %v", counts, want)
+		}
+		for command, n := range want {
+			if counts[command] != n {
+				t.Fatalf("git commands = %v, want %v", counts, want)
+			}
+		}
+	}
+}
+
+func TestObserveBaseInputsPinsOnceAndClosesItsReader(t *testing.T) {
+	repo := newBaseInputsRepo(t)
+	base := repo.commit(map[string]string{
+		"package.json": gateBasePackageJSON, "package-lock.json": gateBasePackageLock,
+		verify.DefaultRecipePath: testRecipe,
+	})
+	git, check := countedCommitGit(t)
+	scratch := t.TempDir()
+	t.Setenv("TMPDIR", scratch)
+	if _, err := ObserveBaseInputs(t.Context(), git, repo.dir, base); err != nil {
+		t.Fatal(err)
+	}
+	check(5, 3)
+	// A later call opens its own reader, including one whose read fails.
+	if _, err := ObserveBaseInputs(t.Context(), "git", repo.dir, strings.Repeat("0", 40)); !errors.Is(err, verify.ErrGitPlumbing) {
+		t.Fatalf("missing commit = %v, want plumbing fault", err)
+	}
+	entries, err := os.ReadDir(scratch)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("scratch after calls = %v, %v", entries, err)
 	}
 }

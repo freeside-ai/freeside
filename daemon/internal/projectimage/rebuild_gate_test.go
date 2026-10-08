@@ -3,6 +3,7 @@ package projectimage
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -850,6 +851,36 @@ func TestEvaluateRebuildReturnsACheckoutFaultAsAnError(t *testing.T) {
 		base, strings.Repeat("0", 40), domain.ResolvedPolicy{})
 	if err == nil {
 		t.Fatal("a head the checkout does not hold produced a decision")
+	}
+}
+
+func TestEvaluateRebuildPinsOnceAcrossBothCommitsAndClosesItsReader(t *testing.T) {
+	repo := newBaseInputsRepo(t)
+	base := repo.commit(map[string]string{
+		"package.json": gateBasePackageJSON, "package-lock.json": gateBasePackageLock,
+		verify.DefaultRecipePath: testRecipe,
+	})
+	head := repo.commit(map[string]string{
+		"package.json": gateHeadPackageJSON, "package-lock.json": gateHeadLock(gateDeclaredEntry),
+	})
+	image := domain.ProjectImage{Environment: &domain.ProjectImageEnvironment{
+		PackageJSONSHA256: manifestSHA256([]byte(gateBasePackageJSON)),
+		PackageLockSHA256: manifestSHA256([]byte(gateBasePackageLock)),
+	}}
+	git, check := countedCommitGit(t)
+	scratch := t.TempDir()
+	t.Setenv("TMPDIR", scratch)
+	decision, err := EvaluateRebuild(t.Context(), git, repo.dir, image, base, head, gatePolicy(t, `["registry.npmjs.org"]`))
+	if err != nil || !decision.Needed || decision.Refusal != "" || decision.Delta.Changed != 1 {
+		t.Fatalf("decision = %+v, %v; want one admitted dependency", decision, err)
+	}
+	check(14, 10)
+	if _, err := EvaluateRebuild(t.Context(), "git", repo.dir, image, base, strings.Repeat("0", 40), domain.ResolvedPolicy{}); !errors.Is(err, verify.ErrGitPlumbing) {
+		t.Fatalf("missing commit = %v, want plumbing fault", err)
+	}
+	entries, err := os.ReadDir(scratch)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("scratch after calls = %v, %v", entries, err)
 	}
 }
 
