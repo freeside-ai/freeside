@@ -198,6 +198,24 @@
 #                                    replaces the managed build proxy when
 #                                    building the already-pinned images;
 #                                    live reachability is recorded not_run
+#                                    Proxy-only use remains preflight-only.
+#                                    With BASE_BUILD_REF, also used for rebuilds.
+#   FREESIDE_REAL_RUN_BASE_BUILD_REF optional local tag resolving to the approved
+#                                    agent base; enables policy-gated rebuilding.
+#                                    Unset/empty disables rebuilding (default).
+#                                    The builder proves the tag's base digest.
+#                                    No whitespace, @, URL scheme, or leading -.
+#   FREESIDE_REAL_RUN_BUILD_DNS     optional space/tab-separated DNS servers on
+#                                    one line; preserves order and IPv6 literals.
+#                                    Unset/empty uses the builder default.
+#                                    Nonempty requires BASE_BUILD_REF.
+#                                    Entries must not begin with -.
+#   Rebuild gate details:
+#   daemon/README.md#rebuild-a-project-image-for-a-dependency-change
+#   Until #1793 bounds build egress, enable BASE_BUILD_REF only where a crafted
+#   candidate contacting public hosts outside the registry set is acceptable.
+#   The manifest gate does not bound connections; the build proxy admits any
+#   public host.
 #   FREESIDE_REAL_RUN_RESTORE_DAEMON installed app daemon (default ~/Applications/
 #                                    Freeside.app/Contents/Resources/freesided):
 #                                    the daemon's -prod-daemon format check
@@ -336,6 +354,9 @@ if [[ ! "$FREESIDE_REAL_RUN_APPROVED_RECIPE" =~ ^sha256:[0-9a-f]{64}$ ]]; then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/real-work-rebuild.sh
+source "$repo_root/scripts/real-work-rebuild.sh"
+real_work_rebuild_args || exit 2
 # An early, readable refusal before any path is created or used; freesided's
 # environment guard (#1501) stays the authority for its own flags.
 # shellcheck source=scripts/supervised-paths.sh
@@ -798,6 +819,12 @@ if [[ -n "$retained_session" ]]; then
   receipt_args=("$build_version" "$spec_file" "$policy_file" "$publication_file" "$work_unit_file"
     --manual-submission-config "$manual_submission_file"
     "${required[@]}" FREESIDE_REAL_RUN_BUILD_PROXY "${judgment_names[@]}")
+  # Absent/empty inputs must retain the legacy receipt's environment digest.
+  for name in FREESIDE_REAL_RUN_BASE_BUILD_REF FREESIDE_REAL_RUN_BUILD_DNS; do
+    if [[ -n "${!name:-}" ]]; then
+      receipt_args+=("$name")
+    fi
+  done
   if [[ "$(cat "$retained_session/status")" == recovery-required &&
     -f "$retained_session/runtime-upgrade-started" &&
     -f "$retained_session/runtime-upgrade-receipt.json" ]]; then
@@ -1007,6 +1034,7 @@ fi
 "$workdir/freesided" \
   "${judgment_args[@]}" \
   "${manual_submission_args[@]}" \
+  ${rebuild_args[@]+"${rebuild_args[@]}"} \
   -environment ephemeral \
   -prod-app-authority \
   -prod-daemon "$(real_work_installed_daemon)" \

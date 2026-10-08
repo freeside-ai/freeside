@@ -149,6 +149,27 @@ with tempfile.TemporaryDirectory() as temp:
     assert receipt == module.upgrade_receipt('reviewed-version', inputs, names)
     assert receipt != module.upgrade_receipt('changed-version', inputs, names)
     assert 'private credential fixture' not in json.dumps(receipt)
+    # Bind configured rebuild inputs while retaining absent/empty legacy receipts.
+    rebuild_names = ['FREESIDE_REAL_RUN_BASE_BUILD_REF', 'FREESIDE_REAL_RUN_BUILD_DNS']
+    def rebuild_receipt():
+        configured_names = names + [name for name in rebuild_names if os.environ.get(name)]
+        return module.upgrade_receipt('reviewed-version', inputs, configured_names)
+    for name in rebuild_names:
+        os.environ.pop(name, None)
+    assert rebuild_receipt() == receipt
+    for name in rebuild_names:
+        os.environ[name] = ''
+    assert rebuild_receipt() == receipt
+    for name in rebuild_names:
+        os.environ[name] = 'first'
+        configured = rebuild_receipt()
+        assert configured != receipt  # Added.
+        os.environ[name] = 'second'
+        assert rebuild_receipt() != configured  # Changed.
+        os.environ[name] = ''
+        assert rebuild_receipt() == receipt != configured  # Emptied.
+        os.environ.pop(name)
+        assert rebuild_receipt() == receipt != configured  # Removed.
     for name in names:
         saved = os.environ[name]
         if name == 'FREESIDE_REAL_RUN_BUILD_PROXY':
