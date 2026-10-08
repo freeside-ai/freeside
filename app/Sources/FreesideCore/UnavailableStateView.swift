@@ -1,45 +1,22 @@
 import SwiftUI
 
-/// A pane's empty or unavailable state. With no `systemImage` it draws the
-/// refined form (R13): the key, a serif line, and a dim sans line. A caller
-/// that still names a symbol keeps the system's own unavailable view until
-/// its surface is recomposed.
+/// A pane's empty or unavailable state (R13): the key, a serif line, and a
+/// dim sans line, centered in the pane.
 struct UnavailableStateView: View {
     let title: String
-    var systemImage: String? = nil
     let description: String
 
-    @ScaledMetric(relativeTo: .title) private var glyphSize: CGFloat = screenshotMetricBase(
-        28, relativeTo: .title)
-
     var body: some View {
-        if let systemImage {
-            ContentUnavailableView {
-                Label {
-                    Text(title).font(FreesideFont.title)
-                } icon: {
-                    // ContentUnavailableView imposes its own image configuration;
-                    // an inline symbol keeps the explicit font metrics in control.
-                    Text(Image(systemName: systemImage))
-                        .font(.system(size: glyphSize, weight: .regular))
-                        .foregroundStyle(Color.inkDim)
-                }
-            } description: {
-                Text(description).font(FreesideFont.callout)
-            }
-            .foregroundStyle(Color.inkDim)
-        } else {
-            KeyMarkEmptyState(title: title, description: description)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 40)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
+        KeyMarkEmptyState(title: title, description: description)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 40)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
 /// A sidebar column's empty state, centered in the content area below the
 /// filters. The filters stay pinned at the top; only this block centers in
-/// the space beneath them, the way the detail pane's ContentUnavailableView
+/// the space beneath them, the way the detail pane's unavailable state
 /// centers in its own area. The call sites frame it with zero-minimum
 /// spacers so the empty column still collapses and never holds the sidebar,
 /// or the window, open the way a fixed-height empty state did.

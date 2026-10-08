@@ -80,7 +80,6 @@ struct SpecificationReaderView: View {
             } else {
                 UnavailableStateView(
                     title: "Preview unavailable",
-                    systemImage: "doc",
                     description: "This \(byteCount(preview.byteCount)) specification is not text.")
             }
 

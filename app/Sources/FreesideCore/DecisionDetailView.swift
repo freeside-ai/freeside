@@ -198,7 +198,6 @@ struct DecisionDetailView: View {
                 } else {
                     UnavailableStateView(
                         title: "Item unavailable",
-                        systemImage: "questionmark.circle",
                         description: "This attention item is not in the inbox.")
                 }
             }
@@ -524,7 +523,6 @@ struct DecisionDetailView: View {
                     } else {
                         UnavailableStateView(
                             title: "No decision selected",
-                            systemImage: "sidebar.trailing",
                             description: "Select an item to inspect its facts.")
                     }
                 }
@@ -1783,7 +1781,6 @@ struct DecisionDetailView: View {
             } else {
                 UnavailableStateView(
                     title: "Specification unavailable",
-                    systemImage: "doc",
                     description: "This approval does not carry a readable specification.")
             }
         case .diff:
@@ -1797,7 +1794,6 @@ struct DecisionDetailView: View {
             } else {
                 UnavailableStateView(
                     title: "Diff unavailable",
-                    systemImage: "doc.text.magnifyingglass",
                     description: "This is the first specification revision.")
             }
         }
@@ -3560,7 +3556,6 @@ struct DecisionDetailView: View {
                     } else {
                         UnavailableStateView(
                             title: "Preview unavailable",
-                            systemImage: "doc",
                             description: "This \(byteCount(preview.byteCount)) attachment is not text.")
                     }
                 }

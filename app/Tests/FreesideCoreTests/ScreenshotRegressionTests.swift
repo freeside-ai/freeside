@@ -2473,7 +2473,6 @@
                     view: AnyView(
                         UnavailableStateView(
                             title: "No decision selected",
-                            systemImage: "sidebar.trailing",
                             description: "Select an item to inspect its facts."))))
 
             // Freshness banner over fresh vs. genuinely stale data (#1130).
