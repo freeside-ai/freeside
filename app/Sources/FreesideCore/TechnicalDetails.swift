@@ -59,12 +59,18 @@ enum ShortIdentifier {
 struct TechnicalDetailRow: View {
     let row: AttentionDisplay.BindingRow
     var rendersInteractiveControls = true
+    /// Stacks the value under its label whatever its length, for a pane
+    /// too narrow for a trailing column (`FactRow.stacksAlways`).
+    var stacksAlways = false
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            FactRow(label: row.label, value: row.value, valueColor: .inkDim)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            FactRow(
+                label: row.label, value: row.value, valueColor: .inkDim,
+                stacksAlways: stacksAlways
+            )
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
             if rendersInteractiveControls {
                 Button {
                     Clipboard.copy(row.value)

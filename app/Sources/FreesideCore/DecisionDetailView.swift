@@ -46,6 +46,7 @@ enum DecisionLaunchComposerGate {
 struct DecisionDetailView: View {
     private enum ScrollTarget: Hashable {
         case technicalDetails
+        case evidence
     }
 
     /// A consequential action awaiting its seal. Identified by action and
@@ -88,6 +89,9 @@ struct DecisionDetailView: View {
     @State private var actionDetailsRevealRequest: TechnicalDetailsRevealRequest?
     @State private var sectionPreferences: DecisionSectionPreferences
     @State private var inspectorPresented: Bool
+    /// Set by the card's Evidence pointer and cleared by the inspector once
+    /// it has scrolled to its Evidence section.
+    @State private var revealsInspectorEvidence = false
     @State private var detailWidth: CGFloat = 0
     @State private var recommendationVisible = true
     @State private var provenanceExpanded = false
@@ -169,25 +173,23 @@ struct DecisionDetailView: View {
                 if let snapshot = model.snapshot {
                     ScrollViewReader { scrollProxy in
                         ScrollView {
+                            let twoColumns = drawsTwoColumns(
+                                snapshot.item, paneIsWide: usesWideLayout)
                             card(
                                 snapshot.item,
                                 proposalFacts: model.proposalFacts,
                                 effectProposalFacts: model.effectProposalFacts,
                                 accessibilityLayout: isAccessibilityLayout,
                                 compactLayout: horizontalSizeClass == .compact,
-                                wideLayout: usesWideLayout,
+                                wideLayout: twoColumns,
                                 inspectorPresented: inspectorBinding.wrappedValue
                             )
                             .decisionCardChrome(
                                 compactLayout: horizontalSizeClass == .compact,
-                                wideLayout: usesWideLayout)
+                                wideLayout: twoColumns)
                         }
                         .coordinateSpace(name: "decision-card-scroll")
-                        .onGeometryChange(for: CGFloat.self) { geometry in
-                            geometry.size.width
-                        } action: { width in
-                            detailWidth = width
-                        }
+                        .onPaneWidthChange { detailWidth = $0 }
                         .onChange(of: detailsRevealRequest) {
                             revealTechnicalDetailsIfRequested(using: scrollProxy)
                         }
@@ -414,6 +416,25 @@ struct DecisionDetailView: View {
             model.emitDetailsOpenedBeforeActing()
             consumeDetailsRevealRequest(detailsRevealRequest.nonce)
         }
+
+        /// The card's Evidence pointer is navigation between two panes of
+        /// one card (R3, R18): it opens the section and scrolls to it, and
+        /// sends and records nothing.
+        private func showEvidenceInInspector() {
+            // The reader and the sections take turns in the inspector, so
+            // the sections come back first.
+            specApprovalReader = nil
+            evidenceExpanded.wrappedValue = true
+            revealsInspectorEvidence = true
+        }
+
+        private func revealEvidenceInInspectorIfRequested(using scrollProxy: ScrollViewProxy) {
+            guard revealsInspectorEvidence else { return }
+            revealsInspectorEvidence = false
+            withAnimation {
+                scrollProxy.scrollTo(ScrollTarget.evidence, anchor: .top)
+            }
+        }
     #endif
 
     @ViewBuilder
@@ -481,13 +502,18 @@ struct DecisionDetailView: View {
                                 ScrollViewReader { scrollProxy in
                                     ScrollView {
                                         inspectorContent(item)
-                                            .padding()
+                                            .padding(.vertical, InspectorScale.verticalPadding)
+                                            .padding(.horizontal, InspectorScale.horizontalPadding)
                                     }
                                     .onChange(of: detailsRevealRequest) {
                                         revealTechnicalDetailsInInspectorIfRequested(using: scrollProxy)
                                     }
+                                    .onChange(of: revealsInspectorEvidence) {
+                                        revealEvidenceInInspectorIfRequested(using: scrollProxy)
+                                    }
                                     .onAppear {
                                         revealTechnicalDetailsInInspectorIfRequested(using: scrollProxy)
+                                        revealEvidenceInInspectorIfRequested(using: scrollProxy)
                                     }
                                 }
                             }
@@ -614,55 +640,42 @@ struct DecisionDetailView: View {
                 .buttonStyle(FreesideActionButtonStyle(tone: .secondary))
             }
 
-            let actionIndex = composition.actionInsertionIndex
-            let reviewingIndex = composition.reviewingActionInsertionIndex
+            let stackedLayout = accessibilityLayout || compactLayout
+            let foldsReason = reasonPlacement == .recordedContext
             #if os(macOS)
-                let reviewingLeads = !DecisionCardComposition.isStale(item)
                 if wideLayout {
-                    // The two columns are read side by side, so the action
-                    // region at the top of the right column is reachable
-                    // before anything further down the left one. The modules
-                    // a composition places ahead of actionInsertionIndex must
-                    // still precede the actions, so they render full width
-                    // above the split rather than beside it.
-                    cardModules(0..<(reviewingIndex ?? actionIndex), modules)
-                    if let reviewingIndex {
-                        if reviewingLeads {
-                            reviewingAction(item)
-                        }
-                        cardModules(reviewingIndex..<actionIndex, modules)
-                    }
-                    HStack(alignment: .top, spacing: 16) {
+                    // Two panes of one card (R18, frame 7.8). The left
+                    // column is read first, so what a type places ahead of
+                    // its actions is still ahead of them there (plan §9),
+                    // and the right column starts level with it.
+                    HStack(alignment: .top, spacing: CardScale.columnGap) {
                         VStack(alignment: .leading, spacing: CardScale.sectionGap) {
-                            cardModules(actionIndex..<composition.modules.count, modules)
+                            cardModules(composition.leadModules, modules)
+                            cardModules(composition.supportingModules, modules)
                         }
-                        .frame(maxWidth: 560, alignment: .topLeading)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
 
                         VStack(alignment: .leading, spacing: CardScale.sectionGap) {
-                            actionRegion(
-                                item,
-                                stackedLayout: accessibilityLayout || compactLayout,
-                                includesReviewing: reviewingIndex == nil || !reviewingLeads,
-                                register: register.at(.actionRegion)
-                            )
-                            if reasonPlacement == .recordedContext {
-                                recordedContext(item, register: register)
-                            }
+                            controlGroup(
+                                modules,
+                                stackedLayout: stackedLayout,
+                                actionRegionFrameChanged: actionRegionFrameChanged)
+                            folds(modules, foldsReason: foldsReason)
                         }
-                        .frame(width: 360, alignment: .topLeading)
+                        .frame(width: CardScale.controlColumnWidth, alignment: .topLeading)
                     }
                 } else {
                     cardColumn(
                         modules,
-                        stackedLayout: accessibilityLayout || compactLayout,
-                        foldsReason: reasonPlacement == .recordedContext,
+                        stackedLayout: stackedLayout,
+                        foldsReason: foldsReason,
                         actionRegionFrameChanged: actionRegionFrameChanged)
                 }
             #else
                 cardColumn(
                     modules,
-                    stackedLayout: accessibilityLayout || compactLayout,
-                    foldsReason: reasonPlacement == .recordedContext,
+                    stackedLayout: stackedLayout,
+                    foldsReason: foldsReason,
                     actionRegionFrameChanged: actionRegionFrameChanged)
             #endif
         }
@@ -707,34 +720,45 @@ struct DecisionDetailView: View {
         foldsReason: Bool,
         actionRegionFrameChanged: ((CGRect) -> Void)?
     ) -> some View {
+        cardModules(modules.composition.leadModules, modules)
+        controlGroup(
+            modules,
+            stackedLayout: stackedLayout,
+            actionRegionFrameChanged: actionRegionFrameChanged)
+        folds(modules, foldsReason: foldsReason)
+        cardModules(modules.composition.supportingModules, modules)
+    }
+
+    /// The reviewing action and the action region are one control group
+    /// (R10), whatever a composition draws between them. A read-only item
+    /// requests no decision, so its card draws no group at all (survey frame
+    /// 5.5) rather than an empty one that still takes a section's gap.
+    @ViewBuilder
+    private func controlGroup(
+        _ modules: CardModules,
+        stackedLayout: Bool,
+        actionRegionFrameChanged: ((CGRect) -> Void)?
+    ) -> some View {
         let item = modules.item
         let composition = modules.composition
-        let actionIndex = composition.actionInsertionIndex
-        let reviewingIndex = composition.reviewingActionInsertionIndex
-        let foldEnd = actionIndex + composition.foldedModuleCount
+        let hasReviewingAction = composition.reviewingActionInsertionIndex != nil
         // The reviewing action leads its group as the card's forward step.
         // On a stale review it is not one, so it follows the action that
         // recovers (frame 7.3) inside the action region.
         let reviewingLeads = !DecisionCardComposition.isStale(item)
-        cardModules(0..<(reviewingIndex ?? actionIndex), modules)
-        // The reviewing action and the action region are one control group
-        // (R10), whatever a composition draws between them. A read-only
-        // item requests no decision, so its card draws no group at all
-        // (survey frame 5.5) rather than an empty one that still takes a
-        // section's gap.
         if Self.drawsControlGroup(item) {
             VStack(alignment: .leading, spacing: CardScale.controlGap) {
-                if let reviewingIndex {
+                if hasReviewingAction {
                     if reviewingLeads {
                         reviewingAction(item)
                     }
-                    cardModules(reviewingIndex..<actionIndex, modules)
+                    cardModules(composition.controlGroupModules, modules)
                 }
                 #if os(macOS)
                     actionRegion(
                         item,
                         stackedLayout: stackedLayout,
-                        includesReviewing: reviewingIndex == nil || !reviewingLeads,
+                        includesReviewing: !hasReviewingAction || !reviewingLeads,
                         register: modules.register.at(.actionRegion)
                     )
                     .onGeometryChange(for: CGRect.self) { geometry in
@@ -746,19 +770,23 @@ struct DecisionDetailView: View {
                     actions(
                         item,
                         stackedLayout: stackedLayout,
-                        includesReviewing: reviewingIndex == nil || !reviewingLeads)
+                        includesReviewing: !hasReviewingAction || !reviewingLeads)
                 #endif
             }
         }
-        let foldsReason = foldsReason && DecisionCardComposition.reason(for: item) != nil
-        let foldedModules = actionIndex..<foldEnd
-        // The card's one hairline (R26) sits above its folds, so a card
-        // with nothing folded draws none.
-        if foldsReason || foldedModules.contains(where: { foldDraws(at: $0, modules) }) {
+    }
+
+    /// The card's one hairline (R26) and the folds under it: the folded
+    /// modules, then Recorded Context. A card with nothing folded draws no
+    /// hairline.
+    @ViewBuilder
+    private func folds(_ modules: CardModules, foldsReason: Bool) -> some View {
+        let foldsReason = foldsReason && DecisionCardComposition.reason(for: modules.item) != nil
+        if foldsReason || drawsFoldedModule(modules.item, modules.composition) {
             VStack(alignment: .leading, spacing: CardScale.foldGap) {
-                cardModules(foldedModules, modules)
+                cardModules(modules.composition.foldedModules, modules)
                 if foldsReason {
-                    recordedContext(item, register: modules.register)
+                    recordedContext(modules.item, register: modules.register)
                 }
             }
             .padding(.top, CardScale.foldLead)
@@ -766,7 +794,6 @@ struct DecisionDetailView: View {
                 Color.rule.frame(height: 1)
             }
         }
-        cardModules(foldEnd..<composition.modules.count, modules)
     }
 
     /// Whether the one-column card has a control group to draw: an action
@@ -777,14 +804,37 @@ struct DecisionDetailView: View {
                 && !DecisionCardComposition.actionRegionClaims(item.agent_claims).isEmpty)
     }
 
-    /// Whether a folded module has anything to draw, which is what decides
-    /// if the folds' hairline has a fold under it.
-    private func foldDraws(at index: Int, _ modules: CardModules) -> Bool {
-        switch modules.composition.modules[index] {
+    /// Whether a wide pane draws this card in two columns. The right column
+    /// holds the control group and the folds, so a read-only card with
+    /// neither (a blocked item) stays one column at any width, rather than
+    /// opening an empty pane beside its modules.
+    func drawsTwoColumns(_ item: Components.Schemas.AttentionItem, paneIsWide: Bool) -> Bool {
+        guard paneIsWide else { return false }
+        let composition = DecisionCardComposition.forType(item._type)
+        let foldsReason =
+            composition.drawsReason(for: item)
+            && DecisionCardComposition.reasonPlacement(for: item) == .recordedContext
+            && DecisionCardComposition.reason(for: item) != nil
+        return Self.drawsControlGroup(item) || foldsReason
+            || drawsFoldedModule(item, composition)
+    }
+
+    /// Whether any folded module has something to draw, which is what
+    /// decides if the folds' hairline has a fold under it.
+    private func drawsFoldedModule(
+        _ item: Components.Schemas.AttentionItem, _ composition: DecisionCardComposition
+    ) -> Bool {
+        composition.foldedModules.contains { foldDraws(composition.modules[$0], item) }
+    }
+
+    private func foldDraws(
+        _ module: DecisionCardModule, _ item: Components.Schemas.AttentionItem
+    ) -> Bool {
+        switch module {
         case .yieldChart:
-            (graphics.diminishingYield ?? DecisionYieldPresentation(modules.item)) != nil
+            (graphics.diminishingYield ?? DecisionYieldPresentation(item)) != nil
         case .foldedFacts:
-            !DecisionFactPlacement(modules.item, includesCommitPlan: false, now: now).folded.isEmpty
+            !DecisionFactPlacement(item, includesCommitPlan: false, now: now).folded.isEmpty
         case .facts, .agentQuestion, .specRevision, .specification, .recommendation, .checklist,
             .stageRail, .comparison, .stopCause, .findingFacts, .factBlock, .summary, .claims,
             .evidence, .details:
@@ -979,46 +1029,32 @@ struct DecisionDetailView: View {
                         at: moduleIndex,
                         prominentClaimIndex: graphics.prominentClaimIndex),
                     title: composition.claimsAreProminent(at: moduleIndex)
-                        ? DecisionCardComposition.leadClaimsKeyword(for: item._type) : "Agent claims",
+                        ? DecisionCardComposition.leadClaimsKeyword(for: item._type) : "Agent Claims",
                     accessibilityLayout: accessibilityLayout,
                     prominent: composition.claimsAreProminent(at: moduleIndex),
                     unverified: register)
             }
         case .evidence:
             #if os(macOS)
-                if composition.reviewingActionInsertionIndex != nil {
-                    // The open inspector renders the same attachments beside
-                    // the card, so the card's own Evidence module collapses to
-                    // a pointer at the packet rather than drawing it twice
-                    // (#1107). Closing the inspector restores the rows.
-                    //
-                    // The pointer waits on the inspector's own Evidence
-                    // disclosure, which starts closed and persists its state.
-                    // At ordinary type sizes the card's module ignores that
-                    // preference and always draws its rows (`lowerSection`
-                    // only builds a DisclosureGroup for the accessibility
-                    // layout), so pointing at a closed inspector section would
-                    // take visible attachments off screen and leave them
-                    // nowhere. Duplication is what the row exists to prevent,
-                    // and there is none while the inspector is not drawing
-                    // them.
-                    if inspectorPresented, evidenceExpanded.wrappedValue,
-                        !item.evidence_snapshot.isEmpty
-                    {
-                        cardSection("Evidence") {
-                            Text(Self.evidencePointer(item.evidence_snapshot.count))
-                                .foregroundStyle(Color.inkDim)
-                                .accessibilityLabel(
-                                    Text(
-                                        Self.evidencePointerAccessibilityLabel(
-                                            item.evidence_snapshot.count)))
-                        }
-                    } else {
-                        evidence(
-                            item,
-                            accessibilityLayout: accessibilityLayout,
-                            rendersInteractiveControls: rendersInteractiveControls)
-                    }
+                // The open inspector holds the attachments, so the card
+                // points at them rather than drawing them twice (R18). The
+                // pointer's link opens the inspector's Evidence section, so
+                // it no longer waits for that section to be open (#1107).
+                switch composition.macEvidence(
+                    inspectorPresented: inspectorPresented,
+                    attachmentCount: item.evidence_snapshot.count)
+                {
+                case .pointer:
+                    evidencePointer(
+                        count: item.evidence_snapshot.count,
+                        rendersInteractiveControls: rendersInteractiveControls)
+                case .rows:
+                    evidence(
+                        item,
+                        accessibilityLayout: accessibilityLayout,
+                        rendersInteractiveControls: rendersInteractiveControls)
+                case .nothing:
+                    EmptyView()
                 }
             #else
                 evidence(
@@ -1817,7 +1853,8 @@ struct DecisionDetailView: View {
     @ViewBuilder
     private func claimRows(
         _ claims: [Components.Schemas.AgentClaim],
-        unverified: UnverifiedRegister
+        unverified: UnverifiedRegister,
+        boxed: Bool = false
     ) -> some View {
         // Position is the only stable identity: two claims may bind the same
         // artifact under different labels and neither field is unique.
@@ -1836,7 +1873,8 @@ struct DecisionDetailView: View {
                     attachments: attachments,
                     loadsAttachments: loadsAttachments,
                     text: claim.text,
-                    rendersInteractiveControls: unverified.rendersInteractiveControls)
+                    rendersInteractiveControls: unverified.rendersInteractiveControls,
+                    boxed: boxed)
             }
         }
     }
@@ -1883,18 +1921,60 @@ struct DecisionDetailView: View {
         ]
     }
 
-    /// The card's Evidence module while the inspector holds the same packet:
-    /// how many attachments it has and where they are, never a second copy of
-    /// the rows themselves.
-    static func evidencePointer(_ count: Int) -> String {
-        "\(count == 1 ? "1 attachment" : "\(count) attachments") → inspector"
+    /// What the card's Evidence pointer counts, in the operator's words.
+    static func evidencePointerCount(_ count: Int) -> String {
+        count == 1 ? "1 attachment" : "\(count) attachments"
     }
 
-    /// The pointer row spoken: the arrow is a direction, not a character worth
-    /// reading out.
-    static func evidencePointerAccessibilityLabel(_ count: Int) -> String {
-        "\(count == 1 ? "1 attachment" : "\(count) attachments"), shown in the inspector"
-    }
+    static let evidencePointerLinkTitle = "In inspector"
+    /// The link spoken: the visible title leans on the row it sits in, and
+    /// VoiceOver may reach the link alone.
+    static let evidencePointerLinkAccessibilityLabel = "Show the attachments in the inspector"
+
+    #if os(macOS)
+        /// The card's Evidence module while the inspector holds the
+        /// attachments (frame 6.9): how many there are, then a link to them
+        /// (R3: away is a link), never a second copy of the rows.
+        private func evidencePointer(count: Int, rendersInteractiveControls: Bool) -> some View {
+            let countText = Text(Self.evidencePointerCount(count))
+                .font(FreesideFont.factLabel)
+                .foregroundStyle(Color.ink)
+            let link = evidencePointerLink(rendersInteractiveControls: rendersInteractiveControls)
+            return keywordSection("Evidence") {
+                // One row where it fits, the link at its trailing edge as
+                // a fact row's value is; the link drops under the count at
+                // a size where it does not.
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        countText
+                        Spacer(minLength: 0)
+                        link
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        countText
+                        link
+                    }
+                }
+            }
+        }
+
+        @ViewBuilder
+        private func evidencePointerLink(rendersInteractiveControls: Bool) -> some View {
+            let link = FreesideLink(
+                title: Self.evidencePointerLinkTitle, face: FreesideFont.noticeAction)
+            if rendersInteractiveControls {
+                Button {
+                    showEvidenceInInspector()
+                } label: {
+                    link.contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Self.evidencePointerLinkAccessibilityLabel)
+            } else {
+                link
+            }
+        }
+    #endif
 
     @ViewBuilder
     private func evidence(
@@ -1958,7 +2038,9 @@ struct DecisionDetailView: View {
             // attachment claims, the evidence packet, and the technical
             // bindings. A second copy of the same rows made an open inspector
             // repeat the card beside it.
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: InspectorScale.sectionGap) {
+                KeywordLabel(text: "Inspector")
+                    .accessibilityAddTraits(.isHeader)
                 let cardLeadClaims = DecisionCardComposition.forType(item._type)
                     .cardLeadClaims(
                         from: item.agent_claims,
@@ -1977,15 +2059,20 @@ struct DecisionDetailView: View {
                 ).withoutInfo
                 if !attachmentClaims.isEmpty {
                     inspectorSection(
-                        "Agent claims",
+                        "Claims",
+                        count: attachmentClaims.count,
                         isExpanded: claimsExpanded,
                         unverified: register
                     ) {
-                        claimRows(attachmentClaims, unverified: register)
+                        claimRows(attachmentClaims, unverified: register, boxed: true)
                     }
                 }
                 if !item.evidence_snapshot.isEmpty {
-                    inspectorSection("Evidence", isExpanded: evidenceExpanded) {
+                    inspectorSection(
+                        "Evidence",
+                        count: item.evidence_snapshot.count,
+                        isExpanded: evidenceExpanded
+                    ) {
                         ForEach(item.evidence_snapshot, id: \.id) { artifact in
                             AttachmentRow(
                                 label: artifact._type.rawValue,
@@ -1993,21 +2080,21 @@ struct DecisionDetailView: View {
                                 metadata: artifact.metadata,
                                 attachments: attachments,
                                 loadsAttachments: loadsAttachments,
-                                rendersInteractiveControls: rendersInteractiveControls)
+                                rendersInteractiveControls: rendersInteractiveControls,
+                                boxed: true)
                         }
                     }
+                    .id(ScrollTarget.evidence)
                 }
-                inspectorSection("Details", isExpanded: detailsExpanded) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        detailsReason(item, register: register)
-                        ForEach(Array(detailRows(item).enumerated()), id: \.offset) { _, row in
-                            TechnicalDetailRow(
-                                row: row, rendersInteractiveControls: rendersInteractiveControls)
-                        }
+                inspectorSection("Technical Bindings", isExpanded: detailsExpanded) {
+                    detailsReason(item, register: register)
+                    ForEach(Array(detailRows(item).enumerated()), id: \.offset) { _, row in
+                        TechnicalDetailRow(
+                            row: row, rendersInteractiveControls: rendersInteractiveControls,
+                            stacksAlways: true)
                     }
                 }
                 .id(ScrollTarget.technicalDetails)
-                .font(FreesideFont.caption)
                 .foregroundStyle(Color.inkDim)
                 .textSelection(.enabled)
             }
@@ -2057,7 +2144,8 @@ struct DecisionDetailView: View {
         inspectorPresented: Bool = false,
         actionRegionFrameChanged: ((CGRect) -> Void)? = nil
     ) -> some View {
-        let wideLayout = detailWidth >= 1_000 && dynamicTypeSize < .accessibility1
+        let wideLayout = drawsTwoColumns(
+            item, paneIsWide: detailWidth >= 1_000 && dynamicTypeSize < .accessibility1)
         card(
             item,
             proposalFacts: proposalFacts,
@@ -2120,7 +2208,8 @@ struct DecisionDetailView: View {
             at dynamicTypeSize: DynamicTypeSize
         ) -> some View {
             inspectorContent(item, rendersInteractiveControls: false)
-                .padding()
+                .padding(.vertical, InspectorScale.verticalPadding)
+                .padding(.horizontal, InspectorScale.horizontalPadding)
                 .frame(width: 360, alignment: .topLeading)
                 .background(Color.sidebarGround)
         }
@@ -2839,14 +2928,25 @@ struct DecisionDetailView: View {
         @ViewBuilder content: @escaping () -> Content
     ) -> some View {
         if accessibilityLayout {
-            let disclosure = DisclosureGroup(isExpanded: isExpanded) {
+            // The sentence disclosure every other fold on the card and the
+            // inspector's sections use (R2). Its label carries no unverified
+            // register, so a section of agent claims draws the register as
+            // its first line and says it aloud on the disclosure.
+            let disclosure = SentenceDisclosure(
+                label: title,
+                spokenLabel: unverified == nil ? nil : Self.unverifiedDisclosureSpokenLabel(title),
+                isExpanded: isExpanded
+            ) {
                 VStack(alignment: .leading, spacing: 8) {
+                    if let unverified {
+                        UnverifiedLabel(
+                            text: title, carriesInfo: false,
+                            rendersInteractiveControls: unverified.rendersInteractiveControls)
+                    }
                     foldedUnverifiedSentence(unverified)
                     content()
                 }
-                .padding(.top, 8)
-            } label: {
-                sectionTitle(title, unverified: unverified, isDisclosureLabel: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             if unverified != nil {
                 disclosure.frame(maxWidth: .infinity, alignment: .leading)
@@ -2863,24 +2963,60 @@ struct DecisionDetailView: View {
         }
     }
 
+    /// The inspector pane's measures (frame 6.9).
+    private enum InspectorScale {
+        static let sectionGap: CGFloat = 16
+        static let verticalPadding: CGFloat = 20
+        static let horizontalPadding: CGFloat = 18
+        /// A section's rows start under its label's text, past the glyph.
+        static let rowIndent: CGFloat = 19
+        static let rowGap: CGFloat = 8
+    }
+
+    /// What VoiceOver calls a one-pane card's folded section of agent
+    /// claims, whose drawn label is the section's title alone.
+    static func unverifiedDisclosureSpokenLabel(_ title: String) -> String {
+        "\(title), unverified"
+    }
+
+    /// What VoiceOver calls the inspector's claims disclosure. The drawn
+    /// label is `Claims` and the unverified mark draws inside the section,
+    /// so the closed disclosure has to say whose claims they are.
+    static func inspectorClaimsSpokenLabel(count: Int) -> String {
+        "Claims, \(count), unverified agent claims"
+    }
+
+    /// One inspector section (R2, frame 6.9): a sentence disclosure with its
+    /// count as the trailing summary and its rows indented under the label,
+    /// set apart by spacing alone. A section of agent claims keeps the
+    /// unverified register as its first line, since the sentence label
+    /// carries none.
     private func inspectorSection<Content: View>(
         _ title: String,
+        count: Int? = nil,
         isExpanded: Binding<Bool>,
         unverified: UnverifiedRegister? = nil,
         @ViewBuilder content: @escaping () -> Content
     ) -> some View {
-        DisclosureGroup(isExpanded: isExpanded) {
-            VStack(alignment: .leading, spacing: 8) {
+        SentenceDisclosure(
+            label: title,
+            summary: count.map { "\($0)" },
+            spokenLabel: unverified == nil
+                ? nil : Self.inspectorClaimsSpokenLabel(count: count ?? 0),
+            isExpanded: isExpanded
+        ) {
+            VStack(alignment: .leading, spacing: InspectorScale.rowGap) {
+                if let unverified {
+                    UnverifiedLabel(
+                        text: "Agent claims", carriesInfo: false,
+                        rendersInteractiveControls: unverified.rendersInteractiveControls)
+                }
                 foldedUnverifiedSentence(unverified)
                 content()
             }
-            .padding(.top, 8)
-        } label: {
-            sectionTitle(title, unverified: unverified, isDisclosureLabel: true)
+            .padding(.leading, InspectorScale.rowIndent)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .freesideCard(dashed: unverified != nil)
     }
 
     private func factRow(_ label: String, value: String) -> some View {
@@ -2925,6 +3061,10 @@ struct DecisionDetailView: View {
         let loadsAttachments: Bool
         var text: Components.Schemas.ClaimText? = nil
         var rendersInteractiveControls = true
+        /// Draws the row in its own 1pt box, as the inspector lists its
+        /// attachments (frame 6.9). A row inside a card section or a
+        /// message is already set apart and draws none.
+        var boxed = false
 
         // Task identity for the attachment load: the digest fixes the content,
         // and availability is the one mutable field that must re-trigger the
@@ -2977,6 +3117,13 @@ struct DecisionDetailView: View {
                     }
                 }
                 digestCaption
+            }
+            .padding(.vertical, boxed ? 8 : 0)
+            .padding(.horizontal, boxed ? 10 : 0)
+            .overlay {
+                if boxed {
+                    RoundedRectangle(cornerRadius: 6).strokeBorder(Color.itemBorder, lineWidth: 1)
+                }
             }
             .onAppear {
                 guard rendersInteractiveControls else { return }
@@ -3056,7 +3203,7 @@ struct DecisionDetailView: View {
                         Label("Open attachment", systemImage: "arrow.up.forward.app")
                     }
                 }
-                .font(FreesideFont.caption)
+                .font(FreesideFont.attachmentState())
                 .sheet(
                     isPresented: $showsNonImagePreview,
                     onDismiss: { nonImagePreview = nil },
@@ -3069,9 +3216,9 @@ struct DecisionDetailView: View {
             case .unavailable:
                 VStack(alignment: .leading, spacing: 4) {
                     Label("No bytes available", systemImage: "photo.badge.exclamationmark")
-                        .font(FreesideFont.sans(.caption, weight: .semibold))
+                        .font(FreesideFont.attachmentState(emphasized: true))
                     Text("The daemon reports the attachment bytes are not available")
-                        .font(FreesideFont.caption)
+                        .font(FreesideFont.attachmentState())
                 }
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -3083,13 +3230,15 @@ struct DecisionDetailView: View {
             case .fetchFailed:
                 VStack(alignment: .leading, spacing: 6) {
                     Label("Couldn't load", systemImage: "arrow.clockwise.circle")
-                        .font(FreesideFont.sans(.caption, weight: .semibold))
+                        .font(FreesideFont.attachmentState(emphasized: true))
                     Text("The fetch failed. Try again.")
-                        .font(FreesideFont.caption)
+                        .font(FreesideFont.attachmentState())
                     if rendersInteractiveControls, loadsAttachments {
                         Button("Retry") { retryFetch() }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
+                            // A small control's own face is 11pt on macOS.
+                            .font(FreesideFont.attachmentState())
                             .accessibilityLabel("Retry loading \(label) attachment")
                     }
                 }
@@ -3104,7 +3253,7 @@ struct DecisionDetailView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     VStack(alignment: .leading, spacing: 4) {
                         Label("Too large here", systemImage: "arrow.up.left.and.arrow.down.right")
-                            .font(FreesideFont.sans(.caption, weight: .semibold))
+                            .font(FreesideFont.attachmentState(emphasized: true))
                         switch reason {
                         case .download(let bytesSeenAtLeast, _):
                             Text("At least \(byteCount(bytesSeenAtLeast))")
@@ -3143,7 +3292,7 @@ struct DecisionDetailView: View {
                             "Load \(label) attachment image, replacing retained images if needed")
                     }
                 }
-                .font(FreesideFont.caption)
+                .font(FreesideFont.attachmentState())
                 .foregroundStyle(Color.inkDim)
             case .loading, nil:
                 HStack(spacing: 8) {
@@ -3155,7 +3304,7 @@ struct DecisionDetailView: View {
                     }
                     Text("fetching by digest…")
                 }
-                .font(FreesideFont.caption)
+                .font(FreesideFont.attachmentState())
                 .foregroundStyle(Color.inkDim)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("\(label) attachment loading")
@@ -3168,7 +3317,7 @@ struct DecisionDetailView: View {
             _ metadata: Components.Schemas.EvidenceMetadata
         ) -> some View {
             Text("\(metadata.media_type.rawValue) · \(byteCount(Int(metadata.size_bytes)))")
-                .font(FreesideFont.mono(.caption2))
+                .font(FreesideFont.attachmentFact)
                 .foregroundStyle(Color.inkDim)
                 .lineLimit(1)
                 .textSelection(.enabled)
@@ -3180,7 +3329,7 @@ struct DecisionDetailView: View {
         @ViewBuilder private var digestCaption: some View {
             let caption = HStack(spacing: 8) {
                 Text("Digest \(digest)")
-                    .font(FreesideFont.mono(.caption2))
+                    .font(FreesideFont.attachmentFact)
                     .foregroundStyle(Color.inkDim)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -4162,6 +4311,20 @@ extension StateChip {
 }
 
 extension View {
+    /// Reports the width of the pane a view is offered, not the width the
+    /// view takes. A vertical scroll view is only as wide as its content,
+    /// and the decision card caps its own width until the pane is wide
+    /// enough for two columns, so the scroll view's own width could never
+    /// reach that threshold.
+    func onPaneWidthChange(_ action: @escaping (CGFloat) -> Void) -> some View {
+        frame(maxWidth: .infinity)
+            .onGeometryChange(for: CGFloat.self) { geometry in
+                geometry.size.width
+            } action: { width in
+                action(width)
+            }
+    }
+
     /// The decision card's own padding, ground, and border, inside the
     /// detail's margin.
     fileprivate func decisionCardChrome(compactLayout: Bool, wideLayout: Bool) -> some View {

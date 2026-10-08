@@ -23,6 +23,15 @@ struct FactRowTests {
         #expect(!FactRow.stacks("ok", at: .xxxLarge))
     }
 
+    /// The decision inspector stacks every binding row (R22): its pane is
+    /// too narrow for a trailing column, so a short value stacks there at
+    /// an ordinary size, and the rule stays off everywhere else.
+    @Test func aPaneThatStacksEveryRowStacksAShortValue() {
+        #expect(FactRow.stacks("ok", at: .large, always: true))
+        #expect(FactRow.stacks("ok", at: .xSmall, always: true))
+        #expect(!FactRow.stacks("ok", at: .large, always: false))
+    }
+
     /// R9: a chip in the value slot stacks by the same rule as the text it
     /// replaces, so the row reads its label for the decision.
     @Test func chipRowCarriesTheChipLabelAsItsValue() {

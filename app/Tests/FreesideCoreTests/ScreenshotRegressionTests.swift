@@ -2961,6 +2961,66 @@
                                 launchProjectID: nil
                             ).screenshotSidebar(now: screenshotNow))))
             }
+            // Frames 7.8 and 6.9 (R18): the finding card at a 1,000pt detail
+            // width with the inspector open, and that inspector, by day and
+            // by dusk. The item carries the frame's three attachments and
+            // two attachment claims, so the pointer row and both counts have
+            // something to count, and the inspector opens Evidence and its
+            // bindings and leaves Claims closed, as the frame draws it.
+            // Drawn last, for the reason given above (#1698).
+            var framed = adjudication
+            var report = try #require(framed.evidence_snapshot.first)
+            report.id = "art-report-finding_adjudication"
+            report._type = .verification_report
+            report.digest = "sha256:report-finding_adjudication"
+            report.metadata.media_type = .application_sol_json
+            report.metadata.size_bytes = 8_192
+            var transcript = report
+            transcript.id = "art-transcript-finding_adjudication"
+            transcript._type = .command_transcript
+            transcript.digest = "sha256:transcript-finding_adjudication"
+            transcript.metadata.media_type = .text_sol_plain
+            transcript.metadata.size_bytes = 2_048
+            framed.evidence_snapshot += [report, transcript]
+            var reviewerLog = try #require(framed.agent_claims.first { $0.text == nil })
+            reviewerLog.label = "reviewer log"
+            reviewerLog.artifact_id = "art-reviewer-log-finding_adjudication"
+            reviewerLog.digest = "sha256:reviewer-log-finding_adjudication"
+            framed.agent_claims.append(reviewerLog)
+            let framedSuite = "FreesideScreenshotFramedInspectorPreferences-\(UUID().uuidString)"
+            guard let framedDefaults = UserDefaults(suiteName: framedSuite) else {
+                throw ScreenshotError.preferencesUnavailable
+            }
+            defer { framedDefaults.removePersistentDomain(forName: framedSuite) }
+            let framedPreferences = DecisionSectionPreferences(defaults: framedDefaults)
+            framedPreferences.evidenceExpanded = true
+            framedPreferences.detailsExpanded = true
+            let framedDetail = DecisionDetailView(
+                store: store,
+                itemID: framed.id,
+                loadsAttachments: false,
+                showsValidationProgress: false,
+                sectionPreferences: framedPreferences)
+            for (suffix, colorScheme) in [("", ColorScheme.light), ("-dark", .dark)] {
+                surfaces.append(
+                    Surface(
+                        name: "decision-finding_adjudication-inspector-open-1000\(suffix)",
+                        width: 1_000,
+                        colorScheme: colorScheme,
+                        view: AnyView(
+                            framedDetail.screenshotCard(
+                                framed,
+                                at: dynamicTypeSize,
+                                detailWidth: 1_000,
+                                inspectorPresented: true))))
+                surfaces.append(
+                    Surface(
+                        name: "decision-finding_adjudication-frame-inspector\(suffix)",
+                        width: 360,
+                        colorScheme: colorScheme,
+                        view: AnyView(
+                            framedDetail.screenshotInspector(framed, at: dynamicTypeSize))))
+            }
             return surfaces
         }
 

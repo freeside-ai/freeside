@@ -418,6 +418,16 @@ enum FreesideFont {
     static func railDetail(emphasized: Bool) -> Font {
         fixed(emphasized ? "IBMPlexSans-Medm" : "IBMPlexSans", cardBodySize, relativeTo: .body)
     }
+    /// An attachment row's facts under its label, its media type, size,
+    /// and digest: mono at the keyword's size (frame 6.9). The platform
+    /// caption styles these lines used are 10pt on macOS, under the
+    /// 11.5pt floor.
+    static var attachmentFact: Font { fixed("IBMPlexMono", keywordSize, relativeTo: .caption2) }
+    /// An attachment row's state lines (not an image, loading, failed):
+    /// sans at the same size, semibold on the line that names the state.
+    static func attachmentState(emphasized: Bool = false) -> Font {
+        fixed(emphasized ? "IBMPlexSans-SmBld" : "IBMPlexSans", keywordSize, relativeTo: .caption)
+    }
     /// The disclosure chevron, sized as a glyph beside the fact label.
     static var disclosureGlyph: Font { fixed("IBMPlexSans", 11, relativeTo: .callout) }
 
@@ -1216,9 +1226,12 @@ struct FactRow: View {
     static let stackThreshold = 40
 
     /// An accessibility size stacks every row; below that, only a value
-    /// too long for the trailing column does.
-    static func stacks(_ value: String, at size: DynamicTypeSize) -> Bool {
-        size >= .accessibility1 || value.count > stackThreshold
+    /// too long for the trailing column does. `always` is a pane's own
+    /// rule that every row stacks (R22): in a pane too narrow for a
+    /// trailing column, a value under the threshold still breaks
+    /// mid-token.
+    static func stacks(_ value: String, at size: DynamicTypeSize, always: Bool = false) -> Bool {
+        always || size >= .accessibility1 || value.count > stackThreshold
     }
 
     let label: String
@@ -1232,10 +1245,13 @@ struct FactRow: View {
     /// in the diff cuts (R28). `value` holds the same line as plain text, so
     /// the stacking rule reads one string.
     var drawn: Text? = nil
+    /// Stacks the value under its label whatever its length. Off by
+    /// default; the decision inspector turns it on.
+    var stacksAlways = false
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        if Self.stacks(value, at: dynamicTypeSize) {
+        if Self.stacks(value, at: dynamicTypeSize, always: stacksAlways) {
             VStack(alignment: .leading, spacing: 3) {
                 labelText
                 valueContent
