@@ -29,20 +29,7 @@ struct DevicesView: View {
             } else {
                 content
             }
-            Divider().overlay(Color.rule)
-            HStack(spacing: 12) {
-                Button("Refresh") {
-                    Task { await model.load() }
-                }
-                .font(FreesideFont.callout)
-                .buttonStyle(FreesideActionButtonStyle(tone: .tertiary))
-                Spacer()
-                Button("Close") { dismiss() }
-                    .font(FreesideFont.callout)
-                    .buttonStyle(FreesideActionButtonStyle(tone: .secondary, expands: false))
-                    .keyboardShortcut(.cancelAction)
-            }
-            .padding(16)
+            FreesideSheetActionRow.done { dismiss() }
         }
         .background(Color.ground2)
         .freesideSheetPresentation()
@@ -72,26 +59,23 @@ struct DevicesView: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
             FreesideSheetHeader(
-                ask: "Devices",
-                consequence:
-                    "Devices paired with this daemon. A revoked device can't read or act until it pairs again.")
+                eyebrow: "Devices",
+                ask: "Paired with this daemon",
+                consequence: "A revoked device can't read or act until it pairs again.",
+                askLineLimit: nil)
             VStack(alignment: .leading, spacing: 16) {
                 if let failure = model.revokeFailure {
-                    Text(failure)
-                        .font(FreesideFont.callout)
-                        .foregroundStyle(Color.waxText)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Notice(tone: .wax, keyword: "Failed", sentence: failure)
+                        .accessibilityElement(children: .combine)
                 }
                 switch model.loadState {
                 case .loading:
                     Text("Loading devices…")
-                        .font(FreesideFont.callout)
+                        .font(FreesideFont.cardBody)
                         .foregroundStyle(Color.inkDim)
                 case .failed(let reason):
-                    Text(reason)
-                        .font(FreesideFont.callout)
-                        .foregroundStyle(Color.waxText)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Notice(tone: .wax, keyword: "Failed", sentence: reason)
+                        .accessibilityElement(children: .combine)
                 case .loaded:
                     if let current = model.currentDevice {
                         section("This device", rows: [current])
@@ -103,6 +87,12 @@ struct DevicesView: View {
                         section("Revoked", rows: model.revokedDevices)
                     }
                 }
+                // The footer holds the one dismiss (R11), so the reload sits
+                // at the end of the list it reloads.
+                Button("Refresh") {
+                    Task { await model.load() }
+                }
+                .buttonStyle(FreesideActionButtonStyle(tone: .tertiary))
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 16)
@@ -121,9 +111,9 @@ struct DevicesView: View {
 
     private func card(_ row: DevicesModel.Row) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 8) {
                 Text(row.name)
-                    .font(FreesideFont.callout.weight(.semibold))
+                    .font(FreesideFont.optionLabel)
                     .foregroundStyle(row.isRevoked ? Color.inkDim : Color.ink)
                     .fixedSize(horizontal: false, vertical: true)
                 fact("Paired", row.pairedAt)
@@ -132,7 +122,7 @@ struct DevicesView: View {
                 } else {
                     // No authenticated request since the daemon began
                     // recording activity.
-                    fact("Last seen", value: "Never")
+                    FactRow(label: "Last seen", value: "Never")
                 }
                 if let revokedAt = row.revokedAt {
                     fact("Revoked", revokedAt)
@@ -143,7 +133,6 @@ struct DevicesView: View {
                 Button(model.revokingID == row.id ? "Revoking…" : "Revoke") {
                     confirming = row
                 }
-                .font(FreesideFont.callout)
                 // Hugs its label: a destructive control should not be the
                 // widest thing on the card.
                 .buttonStyle(FreesideActionButtonStyle(tone: .destructive, expands: false))
@@ -151,29 +140,21 @@ struct DevicesView: View {
                 .accessibilityLabel("Revoke \(row.name)")
             }
         }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(Color.ground, in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.rule))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.itemBorder, lineWidth: 1))
     }
 
     /// One recorded instant in the shared short time format, with the exact
     /// instant a hover or long press away.
     private func fact(_ label: String, _ date: Date) -> some View {
-        fact(
-            label,
+        FactRow(
+            label: label,
             value: FreesideFormat.shortTime(
                 date, now: pinnedNow ?? .now, locale: locale, timeZone: timeZone)
         )
         .exactInstant(date)
-    }
-
-    /// One paragraph, so a long value wraps under its label at large type
-    /// sizes rather than squeezing beside it.
-    private func fact(_ label: String, value: String) -> some View {
-        Text("\(Text(label).foregroundStyle(Color.inkDim)) \(Text(value).foregroundStyle(Color.ink))")
-            .font(FreesideFont.caption)
-            .fixedSize(horizontal: false, vertical: true)
     }
 
     static func confirmationTitle(for row: DevicesModel.Row) -> String {

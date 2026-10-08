@@ -124,6 +124,7 @@ struct NewTaskSheet: View {
             FreesideSheetActionRow(
                 submitLabel: "Submit",
                 isSubmitEnabled: canSubmit,
+                cancelIsOutlined: true,
                 submit: performSubmit,
                 cancel: { dismiss() })
         }
@@ -143,7 +144,8 @@ struct NewTaskSheet: View {
     private var composerContent: some View {
         VStack(spacing: 0) {
             FreesideSheetHeader(
-                ask: "New task",
+                eyebrow: "New task",
+                ask: "What should the agent work on?",
                 consequence:
                     "Describe the work in a sentence or a paragraph. The agent asks before it specifies when the source is a sketch."
             )
@@ -288,17 +290,15 @@ struct NewTaskSheet: View {
     @ViewBuilder private var status: some View {
         switch model.state {
         case .lost:
-            Text("The result couldn't be confirmed. Your request is saved in Unconfirmed submissions in Tasks.")
-                .font(FreesideFont.callout)
-                .foregroundStyle(Color.waxText)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            Notice(
+                tone: .accent, keyword: "Unconfirmed",
+                sentence:
+                    "The result couldn't be confirmed. Your request is saved in Unconfirmed submissions in Tasks."
+            )
+            .accessibilityElement(children: .combine)
         case .rejected(let reason):
-            Text(reason)
-                .font(FreesideFont.callout)
-                .foregroundStyle(Color.waxText)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            Notice(tone: .wax, keyword: "Failed", sentence: reason)
+                .accessibilityElement(children: .combine)
         case .idle, .submitting, .submitted:
             EmptyView()
         }
