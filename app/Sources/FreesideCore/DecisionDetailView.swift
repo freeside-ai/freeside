@@ -1173,8 +1173,10 @@ struct DecisionDetailView: View {
         _ claim: Components.Schemas.AgentClaim, rendersInteractiveControls: Bool
     ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
+            // A fixed face: the platform caption draws under the 11.5pt
+            // floor on macOS.
             Text("Source: agent invocation `\(Self.producerInvocationID(claim))`")
-                .font(FreesideFont.caption).textSelection(.enabled)
+                .font(FreesideFont.cardBody).textSelection(.enabled)
             AttachmentRow(
                 label: "Original report", digest: claim.digest, metadata: claim.metadata, attachments: attachments,
                 loadsAttachments: false, text: claim.text, rendersInteractiveControls: rendersInteractiveControls)
@@ -3543,9 +3545,10 @@ struct DecisionDetailView: View {
                     ProgressView().controlSize(.small).tint(.waterText)
                     // The label reads as the disabled state it describes;
                     // the spinner keeps its water tint because the work is
-                    // still in progress.
+                    // still in progress. A fixed face, because the platform
+                    // mono caption draws under the 11.5pt floor on macOS.
                     Text("Validating current state…")
-                        .font(FreesideFont.monoCaption)
+                        .font(FreesideFont.trailingSummary)
                         .foregroundStyle(Color.inkFaint)
                 }
             }
