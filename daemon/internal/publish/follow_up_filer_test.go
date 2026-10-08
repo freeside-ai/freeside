@@ -2,6 +2,7 @@ package publish_test
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"slices"
@@ -958,6 +959,151 @@ func TestFollowUpFilerDoesNotFileAnInstanceThatFailsTheScreen(t *testing.T) {
 			t.Fatal("the unreadable filing raised a stall notice beside its own")
 		}
 	})
+}
+
+func TestFollowUpFilerWaitingNoticeClearsWhileRepositoryBusy(t *testing.T) {
+	for _, restart := range []bool{false, true} {
+		t.Run(fmt.Sprintf("restart=%t", restart), func(t *testing.T) {
+			t.Parallel()
+			h := newFilingHarness(t)
+			run := h.seedRun("run-a", map[string]string{
+				"follow_up_filing.max_per_day": "1", "follow_up_filing.settle_interval": "72h",
+			}, nil)
+			older, held := h.approve(run, 0), h.approve(run, 2)
+			h.respond(unprovenCommitted)
+			h.mustPass()
+			h.assertNotice(held.ID, "follow_up_filing_waiting", domain.StatusOpen)
+			first := *h.healthItem(held.ID, "follow_up_filing_waiting")
+			h.mustPass()
+			if item := h.healthItem(held.ID, "follow_up_filing_waiting"); item.ItemVersion != first.ItemVersion {
+				t.Fatalf("repeated capped pass changed waiting item: %+v", item)
+			}
+			if restart {
+				h.restart()
+			}
+			h.advance(24*time.Hour + time.Second)
+			h.mustPass()
+			h.assertNotice(held.ID, "follow_up_filing_waiting", domain.StatusResolved)
+			if intent := h.intent(older.ID); intent == nil || intent.Terminal != nil {
+				t.Fatalf("older intent = %+v, want outstanding", intent)
+			}
+			if intent := h.intent(held.ID); intent != nil || h.creates() != 1 {
+				t.Fatalf("uncapped busy filing: intent = %+v, creates = %d", intent, h.creates())
+			}
+
+			// A newly approved filing sorts ahead of held and fills the cap
+			// after the older intent settles. Recurrence survives a restart.
+			h.restart()
+			ahead := h.approve(run, 1)
+			h.mustPass()
+			h.assertNotice(held.ID, "follow_up_filing_waiting", domain.StatusResolved)
+			if intent := h.intent(ahead.ID); intent != nil || h.creates() != 1 ||
+				h.healthItem(ahead.ID, "follow_up_filing_waiting") != nil {
+				t.Fatalf("new uncapped busy filing: intent = %+v, creates = %d", intent, h.creates())
+			}
+			h.advance(48 * time.Hour)
+			h.mustPass()
+			h.assertLedgered(older.ID, h.forgeIssues()[0].Number)
+			h.assertLedgered(ahead.ID, h.forgeIssues()[1].Number)
+			h.assertNotice(held.ID, "follow_up_filing_waiting", domain.StatusResolved)
+			h.assertNotice(held.ID, "follow_up_filing_waiting/2", domain.StatusOpen)
+			h.restart()
+			h.mustPass()
+			h.assertNotice(held.ID, "follow_up_filing_waiting/2", domain.StatusOpen)
+			if intent := h.intent(held.ID); intent != nil || h.creates() != 2 ||
+				h.healthItem(held.ID, "follow_up_filing_waiting/3") != nil {
+				t.Fatalf("recurrent cap: intent = %+v, creates = %d", intent, h.creates())
+			}
+		})
+	}
+}
+
+func TestFollowUpFilerWaitingNoticeSurvivesStoreErrors(t *testing.T) {
+	for _, fault := range []string{"cap count read", "intent insert"} {
+		t.Run(fault, func(t *testing.T) {
+			t.Parallel()
+			h := newFilingHarness(t)
+			run := h.seedRun("run-a", map[string]string{
+				"follow_up_filing.max_per_day": "1", "follow_up_filing.settle_interval": "72h",
+			}, nil)
+			older, held := h.approve(run, 0), h.approve(run, 1)
+			if fault == "cap count read" {
+				h.respond(unprovenCommitted)
+			}
+			h.mustPass()
+			h.assertNotice(held.ID, "follow_up_filing_waiting", domain.StatusOpen)
+			first := *h.healthItem(held.ID, "follow_up_filing_waiting")
+
+			// Corrupt only the ledger row, so proposal discovery still visits
+			// older and the held filing's cap count encounters the read error.
+			setNumbers := func(numbers string) {
+				h.raw(func(raw *sql.DB) {
+					var trigger string
+					if err := raw.QueryRow(`SELECT sql FROM sqlite_master
+						WHERE name = 'follow_up_filing_intents_recorded_update'`).Scan(&trigger); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := raw.Exec(`DROP TRIGGER follow_up_filing_intents_recorded_update`); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := raw.Exec(`UPDATE follow_up_filing_intents SET pre_dispatch_issue_numbers = ?
+						WHERE instance_id = ?`, numbers, older.ID); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := raw.Exec(trigger); err != nil {
+						t.Fatal(err)
+					}
+				})
+			}
+			if fault == "cap count read" {
+				setNumbers("invalid-json")
+			} else {
+				h.advance(24*time.Hour + time.Second)
+				h.raw(func(raw *sql.DB) {
+					if _, err := raw.Exec(`CREATE TRIGGER fail_filing_intent_insert
+						BEFORE INSERT ON follow_up_filing_intents
+						BEGIN SELECT RAISE(ABORT, 'injected intent insert failure'); END`); err != nil {
+						t.Fatal(err)
+					}
+				})
+			}
+			for range 2 {
+				if err := h.pass(); err == nil || !strings.Contains(err.Error(), string(held.ID)) {
+					t.Fatalf("faulted pass = %v, want error naming held filing", err)
+				}
+				h.assertNotice(held.ID, "follow_up_filing_waiting", domain.StatusOpen)
+				if item := h.healthItem(held.ID, "follow_up_filing_waiting"); item.ItemVersion != first.ItemVersion {
+					t.Fatalf("store error changed waiting item: %+v", item)
+				}
+				if intent := h.intent(held.ID); intent != nil || h.creates() != 1 ||
+					h.healthItem(held.ID, "follow_up_filing_waiting/2") != nil {
+					t.Fatalf("faulted filing: intent = %+v, creates = %d", intent, h.creates())
+				}
+			}
+			if fault == "cap count read" {
+				setNumbers("[]")
+				h.mustPass()
+				h.assertNotice(held.ID, "follow_up_filing_waiting", domain.StatusOpen)
+				if h.healthItem(held.ID, "follow_up_filing_waiting/2") != nil {
+					t.Fatal("recovering with the cap still in force opened another occurrence")
+				}
+				h.advance(24*time.Hour + time.Second)
+				h.mustPass()
+				if intent := h.intent(held.ID); intent != nil || h.creates() != 1 {
+					t.Fatalf("recovered busy filing: intent = %+v, creates = %d", intent, h.creates())
+				}
+			} else {
+				h.raw(func(raw *sql.DB) {
+					if _, err := raw.Exec(`DROP TRIGGER fail_filing_intent_insert`); err != nil {
+						t.Fatal(err)
+					}
+				})
+				h.mustPass()
+				h.assertLedgered(held.ID, h.forgeIssues()[1].Number)
+			}
+			h.assertNotice(held.ID, "follow_up_filing_waiting", domain.StatusResolved)
+		})
+	}
 }
 
 func TestFollowUpFilerRateCap(t *testing.T) {
