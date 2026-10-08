@@ -367,10 +367,13 @@ func (f *FollowUpFiler) drive(ctx context.Context, filing approvedFiling, all []
 	}
 	if view.intent == nil {
 		intent, opened, err := f.open(ctx, filing, view, all)
-		if err != nil || !opened {
-			// Still without an intent, so a waiting notice still describes it.
+		if err != nil {
+			// An uncertain cap or intent result cannot clear an existing notice.
 			f.holding[filingNotice{filing.instanceID, followUpFilingWaitingCode}] = true
 			return err
+		}
+		if !opened {
+			return nil
 		}
 		view.intent = &intent
 	}
@@ -432,6 +435,7 @@ func (f *FollowUpFiler) open(
 			return domain.FollowUpFilingIntent{}, false, err
 		}
 		if recent >= view.caps.MaxPerDay {
+			f.holding[filingNotice{filing.instanceID, followUpFilingWaitingCode}] = true
 			return domain.FollowUpFilingIntent{}, false, f.store.Write(ctx, func(tx *store.WriteTx) error {
 				return f.putHealthItem(ctx, tx, filing.filingRef, followUpFilingWaitingCode, fmt.Sprintf(
 					"Follow-up issue filing for proposal instance %s in %s is waiting: %d filings there in the last 24 hours reach the %s cap of %d. It files when the window frees.",
