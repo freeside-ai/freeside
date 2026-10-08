@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -101,154 +102,137 @@ func TestDefaultLevelEmitsNoPerPassRecords(t *testing.T) {
 }
 
 func TestActiveResourceRunUsesOperatorActiveCadence(t *testing.T) {
-	st := schedTestStore(t)
-	item := capturedRunWithCriterion(
-		t, st, "run-active-cadence", "item-active-cadence",
-		domain.CompletionBoundPRMerged, nil,
-	)
-	var merged atomic.Bool
-	observed := make(chan struct{}, 32)
-	reconciler := activeResourceReconciler{
-		store: st,
-		pull: func(context.Context, string, int) (publish.PullObservation, error) {
-			select {
-			case observed <- struct{}{}:
-			default:
-			}
-			if merged.Load() {
-				return exactPull("closed", true), nil
-			}
-			return exactPull("open", false), nil
-		},
-		now: func() time.Time { return time.Now().UTC() },
-	}
-
-	var out bytes.Buffer
-	logger, err := newLogger(&out, "debug")
-	if err != nil {
-		t.Fatal(err)
-	}
-	const (
-		// The idle interval sits far above the fast one on purpose. The test
-		// asserts the loop reschedules at the operator cadence, and a timer-reset
-		// regression (scheduling defaultInterval while operator-active) is caught
-		// only if the deadline separates the two: the correct fast path concludes
-		// in well under a second, so concludeByDeadline clears it comfortably while
-		// a regression cannot resolve before defaultInterval. -race slows a pass's
-		// CPU work, not the wall-clock timer, so that separation holds under the
-		// detector; the original 150ms bound flaked only because it sat right at a
-		// pass's own work time, not because it discriminated cadence.
-		defaultInterval    = 10 * time.Second
-		operatorInterval   = 10 * time.Millisecond
-		concludeByDeadline = 3 * time.Second
-	)
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() {
-		done <- reconciler.Run(ctx, defaultInterval, operatorInterval, logger)
-	}()
-	defer func() {
-		cancel()
-		if done == nil {
-			return
+	synctest.Test(t, func(t *testing.T) {
+		st := schedTestStore(t)
+		item := capturedRunWithCriterion(
+			t, st, "run-active-cadence", "item-active-cadence",
+			domain.CompletionBoundPRMerged, nil,
+		)
+		var merged atomic.Bool
+		reconciler := activeResourceReconciler{
+			store: st,
+			pull: func(context.Context, string, int) (publish.PullObservation, error) {
+				if merged.Load() {
+					return exactPull("closed", true), nil
+				}
+				return exactPull("open", false), nil
+			},
+			now: func() time.Time { return time.Now().UTC() },
 		}
-		select {
-		case err := <-done:
-			if err != nil {
+
+		var out lockedBuffer
+		logger, err := newLogger(&out, "debug")
+		if err != nil {
+			t.Fatal(err)
+		}
+		const (
+			defaultInterval  = 10 * time.Second
+			operatorInterval = 10 * time.Millisecond
+		)
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() {
+			done <- reconciler.Run(ctx, defaultInterval, operatorInterval, logger)
+		}()
+		stop := func() {
+			cancel()
+			if done == nil {
+				return
+			}
+			if err := <-done; err != nil {
 				t.Errorf("Run: %v", err)
 			}
-		case <-time.After(30 * time.Second):
-			t.Error("Run did not stop after cancellation")
+			done = nil
 		}
-	}()
+		// Join before store cleanup even when an assertion ends the test early.
+		defer stop()
 
-	// The startup pass engages the tight cadence, so several observations arrive
-	// in quick succession while unchanged state coalesces to one durable fact and
-	// leaves the item version untouched. Each must land inside concludeByDeadline:
-	// under the operator cadence they arrive within milliseconds, whereas a loop
-	// that ignored the returned interval would not tick again until defaultInterval.
-	for pass := 0; pass < 3; pass++ {
-		select {
-		case <-observed:
-		case <-time.After(concludeByDeadline):
-			t.Fatalf("operator-active pass %d did not arrive at the fast cadence", pass+1)
+		// Settle startup and the fixture's queued ready-item wake before measuring
+		// timer-driven passes. Wait ensures each pass has committed before assertions;
+		// the locked buffer synchronizes reads with later ticks' log writes.
+		synctest.Wait()
+		passCount := func() int {
+			return len(recordsWhere(logRecords(t, out.String()), "msg", "active resource pass complete"))
 		}
-	}
-	if got := readActiveItem(t, st, item.ID); got.ItemVersion != item.ItemVersion {
-		t.Fatalf("unchanged active passes changed item version to %d, want %d",
-			got.ItemVersion, item.ItemVersion)
-	}
-	if facts := activePullFacts(t, st, 424242, 450); len(facts) != 1 {
-		t.Fatalf("unchanged active passes recorded %d pull facts, want 1: %+v", len(facts), facts)
-	}
-	assertNoActiveCompletion(t, st, item)
+		baseline := passCount()
+		if baseline == 0 {
+			t.Fatal("Run did not reconcile immediately")
+		}
+		for pass := 1; pass <= 3; pass++ {
+			time.Sleep(operatorInterval - time.Nanosecond)
+			synctest.Wait()
+			if got := passCount(); got != baseline+pass-1 {
+				t.Fatalf("passes before operator tick %d = %d, want %d", pass, got, baseline+pass-1)
+			}
+			time.Sleep(time.Nanosecond)
+			synctest.Wait()
+			if got := passCount(); got != baseline+pass {
+				t.Fatalf("passes at operator tick %d = %d, want %d", pass, got, baseline+pass)
+			}
+		}
+		if got := readActiveItem(t, st, item.ID); got.ItemVersion != item.ItemVersion {
+			t.Fatalf("unchanged active passes changed item version to %d, want %d",
+				got.ItemVersion, item.ItemVersion)
+		}
+		if facts := activePullFacts(t, st, 424242, 450); len(facts) != 1 {
+			t.Fatalf("unchanged active passes recorded %d pull facts, want 1: %+v", len(facts), facts)
+		}
+		assertNoActiveCompletion(t, st, item)
 
-	merged.Store(true)
-	// The merged item must be concluded within concludeByDeadline, which proves
-	// the loop actually rescheduled at the operator cadence: the concluding pass
-	// fires on the next fast tick, well under the deadline, while a loop that fell
-	// back to defaultInterval could not resolve it in time. The wide margin below
-	// the deadline keeps this robust under -race, where a pass's CPU work, not the
-	// wall-clock timer, is what slows.
-	deadline := time.Now().Add(concludeByDeadline)
-	for {
-		if got := readActiveItem(t, st, item.ID); got.Status == domain.StatusResolved {
-			break
+		merged.Store(true)
+		time.Sleep(operatorInterval)
+		synctest.Wait()
+		if got := readActiveItem(t, st, item.ID); got.Status != domain.StatusResolved {
+			t.Fatalf("item status after merge tick = %s, want resolved", got.Status)
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("merged ready item was not concluded at the operator cadence")
+		completedPasses := passCount()
+		if completedPasses != baseline+4 {
+			t.Fatalf("passes after merge tick = %d, want %d", completedPasses, baseline+4)
 		}
-		time.Sleep(time.Millisecond)
-	}
 
-	// Once the concluding pass releases the regime, several former tight-cadence
-	// windows add neither another pass's facts nor another completion.
-	time.Sleep(3 * operatorInterval)
-	cancel()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("Run: %v", err)
+		// Count passes directly: an unwanted idle pass need not add a pull fact.
+		time.Sleep(3 * operatorInterval)
+		synctest.Wait()
+		if got := passCount(); got != completedPasses {
+			t.Fatalf("passes after cadence release = %d, want %d", got, completedPasses)
 		}
-	case <-time.After(30 * time.Second):
-		t.Fatal("Run did not stop after cancellation")
-	}
-	done = nil
+		stop()
 
-	if facts := activePullFacts(t, st, 424242, 450); len(facts) != 2 || !facts[1].Merged {
-		t.Fatalf("completion pull facts = %+v, want one open and one merged", facts)
-	}
-	if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
-		completion, err := tx.GetWorkUnitCompletion(
-			t.Context(), domain.WorkUnitIDForRun(*item.Subject.RunID),
-		)
-		if err != nil {
-			return err
+		if facts := activePullFacts(t, st, 424242, 450); len(facts) != 2 || facts[0].Merged || !facts[1].Merged {
+			t.Fatalf("completion pull facts = %+v, want one open and one merged", facts)
 		}
-		if completion.MergeCommitSHA != "deadbeef" {
-			t.Fatalf("completion = %+v", completion)
+		if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
+			completion, err := tx.GetWorkUnitCompletion(
+				t.Context(), domain.WorkUnitIDForRun(*item.Subject.RunID),
+			)
+			if err != nil {
+				return err
+			}
+			if completion.MergeCommitSHA != "deadbeef" {
+				t.Fatalf("completion = %+v", completion)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
 		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
 
-	records := logRecords(t, out.String())
-	if engaged := recordsWhere(records, "msg", "operator-active cadence engaged"); len(engaged) != 1 {
-		t.Fatalf("engaged records = %v, want exactly one", engaged)
-	}
-	if released := recordsWhere(records, "msg", "operator-active cadence released"); len(released) != 1 {
-		t.Fatalf("released records = %v, want exactly one", released)
-	}
-	passes := recordsWhere(records, "msg", "active resource pass complete")
-	if len(passes) < 4 {
-		t.Fatalf("pass records = %v, want startup, unchanged, and completion passes", passes)
-	}
-	for _, record := range passes {
-		if record["level"] != "DEBUG" {
-			t.Fatalf("per-pass record escaped debug level: %v", record)
+		records := logRecords(t, out.String())
+		if engaged := recordsWhere(records, "msg", "operator-active cadence engaged"); len(engaged) != 1 {
+			t.Fatalf("engaged records = %v, want exactly one", engaged)
 		}
-	}
+		if released := recordsWhere(records, "msg", "operator-active cadence released"); len(released) != 1 {
+			t.Fatalf("released records = %v, want exactly one", released)
+		}
+		passes := recordsWhere(records, "msg", "active resource pass complete")
+		if len(passes) < 4 {
+			t.Fatalf("pass records = %v, want startup, unchanged, and completion passes", passes)
+		}
+		for _, record := range passes {
+			if record["level"] != "DEBUG" {
+				t.Fatalf("per-pass record escaped debug level: %v", record)
+			}
+		}
+	})
 }
 
 func TestActiveResourceRunWakesForNewReadyItem(t *testing.T) {
