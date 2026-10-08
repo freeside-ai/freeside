@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
@@ -646,75 +647,99 @@ func TestResolutionRequiresActiveJanitor(t *testing.T) {
 // the first complete pass activates the registration, and shutdown closes it.
 func TestInstallationJanitorRunActivatesOnlyAfterCleanPass(t *testing.T) {
 	t.Parallel()
-	ks := publicJanitorKeystore(t)
-	firstPassed := make(chan struct{}, 1)
-	secondStarted := make(chan struct{}, 1)
-	releaseSecond := make(chan struct{})
-	var callsMu sync.Mutex
-	installationCalls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if handleExactGrant(w, r, fixtureRepositoryID) {
-			return
+	synctest.Test(t, func(t *testing.T) {
+		ks := publicJanitorKeystore(t)
+		secondStarted := make(chan struct{}, 1)
+		releaseSecond := make(chan struct{})
+		installationCalls := 0
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if handleExactGrant(w, r, fixtureRepositoryID) {
+				return
+			}
+			if r.Method != http.MethodGet || r.URL.Path != "/app/installations" {
+				t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+				http.Error(w, "unexpected request", http.StatusNotFound)
+				return
+			}
+			installationCalls++
+			if installationCalls == 2 {
+				secondStarted <- struct{}{}
+				select {
+				case <-releaseSecond:
+				case <-r.Context().Done():
+					return
+				}
+			}
+			_, _ = io.WriteString(w,
+				`[{"id":701,"app_id":501,"target_id":101,"repository_selection":"selected","account":{"login":"operator","id":101}}]`)
+		})
+		client := &http.Client{Transport: cleanupTransportFunc(func(req *http.Request) (*http.Response, error) {
+			if err := req.Context().Err(); err != nil {
+				return nil, err
+			}
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+			if err := req.Context().Err(); err != nil {
+				return nil, err
+			}
+			return recorder.Result(), nil
+		})}
+		janitor, err := publish.NewInstallationJanitor(ks, client, "https://api.github.test",
+			publicAuthority(publish.TrustedInstallation{
+				RegistrationID: 501,
+				InstallationID: 701,
+				Account:        "operator",
+				AccountID:      101,
+				RepositoryIDs:  []int64{fixtureRepositoryID},
+			}), &removalRecorder{}, &captureMintRecorder{}, fixedNow, 1)
+		if err != nil {
+			t.Fatalf("NewInstallationJanitor: %v", err)
 		}
-		if r.URL.Path != "/app/installations" {
-			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
-			return
+		if janitor.ActiveFor(501) {
+			t.Fatal("janitor active before its first pass")
 		}
-		callsMu.Lock()
-		installationCalls++
-		call := installationCalls
-		callsMu.Unlock()
-		if call == 2 {
-			secondStarted <- struct{}{}
-			<-releaseSecond
+		if janitor.AllowsRepository(501, 701, fixtureRepositoryID) {
+			t.Fatal("trusted grant allowed before the first pass")
 		}
-		_, _ = io.WriteString(w,
-			`[{"id":701,"app_id":501,"target_id":101,"repository_selection":"selected","account":{"login":"operator","id":101}}]`)
-		if call == 1 {
-			firstPassed <- struct{}{}
-		}
-	}))
-	defer srv.Close()
+		const interval = 10 * time.Millisecond
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- janitor.Run(ctx, interval) }()
+		stop := sync.OnceFunc(func() {
+			cancel()
+			close(releaseSecond)
+			if err := <-done; err != nil {
+				t.Errorf("Run shutdown: %v", err)
+			}
+		})
+		t.Cleanup(stop)
 
-	janitor := newJanitor(t, ks, srv, publicAuthority(publish.TrustedInstallation{
-		RegistrationID: 501,
-		InstallationID: 701,
-		Account:        "operator",
-		AccountID:      101,
-		RepositoryIDs:  []int64{fixtureRepositoryID},
-	}), &removalRecorder{}, 1)
-	if janitor.ActiveFor(501) {
-		t.Fatal("janitor active before its first pass")
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- janitor.Run(ctx, 10*time.Millisecond) }()
-	<-firstPassed
-	deadline := time.Now().Add(time.Second)
-	for !janitor.ActiveFor(501) && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if !janitor.ActiveFor(501) {
-		t.Fatal("janitor did not activate after a clean pass")
-	}
-	if !janitor.AllowsRepository(501, 701, fixtureRepositoryID) {
-		t.Fatal("exact trusted grant did not enter the mint allow-set")
-	}
-	<-secondStarted
-	if janitor.ActiveFor(501) {
-		t.Fatal("janitor left stale coverage active while the next pass was blocked")
-	}
-	close(releaseSecond)
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("Run shutdown: %v", err)
-	}
-	if janitor.ActiveFor(501) {
-		t.Fatal("janitor remained active after shutdown")
-	}
-	if janitor.AllowsRepository(501, 701, fixtureRepositoryID) {
-		t.Fatal("trusted grant remained allowed after shutdown")
-	}
+		// Wait for coverage publication and the timer wait, not just the
+		// HTTP response. Fake time stays put while this goroutine asserts.
+		synctest.Wait()
+		if !janitor.ActiveFor(501) {
+			t.Fatal("janitor did not activate after a clean pass")
+		}
+		if !janitor.AllowsRepository(501, 701, fixtureRepositoryID) {
+			t.Fatal("exact trusted grant did not enter the mint allow-set")
+		}
+		time.Sleep(interval)
+		<-secondStarted
+		synctest.Wait()
+		if janitor.ActiveFor(501) {
+			t.Fatal("janitor left stale coverage active while the next pass was blocked")
+		}
+		if janitor.AllowsRepository(501, 701, fixtureRepositoryID) {
+			t.Fatal("trusted grant remained allowed while the next pass was blocked")
+		}
+		stop()
+		if janitor.ActiveFor(501) {
+			t.Fatal("janitor remained active after shutdown")
+		}
+		if janitor.AllowsRepository(501, 701, fixtureRepositoryID) {
+			t.Fatal("trusted grant remained allowed after shutdown")
+		}
+	})
 }
 
 // TestUnknownInstallationCannotMintOrCreateAttention exercises the invariant
