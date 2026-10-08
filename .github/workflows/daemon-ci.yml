@@ -96,7 +96,22 @@ jobs:
         # cannot drift; the exporter cross-compile guard (#73 acceptance
         # 4) is part of its build step.
         working-directory: .
-        run: bash scripts/check.sh daemon build test vet
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/daemon-evidence"
+          git rev-parse HEAD > "$RUNNER_TEMP/daemon-evidence/tested-merge.txt"
+          go version > "$RUNNER_TEMP/daemon-evidence/toolchain.txt"
+          bash scripts/check.sh daemon build
+          (cd daemon && go test -json -count=1 ./...) | tee "$RUNNER_TEMP/daemon-evidence/tests.jsonl"
+          bash scripts/check.sh daemon vet
+      - name: Save baseline test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-baseline-${{ runner.os }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/daemon-evidence
+          if-no-files-found: error
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
@@ -299,7 +314,21 @@ jobs:
             go-build-${{ runner.os }}-${{ github.job }}-
       - name: build, test (scripts/check.sh)
         working-directory: .
-        run: bash scripts/check.sh daemon build test
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/daemon-evidence"
+          git rev-parse HEAD > "$RUNNER_TEMP/daemon-evidence/tested-merge.txt"
+          go version > "$RUNNER_TEMP/daemon-evidence/toolchain.txt"
+          bash scripts/check.sh daemon build
+          (cd daemon && go test -json -count=1 ./...) | tee "$RUNNER_TEMP/daemon-evidence/tests.jsonl"
+      - name: Save baseline test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-baseline-${{ runner.os }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/daemon-evidence
+          if-no-files-found: error
       # Last step so a failed job saves nothing; push-only so PR runs are
       # restore-only. See the linux job for the full rationale.
       - name: Save Go build output
