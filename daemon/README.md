@@ -374,6 +374,27 @@ the owning sibling registry names it. Policy/profile and reviewer-configuration
 drift remains covered by the adjacent fail-closed recovery fixtures; a new
 drift axis needs both a preterminal refusal and a terminal-fact adoption case.
 
+## Local Test Runs on a Shared Machine
+
+`bash scripts/check.sh daemon test` runs at most one local test step at once
+per user. Extra runs wait, reporting the limit, state directory, and holders
+every 30 seconds. `DAEMON_TEST_MAX_RUNS` sets the limit; `0` disables it. The
+default is `0` when `CI` is non-empty, and an explicit value wins. The limit
+does not change Go's concurrency, timeout, or test arguments.
+
+`DAEMON_TEST_STATE_DIR` defaults to
+`${XDG_CACHE_HOME:-$HOME/.cache}/freeside/daemon-test`. Use the same directory
+outside every checkout for all sessions that should share slots. Kernel file
+locks release slots when a step ends or is killed, including `SIGKILL`.
+Children left behind by tests do not keep them. If Python 3 or writable state
+is unavailable, the step prints a notice and runs without the limit.
+
+Outside CI on macOS, when `git` resolves to `/usr/bin/git`, the test step uses
+the binary from `xcrun -f git` through a stable link directory that preserves
+its helpers and config. Only git's lookup changes, and later steps keep their original
+`PATH`. Other git installations are unchanged. A bare `go test` uses neither
+this git change nor the run limit.
+
 ## GitHub App Credential Onboarding
 
 The default publish identity is one public GitHub App owned by the operator's
