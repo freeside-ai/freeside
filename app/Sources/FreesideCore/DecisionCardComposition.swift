@@ -282,9 +282,10 @@ struct DecisionCardComposition: Equatable {
     static func scale(for type: Components.Schemas.AttentionType) -> Scale {
         switch type {
         case .ready_for_final_review, .agent_question, .system_health, .blocked,
-            .execution_failure, .task_proposal, .effect_proposal, .review_diminishing_returns:
+            .execution_failure, .task_proposal, .effect_proposal, .review_diminishing_returns,
+            .review_dispute:
             return .refined
-        case .review_dispute, .spec_approval,
+        case .spec_approval,
             .review_contradiction, .review_configuration,
             .finding_adjudication, .publish_blocked:
             return .legacy
@@ -514,6 +515,9 @@ struct DecisionCardComposition: Equatable {
         var drawsUnverifiedRecommendation = false
         /// The card has a change summary to draw in its fact block.
         var hasChangeSummary = false
+        /// The card draws a dispute's two positions, each under its own
+        /// unverified keyword.
+        var hasComparison = false
         /// The card draws a follow-up filing's proposed title and body.
         var hasProposedIssueText = false
         var prominentClaimIndex: Int? = nil
@@ -631,8 +635,10 @@ struct DecisionCardComposition: Equatable {
             // The drift audit's explanation and fixes are the audit model's
             // words, drawn under an unverified keyword (frame 5.2).
             return DecisionStopCausePresentation(item)?.audit != nil
+        case .comparison:
+            return context.hasComparison
         case .foldedFacts, .specRevision, .specification, .checklist, .stageRail,
-            .comparison, .yieldChart, .evidence:
+            .yieldChart, .evidence:
             return false
         }
     }
@@ -1766,32 +1772,35 @@ struct DecisionYieldChartModuleView: View {
     }
 }
 
+/// The two positions of a dispute, the reviewer's over the agent's, each a
+/// quote under its own unverified keyword (frame 7.4): both are a model's
+/// words about the change, and stacking them gives each the full measure.
 struct DecisionComparisonModuleView: View {
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let presentation: DecisionComparisonPresentation
+    /// Whether the first position's keyword draws the card's one
+    /// explanation control.
+    var carriesInfo = false
+    var rendersInteractiveControls = true
 
     var body: some View {
-        DecisionModuleContainer(title: "Positions") {
-            let layout =
-                dynamicTypeSize >= .accessibility1
-                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
-                : AnyLayout(HStackLayout(alignment: .top, spacing: 8))
-            layout {
-                ForEach(presentation.positions) { position in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(position.title)
-                            .font(FreesideFont.sans(.callout, weight: .semibold))
+        let scale = DecisionCardComposition.Scale.refined
+        VStack(alignment: .leading, spacing: scale.sectionGap) {
+            ForEach(Array(presentation.positions.enumerated()), id: \.element.id) { index, position in
+                VStack(alignment: .leading, spacing: scale.moduleGap) {
+                    UnverifiedLabel(
+                        text: position.title, carriesInfo: carriesInfo && index == 0,
+                        rendersInteractiveControls: rendersInteractiveControls)
+                    QuoteBlock {
                         Text(position.text)
+                            .font(FreesideFont.statement)
+                            .foregroundStyle(Color.ink)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.neutralWash))
+                    .accessibilityLabel(Text("\(position.title): \(position.text)"))
                 }
             }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(presentation.summary))
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

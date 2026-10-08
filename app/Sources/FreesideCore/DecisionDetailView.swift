@@ -918,7 +918,10 @@ struct DecisionDetailView: View {
             }
         case .comparison:
             if let presentation = graphics.comparison {
-                DecisionComparisonModuleView(presentation: presentation)
+                DecisionComparisonModuleView(
+                    presentation: presentation,
+                    carriesInfo: register.carriesInfo,
+                    rendersInteractiveControls: rendersInteractiveControls)
             }
         case .yieldChart:
             if let presentation = graphics.diminishingYield ?? DecisionYieldPresentation(item) {
@@ -1377,9 +1380,9 @@ struct DecisionDetailView: View {
         }
 
         if let comparison = graphics.comparison, !comparison.verifiableFacts.isEmpty {
-            cardSection("What the daemon can verify") {
+            keywordSection("Daemon Facts") {
                 ForEach(comparison.verifiableFacts) { fact in
-                    factRow(fact.label, value: fact.value)
+                    FactRow(label: fact.label, value: fact.value)
                 }
             }
         }
@@ -2649,6 +2652,7 @@ struct DecisionDetailView: View {
             drawsUnverifiedRecommendation: drawnRecommendation(item)?.register.isUnverifiedClaim
                 == true,
             hasChangeSummary: graphics.changeSummary != nil,
+            hasComparison: graphics.comparison != nil,
             hasProposedIssueText: effectProposalFacts.flatMap(AttentionDisplay.proposedIssueText)
                 != nil,
             prominentClaimIndex: graphics.prominentClaimIndex)

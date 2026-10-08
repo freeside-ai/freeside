@@ -843,6 +843,7 @@ import Testing
         let refined: Set<Components.Schemas.AttentionType> = [
             .ready_for_final_review, .agent_question, .system_health, .blocked,
             .execution_failure, .task_proposal, .effect_proposal, .review_diminishing_returns,
+            .review_dispute,
         ]
         let scale = DecisionCardComposition.scale(for: type)
         #expect(scale == (refined.contains(type) ? .refined : .legacy))
@@ -1268,6 +1269,26 @@ import Testing
             diminishing.summary
                 == "Review yield: Round 1: 4 new, 0 recurring; Round 2: 1 new, 2 recurring; Round 3: 0 new, 3 recurring."
         )
+    }
+
+    /// Frame 7.4: a dispute's positions each draw under an unverified
+    /// keyword, so the first of them, the card's first such keyword in
+    /// reading order, carries the one explanation control. A dispute with
+    /// no positions keeps it on the supplied claim.
+    @Test(arguments: DecisionCardComposition.UnverifiedContext.Platform.allCases)
+    func theDisputesFirstPositionCarriesTheExplanation(
+        platform: DecisionCardComposition.UnverifiedContext.Platform
+    ) throws {
+        let composition = DecisionCardComposition.forType(.review_dispute)
+        let item = AttentionFixtures.fixture(type: .review_dispute).item
+        let comparison = try #require(composition.modules.firstIndex(of: .comparison))
+        let claims = try #require(composition.modules.firstIndex(of: .claims))
+
+        #expect(
+            composition.infoSlot(for: item, in: .init(platform: platform, hasComparison: true))
+                == .module(comparison))
+        #expect(
+            composition.infoSlot(for: item, in: .init(platform: platform)) == .module(claims))
     }
 
     @Test func comparisonSummaryPreservesBothPositions() {
