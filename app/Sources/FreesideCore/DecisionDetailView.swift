@@ -502,7 +502,8 @@ struct DecisionDetailView: View {
                                 ScrollViewReader { scrollProxy in
                                     ScrollView {
                                         inspectorContent(item)
-                                            .padding()
+                                            .padding(.vertical, InspectorScale.verticalPadding)
+                                            .padding(.horizontal, InspectorScale.horizontalPadding)
                                     }
                                     .onChange(of: detailsRevealRequest) {
                                         revealTechnicalDetailsInInspectorIfRequested(using: scrollProxy)
@@ -2035,7 +2036,9 @@ struct DecisionDetailView: View {
             // attachment claims, the evidence packet, and the technical
             // bindings. A second copy of the same rows made an open inspector
             // repeat the card beside it.
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: InspectorScale.sectionGap) {
+                KeywordLabel(text: "Inspector")
+                    .accessibilityAddTraits(.isHeader)
                 let cardLeadClaims = DecisionCardComposition.forType(item._type)
                     .cardLeadClaims(
                         from: item.agent_claims,
@@ -2054,7 +2057,8 @@ struct DecisionDetailView: View {
                 ).withoutInfo
                 if !attachmentClaims.isEmpty {
                     inspectorSection(
-                        "Agent claims",
+                        "Claims",
+                        count: attachmentClaims.count,
                         isExpanded: claimsExpanded,
                         unverified: register
                     ) {
@@ -2062,7 +2066,11 @@ struct DecisionDetailView: View {
                     }
                 }
                 if !item.evidence_snapshot.isEmpty {
-                    inspectorSection("Evidence", isExpanded: evidenceExpanded) {
+                    inspectorSection(
+                        "Evidence",
+                        count: item.evidence_snapshot.count,
+                        isExpanded: evidenceExpanded
+                    ) {
                         ForEach(item.evidence_snapshot, id: \.id) { artifact in
                             AttachmentRow(
                                 label: artifact._type.rawValue,
@@ -2075,17 +2083,14 @@ struct DecisionDetailView: View {
                     }
                     .id(ScrollTarget.evidence)
                 }
-                inspectorSection("Details", isExpanded: detailsExpanded) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        detailsReason(item, register: register)
-                        ForEach(Array(detailRows(item).enumerated()), id: \.offset) { _, row in
-                            TechnicalDetailRow(
-                                row: row, rendersInteractiveControls: rendersInteractiveControls)
-                        }
+                inspectorSection("Technical Bindings", isExpanded: detailsExpanded) {
+                    detailsReason(item, register: register)
+                    ForEach(Array(detailRows(item).enumerated()), id: \.offset) { _, row in
+                        TechnicalDetailRow(
+                            row: row, rendersInteractiveControls: rendersInteractiveControls)
                     }
                 }
                 .id(ScrollTarget.technicalDetails)
-                .font(FreesideFont.caption)
                 .foregroundStyle(Color.inkDim)
                 .textSelection(.enabled)
             }
@@ -2199,7 +2204,8 @@ struct DecisionDetailView: View {
             at dynamicTypeSize: DynamicTypeSize
         ) -> some View {
             inspectorContent(item, rendersInteractiveControls: false)
-                .padding()
+                .padding(.vertical, InspectorScale.verticalPadding)
+                .padding(.horizontal, InspectorScale.horizontalPadding)
                 .frame(width: 360, alignment: .topLeading)
                 .background(Color.sidebarGround)
         }
@@ -2942,24 +2948,54 @@ struct DecisionDetailView: View {
         }
     }
 
+    /// The inspector pane's measures (frame 6.9).
+    private enum InspectorScale {
+        static let sectionGap: CGFloat = 16
+        static let verticalPadding: CGFloat = 20
+        static let horizontalPadding: CGFloat = 18
+        /// A section's rows start under its label's text, past the glyph.
+        static let rowIndent: CGFloat = 19
+        static let rowGap: CGFloat = 8
+    }
+
+    /// What VoiceOver calls the inspector's claims disclosure. The drawn
+    /// label is `Claims` and the unverified mark draws inside the section,
+    /// so the closed disclosure has to say whose claims they are.
+    static func inspectorClaimsSpokenLabel(count: Int) -> String {
+        "Claims, \(count), unverified agent claims"
+    }
+
+    /// One inspector section (R2, frame 6.9): a sentence disclosure with its
+    /// count as the trailing summary and its rows indented under the label,
+    /// set apart by spacing alone. A section of agent claims keeps the
+    /// unverified register as its first line, since the sentence label
+    /// carries none.
     private func inspectorSection<Content: View>(
         _ title: String,
+        count: Int? = nil,
         isExpanded: Binding<Bool>,
         unverified: UnverifiedRegister? = nil,
         @ViewBuilder content: @escaping () -> Content
     ) -> some View {
-        DisclosureGroup(isExpanded: isExpanded) {
-            VStack(alignment: .leading, spacing: 8) {
+        SentenceDisclosure(
+            label: title,
+            summary: count.map { "\($0)" },
+            spokenLabel: unverified == nil
+                ? nil : Self.inspectorClaimsSpokenLabel(count: count ?? 0),
+            isExpanded: isExpanded
+        ) {
+            VStack(alignment: .leading, spacing: InspectorScale.rowGap) {
+                if let unverified {
+                    UnverifiedLabel(
+                        text: "Agent claims", carriesInfo: false,
+                        rendersInteractiveControls: unverified.rendersInteractiveControls)
+                }
                 foldedUnverifiedSentence(unverified)
                 content()
             }
-            .padding(.top, 8)
-        } label: {
-            sectionTitle(title, unverified: unverified, isDisclosureLabel: true)
+            .padding(.leading, InspectorScale.rowIndent)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .freesideCard(dashed: unverified != nil)
     }
 
     private func factRow(_ label: String, value: String) -> some View {

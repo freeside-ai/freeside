@@ -1752,6 +1752,15 @@ import Testing
                 == "Show the attachments in the inspector")
     }
 
+    /// The inspector's claims disclosure is labeled `Claims` and draws its
+    /// unverified mark inside the section, so the closed disclosure says
+    /// aloud that the claims are the agent's and unverified.
+    @Test func theInspectorsClaimsDisclosureSaysTheClaimsAreUnverified() {
+        #expect(
+            DecisionDetailView.inspectorClaimsSpokenLabel(count: 2)
+                == "Claims, 2, unverified agent claims")
+    }
+
     /// The "Scope kept" row names the exact paths the operator left unchanged,
     /// so a long path prints whole rather than shortened: shortening a path a
     /// reader must recognize would lose meaning.
