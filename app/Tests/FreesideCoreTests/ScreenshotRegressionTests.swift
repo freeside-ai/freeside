@@ -38,7 +38,7 @@
         }
 
         private let canvasWidth: CGFloat = 960
-        private let baselineOperatingSystemKey = "macOS-26.6"
+        private let baselineOperatingSystemKey = "macOS-26.7"
         private let screenshotNow = AttentionFixtures.createdInstant.addingTimeInterval(18 * 3_600)
         private let screenshotTimeZone = TimeZone(identifier: "UTC") ?? .current
         private let textSizes = [
@@ -346,10 +346,10 @@
 
         @Test func recordingRequiresTheDesignatedBaselineOperatingSystem() throws {
             try validateRecordingOperatingSystem(
-                "macOS-26.6", baselineKey: "macOS-26.6")
+                "macOS-26.7", baselineKey: "macOS-26.7")
             #expect(throws: ScreenshotError.self) {
                 try validateRecordingOperatingSystem(
-                    "macOS-26.5", baselineKey: "macOS-26.6")
+                    "macOS-26.6", baselineKey: "macOS-26.7")
             }
         }
 
