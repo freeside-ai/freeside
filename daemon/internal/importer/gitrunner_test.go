@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/repotemplate"
 )
 
 // rungit runs git in a fixture repo with a pinned identity and isolated
@@ -69,24 +70,32 @@ func TestRungitIgnoresAmbientGitDir(t *testing.T) {
 	}
 }
 
+var baseRepoTemplates repotemplate.Cache[string]
+
 // initBaseRepo creates a daemon-owned fixture checkout whose HEAD holds
 // the given files.
 func initBaseRepo(t *testing.T, files map[string]string) (dir, baseSHA string) {
 	t.Helper()
-	dir = t.TempDir()
-	rungit(t, dir, "init", "-q")
-	for path, content := range files {
-		full := filepath.Join(dir, filepath.FromSlash(path))
-		if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
-			t.Fatal(err)
+	return baseRepoTemplates.Copy(t, repotemplate.FilesKey(files), func() (string, string) {
+		dir := t.TempDir()
+		rungit(t, dir, "init", "-q")
+		// The cache snapshots the completed repository. Prevent Git from
+		// starting background maintenance that can add and remove lock files
+		// while that snapshot walks .git.
+		rungit(t, dir, "config", "maintenance.auto", "false")
+		for path, content := range files {
+			full := filepath.Join(dir, filepath.FromSlash(path))
+			if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
 		}
-		if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	rungit(t, dir, "add", "-A")
-	rungit(t, dir, "commit", "-q", "--allow-empty", "-m", "base")
-	return dir, rungit(t, dir, "rev-parse", "HEAD")
+		rungit(t, dir, "add", "-A")
+		rungit(t, dir, "commit", "-q", "--allow-empty", "-m", "base")
+		return dir, rungit(t, dir, "rev-parse", "HEAD")
+	})
 }
 
 // newTestRunner builds a hardened runner against a fixture checkout.
