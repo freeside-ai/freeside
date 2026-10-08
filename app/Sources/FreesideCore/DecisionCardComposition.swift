@@ -888,6 +888,15 @@ struct FindingCardPresentation: Equatable, Identifiable {
             ? "Accepting covers the proposed route for the one finding above."
             : "Accepting covers every proposed route above: all \(findingCount) findings."
     }
+
+    /// The same coverage as the object of the recommendation's sentence
+    /// (R20), which says it in place of `acceptanceScope` where the card
+    /// draws a recommendation.
+    static func acceptancePhrase(findingCount: Int) -> String {
+        findingCount == 1
+            ? "accepting the proposed route for the one finding above"
+            : "accepting the proposed route for each of the \(findingCount) findings above"
+    }
 }
 
 struct DecisionGraphicPresentations: Equatable {

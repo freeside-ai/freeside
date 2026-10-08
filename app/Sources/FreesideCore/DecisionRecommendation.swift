@@ -31,7 +31,6 @@ struct DecisionRecommendationPresentation: Equatable {
     let reason: String
     let confidence: String?
     let register: Register
-    let title: String
     let sourceFacts: [SourceFact]
 
     /// Fails when `source` and `provenance` disagree, so a recommendation whose
@@ -54,7 +53,6 @@ struct DecisionRecommendationPresentation: Equatable {
         case .daemon_policy:
             guard let daemonPolicy else { return nil }
             register = .daemonFact
-            title = "Recommended · daemon policy"
             sourceFacts = [
                 .init(label: "Rule Digest", value: daemonPolicy.rule_digest, monospaced: true),
                 .init(label: "Input Digest", value: daemonPolicy.input_digest, monospaced: true),
@@ -62,7 +60,6 @@ struct DecisionRecommendationPresentation: Equatable {
         case .agent_judgment:
             guard let agentJudgment else { return nil }
             register = .agentClaim
-            title = "Recommended · agent judgment"
             sourceFacts = [
                 .init(
                     label: "Judgment Site",
@@ -78,7 +75,6 @@ struct DecisionRecommendationPresentation: Equatable {
         case .project_policy:
             guard let projectPolicy else { return nil }
             register = .projectPolicy
-            title = "Recommended · project policy"
             sourceFacts = [
                 .init(label: "Policy Key", value: projectPolicy.policy_key, monospaced: true),
                 .init(
@@ -95,13 +91,43 @@ struct DecisionRecommendationPresentation: Equatable {
         confidence = recommendation.confidence.map { AttentionDisplay.label($0.value1) }
     }
 
-    /// The block's one label line: the register, then the daemon's confidence
-    /// when it recorded one. Confidence is a property of the recommendation
-    /// itself, so it reads with the register rather than as a fact row the
-    /// operator has to find below the reason (#1107).
-    var label: String {
-        guard let confidence else { return title }
-        return "\(title) · \(confidence)"
+    /// The block's head (R20). An agent's judgment draws it with the
+    /// unverified word; a policy's recommendation draws the keyword alone.
+    static let keyword = "Recommendation"
+
+    /// Who recommends, as the subject of the block's sentence.
+    var actor: String {
+        switch register {
+        case .agentClaim: "The agent"
+        case .daemonFact: "Daemon policy"
+        case .projectPolicy: "Project policy"
+        }
+    }
+
+    /// The block's one sentence (R20): who recommends, the action, and the
+    /// daemon's confidence when it recorded one. Confidence is a property of
+    /// the recommendation itself, so it reads here rather than as a fact row
+    /// the operator has to find below the reason (#1107). It replaces the
+    /// dotted `Recommended · agent judgment · High` label.
+    func sentence(for item: Components.Schemas.AttentionItem?) -> String {
+        let confidence = confidence.map { ", with \($0.lowercased()) confidence" } ?? ""
+        return "\(actor) recommends \(Self.actionPhrase(action, for: item))\(confidence)."
+    }
+
+    /// The action as the sentence names it: the control's own label, so the
+    /// sentence and the filled button under it say the same words. Accepting
+    /// a finding item's routes says what the one command covers instead,
+    /// which the label cannot.
+    static func actionPhrase(
+        _ action: Components.Schemas.Action,
+        for item: Components.Schemas.AttentionItem?
+    ) -> String {
+        if action == .accept_recommended_route,
+            let binding = item?.finding_adjudication?.value1
+        {
+            return FindingCardPresentation.acceptancePhrase(findingCount: binding.proposals.count)
+        }
+        return AttentionDisplay.label(action, for: item)
     }
 
     /// The recommendation an item carries, or none. Kept beside the projection

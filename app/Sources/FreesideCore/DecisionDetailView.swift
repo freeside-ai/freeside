@@ -2473,51 +2473,39 @@ struct DecisionDetailView: View {
         }
     }
 
-    /// The recommendation leads its card in the register its revalidated
-    /// provenance supports (plan §9): daemon policy and project policy render
-    /// as card facts, agent judgment as a labeled unverified proposal. Inside
-    /// that register it argues before it acts: the label carries the register
-    /// and the daemon's confidence, then the reason, then the button. The
-    /// block led with the act until 2026-09-03, on the reading that an
-    /// operator decides rather than audits; the owner reversed that after the
-    /// September UI audit (#1104, #1107), so the button is the conclusion of
-    /// the argument above it rather than a control the reason trails.
+    /// The recommendation in the register its revalidated provenance
+    /// supports (plan §9), drawn as R20 sets it: the keyword, with the
+    /// unverified word when an agent judged; one sentence naming who
+    /// recommends, the action, and the confidence; the recommendation's own
+    /// reason, which plan §9 requires; then the filled action. It argues
+    /// before it acts: the block led with the act until 2026-09-03, on the
+    /// reading that an operator decides rather than audits; the owner
+    /// reversed that after the September UI audit (#1104, #1107), so the
+    /// button is the conclusion of the argument above it rather than a
+    /// control the reason trails. The block draws no frame and no wash,
+    /// because accent means the fill, a link, or the attention mark (R23).
     private func recommendationBlock(
         _ recommendation: DecisionRecommendationPresentation,
         item: Components.Schemas.AttentionItem,
         register: UnverifiedRegister
     ) -> some View {
-        // The block's label names its register without the word, so the
-        // unverified label adds it (R7).
-        let register = recommendation.register.isUnverifiedClaim ? register : nil
-        // On the finding card the recommendation is the batch action's own
-        // line under the cards (plan §9 revision 78, visual audit D09): no
-        // second frame, its reason, then what accepting covers.
-        let acceptanceScope = findingAcceptanceScope(recommendation.action, item: item)
-        return cardSection(
-            title: Group {
-                if let register {
-                    UnverifiedLabel(
-                        text: recommendation.label, carriesInfo: register.carriesInfo,
-                        rendersInteractiveControls: register.rendersInteractiveControls)
-                } else {
-                    KeywordLabel(text: recommendation.label)
-                }
-            },
-            dashed: register != nil,
-            boxed: acceptanceScope == nil,
-            border: .accentBorder,
-            fill: .accentWash
-        ) {
-            if acceptanceScope == nil {
-                KeywordLabel(text: "Why")
+        VStack(alignment: .leading, spacing: DecisionCardComposition.scale(for: item._type).moduleGap) {
+            if recommendation.register.isUnverifiedClaim {
+                UnverifiedLabel(
+                    text: DecisionRecommendationPresentation.keyword,
+                    carriesInfo: register.carriesInfo,
+                    rendersInteractiveControls: register.rendersInteractiveControls)
+            } else {
+                KeywordLabel(text: DecisionRecommendationPresentation.keyword)
             }
-            Text(recommendation.reason)
+            Text(recommendation.sentence(for: item))
+                .font(FreesideFont.cardBody)
+                .foregroundStyle(Color.ink)
                 .fixedSize(horizontal: false, vertical: true)
-            if let acceptanceScope {
-                Text(acceptanceScope)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            Text(recommendation.reason)
+                .font(FreesideFont.cardBody)
+                .foregroundStyle(Color.inkDim)
+                .fixedSize(horizontal: false, vertical: true)
             actionButton(
                 recommendation.action,
                 item: item,
@@ -2539,17 +2527,15 @@ struct DecisionDetailView: View {
             // recommendation; an operator deciding never reads them, so they
             // stay one disclosure away below the act rather than inside the
             // argument for it.
-            DisclosureGroup(isExpanded: $provenanceExpanded) {
+            SentenceDisclosure(label: "Provenance", isExpanded: $provenanceExpanded) {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(recommendation.sourceFacts) { fact in
                         factRow(fact.label, value: fact.value)
                     }
                 }
-                .padding(.top, 6)
-            } label: {
-                KeywordLabel(text: "Provenance")
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// Whether the recommended action is on screen, which is what the iOS
@@ -3422,8 +3408,8 @@ struct DecisionDetailView: View {
                 }
             }
 
-            // The recommendation block states what accepting covers. An item
-            // whose recommendation did not revalidate has no block, and
+            // The recommendation's sentence states what accepting covers. An
+            // item whose recommendation did not revalidate has no block, and
             // offers the same action here, so the sentence comes with it.
             if (ranking.principal + ranking.overflow).contains(.accept_recommended_route),
                 let scope = findingAcceptanceScope(.accept_recommended_route, item: item)
