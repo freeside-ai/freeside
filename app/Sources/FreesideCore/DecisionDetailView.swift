@@ -468,29 +468,9 @@ struct DecisionDetailView: View {
                         Group {
                             if let specApprovalReader {
                                 VStack(spacing: 0) {
-                                    HStack(alignment: .top) {
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(
-                                                specApprovalReader == .specification
-                                                    ? "Specification" : "Specification changes"
-                                            )
-                                            .font(FreesideFont.sectionTitle)
-                                            Label("Drag the divider to resize", systemImage: "arrow.left.and.right")
-                                                .font(FreesideFont.caption)
-                                                .foregroundStyle(Color.inkDim)
-                                        }
-                                        Spacer()
-                                        Button {
-                                            self.specApprovalReader = nil
-                                        } label: {
-                                            Label("Close reader", systemImage: "xmark")
-                                                .labelStyle(.iconOnly)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .help("Close reader and show evidence and details")
+                                    specApprovalReaderHeaderRow(specApprovalReader, item: item) {
+                                        self.specApprovalReader = nil
                                     }
-                                    .padding()
-                                    Divider()
                                     SpecApprovalReaderViewport {
                                         specApprovalReaderContent(specApprovalReader, item: item)
                                     }
@@ -1799,6 +1779,37 @@ struct DecisionDetailView: View {
         }
     }
 
+    /// The Mac inspector's reader header: the row and the rule under it.
+    @ViewBuilder
+    private func specApprovalReaderHeaderRow(
+        _ reader: SpecApprovalReader,
+        item: Components.Schemas.AttentionItem,
+        rendersInteractiveControls: Bool = true,
+        close: @escaping () -> Void
+    ) -> some View {
+        SpecApprovalReaderHeader(
+            reader: reader,
+            revision: Self.specificationRevisionIteration(in: item),
+            rendersInteractiveControls: rendersInteractiveControls,
+            close: close
+        )
+        .padding(.horizontal)
+        .padding(.vertical, 14)
+        Divider()
+    }
+
+    /// The iPhone reader sheet's header: the same keyword and revision chip
+    /// over the reader's title.
+    private func specApprovalReaderSheetHeader(
+        _ reader: SpecApprovalReader,
+        item: Components.Schemas.AttentionItem
+    ) -> some View {
+        FreesideSheetHeader(
+            eyebrow: reader.keyword.full,
+            chip: SpecApprovalReader.revisionChip(Self.specificationRevisionIteration(in: item)),
+            ask: reader == .specification ? "Specification" : "Specification changes")
+    }
+
     #if os(iOS)
         @ViewBuilder
         private func specApprovalReaderSheet(
@@ -1806,8 +1817,7 @@ struct DecisionDetailView: View {
             item: Components.Schemas.AttentionItem
         ) -> some View {
             VStack(spacing: 0) {
-                FreesideSheetHeader(
-                    ask: reader == .specification ? "Specification" : "Specification changes")
+                specApprovalReaderSheetHeader(reader, item: item)
                 SpecApprovalReaderViewport {
                     specApprovalReaderContent(reader, item: item)
                 }
@@ -2173,24 +2183,34 @@ struct DecisionDetailView: View {
         .background(Color.ground)
     }
 
-    @ViewBuilder
+    /// A reader as its host draws it: the Mac inspector's header row over
+    /// the content, or, with `asSheet`, the iPhone sheet's header and fixed
+    /// Done footer.
     func screenshotSpecApprovalReader(
         _ reader: SpecApprovalReader,
         item: Components.Schemas.AttentionItem,
-        expandsTechnicalDetails: Bool = false
+        expandsTechnicalDetails: Bool = false,
+        asSheet: Bool = false
     ) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(reader == .specification ? "Specification" : "Specification changes")
-                .font(FreesideFont.sectionTitle)
+        VStack(spacing: 0) {
+            if asSheet {
+                specApprovalReaderSheetHeader(reader, item: item)
+            } else {
+                specApprovalReaderHeaderRow(reader, item: item, rendersInteractiveControls: false) {}
+            }
             specApprovalReaderContent(
                 reader,
                 item: item,
                 rendersScrollableContent: false,
-                expandsTechnicalDetails: expandsTechnicalDetails)
+                expandsTechnicalDetails: expandsTechnicalDetails
+            )
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            if asSheet {
+                FreesideSheetActionRow.done {}
+            }
         }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(Color.ground)
+        .background(asSheet ? Color.ground2 : Color.sidebarGround)
     }
 
     #if os(macOS)

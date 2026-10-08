@@ -123,6 +123,21 @@
             #expect(!textFields(in: host).contains { $0.stringValue.contains("hidden row") })
         }
 
+        // A wash is its row's background, so a short line's band reaches
+        // the hunk's border only when the rows are as wide as the hunk.
+        @Test func shortDiffLinesFillTheHunk() throws {
+            let host = mount(
+                SpecApprovalReaderViewport {
+                    UnifiedDiffView(
+                        unified: "@@ -1 +1 @@\n-old\n+new", linesAdded: 1, linesRemoved: 1,
+                        truncated: false)
+                }, width: 480, height: 900)
+            defer { host.close() }
+            let horizontal = try #require(scrolls(in: host).first { $0.hasHorizontalScroller })
+            let lines = try #require(horizontal.documentView)
+            #expect(abs(lines.frame.width - horizontal.contentSize.width) <= 1)
+        }
+
         private func mount(
             text: String, width: CGFloat, height: CGFloat, size: DynamicTypeSize = .large
         ) -> ReaderHost {

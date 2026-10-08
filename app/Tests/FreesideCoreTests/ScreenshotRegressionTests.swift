@@ -1041,7 +1041,7 @@
                             width: 390,
                             view: AnyView(
                                 revisedDetail.screenshotSpecApprovalReader(
-                                    .specification, item: revised.item))))
+                                    .specification, item: revised.item, asSheet: true))))
                     surfaces.append(
                         Surface(
                             name: "decision-spec_approval-specification-reader-dark",
@@ -1057,7 +1057,7 @@
                             colorScheme: .dark,
                             view: AnyView(
                                 revisedDetail.screenshotSpecApprovalReader(
-                                    .specification, item: revised.item))))
+                                    .specification, item: revised.item, asSheet: true))))
                     surfaces.append(
                         Surface(
                             name: "decision-spec_approval-specification-reader-details",
@@ -1079,7 +1079,7 @@
                             width: 390,
                             view: AnyView(
                                 revisedDetail.screenshotSpecApprovalReader(
-                                    .diff, item: revised.item))))
+                                    .diff, item: revised.item, asSheet: true))))
                     surfaces.append(
                         Surface(
                             name: "decision-spec_approval-diff-reader-dark",
@@ -1095,7 +1095,7 @@
                             colorScheme: .dark,
                             view: AnyView(
                                 revisedDetail.screenshotSpecApprovalReader(
-                                    .diff, item: revised.item))))
+                                    .diff, item: revised.item, asSheet: true))))
                 }
 
                 if snapshot.item._type == .finding_adjudication {
