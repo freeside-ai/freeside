@@ -360,7 +360,11 @@ struct TaskRowView: View {
                         }
                         switch guidance {
                         case .link(let title):
+                            // Wraps like the sentences above it; left to the
+                            // row it ends in an ellipsis at larger sizes.
                             FreesideLink(title: title, face: FreesideFont.noticeAction)
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
                         case .sentence(let sentence): progressText(sentence)
                         case nil: EmptyView()
                         }
