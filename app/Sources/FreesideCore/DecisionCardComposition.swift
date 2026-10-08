@@ -62,6 +62,63 @@ struct DecisionCardComposition: Equatable {
     /// than as sections of their own.
     var foldedModuleCount = 0
 
+    /// The modules the decision rests on: everything ahead of the control
+    /// group.
+    var leadModules: Range<Int> { 0..<controlGroupStart }
+    /// The modules a control group holds between its reviewing action and
+    /// its actions. Empty on a type with no reviewing action.
+    var controlGroupModules: Range<Int> { controlGroupStart..<actionInsertionIndex }
+    /// The closed folds under the card's one hairline.
+    var foldedModules: Range<Int> {
+        actionInsertionIndex..<(actionInsertionIndex + foldedModuleCount)
+    }
+    /// The supporting modules after the folds.
+    var supportingModules: Range<Int> { foldedModules.upperBound..<modules.count }
+
+    private var controlGroupStart: Int { reviewingActionInsertionIndex ?? actionInsertionIndex }
+
+    /// Where the two-column card (R18, frame 7.8) draws each module. The
+    /// left column is read first, so a module there is ahead of the actions
+    /// as it is on the one-column card.
+    struct Columns: Equatable {
+        /// Left, in drawing order: the lead modules, then the supporting
+        /// ones.
+        let left: [DecisionCardModule]
+        /// Right, inside the control group, between its reviewing action
+        /// and its actions.
+        let controlGroup: [DecisionCardModule]
+        /// Right, under the control group and the card's hairline.
+        let folds: [DecisionCardModule]
+    }
+
+    var columns: Columns {
+        .init(
+            left: Array(modules[leadModules] + modules[supportingModules]),
+            controlGroup: Array(modules[controlGroupModules]),
+            folds: Array(modules[foldedModules]))
+    }
+
+    /// What the Mac card's Evidence module draws.
+    enum MacEvidence: Equatable {
+        /// One row that counts the attachments and links to the inspector's
+        /// Evidence section.
+        case pointer
+        /// The attachment rows themselves.
+        case rows
+        case nothing
+    }
+
+    /// The open inspector holds the attachments, so the card points at them
+    /// there and never draws a second copy (R18). The pointer does not wait
+    /// for the inspector's Evidence section to be open, because its link
+    /// opens that section. With the inspector closed, only a type with a
+    /// reviewing action keeps its rows in the card.
+    func macEvidence(inspectorPresented: Bool, attachmentCount: Int) -> MacEvidence {
+        guard attachmentCount > 0 else { return .nothing }
+        if inspectorPresented { return .pointer }
+        return reviewingActionInsertionIndex == nil ? .nothing : .rows
+    }
+
     /// A claim module leads when it renders above the action region: that is
     /// the whole meaning of prominence here, so it is read from
     /// `actionInsertionIndex` rather than from another module's position.

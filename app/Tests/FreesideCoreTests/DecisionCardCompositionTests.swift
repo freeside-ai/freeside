@@ -885,6 +885,51 @@ import Testing
                 <= composition.modules.count)
     }
 
+    /// Frame 7.8 (R18): from 1,000pt the left column holds what the decision
+    /// rests on and then the supporting modules, and the right column holds
+    /// the control group and the folds. The left column is read first, so
+    /// nothing a type places ahead of its actions may land under them.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func theTwoColumnCardPlacesEveryModuleOnce(type: Components.Schemas.AttentionType) {
+        let composition = DecisionCardComposition.forType(type)
+        let columns = composition.columns
+        let right: (controlGroup: [DecisionCardModule], folds: [DecisionCardModule]) =
+            switch type {
+            case .ready_for_final_review: ([.factBlock], [.yieldChart])
+            case .agent_question: ([], [.foldedFacts])
+            default: ([], [])
+            }
+        #expect(columns.controlGroup == right.controlGroup)
+        #expect(columns.folds == right.folds)
+        // Each module the right column takes appears once in its type's
+        // list, so removing them by value leaves the left column in order.
+        #expect(
+            columns.left
+                == composition.modules.filter { !(right.controlGroup + right.folds).contains($0) })
+
+        let aheadOfActions = Array(composition.modules.prefix(composition.actionInsertionIndex))
+        #expect(
+            Array(columns.left.prefix(composition.leadModules.count)) + columns.controlGroup
+                == aheadOfActions)
+        #expect(!columns.folds.contains(where: aheadOfActions.contains))
+    }
+
+    /// R18: while the inspector is open the Mac card points at the
+    /// attachments there, whichever type it is and whether or not the
+    /// inspector's Evidence section is open, because the pointer's link opens
+    /// it. With the inspector closed only the final review, the one type
+    /// with a reviewing action, keeps its rows in the card.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func theMacCardPointsAtTheOpenInspectorsEvidence(type: Components.Schemas.AttentionType) {
+        let composition = DecisionCardComposition.forType(type)
+        #expect(composition.macEvidence(inspectorPresented: true, attachmentCount: 3) == .pointer)
+        #expect(composition.macEvidence(inspectorPresented: true, attachmentCount: 0) == .nothing)
+        #expect(
+            composition.macEvidence(inspectorPresented: false, attachmentCount: 3)
+                == (type == .ready_for_final_review ? .rows : .nothing))
+        #expect(composition.macEvidence(inspectorPresented: false, attachmentCount: 0) == .nothing)
+    }
+
     /// Survey card 4b: the review yield is the final review's one folded
     /// module. The question card folds its run and binding details the same
     /// way, and no other type folds a module yet.
