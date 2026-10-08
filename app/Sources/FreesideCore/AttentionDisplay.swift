@@ -220,7 +220,7 @@ enum AttentionDisplay {
             guard let failure = item.execution_failure?.value1 else { return [] }
             return [
                 .init("Outcome", label(failure.outcome)),
-                .init("Failing stage", label(failure.stage)),
+                .init("Stage", label(failure.stage)),
                 .init("Invocation", failure.invocation_id, monospaced: true),
             ]
         case .review_diminishing_returns:

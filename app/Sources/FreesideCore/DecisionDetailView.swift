@@ -758,7 +758,8 @@ struct DecisionDetailView: View {
     /// the item requests, or the agent claims the Mac sets beside them.
     static func drawsControlGroup(_ item: Components.Schemas.AttentionItem) -> Bool {
         !item.requested_decision.isEmpty
-            || !DecisionCardComposition.actionRegionClaims(item.agent_claims).isEmpty
+            || (!DecisionCardComposition.forType(item._type).drawsLeadClaimsInCard
+                && !DecisionCardComposition.actionRegionClaims(item.agent_claims).isEmpty)
     }
 
     /// Whether a folded module has anything to draw, which is what decides
@@ -798,7 +799,7 @@ struct DecisionDetailView: View {
                 // A card that leads with its claim draws it in the card, so
                 // a copy here would print the claim twice.
                 if !actionClaims.isEmpty,
-                    !DecisionCardComposition.forType(item._type).leadsWithItsClaim
+                    !DecisionCardComposition.forType(item._type).drawsLeadClaimsInCard
                 {
                     // The recommendation's label comes first in this region,
                     // so it carries the control when it is unverified too.
@@ -888,11 +889,12 @@ struct DecisionDetailView: View {
             }
         case .stageRail:
             if let presentation = graphics.stageRail {
-                cardSection("Failure stage") {
+                keywordSection("Stages") {
                     StageRail(
                         title: nil,
-                        presentation: presentation,
-                        axis: accessibilityLayout ? .vertical : .horizontal)
+                        presentation: presentation.reachedNewestFirst,
+                        axis: .vertical,
+                        showsSummaryText: false)
                 }
             }
         case .comparison:
@@ -936,6 +938,8 @@ struct DecisionDetailView: View {
                         from: item.agent_claims,
                         at: moduleIndex,
                         prominentClaimIndex: graphics.prominentClaimIndex),
+                    title: composition.claimsAreProminent(at: moduleIndex)
+                        ? DecisionCardComposition.leadClaimsKeyword(for: item._type) : "Agent claims",
                     accessibilityLayout: accessibilityLayout,
                     prominent: composition.claimsAreProminent(at: moduleIndex),
                     unverified: register)
@@ -1290,7 +1294,7 @@ struct DecisionDetailView: View {
         }
         if !rows.isEmpty {
             if DecisionCardComposition.scale(for: item._type) == .refined {
-                keywordSection("Facts") {
+                keywordSection(DecisionCardComposition.factsKeyword(for: item._type)) {
                     ForEach(rows) { fact in
                         factRow(fact)
                     }
@@ -1357,9 +1361,9 @@ struct DecisionDetailView: View {
         }
 
         if let attemptTimings = graphics.attemptTimings {
-            cardSection(attemptTimings.title) {
+            keywordSection(attemptTimings.title) {
                 ForEach(attemptTimings.facts) { fact in
-                    factRow(fact.label, value: fact.value)
+                    FactRow(label: fact.label, value: fact.value)
                 }
             }
         }
@@ -1741,18 +1745,19 @@ struct DecisionDetailView: View {
     @ViewBuilder
     private func claims(
         _ claims: [Components.Schemas.AgentClaim],
+        title: String,
         accessibilityLayout: Bool,
         prominent: Bool,
         unverified: UnverifiedRegister
     ) -> some View {
         if !claims.isEmpty {
             if prominent {
-                cardSection("Agent claims", unverified: unverified) {
+                cardSection(title, unverified: unverified) {
                     claimRows(claims, unverified: unverified)
                 }
             } else {
                 lowerSection(
-                    "Agent claims",
+                    title,
                     isExpanded: claimsExpanded,
                     accessibilityLayout: accessibilityLayout,
                     unverified: unverified

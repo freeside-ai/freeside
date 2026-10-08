@@ -218,7 +218,7 @@ import Testing
     /// leaving a value recovered from prose.
     @Test func everyTypedLeadComesFromItsOwnFactFieldAndDisappearsWithIt() {
         let expected: [Components.Schemas.AttentionType: [String]] = [
-            .execution_failure: ["Outcome", "Failing stage", "Invocation"],
+            .execution_failure: ["Outcome", "Stage", "Invocation"],
             .review_diminishing_returns: ["Cost so far", "Diff Growth"],
             .review_dispute: ["Run", "Round", "Disputed findings", "Completion evidence"],
             .ready_for_final_review: ["Diff"],

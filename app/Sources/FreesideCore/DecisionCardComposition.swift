@@ -47,6 +47,16 @@ struct DecisionCardComposition: Equatable {
     /// claim exists. Elsewhere a claim without text stays supporting
     /// context.
     var leadsWithItsClaim = false
+    /// Whether the card's frame places the agent's readable claims inside
+    /// its own order, ahead of the actions, without making them its lead
+    /// (frame 5.3: the diagnostic between the failure's facts and its
+    /// stages). Such a card draws the claims an operator can read in the
+    /// card on every platform; a claim without text stays supporting
+    /// context below the actions.
+    var placesReadableClaimsInCard = false
+    /// Whether the leading claims module draws in the card itself on every
+    /// platform, so no other place a platform lists claims repeats it.
+    var drawsLeadClaimsInCard: Bool { leadsWithItsClaim || placesReadableClaimsInCard }
     /// How many modules directly after the action region are closed folds.
     /// They draw with Recorded Context under the card's one hairline rather
     /// than as sections of their own.
@@ -95,7 +105,7 @@ struct DecisionCardComposition: Equatable {
         from claims: [Components.Schemas.AgentClaim],
         prominentClaimIndex: Int?
     ) -> [Components.Schemas.AgentClaim] {
-        guard leadsWithItsClaim, let lead = modules.firstIndex(of: .claims),
+        guard drawsLeadClaimsInCard, let lead = modules.firstIndex(of: .claims),
             claimsAreProminent(at: lead)
         else { return [] }
         return self.claims(from: claims, at: lead, prominentClaimIndex: prominentClaimIndex)
@@ -213,9 +223,10 @@ struct DecisionCardComposition: Equatable {
         for type: Components.Schemas.AttentionType
     ) -> AgentSectionFrame {
         switch type {
-        case .agent_question, .ready_for_final_review, .review_dispute, .system_health, .blocked:
+        case .agent_question, .ready_for_final_review, .review_dispute, .system_health, .blocked,
+            .execution_failure:
             return .quoted
-        case .spec_approval, .execution_failure, .review_diminishing_returns,
+        case .spec_approval, .review_diminishing_returns,
             .review_contradiction, .review_configuration, .finding_adjudication,
             .publish_blocked, .task_proposal, .effect_proposal:
             return .dashedCard
@@ -270,12 +281,44 @@ struct DecisionCardComposition: Equatable {
     /// exhaustive so a new type has to answer the question.
     static func scale(for type: Components.Schemas.AttentionType) -> Scale {
         switch type {
-        case .ready_for_final_review, .agent_question, .system_health, .blocked:
+        case .ready_for_final_review, .agent_question, .system_health, .blocked,
+            .execution_failure:
             return .refined
-        case .review_dispute, .spec_approval, .execution_failure,
+        case .review_dispute, .spec_approval,
             .review_diminishing_returns, .review_contradiction, .review_configuration,
             .finding_adjudication, .publish_blocked, .task_proposal, .effect_proposal:
             return .legacy
+        }
+    }
+
+    /// The keyword over a card's typed fact rows (R1). A card whose rows
+    /// all describe one thing names that thing; the rest say `Facts`. The
+    /// switch is exhaustive so a new type has to answer the question.
+    static func factsKeyword(for type: Components.Schemas.AttentionType) -> String {
+        switch type {
+        case .execution_failure:
+            return "Failure"
+        case .spec_approval, .agent_question, .review_diminishing_returns, .review_dispute,
+            .review_contradiction, .review_configuration, .finding_adjudication,
+            .ready_for_final_review, .publish_blocked, .task_proposal, .effect_proposal,
+            .system_health, .blocked:
+            return "Facts"
+        }
+    }
+
+    /// The keyword over the claims a card leads with, where the frame names
+    /// what the agent is claiming rather than that it is a claim (R5). The
+    /// unverified register is drawn beside it, never spelled in it. The
+    /// switch is exhaustive so a new type has to answer the question.
+    static func leadClaimsKeyword(for type: Components.Schemas.AttentionType) -> String {
+        switch type {
+        case .execution_failure:
+            return "Diagnostic"
+        case .spec_approval, .agent_question, .review_diminishing_returns, .review_dispute,
+            .review_contradiction, .review_configuration, .finding_adjudication,
+            .ready_for_final_review, .publish_blocked, .task_proposal, .effect_proposal,
+            .system_health, .blocked:
+            return "Agent claims"
         }
     }
 
@@ -499,7 +542,7 @@ struct DecisionCardComposition: Equatable {
     ) -> Bool {
         guard context.platform == .mac else { return false }
         if context.drawsUnverifiedRecommendation { return true }
-        return !leadsWithItsClaim && !Self.actionRegionClaims(item.agent_claims).isEmpty
+        return !drawsLeadClaimsInCard && !Self.actionRegionClaims(item.agent_claims).isEmpty
     }
 
     /// The claims the macOS action region lists beside the actions: the ones
@@ -519,7 +562,7 @@ struct DecisionCardComposition: Equatable {
     /// the card there only where the claim is the card's own lead (D08).
     func drawsClaimsInCard(at moduleIndex: Int, on platform: UnverifiedContext.Platform) -> Bool {
         switch platform {
-        case .mac: leadsWithItsClaim && claimsAreProminent(at: moduleIndex)
+        case .mac: drawsLeadClaimsInCard && claimsAreProminent(at: moduleIndex)
         case .phone: true
         }
     }
@@ -659,13 +702,17 @@ struct DecisionCardComposition: Equatable {
                 reviewingActionInsertionIndex: 4,
                 foldedModuleCount: 1)
         case .execution_failure:
+            // Frame 5.3: what failed, then the agent's account of why, then
+            // the stages the run reached, so the diagnostic is read before
+            // the history it explains.
             return .init(
                 modules: [
-                    .recommendation, .stageRail, .facts, .claims, .factBlock, .summary, .claims,
+                    .recommendation, .facts, .claims, .stageRail, .factBlock, .summary, .claims,
                     .evidence, .details,
                 ],
                 actionInsertionIndex: 4,
-                reviewingActionInsertionIndex: nil)
+                reviewingActionInsertionIndex: nil,
+                placesReadableClaimsInCard: true)
         case .review_dispute:
             // Plan §9 (revision 78, audit D08): both positions lead when the
             // snapshot carries both; when it carries one claim, that claim
@@ -1311,6 +1358,14 @@ struct DecisionStageRailPresentation: Equatable {
 
     let entries: [Entry]
     let summary: String
+
+    /// The stages the run reached, newest first, as a card lists history
+    /// (frame 5.3). A stage the run never reached is left out: above the
+    /// failure it would read as the latest event. The summary still counts
+    /// every stage.
+    var reachedNewestFirst: Self {
+        .init(entries: entries.filter { $0.state != .pending }.reversed(), summary: summary)
+    }
 
     static func failure(stages: [String], failedStageIndex: Int) -> Self? {
         guard stages.indices.contains(failedStageIndex) else { return nil }

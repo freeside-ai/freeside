@@ -122,7 +122,7 @@ import Testing
             ])
         #expect(
             DecisionCardComposition.forType(.execution_failure).modules == [
-                .recommendation, .stageRail, .facts, .claims, .factBlock, .summary, .claims,
+                .recommendation, .facts, .claims, .stageRail, .factBlock, .summary, .claims,
                 .evidence, .details,
             ])
         // Plan §9 revision 78 (visual audit D08): the supplied claim leads
@@ -156,11 +156,11 @@ import Testing
         let execution = DecisionCardComposition.forType(.execution_failure)
         let executionClaims = AttentionFixtures.fixture(type: .execution_failure).item.agent_claims
         let diagnosticIndex = executionClaims.firstIndex { $0.label == "Likely cause (unverified)" }
-        #expect(execution.claimsAreProminent(at: 3))
+        #expect(execution.claimsAreProminent(at: 2))
         #expect(!execution.claimsAreProminent(at: 6))
         #expect(
             execution.claims(
-                from: executionClaims, at: 3, prominentClaimIndex: diagnosticIndex
+                from: executionClaims, at: 2, prominentClaimIndex: diagnosticIndex
             ).map(\.label) == ["Likely cause (unverified)"])
         #expect(
             execution.claims(
@@ -170,7 +170,7 @@ import Testing
         // still leads and the attachment stays supporting context.
         #expect(
             execution.claims(
-                from: executionClaims, at: 3, prominentClaimIndex: nil
+                from: executionClaims, at: 2, prominentClaimIndex: nil
             ).map(\.label) == ["Likely cause (unverified)"])
         #expect(
             execution.claims(
@@ -265,11 +265,12 @@ import Testing
             #expect(
                 infoSlot(.review_dispute, on: platform)
                     == (try module(.claims, of: .review_dispute)))
+            // The failure card reads its diagnostic in the card on both
+            // platforms (frame 5.3), so that keyword carries the control.
+            #expect(
+                infoSlot(.execution_failure, on: platform)
+                    == (try module(.claims, of: .execution_failure)))
         }
-        #expect(infoSlot(.execution_failure, on: .mac) == .actionRegion)
-        #expect(
-            infoSlot(.execution_failure, on: .phone)
-                == (try module(.claims, of: .execution_failure)))
     }
 
     /// A card whose only unverified keyword is a disclosure's own label has
@@ -475,6 +476,7 @@ import Testing
     ) {
         let quoted: [Components.Schemas.AttentionType] = [
             .agent_question, .ready_for_final_review, .review_dispute, .system_health, .blocked,
+            .execution_failure,
         ]
         #expect(
             DecisionCardComposition.agentSectionFrame(for: type)
@@ -532,14 +534,17 @@ import Testing
             composition.cardLeadClaims(from: item.agent_claims, prominentClaimIndex: nil).isEmpty)
     }
 
-    /// Only the dispute's claim is its own lead content. A failure card's
-    /// attachment claims stay supporting context when none is readable, and
-    /// no other card draws a claim in the card that its platform lists
-    /// elsewhere.
+    /// Only the dispute's claim is its own lead content. A failure card
+    /// draws its readable claims in the card but its attachment claims stay
+    /// supporting context when none is readable, and no other card draws a
+    /// claim in the card that its platform lists elsewhere.
     @Test(arguments: Components.Schemas.AttentionType.allCases)
     func onlyTheDisputeLeadsWithItsClaim(type: Components.Schemas.AttentionType) {
         let composition = DecisionCardComposition.forType(type)
         #expect(composition.leadsWithItsClaim == (type == .review_dispute))
+        // The failure card reads its diagnostic in the card, between its
+        // facts and its stages (frame 5.3), without leading with it.
+        #expect(composition.placesReadableClaimsInCard == (type == .execution_failure))
 
         var attachment = AttentionFixtures.fixture(type: .execution_failure).item.agent_claims[0]
         attachment.label = "screenshot"
@@ -549,7 +554,7 @@ import Testing
                 composition.cardLeadClaims(from: [attachment], prominentClaimIndex: nil).isEmpty)
         }
         if type == .execution_failure {
-            #expect(composition.claims(from: [attachment], at: 3, prominentClaimIndex: nil).isEmpty)
+            #expect(composition.claims(from: [attachment], at: 2, prominentClaimIndex: nil).isEmpty)
             #expect(
                 composition.claims(from: [attachment], at: 6, prominentClaimIndex: nil)
                     == [attachment])
@@ -771,15 +776,14 @@ import Testing
         }
     }
 
-    /// Each type keeps its own lead: the final review's change summary, the
-    /// failing stage, and the disputed positions all outrank the
+    /// Each type keeps its own lead: the final review's change summary and
+    /// the disputed positions outrank the
     /// identifier-shaped facts that sit last before the actions. The final
     /// review's diff sits between its summary and its verdict (survey card
     /// 4b, R10).
     @Test func eachTypeLeadsWithItsOwnModuleNotWithItsFacts() {
         for (type, leading) in [
             (Components.Schemas.AttentionType.ready_for_final_review, DecisionCardModule.summary),
-            (.execution_failure, .stageRail),
             (.review_dispute, .comparison),
             (.review_diminishing_returns, .yieldChart),
             (.agent_question, .agentQuestion),
@@ -812,6 +816,7 @@ import Testing
     func onlyTheComposedCardsTakeTheRefinedScale(type: Components.Schemas.AttentionType) {
         let refined: Set<Components.Schemas.AttentionType> = [
             .ready_for_final_review, .agent_question, .system_health, .blocked,
+            .execution_failure,
         ]
         let scale = DecisionCardComposition.scale(for: type)
         #expect(scale == (refined.contains(type) ? .refined : .legacy))
@@ -1141,6 +1146,49 @@ import Testing
 
         #expect(presentation.entries.map(\.state) == [.completed, .completed, .failed, .pending])
         #expect(presentation.summary == "Verify failed, stage 3 of 4.")
+    }
+
+    /// The card lists the stages the run reached with the failure on top
+    /// (frame 5.3). A stage never reached is not history, and the summary
+    /// the rail speaks still counts it.
+    @Test func theFailureCardListsReachedStagesNewestFirst() throws {
+        let presentation = try #require(
+            DecisionStageRailPresentation.failure(
+                stages: ["Import", "Build", "Verify", "Publish"],
+                failedStageIndex: 2))
+        let listed = presentation.reachedNewestFirst
+
+        #expect(listed.entries.map(\.title) == ["Verify", "Build", "Import"])
+        #expect(listed.entries.map(\.state) == [.failed, .completed, .completed])
+        #expect(listed.summary == presentation.summary)
+    }
+
+    /// Frame 5.3 names what the failure card's sections hold: the facts are
+    /// the failure, and the agent's readable claim is its diagnostic, drawn
+    /// in the card ahead of the stages on every platform.
+    @Test func theFailureCardNamesItsFactsAndItsDiagnostic() {
+        let item = AttentionFixtures.fixture(type: .execution_failure).item
+        let composition = DecisionCardComposition.forType(.execution_failure)
+        let claims = try? #require(composition.modules.firstIndex(of: .claims))
+        let rail = try? #require(composition.modules.firstIndex(of: .stageRail))
+
+        #expect(DecisionCardComposition.factsKeyword(for: .execution_failure) == "Failure")
+        #expect(DecisionCardComposition.leadClaimsKeyword(for: .execution_failure) == "Diagnostic")
+        #expect(DecisionCardComposition.factsKeyword(for: .system_health) == "Facts")
+        if let claims, let rail {
+            #expect(claims < rail)
+            #expect(rail < composition.actionInsertionIndex)
+            for platform in [DecisionCardComposition.UnverifiedContext.Platform.mac, .phone] {
+                #expect(composition.drawsClaimsInCard(at: claims, on: platform))
+            }
+            let readable = composition.claims(
+                from: item.agent_claims, at: claims, prominentClaimIndex: nil)
+            #expect(!readable.isEmpty)
+            #expect(readable.allSatisfy { $0.text != nil })
+            #expect(
+                composition.cardLeadClaims(from: item.agent_claims, prominentClaimIndex: nil)
+                    == readable)
+        }
     }
 
     @Test func timelineSummaryPreservesVisibleMilestoneDetails() {
