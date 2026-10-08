@@ -1,5 +1,6 @@
 #if os(macOS)
     import AppKit
+    import FreesideAPI
     import SwiftUI
     import Testing
 
@@ -32,6 +33,27 @@
             }
 
             #expect(measurement.width == paneWidth)
+        }
+
+        /// The right column holds the control group and the folds. A
+        /// read-only card has neither, so two columns would leave it an
+        /// empty pane beside its modules.
+        @Test func aCardWithNothingForItsRightColumnStaysOneColumn() {
+            let blocked = AttentionFixtures.fixture(type: .blocked)
+            let review = AttentionFixtures.fixture(type: .ready_for_final_review)
+            let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+            store.replaceAll(with: [blocked, review])
+            let detail = DecisionDetailView(
+                store: store,
+                itemID: blocked.item.id,
+                loadsAttachments: false,
+                showsValidationProgress: false,
+                now: AttentionFixtures.createdInstant)
+
+            #expect(blocked.item.requested_decision.isEmpty)
+            #expect(!detail.drawsTwoColumns(blocked.item, paneIsWide: true))
+            #expect(detail.drawsTwoColumns(review.item, paneIsWide: true))
+            #expect(!detail.drawsTwoColumns(review.item, paneIsWide: false))
         }
     }
 #endif

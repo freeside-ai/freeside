@@ -272,6 +272,13 @@ struct DecisionCardComposition: Equatable {
         /// The widest a one-column card grows with the detail's 16pt margin
         /// around it: the card itself is 560 wide.
         static let columnWidth: CGFloat = 592
+        /// Between the two-column card's columns (frame 7.8).
+        static let columnGap: CGFloat = 28
+        /// The two-column card's right column. The frame draws 280, where
+        /// a row of two actions cuts labels the wider column draws whole
+        /// (`Answer Without Retry`, `Approve With Changes`), so the
+        /// column keeps the width it had before the frame.
+        static let controlColumnWidth: CGFloat = 360
 
         /// A phone's card is 20 from each side and 18 from the top and
         /// bottom; a Mac's sits 28 in, with 24 under its last line.

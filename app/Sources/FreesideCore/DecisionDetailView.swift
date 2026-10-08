@@ -169,18 +169,20 @@ struct DecisionDetailView: View {
                 if let snapshot = model.snapshot {
                     ScrollViewReader { scrollProxy in
                         ScrollView {
+                            let twoColumns = drawsTwoColumns(
+                                snapshot.item, paneIsWide: usesWideLayout)
                             card(
                                 snapshot.item,
                                 proposalFacts: model.proposalFacts,
                                 effectProposalFacts: model.effectProposalFacts,
                                 accessibilityLayout: isAccessibilityLayout,
                                 compactLayout: horizontalSizeClass == .compact,
-                                wideLayout: usesWideLayout,
+                                wideLayout: twoColumns,
                                 inspectorPresented: inspectorBinding.wrappedValue
                             )
                             .decisionCardChrome(
                                 compactLayout: horizontalSizeClass == .compact,
-                                wideLayout: usesWideLayout)
+                                wideLayout: twoColumns)
                         }
                         .coordinateSpace(name: "decision-card-scroll")
                         .onPaneWidthChange { detailWidth = $0 }
@@ -610,55 +612,42 @@ struct DecisionDetailView: View {
                 .buttonStyle(FreesideActionButtonStyle(tone: .secondary))
             }
 
-            let actionIndex = composition.actionInsertionIndex
-            let reviewingIndex = composition.reviewingActionInsertionIndex
+            let stackedLayout = accessibilityLayout || compactLayout
+            let foldsReason = reasonPlacement == .recordedContext
             #if os(macOS)
-                let reviewingLeads = !DecisionCardComposition.isStale(item)
                 if wideLayout {
-                    // The two columns are read side by side, so the action
-                    // region at the top of the right column is reachable
-                    // before anything further down the left one. The modules
-                    // a composition places ahead of actionInsertionIndex must
-                    // still precede the actions, so they render full width
-                    // above the split rather than beside it.
-                    cardModules(0..<(reviewingIndex ?? actionIndex), modules)
-                    if let reviewingIndex {
-                        if reviewingLeads {
-                            reviewingAction(item)
-                        }
-                        cardModules(reviewingIndex..<actionIndex, modules)
-                    }
-                    HStack(alignment: .top, spacing: 16) {
+                    // Two panes of one card (R18, frame 7.8). The left
+                    // column is read first, so what a type places ahead of
+                    // its actions is still ahead of them there (plan §9),
+                    // and the right column starts level with it.
+                    HStack(alignment: .top, spacing: CardScale.columnGap) {
                         VStack(alignment: .leading, spacing: CardScale.sectionGap) {
-                            cardModules(actionIndex..<composition.modules.count, modules)
+                            cardModules(composition.leadModules, modules)
+                            cardModules(composition.supportingModules, modules)
                         }
-                        .frame(maxWidth: 560, alignment: .topLeading)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
 
                         VStack(alignment: .leading, spacing: CardScale.sectionGap) {
-                            actionRegion(
-                                item,
-                                stackedLayout: accessibilityLayout || compactLayout,
-                                includesReviewing: reviewingIndex == nil || !reviewingLeads,
-                                register: register.at(.actionRegion)
-                            )
-                            if reasonPlacement == .recordedContext {
-                                recordedContext(item, register: register)
-                            }
+                            controlGroup(
+                                modules,
+                                stackedLayout: stackedLayout,
+                                actionRegionFrameChanged: actionRegionFrameChanged)
+                            folds(modules, foldsReason: foldsReason)
                         }
-                        .frame(width: 360, alignment: .topLeading)
+                        .frame(width: CardScale.controlColumnWidth, alignment: .topLeading)
                     }
                 } else {
                     cardColumn(
                         modules,
-                        stackedLayout: accessibilityLayout || compactLayout,
-                        foldsReason: reasonPlacement == .recordedContext,
+                        stackedLayout: stackedLayout,
+                        foldsReason: foldsReason,
                         actionRegionFrameChanged: actionRegionFrameChanged)
                 }
             #else
                 cardColumn(
                     modules,
-                    stackedLayout: accessibilityLayout || compactLayout,
-                    foldsReason: reasonPlacement == .recordedContext,
+                    stackedLayout: stackedLayout,
+                    foldsReason: foldsReason,
                     actionRegionFrameChanged: actionRegionFrameChanged)
             #endif
         }
@@ -703,34 +692,45 @@ struct DecisionDetailView: View {
         foldsReason: Bool,
         actionRegionFrameChanged: ((CGRect) -> Void)?
     ) -> some View {
+        cardModules(modules.composition.leadModules, modules)
+        controlGroup(
+            modules,
+            stackedLayout: stackedLayout,
+            actionRegionFrameChanged: actionRegionFrameChanged)
+        folds(modules, foldsReason: foldsReason)
+        cardModules(modules.composition.supportingModules, modules)
+    }
+
+    /// The reviewing action and the action region are one control group
+    /// (R10), whatever a composition draws between them. A read-only item
+    /// requests no decision, so its card draws no group at all (survey frame
+    /// 5.5) rather than an empty one that still takes a section's gap.
+    @ViewBuilder
+    private func controlGroup(
+        _ modules: CardModules,
+        stackedLayout: Bool,
+        actionRegionFrameChanged: ((CGRect) -> Void)?
+    ) -> some View {
         let item = modules.item
         let composition = modules.composition
-        let actionIndex = composition.actionInsertionIndex
-        let reviewingIndex = composition.reviewingActionInsertionIndex
-        let foldEnd = actionIndex + composition.foldedModuleCount
+        let hasReviewingAction = composition.reviewingActionInsertionIndex != nil
         // The reviewing action leads its group as the card's forward step.
         // On a stale review it is not one, so it follows the action that
         // recovers (frame 7.3) inside the action region.
         let reviewingLeads = !DecisionCardComposition.isStale(item)
-        cardModules(0..<(reviewingIndex ?? actionIndex), modules)
-        // The reviewing action and the action region are one control group
-        // (R10), whatever a composition draws between them. A read-only
-        // item requests no decision, so its card draws no group at all
-        // (survey frame 5.5) rather than an empty one that still takes a
-        // section's gap.
         if Self.drawsControlGroup(item) {
             VStack(alignment: .leading, spacing: CardScale.controlGap) {
-                if let reviewingIndex {
+                if hasReviewingAction {
                     if reviewingLeads {
                         reviewingAction(item)
                     }
-                    cardModules(reviewingIndex..<actionIndex, modules)
+                    cardModules(composition.controlGroupModules, modules)
                 }
                 #if os(macOS)
                     actionRegion(
                         item,
                         stackedLayout: stackedLayout,
-                        includesReviewing: reviewingIndex == nil || !reviewingLeads,
+                        includesReviewing: !hasReviewingAction || !reviewingLeads,
                         register: modules.register.at(.actionRegion)
                     )
                     .onGeometryChange(for: CGRect.self) { geometry in
@@ -742,19 +742,23 @@ struct DecisionDetailView: View {
                     actions(
                         item,
                         stackedLayout: stackedLayout,
-                        includesReviewing: reviewingIndex == nil || !reviewingLeads)
+                        includesReviewing: !hasReviewingAction || !reviewingLeads)
                 #endif
             }
         }
-        let foldsReason = foldsReason && DecisionCardComposition.reason(for: item) != nil
-        let foldedModules = actionIndex..<foldEnd
-        // The card's one hairline (R26) sits above its folds, so a card
-        // with nothing folded draws none.
-        if foldsReason || foldedModules.contains(where: { foldDraws(at: $0, modules) }) {
+    }
+
+    /// The card's one hairline (R26) and the folds under it: the folded
+    /// modules, then Recorded Context. A card with nothing folded draws no
+    /// hairline.
+    @ViewBuilder
+    private func folds(_ modules: CardModules, foldsReason: Bool) -> some View {
+        let foldsReason = foldsReason && DecisionCardComposition.reason(for: modules.item) != nil
+        if foldsReason || drawsFoldedModule(modules.item, modules.composition) {
             VStack(alignment: .leading, spacing: CardScale.foldGap) {
-                cardModules(foldedModules, modules)
+                cardModules(modules.composition.foldedModules, modules)
                 if foldsReason {
-                    recordedContext(item, register: modules.register)
+                    recordedContext(modules.item, register: modules.register)
                 }
             }
             .padding(.top, CardScale.foldLead)
@@ -762,7 +766,6 @@ struct DecisionDetailView: View {
                 Color.rule.frame(height: 1)
             }
         }
-        cardModules(foldEnd..<composition.modules.count, modules)
     }
 
     /// Whether the one-column card has a control group to draw: an action
@@ -773,14 +776,37 @@ struct DecisionDetailView: View {
                 && !DecisionCardComposition.actionRegionClaims(item.agent_claims).isEmpty)
     }
 
-    /// Whether a folded module has anything to draw, which is what decides
-    /// if the folds' hairline has a fold under it.
-    private func foldDraws(at index: Int, _ modules: CardModules) -> Bool {
-        switch modules.composition.modules[index] {
+    /// Whether a wide pane draws this card in two columns. The right column
+    /// holds the control group and the folds, so a read-only card with
+    /// neither (a blocked item) stays one column at any width, rather than
+    /// opening an empty pane beside its modules.
+    func drawsTwoColumns(_ item: Components.Schemas.AttentionItem, paneIsWide: Bool) -> Bool {
+        guard paneIsWide else { return false }
+        let composition = DecisionCardComposition.forType(item._type)
+        let foldsReason =
+            composition.drawsReason(for: item)
+            && DecisionCardComposition.reasonPlacement(for: item) == .recordedContext
+            && DecisionCardComposition.reason(for: item) != nil
+        return Self.drawsControlGroup(item) || foldsReason
+            || drawsFoldedModule(item, composition)
+    }
+
+    /// Whether any folded module has something to draw, which is what
+    /// decides if the folds' hairline has a fold under it.
+    private func drawsFoldedModule(
+        _ item: Components.Schemas.AttentionItem, _ composition: DecisionCardComposition
+    ) -> Bool {
+        composition.foldedModules.contains { foldDraws(composition.modules[$0], item) }
+    }
+
+    private func foldDraws(
+        _ module: DecisionCardModule, _ item: Components.Schemas.AttentionItem
+    ) -> Bool {
+        switch module {
         case .yieldChart:
-            (graphics.diminishingYield ?? DecisionYieldPresentation(modules.item)) != nil
+            (graphics.diminishingYield ?? DecisionYieldPresentation(item)) != nil
         case .foldedFacts:
-            !DecisionFactPlacement(modules.item, includesCommitPlan: false, now: now).folded.isEmpty
+            !DecisionFactPlacement(item, includesCommitPlan: false, now: now).folded.isEmpty
         case .facts, .agentQuestion, .specRevision, .specification, .recommendation, .checklist,
             .stageRail, .comparison, .stopCause, .findingFacts, .factBlock, .summary, .claims,
             .evidence, .details:
@@ -2053,7 +2079,8 @@ struct DecisionDetailView: View {
         inspectorPresented: Bool = false,
         actionRegionFrameChanged: ((CGRect) -> Void)? = nil
     ) -> some View {
-        let wideLayout = detailWidth >= 1_000 && dynamicTypeSize < .accessibility1
+        let wideLayout = drawsTwoColumns(
+            item, paneIsWide: detailWidth >= 1_000 && dynamicTypeSize < .accessibility1)
         card(
             item,
             proposalFacts: proposalFacts,
