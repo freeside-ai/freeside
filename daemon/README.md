@@ -395,6 +395,84 @@ its helpers and config. Only git's lookup changes, and later steps keep their or
 `PATH`. Other git installations are unchanged. A bare `go test` uses neither
 this git change nor the run limit.
 
+## Measuring Local Test Time
+
+Run the operator report from the repository root:
+
+```sh
+python3 scripts/daemon-test-report.py --out /tmp/daemon-report
+python3 scripts/daemon-test-report.py --one-at-a-time ./internal/importer ./internal/publish
+python3 scripts/daemon-test-report.py --no-git-count --tests 0
+```
+
+It runs `go test -json -count=1` directly, with Go's default timeout and
+concurrency. Package patterns default to `./...`. `--one-at-a-time` runs each
+listed package separately, removing contention between packages in that run.
+`--tests N` limits the slowest top-level tests to N rows (30 by default, 0 for
+all); unfinished tests always appear. Subtest times aren't added to their
+parents or counted as separate tests.
+
+The tab-separated header identifies the commit, changes under `daemon/`,
+machine, cores, Go version, git binary and version, mode, counting setting,
+wall time, result, and load averages (1, 5, and 15 minutes) at the start, end,
+and peak. `package` rows give elapsed seconds, passed/failed/skipped/unfinished
+counts, and both git counts. `test` rows list top-level test outcomes and
+elapsed seconds, slowest first. Build failures, timeouts, incomplete packages,
+and unfinished tests are explicit; unavailable elapsed times are `-`.
+
+The git wrapper counts actual calls per package. `git_hardened` means argv
+starts with `-c core.hooksPath=/dev/null`, the first `gitrun.Baseline()` entry;
+these include daemon runner and publish transport calls. `git_other` includes
+test helpers and daemon preflight calls, which lack that prefix. The counts
+exclude git's own child processes and calls to a binary selected by an
+explicit path or a replacement test `PATH` that bypasses the wrapper.
+
+Counting adds work to every git call. Use `--no-git-count` for timings free of
+that cost. `--git PATH` chooses the real git binary in either mode; otherwise
+it uses the first git on `PATH`. On macOS, `--git "$(xcrun -f git)"` bypasses
+the `/usr/bin/git` shim. `--go PATH` and `--daemon DIR` select the Go executable
+and module directory.
+
+The report samples process state at the start, end, and every five seconds.
+`shared` means it saw another `go test` or `.test` process, excluding its own
+descendants. Such a run cannot serve as a baseline. `unshared` means none was
+seen at those sample times; brief activity between samples can be missed.
+A process-sampling failure also makes the baseline unavailable.
+
+`--out DIR` retains `events.jsonl` and `report.txt`, creating the directory
+without deleting it. Compare terminal `(Package, Test, Action)` events between
+counted and uncounted runs at one commit to confirm matching test outcomes.
+Without `--out`, temporary files are removed. Exit codes are 0 for passing
+packages, 1 for failed/build-failed/timed-out/incomplete runs, and 2 for usage
+errors. A test failure still produces both report files.
+
+**Baseline (2026-10-08):** Daemon code and tests from `main`
+`183dd75cc938ee6636726bfdb25e4629d3366b86`, measured with the reporter at
+`a47e05d3a26f928aab43381de00320ca01029fc3`. The checkout differed from main
+only in this report tool, its hermetic suite, and this README section. Machine:
+macOS 26.7.1, arm64, 10 cores; Go 1.26.6 darwin/arm64; git 2.50.1
+(Apple Git-155), `/Applications/Xcode.app/Contents/Developer/usr/bin/git`.
+
+Both full default-mode runs passed and were `unshared`, with zero sampling
+errors. Each had 51 passing packages, 3 packages without test files, 5,167
+passing top-level tests, 38 skipped tests, and no failures or unfinished tests.
+All 14,021 terminal package/test events matched, including subtests and event
+multiplicity. Without counting, wall time was **372.435 seconds**; counting
+took **404.288 seconds** and observed **39,346 hardened** and **11,834 other**
+git calls. Use the uncounted run for package timing:
+
+| Package | Uncounted Seconds | Counted Seconds |
+| --- | ---: | ---: |
+| `internal/integration` | 352.391 | 394.243 |
+| `cmd/freesided` | 151.756 | 151.708 |
+| `internal/importer` | 137.467 | 145.932 |
+| `internal/engine` | 130.861 | 132.011 |
+| `internal/ward` | 109.779 | 108.155 |
+
+The full reports are in [PR #1878](https://github.com/freeside-ai/freeside/pull/1878).
+These are one pair of observations; timing varies with machine and run
+conditions, and five-second sampling can miss brief competing test activity.
+
 ## GitHub App Credential Onboarding
 
 The default publish identity is one public GitHub App owned by the operator's
