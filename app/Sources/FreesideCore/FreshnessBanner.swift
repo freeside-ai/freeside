@@ -56,87 +56,75 @@ struct FreshnessBanner: View {
             if let lastUpdatedAt,
                 now.timeIntervalSince(lastUpdatedAt) >= SyncCoordinator.stalenessThreshold
             {
-                banner(
-                    "The last successful refresh is stale; actions revalidate before use.",
-                    keyword: "Stale",
-                    tint: .accentText,
-                    wash: .accentWash)
+                Notice(
+                    tone: .accent, keyword: "Stale",
+                    sentence: "The last successful refresh is stale; actions revalidate before use."
+                )
+                .standingNoticeInset()
             }
         case .unreachable:
-            banner(
-                "Daemon unreachable — showing cached items; actions are disabled.",
-                keyword: "Unreachable",
-                tint: .accentText,
-                wash: .accentWash
+            Notice(
+                tone: .accent, keyword: "Unreachable",
+                sentence: "Daemon unreachable. Showing cached items; actions are disabled."
             )
+            .standingNoticeInset()
         case .syncFailing:
-            // The wash is the softest of the three, so the message keeps
-            // the full-contrast foreground; the keyword alone carries the
-            // state color.
-            banner(
-                "Daemon is reachable but sync is failing — showing cached items; actions are disabled.",
-                keyword: "Sync failing",
-                tint: .accentText,
-                wash: .accentWashSoft,
-                foreground: .ink
+            Notice(
+                tone: .accent, keyword: "Sync failing",
+                sentence:
+                    "Daemon is reachable but sync is failing. Showing cached items; actions are disabled."
             )
+            .standingNoticeInset()
         case .contractMismatch(let daemonContract):
-            banner(
-                """
-                Daemon contract \(ContractDigestDisplay.short(daemonContract)), \
-                app built for \(ContractDigestDisplay.shortClient) — update the daemon \
-                or the app. Showing cached items; actions are disabled.
-                """,
-                keyword: "Mismatch",
-                tint: .accentText,
-                wash: .accentWashSoft,
-                foreground: .ink
+            let mismatch = ContractMismatchSentence(
+                daemonContract: daemonContract,
+                tail: " Showing cached items; actions are disabled.")
+            Notice(
+                tone: .accent, keyword: "Mismatch",
+                sentence: mismatch.plain, drawn: mismatch.text
             )
+            .standingNoticeInset()
         case .unauthenticated:
-            banner(
-                "This device's access was revoked. Cached items stay readable; actions are disabled.",
-                keyword: "Revoked",
-                tint: .waxText,
-                wash: .waxWash,
+            Notice(
+                tone: .wax, keyword: "Revoked",
+                sentence:
+                    "This device's access was revoked. Cached items stay readable; actions are disabled.",
                 action: Self.showsRePairAction(for: freshness, hasHandler: onRePair != nil)
-                    ? BannerAction(title: "Pair Again", perform: onRePair ?? {}) : nil
+                    ? .init(label: "Pair Again", handler: onRePair ?? {}) : nil
             )
+            .standingNoticeInset()
         }
     }
+}
 
-    /// A full-width tinted wash with a leading small-caps mono keyword in
-    /// the state color and the message in Plex Sans, text-dim unless the
-    /// state passes an explicit high-contrast `foreground`. An optional
-    /// trailing `action` renders as a text button in the state color.
-    private func banner(
-        _ message: String, keyword: String, tint: Color, wash: Color,
-        foreground: Color = .inkDim, action: BannerAction? = nil
-    ) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            KeywordLabel(text: keyword, color: tint)
-            Text(message)
-                .font(FreesideFont.callout)
-                .foregroundStyle(foreground)
-            if let action {
-                Spacer(minLength: 12)
-                Button(action: action.perform) {
-                    Text(action.title)
-                        .font(FreesideFont.sans(.callout, weight: .medium))
-                        .foregroundStyle(tint)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(action.title)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(wash)
+/// The contract-mismatch sentence the freshness banner and the menu-bar
+/// panel both draw: the two short digests in mono inside a sans sentence,
+/// and the fix. `tail` is what the surface adds about its own state.
+struct ContractMismatchSentence {
+    let daemonContract: String
+    var tail = ""
+
+    private var daemon: String { ContractDigestDisplay.short(daemonContract) }
+    private var app: String { ContractDigestDisplay.shortClient }
+
+    var plain: String {
+        "Daemon contract \(daemon), app \(app). Update the daemon or the app.\(tail)"
     }
 
-    private struct BannerAction {
-        let title: String
-        let perform: () -> Void
+    var text: Text {
+        Text(
+            "Daemon contract \(Text(daemon).font(FreesideFont.trailingSummary)), app \(Text(app).font(FreesideFont.trailingSummary)). Update the daemon or the app.\(tail)"
+        )
+    }
+}
+
+extension View {
+    /// The inset a standing notice above the synced surface takes: 16pt
+    /// from each side and 4pt above and below, so two notices sit 8pt
+    /// apart. Each notice carries its own because they come and go
+    /// independently, and a container's padding would outlive them.
+    func standingNoticeInset() -> some View {
+        padding(.horizontal, 16).padding(.vertical, 4)
     }
 }
 

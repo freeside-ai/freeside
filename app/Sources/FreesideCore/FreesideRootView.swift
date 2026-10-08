@@ -116,12 +116,11 @@ public struct FreesideRootView: View {
             taskStops: coordinator.pendingTaskStops.values)
         return VStack(spacing: 0) {
             if let warning = coordinator.promptHistory.saveWarning {
-                HStack {
-                    Text(warning).font(FreesideFont.callout)
-                    Button("Dismiss") { coordinator.promptHistory.saveWarning = nil }
-                }
-                .padding(8)
-                .foregroundStyle(Color.waxText)
+                Notice(
+                    tone: .wax, keyword: "Not saved", sentence: warning,
+                    action: .init(label: "Dismiss") { coordinator.promptHistory.saveWarning = nil }
+                )
+                .standingNoticeInset()
                 .accessibilityElement(children: .contain)
             }
             FreshnessBanner(

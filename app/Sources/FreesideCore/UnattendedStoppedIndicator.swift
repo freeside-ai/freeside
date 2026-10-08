@@ -144,30 +144,18 @@ struct UnattendedStoppedIndicator: View {
     }
 
     private func row(_ presentation: UnattendedStoppedPresentation) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            KeywordLabel(text: presentation.keyword, color: .waxText)
-            Text(presentation.message)
-                .font(FreesideFont.callout)
-                .foregroundStyle(presentation.isCurrent ? Color.ink : Color.inkDim)
-            if let itemID = presentation.itemID, let onOpenItem {
-                Spacer(minLength: 12)
-                Button {
-                    onOpenItem(itemID)
-                } label: {
-                    Text(presentation.actionTitle)
-                        .font(FreesideFont.sans(.callout, weight: .medium))
-                        .foregroundStyle(Color.waxText)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(presentation.actionTitle)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.waxWash)
+        Notice(
+            tone: .wax, keyword: presentation.keyword, sentence: presentation.message,
+            action: action(for: presentation)
+        )
+        .standingNoticeInset()
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("unattended-stopped-indicator")
+    }
+
+    private func action(for presentation: UnattendedStoppedPresentation) -> Notice.Action? {
+        guard let itemID = presentation.itemID, let onOpenItem else { return nil }
+        return .init(label: presentation.actionTitle) { onOpenItem(itemID) }
     }
 }
 
