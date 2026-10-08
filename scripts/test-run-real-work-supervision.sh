@@ -102,6 +102,40 @@ assert_contains "$fixture_root/success/stderr" 'specification run=run-spec state
 assert_contains "$fixture_root/success/stderr" 'implementation run=run-impl state=published'
 assert_contains "$fixture_root/success/stderr" 'implementation run=run-impl state=publication_ready'
 
+# A resumed implementation may already be completed on its first snapshot.
+rm -f "$stub_root/run-spec.count"
+write_sequence run-impl "$(snapshot completed completed)"
+run_case completed-resume "" 3 0
+assert_contains "$fixture_root/completed-resume/stderr" 'implementation run=run-impl state=completed'
+cmp "$stub_root/run-impl" "$fixture_root/completed-resume/snapshot.json"
+[[ ! -e "$stub_root/run-spec.count" ]] || { echo 'completed resume observed the specification lane' >&2; exit 1; }
+
+# Completion can also be the first observation after an exact lane handoff.
+write_sequence run-spec "$(snapshot implementation_bound pending)"
+write_sequence run-impl "$(snapshot completed completed)"
+run_case completed-handoff run-spec 3 0
+assert_contains "$fixture_root/completed-handoff/stderr" 'specification run=run-spec state=implementation_bound'
+assert_contains "$fixture_root/completed-handoff/stderr" 'implementation run=run-impl state=completed'
+cmp "$stub_root/run-impl" "$fixture_root/completed-handoff/snapshot.json"
+
+# A completed specification is terminal, not proof of implementation success.
+write_sequence run-spec "$(snapshot completed completed)"
+write_sequence run-impl "$(snapshot published published)"
+run_case specification-completed run-spec 3 1
+assert_contains "$fixture_root/specification-completed/stderr" 'specification run=run-spec ended outcome=completed'
+cmp "$stub_root/run-spec" "$fixture_root/specification-completed/snapshot.json"
+[[ ! -e "$stub_root/run-impl.count" ]] || { echo 'completed specification observed the implementation lane' >&2; exit 1; }
+
+# Recognizing completed does not make an unknown state successful in either lane.
+for lane in specification implementation; do
+	specification=""
+	[[ "$lane" != specification ]] || specification=run-spec
+	write_sequence run-spec "$(snapshot future_state pending)"
+	write_sequence run-impl "$(snapshot future_state pending)"
+	run_case "unknown-$lane" "$specification" 3 1
+	assert_contains "$fixture_root/unknown-$lane/stderr" "unsupported $lane supervision state=future_state"
+done
+
 # Rejection and specification execution failure are terminal immediately and
 # retain their distinct terminal classes plus the relevant AttentionItem.
 rejected_extra=',"terminal":"canceled","last_attention_item":{"id":"spec-approval-1","type":"spec_approval","status":"superseded","requested_decision":[]}'
@@ -273,6 +307,16 @@ assert_contains "$fixture_root/hook-late-binding/stderr" 'implementation run=run
 # A resolver error is terminal, not a poll-to-timeout.
 write_sequence run-spec "$(snapshot implementation_bound pending)"
 run_hook_case hook-error error 1
+
+# Without a supplied implementation identity, specification completion must
+# still fail without asking the resolver to infer a handoff.
+write_sequence run-spec "$(snapshot completed completed)"
+write_sequence run-impl "$(snapshot published published)"
+run_hook_case hook-specification-completed bind-after-2 1
+assert_contains "$fixture_root/hook-specification-completed/stderr" 'specification run=run-spec ended outcome=completed'
+cmp "$stub_root/run-spec" "$fixture_root/hook-specification-completed/snapshot.json"
+[[ ! -e "$resolve_calls" ]] || { echo 'completed specification invoked the implementation resolver' >&2; exit 1; }
+[[ ! -e "$stub_root/run-impl.count" ]] || { echo 'completed specification observed the implementation lane' >&2; exit 1; }
 
 unset -f real_work_resolve_implementation
 
