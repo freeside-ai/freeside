@@ -463,27 +463,46 @@ struct InboxRowView: View {
             // The summary says what needs attention, so it takes the serif
             // and the main ink; the type above it is the quiet line (visual
             // audit D01).
+            // Two lines at the standard sizes. An accessibility size fits
+            // fewer words on a line, so the cap lifts there rather than hide
+            // what the default size shows (R22).
             Text(AttentionDisplay.rowSummary(item))
                 .font(FreesideFont.statement)
                 .foregroundStyle(Color.ink)
-                .lineLimit(2)
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                contextSegment(context.project)
-                if let workUnit = context.workUnit {
-                    separator
-                    contextSegment(workUnit)
-                    if workUnit.isAgentClaim {
-                        CompactMark(text: "Agent")
-                    }
-                }
-                if let relativeTime = AttentionDisplay.relativeRowTime(item, now: now) {
-                    Spacer(minLength: 8)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
+            let relativeTime = AttentionDisplay.relativeRowTime(item, now: now)
+            if dynamicTypeSize.isAccessibilitySize {
+                // The age drops under the context line, which then has the
+                // row's width to itself.
+                contextLine(context)
+                if let relativeTime {
                     timeText(relativeTime, now: now)
-                        .fixedSize()
+                }
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    contextLine(context)
+                    if let relativeTime {
+                        Spacer(minLength: 8)
+                        timeText(relativeTime, now: now)
+                            .fixedSize()
+                    }
                 }
             }
         }
         .modifier(SidebarRowSurface(isSelected: isSelected, verticalPadding: 12))
+    }
+
+    private func contextLine(_ context: AttentionDisplay.RowContext) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            contextSegment(context.project)
+            if let workUnit = context.workUnit {
+                separator
+                contextSegment(workUnit)
+                if workUnit.isAgentClaim {
+                    CompactMark(text: "Agent")
+                }
+            }
+        }
     }
 
     /// The word the decision card's eyebrow uses for this item (R27), so the
