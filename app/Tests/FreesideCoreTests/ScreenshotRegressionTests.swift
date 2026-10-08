@@ -1482,6 +1482,17 @@
                     view: AnyView(
                         destructiveRecommendation.screenshotCard(
                             question, at: dynamicTypeSize))))
+            // The question card in the Mac's two-column layout, where the
+            // action region sits beside the card's modules, not above them.
+            surfaces.append(
+                Surface(
+                    name: "decision-agent_question-1200",
+                    width: 1_200,
+                    view: AnyView(
+                        destructiveRecommendation.screenshotCard(
+                            AttentionFixtures.fixture(type: .agent_question).item,
+                            at: dynamicTypeSize,
+                            detailWidth: 1_200))))
 
             let cache = InMemoryCacheStore()
             let runs = RunFixtures.defaultRuns()
