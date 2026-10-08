@@ -225,11 +225,9 @@ struct DecisionCardComposition: Equatable {
         switch type {
         case .agent_question, .ready_for_final_review, .review_dispute, .system_health, .blocked,
             .execution_failure, .task_proposal, .effect_proposal, .review_diminishing_returns,
-            .spec_approval, .finding_adjudication:
-            return .quoted
-        case .review_contradiction, .review_configuration,
+            .spec_approval, .finding_adjudication, .review_contradiction, .review_configuration,
             .publish_blocked:
-            return .dashedCard
+            return .quoted
         }
     }
 
@@ -283,10 +281,9 @@ struct DecisionCardComposition: Equatable {
         switch type {
         case .ready_for_final_review, .agent_question, .system_health, .blocked,
             .execution_failure, .task_proposal, .effect_proposal, .review_diminishing_returns,
-            .review_dispute, .spec_approval, .finding_adjudication:
+            .review_dispute, .spec_approval, .finding_adjudication, .review_contradiction,
+            .review_configuration, .publish_blocked:
             return .refined
-        case .review_contradiction, .review_configuration, .publish_blocked:
-            return .legacy
         }
     }
 
