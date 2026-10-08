@@ -312,6 +312,13 @@ format, and CI follow the daemon's pattern, `daemon/.golangci.yml` and
 macOS runs build and test); each new component adds its own on that pattern
 in its first PR and registers its steps in `scripts/check.sh`.
 
+While iterating on a visible `app/` change, render only the surfaces the step
+touches with `bash app/scripts/render-surfaces.sh OUTPUT_DIR SURFACE...` and
+run only the affected test suites. At the end, record screenshot digests per
+render-changing commit, then run the full `app` test step once before push.
+The full screenshot matrix takes minutes; a selected render takes seconds.
+Detail: `app/README.md` (Iterating on a Visible Change).
+
 ## Daemon Coding Conventions
 
 Binding for new and changed `daemon/` Go code; the detail lives at point of
