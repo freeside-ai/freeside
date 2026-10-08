@@ -40,28 +40,14 @@ struct ConsequenceSheet: View {
 
     private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 10) {
-                Text(title)
-                    .font(FreesideFont.sectionTitle)
-                    .foregroundStyle(Color.ink)
-                    .accessibilityAddTraits(.isHeader)
-                if let consequence {
-                    Text(consequence)
-                        .font(FreesideFont.callout)
-                        .foregroundStyle(Color.ink)
-                }
-                Text(bindingLine)
-                    .font(FreesideFont.monoCaption)
-                    .foregroundStyle(Color.inkDim)
-            }
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(20)
-            .padding(.bottom, -6)
+            FreesideSheetHeader(
+                eyebrow: actionLabel, ask: title, consequence: consequence, binding: bindingLine,
+                askLineLimit: nil)
             FreesideSheetActionRow(
                 submitLabel: actionLabel,
                 tone: .destructive,
                 submitHint: consequence,
+                cancelIsOutlined: true,
                 submit: submit,
                 cancel: cancel)
         }

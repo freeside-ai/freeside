@@ -94,67 +94,115 @@ struct TaskStopView: View {
     }
 }
 
+/// The confirmation the task page's Stop opens (R11): what stopping does,
+/// the task it binds to, and the wax-outlined submit.
 struct TaskStopConfirmationView: View {
+    static let consequence =
+        "Stop any remaining work owned by this task and prevent further work. "
+        + "Existing history and PRs remain. The daemon must confirm that execution has stopped."
+
     let entry: PendingTaskStop
     let onConfirm: () -> Void
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        ScrollView { content }
-            .background(Color.ground2)
-            .freesideSheetPresentation()
-            .frame(idealWidth: 460, minHeight: 340)
+        VStack(spacing: 0) {
+            ScrollView { facts }
+            actionRow
+        }
+        .background(Color.ground2)
+        .freesideSheetPresentation()
+        .frame(idealWidth: 460, minHeight: 340)
     }
 
+    /// The sheet laid out in place of its scroll view, for the screenshot
+    /// suite.
     var content: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("Stop this task?").font(FreesideFont.title)
-            Text(entry.taskName).font(FreesideFont.callout.weight(.semibold))
-            Text(entry.projectName).foregroundStyle(Color.inkDim)
-            Text(
-                "Stop any remaining work owned by this task and prevent further work. Existing history and PRs remain. The daemon must confirm that execution has stopped."
-            )
-            Button("Stop task", role: .destructive, action: onConfirm)
-                .buttonStyle(FreesideActionButtonStyle(tone: .secondary))
-            Button("Keep task") { dismiss() }
-                .keyboardShortcut(.cancelAction)
+        VStack(spacing: 0) {
+            facts
+            actionRow
         }
-        .font(FreesideFont.callout)
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(24)
-        .foregroundStyle(Color.ink)
         .background(Color.ground2)
+    }
+
+    private var facts: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            FreesideSheetHeader(
+                eyebrow: "Stop task", ask: "Stop this task?", consequence: Self.consequence,
+                binding: entry.taskID, askLineLimit: nil)
+            VStack(alignment: .leading, spacing: 11) {
+                FactRow(label: "Task", value: entry.taskName)
+                FactRow(label: "Project", value: entry.projectName)
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
+        }
+    }
+
+    private var actionRow: some View {
+        FreesideSheetActionRow(
+            submitLabel: "Stop Task", tone: .destructive, submitHint: Self.consequence,
+            cancelIsOutlined: true, submitsOnReturn: false, submit: onConfirm, cancel: { dismiss() })
     }
 }
 
+/// The saved Stop requests whose results are not recovered yet (R11). Opening
+/// it never sends one; each entry carries its own state and its own Retry.
 struct TaskStopRecoveryView: View {
     let coordinator: SyncCoordinator
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("Pending Stops").font(FreesideFont.title)
-                Text("Saved requests stay here until their results are recovered. Opening this view never sends them.")
-                ForEach(coordinator.taskStop.pending, id: \.command.command_id) { entry in
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(entry.taskName).font(FreesideFont.callout.weight(.semibold))
-                        Text(entry.projectName).foregroundStyle(Color.inkDim)
-                        TaskStopView(coordinator: coordinator, taskID: entry.taskID)
-                    }
-                    Divider()
-                }
-                if coordinator.taskStop.pending.isEmpty { Text("No pending Stop requests.") }
-                Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
-            }
-            .font(FreesideFont.callout)
-            .padding(24)
-            .foregroundStyle(Color.ink)
-            .background(Color.ground2)
+        VStack(spacing: 0) {
+            ScrollView { entries }
+            FreesideSheetActionRow.done { dismiss() }
         }
         .background(Color.ground2)
         .freesideSheetPresentation()
         .frame(idealWidth: 480, minHeight: 340)
+    }
+
+    /// The sheet laid out in place of its scroll view, for the screenshot
+    /// suite.
+    var content: some View {
+        VStack(spacing: 0) {
+            entries
+            FreesideSheetActionRow.done {}
+        }
+        .background(Color.ground2)
+    }
+
+    private var pending: [PendingTaskStop] { coordinator.taskStop.pending }
+
+    private var entries: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            FreesideSheetHeader(
+                eyebrow: "Stop requests",
+                chip: StateChip(label: "\(pending.count)", cut: .attention),
+                ask: "Pending Stops",
+                consequence:
+                    "Saved requests stay here until their results are recovered. Opening this view never sends them.",
+                askLineLimit: nil)
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(pending, id: \.command.command_id) { entry in
+                    VStack(alignment: .leading, spacing: 11) {
+                        FactRow(label: "Task", value: entry.taskName)
+                        FactRow(label: "Project", value: entry.projectName)
+                        TaskStopView(coordinator: coordinator, taskID: entry.taskID)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+                    .background(Color.ground, in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.itemBorder, lineWidth: 1))
+                }
+                if pending.isEmpty {
+                    Text("No pending Stop requests.")
+                        .font(FreesideFont.cardBody)
+                        .foregroundStyle(Color.inkDim)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
+        }
     }
 }

@@ -1585,6 +1585,10 @@ struct FreesideSheetActionRow: View {
     /// The refined footer (R11): Cancel as an outline that shares the row
     /// equally with the submit, in place of the hugging text button.
     var cancelIsOutlined = false
+    /// False where Return must not take the submit. The task Stop
+    /// confirmation never bound Return to its destructive control, and
+    /// taking this row's shape does not change that.
+    var submitsOnReturn = true
     let submit: () -> Void
     /// `nil` for a reader's single dismiss: no Cancel is drawn and Escape
     /// routes to `submit`, so both keys close the sheet.
@@ -1661,7 +1665,7 @@ struct FreesideSheetActionRow: View {
             .buttonStyle(
                 FreesideActionButtonStyle(tone: tone, expands: expands)
             )
-            .keyboardShortcut(.defaultAction)
+            .keyboardShortcut(submitsOnReturn ? .defaultAction : nil)
             .disabled(!isSubmitEnabled)
             .accessibilityHint(submitHint ?? "")
     }
