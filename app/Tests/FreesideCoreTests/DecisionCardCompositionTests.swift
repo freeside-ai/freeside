@@ -53,7 +53,7 @@ import Testing
             ])
     }
 
-    @Test @MainActor func revisedSpecificationLeadsWithTypedRevisionFacts() throws {
+    @Test @MainActor func revisedSpecificationDrawsItsChangeAndItemAboveTheActions() throws {
         let item = AttentionFixtures.revisedSpecification().item
         let revision = try #require(item.spec_revision?.value1)
         let composition = DecisionCardComposition.forType(.spec_approval)
@@ -63,23 +63,20 @@ import Testing
         #expect(revision.diff.lines_removed == 1)
         #expect(
             composition.modules == [
-                .recommendation, .specRevision, .summary, .facts, .specification, .factBlock,
+                .recommendation, .summary, .specRevision, .specification, .facts, .factBlock,
                 .claims, .evidence, .details,
             ])
-        #expect(
-            composition.modules.firstIndex(of: .specRevision).map {
-                $0 < composition.actionInsertionIndex
-            } == true)
-        // §9 leads this card with a plan-altitude summary and puts the full
-        // specification below it, so the summary layer that now carries the
-        // reason has to render above the action region (#1098).
-        #expect(
-            composition.modules.firstIndex(of: .summary).map {
-                $0 < composition.actionInsertionIndex
-            } == true)
-        #expect(
-            composition.modules.firstIndex(of: .specification)
-                == composition.actionInsertionIndex)
+        // Frames 5.1 and 7.2: the summary, the change since the last
+        // revision, and the specification item (with the conversation it
+        // carries) are what the approval weighs, so all three render above
+        // the action region, in that order. The summary still carries the
+        // reason there (#1098).
+        let leading = try [DecisionCardModule.summary, .specRevision, .specification].map {
+            try #require(composition.modules.firstIndex(of: $0))
+        }
+        #expect(leading == leading.sorted())
+        #expect(leading.allSatisfy { $0 < composition.actionInsertionIndex })
+        #expect(DecisionCardComposition.placesConversationWithSpecification(for: .spec_approval))
         #expect(
             composition.claims(
                 from: item.agent_claims,
@@ -500,6 +497,7 @@ import Testing
         let quoted: [Components.Schemas.AttentionType] = [
             .agent_question, .ready_for_final_review, .review_dispute, .system_health, .blocked,
             .execution_failure, .task_proposal, .effect_proposal, .review_diminishing_returns,
+            .spec_approval,
         ]
         #expect(
             DecisionCardComposition.agentSectionFrame(for: type)
@@ -843,7 +841,7 @@ import Testing
         let refined: Set<Components.Schemas.AttentionType> = [
             .ready_for_final_review, .agent_question, .system_health, .blocked,
             .execution_failure, .task_proposal, .effect_proposal, .review_diminishing_returns,
-            .review_dispute,
+            .review_dispute, .spec_approval,
         ]
         let scale = DecisionCardComposition.scale(for: type)
         #expect(scale == (refined.contains(type) ? .refined : .legacy))
@@ -1289,6 +1287,26 @@ import Testing
                 == .module(comparison))
         #expect(
             composition.infoSlot(for: item, in: .init(platform: platform)) == .module(claims))
+    }
+
+    /// Frame 7.2: a prior comment and the agent's addressal read as
+    /// conversation. A comment the agent claimed nothing for keeps its
+    /// place with no response, never another comment's.
+    @Test @MainActor func priorCommentsPairWithTheirOwnAddressal() throws {
+        var item = AttentionFixtures.revisedSpecification().item
+        var revision = try #require(item.spec_revision?.value1)
+        let exchanges = DecisionDetailView.priorExchanges(in: item)
+
+        #expect(exchanges.map(\.id) == revision.prior_comments.map(\.comment_id))
+        #expect(exchanges.first?.marker == "on revision \(revision.prior_comments[0].iteration)")
+        #expect(exchanges.first?.response == revision.claimed_addressals.first?.response)
+
+        revision.claimed_addressals = []
+        item.spec_revision = .init(value1: revision)
+        #expect(DecisionDetailView.priorExchanges(in: item).allSatisfy { $0.response == nil })
+
+        item.spec_revision = nil
+        #expect(DecisionDetailView.priorExchanges(in: item).isEmpty)
     }
 
     @Test func comparisonSummaryPreservesBothPositions() {

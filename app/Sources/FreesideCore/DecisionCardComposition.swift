@@ -224,10 +224,10 @@ struct DecisionCardComposition: Equatable {
     ) -> AgentSectionFrame {
         switch type {
         case .agent_question, .ready_for_final_review, .review_dispute, .system_health, .blocked,
-            .execution_failure, .task_proposal, .effect_proposal, .review_diminishing_returns:
+            .execution_failure, .task_proposal, .effect_proposal, .review_diminishing_returns,
+            .spec_approval:
             return .quoted
-        case .spec_approval,
-            .review_contradiction, .review_configuration, .finding_adjudication,
+        case .review_contradiction, .review_configuration, .finding_adjudication,
             .publish_blocked:
             return .dashedCard
         }
@@ -283,13 +283,22 @@ struct DecisionCardComposition: Equatable {
         switch type {
         case .ready_for_final_review, .agent_question, .system_health, .blocked,
             .execution_failure, .task_proposal, .effect_proposal, .review_diminishing_returns,
-            .review_dispute:
+            .review_dispute, .spec_approval:
             return .refined
-        case .spec_approval,
-            .review_contradiction, .review_configuration,
+        case .review_contradiction, .review_configuration,
             .finding_adjudication, .publish_blocked:
             return .legacy
         }
+    }
+
+    /// Whether the conversation draws inside the card's modules, under the
+    /// specification, instead of directly under the ask. On spec approval
+    /// the thread is about the specification and ends in the reply link
+    /// (frame 5.1); every other card keeps it under its ask.
+    static func placesConversationWithSpecification(
+        for type: Components.Schemas.AttentionType
+    ) -> Bool {
+        type == .spec_approval
     }
 
     /// The keyword over a card's typed fact rows (R1). A card whose rows
@@ -801,17 +810,19 @@ struct DecisionCardComposition: Equatable {
                 // actions with Recorded Context (R26).
                 foldedModuleCount: 1)
         case .spec_approval:
-            // Plan §9 has this card lead with the ask and a plan-altitude
-            // summary and put the full specification below, so `.summary`
-            // renders ahead of the action region while `.specification` opens
-            // the region below it. A revision still leads: `.specRevision`
-            // carries the diff-from-last-reviewed facts and stays first.
+            // Frames 5.1 and 7.2: the agent's summary, then what changed
+            // since the last revision, then the specification as one item
+            // that opens its readers, then the conversation, which draws
+            // with `.specification` (`placesConversationWithSpecification`).
+            // All of it is what the approval weighs, so it sits above the
+            // actions. 7.2 draws the conversation ahead of the item; one
+            // order serves both frames.
             return .init(
                 modules: [
-                    .recommendation, .specRevision, .summary, .facts, .specification, .factBlock,
+                    .recommendation, .summary, .specRevision, .specification, .facts, .factBlock,
                     .claims, .evidence, .details,
                 ],
-                actionInsertionIndex: 4,
+                actionInsertionIndex: 5,
                 reviewingActionInsertionIndex: nil)
         case .task_proposal:
             // Frame 5.4: the proposal in the agent's words, then the facts

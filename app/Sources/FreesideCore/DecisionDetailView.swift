@@ -576,7 +576,9 @@ struct DecisionDetailView: View {
                 reasonUnderAsk(item, register: register.at(.reason))
             }
 
-            if let conversation = model.conversation {
+            if let conversation = model.conversation,
+                !DecisionCardComposition.placesConversationWithSpecification(for: item._type)
+            {
                 ConversationView(
                     snapshot: conversation,
                     attachments: attachments,
@@ -896,6 +898,8 @@ struct DecisionDetailView: View {
             specificationMaterial(
                 item,
                 rendersInteractiveControls: rendersInteractiveControls)
+            specificationConversation(
+                item, rendersInteractiveControls: rendersInteractiveControls)
         case .recommendation:
             #if os(iOS)
                 if let recommendation = drawnRecommendation(item) {
@@ -1537,86 +1541,147 @@ struct DecisionDetailView: View {
             .joined(separator: ", ")
     }
 
+    /// What changed since the revision the operator last read: one row,
+    /// the keyword on the left and the counts on the right (frame 7.2).
     @ViewBuilder
     private func specRevisionLead(_ item: Components.Schemas.AttentionItem) -> some View {
         if let revision = item.spec_revision?.value1,
             let priorIteration = Self.priorSpecRevisionIteration(in: item)
         {
-            cardSection("Specification revision") {
-                Text("Revision \(revision.iteration), supersedes revision \(priorIteration)")
-                    .font(FreesideFont.sans(.callout, weight: .semibold))
-                    .fixedSize(horizontal: false, vertical: true)
-                DecisionChangeRow(specification: revision.diff, sinceRevision: priorIteration)
-
-                Divider()
-                Text("Agent responses are unverified.")
-                    .font(FreesideFont.caption)
-                    .foregroundStyle(Color.inkDim)
-
-                ForEach(Array(revision.prior_comments.enumerated()), id: \.offset) {
-                    index, comment in
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("You, iteration \(comment.iteration)")
-                            .font(FreesideFont.caption)
-                            .foregroundStyle(Color.accentText)
-                        Text(comment.body)
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        if let addressal = revision.claimed_addressals.first(where: {
-                            $0.comment_id == comment.comment_id
-                        }) {
-                            Label("Agent response", systemImage: "quote.bubble")
-                                .font(FreesideFont.caption)
-                                .foregroundStyle(Color.inkDim)
-                            Text(addressal.response)
-                                .fixedSize(horizontal: false, vertical: true)
-                        } else {
-                            Label("No addressal claimed", systemImage: "questionmark.bubble")
-                                .font(FreesideFont.caption)
-                                .foregroundStyle(Color.inkDim)
-                        }
-                    }
-                    if index < revision.prior_comments.count - 1 {
-                        Divider()
-                    }
-                }
-            }
+            DecisionChangeRow(specification: revision.diff, sinceRevision: priorIteration)
         }
     }
 
+    /// The operator's comments on earlier revisions, each with the agent's
+    /// addressal claim, in the order the daemon lists them.
+    static func priorExchanges(
+        in item: Components.Schemas.AttentionItem
+    ) -> [ConversationView.PriorExchange] {
+        guard let revision = item.spec_revision?.value1 else { return [] }
+        return revision.prior_comments.map { comment in
+            .init(
+                id: comment.comment_id,
+                iteration: comment.iteration,
+                comment: comment.body,
+                response: revision.claimed_addressals.first {
+                    $0.comment_id == comment.comment_id
+                }?.response)
+        }
+    }
+
+    /// The thread about the specification: earlier comments with their
+    /// addressal, the live conversation, and the link that replies to it.
+    /// The link opens the composer `Discuss` opens, under the gate that
+    /// button is under, and draws only where there is a thread to reply to.
+    @ViewBuilder
+    private func specificationConversation(
+        _ item: Components.Schemas.AttentionItem,
+        rendersInteractiveControls: Bool
+    ) -> some View {
+        let priorExchanges = Self.priorExchanges(in: item)
+        if DecisionCardComposition.placesConversationWithSpecification(for: item._type),
+            model.conversation != nil || !priorExchanges.isEmpty
+        {
+            let offersReply =
+                item.requested_decision.contains(.discuss)
+                && !actionRanking(item).unavailable.contains(.discuss)
+            ConversationView(
+                snapshot: model.conversation,
+                priorExchanges: priorExchanges,
+                reply: offersReply
+                    ? .init(isEnabled: model.actionsEnabled && model.isSubmittable(.discuss)) {
+                        trigger(.discuss, item: item)
+                    } : nil,
+                attachments: attachments,
+                loadsAttachments: loadsAttachments,
+                now: now,
+                rendersInteractiveControls: rendersInteractiveControls)
+        }
+    }
+
+    /// The specification as one bordered item under its keyword (frame
+    /// 5.1): which revision the daemon bound to this approval, and the
+    /// links that open it. A revision's diff is a second link on the same
+    /// item, not a second item (frame 7.2).
     @ViewBuilder
     private func specificationMaterial(
         _ item: Components.Schemas.AttentionItem,
         rendersInteractiveControls: Bool
     ) -> some View {
         if let specification = Self.specificationClaim(in: item) {
-            let iteration = Self.specificationRevisionIteration(in: item)
-            let title = iteration.map { "Specification, revision \($0)" } ?? "Specification"
-            cardSection("Approval material") {
-                if specification.text != nil {
-                    approvalMaterialRow(
-                        title: title,
-                        detail: "Bound by the daemon to this approval",
-                        reader: .specification,
-                        rendersInteractiveControls: rendersInteractiveControls)
-                } else {
-                    AttachmentRow(
-                        label: title,
-                        digest: specification.digest,
-                        metadata: specification.metadata,
-                        attachments: attachments,
-                        loadsAttachments: loadsAttachments,
-                        rendersInteractiveControls: rendersInteractiveControls)
+            let title =
+                Self.specificationRevisionIteration(in: item).map { "Revision \($0)" }
+                ?? "Specification"
+            let priorIteration = Self.priorSpecRevisionIteration(in: item)
+            keywordSection("Specification") {
+                VStack(alignment: .leading, spacing: 11) {
+                    if specification.text != nil {
+                        ViewThatFits(in: .horizontal) {
+                            HStack(alignment: .center, spacing: 12) {
+                                specificationItemTitle(title)
+                                Spacer(minLength: 8)
+                                specificationLinks(
+                                    priorIteration: priorIteration,
+                                    rendersInteractiveControls: rendersInteractiveControls)
+                            }
+                            VStack(alignment: .leading, spacing: 11) {
+                                specificationItemTitle(title)
+                                specificationLinks(
+                                    priorIteration: priorIteration,
+                                    rendersInteractiveControls: rendersInteractiveControls)
+                            }
+                        }
+                    } else {
+                        AttachmentRow(
+                            label: title,
+                            digest: specification.digest,
+                            metadata: specification.metadata,
+                            attachments: attachments,
+                            loadsAttachments: loadsAttachments,
+                            rendersInteractiveControls: rendersInteractiveControls)
+                        if let priorIteration {
+                            readerLink(
+                                "Open Diff", reader: .diff,
+                                accessibilityLabel: "Open diff from revision \(priorIteration)",
+                                rendersInteractiveControls: rendersInteractiveControls)
+                        }
+                    }
                 }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8).strokeBorder(Color.itemBorder, lineWidth: 1))
+            }
+        }
+    }
 
-                if let priorIteration = Self.priorSpecRevisionIteration(in: item) {
-                    Divider()
-                    approvalMaterialRow(
-                        title: "Diff from revision \(priorIteration)",
-                        detail: "Bounded unified diff",
-                        reader: .diff,
-                        rendersInteractiveControls: rendersInteractiveControls)
-                }
+    private func specificationItemTitle(_ title: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(FreesideFont.factLabel)
+                .foregroundStyle(Color.ink)
+            Text("Bound by the daemon to this approval")
+                .font(FreesideFont.cardBody)
+                .foregroundStyle(Color.inkDim)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func specificationLinks(
+        priorIteration: Int?,
+        rendersInteractiveControls: Bool
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 16) {
+            readerLink(
+                "Open Reader", reader: .specification,
+                accessibilityLabel: "Open specification reader",
+                rendersInteractiveControls: rendersInteractiveControls)
+            if let priorIteration {
+                readerLink(
+                    "Open Diff", reader: .diff,
+                    accessibilityLabel: "Open diff from revision \(priorIteration)",
+                    rendersInteractiveControls: rendersInteractiveControls)
             }
         }
     }
@@ -1640,57 +1705,26 @@ struct DecisionDetailView: View {
         item.spec_revision?.value1.prior_comments.last?.iteration
     }
 
+    /// A link that opens one of the approval's readers (R3: away is a
+    /// link). A real `Button` where the surface is interactive.
     @ViewBuilder
-    private func approvalMaterialRow(
-        title: String,
-        detail: String,
+    private func readerLink(
+        _ title: String,
         reader: SpecApprovalReader,
+        accessibilityLabel: String,
         rendersInteractiveControls: Bool
     ) -> some View {
+        let link = FreesideLink(title: title, face: FreesideFont.noticeAction)
         if rendersInteractiveControls {
             Button {
                 openSpecApprovalReader(reader)
             } label: {
-                HStack(alignment: .center, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(title)
-                            .font(FreesideFont.sans(.callout, weight: .semibold))
-                            .foregroundStyle(Color.ink)
-                        Text(detail)
-                            .font(FreesideFont.caption)
-                            .foregroundStyle(Color.inkDim)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    Spacer(minLength: 8)
-                    Text("Open")
-                        .font(FreesideFont.caption)
-                        .foregroundStyle(Color.accentText)
-                    Image(systemName: "chevron.right")
-                        .font(FreesideFont.caption)
-                        .foregroundStyle(Color.accentText)
-                }
-                .contentShape(Rectangle())
+                link.contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Open \(title)")
+            .accessibilityLabel(accessibilityLabel)
         } else {
-            HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title)
-                        .font(FreesideFont.sans(.callout, weight: .semibold))
-                    Text(detail)
-                        .font(FreesideFont.caption)
-                        .foregroundStyle(Color.inkDim)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                Spacer(minLength: 8)
-                Label("Open", systemImage: "chevron.right")
-                    .labelStyle(.titleAndIcon)
-                    .font(FreesideFont.caption)
-                    .foregroundStyle(Color.accentText)
-            }
+            link
         }
     }
 
@@ -2468,6 +2502,13 @@ struct DecisionDetailView: View {
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
             : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 8))
         layout {
+            // A revised specification names its revision beside the type
+            // (frame 7.2); a first revision has nothing to tell apart.
+            if item._type == .spec_approval, Self.priorSpecRevisionIteration(in: item) != nil,
+                let iteration = Self.specificationRevisionIteration(in: item)
+            {
+                StateChip(label: "Revision \(iteration)", color: .inkDim)
+            }
             if AttentionDisplay.showsPriorityBadge(item.priority) {
                 PriorityBadge(priority: item.priority)
             }

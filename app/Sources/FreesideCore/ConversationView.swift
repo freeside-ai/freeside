@@ -93,7 +93,34 @@ private struct MessageRowLayout: Layout {
 /// No message prints an author or a time. VoiceOver reads both with every
 /// body, and the exact instant is one gesture away (R17).
 struct ConversationView: View {
-    let snapshot: Components.Schemas.ConversationSnapshot
+    /// A comment the operator left on an earlier specification revision and
+    /// what the agent claims it did about it. The pair is part of deciding
+    /// on the revision, so it reads as conversation (frame 7.2) ahead of the
+    /// live thread.
+    struct PriorExchange: Equatable, Identifiable {
+        let id: String
+        let iteration: Int
+        let comment: String
+        /// The agent's addressal claim, absent when it claimed none.
+        let response: String?
+
+        var marker: String { "on revision \(iteration)" }
+
+        var accessibilityLabel: String {
+            let answer = response.map { "Agent claims addressed: \($0)" } ?? "No addressal claimed"
+            return "You, on revision \(iteration): \(comment). \(answer)"
+        }
+    }
+
+    /// The link under the thread that opens the reply composer.
+    struct Reply {
+        var isEnabled = true
+        let open: () -> Void
+    }
+
+    let snapshot: Components.Schemas.ConversationSnapshot?
+    var priorExchanges: [PriorExchange] = []
+    var reply: Reply? = nil
     let attachments: AttachmentLoader
     let loadsAttachments: Bool
     var now = Date.now
@@ -106,7 +133,9 @@ struct ConversationView: View {
     /// `initiallyExpandedMessageIDs` lets a screenshot golden draw the
     /// expanded state; the app always starts with every long body bounded.
     init(
-        snapshot: Components.Schemas.ConversationSnapshot,
+        snapshot: Components.Schemas.ConversationSnapshot?,
+        priorExchanges: [PriorExchange] = [],
+        reply: Reply? = nil,
         attachments: AttachmentLoader,
         loadsAttachments: Bool,
         now: Date = .now,
@@ -114,6 +143,8 @@ struct ConversationView: View {
         initiallyExpandedMessageIDs: Set<String> = []
     ) {
         self.snapshot = snapshot
+        self.priorExchanges = priorExchanges
+        self.reply = reply
         self.attachments = attachments
         self.loadsAttachments = loadsAttachments
         self.now = now
@@ -126,14 +157,19 @@ struct ConversationView: View {
             KeywordLabel(text: "Conversation")
                 .accessibilityAddTraits(.isHeader)
 
-            ForEach(snapshot.conversation.messages.sorted(by: { $0.sequence < $1.sequence }), id: \.id) {
+            ForEach(priorExchanges) { exchange in
+                priorExchange(exchange)
+            }
+
+            let messages = snapshot?.conversation.messages ?? []
+            ForEach(messages.sorted(by: { $0.sequence < $1.sequence }), id: \.id) {
                 message in
                 MessageRowLayout(alignsTrailing: message.author == .user) {
                     exactTime(message, on: messageShape(message))
                 }
             }
 
-            if snapshot.conversation.status == .awaiting_agent {
+            if snapshot?.conversation.status == .awaiting_agent {
                 HStack(spacing: 8) {
                     if rendersInteractiveControls {
                         ProgressView().controlSize(.small)
@@ -146,8 +182,75 @@ struct ConversationView: View {
                 }
                 .accessibilityElement(children: .combine)
             }
+
+            if let reply {
+                replyLink(reply)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The comment on the right as the operator's own message, the agent's
+    /// addressal quoted on the left under a compact mark. The quote surface
+    /// is what says the addressal is the agent's claim, as it does for every
+    /// agent message in the thread.
+    @ViewBuilder
+    private func priorExchange(_ exchange: PriorExchange) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(exchange.marker)
+                .font(FreesideFont.trailingSummary)
+                .foregroundStyle(Color.inkDim)
+            MessageRowLayout(alignsTrailing: true) {
+                Text(exchange.comment)
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.itemBorder, lineWidth: 1))
+            }
+            if let response = exchange.response {
+                MessageRowLayout(alignsTrailing: false) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        KeywordLabel(text: "Addressed", color: .accentText)
+                        Text(response)
+                            .font(FreesideFont.message)
+                            .foregroundStyle(Color.ink)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .quoteSurface(cornerRadius: 8)
+                }
+            } else {
+                Text("No addressal claimed")
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.inkDim)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(exchange.accessibilityLabel))
+    }
+
+    /// A real `Button`, so the keyboard and VoiceOver reach the composer
+    /// from the thread as they do from the action.
+    @ViewBuilder
+    private func replyLink(_ reply: Reply) -> some View {
+        let label = Text("Reply\u{2026}")
+            .font(FreesideFont.actionLabel)
+            .foregroundStyle(Color.accentText)
+        if rendersInteractiveControls {
+            Button(action: reply.open) {
+                label
+                    .frame(minHeight: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!reply.isEnabled)
+            .accessibilityLabel("Reply to the agent")
+        } else {
+            label
+        }
     }
 
     @ViewBuilder
