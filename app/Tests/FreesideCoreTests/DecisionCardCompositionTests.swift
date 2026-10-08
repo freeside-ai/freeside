@@ -405,11 +405,34 @@ import Testing
     ) {
         let expected: DecisionCardComposition.ReasonPlacement =
             switch type {
-            case .agent_question, .ready_for_final_review, .finding_adjudication: .recordedContext
+            case .agent_question, .ready_for_final_review, .finding_adjudication, .task_proposal,
+                .effect_proposal:
+                .recordedContext
             case .blocked: .detailsOnly
             default: .underAsk
             }
         #expect(DecisionCardComposition.reasonPlacement(for: type) == expected)
+    }
+
+    /// A proposal's reason folds only at its planned gate, where the daemon
+    /// writes a sentence that restates the ask. The closure notice is the
+    /// one proposal reason that says more (the issue could not be closed
+    /// automatically, and the notice does not hold the pull request); the
+    /// daemon opens it as exceptional, and it stays ahead of the actions
+    /// (plan §9 revision 82).
+    @Test(arguments: [Components.Schemas.AttentionType.task_proposal, .effect_proposal])
+    func aProposalReasonFoldsOnlyAtItsPlannedGate(type: Components.Schemas.AttentionType) {
+        var item = AttentionFixtures.fixture(type: type).item
+        item.interruption_class = .planned_gate
+        #expect(DecisionCardComposition.reasonPlacement(for: item) == .recordedContext)
+        // Details still carry it in full.
+        #expect(DecisionCardComposition.reason(for: item)?.text == item.reason)
+
+        item.interruption_class = .exceptional
+        item.reason =
+            "The source issue could not be closed automatically; decide the fallback. "
+            + "This notice does not hold the pull request."
+        #expect(DecisionCardComposition.reasonPlacement(for: item) == .underAsk)
     }
 
     /// A blocked item's reason says what the run waits on and since when.
@@ -476,7 +499,7 @@ import Testing
     ) {
         let quoted: [Components.Schemas.AttentionType] = [
             .agent_question, .ready_for_final_review, .review_dispute, .system_health, .blocked,
-            .execution_failure,
+            .execution_failure, .task_proposal, .effect_proposal,
         ]
         #expect(
             DecisionCardComposition.agentSectionFrame(for: type)
@@ -544,7 +567,10 @@ import Testing
         #expect(composition.leadsWithItsClaim == (type == .review_dispute))
         // The failure card reads its diagnostic in the card, between its
         // facts and its stages (frame 5.3), without leading with it.
-        #expect(composition.placesReadableClaimsInCard == (type == .execution_failure))
+        // The task proposal reads the proposal itself the same way (5.4).
+        #expect(
+            composition.placesReadableClaimsInCard
+                == [.execution_failure, .task_proposal].contains(type))
 
         var attachment = AttentionFixtures.fixture(type: .execution_failure).item.agent_claims[0]
         attachment.label = "screenshot"
@@ -689,8 +715,8 @@ import Testing
         #expect(DecisionCardComposition.reasonPlacement(for: empty) == .underAsk)
     }
 
-    /// Only the question's placement depends on the item; every other type
-    /// answers from its type alone.
+    /// Each fixture is its type's ordinary item, so its placement is the
+    /// one its type names; the per-item tests cover the items that differ.
     @Test(arguments: Components.Schemas.AttentionType.allCases)
     func reasonPlacementFollowsTheTypeForATypedItem(
         type: Components.Schemas.AttentionType
@@ -816,7 +842,7 @@ import Testing
     func onlyTheComposedCardsTakeTheRefinedScale(type: Components.Schemas.AttentionType) {
         let refined: Set<Components.Schemas.AttentionType> = [
             .ready_for_final_review, .agent_question, .system_health, .blocked,
-            .execution_failure,
+            .execution_failure, .task_proposal, .effect_proposal,
         ]
         let scale = DecisionCardComposition.scale(for: type)
         #expect(scale == (refined.contains(type) ? .refined : .legacy))

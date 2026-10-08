@@ -786,7 +786,9 @@ public enum AttentionFixtures {
         let priority: Components.Schemas.Priority
         let interruption: Components.Schemas.InterruptionClass
         switch type {
-        case .spec_approval, .ready_for_final_review, .task_proposal,
+        // An effect proposal opens at its planned gate; only the closure
+        // notice is exceptional (daemon/internal/signet/effect_proposal.go).
+        case .spec_approval, .ready_for_final_review, .task_proposal, .effect_proposal,
             .review_diminishing_returns, .finding_adjudication:
             priority = type == .spec_approval ? .high : .normal
             interruption = .planned_gate

@@ -130,16 +130,24 @@ public final class DecisionModel {
     }
 
     static func pullRequestURL(for reference: Components.Schemas.PRReference) -> URL? {
-        let parts = reference.repo.split(separator: "/", omittingEmptySubsequences: false)
-        guard parts.count == 2, reference.number > 0,
+        forgeURL(repo: reference.repo, kind: "pull", number: reference.number)
+    }
+
+    nonisolated static func issueURL(for issue: Components.Schemas.IssueSubjectRef) -> URL? {
+        forgeURL(repo: issue.repo, kind: "issues", number: issue.issue_number)
+    }
+
+    private nonisolated static func forgeURL(repo: String, kind: String, number: Int) -> URL? {
+        let parts = repo.split(separator: "/", omittingEmptySubsequences: false)
+        guard parts.count == 2, number > 0,
             parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }),
             var url = URL(string: "https://github.com")
         else { return nil }
         for part in parts {
             url.appendPathComponent(String(part))
         }
-        url.appendPathComponent("pull")
-        url.appendPathComponent(String(reference.number))
+        url.appendPathComponent(kind)
+        url.appendPathComponent(String(number))
         return url
     }
 

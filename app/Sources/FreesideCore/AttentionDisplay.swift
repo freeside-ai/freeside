@@ -26,6 +26,8 @@ enum AttentionDisplay {
             case posture(Components.Schemas.HealthPosture)
             /// Another attention item, which the value links to (R3).
             case item(id: String)
+            /// A page outside the app, which the value links to (R3).
+            case link(URL)
         }
 
         let label: String
@@ -54,6 +56,15 @@ enum AttentionDisplay {
             self.value = value
             self.monospaced = false
             self.form = .item(id: id)
+        }
+
+        /// A value that names something with a page of its own. Without a
+        /// URL the value still draws, as the identifier it is.
+        init(_ label: String, _ value: String, linking url: URL?) {
+            self.label = label
+            self.value = value
+            self.monospaced = url == nil
+            self.form = url.map(Form.link) ?? .plain
         }
 
         init(_ label: String, diffs: [DiffCounts]) {
@@ -331,21 +342,67 @@ enum AttentionDisplay {
         }
     }
 
+    static let effectFactLabel = "Effect"
+    static let onMergeFactLabel = "On Merge"
+
+    static func issueName(_ issue: Components.Schemas.IssueSubjectRef) -> String {
+        "\(issue.repo)#\(issue.issue_number)"
+    }
+
+    /// What approving a source-issue closure binds, as one sentence (frame
+    /// 7.9): the candidate head, the base it would merge into, and what the
+    /// merge would do to the issue. The head is kept apart so the card can
+    /// set it in the identifier face. Nil for an effect with no merge to
+    /// state, which keeps its rows instead.
+    struct EffectBinding: Equatable {
+        let lead: String
+        let head: String
+        let outcome: String
+
+        var plain: String { lead + head + outcome }
+    }
+
+    static func effectBinding(
+        _ facts: Components.Schemas.EffectProposalFactsSnapshot
+    ) -> EffectBinding? {
+        guard facts.effect_kind == .source_issue_closure,
+            let closure = facts.source_issue_closure?.value1
+        else { return nil }
+        let issue = issueName(closure.target)
+        return .init(
+            lead: "Merging head ",
+            head: shortRevision(closure.merge.candidate_head_sha),
+            outcome: closure.resolves
+                ? " into \(closure.merge.base_ref) would close \(issue)."
+                : " into \(closure.merge.base_ref) would leave \(issue) open.")
+    }
+
+    /// The effect's rows as the card draws them. Where the binding
+    /// statement leads, it already names the effect and what the merge
+    /// does, so those two rows are not repeated under it.
+    static func effectProposalCardRows(
+        _ facts: Components.Schemas.EffectProposalFactsSnapshot
+    ) -> [FactRow] {
+        let rows = effectProposalRows(facts)
+        guard effectBinding(facts) != nil else { return rows }
+        return rows.filter { $0.label != effectFactLabel && $0.label != onMergeFactLabel }
+    }
+
     /// The closure card names no PR (the facts carry none).
     private static func sourceIssueClosureRows(
         _ closure: Components.Schemas.SourceIssueClosureFacts,
         supersedes: Components.Schemas.EffectProposalRevisionFacts?
     ) -> [FactRow] {
         var rows: [FactRow] = [
-            .init("Effect", effectKindLabel(.source_issue_closure)),
+            .init(effectFactLabel, effectKindLabel(.source_issue_closure)),
             .init(
-                "Target", "\(closure.target.repo)#\(closure.target.issue_number)",
-                monospaced: true),
+                "Target Issue", issueName(closure.target),
+                linking: DecisionModel.issueURL(for: closure.target)),
             .init(
-                "On merge",
+                onMergeFactLabel,
                 closure.resolves ? "Closes the issue" : "Doesn't close the issue"),
             .init("Reference", closureProvenanceExplanation(closure.provenance)),
-            .init("Origin", closureOriginLabel(closure.origin)),
+            .init("Closure Flag", closureOriginLabel(closure.origin)),
             .init(
                 "Bound to",
                 "Head \(shortRevision(closure.merge.candidate_head_sha)) · "
@@ -365,7 +422,7 @@ enum AttentionDisplay {
             // would be a no-op that only reads as if it did something.
             rows.append(
                 .init(
-                    "Superseded proposal",
+                    "Superseded Proposal",
                     "Previously \(priorPhrase) (\(prior.proposal_digest))"))
         }
         return rows
@@ -378,14 +435,14 @@ enum AttentionDisplay {
         _ filing: Components.Schemas.FollowUpFilingFacts
     ) -> [FactRow] {
         [
-            .init("Effect", effectKindLabel(.follow_up_filing)),
+            .init(effectFactLabel, effectKindLabel(.follow_up_filing)),
             .init("Repository", filing.repository.repo, monospaced: true),
             .init("Labels", filing.labels.isEmpty ? "None" : filing.labels.joined(separator: ", ")),
             .init("Milestone", filing.milestone ?? "None"),
             .init(
                 "Source",
                 "Finding \(filing.source.finding_id) · \(followUpSourceKindLabel(filing.source.kind))"),
-            .init("Text screening", textScreening(title: filing.title, body: filing.body)),
+            .init("Text Screening", textScreening(title: filing.title, body: filing.body)),
         ]
     }
 

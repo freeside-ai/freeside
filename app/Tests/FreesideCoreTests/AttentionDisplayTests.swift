@@ -902,13 +902,13 @@ import Testing
         let recommended = AttentionDisplay.effectProposalRows(recommendedFacts)
 
         #expect(
-            verified.map(\.label) == ["Effect", "Target", "On merge", "Reference", "Origin", "Bound to"])
+            verified.map(\.label) == ["Effect", "Target Issue", "On Merge", "Reference", "Closure Flag", "Bound to"])
         #expect(value(verified, "Effect") == "Source issue closure")
-        #expect(value(verified, "Target") == "owner/repo#724")
-        #expect(value(verified, "On merge") == "Closes the issue")
+        #expect(value(verified, "Target Issue") == "owner/repo#724")
+        #expect(value(verified, "On Merge") == "Closes the issue")
         // Origin names the mechanism that emitted the flag (the inference
         // site), not the human work proposal.
-        #expect(value(verified, "Origin") == "Emitted by the inference site")
+        #expect(value(verified, "Closure Flag") == "Emitted by the inference site")
 
         // A verified and a recommended closure differ in their Reference row;
         // only the recommended card says the person is confirming the reference.
@@ -934,9 +934,9 @@ import Testing
         facts.source_issue_closure = .init(value1: closure)
 
         let rows = AttentionDisplay.effectProposalRows(facts)
-        #expect(value(rows, "On merge") == "Doesn't close the issue")
+        #expect(value(rows, "On Merge") == "Doesn't close the issue")
         // The Effect row names the kind neutrally, so a resolve-false proposal
-        // does not contradict the "On merge" row.
+        // does not contradict the "On Merge" row.
         #expect(value(rows, "Effect") == "Source issue closure")
     }
 
@@ -956,7 +956,7 @@ import Testing
                 .init("Labels", "deferred-finding, reliability"),
                 .init("Milestone", "Backlog"),
                 .init("Source", "Finding finding-3 · Deferred disposition"),
-                .init("Text screening", "Title and body: passed under github-issue/1"),
+                .init("Text Screening", "Title and body: passed under github-issue/1"),
             ])
     }
 
@@ -984,7 +984,7 @@ import Testing
         facts.follow_up_filing?.value1.body.verdict = .rejected
 
         #expect(
-            value(AttentionDisplay.effectProposalRows(facts), "Text screening")
+            value(AttentionDisplay.effectProposalRows(facts), "Text Screening")
                 == "Title: passed under github-issue/1 · Body: rejected under github-issue/1")
     }
 
@@ -1059,14 +1059,14 @@ import Testing
     @Test func effectProposalSupersededRowAppearsOnlyWithPriorFacts() throws {
         let base = try #require(
             AttentionFixtures.effectProposalFacts(for: AttentionFixtures.fixture(type: .effect_proposal)))
-        #expect(!AttentionDisplay.effectProposalRows(base).contains { $0.label == "Superseded proposal" })
+        #expect(!AttentionDisplay.effectProposalRows(base).contains { $0.label == "Superseded Proposal" })
 
         var revised = base
         revised.supersedes = .init(
             value1: .init(
                 proposal_digest: "sha256:prior-effect",
                 source_issue_closure: .init(resolves: false)))
-        let row = value(AttentionDisplay.effectProposalRows(revised), "Superseded proposal")
+        let row = value(AttentionDisplay.effectProposalRows(revised), "Superseded Proposal")
         #expect(row?.contains("leaving the issue open") == true)
         // The prior digest is shown in full, as the sibling "Prior Proposal"
         // binding row does; a Digest is algorithm-prefixed, so it is not

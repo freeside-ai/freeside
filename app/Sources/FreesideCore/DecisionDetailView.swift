@@ -74,6 +74,7 @@ struct DecisionDetailView: View {
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.openURL) private var openURL
     @ScaledMetric(relativeTo: .callout) private var bannerGlyphSize: CGFloat = screenshotMetricBase(
         10, relativeTo: .callout)
     @State private var model: DecisionModel
@@ -841,20 +842,38 @@ struct DecisionDetailView: View {
                 includesCommitPlan: !composition.modules.contains(.checklist),
                 drawsFold: !composition.modules.contains(.foldedFacts))
             if let proposalFacts {
-                cardSection("Authenticated proposal") {
+                keywordSection("Facts") {
                     proposalRows(proposalFacts)
                 }
+                if let prior = proposalFacts.supersedes?.value1 {
+                    keywordSection("Revision Context") {
+                        proposalRevisionRows(prior)
+                    }
+                }
             }
-            // effectProposalRows is empty for an effect kind this card has
-            // no rows for (it draws a closure and a follow-up filing), so
-            // the titled section is suppressed rather than drawn empty.
+            // A closure states what approving binds as the card's statement
+            // (frame 7.9), ahead of the facts that qualify it.
             if let effectProposalFacts,
-                case let effectRows = AttentionDisplay.effectProposalRows(effectProposalFacts),
+                let binding = AttentionDisplay.effectBinding(effectProposalFacts)
+            {
+                Text(
+                    "\(binding.lead)\(Text(binding.head).font(FreesideFont.monoValue))\(binding.outcome)"
+                )
+                .font(FreesideFont.statement)
+                .foregroundStyle(Color.ink)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel(Text(binding.plain))
+            }
+            // effectProposalCardRows is empty for an effect kind this card
+            // has no rows for (it draws a closure and a follow-up filing),
+            // so the titled section is suppressed rather than drawn empty.
+            if let effectProposalFacts,
+                case let effectRows = AttentionDisplay.effectProposalCardRows(effectProposalFacts),
                 !effectRows.isEmpty
             {
-                cardSection("Authenticated proposal") {
+                keywordSection("Facts") {
                     ForEach(effectRows) { fact in
-                        factRow(fact.label, value: fact.value)
+                        factRow(fact)
                     }
                 }
             }
@@ -1001,7 +1020,9 @@ struct DecisionDetailView: View {
         text: String,
         unverified: UnverifiedRegister
     ) -> some View {
-        cardSection(title, unverified: unverified) {
+        // The text that would be published keeps the dashed frame on every
+        // card: it is set apart as an exhibit, not quoted as an account.
+        cardSection(title: sectionTitle(title, unverified: unverified), dashed: true) {
             Text(AttentionDisplay.screenedIssueTextExplanation)
                 .foregroundStyle(Color.inkDim)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1972,16 +1993,10 @@ struct DecisionDetailView: View {
     @ViewBuilder
     private func proposalRows(_ facts: Components.Schemas.TaskProposalFactsSnapshot) -> some View {
         factRow("Intent", value: facts.intent.rawValue)
-        factRow("Expected cost", value: "\(facts.expected_cost_units) units")
+        factRow("Expected Cost", value: "\(facts.expected_cost_units) units")
         factRow("Components", value: "\(facts.scope.component_count)")
-        factRow("Declared paths", value: "\(facts.scope.declared_path_count)")
-        factRow("Control plane", value: facts.scope.touches_control_plane ? "Yes" : "No")
-        if let prior = facts.supersedes?.value1 {
-            Divider()
-            Text("Revision context")
-                .font(FreesideFont.sans(.caption, weight: .semibold))
-            proposalRevisionRows(prior)
-        }
+        factRow("Declared Paths", value: "\(facts.scope.declared_path_count)")
+        factRow("Control Plane", value: facts.scope.touches_control_plane ? "Yes" : "No")
     }
 
     private var claimsExpanded: Binding<Bool> {
@@ -2410,13 +2425,13 @@ struct DecisionDetailView: View {
     private func proposalRevisionRows(
         _ prior: Components.Schemas.TaskProposalRevisionFacts
     ) -> some View {
-        factRow("Prior intent", value: prior.intent.rawValue)
-        factRow("Prior cost", value: "\(prior.expected_cost_units) units")
+        factRow("Prior Intent", value: prior.intent.rawValue)
+        factRow("Prior Cost", value: "\(prior.expected_cost_units) units")
         factRow(
-            "Prior scope",
+            "Prior Scope",
             value: "\(prior.scope.component_count) components, \(prior.scope.declared_path_count) paths")
         factRow(
-            "Prior control plane", value: prior.scope.touches_control_plane ? "Yes" : "No")
+            "Prior Control Plane", value: prior.scope.touches_control_plane ? "Yes" : "No")
     }
 
     /// The type eyebrow (R27): the type's name, with the item's badges in
@@ -2824,6 +2839,8 @@ struct DecisionDetailView: View {
             FactRow(label: fact.label, chip: StateChip(posture: posture))
         case .item(let id):
             FactLinkRow(label: fact.label, value: fact.value) { onSelectItem(id) }
+        case .link(let url):
+            FactLinkRow(label: fact.label, value: fact.value) { openURL(url) }
         }
     }
 

@@ -224,11 +224,11 @@ struct DecisionCardComposition: Equatable {
     ) -> AgentSectionFrame {
         switch type {
         case .agent_question, .ready_for_final_review, .review_dispute, .system_health, .blocked,
-            .execution_failure:
+            .execution_failure, .task_proposal, .effect_proposal:
             return .quoted
         case .spec_approval, .review_diminishing_returns,
             .review_contradiction, .review_configuration, .finding_adjudication,
-            .publish_blocked, .task_proposal, .effect_proposal:
+            .publish_blocked:
             return .dashedCard
         }
     }
@@ -282,11 +282,11 @@ struct DecisionCardComposition: Equatable {
     static func scale(for type: Components.Schemas.AttentionType) -> Scale {
         switch type {
         case .ready_for_final_review, .agent_question, .system_health, .blocked,
-            .execution_failure:
+            .execution_failure, .task_proposal, .effect_proposal:
             return .refined
         case .review_dispute, .spec_approval,
             .review_diminishing_returns, .review_contradiction, .review_configuration,
-            .finding_adjudication, .publish_blocked, .task_proposal, .effect_proposal:
+            .finding_adjudication, .publish_blocked:
             return .legacy
         }
     }
@@ -314,9 +314,11 @@ struct DecisionCardComposition: Equatable {
         switch type {
         case .execution_failure:
             return "Diagnostic"
+        case .task_proposal:
+            return "Proposal"
         case .spec_approval, .agent_question, .review_diminishing_returns, .review_dispute,
             .review_contradiction, .review_configuration, .finding_adjudication,
-            .ready_for_final_review, .publish_blocked, .task_proposal, .effect_proposal,
+            .ready_for_final_review, .publish_blocked, .effect_proposal,
             .system_health, .blocked:
             return "Agent claims"
         }
@@ -393,7 +395,8 @@ struct DecisionCardComposition: Equatable {
     /// only where the card's lead already states it. The question, the final
     /// review, and the finding cards lead with their own module and have that
     /// test (`reasonPlacement(for item:)`), so they keep the recorded
-    /// sentence one disclosure away (D06, D07, D09). A blocked card leads
+    /// sentence one disclosure away (D06, D07, D09). A proposal's reason
+    /// restates its ask at the planned gate and folds there. A blocked card leads
     /// with the wait its typed facts name, so its reason leaves the face
     /// under the same kind of test. Every other type draws it under the ask
     /// (R0): no type has a boxed Context section, and no type folds its
@@ -403,13 +406,13 @@ struct DecisionCardComposition: Equatable {
         for type: Components.Schemas.AttentionType
     ) -> ReasonPlacement {
         switch type {
-        case .agent_question, .ready_for_final_review, .finding_adjudication:
+        case .agent_question, .ready_for_final_review, .finding_adjudication, .task_proposal,
+            .effect_proposal:
             return .recordedContext
         case .blocked:
             return .detailsOnly
         case .review_dispute, .spec_approval, .execution_failure, .review_diminishing_returns,
-            .review_contradiction, .review_configuration, .publish_blocked, .task_proposal,
-            .effect_proposal, .system_health:
+            .review_contradiction, .review_configuration, .publish_blocked, .system_health:
             return .underAsk
         }
     }
@@ -437,9 +440,27 @@ struct DecisionCardComposition: Equatable {
     /// wait keeps the generic ask, and no writer yet says what a wait on PR
     /// checks or an external review records, so both keep the reason under
     /// the ask.
+    ///
+    /// A proposal opened at its planned gate carries a reason that only
+    /// restates the ask: "Start the daemon-enumerated work subject"
+    /// (daemon/internal/engine/proposal_admission.go), "Decide the proposed
+    /// effect on the source issue" and "Decide whether to file the follow-up
+    /// issue" (daemon/internal/signet/effect_proposal.go), and their revised
+    /// forms (daemon/internal/signet/proposal.go), whose revision the card's
+    /// own rows state. The one proposal reason that says more is the
+    /// closure notice, that the source issue could not be closed
+    /// automatically and that the notice does not hold the pull request; the
+    /// daemon opens that item as exceptional, and only that one. So a
+    /// proposal's reason folds at the planned gate and stays ahead of the
+    /// actions on any other class.
     static func reasonPlacement(
         for item: Components.Schemas.AttentionItem
     ) -> ReasonPlacement {
+        if item._type == .task_proposal || item._type == .effect_proposal,
+            item.interruption_class != .planned_gate
+        {
+            return .underAsk
+        }
         if item._type == .agent_question, rendersAsk(for: item) { return .underAsk }
         if item._type == .blocked, item.blocked_on?.value1.kind != .spec_approval {
             return .underAsk
@@ -782,8 +803,19 @@ struct DecisionCardComposition: Equatable {
                 ],
                 actionInsertionIndex: 4,
                 reviewingActionInsertionIndex: nil)
+        case .task_proposal:
+            // Frame 5.4: the proposal in the agent's words, then the facts
+            // the daemon authenticated about it.
+            return .init(
+                modules: [
+                    .recommendation, .claims, .facts, .factBlock, .summary, .claims, .evidence,
+                    .details,
+                ],
+                actionInsertionIndex: 3,
+                reviewingActionInsertionIndex: nil,
+                placesReadableClaimsInCard: true)
         case .review_contradiction, .review_configuration,
-            .publish_blocked, .task_proposal, .effect_proposal:
+            .publish_blocked, .effect_proposal:
             return .init(
                 modules: [
                     .recommendation, .facts, .factBlock, .summary, .claims, .evidence, .details,
