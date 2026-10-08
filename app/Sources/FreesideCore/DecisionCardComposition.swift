@@ -47,6 +47,16 @@ struct DecisionCardComposition: Equatable {
     /// claim exists. Elsewhere a claim without text stays supporting
     /// context.
     var leadsWithItsClaim = false
+    /// Whether the card's frame places the agent's readable claims inside
+    /// its own order, ahead of the actions, without making them its lead
+    /// (frame 5.3: the diagnostic between the failure's facts and its
+    /// stages). Such a card draws the claims an operator can read in the
+    /// card on every platform; a claim without text stays supporting
+    /// context below the actions.
+    var placesReadableClaimsInCard = false
+    /// Whether the leading claims module draws in the card itself on every
+    /// platform, so no other place a platform lists claims repeats it.
+    var drawsLeadClaimsInCard: Bool { leadsWithItsClaim || placesReadableClaimsInCard }
     /// How many modules directly after the action region are closed folds.
     /// They draw with Recorded Context under the card's one hairline rather
     /// than as sections of their own.
@@ -95,7 +105,7 @@ struct DecisionCardComposition: Equatable {
         from claims: [Components.Schemas.AgentClaim],
         prominentClaimIndex: Int?
     ) -> [Components.Schemas.AgentClaim] {
-        guard leadsWithItsClaim, let lead = modules.firstIndex(of: .claims),
+        guard drawsLeadClaimsInCard, let lead = modules.firstIndex(of: .claims),
             claimsAreProminent(at: lead)
         else { return [] }
         return self.claims(from: claims, at: lead, prominentClaimIndex: prominentClaimIndex)
@@ -188,95 +198,73 @@ struct DecisionCardComposition: Equatable {
         return !Self.reasonIsAgentSummary(item._type) || summaries(from: item.agent_claims).isEmpty
     }
 
-    /// How a card frames its agent-written sections. The unverified label
-    /// names the register in both; the frame is only how the section is set
-    /// apart from its neighbors.
-    enum AgentSectionFrame: Equatable {
-        /// A dashed card around the section, with every claim's source
-        /// identifiers printed beside its text.
-        case dashedCard
-        /// The label and then the agent's prose in a `QuoteBlock` (R5), with
-        /// the source identifiers one disclosure away.
-        case quoted
-    }
-
-    /// The visual audit keeps a bounded card for an independent item or
-    /// option and separates ordinary sections by spacing, on the surfaces it
-    /// approved only. The question card (D06) draws its options as the
-    /// bounded panels, the final review (D07) keeps its one card for the
-    /// daemon's checklist, and the dispute (D08) reads its claim as prose
-    /// beside the actions, so their agent sections drop their own card and
-    /// quote the agent instead. Every other type keeps the dashed card until
-    /// its own sweep. The switch is exhaustive so a new type has to answer
-    /// the question.
-    static func agentSectionFrame(
-        for type: Components.Schemas.AttentionType
-    ) -> AgentSectionFrame {
-        switch type {
-        case .agent_question, .ready_for_final_review, .review_dispute:
-            return .quoted
-        case .spec_approval, .execution_failure, .review_diminishing_returns,
-            .review_contradiction, .review_configuration, .finding_adjudication,
-            .publish_blocked, .task_proposal, .effect_proposal, .system_health, .blocked:
-            return .dashedCard
-        }
-    }
-
-    /// A card's gap ladder, padding, and corner (R10). The refined ladder is
-    /// the one survey card 4b settled: 22 between sections, 11 inside a
-    /// module, 10 within a control group, and 18 above the folds, which sit
-    /// under the card's one hairline.
-    enum Scale: Equatable {
-        case legacy
-        case refined
-
-        var sectionGap: CGFloat { self == .refined ? 22 : 16 }
+    /// A card's gap ladder, padding, and corner (R10), as survey card 4b
+    /// settled them: 22 between sections, 11 inside a module, 10 within a
+    /// control group, and 18 above the folds, which sit under the card's
+    /// one hairline. Every decision type draws on it.
+    enum Scale {
+        static let sectionGap: CGFloat = 22
         /// Between the eyebrow and the ask.
-        var headGap: CGFloat { self == .refined ? 12 : 16 }
-        var moduleGap: CGFloat { self == .refined ? 11 : 8 }
-        var controlGap: CGFloat { self == .refined ? 10 : 8 }
-        var foldGap: CGFloat { self == .refined ? 12 : 16 }
+        static let headGap: CGFloat = 12
+        static let moduleGap: CGFloat = 11
+        static let controlGap: CGFloat = 10
+        static let foldGap: CGFloat = 12
         /// The space between the hairline and the first fold.
-        var foldLead: CGFloat { 18 }
-        var drawsFoldHairline: Bool { self == .refined }
-        /// Returning the work is a plain outlined command on the refined
-        /// card (R6).
-        var drawsReturnGlyph: Bool { self == .legacy }
-        /// The overflow trigger's words, in Title Case on the refined card
-        /// (R30).
-        var overflowLabel: String { self == .refined ? "More Actions" : "More actions" }
-        var cornerRadius: CGFloat { self == .refined ? 12 : 8 }
+        static let foldLead: CGFloat = 18
+        static let cornerRadius: CGFloat = 12
         /// The widest a one-column card grows with the detail's 16pt margin
-        /// around it: the refined card itself is 560 wide.
-        var columnWidth: CGFloat { self == .refined ? 592 : 560 }
+        /// around it: the card itself is 560 wide.
+        static let columnWidth: CGFloat = 592
 
         /// A phone's card is 20 from each side and 18 from the top and
         /// bottom; a Mac's sits 28 in, with 24 under its last line.
-        func padding(compact: Bool) -> EdgeInsets {
-            switch self {
-            case .legacy:
-                EdgeInsets(top: 14, leading: 14, bottom: 14, trailing: 14)
-            case .refined:
-                compact
-                    ? EdgeInsets(top: 18, leading: 20, bottom: 18, trailing: 20)
-                    : EdgeInsets(top: 28, leading: 28, bottom: 24, trailing: 28)
-            }
+        static func padding(compact: Bool) -> EdgeInsets {
+            compact
+                ? EdgeInsets(top: 18, leading: 20, bottom: 18, trailing: 20)
+                : EdgeInsets(top: 28, leading: 28, bottom: 24, trailing: 28)
         }
     }
 
-    /// The final review is the card the refined ladder was proved on, and
-    /// the agent question the second composed on it; every other type keeps
-    /// the earlier one until its own sweep composes it. The switch is
-    /// exhaustive so a new type has to answer the question.
-    static func scale(for type: Components.Schemas.AttentionType) -> Scale {
+    /// Whether the conversation draws inside the card's modules, under the
+    /// specification, instead of directly under the ask. On spec approval
+    /// the thread is about the specification and ends in the reply link
+    /// (frame 5.1); every other card keeps it under its ask.
+    static func placesConversationWithSpecification(
+        for type: Components.Schemas.AttentionType
+    ) -> Bool {
+        type == .spec_approval
+    }
+
+    /// The keyword over a card's typed fact rows (R1). A card whose rows
+    /// all describe one thing names that thing; the rest say `Facts`. The
+    /// switch is exhaustive so a new type has to answer the question.
+    static func factsKeyword(for type: Components.Schemas.AttentionType) -> String {
         switch type {
-        case .ready_for_final_review, .agent_question:
-            return .refined
-        case .review_dispute, .spec_approval, .execution_failure,
-            .review_diminishing_returns, .review_contradiction, .review_configuration,
-            .finding_adjudication, .publish_blocked, .task_proposal, .effect_proposal,
+        case .execution_failure:
+            return "Failure"
+        case .spec_approval, .agent_question, .review_diminishing_returns, .review_dispute,
+            .review_contradiction, .review_configuration, .finding_adjudication,
+            .ready_for_final_review, .publish_blocked, .task_proposal, .effect_proposal,
             .system_health, .blocked:
-            return .legacy
+            return "Facts"
+        }
+    }
+
+    /// The keyword over the claims a card leads with, where the frame names
+    /// what the agent is claiming rather than that it is a claim (R5). The
+    /// unverified register is drawn beside it, never spelled in it. The
+    /// switch is exhaustive so a new type has to answer the question.
+    static func leadClaimsKeyword(for type: Components.Schemas.AttentionType) -> String {
+        switch type {
+        case .execution_failure:
+            return "Diagnostic"
+        case .task_proposal:
+            return "Proposal"
+        case .spec_approval, .agent_question, .review_diminishing_returns, .review_dispute,
+            .review_contradiction, .review_configuration, .finding_adjudication,
+            .ready_for_final_review, .publish_blocked, .effect_proposal,
+            .system_health, .blocked:
+            return "Agent claims"
         }
     }
 
@@ -316,25 +304,59 @@ struct DecisionCardComposition: Equatable {
         case underAsk
         /// A closed "Recorded Context" disclosure below the actions.
         case recordedContext
+        /// Off the card's face: Details alone carry it, as they do on every
+        /// type.
+        case detailsOnly
+    }
+
+    /// How the shell sets a reason it draws under the ask.
+    enum ReasonFace: Equatable {
+        /// The ask's dim second line (R0).
+        case secondLine
+        /// The card's own statement, in the serif face and ink.
+        case statement
+    }
+
+    /// A system-health item's reason is the daemon's finding: the sentence
+    /// that says what is wrong, which its diagnostic code and impaired
+    /// capability only classify. It is what the card is about, so it reads
+    /// as the card's statement (survey frame 5.5) and never folds. Every
+    /// other reason the shell draws is context for the ask above it. The
+    /// switch is exhaustive so a new type has to answer the question.
+    static func reasonFace(for type: Components.Schemas.AttentionType) -> ReasonFace {
+        switch type {
+        case .system_health:
+            return .statement
+        case .spec_approval, .execution_failure, .agent_question, .review_diminishing_returns,
+            .review_dispute, .review_contradiction, .review_configuration,
+            .finding_adjudication, .ready_for_final_review, .publish_blocked, .task_proposal,
+            .effect_proposal, .blocked:
+            return .secondLine
+        }
     }
 
     /// Plan §9 (revision 82) places the reason by a per-item test: it folds
     /// only where the card's lead already states it. The question, the final
     /// review, and the finding cards lead with their own module and have that
     /// test (`reasonPlacement(for item:)`), so they keep the recorded
-    /// sentence one disclosure away (D06, D07, D09). Every other type draws
-    /// it under the ask (R0): no type has a boxed Context section, and no
-    /// type folds its reason without a test that says its lead covers it.
-    /// The switch is exhaustive so a new type has to answer the question.
+    /// sentence one disclosure away (D06, D07, D09). A proposal's reason
+    /// restates its ask at the planned gate and folds there. A blocked card leads
+    /// with the wait its typed facts name, so its reason leaves the face
+    /// under the same kind of test. Every other type draws it under the ask
+    /// (R0): no type has a boxed Context section, and no type folds its
+    /// reason without a test that says its lead covers it. The switch is
+    /// exhaustive so a new type has to answer the question.
     static func reasonPlacement(
         for type: Components.Schemas.AttentionType
     ) -> ReasonPlacement {
         switch type {
-        case .agent_question, .ready_for_final_review, .finding_adjudication:
+        case .agent_question, .ready_for_final_review, .finding_adjudication, .task_proposal,
+            .effect_proposal:
             return .recordedContext
+        case .blocked:
+            return .detailsOnly
         case .review_dispute, .spec_approval, .execution_failure, .review_diminishing_returns,
-            .review_contradiction, .review_configuration, .publish_blocked, .task_proposal,
-            .effect_proposal, .system_health, .blocked:
+            .review_contradiction, .review_configuration, .publish_blocked, .system_health:
             return .underAsk
         }
     }
@@ -352,16 +374,66 @@ struct DecisionCardComposition: Equatable {
     /// recommendation did not revalidate has no other statement of it, and
     /// an action's consequence never folds (plan §9), so its reason stays
     /// under the ask.
+    ///
+    /// A blocked item's reason says what the run waits on and since when
+    /// (`ensureSpecificationBlockedItem` in
+    /// daemon/internal/engine/specification.go, the one writer). The card's
+    /// lead names that wait and its Waiting fact gives the duration, with
+    /// the exact start in Details, so the reason leaves the face. That holds
+    /// only for the wait the daemon writes today: an item with no typed
+    /// wait keeps the generic ask, and no writer yet says what a wait on PR
+    /// checks or an external review records, so both keep the reason under
+    /// the ask.
+    ///
+    /// A proposal opened at its planned gate carries a reason that only
+    /// restates the ask: "Start the daemon-enumerated work subject"
+    /// (daemon/internal/engine/proposal_admission.go), "Decide the proposed
+    /// effect on the source issue" and "Decide whether to file the follow-up
+    /// issue" (daemon/internal/signet/effect_proposal.go), and their revised
+    /// forms (daemon/internal/signet/proposal.go), whose revision the card's
+    /// own rows state. The one proposal reason that says more is the
+    /// closure notice, that the source issue could not be closed
+    /// automatically and that the notice does not hold the pull request; the
+    /// daemon opens that item as exceptional, and only that one. So a
+    /// proposal's reason folds at the planned gate and stays ahead of the
+    /// actions on any other class.
     static func reasonPlacement(
         for item: Components.Schemas.AttentionItem
     ) -> ReasonPlacement {
+        if item._type == .task_proposal || item._type == .effect_proposal,
+            item.interruption_class != .planned_gate
+        {
+            return .underAsk
+        }
         if item._type == .agent_question, rendersAsk(for: item) { return .underAsk }
+        if item._type == .blocked, item.blocked_on?.value1.kind != .spec_approval {
+            return .underAsk
+        }
         if item._type == .finding_adjudication,
             DecisionRecommendationPresentation.of(item) == nil
         {
             return .underAsk
         }
         return reasonPlacement(for: item._type)
+    }
+
+    /// What accepting does, on a finding adjudication whose reason folds: the
+    /// first sentence of the line the daemon writes for it
+    /// (`findingAdjudicationReason` in
+    /// daemon/internal/engine/finding_adjudication.go), which follows any
+    /// "Changed after Discuss" lines. An action's consequence never folds
+    /// (plan §9), and the recommendation beside the batch action says which
+    /// findings accepting covers, not what the run does next. Nil on any
+    /// other item and where the reason carries no such line; the whole
+    /// reason is one disclosure away either way.
+    static func reasonLead(for item: Components.Schemas.AttentionItem) -> String? {
+        guard item._type == .finding_adjudication,
+            reasonPlacement(for: item) == .recordedContext,
+            let line = item.reason.split(separator: "\n")
+                .first(where: { $0.hasPrefix("Accepting ") })
+        else { return nil }
+        guard let end = line.range(of: ". ") else { return String(line) }
+        return String(line[..<end.upperBound]).trimmingCharacters(in: .whitespaces)
     }
 
     /// A place a card draws an unverified keyword the operator can always
@@ -405,6 +477,9 @@ struct DecisionCardComposition: Equatable {
         var drawsUnverifiedRecommendation = false
         /// The card has a change summary to draw in its fact block.
         var hasChangeSummary = false
+        /// The card draws a dispute's two positions, each under its own
+        /// unverified keyword.
+        var hasComparison = false
         /// The card draws a follow-up filing's proposed title and body.
         var hasProposedIssueText = false
         var prominentClaimIndex: Int? = nil
@@ -454,7 +529,7 @@ struct DecisionCardComposition: Equatable {
     ) -> Bool {
         guard context.platform == .mac else { return false }
         if context.drawsUnverifiedRecommendation { return true }
-        return !leadsWithItsClaim && !Self.actionRegionClaims(item.agent_claims).isEmpty
+        return !drawsLeadClaimsInCard && !Self.actionRegionClaims(item.agent_claims).isEmpty
     }
 
     /// The claims the macOS action region lists beside the actions: the ones
@@ -474,7 +549,7 @@ struct DecisionCardComposition: Equatable {
     /// the card there only where the claim is the card's own lead (D08).
     func drawsClaimsInCard(at moduleIndex: Int, on platform: UnverifiedContext.Platform) -> Bool {
         switch platform {
-        case .mac: leadsWithItsClaim && claimsAreProminent(at: moduleIndex)
+        case .mac: drawsLeadClaimsInCard && claimsAreProminent(at: moduleIndex)
         case .phone: true
         }
     }
@@ -518,29 +593,113 @@ struct DecisionCardComposition: Equatable {
             // an agent-written reason there shows its keyword.
             return context.platform == .phone && !context.accessibilityLayout
                 && Self.reason(for: item)?.isAgentWritten == true
-        case .foldedFacts, .specRevision, .specification, .stopCause, .checklist, .stageRail,
-            .comparison, .yieldChart, .evidence:
+        case .stopCause:
+            // The drift audit's explanation and fixes are the audit model's
+            // words, drawn under an unverified keyword (frame 5.2).
+            return DecisionStopCausePresentation(item)?.audit != nil
+        case .comparison:
+            return context.hasComparison
+        case .foldedFacts, .specRevision, .specification, .checklist, .stageRail,
+            .yieldChart, .evidence:
             return false
         }
     }
 
-    /// Which of a card's principal actions draws filled, by position.
-    /// Answering and retrying is the question card's supported next step, so
-    /// it takes the card's one filled button unless a recommendation block
-    /// already holds it. `requested_decision` may repeat an action, so only
-    /// the first one takes the fill and no card draws two.
-    static func filledPrincipalIndex(
-        for type: Components.Schemas.AttentionType, ranking: DecisionActionRanking
-    ) -> Int? {
-        guard type == .agent_question, ranking.recommended == nil else { return nil }
-        return ranking.principal.firstIndex(of: .answer_and_retry)
+    /// Whether a final review's verdict no longer describes what the pull
+    /// request holds: the daemon superseded the binding, or its base watch
+    /// saw the base move. Both are daemon facts; the client compares nothing.
+    static func isStale(_ item: Components.Schemas.AttentionItem) -> Bool {
+        item._type == .ready_for_final_review
+            && (item.readiness_invalidation != nil || item.base_freshness?.value1.advanced == true)
     }
 
-    /// Whether a card's own reviewing action draws filled. View PR is the
-    /// final review's supported next step (D07), so it takes the card's one
-    /// filled button unless a recommendation block already holds it.
-    static func reviewingActionIsFilled(_ ranking: DecisionActionRanking) -> Bool {
-        ranking.recommended == nil
+    /// The sentence a stale final review leads with (frame 7.3): what moved
+    /// after verification, and the coordinates the verdict was reached at.
+    /// Built only from typed facts the item carries; nil when they can't
+    /// make the sentence (no verdict to name, or an invalidation whose
+    /// coordinates are not revisions), and the checklist's chip and rows
+    /// carry the staleness alone.
+    static func staleNotice(for item: Components.Schemas.AttentionItem) -> String? {
+        guard isStale(item), let readiness = item.readiness?.value1 else { return nil }
+        let was: String
+        switch readiness._class {
+        case .ready_clean: was = "clean"
+        case .ready_degraded: was = "degraded"
+        }
+        let detail = item.readiness_detail?.value1
+        let head = detail.map { " at head \(AttentionDisplay.shortRevision($0.candidate_head))" } ?? ""
+        func baseAdvanced(ref: String, from: String, to: String) -> String {
+            "The base advanced after verification. The verdict below was \(was)\(head) "
+                + "against \(ref)@\(AttentionDisplay.shortRevision(from)); "
+                + "\(ref) is now at \(AttentionDisplay.shortRevision(to))."
+        }
+        if let invalidation = item.readiness_invalidation?.value1 {
+            switch invalidation.reason {
+            case .head_changed:
+                return "The head changed after verification. The verdict below was \(was) at head "
+                    + "\(AttentionDisplay.shortRevision(invalidation.bound)); the head is now at "
+                    + "\(AttentionDisplay.shortRevision(invalidation.observed))."
+            case .base_advanced:
+                guard let detail else { return nil }
+                return baseAdvanced(
+                    ref: detail.base.base_ref, from: invalidation.bound, to: invalidation.observed)
+            case .retargeted, .identity_changed:
+                return nil
+            }
+        }
+        guard let freshness = item.base_freshness?.value1, freshness.advanced else { return nil }
+        return baseAdvanced(
+            ref: freshness.base_ref, from: freshness.admitted_base_sha,
+            to: freshness.observed_base_sha)
+    }
+
+    /// The one action a card's row draws filled, or none (R6). A
+    /// recommendation the card draws holds the fill in its own block, so the
+    /// row fills nothing. Without one the fill goes to the type's forward
+    /// action, where the row offers it and it needs no confirmation: a
+    /// destructive action is never filled. A stale final review fills
+    /// nothing: the proof no longer covers the head `View PR` would open. `requested_decision` may repeat
+    /// an action, so the row fills only the first and no card draws two.
+    static func filledAction(
+        for item: Components.Schemas.AttentionItem, ranking: DecisionActionRanking
+    ) -> Components.Schemas.Action? {
+        guard !isStale(item), ranking.recommended == nil,
+            let forward = forwardAction(for: item._type),
+            ranking.principal.contains(forward) || ranking.reviewing == forward,
+            AttentionDisplay.confirmationConsequence(forward, for: item) == nil
+        else { return nil }
+        return forward
+    }
+
+    /// The type's one forward action, as R6 lists them: the supported next
+    /// step a card with no recommendation still points at. A type whose
+    /// choices are peers (approve or request changes, one route or another)
+    /// has none, and neither do the three types with no frame. The switch is
+    /// exhaustive so a new type has to answer the question.
+    static func forwardAction(
+        for type: Components.Schemas.AttentionType
+    ) -> Components.Schemas.Action? {
+        switch type {
+        case .agent_question: return .answer_and_retry
+        case .ready_for_final_review: return .open_pr
+        case .execution_failure: return .retry
+        case .task_proposal: return .start
+        case .effect_proposal: return .approve
+        case .system_health: return .acknowledge
+        case .spec_approval, .review_dispute, .review_diminishing_returns,
+            .finding_adjudication, .review_contradiction, .review_configuration,
+            .publish_blocked, .blocked:
+            return nil
+        }
+    }
+
+    /// The actions a type moves under More Actions beyond the set every
+    /// card shares. Spec approval's conversation is where a reply starts
+    /// (frame 5.1), so Discuss leaves its row.
+    static func overflowActions(
+        for type: Components.Schemas.AttentionType
+    ) -> Set<Components.Schemas.Action> {
+        type == .spec_approval ? [.discuss] : []
     }
 
     /// Whether the type's `.facts` rows are routine run and binding
@@ -586,13 +745,17 @@ struct DecisionCardComposition: Equatable {
                 reviewingActionInsertionIndex: 4,
                 foldedModuleCount: 1)
         case .execution_failure:
+            // Frame 5.3: what failed, then the agent's account of why, then
+            // the stages the run reached, so the diagnostic is read before
+            // the history it explains.
             return .init(
                 modules: [
-                    .recommendation, .stageRail, .facts, .claims, .factBlock, .summary, .claims,
+                    .recommendation, .facts, .claims, .stageRail, .factBlock, .summary, .claims,
                     .evidence, .details,
                 ],
                 actionInsertionIndex: 4,
-                reviewingActionInsertionIndex: nil)
+                reviewingActionInsertionIndex: nil,
+                placesReadableClaimsInCard: true)
         case .review_dispute:
             // Plan §9 (revision 78, audit D08): both positions lead when the
             // snapshot carries both; when it carries one claim, that claim
@@ -650,20 +813,33 @@ struct DecisionCardComposition: Equatable {
                 // actions with Recorded Context (R26).
                 foldedModuleCount: 1)
         case .spec_approval:
-            // Plan §9 has this card lead with the ask and a plan-altitude
-            // summary and put the full specification below, so `.summary`
-            // renders ahead of the action region while `.specification` opens
-            // the region below it. A revision still leads: `.specRevision`
-            // carries the diff-from-last-reviewed facts and stays first.
+            // Frames 5.1 and 7.2: the agent's summary, then what changed
+            // since the last revision, then the specification as one item
+            // that opens its readers, then the conversation, which draws
+            // with `.specification` (`placesConversationWithSpecification`).
+            // All of it is what the approval weighs, so it sits above the
+            // actions. 7.2 draws the conversation ahead of the item; one
+            // order serves both frames.
             return .init(
                 modules: [
-                    .recommendation, .specRevision, .summary, .facts, .specification, .factBlock,
+                    .recommendation, .summary, .specRevision, .specification, .facts, .factBlock,
                     .claims, .evidence, .details,
                 ],
-                actionInsertionIndex: 4,
+                actionInsertionIndex: 5,
                 reviewingActionInsertionIndex: nil)
+        case .task_proposal:
+            // Frame 5.4: the proposal in the agent's words, then the facts
+            // the daemon authenticated about it.
+            return .init(
+                modules: [
+                    .recommendation, .claims, .facts, .factBlock, .summary, .claims, .evidence,
+                    .details,
+                ],
+                actionInsertionIndex: 3,
+                reviewingActionInsertionIndex: nil,
+                placesReadableClaimsInCard: true)
         case .review_contradiction, .review_configuration,
-            .publish_blocked, .task_proposal, .effect_proposal:
+            .publish_blocked, .effect_proposal:
             return .init(
                 modules: [
                     .recommendation, .facts, .factBlock, .summary, .claims, .evidence, .details,
@@ -740,16 +916,21 @@ struct DecisionFactPlacement: Equatable {
 
 /// One finding's card on `finding_adjudication` (plan §9 revision 78, visual
 /// audit D09): what the card shows before anything is opened, and what its
-/// "Reason and alternatives" disclosure holds, in render order. Kept apart
+/// "Reason and Alternatives" disclosure holds, in render order. Kept apart
 /// from the view so the destination of each proposal and binding field is
 /// testable without rendering.
 struct FindingCardPresentation: Equatable, Identifiable {
-    static let disclosureTitle = "Reason and alternatives"
+    static let disclosureTitle = "Reason and Alternatives"
 
-    struct Alternative: Equatable {
+    /// One route the operator may send for this finding.
+    struct RouteOption: Equatable {
         let route: Components.Schemas.AdjudicationRoute
         let label: String
-        let consequence: String
+        /// What choosing it does. A proposal states one for each alternative
+        /// and none for its own route, whose rationale stands above the
+        /// list.
+        let consequence: String?
+        let isProposed: Bool
     }
 
     /// The daemon's finding id. An open disclosure and an alternative
@@ -767,17 +948,28 @@ struct FindingCardPresentation: Equatable, Identifiable {
     let producerUnverifiedKeyword: String?
     let route: String
 
-    // The disclosure, in render order: the proposal in its producer's
-    // register, the daemon's coordinates in theirs, then what the proposal
-    // rests on and what else the operator may choose.
+    /// Whether a model wrote the proposal. Its rationale, evidence, cited
+    /// rules, assumptions, and questions are then the model's words, drawn
+    /// as quotes under unverified keywords; the daemon's fast path wrote
+    /// them otherwise, and they draw as its own text.
+    let modelBacked: Bool
+
+    // An open disclosure joins the rationale and its qualities to the route
+    // (one statement by one producer), then draws, in render order: the
+    // evidence, the daemon's coordinates in their own register, what the
+    // proposal cites and assumes, the routes the operator may send, and
+    // what the proposal left open.
     let rationale: String
-    let proposalRows: [AttentionDisplay.FactRow]
-    let evidenceTitle: String
+    /// The proposal's goal relationship, confidence, and work-unit
+    /// compatibility on one line.
+    let qualities: String
     let evidence: [String]
     let daemonFacts: [AttentionDisplay.FactRow]
-    let assumptions: [String]
     let citedRules: [String]
-    let alternatives: [Alternative]
+    let assumptions: [String]
+    /// The proposed route first, then each alternative the proposal offers.
+    /// Empty when it offers none: one route is not a choice.
+    let routeOptions: [RouteOption]
     let gatingQuestions: [String]
 
     static func cards(
@@ -801,26 +993,21 @@ struct FindingCardPresentation: Equatable, Identifiable {
         producerUnverifiedKeyword = producer.unverifiedKeyword
         route = AttentionDisplay.label(proposal.route)
 
+        modelBacked = producer.modelBacked
         rationale = proposal.rationale
-        var proposalRows: [AttentionDisplay.FactRow] = [
-            .init("Goal relationship", AttentionDisplay.label(proposal.goal_relationship)),
-            .init(
-                "Work-unit compatibility",
-                AttentionDisplay.label(proposal.compatibility?.value1)),
+        // An adjudicator that recorded no confidence gets no word for it,
+        // rather than a quality with nothing in it.
+        qualities = [
+            Self.quality(proposal.goal_relationship),
+            proposal.confidence.map { "\(AttentionDisplay.label($0.value1)) confidence" },
+            Self.quality(proposal.compatibility?.value1),
         ]
-        // An adjudicator that recorded no confidence gets no row, rather
-        // than a row with nothing in it.
-        if let confidence = proposal.confidence?.value1 {
-            proposalRows.append(.init("Confidence", AttentionDisplay.label(confidence)))
-        }
-        self.proposalRows = proposalRows
-        // The engine fast path also populates evidence (the finding's own
-        // containment location, a daemon fact), so the title follows the
-        // producer instead of always reading "model-derived" (#892, #984).
-        evidenceTitle =
-            producer.modelBacked ? "Evidence (model-derived)" : "Evidence (daemon-derived)"
+        .compactMap(\.self)
+        .joined(separator: " · ")
         evidence = proposal.evidence
 
+        // The binding digest stays in Technical Details with the rest of
+        // the binding (`AttentionDisplay.findingAdjudicationRows`).
         var daemonFacts: [AttentionDisplay.FactRow] = [
             .init("Finding", proposal.finding_id, monospaced: true)
         ]
@@ -828,21 +1015,57 @@ struct FindingCardPresentation: Equatable, Identifiable {
             daemonFacts.append(
                 .init("Location", AttentionDisplay.findingLocation(location), monospaced: true))
         }
+        // Two rows, not the frame's one "Run · Round" row: a run id beside a
+        // round has nowhere to break on a phone but mid-token.
         daemonFacts += [
-            .init("Binding digest", binding.adjudication_digest, monospaced: true),
             .init("Run", binding.run_id, monospaced: true),
             .init("Round", "\(binding.round)", monospaced: true),
         ]
         self.daemonFacts = daemonFacts
 
-        assumptions = proposal.assumptions
         citedRules = proposal.cited_rules
-        alternatives = proposal.offered_alternatives.map {
-            .init(
-                route: $0.route, label: AttentionDisplay.label($0.route),
-                consequence: $0.consequence)
-        }
+        assumptions = proposal.assumptions
+        routeOptions =
+            proposal.offered_alternatives.isEmpty
+            ? []
+            : [
+                RouteOption(
+                    route: proposal.route, label: route, consequence: nil, isProposed: true)
+            ]
+                + proposal.offered_alternatives.map {
+                    RouteOption(
+                        route: $0.route, label: AttentionDisplay.label($0.route),
+                        consequence: $0.consequence, isProposed: false)
+                }
         gatingQuestions = proposal.open_questions
+    }
+
+    private static func quality(_ relationship: Components.Schemas.GoalRelationship) -> String {
+        switch relationship {
+        case .required: "Required by the goal"
+        case .adjacent: "Adjacent to the goal"
+        case .contradictory: "Contradicts the goal"
+        case .unclear: "Goal relationship unclear"
+        }
+    }
+
+    private static func quality(
+        _ compatibility: Components.Schemas.WorkUnitCompatibility?
+    ) -> String {
+        guard let compatibility else { return "compatibility not assessed" }
+        return switch compatibility {
+        case .allowed: "allowed in the work unit"
+        case .work_unit_revision_required: "work-unit revision required"
+        case .separate_work_required: "separate work required"
+        case .human_decision_required: "human decision required"
+        case .unknown: "compatibility unknown"
+        }
+    }
+
+    var citedRulesKeyword: String { citedRules.count == 1 ? "Cited Rule" : "Cited Rules" }
+
+    var gatingQuestionsKeyword: String {
+        gatingQuestions.count == 1 ? "Open Question" : "Open Questions"
     }
 
     /// The heading and message as one spoken element.
@@ -857,15 +1080,15 @@ struct FindingCardPresentation: Equatable, Identifiable {
         "\(heading) proposed route, \(producerLabel): \(route)"
     }
 
-    /// Every card's disclosure reads "Reason and alternatives", so the
+    /// Every card's disclosure reads "Reason and Alternatives", so the
     /// spoken control says whose it is.
     var disclosureAccessibilityLabel: String {
         "\(Self.disclosureTitle), \(heading)"
     }
 
-    /// A held alternative, said on the card's face. The picker sits inside
+    /// A held alternative, said on the card's face. The route list sits inside
     /// the disclosure, so without this a closed card would hide a choice
-    /// that "Choose selected alternative" still sends, and accepting sends
+    /// that "Choose Another Route" still sends, and accepting sends
     /// no choice at all.
     static func selectionNotice(_ route: Components.Schemas.AdjudicationRoute) -> String {
         "Selected alternative: \(AttentionDisplay.label(route)). Accepting does not send it."
@@ -887,6 +1110,15 @@ struct FindingCardPresentation: Equatable, Identifiable {
         findingCount == 1
             ? "Accepting covers the proposed route for the one finding above."
             : "Accepting covers every proposed route above: all \(findingCount) findings."
+    }
+
+    /// The same coverage as the object of the recommendation's sentence
+    /// (R20), which says it in place of `acceptanceScope` where the card
+    /// draws a recommendation.
+    static func acceptancePhrase(findingCount: Int) -> String {
+        findingCount == 1
+            ? "accepting the proposed route for the one finding above"
+            : "accepting the proposed route for each of the \(findingCount) findings above"
     }
 }
 
@@ -954,8 +1186,14 @@ struct DecisionChecklistPresentation: Equatable {
         let label: String
         let value: String
         let result: Result
+        /// The row holds a coordinate that moved after verification. It
+        /// reads in wax and is not a failed requirement, so the verdict
+        /// line does not count it.
+        var isStale = false
 
         var id: String { label }
+
+        var accessibilityState: String { isStale ? "stale" : result.accessibilityState }
     }
 
     /// The daemon's verdict row, drawn as the module's leading line rather
@@ -965,7 +1203,11 @@ struct DecisionChecklistPresentation: Equatable {
     /// Every row but the verdict, grouped by severity class and keeping the
     /// daemon's order inside each class.
     let rows: [Row]
-    /// The count tokens alone, without the verdict word.
+    /// What the verdict was before it went stale ("was Clean"), nil on a
+    /// current verdict or where the item carries none.
+    let priorVerdict: String?
+    /// What follows the verdict chip: the prior verdict of a stale card,
+    /// then the count tokens.
     let countSummary: String
     let verdictLine: String
     let summary: String
@@ -986,38 +1228,75 @@ struct DecisionChecklistPresentation: Equatable {
         // demote the verdict and its bound coordinates; the client compares
         // nothing itself and derives no reason from the verdict class.
         let stale = invalidation != nil || freshness?.advanced == true
-        if invalidation != nil {
-            verdict = .init(label: "Verification verdict", value: "Invalidated", result: .failed)
-        } else if let readiness = item.readiness?.value1 {
-            let word: String
-            switch readiness._class {
-            case .ready_clean: word = "Clean"
-            case .ready_degraded: word = "Degraded"
+        var priorVerdict: String?
+        let verdictWord: String? = item.readiness.map {
+            switch $0.value1._class {
+            case .ready_clean: "Clean"
+            case .ready_degraded: "Degraded"
             }
+        }
+        if stale {
+            verdict = .init(label: "Verification verdict", value: "Stale", result: .failed)
+            priorVerdict = verdictWord.map { "was \($0)" }
+        } else if let verdictWord {
             verdict = .init(
                 label: "Verification verdict",
-                value: stale ? "\(word), stale" : word,
-                result: stale || readiness._class == .ready_degraded ? .failed : .passed)
+                value: verdictWord,
+                result: item.readiness?.value1._class == .ready_degraded ? .failed : .passed)
         } else if item._type == .ready_for_final_review {
             verdict = .init(label: "Verification verdict", value: "Unavailable", result: .failed)
         }
+        // The coordinate that moved leads the Bound-to row with both of its
+        // values (frame 7.3), so the row that went stale is one row and no
+        // second row repeats the pair. An invalidation whose coordinates
+        // are not the bound head or base keeps its own row.
+        var boundRowCarriesBaseAdvance = false
         if let detail {
+            let head = "Head \(AttentionDisplay.shortRevision(detail.candidate_head))"
+            let base =
+                "Base \(detail.base.base_ref)@\(AttentionDisplay.shortRevision(detail.base.base_sha))"
+            // The invalidation's own pair, not the detail's coordinate: the
+            // divergence is the daemon's fact and the row shows both sides.
+            let moved = invalidation.map {
+                "\(AttentionDisplay.shortRevision($0.bound)) → \(AttentionDisplay.shortRevision($0.observed))"
+            }
+            let value: String
+            switch (invalidation?.reason, moved) {
+            case (.head_changed?, let moved?):
+                value = "Head \(moved) · \(base)"
+            case (.base_advanced?, let moved?):
+                value = "Base \(detail.base.base_ref)@\(moved) · \(head)"
+                boundRowCarriesBaseAdvance = true
+            case (.retargeted?, _), (.identity_changed?, _), (.head_changed?, nil),
+                (.base_advanced?, nil):
+                value = "\(head) · \(base)"
+            case (nil, _):
+                if let freshness, freshness.advanced {
+                    value =
+                        "\(base) → \(AttentionDisplay.shortRevision(freshness.observed_base_sha)) · \(head)"
+                    boundRowCarriesBaseAdvance = true
+                } else {
+                    value = "\(head) · \(base)"
+                }
+            }
             rows.append(
                 .init(
-                    label: "Bound to",
-                    value:
-                        "Head \(AttentionDisplay.shortRevision(detail.candidate_head)) · "
-                        + "Base \(detail.base.base_ref)@\(AttentionDisplay.shortRevision(detail.base.base_sha))",
-                    result: stale ? .failed : .passed))
+                    label: "Bound to", value: value, result: stale ? .failed : .passed,
+                    isStale: stale))
         }
         if let invalidation {
-            rows.append(
-                .init(
-                    label: AttentionDisplay.label(invalidation.reason),
-                    value:
-                        "bound \(AttentionDisplay.shortRevision(invalidation.bound)), "
-                        + "observed \(AttentionDisplay.shortRevision(invalidation.observed))",
-                    result: .failed))
+            let movedCoordinateIsBound =
+                detail != nil
+                && (invalidation.reason == .head_changed || invalidation.reason == .base_advanced)
+            if !movedCoordinateIsBound {
+                rows.append(
+                    .init(
+                        label: AttentionDisplay.label(invalidation.reason),
+                        value:
+                            "\(AttentionDisplay.shortRevision(invalidation.bound)) → "
+                            + AttentionDisplay.shortRevision(invalidation.observed),
+                        result: .failed, isStale: true))
+            }
         }
         for requirement in detail?.requirements ?? [] {
             rows.append(Self.requirementRow(requirement))
@@ -1037,15 +1316,16 @@ struct DecisionChecklistPresentation: Equatable {
                     value: AttentionDisplay.label(notice),
                     result: .note))
         }
-        if let freshness {
+        if let freshness, !(freshness.advanced && boundRowCarriesBaseAdvance) {
             rows.append(
                 .init(
                     label: "Base freshness",
                     value: freshness.advanced
-                        ? "Advanced past \(AttentionDisplay.shortRevision(freshness.admitted_base_sha)), "
-                            + "now \(AttentionDisplay.shortRevision(freshness.observed_base_sha))"
+                        ? "\(AttentionDisplay.shortRevision(freshness.admitted_base_sha)) → "
+                            + AttentionDisplay.shortRevision(freshness.observed_base_sha)
                         : "Current",
-                    result: freshness.advanced ? .failed : .passed))
+                    result: freshness.advanced ? .failed : .passed,
+                    isStale: freshness.advanced))
         }
         if let history = item.yield_history?.value1 {
             let unresolved = history.rounds.reduce(into: 0) { count, round in
@@ -1077,11 +1357,13 @@ struct DecisionChecklistPresentation: Equatable {
         // daemon's row order without relying on sort stability.
         self.rows = Result.allCases.flatMap { result in rows.filter { $0.result == result } }
         let countTokens = Result.allCases.compactMap { result -> String? in
-            let count = rows.filter { $0.result == result }.count
+            let count = rows.filter { $0.result == result && !$0.isStale }.count
             return count == 0 ? nil : result.countToken(count)
         }
-        countSummary = countTokens.joined(separator: " · ")
-        let tokens = ([verdict?.value].compactMap { $0 } + countTokens)
+        self.priorVerdict = priorVerdict
+        let trailingTokens = [priorVerdict].compactMap { $0 } + countTokens
+        countSummary = trailingTokens.joined(separator: " · ")
+        let tokens = ([verdict?.value].compactMap { $0 } + trailingTokens)
         verdictLine = tokens.joined(separator: " · ")
         // The spoken label joins the same tokens with commas: a middle dot
         // is a visual separator whose readout depends on the listener's
@@ -1090,7 +1372,7 @@ struct DecisionChecklistPresentation: Equatable {
         accessibilitySummary =
             summary + " "
             + ([verdict].compactMap { $0 } + self.rows).map { row in
-                "\(row.label): \(row.value), \(row.result.accessibilityState)"
+                "\(row.label): \(row.value), \(row.accessibilityState)"
             }.joined(separator: "; ") + "."
     }
 }
@@ -1230,6 +1512,14 @@ struct DecisionStageRailPresentation: Equatable {
     let entries: [Entry]
     let summary: String
 
+    /// The stages the run reached, newest first, as a card lists history
+    /// (frame 5.3). A stage the run never reached is left out: above the
+    /// failure it would read as the latest event. The summary still counts
+    /// every stage.
+    var reachedNewestFirst: Self {
+        .init(entries: entries.filter { $0.state != .pending }.reversed(), summary: summary)
+    }
+
     static func failure(stages: [String], failedStageIndex: Int) -> Self? {
         guard stages.indices.contains(failedStageIndex) else { return nil }
         let entries = stages.enumerated().map { index, stage in
@@ -1326,11 +1616,32 @@ struct DecisionModuleContainer<Content: View>: View {
     }
 }
 
-/// The final review's diff as one row (R28): the keyword, then the counts in
-/// the diff cuts and the file count in mono.
+/// A change as one row (R28): the keyword, then the counts in the diff cuts
+/// and what they count in mono. The final review counts a diff's files; a
+/// revised specification counts lines against the revision it supersedes.
 struct DecisionChangeRow: View {
+    /// What the counts measure, which the row draws after them.
+    enum Measure: Equatable {
+        case files(Int)
+        case lines
+    }
+
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    let diff: Components.Schemas.DiffStats
+    let keyword: String
+    let counts: DiffCounts
+    let measure: Measure
+
+    init(diff: Components.Schemas.DiffStats) {
+        keyword = "Change"
+        counts = AttentionDisplay.diffCounts(diff)
+        measure = .files(diff.files_changed)
+    }
+
+    init(specification diff: Components.Schemas.SpecDiff, sinceRevision prior: Int) {
+        keyword = "Change Since Revision \(prior)"
+        counts = .init(added: diff.lines_added, removed: diff.lines_removed)
+        measure = .lines
+    }
 
     var body: some View {
         let layout =
@@ -1338,23 +1649,35 @@ struct DecisionChangeRow: View {
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 3))
             : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 12))
         layout {
-            KeywordLabel(text: "Change")
+            KeywordLabel(text: keyword)
             if dynamicTypeSize < .accessibility1 {
                 Spacer(minLength: 12)
             }
-            Text(
-                "\(Text("+\(diff.additions)").foregroundStyle(Color.diffAdd)) \(Text("\u{2212}\(diff.deletions)").foregroundStyle(Color.diffRemove)) · \(AttentionDisplay.fileCount(diff))"
-            )
-            .font(FreesideFont.monoValue)
-            .foregroundStyle(Color.ink)
+            Text("\(counts.text)\(trailing)")
+                .font(FreesideFont.monoValue)
+                .foregroundStyle(Color.ink)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(Self.accessibilityLabel(diff)))
+        .accessibilityLabel(Text(spokenLabel))
     }
 
-    static func accessibilityLabel(_ diff: Components.Schemas.DiffStats) -> String {
-        "Change: \(diff.additions) added, \(diff.deletions) removed, \(AttentionDisplay.fileCount(diff))"
+    private var trailing: String {
+        switch measure {
+        case .files(let count): " · \(AttentionDisplay.fileCount(count))"
+        case .lines: " lines"
+        }
+    }
+
+    /// The row in words, since the plus and minus signs carry the meaning
+    /// only on screen.
+    var spokenLabel: String {
+        switch measure {
+        case .files(let count):
+            "\(keyword): \(counts.spoken), \(AttentionDisplay.fileCount(count))"
+        case .lines:
+            "\(keyword): \(counts.added) lines added, \(counts.removed) removed"
+        }
     }
 }
 
@@ -1368,7 +1691,7 @@ struct DecisionChecklistModuleView: View {
     @State private var passedExpanded = false
     let presentation: DecisionChecklistPresentation
 
-    private static let rowGap = DecisionCardComposition.Scale.refined.moduleGap
+    private static let rowGap = DecisionCardComposition.Scale.moduleGap
 
     var body: some View {
         VStack(alignment: .leading, spacing: Self.rowGap) {
@@ -1442,7 +1765,7 @@ struct DecisionChecklistModuleView: View {
         }
         let value = Text(row.value)
             .font(FreesideFont.monoValue)
-            .foregroundStyle(Color.ink)
+            .foregroundStyle(row.isStale ? Color.waxText : Color.ink)
         // The fact-row rule owns when a value is too long for a trailing
         // column; the marker keeps the checklist's own row shape.
         if FactRow.stacks(row.value, at: dynamicTypeSize) {
@@ -1487,9 +1810,11 @@ struct DecisionYieldChartModuleView: View {
                 .accessibilityLabel(Text(presentation.summary))
             }
         } else {
-            DecisionModuleContainer(title: Self.title) {
+            VStack(alignment: .leading, spacing: DecisionCardComposition.Scale.moduleGap) {
+                KeywordLabel(text: Self.title)
                 rounds
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Text(presentation.summary))
         }
@@ -1497,83 +1822,95 @@ struct DecisionYieldChartModuleView: View {
 
     private static let title = "Review Yield"
 
+    /// One row a round (frame 5.2): the round on the left, its counts on
+    /// the right in the two fills' colors, and, where bars draw, one capsule
+    /// beneath scaled against the busiest round.
     @ViewBuilder
     private var rounds: some View {
+        let busiest = max(presentation.rounds.map(\.total).max() ?? 1, 1)
         ForEach(presentation.rounds) { round in
-            VStack(alignment: .leading, spacing: 4) {
-                Text(round.text)
-                    .font(FreesideFont.monoCaption)
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text("Round \(round.number)")
+                        .font(FreesideFont.factLabel)
+                        .foregroundStyle(Color.ink)
+                    Spacer(minLength: 0)
+                    Text(
+                        "\(Text("\(round.newFindings) new").foregroundStyle(Color.accentText)) · \(Text("\(round.recurringFindings) recurring").foregroundStyle(Color.waxText))"
+                    )
+                    .font(FreesideFont.monoValue)
+                    .foregroundStyle(Color.inkDim)
+                }
                 if showsBars {
                     GeometryReader { geometry in
-                        let total = max(
-                            presentation.rounds.map(\.total).max() ?? 1,
-                            1)
                         HStack(spacing: 0) {
                             Rectangle()
                                 .fill(Color.accentBorder)
                                 .frame(
                                     width: geometry.size.width
-                                        * CGFloat(round.newFindings) / CGFloat(total))
+                                        * CGFloat(round.newFindings) / CGFloat(busiest))
                             Rectangle()
                                 .fill(Color.waxText)
                                 .frame(
                                     width: geometry.size.width
-                                        * CGFloat(round.recurringFindings) / CGFloat(total))
+                                        * CGFloat(round.recurringFindings) / CGFloat(busiest))
                         }
+                        .clipShape(Capsule())
                     }
                     .frame(height: 8)
-                    .clipShape(Capsule())
                 }
             }
         }
         // The bars carry two fills with no other key; the legend names
         // them where they render.
         if showsBars {
-            HStack(spacing: 12) {
-                legendToken(color: .accentBorder, text: "new")
+            HStack(spacing: 16) {
+                legendToken(color: .accentBorder, text: "new findings")
                 legendToken(color: .waxText, text: "recurring")
             }
         }
     }
 
     private func legendToken(color: Color, text: String) -> some View {
-        HStack(spacing: 4) {
-            RoundedRectangle(cornerRadius: 2)
+        HStack(spacing: 6) {
+            Circle()
                 .fill(color)
                 .frame(width: legendSwatch, height: legendSwatch)
             Text(text)
-                .font(FreesideFont.monoCaption)
+                .font(FreesideFont.cardBody)
                 .foregroundStyle(Color.inkDim)
         }
     }
 }
 
+/// The two positions of a dispute, the reviewer's over the agent's, each a
+/// quote under its own unverified keyword (frame 7.4): both are a model's
+/// words about the change, and stacking them gives each the full measure.
 struct DecisionComparisonModuleView: View {
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let presentation: DecisionComparisonPresentation
+    /// Whether the first position's keyword draws the card's one
+    /// explanation control.
+    var carriesInfo = false
+    var rendersInteractiveControls = true
 
     var body: some View {
-        DecisionModuleContainer(title: "Positions") {
-            let layout =
-                dynamicTypeSize >= .accessibility1
-                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
-                : AnyLayout(HStackLayout(alignment: .top, spacing: 8))
-            layout {
-                ForEach(presentation.positions) { position in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(position.title)
-                            .font(FreesideFont.sans(.callout, weight: .semibold))
+        VStack(alignment: .leading, spacing: DecisionCardComposition.Scale.sectionGap) {
+            ForEach(Array(presentation.positions.enumerated()), id: \.element.id) { index, position in
+                VStack(alignment: .leading, spacing: DecisionCardComposition.Scale.moduleGap) {
+                    UnverifiedLabel(
+                        text: position.title, carriesInfo: carriesInfo && index == 0,
+                        rendersInteractiveControls: rendersInteractiveControls)
+                    QuoteBlock {
                         Text(position.text)
+                            .font(FreesideFont.statement)
+                            .foregroundStyle(Color.ink)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.neutralWash))
+                    .accessibilityLabel(Text("\(position.title): \(position.text)"))
                 }
             }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(presentation.summary))
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1715,28 +2052,31 @@ struct StageRail: View {
     }
 
     /// The entry the rail stands on (current, or failed in wax) reads
-    /// semibold; every other title recedes to regular ink-dim.
+    /// semibold; every other title recedes to regular ink-dim. The faces
+    /// are the refined scale's (frame 5.3): a 16pt title, and the context
+    /// and the time in the 13.5pt mono a trailing summary uses, so no
+    /// line a rail draws is under the 11.5pt floor on macOS.
     private func entryLabel(_ entry: DecisionStageRailPresentation.Entry) -> some View {
         let emphasized = entry.state == .current || entry.state == .failed
         return VStack(alignment: axis == .vertical ? .leading : .center, spacing: 4) {
             Text(entry.title)
-                .font(FreesideFont.sans(.headline, weight: emphasized ? .semibold : .regular))
+                .font(FreesideFont.railTitle(emphasized: emphasized))
                 .foregroundStyle(
                     entry.state == .failed ? Color.waxText : emphasized ? Color.ink : Color.inkDim)
             if let detail = entry.detail {
                 // A receded title must not sit over a heavier detail.
                 Text(detail)
-                    .font(FreesideFont.sans(.subheadline, weight: emphasized ? .medium : .regular))
+                    .font(FreesideFont.railDetail(emphasized: emphasized))
                     .foregroundStyle(emphasized ? AnyShapeStyle(.foreground) : AnyShapeStyle(Color.inkDim))
             }
             if let context = entry.context {
                 Text(context)
-                    .font(FreesideFont.subheadline)
+                    .font(FreesideFont.trailingSummary)
                     .foregroundStyle(Color.inkDim)
             }
             if let timestamp = entry.timestamp {
                 let text = Text(timestamp)
-                    .font(FreesideFont.monoCaption)
+                    .font(FreesideFont.trailingSummary)
                     .foregroundStyle(Color.inkDim)
                 if let instant = entry.instant {
                     text.exactInstant(instant)

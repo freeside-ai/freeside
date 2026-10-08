@@ -87,7 +87,7 @@ import Testing
         #expect(!ranking.notDecidableHere)
         #expect(
             AttentionDisplay.unavailableActionRows(ranking.unavailable)
-                == [.init(label: "Requested, not available here", value: "Convert to policy")])
+                == [.init(label: "Requested, Not Available Here", value: "Convert to Policy")])
     }
 
     @Test func answerAndReturnActionsAreOffered() {
@@ -133,6 +133,41 @@ import Testing
         #expect(ranking.principal == [.approve])
         #expect(ranking.reviewing == .open_pr)
         #expect(ranking.overflow == [.snooze, .mark_seen, .dismiss, .stop])
+    }
+
+    /// The frames put continuing under policy and resuming unattended work
+    /// under More Actions, ahead of the consequential entries, and keep
+    /// Acknowledge in the row (R6).
+    @Test func continuingAndResumingSitUnderMoreActionsAndAcknowledgeDoesNot() {
+        let ranking = DecisionActionRanking(
+            requested: [
+                .stop_unattended, .resume_unattended, .acknowledge, .continue_under_policy,
+                .finish_now, .snooze,
+            ])
+
+        #expect(ranking.principal == [.acknowledge, .finish_now])
+        #expect(
+            ranking.overflow
+                == [.snooze, .continue_under_policy, .resume_unattended, .stop_unattended])
+    }
+
+    /// A card names the one further action it moves under More Actions; the
+    /// partition is otherwise the same on every card.
+    @Test func aCardMayMoveOneMoreActionUnderMoreActions() {
+        let requested: [Components.Schemas.Action] = [.approve, .request_changes, .discuss, .stop]
+        let shared = DecisionActionRanking(requested: requested)
+        #expect(shared.principal == [.approve, .request_changes, .discuss])
+        #expect(shared.overflow == [.stop])
+
+        let moved = DecisionActionRanking(requested: requested, alsoOverflowing: [.discuss])
+        #expect(moved.principal == [.approve, .request_changes])
+        #expect(moved.overflow == [.discuss, .stop])
+
+        // A recommended action stays the recommendation, wherever it would sit.
+        let recommended = DecisionActionRanking(
+            requested: requested, recommendedAction: .discuss, alsoOverflowing: [.discuss])
+        #expect(recommended.recommended == .discuss)
+        #expect(!recommended.overflow.contains(.discuss))
     }
 
     @Test func recommendationIsExcludedFromEverySecondaryActionBucket() {
@@ -224,7 +259,7 @@ import Testing
 
     @Test func iconsAreLimitedToNavigationRetryAndLossRisk() {
         let iconActions: [Components.Schemas.Action] = [
-            .open_pr, .retry, .snooze, .stop, .stop_unattended, .return_to_agent,
+            .open_pr, .retry, .snooze, .stop, .stop_unattended,
         ]
         for action in AttentionFixtures.phase1Actions {
             #expect((AttentionDisplay.systemImage(action) != nil) == iconActions.contains(action))

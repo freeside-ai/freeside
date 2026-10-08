@@ -14,9 +14,26 @@ enum AttentionDisplay {
     /// card shows it under. Identifiers and digests render monospaced so a
     /// fact that must be compared by eye reads as one.
     struct FactRow: Equatable, Identifiable {
+        /// How a card draws the value. `value` is the same reading as plain
+        /// text on every form, for a summary, a test, or a stacking rule.
+        enum Form: Equatable {
+            case plain
+            /// Counts in the diff cuts (R28): successive measurements of one
+            /// diff, earliest first.
+            case diffs([DiffCounts])
+            /// A system-health item's admission posture, a state: the chip
+            /// sits in the value slot (R9).
+            case posture(Components.Schemas.HealthPosture)
+            /// Another attention item, which the value links to (R3).
+            case item(id: String)
+            /// A page outside the app, which the value links to (R3).
+            case link(URL)
+        }
+
         let label: String
         let value: String
         let monospaced: Bool
+        let form: Form
 
         var id: String { label }
 
@@ -24,6 +41,37 @@ enum AttentionDisplay {
             self.label = label
             self.value = value
             self.monospaced = monospaced
+            self.form = .plain
+        }
+
+        init(_ label: String, posture: Components.Schemas.HealthPosture) {
+            self.label = label
+            self.value = AttentionDisplay.label(posture)
+            self.monospaced = false
+            self.form = .posture(posture)
+        }
+
+        init(_ label: String, _ value: String, linkingItem id: String) {
+            self.label = label
+            self.value = value
+            self.monospaced = false
+            self.form = .item(id: id)
+        }
+
+        /// A value that names something with a page of its own. Without a
+        /// URL the value still draws, as the identifier it is.
+        init(_ label: String, _ value: String, linking url: URL?) {
+            self.label = label
+            self.value = value
+            self.monospaced = url == nil
+            self.form = url.map(Form.link) ?? .plain
+        }
+
+        init(_ label: String, diffs: [DiffCounts]) {
+            self.label = label
+            self.value = DiffCounts.plain(diffs)
+            self.monospaced = true
+            self.form = .diffs(diffs)
         }
     }
 
@@ -105,8 +153,16 @@ enum AttentionDisplay {
         case .system_health:
             return "How should this system-health condition be handled?"
         case .blocked:
-            return "What is keeping this run blocked?"
+            // A blocked card offers no decision, so where the daemon typed
+            // the wait the card leads with it (survey frame 5.5).
+            return blockedWaitSentence(item) ?? "What is keeping this run blocked?"
         }
+    }
+
+    /// What a blocked run waits on, as a sentence, where the item's typed
+    /// wait says.
+    static func blockedWaitSentence(_ item: Components.Schemas.AttentionItem) -> String? {
+        item.blocked_on.map { "Waiting on \(phrase($0.value1.kind))." }
     }
 
     static func rowSummary(_ item: Components.Schemas.AttentionItem) -> String {
@@ -157,10 +213,7 @@ enum AttentionDisplay {
             }
             return "\(label(diagnostic.impairs)) is impaired by diagnostic \(diagnostic.code)."
         case .blocked:
-            guard let wait = item.blocked_on?.value1 else {
-                return "A run is waiting on a blocker."
-            }
-            return "Waiting on \(phrase(wait.kind))."
+            return blockedWaitSentence(item) ?? "A run is waiting on a blocker."
         }
     }
 
@@ -178,12 +231,12 @@ enum AttentionDisplay {
             guard let failure = item.execution_failure?.value1 else { return [] }
             return [
                 .init("Outcome", label(failure.outcome)),
-                .init("Failing stage", label(failure.stage)),
+                .init("Stage", label(failure.stage)),
                 .init("Invocation", failure.invocation_id, monospaced: true),
             ]
         case .review_diminishing_returns:
             return [
-                item.billable_cost_so_far.map { .init("Cost so far", costSoFar($0.value1)) },
+                item.billable_cost_so_far.map { .init("Cost so Far", costSoFar($0.value1)) },
                 diffGrowth(item),
             ].compactMap { $0 }
         case .review_dispute:
@@ -214,27 +267,36 @@ enum AttentionDisplay {
             }
             return []
         case .system_health:
-            guard let diagnostic = item.health_diagnostic?.value1 else { return [] }
-            return [
-                .init("Diagnostic", diagnostic.code, monospaced: true),
-                .init("Impairs", label(diagnostic.impairs)),
-            ]
+            var rows: [FactRow] = []
+            if let diagnostic = item.health_diagnostic?.value1 {
+                rows.append(.init("Diagnostic", diagnostic.code, monospaced: true))
+                rows.append(.init("Impairs", label(diagnostic.impairs)))
+            }
+            // Whether the finding gates unattended admission is a fact about
+            // it, so it reads with the diagnostic in either posture.
+            if let posture = item.posture?.value1 {
+                rows.append(.init("Posture", posture: posture))
+            }
+            return rows
         case .blocked:
             guard let wait = item.blocked_on?.value1 else { return [] }
             var rows: [FactRow] = [
-                .init("Waiting on", label(wait.kind)),
                 // The wait reads as the duration the inbox row already uses.
                 // Its exact start is an audit coordinate, so it stays with the
                 // other technical bindings rather than leading the card as a
                 // monospaced timestamp.
-                .init("Waiting for", relativeRowTime(wait.since, now: now)),
+                .init("Waiting", relativeRowTime(wait.since, now: now))
             ]
+            // The item the run waits on is one the operator can open, so the
+            // row links to it; its id is a binding and stays in Details.
             if let blockingItem = wait.item_id {
-                rows.append(.init("Blocking item", blockingItem, monospaced: true))
+                rows.append(.init("Blocked on", label(wait.kind), linkingItem: blockingItem))
+            } else {
+                rows.append(.init("Blocked on", label(wait.kind)))
             }
             if let pull = wait.pr_reference?.value1 {
                 rows.append(
-                    .init("Pull request", "\(pull.repo)#\(pull.number)", monospaced: true))
+                    .init("Pull Request", "\(pull.repo)#\(pull.number)", monospaced: true))
             }
             return rows
         case .agent_question:
@@ -280,21 +342,67 @@ enum AttentionDisplay {
         }
     }
 
+    static let effectFactLabel = "Effect"
+    static let onMergeFactLabel = "On Merge"
+
+    static func issueName(_ issue: Components.Schemas.IssueSubjectRef) -> String {
+        "\(issue.repo)#\(issue.issue_number)"
+    }
+
+    /// What approving a source-issue closure binds, as one sentence (frame
+    /// 7.9): the candidate head, the base it would merge into, and what the
+    /// merge would do to the issue. The head is kept apart so the card can
+    /// set it in the identifier face. Nil for an effect with no merge to
+    /// state, which keeps its rows instead.
+    struct EffectBinding: Equatable {
+        let lead: String
+        let head: String
+        let outcome: String
+
+        var plain: String { lead + head + outcome }
+    }
+
+    static func effectBinding(
+        _ facts: Components.Schemas.EffectProposalFactsSnapshot
+    ) -> EffectBinding? {
+        guard facts.effect_kind == .source_issue_closure,
+            let closure = facts.source_issue_closure?.value1
+        else { return nil }
+        let issue = issueName(closure.target)
+        return .init(
+            lead: "Merging head ",
+            head: shortRevision(closure.merge.candidate_head_sha),
+            outcome: closure.resolves
+                ? " into \(closure.merge.base_ref) would close \(issue)."
+                : " into \(closure.merge.base_ref) would leave \(issue) open.")
+    }
+
+    /// The effect's rows as the card draws them. Where the binding
+    /// statement leads, it already names the effect and what the merge
+    /// does, so those two rows are not repeated under it.
+    static func effectProposalCardRows(
+        _ facts: Components.Schemas.EffectProposalFactsSnapshot
+    ) -> [FactRow] {
+        let rows = effectProposalRows(facts)
+        guard effectBinding(facts) != nil else { return rows }
+        return rows.filter { $0.label != effectFactLabel && $0.label != onMergeFactLabel }
+    }
+
     /// The closure card names no PR (the facts carry none).
     private static func sourceIssueClosureRows(
         _ closure: Components.Schemas.SourceIssueClosureFacts,
         supersedes: Components.Schemas.EffectProposalRevisionFacts?
     ) -> [FactRow] {
         var rows: [FactRow] = [
-            .init("Effect", effectKindLabel(.source_issue_closure)),
+            .init(effectFactLabel, effectKindLabel(.source_issue_closure)),
             .init(
-                "Target", "\(closure.target.repo)#\(closure.target.issue_number)",
-                monospaced: true),
+                "Target Issue", issueName(closure.target),
+                linking: DecisionModel.issueURL(for: closure.target)),
             .init(
-                "On merge",
+                onMergeFactLabel,
                 closure.resolves ? "Closes the issue" : "Doesn't close the issue"),
             .init("Reference", closureProvenanceExplanation(closure.provenance)),
-            .init("Origin", closureOriginLabel(closure.origin)),
+            .init("Closure Flag", closureOriginLabel(closure.origin)),
             .init(
                 "Bound to",
                 "Head \(shortRevision(closure.merge.candidate_head_sha)) · "
@@ -314,7 +422,7 @@ enum AttentionDisplay {
             // would be a no-op that only reads as if it did something.
             rows.append(
                 .init(
-                    "Superseded proposal",
+                    "Superseded Proposal",
                     "Previously \(priorPhrase) (\(prior.proposal_digest))"))
         }
         return rows
@@ -327,14 +435,14 @@ enum AttentionDisplay {
         _ filing: Components.Schemas.FollowUpFilingFacts
     ) -> [FactRow] {
         [
-            .init("Effect", effectKindLabel(.follow_up_filing)),
+            .init(effectFactLabel, effectKindLabel(.follow_up_filing)),
             .init("Repository", filing.repository.repo, monospaced: true),
             .init("Labels", filing.labels.isEmpty ? "None" : filing.labels.joined(separator: ", ")),
             .init("Milestone", filing.milestone ?? "None"),
             .init(
                 "Source",
                 "Finding \(filing.source.finding_id) · \(followUpSourceKindLabel(filing.source.kind))"),
-            .init("Text screening", textScreening(title: filing.title, body: filing.body)),
+            .init("Text Screening", textScreening(title: filing.title, body: filing.body)),
         ]
     }
 
@@ -415,7 +523,7 @@ enum AttentionDisplay {
         return [
             .init(label: "Repository ID", value: String(filing.repository.repository_id)),
             .init(label: "Finding", value: filing.source.finding_id),
-            .init(label: "Adjudication digest", value: filing.source.adjudication_digest),
+            .init(label: "Adjudication Digest", value: filing.source.adjudication_digest),
         ]
     }
 
@@ -459,72 +567,81 @@ enum AttentionDisplay {
             + (cost.complete ? "" : ", still accruing")
     }
 
-    /// The change's cumulative diff size at round 1 beside the latest round
-    /// the daemon measured, both from `yield_history` (plan §9). A round
-    /// without `diff_metrics` is a gap: with no round-1 measurement there is
-    /// nothing to grow from, so the row names the latest measured round
-    /// alone, and with no measurement at all there is no row.
+    /// The change's cumulative diff at round 1 beside the latest round the
+    /// daemon measured, both from `yield_history` (plan §9), as counts the
+    /// card draws in the diff cuts (R28). A round without `diff_metrics` is a
+    /// gap, and the label names the round wherever a gap would otherwise hide
+    /// it: with no round-1 measurement there is nothing to grow from, so the
+    /// row is the latest measured round's size alone; growth that stops short
+    /// of the last round says where it stops; and with no measurement at all
+    /// there is no row.
     private static func diffGrowth(_ item: Components.Schemas.AttentionItem) -> FactRow? {
         let rounds = item.yield_history?.value1.rounds ?? []
         guard let latest = rounds.last(where: { $0.diff_metrics != nil }),
             let latestMetrics = latest.diff_metrics
         else { return nil }
-        let latestSize = diffStats(latestMetrics.cumulative)
+        let latestSize = diffCounts(latestMetrics.cumulative)
         guard latest.round != 1,
             let first = rounds.first(where: { $0.round == 1 })?.diff_metrics
         else {
-            return .init("Diff size", "Round \(latest.round): \(latestSize)")
+            return .init("Diff Size at Round \(latest.round)", diffs: [latestSize])
         }
         return .init(
-            "Diff growth",
-            "Round 1: \(diffStats(first.cumulative)); round \(latest.round): \(latestSize)")
+            latest.round == rounds.last?.round
+                ? "Diff Growth" : "Diff Growth to Round \(latest.round)",
+            diffs: [diffCounts(first.cumulative), latestSize])
     }
 
     /// The label of the fact that carries a candidate's whole diff.
     static let diffFactLabel = "Diff"
 
-    static func fileCount(_ diff: Components.Schemas.DiffStats) -> String {
-        diff.files_changed == 1 ? "1 file" : "\(diff.files_changed) files"
+    static func fileCount(_ count: Int) -> String {
+        count == 1 ? "1 file" : "\(count) files"
     }
 
+    static func diffCounts(_ diff: Components.Schemas.DiffStats) -> DiffCounts {
+        .init(added: diff.additions, removed: diff.deletions)
+    }
+
+    /// A whole diff as one plain line, in the order the Change row draws it.
     private static func diffStats(_ diff: Components.Schemas.DiffStats) -> String {
-        return "\(fileCount(diff)), +\(diff.additions) -\(diff.deletions)"
+        "\(diffCounts(diff).plain) · \(fileCount(diff.files_changed))"
     }
 
     static func label(_ action: Components.Schemas.Action) -> String {
         switch action {
         case .approve: return "Approve"
-        case .request_changes: return "Request changes"
+        case .request_changes: return "Request Changes"
         case .discuss: return "Discuss"
         case .stop: return "Stop"
-        case .finish_now: return "Finish now"
-        case .apply_then_finish: return "Apply, then finish"
-        case .continue_under_policy: return "Continue under policy"
-        case .convert_to_policy: return "Convert to policy"
+        case .finish_now: return "Finish Now"
+        case .apply_then_finish: return "Apply Then Finish"
+        case .continue_under_policy: return "Continue Under Policy"
+        case .convert_to_policy: return "Convert to Policy"
         case .retry: return "Retry"
-        case .retry_with_capabilities: return "Retry with profile"
+        case .retry_with_capabilities: return "Retry With Profile"
         case .answer_and_retry: return "Answer and Retry"
         case .answer_without_retry: return "Answer Without Retry"
-        case .rerun_trust_evaluation: return "Rerun trust evaluation"
-        case .inspect_trust_failure: return "Inspect trust failure"
+        case .rerun_trust_evaluation: return "Rerun Trust Evaluation"
+        case .inspect_trust_failure: return "Inspect Trust Failure"
         case .open_pr: return "View PR"
-        case .return_to_agent: return "Return to agent"
-        case .mark_seen: return "Mark seen"
+        case .return_to_agent: return "Return to Agent"
+        case .mark_seen: return "Mark Seen"
         case .dismiss: return "Dismiss"
         case .start: return "Start"
-        case .start_with_changes: return "Start with changes"
-        case .approve_with_changes: return "Approve with changes"
+        case .start_with_changes: return "Start With Changes"
+        case .approve_with_changes: return "Approve With Changes"
         case .decline: return "Decline"
         case .snooze: return "Snooze"
         case .acknowledge: return "Acknowledge"
-        case .run_doctor: return "Run doctor"
-        case .stop_unattended: return "Stop unattended"
-        case .resume_unattended: return "Resume unattended"
-        case .recover_review: return "Recover review"
-        case .adopt_review_configuration: return "Adopt review configuration"
-        case .resolve_reenrollment: return "Resolve re-enrollment"
-        case .accept_recommended_route: return "Accept recommended route"
-        case .choose_alternative_route: return "Choose selected alternative"
+        case .run_doctor: return "Run Doctor"
+        case .stop_unattended: return "Stop Unattended"
+        case .resume_unattended: return "Resume Unattended"
+        case .recover_review: return "Recover Review"
+        case .adopt_review_configuration: return "Adopt Review Configuration"
+        case .resolve_reenrollment: return "Resolve Re-enrollment"
+        case .accept_recommended_route: return "Accept Recommended Route"
+        case .choose_alternative_route: return "Choose Another Route"
         }
     }
 
@@ -539,7 +656,7 @@ enum AttentionDisplay {
         if action == .accept_recommended_route,
             let binding = item?.finding_adjudication?.value1, binding.proposals.count > 1
         {
-            return "Accept all dispositions"
+            return "Accept All Dispositions"
         }
         return label(action)
     }
@@ -550,8 +667,7 @@ enum AttentionDisplay {
         case .retry: return "arrow.clockwise"
         case .snooze: return "clock"
         case .stop, .stop_unattended: return "stop.fill"
-        case .return_to_agent: return "return"
-        case .approve, .request_changes, .discuss, .finish_now, .apply_then_finish,
+        case .return_to_agent, .approve, .request_changes, .discuss, .finish_now, .apply_then_finish,
             .continue_under_policy, .convert_to_policy,
             .retry_with_capabilities, .answer_and_retry, .answer_without_retry,
             .rerun_trust_evaluation,
@@ -804,10 +920,6 @@ enum AttentionDisplay {
         status != .open
     }
 
-    static func showsPostureBadge(_ posture: Components.Schemas.HealthPosture) -> Bool {
-        posture == .blocking
-    }
-
     static func showsDegradedBadge(_ item: Components.Schemas.AttentionItem) -> Bool {
         item.readiness?.value1._class == .ready_degraded
     }
@@ -836,7 +948,7 @@ enum AttentionDisplay {
         }
 
         for artifact in item.evidence_snapshot {
-            append("Evidence digest", artifact.digest, seen: &seenEvidenceDigests)
+            append("Evidence Digest", artifact.digest, seen: &seenEvidenceDigests)
         }
         for claim in item.agent_claims {
             // The specification's daemon-bound digest is the one a reader
@@ -844,12 +956,12 @@ enum AttentionDisplay {
             // other claim keeps the generic label. The row's value is unchanged.
             let label =
                 claim.label == AgentClaimLabels.specification
-                ? "Specification digest" : "Claim digest"
+                ? "Specification Digest" : "Claim Digest"
             append(label, claim.digest, seen: &seenClaimDigests)
         }
         for digest in item.artifact_digests {
             guard representedDigests.insert(digest).inserted else { continue }
-            rows.append(.init(label: "Artifact digest", value: digest))
+            rows.append(.init(label: "Artifact Digest", value: digest))
         }
         return rows
     }
@@ -861,7 +973,7 @@ enum AttentionDisplay {
     static func unavailableActionRows(
         _ actions: [Components.Schemas.Action]
     ) -> [BindingRow] {
-        actions.map { .init(label: "Requested, not available here", value: label($0)) }
+        actions.map { .init(label: "Requested, Not Available Here", value: label($0)) }
     }
 
     static func detailBindingRows(
@@ -887,14 +999,17 @@ enum AttentionDisplay {
         }
         if let wait = item.blocked_on?.value1 {
             rows.append(
-                .init(label: "Waiting since", value: wait.since.formatted(.iso8601)))
+                .init(label: "Waiting Since", value: wait.since.formatted(.iso8601)))
+            if let blockingItem = wait.item_id {
+                rows.append(.init(label: "Blocking Item", value: blockingItem))
+            }
         }
         if let hold = item.publish_block?.value1.hold_reason?.value1 {
-            rows.append(.init(label: "Hold code", value: hold.rawValue))
+            rows.append(.init(label: "Hold Code", value: hold.rawValue))
         }
-        rows.append(.init(label: "Item version", value: "\(item.item_version)"))
+        rows.append(.init(label: "Item Version", value: "\(item.item_version)"))
         if !item.pr_head_sha.isEmpty {
-            rows.append(.init(label: "PR head", value: item.pr_head_sha))
+            rows.append(.init(label: "PR Head", value: item.pr_head_sha))
         }
         // The diff's own base and head, which no other layer is guaranteed to
         // render: the checklist's "Bound to" row reads readiness_detail, which
@@ -903,12 +1018,12 @@ enum AttentionDisplay {
         // in the technical bindings, so the card can stop repeating them
         // without losing them (#1107).
         if let diff = item.diff_stats?.value1 {
-            rows.append(.init(label: "Diff base", value: diff.base_sha))
-            rows.append(.init(label: "Diff head", value: diff.head_sha))
+            rows.append(.init(label: "Diff Base", value: diff.base_sha))
+            rows.append(.init(label: "Diff Head", value: diff.head_sha))
         }
         rows.append(contentsOf: attachmentDigestRows(item))
         if let priorProposalDigest {
-            rows.append(.init(label: "Prior proposal", value: priorProposalDigest))
+            rows.append(.init(label: "Prior Proposal", value: priorProposalDigest))
         }
         if let proposalDigest {
             rows.append(.init(label: "Proposal", value: proposalDigest))
@@ -920,7 +1035,7 @@ enum AttentionDisplay {
         rows.append(contentsOf: readinessSummaryRows(item))
         rows.append(contentsOf: reviewYieldRows(item))
         if let drift = item.review_diminishing?.value1.drift_audit?.value1 {
-            rows.append(.init(label: "Drift audit", value: drift.audit_digest))
+            rows.append(.init(label: "Drift Audit", value: drift.audit_digest))
         }
         return rows
     }
@@ -954,7 +1069,7 @@ enum AttentionDisplay {
         guard let history = item.yield_history?.value1 else { return [] }
         var rows = history.rounds.map { round in
             BindingRow(
-                label: "Review round \(round.round)",
+                label: "Review Round \(round.round)",
                 value: "\(round.findings_ingested) findings · \(round.new_findings) new · "
                     + "\(round.recurring_findings) recurring · \(round.fixed) fixed · "
                     + "\(round.declined) declined · \(round.deferred) deferred · "
@@ -963,7 +1078,7 @@ enum AttentionDisplay {
         }
         rows.append(
             .init(
-                label: "Terminal review",
+                label: "Terminal Review",
                 value: reviewOutcomeLabel(history.terminal_outcome)))
         return rows
     }
@@ -988,12 +1103,12 @@ enum AttentionDisplay {
         }
         var rows = [
             BindingRow(label: "Readiness", value: verdict),
-            BindingRow(label: "Evaluation set", value: readiness.evaluation_set_digest),
+            BindingRow(label: "Evaluation Set", value: readiness.evaluation_set_digest),
         ]
         guard let detail = item.readiness_detail?.value1 else { return rows }
-        rows.append(BindingRow(label: "Bound head", value: detail.candidate_head))
+        rows.append(BindingRow(label: "Bound Head", value: detail.candidate_head))
         rows.append(
-            BindingRow(label: "Bound base", value: "\(detail.base.base_ref)@\(detail.base.base_sha)"))
+            BindingRow(label: "Bound Base", value: "\(detail.base.base_ref)@\(detail.base.base_sha)"))
         for requirement in detail.requirements {
             var value = [
                 label(requirement.check_class), label(requirement.kind), label(requirement.state),
@@ -1071,9 +1186,9 @@ enum AttentionDisplay {
     ) -> [BindingRow] {
         guard let binding = item.finding_adjudication?.value1 else { return [] }
         return [
-            BindingRow(label: "Adjudication digest", value: binding.adjudication_digest),
-            BindingRow(label: "Adjudication run", value: binding.run_id),
-            BindingRow(label: "Adjudication round", value: "\(binding.round)"),
+            BindingRow(label: "Adjudication Digest", value: binding.adjudication_digest),
+            BindingRow(label: "Adjudication Run", value: binding.run_id),
+            BindingRow(label: "Adjudication Round", value: "\(binding.round)"),
         ]
     }
 
@@ -1162,12 +1277,12 @@ enum AttentionDisplay {
     ) -> [BindingRow] {
         guard let binding = item.review_recovery_binding?.value1 else { return [] }
         return [
-            BindingRow(label: "Recovery run", value: binding.run_id),
+            BindingRow(label: "Recovery Run", value: binding.run_id),
             BindingRow(label: "Invocation", value: binding.invocation_id),
             BindingRow(label: "Round", value: "\(binding.round)"),
             BindingRow(label: "Base", value: binding.base_sha),
             BindingRow(label: "Head", value: binding.head_sha),
-            BindingRow(label: "Failure digest", value: binding.failure_digest),
+            BindingRow(label: "Failure Digest", value: binding.failure_digest),
         ]
     }
 
@@ -1176,14 +1291,14 @@ enum AttentionDisplay {
     ) -> [BindingRow] {
         guard let binding = item.review_configuration_recovery?.value1 else { return [] }
         return [
-            BindingRow(label: "Recovery run", value: binding.run_id),
+            BindingRow(label: "Recovery Run", value: binding.run_id),
             BindingRow(label: "Invocation", value: binding.invocation_id),
             BindingRow(label: "Round", value: "\(binding.round)"),
             BindingRow(label: "Base", value: binding.base_sha),
             BindingRow(label: "Head", value: binding.head_sha),
-            BindingRow(label: "Failure digest", value: binding.failure_digest),
+            BindingRow(label: "Failure Digest", value: binding.failure_digest),
             BindingRow(label: "Repository", value: binding.repo),
-            BindingRow(label: "Superseded profile", value: binding.superseded_profile_digest),
+            BindingRow(label: "Superseded Profile", value: binding.superseded_profile_digest),
         ]
     }
 
@@ -1192,11 +1307,11 @@ enum AttentionDisplay {
     ) -> [BindingRow] {
         guard let binding = item.codex_reenrollment_recovery_binding?.value1 else { return [] }
         return [
-            BindingRow(label: "Auth identity", value: binding.auth_identity_id),
-            BindingRow(label: "Lease fence", value: "\(binding.lease_fence)"),
-            BindingRow(label: "Auth store digest", value: binding.auth_store_digest),
+            BindingRow(label: "Auth Identity", value: binding.auth_identity_id),
+            BindingRow(label: "Lease Fence", value: "\(binding.lease_fence)"),
+            BindingRow(label: "Auth Store Digest", value: binding.auth_store_digest),
             BindingRow(
-                label: "Token expires",
+                label: "Token Expires",
                 value: binding.access_token_expires_at.formatted(.iso8601)
             ),
         ]

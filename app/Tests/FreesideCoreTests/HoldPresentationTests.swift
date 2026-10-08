@@ -44,7 +44,7 @@ import Testing
             #expect(facts.count == 1)
             #expect(
                 AttentionDisplay.detailBindingRows(item).contains {
-                    $0.label == "Hold code" && $0.value == reason.rawValue
+                    $0.label == "Hold Code" && $0.value == reason.rawValue
                 })
         }
     }
@@ -113,7 +113,7 @@ import Testing
         missing.publish_block = nil
         missing.reason = "identity_parallelism"
         #expect(AttentionDisplay.cardFacts(missing, now: RunFixtures.screenshotInstant).isEmpty)
-        #expect(!AttentionDisplay.detailBindingRows(missing).contains { $0.label == "Hold code" })
+        #expect(!AttentionDisplay.detailBindingRows(missing).contains { $0.label == "Hold Code" })
     }
 
     @Test func finishedAndSupersededRunsCannotReadAsActiveQueues() throws {

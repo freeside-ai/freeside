@@ -49,10 +49,10 @@ import Testing
 
         #expect(presentation.register == .daemonFact)
         #expect(!presentation.register.isUnverifiedClaim)
-        #expect(presentation.title == "Recommended · daemon policy")
-        #expect(presentation.label == "Recommended · daemon policy")
+        #expect(presentation.actor == "Daemon policy")
+        #expect(presentation.sentence(for: nil) == "Daemon policy recommends Approve.")
         #expect(
-            presentation.sourceFacts.map(\.label) == ["Rule digest", "Input digest"])
+            presentation.sourceFacts.map(\.label) == ["Rule Digest", "Input Digest"])
         #expect(presentation.sourceFacts.allSatisfy { $0.monospaced })
         #expect(presentation.confidence == nil)
     }
@@ -68,8 +68,10 @@ import Testing
 
         #expect(presentation.register == .agentClaim)
         #expect(presentation.register.isUnverifiedClaim)
-        #expect(presentation.title == "Recommended · agent judgment")
-        #expect(presentation.label == "Recommended · agent judgment · High")
+        #expect(presentation.actor == "The agent")
+        #expect(
+            presentation.sentence(for: nil)
+                == "The agent recommends Accept Recommended Route, with high confidence.")
         #expect(
             presentation.sourceFacts.map(\.value)
                 == ["Finding adjudicator", "adjudicator-1", "sha256:artifact"])
@@ -84,16 +86,17 @@ import Testing
 
         #expect(presentation.register == .projectPolicy)
         #expect(!presentation.register.isUnverifiedClaim)
-        #expect(presentation.title == "Recommended · project policy")
+        #expect(presentation.actor == "Project policy")
+        #expect(presentation.sentence(for: nil) == "Project policy recommends Approve.")
         #expect(
             presentation.sourceFacts.map(\.value)
                 == ["review.adjudication.route", "sha256:policy", "sha256:application"])
     }
 
-    /// The label is the block's one register line, so a recommendation the
-    /// daemon recorded no confidence for renders the register alone rather
-    /// than a dangling separator (#1107).
-    @Test func aRecommendationWithoutConfidenceLabelsOnlyItsRegister() throws {
+    /// The sentence carries the confidence, so a recommendation the daemon
+    /// recorded no confidence for ends at the action rather than on a
+    /// dangling clause (#1107).
+    @Test func aRecommendationWithoutConfidenceNamesOnlyItsActorAndAction() throws {
         let presentation = try #require(
             DecisionRecommendationPresentation(
                 recommendation(
@@ -101,7 +104,7 @@ import Testing
                     provenance: agentJudgmentProvenance)))
 
         #expect(presentation.confidence == nil)
-        #expect(presentation.label == "Recommended · agent judgment")
+        #expect(presentation.sentence(for: nil) == "The agent recommends Approve.")
     }
 
     /// A source the provenance does not authenticate must not pick up the
@@ -145,6 +148,27 @@ import Testing
                 requested: item.requested_decision,
                 recommendedAction: DecisionRecommendationPresentation.of(item)?.action
             ).recommended == nil)
+    }
+
+    /// Accepting a finding item's routes is one command over every finding
+    /// it binds, so the sentence says what that covers (R20, frame 7.1); any
+    /// other action is named by its own label.
+    @Test func theSentenceSaysWhatAcceptingAFindingItemCovers() throws {
+        let batch = AttentionFixtures.fixture(type: .finding_adjudication).item
+        let single = AttentionFixtures.findingAdjudicationFixture(route: .remediate).item
+        let presentation = try #require(DecisionRecommendationPresentation.of(batch))
+        let confidence = try #require(presentation.confidence).lowercased()
+
+        #expect(
+            presentation.sentence(for: batch)
+                == "The agent recommends accepting the proposed route for each of the 2 findings above, "
+                + "with \(confidence) confidence.")
+        #expect(
+            DecisionRecommendationPresentation.actionPhrase(.accept_recommended_route, for: single)
+                == "accepting the proposed route for the one finding above")
+        #expect(
+            DecisionRecommendationPresentation.actionPhrase(.stop, for: batch)
+                == AttentionDisplay.label(.stop))
     }
 
     @Test func theItemsOwnRecommendationIsTheOnlySource() throws {

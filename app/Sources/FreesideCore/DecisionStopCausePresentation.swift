@@ -32,6 +32,24 @@ struct DecisionStopCausePresentation: Equatable {
             reversals.count == 1 ? "1 fix to undo" : "\(reversals.count) fixes to undo"
         }
 
+        /// The keyword over the audit's own words. With no fix to undo the
+        /// section holds only its explanation.
+        var keyword: String { reversals.isEmpty ? "Audit Explanation" : "Fixes to Undo" }
+
+        /// The entries past the first `collapsedReversalCount`, which open
+        /// on request under `moreFixesLabel`.
+        var foldedReversals: [Reversal] {
+            collapses
+                ? Array(reversals.dropFirst(DecisionStopCausePresentation.collapsedReversalCount))
+                : []
+        }
+
+        var moreFixesLabel: String {
+            foldedReversals.count == 1 ? "1 More Fix" : "\(foldedReversals.count) More Fixes"
+        }
+
+        var totalFixes: String { "\(reversals.count) in total" }
+
         func visibleReversals(showingAll: Bool) -> [Reversal] {
             collapses && !showingAll
                 ? Array(reversals.prefix(DecisionStopCausePresentation.collapsedReversalCount))
@@ -48,9 +66,6 @@ struct DecisionStopCausePresentation: Equatable {
     /// What `continue_under_policy` will do, or that no offered action undoes
     /// the listed fixes. Nil where the typed facts say nothing about it.
     let continuation: String?
-    /// The section title over `continuation`: a card narrowed to `finish_now`
-    /// has no continuing to describe.
-    let continuationTitle: String
 
     init?(_ item: Components.Schemas.AttentionItem) {
         guard let facts = item.review_diminishing?.value1 else { return nil }
@@ -67,7 +82,6 @@ struct DecisionStopCausePresentation: Equatable {
         }
         let offered = item.requested_decision.contains(.continue_under_policy)
         continuation = drift.flatMap { Self.continuationSentence($0, offered: offered) }
-        continuationTitle = offered ? "If you continue" : "Undoing the fixes"
     }
 
     static func label(_ verdict: Components.Schemas.DriftVerdict) -> String {
@@ -129,63 +143,78 @@ struct DecisionStopCausePresentation: Equatable {
 struct DecisionStopCauseModuleView: View {
     @State private var showsEveryReversal = false
     let presentation: DecisionStopCausePresentation
+    /// Whether the audit's keyword draws the card's one explanation control.
+    var carriesInfo = false
+    var rendersInteractiveControls = true
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            DecisionModuleContainer(title: "Why review stopped") {
-                Text(presentation.cause)
-                    .fixedSize(horizontal: false, vertical: true)
-                if let audit = presentation.audit {
-                    FactRow(label: "Verdict", value: audit.verdict)
-                    FactRow(label: "Audit confidence", value: audit.confidence)
-                }
-            }
+        VStack(alignment: .leading, spacing: DecisionCardComposition.Scale.sectionGap) {
+            Text(presentation.cause)
+                .font(FreesideFont.statement)
+                .foregroundStyle(Color.ink)
+                .fixedSize(horizontal: false, vertical: true)
             if let audit = presentation.audit {
-                // Dashed, like every model-written section on the card: the
+                VStack(alignment: .leading, spacing: DecisionCardComposition.Scale.moduleGap) {
+                    KeywordLabel(text: "Drift Audit")
+                    FactRow(label: "Verdict", value: audit.verdict)
+                    FactRow(label: "Confidence", value: audit.confidence)
+                }
+                // Quoted, like every model-written section on the card: the
                 // explanation and the reversal text are the audit model's
                 // words, not values the daemon computed.
-                DecisionModuleContainer(title: "Drift audit's judgment (model-written)", dashed: true) {
-                    Text(audit.explanation)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if !audit.reversals.isEmpty {
-                        reversals(audit)
+                VStack(alignment: .leading, spacing: DecisionCardComposition.Scale.moduleGap) {
+                    UnverifiedLabel(
+                        text: audit.keyword, carriesInfo: carriesInfo,
+                        rendersInteractiveControls: rendersInteractiveControls)
+                    QuoteBlock {
+                        Text(audit.explanation)
+                            .font(FreesideFont.message)
+                            .foregroundStyle(Color.ink)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    ForEach(audit.visibleReversals(showingAll: false)) { reversal in
+                        fix(reversal)
+                    }
+                    if audit.collapses {
+                        SentenceDisclosure(
+                            label: audit.moreFixesLabel, summary: audit.totalFixes,
+                            isExpanded: $showsEveryReversal
+                        ) {
+                            VStack(alignment: .leading, spacing: DecisionCardComposition.Scale.moduleGap) {
+                                ForEach(audit.foldedReversals) { reversal in
+                                    fix(reversal)
+                                }
+                            }
+                        }
                     }
                 }
             }
             if let continuation = presentation.continuation {
-                DecisionModuleContainer(title: presentation.continuationTitle) {
-                    Text(continuation)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                Text(continuation)
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.inkDim)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    @ViewBuilder
-    private func reversals(_ audit: DecisionStopCausePresentation.Audit) -> some View {
-        Text(audit.reversalCount)
-            .font(FreesideFont.sans(.callout, weight: .semibold))
-        ForEach(audit.visibleReversals(showingAll: showsEveryReversal)) { reversal in
-            VStack(alignment: .leading, spacing: 2) {
-                Text(reversal.findingID)
-                    .font(FreesideFont.monoCaption)
-                    .foregroundStyle(Color.inkDim)
-                Text(reversal.undo)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(reversal.rationale)
-                    .foregroundStyle(Color.inkDim)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+    /// One fix to undo: what to undo in the serif, then why and which
+    /// finding it answers in dim beneath (frame 5.2).
+    private func fix(_ reversal: DecisionStopCausePresentation.Reversal) -> some View {
+        QuoteBlock {
+            Text(reversal.undo)
+                .font(FreesideFont.optionLabel)
+                .foregroundStyle(Color.ink)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(reversal.rationale)
+                .font(FreesideFont.cardBody)
+                .foregroundStyle(Color.inkDim)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(reversal.findingID)
+                .font(FreesideFont.trailingSummary)
+                .foregroundStyle(Color.inkDim)
         }
-        if audit.collapses {
-            Button(
-                showsEveryReversal
-                    ? "Show first \(DecisionStopCausePresentation.collapsedReversalCount)"
-                    : "Show all \(audit.reversalCount)"
-            ) {
-                showsEveryReversal.toggle()
-            }
-            .buttonStyle(FreesideActionButtonStyle(tone: .tertiary))
-        }
+        .accessibilityElement(children: .combine)
     }
 }

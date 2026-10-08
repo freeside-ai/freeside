@@ -53,7 +53,7 @@ import Testing
             ])
     }
 
-    @Test @MainActor func revisedSpecificationLeadsWithTypedRevisionFacts() throws {
+    @Test @MainActor func revisedSpecificationDrawsItsChangeAndItemAboveTheActions() throws {
         let item = AttentionFixtures.revisedSpecification().item
         let revision = try #require(item.spec_revision?.value1)
         let composition = DecisionCardComposition.forType(.spec_approval)
@@ -63,23 +63,20 @@ import Testing
         #expect(revision.diff.lines_removed == 1)
         #expect(
             composition.modules == [
-                .recommendation, .specRevision, .summary, .facts, .specification, .factBlock,
+                .recommendation, .summary, .specRevision, .specification, .facts, .factBlock,
                 .claims, .evidence, .details,
             ])
-        #expect(
-            composition.modules.firstIndex(of: .specRevision).map {
-                $0 < composition.actionInsertionIndex
-            } == true)
-        // §9 leads this card with a plan-altitude summary and puts the full
-        // specification below it, so the summary layer that now carries the
-        // reason has to render above the action region (#1098).
-        #expect(
-            composition.modules.firstIndex(of: .summary).map {
-                $0 < composition.actionInsertionIndex
-            } == true)
-        #expect(
-            composition.modules.firstIndex(of: .specification)
-                == composition.actionInsertionIndex)
+        // Frames 5.1 and 7.2: the summary, the change since the last
+        // revision, and the specification item (with the conversation it
+        // carries) are what the approval weighs, so all three render above
+        // the action region, in that order. The summary still carries the
+        // reason there (#1098).
+        let leading = try [DecisionCardModule.summary, .specRevision, .specification].map {
+            try #require(composition.modules.firstIndex(of: $0))
+        }
+        #expect(leading == leading.sorted())
+        #expect(leading.allSatisfy { $0 < composition.actionInsertionIndex })
+        #expect(DecisionCardComposition.placesConversationWithSpecification(for: .spec_approval))
         #expect(
             composition.claims(
                 from: item.agent_claims,
@@ -122,7 +119,7 @@ import Testing
             ])
         #expect(
             DecisionCardComposition.forType(.execution_failure).modules == [
-                .recommendation, .stageRail, .facts, .claims, .factBlock, .summary, .claims,
+                .recommendation, .facts, .claims, .stageRail, .factBlock, .summary, .claims,
                 .evidence, .details,
             ])
         // Plan §9 revision 78 (visual audit D08): the supplied claim leads
@@ -156,11 +153,11 @@ import Testing
         let execution = DecisionCardComposition.forType(.execution_failure)
         let executionClaims = AttentionFixtures.fixture(type: .execution_failure).item.agent_claims
         let diagnosticIndex = executionClaims.firstIndex { $0.label == "Likely cause (unverified)" }
-        #expect(execution.claimsAreProminent(at: 3))
+        #expect(execution.claimsAreProminent(at: 2))
         #expect(!execution.claimsAreProminent(at: 6))
         #expect(
             execution.claims(
-                from: executionClaims, at: 3, prominentClaimIndex: diagnosticIndex
+                from: executionClaims, at: 2, prominentClaimIndex: diagnosticIndex
             ).map(\.label) == ["Likely cause (unverified)"])
         #expect(
             execution.claims(
@@ -170,7 +167,7 @@ import Testing
         // still leads and the attachment stays supporting context.
         #expect(
             execution.claims(
-                from: executionClaims, at: 3, prominentClaimIndex: nil
+                from: executionClaims, at: 2, prominentClaimIndex: nil
             ).map(\.label) == ["Likely cause (unverified)"])
         #expect(
             execution.claims(
@@ -265,11 +262,12 @@ import Testing
             #expect(
                 infoSlot(.review_dispute, on: platform)
                     == (try module(.claims, of: .review_dispute)))
+            // The failure card reads its diagnostic in the card on both
+            // platforms (frame 5.3), so that keyword carries the control.
+            #expect(
+                infoSlot(.execution_failure, on: platform)
+                    == (try module(.claims, of: .execution_failure)))
         }
-        #expect(infoSlot(.execution_failure, on: .mac) == .actionRegion)
-        #expect(
-            infoSlot(.execution_failure, on: .phone)
-                == (try module(.claims, of: .execution_failure)))
     }
 
     /// A card whose only unverified keyword is a disclosure's own label has
@@ -404,10 +402,110 @@ import Testing
     ) {
         let expected: DecisionCardComposition.ReasonPlacement =
             switch type {
-            case .agent_question, .ready_for_final_review, .finding_adjudication: .recordedContext
+            case .agent_question, .ready_for_final_review, .finding_adjudication, .task_proposal,
+                .effect_proposal:
+                .recordedContext
+            case .blocked: .detailsOnly
             default: .underAsk
             }
         #expect(DecisionCardComposition.reasonPlacement(for: type) == expected)
+    }
+
+    /// A finding adjudication's reason folds while the recommendation is on
+    /// the card, but what accepting does never folds (plan §9): the first
+    /// sentence of the daemon's "Accepting" line stays ahead of the actions,
+    /// after any line about what changed since Discuss. Where the whole
+    /// reason already draws under the ask there is no separate lead.
+    @Test func whatAcceptingDoesStaysAheadOfTheActionsOnAFindingCard() {
+        var item = AttentionFixtures.fixture(type: .finding_adjudication).item
+        #expect(DecisionCardComposition.reasonPlacement(for: item) == .recordedContext)
+
+        item.reason = [
+            "Changed after Discuss: review-finding-17 moved from \"Decline\" to \"Fix in this PR\".",
+            "Accepting starts a remediator that edits this PR. It may change only the "
+                + "run's allowed paths (daemon/**), not just where a finding was reported.",
+            "review-finding-17 (daemon/internal/signet/service.go:214-227): Fix in this PR.",
+        ].joined(separator: "\n")
+        #expect(
+            DecisionCardComposition.reasonLead(for: item)
+                == "Accepting starts a remediator that edits this PR.")
+
+        item.reason = "Accepting parks the run: nothing is fixed or published."
+        #expect(DecisionCardComposition.reasonLead(for: item) == item.reason)
+
+        item.reason = "The reviewer and the agent disagree."
+        #expect(DecisionCardComposition.reasonLead(for: item) == nil)
+
+        item.reason = "Accepting parks the run: nothing is fixed or published."
+        item.recommendation = nil
+        #expect(DecisionCardComposition.reasonPlacement(for: item) == .underAsk)
+        #expect(DecisionCardComposition.reasonLead(for: item) == nil)
+
+        var other = AttentionFixtures.fixture(type: .task_proposal).item
+        other.reason = item.reason
+        #expect(DecisionCardComposition.reasonLead(for: other) == nil)
+    }
+
+    /// A proposal's reason folds only at its planned gate, where the daemon
+    /// writes a sentence that restates the ask. The closure notice is the
+    /// one proposal reason that says more (the issue could not be closed
+    /// automatically, and the notice does not hold the pull request); the
+    /// daemon opens it as exceptional, and it stays ahead of the actions
+    /// (plan §9 revision 82).
+    @Test(arguments: [Components.Schemas.AttentionType.task_proposal, .effect_proposal])
+    func aProposalReasonFoldsOnlyAtItsPlannedGate(type: Components.Schemas.AttentionType) {
+        var item = AttentionFixtures.fixture(type: type).item
+        item.interruption_class = .planned_gate
+        #expect(DecisionCardComposition.reasonPlacement(for: item) == .recordedContext)
+        // Details still carry it in full.
+        #expect(DecisionCardComposition.reason(for: item)?.text == item.reason)
+
+        item.interruption_class = .exceptional
+        item.reason =
+            "The source issue could not be closed automatically; decide the fallback. "
+            + "This notice does not hold the pull request."
+        #expect(DecisionCardComposition.reasonPlacement(for: item) == .underAsk)
+    }
+
+    /// A blocked item's reason says what the run waits on and since when.
+    /// It leaves the card's face only where the lead and the Waiting fact
+    /// say both, which is the one wait the daemon writes today: a
+    /// specification approval. An item with no typed wait, or a wait whose
+    /// reason no writer defines yet, keeps the reason under the ask (plan
+    /// §9 revision 82).
+    @Test func aBlockedReasonLeavesTheFaceOnlyWhereTheLeadStatesTheWait() throws {
+        let now = AttentionFixtures.createdInstant
+        var item = AttentionFixtures.fixture(type: .blocked).item
+        let wait = try #require(item.blocked_on?.value1)
+        #expect(wait.kind == .spec_approval)
+        #expect(DecisionCardComposition.reasonPlacement(for: item) == .detailsOnly)
+        // What stands in for the reason: the lead and the duration.
+        #expect(AttentionDisplay.ask(item) == "Waiting on specification approval.")
+        #expect(AttentionDisplay.cardFacts(item, now: now).map(\.label).contains("Waiting"))
+        // Details still carry it in full.
+        #expect(DecisionCardComposition.reason(for: item)?.text == item.reason)
+
+        for kind in [Components.Schemas.BlockedWaitKind.pr_checks, .external_review] {
+            item.blocked_on = .init(
+                value1: .init(kind: kind, since: wait.since, item_id: nil, pr_reference: nil))
+            #expect(DecisionCardComposition.reasonPlacement(for: item) == .underAsk)
+        }
+
+        item.blocked_on = nil
+        #expect(DecisionCardComposition.reasonPlacement(for: item) == .underAsk)
+    }
+
+    /// Survey frame 5.5: a system-health item's reason is the daemon's
+    /// finding, so it reads as the card's statement and stays ahead of the
+    /// actions. Every other reason the shell draws is the ask's second line.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func onlyTheSystemHealthReasonReadsAsTheCardsStatement(
+        type: Components.Schemas.AttentionType
+    ) {
+        #expect(
+            DecisionCardComposition.reasonFace(for: type)
+                == (type == .system_health ? .statement : .secondLine))
+        #expect(DecisionCardComposition.reasonPlacement(for: .system_health) == .underAsk)
     }
 
     /// The finding card's reason says what accepting does. It may fold only
@@ -421,22 +519,6 @@ import Testing
         #expect(DecisionRecommendationPresentation.of(recommended) != nil)
         #expect(DecisionCardComposition.reasonPlacement(for: recommended) == .recordedContext)
         #expect(DecisionCardComposition.reasonPlacement(for: unrecommended) == .underAsk)
-    }
-
-    /// Visual audit D06 to D08: the question card bounds only its options,
-    /// the final review only the daemon's checklist, and the dispute reads
-    /// its claim as prose, so all three quote their agent sections (R5);
-    /// every other type keeps the dashed card around agent prose.
-    @Test(arguments: Components.Schemas.AttentionType.allCases)
-    func agentSectionsAreQuotedOnlyOnTheApprovedCards(
-        type: Components.Schemas.AttentionType
-    ) {
-        let quoted: [Components.Schemas.AttentionType] = [
-            .agent_question, .ready_for_final_review, .review_dispute,
-        ]
-        #expect(
-            DecisionCardComposition.agentSectionFrame(for: type)
-                == (quoted.contains(type) ? .quoted : .dashedCard))
     }
 
     /// Visual audit D08: the dispute leads with the claim the snapshot
@@ -490,14 +572,20 @@ import Testing
             composition.cardLeadClaims(from: item.agent_claims, prominentClaimIndex: nil).isEmpty)
     }
 
-    /// Only the dispute's claim is its own lead content. A failure card's
-    /// attachment claims stay supporting context when none is readable, and
-    /// no other card draws a claim in the card that its platform lists
-    /// elsewhere.
+    /// Only the dispute's claim is its own lead content. A failure card
+    /// draws its readable claims in the card but its attachment claims stay
+    /// supporting context when none is readable, and no other card draws a
+    /// claim in the card that its platform lists elsewhere.
     @Test(arguments: Components.Schemas.AttentionType.allCases)
     func onlyTheDisputeLeadsWithItsClaim(type: Components.Schemas.AttentionType) {
         let composition = DecisionCardComposition.forType(type)
         #expect(composition.leadsWithItsClaim == (type == .review_dispute))
+        // The failure card reads its diagnostic in the card, between its
+        // facts and its stages (frame 5.3), without leading with it.
+        // The task proposal reads the proposal itself the same way (5.4).
+        #expect(
+            composition.placesReadableClaimsInCard
+                == [.execution_failure, .task_proposal].contains(type))
 
         var attachment = AttentionFixtures.fixture(type: .execution_failure).item.agent_claims[0]
         attachment.label = "screenshot"
@@ -507,47 +595,119 @@ import Testing
                 composition.cardLeadClaims(from: [attachment], prominentClaimIndex: nil).isEmpty)
         }
         if type == .execution_failure {
-            #expect(composition.claims(from: [attachment], at: 3, prominentClaimIndex: nil).isEmpty)
+            #expect(composition.claims(from: [attachment], at: 2, prominentClaimIndex: nil).isEmpty)
             #expect(
                 composition.claims(from: [attachment], at: 6, prominentClaimIndex: nil)
                     == [attachment])
         }
     }
 
+    private func ranking(
+        _ item: Components.Schemas.AttentionItem,
+        recommending recommended: Components.Schemas.Action? = nil
+    ) -> DecisionActionRanking {
+        DecisionActionRanking(
+            requested: item.requested_decision, recommendedAction: recommended,
+            alsoOverflowing: DecisionCardComposition.overflowActions(for: item._type))
+    }
+
     /// Visual audit D07: View PR is the final review's filled button, and a
     /// card never shows two, so it yields to a recommendation block.
     @Test func viewPRIsFilledUnlessARecommendationHoldsTheFilledButton() {
-        let requested = AttentionFixtures.fixture(type: .ready_for_final_review).item
-            .requested_decision
-        let plain = DecisionActionRanking(requested: requested)
+        let item = AttentionFixtures.fixture(type: .ready_for_final_review).item
+        let plain = ranking(item)
         #expect(plain.reviewing == .open_pr)
-        #expect(DecisionCardComposition.reviewingActionIsFilled(plain))
+        #expect(DecisionCardComposition.filledAction(for: item, ranking: plain) == .open_pr)
 
-        let recommended = DecisionActionRanking(
-            requested: requested, recommendedAction: .return_to_agent)
+        let recommended = ranking(item, recommending: .return_to_agent)
         #expect(recommended.reviewing == .open_pr)
-        #expect(!DecisionCardComposition.reviewingActionIsFilled(recommended))
+        #expect(DecisionCardComposition.filledAction(for: item, ranking: recommended) == nil)
+
+        // Frame 7.3: a stale review fills nothing, because the proof no
+        // longer covers the head View PR would open.
+        let stale = AttentionFixtures.staleReady().item
+        #expect(DecisionCardComposition.isStale(stale))
+        #expect(!DecisionCardComposition.isStale(item))
+        #expect(DecisionCardComposition.filledAction(for: stale, ranking: ranking(stale)) == nil)
     }
 
-    /// The question card fills Answer and Retry, once, and gives the fill up
-    /// to a recommendation block. No other type fills a principal action.
+    /// The question card fills Answer and Retry, and gives the fill up to a
+    /// recommendation block. The fill names an action, and the row fills
+    /// only its first button, so a repeated request never draws two.
     @Test func answerAndRetryTakesTheQuestionCardsOneFill() {
-        let plain = DecisionActionRanking(requested: [.answer_without_retry, .answer_and_retry, .stop])
+        var item = AttentionFixtures.fixture(type: .agent_question).item
+        item.requested_decision = [.answer_without_retry, .answer_and_retry, .stop]
+        let plain = ranking(item)
         #expect(plain.principal.contains(.answer_and_retry))
+        #expect(DecisionCardComposition.filledAction(for: item, ranking: plain) == .answer_and_retry)
+
         #expect(
-            DecisionCardComposition.filledPrincipalIndex(for: .agent_question, ranking: plain)
-                == plain.principal.firstIndex(of: .answer_and_retry))
+            DecisionCardComposition.filledAction(for: item, ranking: ranking(item, recommending: .stop))
+                == nil)
 
-        let repeated = DecisionActionRanking(requested: [.answer_and_retry, .answer_and_retry])
-        #expect(DecisionCardComposition.filledPrincipalIndex(for: .agent_question, ranking: repeated) == 0)
+        item.requested_decision = [.answer_without_retry, .stop]
+        #expect(DecisionCardComposition.filledAction(for: item, ranking: ranking(item)) == nil)
+    }
 
-        let recommended = DecisionActionRanking(
-            requested: [.answer_and_retry, .answer_without_retry, .stop], recommendedAction: .stop)
-        #expect(DecisionCardComposition.filledPrincipalIndex(for: .agent_question, ranking: recommended) == nil)
+    /// R6: one control is filled, or none. Without a recommendation the fill
+    /// goes to the type's one forward action; a type whose choices are peers,
+    /// and the three with no frame, fill nothing, so View PR is an outline
+    /// there.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func theFillGoesToTheTypesForwardActionOrToNothing(type: Components.Schemas.AttentionType) {
+        let forward: [Components.Schemas.AttentionType: Components.Schemas.Action] = [
+            .agent_question: .answer_and_retry, .ready_for_final_review: .open_pr,
+            .execution_failure: .retry, .task_proposal: .start, .effect_proposal: .approve,
+            .system_health: .acknowledge,
+        ]
+        var item = AttentionFixtures.fixture(type: type).item
+        #expect(DecisionCardComposition.forwardAction(for: type) == forward[type])
+        #expect(DecisionCardComposition.filledAction(for: item, ranking: ranking(item)) == forward[type])
 
-        let withoutRetry = DecisionActionRanking(requested: [.answer_without_retry, .stop])
-        #expect(DecisionCardComposition.filledPrincipalIndex(for: .agent_question, ranking: withoutRetry) == nil)
-        #expect(DecisionCardComposition.filledPrincipalIndex(for: .spec_approval, ranking: plain) == nil)
+        // A card that offers View PR beside peers leaves it an outline.
+        item.requested_decision.append(.open_pr)
+        let withPullRequest = DecisionCardComposition.filledAction(for: item, ranking: ranking(item))
+        #expect(withPullRequest == forward[type])
+    }
+
+    /// A recommendation the card draws holds the fill in its own block, so
+    /// the row under it fills nothing on any type: no card draws two.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func aDrawnRecommendationLeavesTheRowUnfilled(type: Components.Schemas.AttentionType) throws {
+        let item = AttentionFixtures.fixture(type: type).item
+        guard let recommended = item.requested_decision.first else { return }
+        let recommending = ranking(item, recommending: recommended)
+        #expect(recommending.recommended == recommended)
+        #expect(DecisionCardComposition.filledAction(for: item, ranking: recommending) == nil)
+    }
+
+    /// The fill is never a destructive action, and never one the row does
+    /// not draw: an action under More Actions cannot be the filled button.
+    @Test func theFillIsNeverDestructiveOrOutOfTheRow() {
+        var health = AttentionFixtures.fixture(type: .system_health).item
+        health.requested_decision = [.run_doctor, .resume_unattended, .stop_unattended]
+        #expect(DecisionCardComposition.filledAction(for: health, ranking: ranking(health)) == nil)
+
+        for type in Components.Schemas.AttentionType.allCases {
+            let item = AttentionFixtures.fixture(type: type).item
+            if let filled = DecisionCardComposition.filledAction(for: item, ranking: ranking(item)) {
+                #expect(AttentionDisplay.confirmationConsequence(filled, for: item) == nil)
+                #expect(!ranking(item).overflow.contains(filled))
+            }
+        }
+    }
+
+    /// Discuss sits under More Actions on spec approval only, where the
+    /// conversation is the place a reply starts (frame 5.1). The menu still
+    /// draws when Discuss is its one entry.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func discussMovesUnderMoreActionsOnSpecApprovalOnly(type: Components.Schemas.AttentionType) {
+        var item = AttentionFixtures.fixture(type: type).item
+        item.requested_decision = [.approve, .discuss]
+        let ranked = ranking(item)
+        #expect(ranked.overflow.contains(.discuss) == (type == .spec_approval))
+        #expect(ranked.principal.contains(.discuss) == (type != .spec_approval))
+        #expect(DecisionCardComposition.overflowActions(for: type) == (type == .spec_approval ? [.discuss] : []))
     }
 
     /// Visual audit D06: the agent's own question leads, so the shell's
@@ -577,8 +737,8 @@ import Testing
         #expect(DecisionCardComposition.reasonPlacement(for: empty) == .underAsk)
     }
 
-    /// Only the question's placement depends on the item; every other type
-    /// answers from its type alone.
+    /// Each fixture is its type's ordinary item, so its placement is the
+    /// one its type names; the per-item tests cover the items that differ.
     @Test(arguments: Components.Schemas.AttentionType.allCases)
     func reasonPlacementFollowsTheTypeForATypedItem(
         type: Components.Schemas.AttentionType
@@ -618,7 +778,7 @@ import Testing
 
         let rows = DecisionDetailView.claimSourceRows(claim, text: text)
         #expect(
-            rows.map(\.label) == ["Label", "Media type", "Agent invocation", "Claim digest"])
+            rows.map(\.label) == ["Label", "Media Type", "Agent Invocation", "Claim Digest"])
         #expect(rows.first?.value == claim.label)
         #expect(rows[1].value == text.media_type.rawValue)
         #expect(rows[2].value == "inv-agent-agent_question")
@@ -664,15 +824,14 @@ import Testing
         }
     }
 
-    /// Each type keeps its own lead: the final review's change summary, the
-    /// failing stage, and the disputed positions all outrank the
+    /// Each type keeps its own lead: the final review's change summary and
+    /// the disputed positions outrank the
     /// identifier-shaped facts that sit last before the actions. The final
     /// review's diff sits between its summary and its verdict (survey card
     /// 4b, R10).
     @Test func eachTypeLeadsWithItsOwnModuleNotWithItsFacts() {
         for (type, leading) in [
             (Components.Schemas.AttentionType.ready_for_final_review, DecisionCardModule.summary),
-            (.execution_failure, .stageRail),
             (.review_dispute, .comparison),
             (.review_diminishing_returns, .yieldChart),
             (.agent_question, .agentQuestion),
@@ -699,29 +858,16 @@ import Testing
         }
     }
 
-    /// R10: the ladder survey card 4b settled, on the cards composed on it
-    /// so far. Every other type keeps the earlier scale until its sweep.
-    @Test(arguments: Components.Schemas.AttentionType.allCases)
-    func onlyTheComposedCardsTakeTheRefinedScale(type: Components.Schemas.AttentionType) {
-        let refined: Set<Components.Schemas.AttentionType> = [.ready_for_final_review, .agent_question]
-        let scale = DecisionCardComposition.scale(for: type)
-        #expect(scale == (refined.contains(type) ? .refined : .legacy))
-    }
-
-    @Test func refinedScaleIsTheLadderCard4bSettled() {
-        let scale = DecisionCardComposition.Scale.refined
+    /// R10: the ladder survey card 4b settled, which every decision type
+    /// now draws on.
+    @Test func theCardScaleIsTheLadderCard4bSettled() {
+        let scale = DecisionCardComposition.Scale.self
         #expect(scale.sectionGap == 22)
         #expect(scale.moduleGap == 11)
         #expect(scale.controlGap == 10)
         #expect(scale.foldLead == 18)
-        #expect(scale.drawsFoldHairline)
         #expect(scale.padding(compact: false) == .init(top: 28, leading: 28, bottom: 24, trailing: 28))
         #expect(scale.padding(compact: true) == .init(top: 18, leading: 20, bottom: 18, trailing: 20))
-        #expect(!scale.drawsReturnGlyph)
-        #expect(scale.overflowLabel == "More Actions")
-        #expect(DecisionCardComposition.Scale.legacy.overflowLabel == "More actions")
-        #expect(!DecisionCardComposition.Scale.legacy.drawsFoldHairline)
-        #expect(DecisionCardComposition.Scale.legacy.drawsReturnGlyph)
     }
 
     /// The reviewing action opens the control group the action region
@@ -780,21 +926,29 @@ import Testing
         #expect(DecisionYieldPresentation(rounds: []).foldSummary == "0 rounds")
     }
 
-    /// R28: the Change row reads its counts aloud in words, since the plus
+    /// R28: a change row reads its counts aloud in words, since the plus
     /// and minus signs carry the meaning only on screen.
-    @Test func changeRowSpeaksItsCountsInWords() {
+    @Test func changeRowSpeaksItsCountsInWords() throws {
         #expect(
-            DecisionChangeRow.accessibilityLabel(
-                .init(
+            DecisionChangeRow(
+                diff: .init(
                     files_changed: 9, additions: 412, deletions: 88, base_sha: "base",
-                    head_sha: "head"))
-                == "Change: 412 added, 88 removed, 9 files")
+                    head_sha: "head")
+            ).spokenLabel == "Change: 412 added, 88 removed, 9 files")
         #expect(
-            DecisionChangeRow.accessibilityLabel(
-                .init(
+            DecisionChangeRow(
+                diff: .init(
                     files_changed: 1, additions: 3, deletions: 0, base_sha: "base",
-                    head_sha: "head"))
-                == "Change: 3 added, 0 removed, 1 file")
+                    head_sha: "head")
+            ).spokenLabel == "Change: 3 added, 0 removed, 1 file")
+
+        let revision = try #require(
+            AttentionFixtures.revisedSpecification().item
+                .spec_revision?.value1)
+        let row = DecisionChangeRow(specification: revision.diff, sinceRevision: 1)
+        #expect(row.keyword == "Change Since Revision 1")
+        #expect(row.counts.plain == "+2 \u{2212}1")
+        #expect(row.spokenLabel == "Change Since Revision 1: 2 lines added, 1 removed")
     }
 
     @Test func checklistUsesNeutralSuccessAndFailureOnlyWhereTheFactFails() throws {
@@ -825,24 +979,39 @@ import Testing
                 observed: "feedface",
                 observed_at: Date(timeIntervalSince1970: 0)))
         let invalidatedChecklist = try #require(DecisionChecklistPresentation(invalidated))
+        // Frame 7.3: the chip reads Stale beside what the verdict was, and
+        // the moved coordinate is a stale row, not a failed requirement, so
+        // the line counts no failure.
         #expect(invalidatedChecklist.verdict?.result == .failed)
-        #expect(invalidatedChecklist.verdict?.value == "Invalidated")
+        #expect(invalidatedChecklist.verdict?.value == "Stale")
+        #expect(invalidatedChecklist.priorVerdict == "was Clean")
         #expect(
             invalidatedChecklist.summary
-                == "Readiness checklist: Invalidated, 2 failed, 1 note, 3 passed.")
+                == "Readiness checklist: Stale, was Clean, 1 note, 3 passed.")
         #expect(
             invalidatedChecklist.accessibilitySummary.contains(
-                "Verification verdict: Invalidated, needs attention"))
+                "Verification verdict: Stale, needs attention"))
+        #expect(
+            invalidatedChecklist.accessibilitySummary.contains(
+                "Bound to: Head cafebabe → feedface · Base main@deadbeef, stale"))
 
         var legacyInvalidated = invalidated
         legacyInvalidated.readiness = nil
         legacyInvalidated.readiness_detail = nil
         let legacyChecklist = try #require(DecisionChecklistPresentation(legacyInvalidated))
         #expect(legacyChecklist.verdict?.result == .failed)
-        #expect(legacyChecklist.verdict?.value == "Invalidated")
+        #expect(legacyChecklist.verdict?.value == "Stale")
+        #expect(legacyChecklist.priorVerdict == nil)
         #expect(
             legacyChecklist.accessibilitySummary.contains(
-                "Verification verdict: Invalidated, needs attention"))
+                "Verification verdict: Stale, needs attention"))
+        // With no bound coordinates to lead with, the invalidation keeps
+        // its own row.
+        #expect(
+            legacyChecklist.rows.first
+                == .init(
+                    label: "Head changed", value: "cafebabe → feedface", result: .failed,
+                    isStale: true))
 
         var informationalOnly = AttentionFixtures.fixture(type: .ready_for_final_review).item
         informationalOnly.readiness = nil
@@ -921,15 +1090,18 @@ import Testing
             degraded.summary
                 == "Readiness checklist: Degraded, 1 waived, 1 advisory, 1 note, 4 passed.")
 
-        // The daemon's invalidation demotes the verdict and its bound
-        // coordinates and shows both sides of the divergence.
+        // The daemon's invalidation demotes the verdict, and the Bound-to
+        // row leads with the coordinate that moved and both of its values
+        // (frame 7.3), so no second row repeats the pair.
         let stale = try #require(DecisionChecklistPresentation(AttentionFixtures.staleReady().item))
-        #expect(stale.verdict == .init(label: "Verification verdict", value: "Invalidated", result: .failed))
-        #expect(stale.rows[0] == .init(label: "Bound to", value: "Head cafebabe · Base main@deadbeef", result: .failed))
+        #expect(stale.verdict == .init(label: "Verification verdict", value: "Stale", result: .failed))
         #expect(
-            stale.rows[1]
-                == .init(label: "Head changed", value: "bound cafebabe, observed feedface", result: .failed))
-        #expect(stale.rows[2].result == .note)
+            stale.rows[0]
+                == .init(
+                    label: "Bound to", value: "Head cafebabe → feedface · Base main@deadbeef",
+                    result: .failed, isStale: true))
+        #expect(stale.rows.filter(\.isStale).count == 1)
+        #expect(stale.rows[1].result == .note)
 
         // A base advance the watch observed is the other staleness axis: the
         // verdict is still the daemon's, but it no longer describes the base.
@@ -941,13 +1113,37 @@ import Testing
         let advancedChecklist = try #require(DecisionChecklistPresentation(advanced))
         #expect(
             advancedChecklist.verdict
-                == .init(label: "Verification verdict", value: "Clean, stale", result: .failed))
-        #expect(advancedChecklist.rows[0].result == .failed)
+                == .init(label: "Verification verdict", value: "Stale", result: .failed))
+        #expect(advancedChecklist.priorVerdict == "was Clean")
         #expect(
-            advancedChecklist.rows.first(where: { $0.label == "Base freshness" })
+            advancedChecklist.rows[0]
                 == .init(
-                    label: "Base freshness", value: "Advanced past deadbeef, now 0badf00d",
-                    result: .failed))
+                    label: "Bound to", value: "Base main@deadbeef → 0badf00d · Head cafebabe",
+                    result: .failed, isStale: true))
+        // The Bound-to row carries the advance, so the freshness row does
+        // not say it a second time.
+        #expect(advancedChecklist.rows.first(where: { $0.label == "Base freshness" }) == nil)
+
+        // Frame 7.3's notice: one sentence, built from the same typed
+        // facts. An item with no verdict to name, or an invalidation whose
+        // coordinates are not revisions, draws none.
+        #expect(
+            DecisionCardComposition.staleNotice(for: advanced)
+                == "The base advanced after verification. The verdict below was clean at head "
+                + "cafebabe against main@deadbeef; main is now at 0badf00d.")
+        #expect(
+            DecisionCardComposition.staleNotice(for: AttentionFixtures.staleReady().item)
+                == "The head changed after verification. The verdict below was clean at head "
+                + "cafebabe; the head is now at feedface.")
+        var retargeted = AttentionFixtures.staleReady().item
+        retargeted.readiness_invalidation?.value1.reason = .retargeted
+        #expect(DecisionCardComposition.staleNotice(for: retargeted) == nil)
+        var unverdicted = advanced
+        unverdicted.readiness = nil
+        #expect(DecisionCardComposition.staleNotice(for: unverdicted) == nil)
+        #expect(
+            DecisionCardComposition.staleNotice(
+                for: AttentionFixtures.fixture(type: .ready_for_final_review).item) == nil)
         #expect(
             AttentionDisplay.shortRevision("0123456789abcdef0123456789abcdef01234567") == "01234567")
         // A base ref and a "repository_id#pr_number" identity are the other
@@ -1026,6 +1222,49 @@ import Testing
         #expect(presentation.summary == "Verify failed, stage 3 of 4.")
     }
 
+    /// The card lists the stages the run reached with the failure on top
+    /// (frame 5.3). A stage never reached is not history, and the summary
+    /// the rail speaks still counts it.
+    @Test func theFailureCardListsReachedStagesNewestFirst() throws {
+        let presentation = try #require(
+            DecisionStageRailPresentation.failure(
+                stages: ["Import", "Build", "Verify", "Publish"],
+                failedStageIndex: 2))
+        let listed = presentation.reachedNewestFirst
+
+        #expect(listed.entries.map(\.title) == ["Verify", "Build", "Import"])
+        #expect(listed.entries.map(\.state) == [.failed, .completed, .completed])
+        #expect(listed.summary == presentation.summary)
+    }
+
+    /// Frame 5.3 names what the failure card's sections hold: the facts are
+    /// the failure, and the agent's readable claim is its diagnostic, drawn
+    /// in the card ahead of the stages on every platform.
+    @Test func theFailureCardNamesItsFactsAndItsDiagnostic() {
+        let item = AttentionFixtures.fixture(type: .execution_failure).item
+        let composition = DecisionCardComposition.forType(.execution_failure)
+        let claims = try? #require(composition.modules.firstIndex(of: .claims))
+        let rail = try? #require(composition.modules.firstIndex(of: .stageRail))
+
+        #expect(DecisionCardComposition.factsKeyword(for: .execution_failure) == "Failure")
+        #expect(DecisionCardComposition.leadClaimsKeyword(for: .execution_failure) == "Diagnostic")
+        #expect(DecisionCardComposition.factsKeyword(for: .system_health) == "Facts")
+        if let claims, let rail {
+            #expect(claims < rail)
+            #expect(rail < composition.actionInsertionIndex)
+            for platform in [DecisionCardComposition.UnverifiedContext.Platform.mac, .phone] {
+                #expect(composition.drawsClaimsInCard(at: claims, on: platform))
+            }
+            let readable = composition.claims(
+                from: item.agent_claims, at: claims, prominentClaimIndex: nil)
+            #expect(!readable.isEmpty)
+            #expect(readable.allSatisfy { $0.text != nil })
+            #expect(
+                composition.cardLeadClaims(from: item.agent_claims, prominentClaimIndex: nil)
+                    == readable)
+        }
+    }
+
     @Test func timelineSummaryPreservesVisibleMilestoneDetails() {
         let presentation = DecisionStageRailPresentation.timeline(entries: [
             .init(
@@ -1077,6 +1316,46 @@ import Testing
             diminishing.summary
                 == "Review yield: Round 1: 4 new, 0 recurring; Round 2: 1 new, 2 recurring; Round 3: 0 new, 3 recurring."
         )
+    }
+
+    /// Frame 7.4: a dispute's positions each draw under an unverified
+    /// keyword, so the first of them, the card's first such keyword in
+    /// reading order, carries the one explanation control. A dispute with
+    /// no positions keeps it on the supplied claim.
+    @Test(arguments: DecisionCardComposition.UnverifiedContext.Platform.allCases)
+    func theDisputesFirstPositionCarriesTheExplanation(
+        platform: DecisionCardComposition.UnverifiedContext.Platform
+    ) throws {
+        let composition = DecisionCardComposition.forType(.review_dispute)
+        let item = AttentionFixtures.fixture(type: .review_dispute).item
+        let comparison = try #require(composition.modules.firstIndex(of: .comparison))
+        let claims = try #require(composition.modules.firstIndex(of: .claims))
+
+        #expect(
+            composition.infoSlot(for: item, in: .init(platform: platform, hasComparison: true))
+                == .module(comparison))
+        #expect(
+            composition.infoSlot(for: item, in: .init(platform: platform)) == .module(claims))
+    }
+
+    /// Frame 7.2: a prior comment and the agent's addressal read as
+    /// conversation. A comment the agent claimed nothing for keeps its
+    /// place with no response, never another comment's.
+    @Test @MainActor func priorCommentsPairWithTheirOwnAddressal() throws {
+        var item = AttentionFixtures.revisedSpecification().item
+        var revision = try #require(item.spec_revision?.value1)
+        let exchanges = DecisionDetailView.priorExchanges(in: item)
+
+        #expect(exchanges.map(\.id) == revision.prior_comments.map(\.comment_id))
+        #expect(exchanges.first?.marker == "on revision \(revision.prior_comments[0].iteration)")
+        #expect(exchanges.first?.response == revision.claimed_addressals.first?.response)
+
+        revision.claimed_addressals = []
+        item.spec_revision = .init(value1: revision)
+        #expect(DecisionDetailView.priorExchanges(in: item).allSatisfy { $0.response == nil })
+
+        item.spec_revision = nil
+        #expect(DecisionDetailView.priorExchanges(in: item).isEmpty)
     }
 
     @Test func comparisonSummaryPreservesBothPositions() {
@@ -1247,10 +1526,12 @@ import Testing
         #expect(engineModel.producerUnverifiedKeyword == nil)
     }
 
-    /// Every other proposal and binding field has a destination inside that
-    /// finding's own disclosure, so removing the rendering below the actions
-    /// lost nothing. The daemon's coordinates sit under their own title,
-    /// apart from the producer's rationale and evidence.
+    /// Every other proposal field has a destination inside that finding's
+    /// own disclosure, so removing the rendering below the actions lost
+    /// nothing. The daemon's coordinates sit under their own title, apart
+    /// from the producer's statements, and the binding digest stays with the
+    /// binding in Technical Details. The route list leads with the proposed
+    /// route, which states no consequence of its own.
     @Test func everyOtherFindingFieldHasADestinationInItsCardsDisclosure() throws {
         let binding = try #require(
             AttentionFixtures.fixture(type: .finding_adjudication).item
@@ -1260,36 +1541,42 @@ import Testing
 
         #expect(card.rationale == proposal.rationale)
         #expect(
-            card.proposalRows == [
-                .init("Goal relationship", "Contradictory"),
-                .init("Work-unit compatibility", "Not assessed"),
-                .init("Confidence", "High"),
-            ])
-        #expect(card.evidenceTitle == "Evidence (model-derived)")
+            card.qualities == "Contradicts the goal · High confidence · compatibility not assessed")
+        #expect(card.modelBacked)
         #expect(card.evidence == proposal.evidence)
         #expect(
             card.daemonFacts == [
                 .init("Finding", "review-finding-17", monospaced: true),
                 .init("Location", "daemon/internal/signet/service.go:214-227", monospaced: true),
-                .init("Binding digest", binding.adjudication_digest, monospaced: true),
                 .init("Run", binding.run_id, monospaced: true),
                 .init("Round", "3", monospaced: true),
             ])
+        #expect(
+            AttentionDisplay.findingAdjudicationRows(
+                AttentionFixtures.fixture(type: .finding_adjudication).item
+            ).contains(.init(label: "Adjudication Digest", value: binding.adjudication_digest)))
         #expect(card.assumptions == proposal.assumptions)
         #expect(card.citedRules == proposal.cited_rules)
+        #expect(card.citedRulesKeyword == "Cited Rules")
         #expect(
-            card.alternatives == [
+            card.routeOptions == [
+                .init(
+                    route: proposal.route, label: card.route, consequence: nil,
+                    isProposed: true),
                 .init(
                     route: .dispute, label: AttentionDisplay.label(.dispute),
-                    consequence: "Park the run: nothing is declined, fixed, or published.")
+                    consequence: "Park the run: nothing is declined, fixed, or published.",
+                    isProposed: false),
             ])
         #expect(card.gatingQuestions == proposal.open_questions)
+        #expect(card.gatingQuestionsKeyword == "Open Question")
     }
 
     /// A finding with no location, no confidence, no alternatives, and empty
     /// lists keeps its card and its coordinates, and carries nothing for the
-    /// view to draw an empty section from. A daemon-produced route labels its
-    /// evidence as the daemon's.
+    /// view to draw an empty section from. A daemon-produced route is not a
+    /// model's, so nothing of it draws as a quote, and with no alternative
+    /// there is no route list: one route is not a choice.
     @Test func aFindingWithNothingOptionalStillHasItsCard() throws {
         var binding = try #require(
             AttentionFixtures.fixture(type: .finding_adjudication).item
@@ -1312,13 +1599,13 @@ import Testing
         #expect(card.messageAccessibilityLabel == "Finding 1")
         #expect(card.producerLabel == "Daemon recommendation")
         #expect(card.producerUnverifiedKeyword == nil)
-        #expect(card.proposalRows.map(\.label) == ["Goal relationship", "Work-unit compatibility"])
-        #expect(card.evidenceTitle == "Evidence (daemon-derived)")
-        #expect(card.daemonFacts.map(\.label) == ["Finding", "Binding digest", "Run", "Round"])
+        #expect(!card.modelBacked)
+        #expect(!card.qualities.contains("confidence"))
+        #expect(card.daemonFacts.map(\.label) == ["Finding", "Run", "Round"])
         #expect(card.evidence.isEmpty)
         #expect(card.assumptions.isEmpty)
         #expect(card.citedRules.isEmpty)
-        #expect(card.alternatives.isEmpty)
+        #expect(card.routeOptions.isEmpty)
         #expect(card.gatingQuestions.isEmpty)
     }
 
@@ -1338,7 +1625,7 @@ import Testing
         #expect(
             card.routeAccessibilityLabel
                 == "Finding 1 proposed route, Model proposal (unverified): Decline the finding")
-        #expect(card.disclosureAccessibilityLabel == "Reason and alternatives, Finding 1")
+        #expect(card.disclosureAccessibilityLabel == "Reason and Alternatives, Finding 1")
     }
 
     /// A held alternative is named on the card's face, where a closed
@@ -1368,7 +1655,7 @@ import Testing
         #expect(batch.finding_adjudication?.value1.proposals.count == 2)
         #expect(
             AttentionDisplay.label(.accept_recommended_route, for: batch)
-                == "Accept all dispositions")
+                == "Accept All Dispositions")
         #expect(
             FindingCardPresentation.acceptanceScope(findingCount: 2)
                 == "Accepting covers every proposed route above: all 2 findings.")
@@ -1376,7 +1663,7 @@ import Testing
         #expect(single.finding_adjudication?.value1.proposals.count == 1)
         #expect(
             AttentionDisplay.label(.accept_recommended_route, for: single)
-                == "Accept recommended route")
+                == "Accept Recommended Route")
         #expect(
             FindingCardPresentation.acceptanceScope(findingCount: 1)
                 == "Accepting covers the proposed route for the one finding above.")
@@ -1388,7 +1675,7 @@ import Testing
                 == AttentionDisplay.label(.choose_alternative_route))
         #expect(
             AttentionDisplay.label(.accept_recommended_route, for: nil)
-                == "Accept recommended route")
+                == "Accept Recommended Route")
     }
 
     /// The option's compact mark prints no register (R21), so the spoken

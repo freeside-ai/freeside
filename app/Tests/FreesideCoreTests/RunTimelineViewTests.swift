@@ -329,6 +329,7 @@ import Testing
         specification.stages[0].name = "specification"
 
         #expect(RunDisplay.specificationLabel(specification, approval: .approved) == "Source specification")
+        #expect(RunDisplay.specificationRowLabel(specification, approval: .approved) == "Source Specification")
     }
 
     @Test func productionLaneKeepsApprovedSpecificationAfterLaterStages() {
@@ -344,15 +345,19 @@ import Testing
         #expect(RunDisplay.specificationLabel(active, approval: .approved) == "Approved specification")
         #expect(RunDisplay.specificationLabel(ready, approval: .approved) == "Approved specification")
         #expect(RunDisplay.specificationLabel(active, approval: .unavailable) == "Specification digest")
+        // The row that carries the digest takes a row label's case (R9).
+        #expect(RunDisplay.specificationRowLabel(active, approval: .approved) == "Approved Specification")
+        #expect(RunDisplay.specificationRowLabel(active, approval: .unapproved) == "Source Specification")
+        #expect(RunDisplay.specificationRowLabel(active, approval: .unavailable) == "Specification Digest")
     }
 
     @Test func headerTechnicalRowsCarryTheExactSourceValues() throws {
         var run = try #require(RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID }).run
         run.parent_run_id = "run-\(String(repeating: "a", count: 64))"
-        let rows = RunTimelineView.technicalRows(run: run, specificationLabel: "Approved specification")
+        let rows = RunTimelineView.technicalRows(run: run, specificationLabel: "Approved Specification")
         #expect(
             rows.map(\.label)
-                == ["Run ID", "Task ID", "Campaign ID", "Parent run ID", "Approved specification"])
+                == ["Run ID", "Task ID", "Campaign ID", "Parent Run ID", "Approved Specification"])
         let campaign = try #require(run.campaign_id)
         let parent = try #require(run.parent_run_id)
         #expect(rows.map(\.value) == [run.id, run.task_id, campaign, parent, run.spec_digest])
@@ -364,8 +369,8 @@ import Testing
         let hold = Components.Schemas.RunHold(
             run_id: run.id, reason: .verification_findings, first_observed_at: observed,
             last_observed_at: observed)
-        let held = RunTimelineView.technicalRows(run: run, specificationLabel: "Approved specification", hold: hold)
-        #expect(held.last?.label == "Hold code")
+        let held = RunTimelineView.technicalRows(run: run, specificationLabel: "Approved Specification", hold: hold)
+        #expect(held.last?.label == "Hold Code")
         #expect(held.last?.value == "verification_findings")
         #expect(
             RunTimelineView.technicalSummary(run: run, hold: hold)
@@ -413,7 +418,8 @@ import Testing
         specification.stages[0].name = "specification"
 
         // The header line, without the digest beside it, must not read
-        // "Specification digest"; the technical-details row label still does.
+        // "Specification digest"; the technical-details row is where a digest
+        // is named.
         #expect(
             RunDisplay.specificationHeaderLabel(active, approval: .unavailable)
                 == "Specification approval not confirmed")

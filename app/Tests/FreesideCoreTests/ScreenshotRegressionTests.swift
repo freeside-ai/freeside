@@ -455,9 +455,9 @@
                     width: 480,
                     view: AnyView(
                         MessageComposerSheet(
-                            eyebrow: "Request changes",
+                            eyebrow: "Request Changes",
                             ask: "What should the specification change?",
-                            submitLabel: "Request changes",
+                            submitLabel: "Request Changes",
                             byteLimit: 8192,
                             rendersInteractiveControls: false,
                             submit: { _, _ in true }))))
@@ -467,9 +467,9 @@
                     width: 390,
                     view: AnyView(
                         MessageComposerSheet(
-                            eyebrow: "Request changes",
+                            eyebrow: "Request Changes",
                             ask: "What should the specification change?",
-                            submitLabel: "Request changes",
+                            submitLabel: "Request Changes",
                             byteLimit: 8192,
                             rendersInteractiveControls: false,
                             submit: { _, _ in true }))))
@@ -480,9 +480,9 @@
                     colorScheme: .dark,
                     view: AnyView(
                         MessageComposerSheet(
-                            eyebrow: "Request changes",
+                            eyebrow: "Request Changes",
                             ask: "What should the specification change?",
-                            submitLabel: "Request changes",
+                            submitLabel: "Request Changes",
                             byteLimit: 8192,
                             rendersInteractiveControls: false,
                             submit: { _, _ in true }))))
@@ -493,9 +493,9 @@
                     colorScheme: .dark,
                     view: AnyView(
                         MessageComposerSheet(
-                            eyebrow: "Request changes",
+                            eyebrow: "Request Changes",
                             ask: "What should the specification change?",
-                            submitLabel: "Request changes",
+                            submitLabel: "Request Changes",
                             byteLimit: 8192,
                             rendersInteractiveControls: false,
                             submit: { _, _ in true }))))
@@ -1254,6 +1254,26 @@
                                     AttentionFixtures.staleReady().item,
                                     at: dynamicTypeSize,
                                     detailWidth: 1_200))))
+                    // Frame 7.3 at the card's own width, and the other
+                    // staleness axis (the base watch) on the phone.
+                    surfaces.append(
+                        Surface(
+                            name: "decision-ready_for_final_review-stale",
+                            view: AnyView(
+                                detail.screenshotCard(
+                                    AttentionFixtures.staleReady().item, at: dynamicTypeSize))))
+                    var baseAdvanced = snapshot.item
+                    baseAdvanced.base_freshness = .init(
+                        value1: .init(
+                            base_ref: "main", admitted_base_sha: "deadbeef",
+                            observed_base_sha: "0badf00d", advanced: true,
+                            observed_at: AttentionFixtures.createdInstant))
+                    surfaces.append(
+                        Surface(
+                            name: "decision-ready_for_final_review-stale-base-phone",
+                            width: 390,
+                            view: AnyView(
+                                detail.screenshotCard(baseAdvanced, at: dynamicTypeSize))))
                 }
 
                 if snapshot.item._type == .publish_blocked {
@@ -3009,7 +3029,7 @@
                 loadsAttachments: false,
                 showsValidationProgress: false,
                 now: screenshotNow)
-            let width = DecisionCardComposition.Scale.refined.columnWidth
+            let width = DecisionCardComposition.Scale.columnWidth
             return [("clean", clean), ("degraded", AttentionFixtures.degradedReady().item)].flatMap {
                 name, item in
                 [("light", ColorScheme.light), ("dark", ColorScheme.dark)].map { theme, scheme in

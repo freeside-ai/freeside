@@ -408,6 +408,16 @@ enum FreesideFont {
     static var actionLabel: Font { fixed("IBMPlexSans-Medm", 15, relativeTo: .body) }
     /// A text action inside a notice: the card body size, medium.
     static var noticeAction: Font { fixed("IBMPlexSans-Medm", cardBodySize, relativeTo: .body) }
+    /// A rail entry's title: the fact label's size, semibold on the entry
+    /// the rail stands on.
+    static func railTitle(emphasized: Bool) -> Font {
+        fixed(emphasized ? "IBMPlexSans-SmBld" : "IBMPlexSans", 16, relativeTo: .callout)
+    }
+    /// A rail entry's detail: the card body's size, between the title and
+    /// the mono lines under it, medium on the entry the rail stands on.
+    static func railDetail(emphasized: Bool) -> Font {
+        fixed(emphasized ? "IBMPlexSans-Medm" : "IBMPlexSans", cardBodySize, relativeTo: .body)
+    }
     /// The disclosure chevron, sized as a glyph beside the fact label.
     static var disclosureGlyph: Font { fixed("IBMPlexSans", 11, relativeTo: .callout) }
 
@@ -605,36 +615,53 @@ struct UnverifiedLabel: View {
 struct SentenceDisclosure<Content: View>: View {
     let label: String
     var summary: String? = nil
+    /// What the control is called aloud where the drawn label alone would
+    /// not say whose it is (one of several folds with the same title). Nil
+    /// speaks the label and summary as drawn.
+    var spokenLabel: String? = nil
     @Binding var isExpanded: Bool
     @ViewBuilder let content: () -> Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
-            Button {
-                isExpanded.toggle()
-            } label: {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Image(systemName: "arrowtriangle.right.fill")
-                        .font(FreesideFont.disclosureGlyph)
-                        .foregroundStyle(Color.accentText)
-                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                        .accessibilityHidden(true)
-                    labelText
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                // A touch target taller than the line, without spreading the
-                // folds a card stacks 12pt apart.
-                .padding(.vertical, 8)
-                .contentShape(Rectangle())
-                .padding(.vertical, -8)
-            }
-            .buttonStyle(.plain)
-            .freesideFocusRing(cornerRadius: 4)
-            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            spoken(toggle)
+                .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
             if isExpanded {
                 content()
             }
         }
+    }
+
+    @ViewBuilder
+    private func spoken(_ control: some View) -> some View {
+        if let spokenLabel {
+            control.accessibilityLabel(Text(spokenLabel))
+        } else {
+            control
+        }
+    }
+
+    private var toggle: some View {
+        Button {
+            isExpanded.toggle()
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "arrowtriangle.right.fill")
+                    .font(FreesideFont.disclosureGlyph)
+                    .foregroundStyle(Color.accentText)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .accessibilityHidden(true)
+                labelText
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // A touch target taller than the line, without spreading the
+            // folds a card stacks 12pt apart.
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+            .padding(.vertical, -8)
+        }
+        .buttonStyle(.plain)
+        .freesideFocusRing(cornerRadius: 4)
     }
 
     @ViewBuilder private var labelText: some View {
@@ -1201,6 +1228,10 @@ struct FactRow: View {
     /// A state drawn in the value slot in place of the text (R9). `value`
     /// holds the chip's label, so the stacking rule reads one string.
     private(set) var chip: StateChip? = nil
+    /// The value as styled text in place of the plain string, such as counts
+    /// in the diff cuts (R28). `value` holds the same line as plain text, so
+    /// the stacking rule reads one string.
+    var drawn: Text? = nil
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
@@ -1233,11 +1264,48 @@ struct FactRow: View {
         if let chip {
             chip
         } else {
-            Text(value)
+            (drawn ?? Text(value))
                 .font(FreesideFont.monoValue)
                 .foregroundStyle(valueColor ?? .ink)
         }
     }
+}
+
+/// One + / − pair in the diff cuts (R28): the added count in the add color
+/// and the removed count, behind a typographic minus, in the remove color.
+/// The cuts are `Text`, so a caller sets the pair inside a longer mono line.
+struct DiffCounts: Equatable {
+    let added: Int
+    let removed: Int
+
+    /// The pair as the plain line the cuts draw.
+    var plain: String { "+\(added) \u{2212}\(removed)" }
+
+    /// The pair as VoiceOver reads it, in words instead of signs.
+    var spoken: String { "\(added) added, \(removed) removed" }
+
+    var text: Text {
+        Text(
+            "\(Text("+\(added)").foregroundStyle(Color.diffAdd)) \(Text("\u{2212}\(removed)").foregroundStyle(Color.diffRemove))"
+        )
+    }
+
+    /// Successive measurements of one diff, earliest first.
+    static func plain(_ measurements: [DiffCounts]) -> String {
+        measurements.map(\.plain).joined(separator: growthSeparator)
+    }
+
+    static func spoken(_ measurements: [DiffCounts]) -> String {
+        measurements.map(\.spoken).joined(separator: ", then ")
+    }
+
+    static func text(_ measurements: [DiffCounts]) -> Text {
+        measurements.dropFirst().reduce(measurements.first?.text ?? Text(verbatim: "")) {
+            Text("\($0)\(growthSeparator)\($1.text)")
+        }
+    }
+
+    private static let growthSeparator = " \u{2192} "
 }
 
 /// A fact whose value is a link (R6), laid out as `FactRow` lays out a

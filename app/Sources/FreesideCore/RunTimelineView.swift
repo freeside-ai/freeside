@@ -229,11 +229,11 @@ struct RunTimelineView: View {
             rows.append(.init(label: "Campaign ID", value: campaignID))
         }
         if let parent = run.parent_run_id {
-            rows.append(.init(label: "Parent run ID", value: parent))
+            rows.append(.init(label: "Parent Run ID", value: parent))
         }
         rows.append(.init(label: specificationLabel, value: run.spec_digest))
         if let hold {
-            rows.append(.init(label: "Hold code", value: hold.reason.rawValue))
+            rows.append(.init(label: "Hold Code", value: hold.reason.rawValue))
         }
         return rows
     }
@@ -259,7 +259,7 @@ struct RunTimelineView: View {
     }
 
     var specificationLabel: String {
-        RunDisplay.specificationLabel(snapshot.run, approval: specificationApproval)
+        RunDisplay.specificationRowLabel(snapshot.run, approval: specificationApproval)
     }
 
     /// The eyebrow names the screen and the task the run belongs to, in the
