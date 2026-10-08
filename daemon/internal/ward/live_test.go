@@ -709,6 +709,8 @@ func commitLiveSeedCheckout(t *testing.T, dir string) domain.BaseRevision {
 	return base
 }
 
+// scrubbedLiveGitEnv removes inherited Git overrides and disables the default
+// excludes file, which Git reads through HOME or XDG even with global config off.
 func scrubbedLiveGitEnv() []string {
 	var env []string
 	for _, entry := range os.Environ() {
@@ -716,7 +718,11 @@ func scrubbedLiveGitEnv() []string {
 			env = append(env, entry)
 		}
 	}
-	return env
+	return append(env,
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=core.excludesFile",
+		"GIT_CONFIG_VALUE_0="+os.DevNull,
+	)
 }
 
 func TestRungitLiveIgnoresAmbientGitDir(t *testing.T) {
@@ -741,6 +747,80 @@ func TestRungitLiveIgnoresAmbientGitDir(t *testing.T) {
 	}
 	if strings.Contains(string(decoyConfig), "fixture = target") {
 		t.Error("fixture command inherited hostile GIT_DIR and updated the decoy repository")
+	}
+}
+
+func TestRungitLiveIgnoresAmbientExcludes(t *testing.T) {
+	for _, config := range []string{"xdg", "home_unset", "home_empty"} {
+		t.Run(config, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", "")
+			configDir := filepath.Join(home, ".config")
+			switch config {
+			case "xdg":
+				configDir = t.TempDir()
+				t.Setenv("XDG_CONFIG_HOME", configDir)
+			case "home_unset":
+				if err := os.Unsetenv("XDG_CONFIG_HOME"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ignoreDir := filepath.Join(configDir, "git")
+			if err := os.MkdirAll(ignoreDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(ignoreDir, "ignore"), []byte(".DS_Store\nambient-only.txt\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			for _, runner := range []string{"rungitLive", "shell"} {
+				t.Run(runner, func(t *testing.T) {
+					dir := t.TempDir()
+					rungitLive(t, dir, "init", "-q")
+					files := map[string]string{
+						".DS_Store":                              "metadata\n",
+						"ambient-only.txt":                       "visible\n",
+						"repository-only.txt":                    "ignored\n",
+						"local-only.txt":                         "ignored\n",
+						".gitignore":                             "repository-only.txt\n",
+						filepath.Join(".git", "info", "exclude"): "local-only.txt\n",
+					}
+					for name, content := range files {
+						if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+							t.Fatal(err)
+						}
+					}
+
+					runGit := func(args ...string) string {
+						t.Helper()
+						if runner == "rungitLive" {
+							return rungitLive(t, dir, args...)
+						}
+						cmd := osexec.Command("sh", append([]string{"-c", `git "$@"`, "git-fixture"}, args...)...) //nolint:gosec // fixed shell script forwards test-owned Git arguments
+						cmd.Dir = dir
+						cmd.Env = append(scrubbedLiveGitEnv(),
+							"GIT_CONFIG_GLOBAL="+os.DevNull,
+							"GIT_CONFIG_SYSTEM="+os.DevNull,
+							"GIT_CONFIG_NOSYSTEM=1",
+						)
+						out, err := cmd.CombinedOutput()
+						if err != nil {
+							t.Fatalf("shell git %s: %v: %s", strings.Join(args, " "), err, out)
+						}
+						return string(out)
+					}
+
+					runGit("add", ".DS_Store")
+					if got := runGit("ls-files", "--cached"); got != ".DS_Store\n" {
+						t.Errorf("staged files = %q, want .DS_Store", got)
+					}
+					if got := runGit("ls-files", "--others", "--exclude-standard"); got != ".gitignore\nambient-only.txt\n" {
+						t.Errorf("untracked files = %q, want only .gitignore and ambient-only.txt", got)
+					}
+				})
+			}
+		})
 	}
 }
 
