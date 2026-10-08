@@ -779,7 +779,7 @@ import Testing
             ],
             runs: [])
         let sectionRows = TaskTimelinePresentation.technicalRows(section: section)
-        #expect(sectionRows.map(\.label) == ["Campaign ID", "Approved specification digest"])
+        #expect(sectionRows.map(\.label) == ["Campaign ID", "Approved Specification Digest"])
         #expect(sectionRows.map(\.value) == [campaignID, digest])
 
         let timeline = Components.Schemas.TaskTimeline(
@@ -804,7 +804,7 @@ import Testing
         let runRows = TaskTimelinePresentation.technicalRows(run: run, in: timeline)
         #expect(
             runRows.map(\.label)
-                == ["Run ID", "Parent run ID", "Superseded by run ID", "Verification Inbox item ID"])
+                == ["Run ID", "Parent Run ID", "Superseded by Run ID", "Verification Inbox Item ID"])
         #expect(runRows.map(\.value) == [runID, parentID, successorID, "item-ready"])
         #expect(TaskTimelinePresentation.technicalRows(taskID: "task-x").map(\.value) == ["task-x"])
         // The closed disclosure names one word per kind of row it holds.
@@ -833,7 +833,7 @@ import Testing
         let rows = TaskTimelinePresentation.technicalRows(run: timeline.sections[0].runs[0], in: timeline)
         // Numbered when there is more than one, so each copy control's
         // accessibility label ("Copy Verification Inbox item ID 1") is distinct.
-        #expect(rows.map(\.label) == ["Run ID", "Verification Inbox item ID 1", "Verification Inbox item ID 2"])
+        #expect(rows.map(\.label) == ["Run ID", "Verification Inbox Item ID 1", "Verification Inbox Item ID 2"])
         #expect(rows.map(\.value) == [runID, "item-1", "item-2"])
     }
 

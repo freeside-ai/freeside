@@ -618,7 +618,7 @@ import Testing
 
         let rows = DecisionDetailView.claimSourceRows(claim, text: text)
         #expect(
-            rows.map(\.label) == ["Label", "Media type", "Agent invocation", "Claim digest"])
+            rows.map(\.label) == ["Label", "Media Type", "Agent Invocation", "Claim Digest"])
         #expect(rows.first?.value == claim.label)
         #expect(rows[1].value == text.media_type.rawValue)
         #expect(rows[2].value == "inv-agent-agent_question")

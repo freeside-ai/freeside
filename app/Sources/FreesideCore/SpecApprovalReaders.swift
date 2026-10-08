@@ -85,7 +85,7 @@ struct SpecificationReaderView: View {
             }
 
             TechnicalDetailsSection(
-                rows: [.init(label: "Daemon-bound digest", value: digest)],
+                rows: [.init(label: "Daemon-Bound Digest", value: digest)],
                 startsExpanded: expandsTechnicalDetails)
         }
     }

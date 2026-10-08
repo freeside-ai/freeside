@@ -56,8 +56,8 @@ struct DecisionRecommendationPresentation: Equatable {
             register = .daemonFact
             title = "Recommended · daemon policy"
             sourceFacts = [
-                .init(label: "Rule digest", value: daemonPolicy.rule_digest, monospaced: true),
-                .init(label: "Input digest", value: daemonPolicy.input_digest, monospaced: true),
+                .init(label: "Rule Digest", value: daemonPolicy.rule_digest, monospaced: true),
+                .init(label: "Input Digest", value: daemonPolicy.input_digest, monospaced: true),
             ]
         case .agent_judgment:
             guard let agentJudgment else { return nil }
@@ -65,14 +65,14 @@ struct DecisionRecommendationPresentation: Equatable {
             title = "Recommended · agent judgment"
             sourceFacts = [
                 .init(
-                    label: "Judgment site",
+                    label: "Judgment Site",
                     value: AttentionDisplay.label(agentJudgment.judgment_site),
                     monospaced: false),
                 .init(
-                    label: "Judgment invocation",
+                    label: "Judgment Invocation",
                     value: agentJudgment.invocation_id, monospaced: true),
                 .init(
-                    label: "Artifact digest",
+                    label: "Artifact Digest",
                     value: agentJudgment.artifact_digest, monospaced: true),
             ]
         case .project_policy:
@@ -80,12 +80,12 @@ struct DecisionRecommendationPresentation: Equatable {
             register = .projectPolicy
             title = "Recommended · project policy"
             sourceFacts = [
-                .init(label: "Policy key", value: projectPolicy.policy_key, monospaced: true),
+                .init(label: "Policy Key", value: projectPolicy.policy_key, monospaced: true),
                 .init(
-                    label: "Policy digest",
+                    label: "Policy Digest",
                     value: projectPolicy.resolved_policy_digest, monospaced: true),
                 .init(
-                    label: "Application digest",
+                    label: "Application Digest",
                     value: projectPolicy.application_digest, monospaced: true),
             ]
         }

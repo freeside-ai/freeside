@@ -291,7 +291,7 @@ import Testing
         #expect(AttentionDisplay.cardFacts(blocked, now: now)[1].value == "18h")
         #expect(
             AttentionDisplay.detailBindingRows(blocked)
-                .contains { $0.label == "Waiting since" && $0.value.hasPrefix("2026-") })
+                .contains { $0.label == "Waiting Since" && $0.value.hasPrefix("2026-") })
     }
 
     @Test func rowContextRendersTheDaemonsDisplayNamesAndMarksIdentifiers() {
@@ -455,14 +455,14 @@ import Testing
         let rows = AttentionDisplay.attachmentDigestRows(item)
 
         #expect(rows.count == item.artifact_digests.count)
-        #expect(rows.first?.label == "Evidence digest")
+        #expect(rows.first?.label == "Evidence Digest")
         // The specification claim names its own channel; every other claim
         // keeps the generic label, and no row's value changes.
         let specDigest = item.agent_claims.first { $0.label == "Specification" }?.digest
-        #expect(rows.contains { $0.label == "Specification digest" && $0.value == specDigest })
+        #expect(rows.contains { $0.label == "Specification Digest" && $0.value == specDigest })
         #expect(
             rows.dropFirst().allSatisfy {
-                $0.label == "Claim digest" || $0.label == "Specification digest"
+                $0.label == "Claim Digest" || $0.label == "Specification Digest"
             })
         #expect(Set(rows.map(\.value)) == Set(item.artifact_digests))
     }
@@ -473,9 +473,9 @@ import Testing
 
         let rows = AttentionDisplay.attachmentDigestRows(item)
 
-        let specRows = rows.filter { $0.label == "Specification digest" }
+        let specRows = rows.filter { $0.label == "Specification Digest" }
         #expect(specRows.map(\.value) == [specDigest])
-        #expect(!rows.contains { $0.label == "Claim digest" && $0.value == specDigest })
+        #expect(!rows.contains { $0.label == "Claim Digest" && $0.value == specDigest })
     }
 
     @Test func sharedAttachmentDigestKeepsBothTrustChannelLabels() {
@@ -487,10 +487,10 @@ import Testing
         let rows = AttentionDisplay.attachmentDigestRows(item)
 
         // agent_claims[0] on this fixture is the specification claim, so its
-        // digest row reads "Specification digest"; the evidence channel keeps
+        // digest row reads "Specification Digest"; the evidence channel keeps
         // the same value under its own label from the separate seen-set.
-        #expect(rows.contains(.init(label: "Evidence digest", value: digest)))
-        #expect(rows.contains(.init(label: "Specification digest", value: digest)))
+        #expect(rows.contains(.init(label: "Evidence Digest", value: digest)))
+        #expect(rows.contains(.init(label: "Specification Digest", value: digest)))
     }
 
     @Test func contextMenuEvidenceDigestsAreUniqueAndStable() {
@@ -522,7 +522,7 @@ import Testing
 
         let rows = AttentionDisplay.detailBindingRows(item)
 
-        #expect(rows.contains(.init(label: "PR head", value: "cafebabe")))
+        #expect(rows.contains(.init(label: "PR Head", value: "cafebabe")))
         #expect(rows.contains(.init(label: "Head", value: "cafebabe")))
     }
 
@@ -536,16 +536,16 @@ import Testing
 
         let rows = AttentionDisplay.detailBindingRows(item)
 
-        #expect(rows.contains(.init(label: "Diff base", value: "deadbeef")))
-        #expect(rows.contains(.init(label: "Diff head", value: "cafebabe")))
+        #expect(rows.contains(.init(label: "Diff Base", value: "deadbeef")))
+        #expect(rows.contains(.init(label: "Diff Head", value: "cafebabe")))
 
         var legacy = item
         legacy.readiness_detail = nil
         let legacyRows = AttentionDisplay.detailBindingRows(legacy)
 
-        #expect(legacyRows.contains(.init(label: "Diff base", value: "deadbeef")))
-        #expect(legacyRows.contains(.init(label: "Diff head", value: "cafebabe")))
-        #expect(!legacyRows.contains { $0.label == "Bound base" })
+        #expect(legacyRows.contains(.init(label: "Diff Base", value: "deadbeef")))
+        #expect(legacyRows.contains(.init(label: "Diff Head", value: "cafebabe")))
+        #expect(!legacyRows.contains { $0.label == "Bound Base" })
     }
 
     @Test func detailBindingsExposeExactCreatedAndDueTimestamps() {
@@ -572,7 +572,7 @@ import Testing
 
         let rows = AttentionDisplay.detailBindingRows(item, proposalDigest: digest)
 
-        #expect(rows.contains { $0.value == digest && $0.label.hasSuffix("digest") })
+        #expect(rows.contains { $0.value == digest && $0.label.hasSuffix("Digest") })
         #expect(rows.contains(.init(label: "Proposal", value: digest)))
     }
 
@@ -595,13 +595,13 @@ import Testing
 
         #expect(
             AttentionDisplay.reviewRecoveryBindingRows(item) == [
-                .init(label: "Recovery run", value: "run-review_contradiction"),
+                .init(label: "Recovery Run", value: "run-review_contradiction"),
                 .init(label: "Invocation", value: "review-run-review_contradiction-1"),
                 .init(label: "Round", value: "1"),
                 .init(label: "Base", value: "beefcafe"),
                 .init(label: "Head", value: "cafebabe"),
                 .init(
-                    label: "Failure digest",
+                    label: "Failure Digest",
                     value: "sha256:failure-review_contradiction"
                 ),
             ])
@@ -618,18 +618,18 @@ import Testing
 
         #expect(
             AttentionDisplay.reviewConfigurationRecoveryRows(item) == [
-                .init(label: "Recovery run", value: "run-review_configuration"),
+                .init(label: "Recovery Run", value: "run-review_configuration"),
                 .init(label: "Invocation", value: "review-run-review_configuration-2"),
                 .init(label: "Round", value: "2"),
                 .init(label: "Base", value: "beefcafe"),
                 .init(label: "Head", value: "cafebabe"),
                 .init(
-                    label: "Failure digest",
+                    label: "Failure Digest",
                     value: "sha256:failure-review_configuration"
                 ),
                 .init(label: "Repository", value: "owner/repo"),
                 .init(
-                    label: "Superseded profile",
+                    label: "Superseded Profile",
                     value: "sha256:profile-review_configuration"
                 ),
             ])
@@ -646,10 +646,10 @@ import Testing
 
         #expect(
             AttentionDisplay.codexReenrollmentRecoveryRows(item) == [
-                .init(label: "Auth identity", value: "codex-primary"),
-                .init(label: "Lease fence", value: "4"),
-                .init(label: "Auth store digest", value: "sha256:replacement-store"),
-                .init(label: "Token expires", value: "2026-08-12T02:44:05Z"),
+                .init(label: "Auth Identity", value: "codex-primary"),
+                .init(label: "Lease Fence", value: "4"),
+                .init(label: "Auth Store Digest", value: "sha256:replacement-store"),
+                .init(label: "Token Expires", value: "2026-08-12T02:44:05Z"),
             ])
     }
 
@@ -665,10 +665,10 @@ import Testing
         #expect(
             AttentionDisplay.findingAdjudicationRows(item) == [
                 .init(
-                    label: "Adjudication digest",
+                    label: "Adjudication Digest",
                     value: "sha256:adjudication-finding_adjudication"),
-                .init(label: "Adjudication run", value: "run-finding_adjudication"),
-                .init(label: "Adjudication round", value: "3"),
+                .init(label: "Adjudication Run", value: "run-finding_adjudication"),
+                .init(label: "Adjudication Round", value: "3"),
             ])
     }
 
@@ -701,9 +701,9 @@ import Testing
         #expect(
             AttentionDisplay.readinessSummaryRows(clean) == [
                 .init(label: "Readiness", value: "Clean"),
-                .init(label: "Evaluation set", value: "sha256:evaluation-clean"),
-                .init(label: "Bound head", value: "cafebabe"),
-                .init(label: "Bound base", value: "main@deadbeef"),
+                .init(label: "Evaluation Set", value: "sha256:evaluation-clean"),
+                .init(label: "Bound Head", value: "cafebabe"),
+                .init(label: "Bound Base", value: "main@deadbeef"),
                 .init(
                     label: "Requirement clean-verification",
                     value: "Clean verification, Required, Passed, proof sha256:recipe"),
@@ -715,7 +715,7 @@ import Testing
         #expect(
             degradedRows.prefix(2) == [
                 .init(label: "Readiness", value: "Degraded"),
-                .init(label: "Evaluation set", value: "sha256:evaluation-degraded"),
+                .init(label: "Evaluation Set", value: "sha256:evaluation-degraded"),
             ])
         #expect(
             degradedRows.contains(
@@ -744,15 +744,15 @@ import Testing
         #expect(
             AttentionDisplay.reviewYieldRows(item) == [
                 .init(
-                    label: "Review round 1",
+                    label: "Review Round 1",
                     value: "2 findings · 2 new · 0 recurring · 1 fixed · 0 declined · 1 deferred · Findings"),
                 .init(
-                    label: "Review round 2",
+                    label: "Review Round 2",
                     value: "2 findings · 1 new · 1 recurring · 1 fixed · 1 declined · 0 deferred · Findings"),
                 .init(
-                    label: "Review round 3",
+                    label: "Review Round 3",
                     value: "0 findings · 0 new · 0 recurring · 0 fixed · 0 declined · 0 deferred · Clean"),
-                .init(label: "Terminal review", value: "Clean"),
+                .init(label: "Terminal Review", value: "Clean"),
             ])
     }
 
@@ -788,11 +788,11 @@ import Testing
         let drift = AttentionFixtures.reviewDiminishing(cause: .drift_audit, verdict: .stuck).item
         #expect(
             AttentionDisplay.detailBindingRows(drift).contains(
-                .init(label: "Drift audit", value: "sha256:drift-audit-stuck")))
+                .init(label: "Drift Audit", value: "sha256:drift-audit-stuck")))
         #expect(
             !AttentionDisplay.detailBindingRows(
                 AttentionFixtures.fixture(type: .review_diminishing_returns).item
-            ).contains { $0.label == "Drift audit" })
+            ).contains { $0.label == "Drift Audit" })
     }
 
     @Test func diminishingReviewYieldRendersEveryRoundAndTerminalOutcome() {
@@ -801,15 +801,15 @@ import Testing
         #expect(
             AttentionDisplay.reviewYieldRows(item) == [
                 .init(
-                    label: "Review round 1",
+                    label: "Review Round 1",
                     value: "4 findings · 4 new · 0 recurring · 2 fixed · 1 declined · 1 deferred · Findings"),
                 .init(
-                    label: "Review round 2",
+                    label: "Review Round 2",
                     value: "3 findings · 1 new · 2 recurring · 1 fixed · 1 declined · 1 deferred · Findings"),
                 .init(
-                    label: "Review round 3",
+                    label: "Review Round 3",
                     value: "3 findings · 0 new · 3 recurring · 0 fixed · 2 declined · 1 deferred · Findings"),
-                .init(label: "Terminal review", value: "Findings"),
+                .init(label: "Terminal Review", value: "Findings"),
             ])
     }
 
@@ -946,7 +946,7 @@ import Testing
                 .init(label: "Repository ID", value: "84958515"),
                 .init(label: "Finding", value: "finding-3"),
                 .init(
-                    label: "Adjudication digest",
+                    label: "Adjudication Digest",
                     value: "sha256:" + String(repeating: "c", count: 64)),
             ])
     }
@@ -1000,7 +1000,7 @@ import Testing
                 source_issue_closure: .init(resolves: false)))
         let row = value(AttentionDisplay.effectProposalRows(revised), "Superseded proposal")
         #expect(row?.contains("leaving the issue open") == true)
-        // The prior digest is shown in full, as the sibling "Prior proposal"
+        // The prior digest is shown in full, as the sibling "Prior Proposal"
         // binding row does; a Digest is algorithm-prefixed, so it is not
         // abbreviated.
         #expect(row?.contains("sha256:prior-effect") == true)

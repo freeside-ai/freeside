@@ -764,7 +764,7 @@ enum TaskTimelinePresentation {
         if let digest = section.events.first(where: { $0.kind == .specification_approved })?
             .approved_spec_digest?.value1
         {
-            rows.append(.init(label: "Approved specification digest", value: digest))
+            rows.append(.init(label: "Approved Specification Digest", value: digest))
         }
         return rows
     }
@@ -778,10 +778,10 @@ enum TaskTimelinePresentation {
     ) -> [AttentionDisplay.BindingRow] {
         var rows: [AttentionDisplay.BindingRow] = [.init(label: "Run ID", value: run.run_id)]
         if let parent = run.parent_run_id {
-            rows.append(.init(label: "Parent run ID", value: parent))
+            rows.append(.init(label: "Parent Run ID", value: parent))
         }
         if let successor = run.superseded_by {
-            rows.append(.init(label: "Superseded by run ID", value: successor))
+            rows.append(.init(label: "Superseded by Run ID", value: successor))
         }
         // Number the rows when a remediated run recorded more than one, so each
         // row's copy control has a distinct accessibility label.
@@ -789,7 +789,7 @@ enum TaskTimelinePresentation {
         for (index, itemID) in itemIDs.enumerated() {
             let label =
                 itemIDs.count > 1
-                ? "Verification Inbox item ID \(index + 1)" : "Verification Inbox item ID"
+                ? "Verification Inbox Item ID \(index + 1)" : "Verification Inbox Item ID"
             rows.append(.init(label: label, value: itemID))
         }
         return rows

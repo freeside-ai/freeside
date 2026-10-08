@@ -1798,9 +1798,9 @@ struct DecisionDetailView: View {
     ) -> [AttentionDisplay.BindingRow] {
         [
             .init(label: "Label", value: claim.label),
-            .init(label: "Media type", value: text.media_type.rawValue),
-            .init(label: "Agent invocation", value: producerInvocationID(claim)),
-            .init(label: "Claim digest", value: claim.digest),
+            .init(label: "Media Type", value: text.media_type.rawValue),
+            .init(label: "Agent Invocation", value: producerInvocationID(claim)),
+            .init(label: "Claim Digest", value: claim.digest),
         ]
     }
 
@@ -2361,9 +2361,9 @@ struct DecisionDetailView: View {
         // publication identity for audit and copy (two bases sharing an
         // eight-character prefix are otherwise indistinguishable).
         if let merge = model.effectProposalFacts?.source_issue_closure?.value1.merge {
-            rows.append(.init(label: "Bound head", value: merge.candidate_head_sha))
-            rows.append(.init(label: "Bound base", value: "\(merge.base_ref)@\(merge.base_sha)"))
-            rows.append(.init(label: "Publication identity", value: merge.publication_identity))
+            rows.append(.init(label: "Bound Head", value: merge.candidate_head_sha))
+            rows.append(.init(label: "Bound Base", value: "\(merge.base_ref)@\(merge.base_sha)"))
+            rows.append(.init(label: "Publication Identity", value: merge.publication_identity))
         }
         if let facts = model.effectProposalFacts {
             rows.append(contentsOf: AttentionDisplay.followUpFilingDetailRows(facts))

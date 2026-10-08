@@ -259,23 +259,53 @@ enum RunDisplay {
         return .milestone("No milestone recorded")
     }
 
-    static func specificationLabel(_ run: Components.Schemas.Run, approval: TaskDisplay.SpecificationApproval) -> String
-    {
+    /// What a run's specification digest is, which the header says as a
+    /// sentence and Technical Details says as a row label.
+    private enum SpecificationStanding {
+        case source
+        case approved
+        case unconfirmed
+    }
+
+    private static func specificationStanding(
+        _ run: Components.Schemas.Run, approval: TaskDisplay.SpecificationApproval
+    ) -> SpecificationStanding {
         if run.stages.contains(where: { canonicalStageName($0.name) == "specification" }) {
-            return "Source specification"
+            return .source
         }
         switch approval {
+        case .approved: return .approved
+        case .unapproved: return .source
+        case .unavailable: return .unconfirmed
+        }
+    }
+
+    static func specificationLabel(_ run: Components.Schemas.Run, approval: TaskDisplay.SpecificationApproval) -> String
+    {
+        switch specificationStanding(run, approval: approval) {
+        case .source: return "Source specification"
         case .approved: return "Approved specification"
-        case .unapproved: return "Source specification"
-        case .unavailable: return "Specification digest"
+        case .unconfirmed: return "Specification digest"
+        }
+    }
+
+    /// The Technical Details row that carries the digest. A row label is
+    /// Title Case (R9); the header's line is prose and keeps its own case.
+    static func specificationRowLabel(
+        _ run: Components.Schemas.Run, approval: TaskDisplay.SpecificationApproval
+    ) -> String {
+        switch specificationStanding(run, approval: approval) {
+        case .source: return "Source Specification"
+        case .approved: return "Approved Specification"
+        case .unconfirmed: return "Specification Digest"
         }
     }
 
     /// The run header's plain specification line, without the digest that moved
     /// to technical details. A source or approved run names itself; an
     /// unavailable approval says so rather than labelling a digest that is no
-    /// longer beside it. `specificationLabel` keeps its wording for the
-    /// technical-details row that still carries the digest.
+    /// longer beside it. `specificationRowLabel` names the technical-details
+    /// row that still carries the digest.
     static func specificationHeaderLabel(
         _ run: Components.Schemas.Run, approval: TaskDisplay.SpecificationApproval
     ) -> String {

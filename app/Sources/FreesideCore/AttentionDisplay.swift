@@ -415,7 +415,7 @@ enum AttentionDisplay {
         return [
             .init(label: "Repository ID", value: String(filing.repository.repository_id)),
             .init(label: "Finding", value: filing.source.finding_id),
-            .init(label: "Adjudication digest", value: filing.source.adjudication_digest),
+            .init(label: "Adjudication Digest", value: filing.source.adjudication_digest),
         ]
     }
 
@@ -836,7 +836,7 @@ enum AttentionDisplay {
         }
 
         for artifact in item.evidence_snapshot {
-            append("Evidence digest", artifact.digest, seen: &seenEvidenceDigests)
+            append("Evidence Digest", artifact.digest, seen: &seenEvidenceDigests)
         }
         for claim in item.agent_claims {
             // The specification's daemon-bound digest is the one a reader
@@ -844,12 +844,12 @@ enum AttentionDisplay {
             // other claim keeps the generic label. The row's value is unchanged.
             let label =
                 claim.label == AgentClaimLabels.specification
-                ? "Specification digest" : "Claim digest"
+                ? "Specification Digest" : "Claim Digest"
             append(label, claim.digest, seen: &seenClaimDigests)
         }
         for digest in item.artifact_digests {
             guard representedDigests.insert(digest).inserted else { continue }
-            rows.append(.init(label: "Artifact digest", value: digest))
+            rows.append(.init(label: "Artifact Digest", value: digest))
         }
         return rows
     }
@@ -861,7 +861,7 @@ enum AttentionDisplay {
     static func unavailableActionRows(
         _ actions: [Components.Schemas.Action]
     ) -> [BindingRow] {
-        actions.map { .init(label: "Requested, not available here", value: label($0)) }
+        actions.map { .init(label: "Requested, Not Available Here", value: label($0)) }
     }
 
     static func detailBindingRows(
@@ -887,14 +887,14 @@ enum AttentionDisplay {
         }
         if let wait = item.blocked_on?.value1 {
             rows.append(
-                .init(label: "Waiting since", value: wait.since.formatted(.iso8601)))
+                .init(label: "Waiting Since", value: wait.since.formatted(.iso8601)))
         }
         if let hold = item.publish_block?.value1.hold_reason?.value1 {
-            rows.append(.init(label: "Hold code", value: hold.rawValue))
+            rows.append(.init(label: "Hold Code", value: hold.rawValue))
         }
-        rows.append(.init(label: "Item version", value: "\(item.item_version)"))
+        rows.append(.init(label: "Item Version", value: "\(item.item_version)"))
         if !item.pr_head_sha.isEmpty {
-            rows.append(.init(label: "PR head", value: item.pr_head_sha))
+            rows.append(.init(label: "PR Head", value: item.pr_head_sha))
         }
         // The diff's own base and head, which no other layer is guaranteed to
         // render: the checklist's "Bound to" row reads readiness_detail, which
@@ -903,12 +903,12 @@ enum AttentionDisplay {
         // in the technical bindings, so the card can stop repeating them
         // without losing them (#1107).
         if let diff = item.diff_stats?.value1 {
-            rows.append(.init(label: "Diff base", value: diff.base_sha))
-            rows.append(.init(label: "Diff head", value: diff.head_sha))
+            rows.append(.init(label: "Diff Base", value: diff.base_sha))
+            rows.append(.init(label: "Diff Head", value: diff.head_sha))
         }
         rows.append(contentsOf: attachmentDigestRows(item))
         if let priorProposalDigest {
-            rows.append(.init(label: "Prior proposal", value: priorProposalDigest))
+            rows.append(.init(label: "Prior Proposal", value: priorProposalDigest))
         }
         if let proposalDigest {
             rows.append(.init(label: "Proposal", value: proposalDigest))
@@ -920,7 +920,7 @@ enum AttentionDisplay {
         rows.append(contentsOf: readinessSummaryRows(item))
         rows.append(contentsOf: reviewYieldRows(item))
         if let drift = item.review_diminishing?.value1.drift_audit?.value1 {
-            rows.append(.init(label: "Drift audit", value: drift.audit_digest))
+            rows.append(.init(label: "Drift Audit", value: drift.audit_digest))
         }
         return rows
     }
@@ -954,7 +954,7 @@ enum AttentionDisplay {
         guard let history = item.yield_history?.value1 else { return [] }
         var rows = history.rounds.map { round in
             BindingRow(
-                label: "Review round \(round.round)",
+                label: "Review Round \(round.round)",
                 value: "\(round.findings_ingested) findings · \(round.new_findings) new · "
                     + "\(round.recurring_findings) recurring · \(round.fixed) fixed · "
                     + "\(round.declined) declined · \(round.deferred) deferred · "
@@ -963,7 +963,7 @@ enum AttentionDisplay {
         }
         rows.append(
             .init(
-                label: "Terminal review",
+                label: "Terminal Review",
                 value: reviewOutcomeLabel(history.terminal_outcome)))
         return rows
     }
@@ -988,12 +988,12 @@ enum AttentionDisplay {
         }
         var rows = [
             BindingRow(label: "Readiness", value: verdict),
-            BindingRow(label: "Evaluation set", value: readiness.evaluation_set_digest),
+            BindingRow(label: "Evaluation Set", value: readiness.evaluation_set_digest),
         ]
         guard let detail = item.readiness_detail?.value1 else { return rows }
-        rows.append(BindingRow(label: "Bound head", value: detail.candidate_head))
+        rows.append(BindingRow(label: "Bound Head", value: detail.candidate_head))
         rows.append(
-            BindingRow(label: "Bound base", value: "\(detail.base.base_ref)@\(detail.base.base_sha)"))
+            BindingRow(label: "Bound Base", value: "\(detail.base.base_ref)@\(detail.base.base_sha)"))
         for requirement in detail.requirements {
             var value = [
                 label(requirement.check_class), label(requirement.kind), label(requirement.state),
@@ -1071,9 +1071,9 @@ enum AttentionDisplay {
     ) -> [BindingRow] {
         guard let binding = item.finding_adjudication?.value1 else { return [] }
         return [
-            BindingRow(label: "Adjudication digest", value: binding.adjudication_digest),
-            BindingRow(label: "Adjudication run", value: binding.run_id),
-            BindingRow(label: "Adjudication round", value: "\(binding.round)"),
+            BindingRow(label: "Adjudication Digest", value: binding.adjudication_digest),
+            BindingRow(label: "Adjudication Run", value: binding.run_id),
+            BindingRow(label: "Adjudication Round", value: "\(binding.round)"),
         ]
     }
 
@@ -1162,12 +1162,12 @@ enum AttentionDisplay {
     ) -> [BindingRow] {
         guard let binding = item.review_recovery_binding?.value1 else { return [] }
         return [
-            BindingRow(label: "Recovery run", value: binding.run_id),
+            BindingRow(label: "Recovery Run", value: binding.run_id),
             BindingRow(label: "Invocation", value: binding.invocation_id),
             BindingRow(label: "Round", value: "\(binding.round)"),
             BindingRow(label: "Base", value: binding.base_sha),
             BindingRow(label: "Head", value: binding.head_sha),
-            BindingRow(label: "Failure digest", value: binding.failure_digest),
+            BindingRow(label: "Failure Digest", value: binding.failure_digest),
         ]
     }
 
@@ -1176,14 +1176,14 @@ enum AttentionDisplay {
     ) -> [BindingRow] {
         guard let binding = item.review_configuration_recovery?.value1 else { return [] }
         return [
-            BindingRow(label: "Recovery run", value: binding.run_id),
+            BindingRow(label: "Recovery Run", value: binding.run_id),
             BindingRow(label: "Invocation", value: binding.invocation_id),
             BindingRow(label: "Round", value: "\(binding.round)"),
             BindingRow(label: "Base", value: binding.base_sha),
             BindingRow(label: "Head", value: binding.head_sha),
-            BindingRow(label: "Failure digest", value: binding.failure_digest),
+            BindingRow(label: "Failure Digest", value: binding.failure_digest),
             BindingRow(label: "Repository", value: binding.repo),
-            BindingRow(label: "Superseded profile", value: binding.superseded_profile_digest),
+            BindingRow(label: "Superseded Profile", value: binding.superseded_profile_digest),
         ]
     }
 
@@ -1192,11 +1192,11 @@ enum AttentionDisplay {
     ) -> [BindingRow] {
         guard let binding = item.codex_reenrollment_recovery_binding?.value1 else { return [] }
         return [
-            BindingRow(label: "Auth identity", value: binding.auth_identity_id),
-            BindingRow(label: "Lease fence", value: "\(binding.lease_fence)"),
-            BindingRow(label: "Auth store digest", value: binding.auth_store_digest),
+            BindingRow(label: "Auth Identity", value: binding.auth_identity_id),
+            BindingRow(label: "Lease Fence", value: "\(binding.lease_fence)"),
+            BindingRow(label: "Auth Store Digest", value: binding.auth_store_digest),
             BindingRow(
-                label: "Token expires",
+                label: "Token Expires",
                 value: binding.access_token_expires_at.formatted(.iso8601)
             ),
         ]

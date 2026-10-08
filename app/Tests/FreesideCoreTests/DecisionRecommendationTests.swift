@@ -52,7 +52,7 @@ import Testing
         #expect(presentation.title == "Recommended · daemon policy")
         #expect(presentation.label == "Recommended · daemon policy")
         #expect(
-            presentation.sourceFacts.map(\.label) == ["Rule digest", "Input digest"])
+            presentation.sourceFacts.map(\.label) == ["Rule Digest", "Input Digest"])
         #expect(presentation.sourceFacts.allSatisfy { $0.monospaced })
         #expect(presentation.confidence == nil)
     }
