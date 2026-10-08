@@ -31,8 +31,11 @@
 # the durable export, networkless verification evidence, publication outcome,
 # and exact published head with the real-run harness test. A durable
 # specification failure exits promptly with its recorded diagnostic instead of
-# waiting for the production deadline. Successful verification keeps this same
-# daemon alive for a walkthrough until `real-work-session.sh complete` is used.
+# waiting for the production deadline. A verified ready publication keeps this
+# same daemon alive for a walkthrough until `real-work-session.sh complete` is
+# used. If supervision first observes a completed implementation, verification
+# authenticates its completed history and exact remote merge, then exits through
+# cleanup without granting execution authority or entering the walkthrough.
 # See docs/production-walkthrough.md for completion, recovery and restoration.
 #
 # A scope-conflict question keeps the current policy immutable. To widen scope,
@@ -1134,7 +1137,7 @@ fi
 
 # Follow durable, read-only snapshots instead of rerunning the integration
 # verifier as a polling mechanism. The verifier below remains the one final
-# success authority after observation reaches published.
+# success authority after observation reaches published or completed.
 set +e
 real_work_supervise "$workdir/freesided" "$db_path" "$specification_run_id" \
 	"$implementation_run_id" "$daemon_pid" \
@@ -1166,18 +1169,43 @@ if [[ "$client_target" == true ]]; then
   } > "$workdir/verification-env.sh"
 fi
 
+# The snapshot selects evidence to verify, never success. Bind it to the
+# selected implementation while preserving the admission invocation: a
+# successor's producing invocation is authenticated by the verifier itself.
+verification_state=$(python3 - "$last_supervision_snapshot" "$implementation_run_id" <<'PY'
+import json, sys
+with open(sys.argv[1]) as stream:
+    snapshot = json.load(stream)
+if (not isinstance(snapshot, dict) or not sys.argv[2]
+        or snapshot.get("run_id") != sys.argv[2]
+        or snapshot.get("state") not in ("published", "completed")):
+    raise SystemExit("run-real-work: final snapshot does not match the selected implementation result")
+print(snapshot["state"])
+PY
+)
+verification_mode_env=(FREESIDE_REAL_RUN_RETAINED=0)
+if [[ "$verification_state" == completed ]]; then
+  verification_evidence_dir=$(mktemp -d "$workdir/verify-final.XXXXXX")
+  verify_checkpoint="$verification_evidence_dir/completed.json"
+  verification_mode_env=(FREESIDE_REAL_RUN_RETAINED=1 FREESIDE_REAL_RUN_CHECKPOINT_PATH="$verify_checkpoint")
+fi
+
 # Positive evidence, not the absence of an error: a Go test binary exits 0
-# for a skipped test too, so require the harness's own success line.
+# for a skipped test too, so require this attempt's own success line.
 verify_log="$workdir/verify-final.log"
+: >"$verify_log"
 set +e
+# The specification array can start with -u; env options precede assignments.
 env -u FREESIDE_REAL_RUN_RUN_ID -u FREESIDE_REAL_RUN_INVOCATION \
+	-u FREESIDE_REAL_RUN_CHECKPOINT_PATH \
 	"${specification_verifier_env[@]}" \
+	"${verification_mode_env[@]}" \
 	${target_task_id:+FREESIDE_REAL_RUN_TARGET_TASK_ID="$target_task_id"} \
   FREESIDE_REAL_RUN_LIVE_TEST=1 \
   FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID="$implementation_run_id" \
   FREESIDE_REAL_RUN_IMPLEMENTATION_INVOCATION="$implementation_invocation_id" \
   go test -C "$repo_root/daemon" ./internal/integration/ \
-    -run TestRealWorkItemCompletesProductionPipeline -count=1 -v 2>&1 | tee -a "$verify_log"
+    -run TestRealWorkItemCompletesProductionPipeline -count=1 -v 2>&1 | tee "$verify_log"
 verify_status=${PIPESTATUS[0]}
 set -e
 if grep -q "real run specification failed:" "$verify_log"; then
@@ -1185,6 +1213,31 @@ if grep -q "real run specification failed:" "$verify_log"; then
 	echo "daemon log:" >&2
 	tail -50 "$workdir/daemon.log" >&2
 	exit 1
+fi
+if [[ "$verification_state" == completed ]]; then
+  if [[ "$verify_status" -ne 0 ]] ||
+    ! grep -Fq "completed production checkpoint verified: run=$implementation_run_id PR #" "$verify_log" ||
+    ! python3 - "$verify_checkpoint" "$implementation_run_id" <<'PY'
+import json, sys
+with open(sys.argv[1]) as stream:
+    checkpoint = json.load(stream)
+if (not isinstance(checkpoint, dict) or checkpoint.get("state") != "completed"
+        or not isinstance(checkpoint.get("binding"), dict)
+        or checkpoint["binding"].get("run_id") != sys.argv[2]):
+    raise SystemExit("completed checkpoint does not match the selected implementation run")
+PY
+  then
+    echo "run-real-work: the run did not reach verified completed history" >&2
+    echo "daemon log:" >&2
+    tail -50 "$workdir/daemon.log" >&2
+    exit 1
+  fi
+  if ! python3 "$workdir/real-work-retained.py" remote "$verify_checkpoint"; then
+    echo "run-real-work: remote merge refused for completed implementation run=$implementation_run_id" >&2
+    exit 1
+  fi
+  echo "run-real-work: verified completed history for implementation run=$implementation_run_id invocation=$implementation_invocation_id; no execution authority granted" >&2
+  exit 0
 fi
 if [[ "$verify_status" -ne 0 ]] ||
 	! grep -q "real production pipeline verified: PR #" "$verify_log"; then
