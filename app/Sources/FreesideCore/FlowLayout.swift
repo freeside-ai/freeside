@@ -2,7 +2,9 @@ import SwiftUI
 
 /// A compact leading-aligned flow for fixed-width chips. Each child keeps its
 /// intrinsic width; the layout moves whole children to the next line instead
-/// of compressing or truncating them.
+/// of compressing or truncating them. A child wider than a whole line is the
+/// one exception: it is measured at the line's width, so a title set in an
+/// accessibility size wraps instead of running past the edge.
 struct WrappingHStack: Layout {
     var horizontalSpacing: CGFloat = 6
     var verticalSpacing: CGFloat = 6
@@ -12,8 +14,8 @@ struct WrappingHStack: Layout {
         subviews: Subviews,
         cache: inout ()
     ) -> CGSize {
-        fittingSize(
-            for: subviews.map { $0.sizeThatFits(.unspecified) }, proposedWidth: proposal.width)
+        let maximumWidth = proposal.width ?? .infinity
+        return fittingSize(for: sizes(of: subviews, maximumWidth: maximumWidth), proposedWidth: proposal.width)
     }
 
     func fittingSize(for sizes: [CGSize], proposedWidth: CGFloat?) -> CGSize {
@@ -26,7 +28,7 @@ struct WrappingHStack: Layout {
         subviews: Subviews,
         cache: inout ()
     ) {
-        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let sizes = sizes(of: subviews, maximumWidth: bounds.width)
         let arrangement = arrange(sizes, maximumWidth: bounds.width)
         for (index, subview) in subviews.enumerated() {
             subview.place(
@@ -36,6 +38,14 @@ struct WrappingHStack: Layout {
                 anchor: .topLeading,
                 proposal: ProposedViewSize(sizes[index])
             )
+        }
+    }
+
+    private func sizes(of subviews: Subviews, maximumWidth: CGFloat) -> [CGSize] {
+        subviews.map { subview in
+            let ideal = subview.sizeThatFits(.unspecified)
+            guard ideal.width > maximumWidth else { return ideal }
+            return subview.sizeThatFits(ProposedViewSize(width: maximumWidth, height: nil))
         }
     }
 
