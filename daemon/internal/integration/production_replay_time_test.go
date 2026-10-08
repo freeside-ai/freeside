@@ -12,8 +12,10 @@ import (
 )
 
 func TestProductionReplaySeparatesCommitAndCompletionTime(t *testing.T) {
+	t.Parallel()
 	for _, completionDelay := range []time.Duration{0, time.Minute} {
 		t.Run(completionDelay.String(), func(t *testing.T) {
+			t.Parallel()
 			p := newProductionPublicationHarness(t, "")
 			record := p.startExecutionExport(t, p.replay.HeadSHA)
 			record.RecordedAt = record.RecordedAt.Add(completionDelay)
