@@ -494,37 +494,37 @@ enum AttentionDisplay {
     static func label(_ action: Components.Schemas.Action) -> String {
         switch action {
         case .approve: return "Approve"
-        case .request_changes: return "Request changes"
+        case .request_changes: return "Request Changes"
         case .discuss: return "Discuss"
         case .stop: return "Stop"
-        case .finish_now: return "Finish now"
-        case .apply_then_finish: return "Apply, then finish"
-        case .continue_under_policy: return "Continue under policy"
-        case .convert_to_policy: return "Convert to policy"
+        case .finish_now: return "Finish Now"
+        case .apply_then_finish: return "Apply Then Finish"
+        case .continue_under_policy: return "Continue Under Policy"
+        case .convert_to_policy: return "Convert to Policy"
         case .retry: return "Retry"
-        case .retry_with_capabilities: return "Retry with profile"
+        case .retry_with_capabilities: return "Retry With Profile"
         case .answer_and_retry: return "Answer and Retry"
         case .answer_without_retry: return "Answer Without Retry"
-        case .rerun_trust_evaluation: return "Rerun trust evaluation"
-        case .inspect_trust_failure: return "Inspect trust failure"
+        case .rerun_trust_evaluation: return "Rerun Trust Evaluation"
+        case .inspect_trust_failure: return "Inspect Trust Failure"
         case .open_pr: return "View PR"
-        case .return_to_agent: return "Return to agent"
-        case .mark_seen: return "Mark seen"
+        case .return_to_agent: return "Return to Agent"
+        case .mark_seen: return "Mark Seen"
         case .dismiss: return "Dismiss"
         case .start: return "Start"
-        case .start_with_changes: return "Start with changes"
-        case .approve_with_changes: return "Approve with changes"
+        case .start_with_changes: return "Start With Changes"
+        case .approve_with_changes: return "Approve With Changes"
         case .decline: return "Decline"
         case .snooze: return "Snooze"
         case .acknowledge: return "Acknowledge"
-        case .run_doctor: return "Run doctor"
-        case .stop_unattended: return "Stop unattended"
-        case .resume_unattended: return "Resume unattended"
-        case .recover_review: return "Recover review"
-        case .adopt_review_configuration: return "Adopt review configuration"
-        case .resolve_reenrollment: return "Resolve re-enrollment"
-        case .accept_recommended_route: return "Accept recommended route"
-        case .choose_alternative_route: return "Choose selected alternative"
+        case .run_doctor: return "Run Doctor"
+        case .stop_unattended: return "Stop Unattended"
+        case .resume_unattended: return "Resume Unattended"
+        case .recover_review: return "Recover Review"
+        case .adopt_review_configuration: return "Adopt Review Configuration"
+        case .resolve_reenrollment: return "Resolve Re-enrollment"
+        case .accept_recommended_route: return "Accept Recommended Route"
+        case .choose_alternative_route: return "Choose Another Route"
         }
     }
 
@@ -539,7 +539,7 @@ enum AttentionDisplay {
         if action == .accept_recommended_route,
             let binding = item?.finding_adjudication?.value1, binding.proposals.count > 1
         {
-            return "Accept all dispositions"
+            return "Accept All Dispositions"
         }
         return label(action)
     }

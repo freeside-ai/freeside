@@ -455,9 +455,9 @@
                     width: 480,
                     view: AnyView(
                         MessageComposerSheet(
-                            eyebrow: "Request changes",
+                            eyebrow: "Request Changes",
                             ask: "What should the specification change?",
-                            submitLabel: "Request changes",
+                            submitLabel: "Request Changes",
                             byteLimit: 8192,
                             rendersInteractiveControls: false,
                             submit: { _, _ in true }))))
@@ -467,9 +467,9 @@
                     width: 390,
                     view: AnyView(
                         MessageComposerSheet(
-                            eyebrow: "Request changes",
+                            eyebrow: "Request Changes",
                             ask: "What should the specification change?",
-                            submitLabel: "Request changes",
+                            submitLabel: "Request Changes",
                             byteLimit: 8192,
                             rendersInteractiveControls: false,
                             submit: { _, _ in true }))))
@@ -480,9 +480,9 @@
                     colorScheme: .dark,
                     view: AnyView(
                         MessageComposerSheet(
-                            eyebrow: "Request changes",
+                            eyebrow: "Request Changes",
                             ask: "What should the specification change?",
-                            submitLabel: "Request changes",
+                            submitLabel: "Request Changes",
                             byteLimit: 8192,
                             rendersInteractiveControls: false,
                             submit: { _, _ in true }))))
@@ -493,9 +493,9 @@
                     colorScheme: .dark,
                     view: AnyView(
                         MessageComposerSheet(
-                            eyebrow: "Request changes",
+                            eyebrow: "Request Changes",
                             ask: "What should the specification change?",
-                            submitLabel: "Request changes",
+                            submitLabel: "Request Changes",
                             byteLimit: 8192,
                             rendersInteractiveControls: false,
                             submit: { _, _ in true }))))

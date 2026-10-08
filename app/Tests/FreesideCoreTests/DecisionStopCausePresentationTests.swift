@@ -79,10 +79,10 @@ import Testing
         #expect(
             try #require(DecisionStopCausePresentation(drift(simplificationOnContinue: true)))
                 .continuation
-                == "Continue under policy runs one simplification round that undoes the listed fixes.")
+                == "Continue Under Policy runs one simplification round that undoes the listed fixes.")
         #expect(
             try #require(DecisionStopCausePresentation(drift())).continuation
-                == "Continue under policy runs an ordinary review round and will not undo the listed fixes."
+                == "Continue Under Policy runs an ordinary review round and will not undo the listed fixes."
         )
     }
 
@@ -91,7 +91,7 @@ import Testing
         var item = drift(verdict)
         #expect(
             try #require(DecisionStopCausePresentation(item)).continuation
-                == "Continue under policy runs an ordinary review round.")
+                == "Continue Under Policy runs an ordinary review round.")
 
         // Narrowed to finish_now there is no continuing to describe and no
         // listed fix to warn about.

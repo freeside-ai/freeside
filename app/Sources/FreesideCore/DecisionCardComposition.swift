@@ -865,7 +865,7 @@ struct FindingCardPresentation: Equatable, Identifiable {
 
     /// A held alternative, said on the card's face. The picker sits inside
     /// the disclosure, so without this a closed card would hide a choice
-    /// that "Choose selected alternative" still sends, and accepting sends
+    /// that "Choose Another Route" still sends, and accepting sends
     /// no choice at all.
     static func selectionNotice(_ route: Components.Schemas.AdjudicationRoute) -> String {
         "Selected alternative: \(AttentionDisplay.label(route)). Accepting does not send it."

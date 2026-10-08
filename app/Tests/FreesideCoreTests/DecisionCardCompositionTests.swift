@@ -1368,7 +1368,7 @@ import Testing
         #expect(batch.finding_adjudication?.value1.proposals.count == 2)
         #expect(
             AttentionDisplay.label(.accept_recommended_route, for: batch)
-                == "Accept all dispositions")
+                == "Accept All Dispositions")
         #expect(
             FindingCardPresentation.acceptanceScope(findingCount: 2)
                 == "Accepting covers every proposed route above: all 2 findings.")
@@ -1376,7 +1376,7 @@ import Testing
         #expect(single.finding_adjudication?.value1.proposals.count == 1)
         #expect(
             AttentionDisplay.label(.accept_recommended_route, for: single)
-                == "Accept recommended route")
+                == "Accept Recommended Route")
         #expect(
             FindingCardPresentation.acceptanceScope(findingCount: 1)
                 == "Accepting covers the proposed route for the one finding above.")
@@ -1388,7 +1388,7 @@ import Testing
                 == AttentionDisplay.label(.choose_alternative_route))
         #expect(
             AttentionDisplay.label(.accept_recommended_route, for: nil)
-                == "Accept recommended route")
+                == "Accept Recommended Route")
     }
 
     /// The option's compact mark prints no register (R21), so the spoken

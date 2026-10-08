@@ -87,7 +87,7 @@ import Testing
         #expect(!ranking.notDecidableHere)
         #expect(
             AttentionDisplay.unavailableActionRows(ranking.unavailable)
-                == [.init(label: "Requested, not available here", value: "Convert to policy")])
+                == [.init(label: "Requested, not available here", value: "Convert to Policy")])
     }
 
     @Test func answerAndReturnActionsAreOffered() {

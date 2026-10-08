@@ -1536,7 +1536,7 @@ import Testing
         #expect(reversed == Array(inOrder.reversed()))
     }
 
-    /// "Accept all dispositions" is a label on `accept_recommended_route`:
+    /// "Accept All Dispositions" is a label on `accept_recommended_route`:
     /// the command binds the whole item at its current version and carries
     /// no per-finding choice, so it can never become a partial acceptance.
     @Test func acceptingEveryDispositionBindsTheWholeItemAndCarriesNoChoices() async throws {
