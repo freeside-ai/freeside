@@ -408,6 +408,16 @@ enum FreesideFont {
     static var actionLabel: Font { fixed("IBMPlexSans-Medm", 15, relativeTo: .body) }
     /// A text action inside a notice: the card body size, medium.
     static var noticeAction: Font { fixed("IBMPlexSans-Medm", cardBodySize, relativeTo: .body) }
+    /// A rail entry's title: the fact label's size, semibold on the entry
+    /// the rail stands on.
+    static func railTitle(emphasized: Bool) -> Font {
+        fixed(emphasized ? "IBMPlexSans-SmBld" : "IBMPlexSans", 16, relativeTo: .callout)
+    }
+    /// A rail entry's detail: the card body's size, between the title and
+    /// the mono lines under it, medium on the entry the rail stands on.
+    static func railDetail(emphasized: Bool) -> Font {
+        fixed(emphasized ? "IBMPlexSans-Medm" : "IBMPlexSans", cardBodySize, relativeTo: .body)
+    }
     /// The disclosure chevron, sized as a glyph beside the fact label.
     static var disclosureGlyph: Font { fixed("IBMPlexSans", 11, relativeTo: .callout) }
 

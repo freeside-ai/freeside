@@ -1715,28 +1715,31 @@ struct StageRail: View {
     }
 
     /// The entry the rail stands on (current, or failed in wax) reads
-    /// semibold; every other title recedes to regular ink-dim.
+    /// semibold; every other title recedes to regular ink-dim. The faces
+    /// are the refined scale's (frame 5.3): a 16pt title, and the context
+    /// and the time in the 13.5pt mono a trailing summary uses, so no
+    /// line a rail draws is under the 11.5pt floor on macOS.
     private func entryLabel(_ entry: DecisionStageRailPresentation.Entry) -> some View {
         let emphasized = entry.state == .current || entry.state == .failed
         return VStack(alignment: axis == .vertical ? .leading : .center, spacing: 4) {
             Text(entry.title)
-                .font(FreesideFont.sans(.headline, weight: emphasized ? .semibold : .regular))
+                .font(FreesideFont.railTitle(emphasized: emphasized))
                 .foregroundStyle(
                     entry.state == .failed ? Color.waxText : emphasized ? Color.ink : Color.inkDim)
             if let detail = entry.detail {
                 // A receded title must not sit over a heavier detail.
                 Text(detail)
-                    .font(FreesideFont.sans(.subheadline, weight: emphasized ? .medium : .regular))
+                    .font(FreesideFont.railDetail(emphasized: emphasized))
                     .foregroundStyle(emphasized ? AnyShapeStyle(.foreground) : AnyShapeStyle(Color.inkDim))
             }
             if let context = entry.context {
                 Text(context)
-                    .font(FreesideFont.subheadline)
+                    .font(FreesideFont.trailingSummary)
                     .foregroundStyle(Color.inkDim)
             }
             if let timestamp = entry.timestamp {
                 let text = Text(timestamp)
-                    .font(FreesideFont.monoCaption)
+                    .font(FreesideFont.trailingSummary)
                     .foregroundStyle(Color.inkDim)
                 if let instant = entry.instant {
                     text.exactInstant(instant)
