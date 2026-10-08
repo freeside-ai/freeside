@@ -196,6 +196,10 @@ func (h *replyHarness) review(round int, head string) domain.ReviewRecord {
 }
 
 func newReplyHarness(t *testing.T, thread string, disposition domain.ReviewDisposition, reason string) *replyHarness {
+	return newReplyHarnessThreads(t, thread, "review_comment/44", disposition, reason)
+}
+
+func newReplyHarnessThreads(t *testing.T, thread, secondThread string, disposition domain.ReviewDisposition, reason string) *replyHarness {
 	t.Helper()
 	h := &replyHarness{t: t, now: time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC), comments: []replyCommentWire{}}
 	h.f = seedReplyBinding(t, "feat/test-replies", strings.Repeat("1", 40), strings.Repeat("a", 40))
@@ -220,7 +224,7 @@ func newReplyHarness(t *testing.T, thread string, disposition domain.ReviewDispo
 	})
 	second, err := domain.NewExternalFinding(domain.ExternalFindingInput{
 		RunID: h.f.run.ID, Forge: domain.ExternalReviewForgeGitHub,
-		ReviewerAccountID: 41, ReviewerLogin: "reviewer", ThreadID: "review_comment/44", HeadSHA: h.f.binding.HeadSHA,
+		ReviewerAccountID: 41, ReviewerLogin: "reviewer", ThreadID: secondThread, HeadSHA: h.f.binding.HeadSHA,
 		Message: "Second finding", RawText: "P2: second finding", CreatedAt: h.now,
 	})
 	if err != nil {

@@ -89,13 +89,83 @@ func ExternalReplyBackupPayloadDigests(entry store.QueueEntry) ([]domain.Digest,
 		_, err := decodeExternalReplyIntent(entry)
 		return nil, err
 	}
+	_, err := decodeExternalReplyOutcome(entry)
+	return nil, err
+}
+
+func decodeExternalReplyOutcome(entry store.QueueEntry) (externalReplyOutcome, error) {
 	var o externalReplyOutcome
 	if entry.Kind != ExternalReplyOutcomeKind || strictjson.Decode(entry.Payload, &o, strictjson.TolerateInvalidUTF8, strictjson.NoLimit) != nil ||
 		o.FindingID == "" || o.Round < 1 || entry.IdempotencyKey != externalReplyKey(o.FindingID, o.Round)+"/outcome" ||
 		(o.Code == "" && o.CommentID <= 0) || (o.Code != "" && o.Code != externalReplyRefused && o.Code != externalReplyAmbiguous && o.Code != externalReplyRevoked) {
-		return nil, errors.New("review reply: invalid outcome")
+		return o, errors.New("review reply: invalid outcome")
 	}
-	return nil, nil
+	return o, nil
+}
+
+type externalReplyCollection struct {
+	repositoryID int64
+	prNumber     int
+	root         int64
+}
+
+// replyCollection authenticates each intent against its own historical
+// publication. Repository names can change; numeric identity cannot.
+func replyCollection(ctx context.Context, tx *store.ReadTx, i externalReplyIntent) (externalReplyCollection, error) {
+	binding, err := tx.GetReadyItemPRBinding(ctx, i.ItemID)
+	if err != nil {
+		return externalReplyCollection{}, err
+	}
+	if binding.ItemID != i.ItemID || binding.RunID != i.RunID || binding.Repo != i.Repo ||
+		binding.PRNumber != i.PRNumber || binding.HeadSHA != i.HeadSHA {
+		return externalReplyCollection{}, errors.New("review reply: pinned publication differs")
+	}
+	thread, err := parseExternalReplyThread(i.Thread)
+	if err != nil {
+		return externalReplyCollection{}, err
+	}
+	return externalReplyCollection{binding.RepositoryID, binding.PRNumber, thread.root}, nil
+}
+
+func (r *ExternalReviewReplier) priorAmbiguousReply(ctx context.Context, i externalReplyIntent) (bool, error) {
+	var ambiguous bool
+	err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+		collection, err := replyCollection(ctx, tx, i)
+		if err != nil {
+			return err
+		}
+		rows, err := tx.ListDispatchedOutbox(ctx, ExternalReplyOutcomeKind)
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			outcome, err := decodeExternalReplyOutcome(row)
+			if err != nil {
+				return err
+			}
+			if outcome.Code != externalReplyAmbiguous {
+				continue
+			}
+			entry, err := tx.GetOutbox(ctx, externalReplyKey(outcome.FindingID, outcome.Round))
+			if err != nil {
+				return err
+			}
+			other, err := decodeExternalReplyIntent(entry)
+			if err != nil {
+				return err
+			}
+			if !entry.Dispatched() || other.FindingID != outcome.FindingID || other.Round != outcome.Round {
+				return errors.New("review reply: ambiguous outcome differs from intent")
+			}
+			previous, err := replyCollection(ctx, tx, other)
+			if err != nil {
+				return err
+			}
+			ambiguous = ambiguous || previous == collection
+		}
+		return nil
+	})
+	return ambiguous, err
 }
 
 // ExternalReviewReplier publishes recorded dispositions and reconciles
@@ -327,6 +397,10 @@ func (r *ExternalReviewReplier) open(ctx context.Context, run domain.Run, d doma
 		return err
 	}
 	return r.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		collection, err := replyCollection(ctx, &tx.ReadTx, i)
+		if err != nil {
+			return err
+		}
 		pending, err := tx.ListPendingOutbox(ctx, ExternalReplyIntentKind)
 		if err != nil {
 			return err
@@ -336,7 +410,11 @@ func (r *ExternalReviewReplier) open(ctx context.Context, run domain.Run, d doma
 			if err != nil {
 				return err
 			}
-			if other.Repo == i.Repo && other.PRNumber == i.PRNumber {
+			previous, err := replyCollection(ctx, &tx.ReadTx, other)
+			if err != nil {
+				return err
+			}
+			if previous.repositoryID == collection.repositoryID && previous.prNumber == collection.prNumber {
 				return nil
 			}
 		}
@@ -470,6 +548,15 @@ func (r *ExternalReviewReplier) settle(ctx context.Context, run domain.Run, d do
 	}
 	if r.now().Before(deadline) {
 		return nil
+	}
+	// An earlier unknown send can commit after its terminal outcome, so
+	// even a unique new comment cannot identify this later request.
+	ambiguous, err := r.priorAmbiguousReply(ctx, i)
+	if err != nil {
+		return err
+	}
+	if ambiguous {
+		return r.finish(ctx, run, d, externalReplyAmbiguous, 0, "An earlier reply in this comment collection may still post. No listed comment can prove this later reply. Check the pull request by hand; no second reply will be sent.")
 	}
 	comments, err := r.comments(ctx, i)
 	if err != nil {

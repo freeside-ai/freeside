@@ -1334,8 +1334,8 @@ The following advisory, acknowledge-only health items describe reply failures:
   could not receive a reply, the App identity changed, or GitHub rejected the
   request. The reply will not be retried.
 - `external_review_reply_ambiguous`: the request may have posted, but recovery
-  could not identify exactly one new comment from the recorded App account.
-  Check the pull request by hand. Acknowledging the item does not resend it.
+  could not prove which comment belongs to it. Check the pull request by hand.
+  Acknowledging the item does not resend it or settle the earlier effect.
 - `external_review_reply_unreadable`: stored dispositions could not be
   reconstructed. Replies for that run wait until the records can be read.
 
@@ -1343,6 +1343,17 @@ An uncertain send is never repeated. Recovery waits ten minutes before looking
 for its comment; a restart begins that wait again. Only a proven rate-limit
 rejection allows retry, at most three attempts per daemon process and at least
 one minute apart. These notices do not block publication or review.
+
+An earlier ambiguous reply may still post after its outcome was recorded.
+Later replies can still be sent once, and a validated create response can
+prove success. An unknown later send cannot recover by adopting a listed
+comment in the same collection: the earlier request could explain that
+comment. This restriction survives restarts, repository renames, App account
+changes, notice acknowledgement, and elapsed settle intervals. The collection
+is the numeric repository ID and pull request number plus either the whole
+conversation or one inline root. Different review-body findings share the
+conversation; different inline roots have separate collections. Successful
+and definitely refused earlier replies do not impose this restriction.
 
 ## Run Observation Contract
 

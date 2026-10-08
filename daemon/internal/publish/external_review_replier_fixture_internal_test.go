@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -43,15 +44,29 @@ var readyAnchorSpecDigest = domain.Digest("sha256:" + strings.Repeat("5", 64))
 
 func seedReplyBinding(t *testing.T, branch, baseSHA, headSHA string) replyBindingFixture {
 	t.Helper()
-	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "store.db")
 	st := storetest.Open(t, path, store.Options{AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 		domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
 	}})
-	runID := domain.RunID("run-ready-anchor")
-	invocationID := domain.InvocationID("inv-ready-anchor")
-	stageID := domain.StageID("stage-ready-anchor")
-	attemptID := domain.AttemptID("attempt-ready-anchor")
+	f := seedReplyBindingIn(t, st, replyBindingSeed{"run-ready-anchor", "owner/repo", 424242, 450}, branch, baseSHA, headSHA)
+	f.path = path
+	return f
+}
+
+type replyBindingSeed struct {
+	runID        domain.RunID
+	repo         string
+	repositoryID int64
+	prNumber     int
+}
+
+func seedReplyBindingIn(t *testing.T, st *store.Store, seed replyBindingSeed, branch, baseSHA, headSHA string) replyBindingFixture {
+	t.Helper()
+	ctx := context.Background()
+	runID := seed.runID
+	invocationID := domain.InvocationID("inv-" + string(runID))
+	stageID := domain.StageID("stage-" + string(runID))
+	attemptID := domain.AttemptID("attempt-" + string(runID))
 	policy, err := domain.NewResolvedPolicy(runID, []domain.PolicyKey{{
 		Key: "driver", Value: "claude", Provenance: domain.KeyProvenance{
 			Source: domain.ProvenanceOverride,
@@ -62,7 +77,7 @@ func seedReplyBinding(t *testing.T, branch, baseSHA, headSHA string) replyBindin
 		t.Fatal(err)
 	}
 	run := domain.Run{
-		ID: runID, ProjectID: "project-1", SpecDigest: readyAnchorSpecDigest, PolicyDigest: policy.Digest,
+		ID: runID, ProjectID: domain.ProjectID("project-" + string(runID)), SpecDigest: readyAnchorSpecDigest, PolicyDigest: policy.Digest,
 		Stages: []domain.Stage{{
 			ID: stageID, RunID: runID, Name: "implementation",
 			Attempts: []domain.Attempt{{ID: attemptID, StageID: stageID, Number: 1, InvocationID: invocationID}},
@@ -73,7 +88,7 @@ func seedReplyBinding(t *testing.T, branch, baseSHA, headSHA string) replyBindin
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
 		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
 		Reason: "published", RequestedDecision: []domain.Action{domain.ActionOpenPR},
-		PRHeadSHA: headSHA, PRReference: &domain.PRReference{Repo: "owner/repo", Number: 450},
+		PRHeadSHA: headSHA, PRReference: &domain.PRReference{Repo: seed.repo, Number: seed.prNumber},
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
 	}, nil)
@@ -99,7 +114,7 @@ func seedReplyBinding(t *testing.T, branch, baseSHA, headSHA string) replyBindin
 		EgressProfile: domain.EgressCleanVerification,
 		ImageRef:      domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("a", 64)),
 		SpecDigest:    run.SpecDigest, PolicyDigest: run.PolicyDigest, InputDigest: "sha256:input",
-		Base:      domain.BaseRevision{Repo: "owner/repo", RepositoryID: 424242, BaseRef: "main", BaseSHA: baseSHA},
+		Base:      domain.BaseRevision{Repo: seed.repo, RepositoryID: seed.repositoryID, BaseRef: "main", BaseSHA: baseSHA},
 		Workspace: "workspace", AdmittedAt: admittedAt,
 	})
 	if err != nil {
@@ -113,7 +128,7 @@ func seedReplyBinding(t *testing.T, branch, baseSHA, headSHA string) replyBindin
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity := domain.Digest("sha256:" + strings.Repeat("a", 64))
+	identity := domain.Digest(contentaddr.Sum([]byte("reply-publication/" + string(runID))))
 	publicationInvocationID := domain.InvocationID("publish-production-" + string(runID))
 	intentPayload, err := json.Marshal(publicationrecord.Intent{
 		FormatVersion: publicationrecord.IntentFormatCurrent,
@@ -130,7 +145,7 @@ func seedReplyBinding(t *testing.T, branch, baseSHA, headSHA string) replyBindin
 	payload, err := json.Marshal(publicationrecord.Outcome{
 		Identity: identity, Repo: admission.Base.Repo, BaseRef: admission.Base.BaseRef,
 		HeadSHA: export.HeadSHA, Branch: branch,
-		PRNumber: 450, EvidenceEligible: true,
+		PRNumber: seed.prNumber, EvidenceEligible: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -139,7 +154,7 @@ func seedReplyBinding(t *testing.T, branch, baseSHA, headSHA string) replyBindin
 		ItemID: item.ID, RunID: runID, ProducingInvocationID: invocationID,
 		PublicationInvocationID: publicationInvocationID,
 		PublicationIdentity:     identity, Repo: admission.Base.Repo,
-		RepositoryID: admission.Base.RepositoryID, PRNumber: 450,
+		RepositoryID: admission.Base.RepositoryID, PRNumber: seed.prNumber,
 		BaseRef: admission.Base.BaseRef, HeadSHA: export.HeadSHA,
 		RecordedAt: admittedAt.Add(2 * time.Minute),
 	}
@@ -165,8 +180,7 @@ func seedReplyBinding(t *testing.T, branch, baseSHA, headSHA string) replyBindin
 		t.Fatal(err)
 	}
 	return replyBindingFixture{
-		path: path,
-		st:   st, run: run, item: item, admission: admission, export: export, binding: binding,
+		st: st, run: run, item: item, admission: admission, export: export, binding: binding,
 		intentKey: intentKey, intentPayload: intentPayload, outcomePayload: payload,
 	}
 }
