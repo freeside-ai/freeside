@@ -411,6 +411,41 @@ import Testing
         #expect(DecisionCardComposition.reasonPlacement(for: type) == expected)
     }
 
+    /// A finding adjudication's reason folds while the recommendation is on
+    /// the card, but what accepting does never folds (plan §9): the first
+    /// sentence of the daemon's "Accepting" line stays ahead of the actions,
+    /// after any line about what changed since Discuss. Where the whole
+    /// reason already draws under the ask there is no separate lead.
+    @Test func whatAcceptingDoesStaysAheadOfTheActionsOnAFindingCard() {
+        var item = AttentionFixtures.fixture(type: .finding_adjudication).item
+        #expect(DecisionCardComposition.reasonPlacement(for: item) == .recordedContext)
+
+        item.reason = [
+            "Changed after Discuss: review-finding-17 moved from \"Decline\" to \"Fix in this PR\".",
+            "Accepting starts a remediator that edits this PR. It may change only the "
+                + "run's allowed paths (daemon/**), not just where a finding was reported.",
+            "review-finding-17 (daemon/internal/signet/service.go:214-227): Fix in this PR.",
+        ].joined(separator: "\n")
+        #expect(
+            DecisionCardComposition.reasonLead(for: item)
+                == "Accepting starts a remediator that edits this PR.")
+
+        item.reason = "Accepting parks the run: nothing is fixed or published."
+        #expect(DecisionCardComposition.reasonLead(for: item) == item.reason)
+
+        item.reason = "The reviewer and the agent disagree."
+        #expect(DecisionCardComposition.reasonLead(for: item) == nil)
+
+        item.reason = "Accepting parks the run: nothing is fixed or published."
+        item.recommendation = nil
+        #expect(DecisionCardComposition.reasonPlacement(for: item) == .underAsk)
+        #expect(DecisionCardComposition.reasonLead(for: item) == nil)
+
+        var other = AttentionFixtures.fixture(type: .task_proposal).item
+        other.reason = item.reason
+        #expect(DecisionCardComposition.reasonLead(for: other) == nil)
+    }
+
     /// A proposal's reason folds only at its planned gate, where the daemon
     /// writes a sentence that restates the ask. The closure notice is the
     /// one proposal reason that says more (the issue could not be closed
@@ -497,7 +532,7 @@ import Testing
         let quoted: [Components.Schemas.AttentionType] = [
             .agent_question, .ready_for_final_review, .review_dispute, .system_health, .blocked,
             .execution_failure, .task_proposal, .effect_proposal, .review_diminishing_returns,
-            .spec_approval,
+            .spec_approval, .finding_adjudication,
         ]
         #expect(
             DecisionCardComposition.agentSectionFrame(for: type)
@@ -848,7 +883,7 @@ import Testing
         let refined: Set<Components.Schemas.AttentionType> = [
             .ready_for_final_review, .agent_question, .system_health, .blocked,
             .execution_failure, .task_proposal, .effect_proposal, .review_diminishing_returns,
-            .review_dispute, .spec_approval,
+            .review_dispute, .spec_approval, .finding_adjudication,
         ]
         let scale = DecisionCardComposition.scale(for: type)
         #expect(scale == (refined.contains(type) ? .refined : .legacy))
@@ -1526,10 +1561,12 @@ import Testing
         #expect(engineModel.producerUnverifiedKeyword == nil)
     }
 
-    /// Every other proposal and binding field has a destination inside that
-    /// finding's own disclosure, so removing the rendering below the actions
-    /// lost nothing. The daemon's coordinates sit under their own title,
-    /// apart from the producer's rationale and evidence.
+    /// Every other proposal field has a destination inside that finding's
+    /// own disclosure, so removing the rendering below the actions lost
+    /// nothing. The daemon's coordinates sit under their own title, apart
+    /// from the producer's statements, and the binding digest stays with the
+    /// binding in Technical Details. The route list leads with the proposed
+    /// route, which states no consequence of its own.
     @Test func everyOtherFindingFieldHasADestinationInItsCardsDisclosure() throws {
         let binding = try #require(
             AttentionFixtures.fixture(type: .finding_adjudication).item
@@ -1539,36 +1576,42 @@ import Testing
 
         #expect(card.rationale == proposal.rationale)
         #expect(
-            card.proposalRows == [
-                .init("Goal relationship", "Contradictory"),
-                .init("Work-unit compatibility", "Not assessed"),
-                .init("Confidence", "High"),
-            ])
-        #expect(card.evidenceTitle == "Evidence (model-derived)")
+            card.qualities == "Contradicts the goal · High confidence · compatibility not assessed")
+        #expect(card.modelBacked)
         #expect(card.evidence == proposal.evidence)
         #expect(
             card.daemonFacts == [
                 .init("Finding", "review-finding-17", monospaced: true),
                 .init("Location", "daemon/internal/signet/service.go:214-227", monospaced: true),
-                .init("Binding digest", binding.adjudication_digest, monospaced: true),
                 .init("Run", binding.run_id, monospaced: true),
                 .init("Round", "3", monospaced: true),
             ])
+        #expect(
+            AttentionDisplay.findingAdjudicationRows(
+                AttentionFixtures.fixture(type: .finding_adjudication).item
+            ).contains(.init(label: "Adjudication Digest", value: binding.adjudication_digest)))
         #expect(card.assumptions == proposal.assumptions)
         #expect(card.citedRules == proposal.cited_rules)
+        #expect(card.citedRulesKeyword == "Cited Rules")
         #expect(
-            card.alternatives == [
+            card.routeOptions == [
+                .init(
+                    route: proposal.route, label: card.route, consequence: nil,
+                    isProposed: true),
                 .init(
                     route: .dispute, label: AttentionDisplay.label(.dispute),
-                    consequence: "Park the run: nothing is declined, fixed, or published.")
+                    consequence: "Park the run: nothing is declined, fixed, or published.",
+                    isProposed: false),
             ])
         #expect(card.gatingQuestions == proposal.open_questions)
+        #expect(card.gatingQuestionsKeyword == "Open Question")
     }
 
     /// A finding with no location, no confidence, no alternatives, and empty
     /// lists keeps its card and its coordinates, and carries nothing for the
-    /// view to draw an empty section from. A daemon-produced route labels its
-    /// evidence as the daemon's.
+    /// view to draw an empty section from. A daemon-produced route is not a
+    /// model's, so nothing of it draws as a quote, and with no alternative
+    /// there is no route list: one route is not a choice.
     @Test func aFindingWithNothingOptionalStillHasItsCard() throws {
         var binding = try #require(
             AttentionFixtures.fixture(type: .finding_adjudication).item
@@ -1591,13 +1634,13 @@ import Testing
         #expect(card.messageAccessibilityLabel == "Finding 1")
         #expect(card.producerLabel == "Daemon recommendation")
         #expect(card.producerUnverifiedKeyword == nil)
-        #expect(card.proposalRows.map(\.label) == ["Goal relationship", "Work-unit compatibility"])
-        #expect(card.evidenceTitle == "Evidence (daemon-derived)")
-        #expect(card.daemonFacts.map(\.label) == ["Finding", "Binding digest", "Run", "Round"])
+        #expect(!card.modelBacked)
+        #expect(!card.qualities.contains("confidence"))
+        #expect(card.daemonFacts.map(\.label) == ["Finding", "Run", "Round"])
         #expect(card.evidence.isEmpty)
         #expect(card.assumptions.isEmpty)
         #expect(card.citedRules.isEmpty)
-        #expect(card.alternatives.isEmpty)
+        #expect(card.routeOptions.isEmpty)
         #expect(card.gatingQuestions.isEmpty)
     }
 
@@ -1617,7 +1660,7 @@ import Testing
         #expect(
             card.routeAccessibilityLabel
                 == "Finding 1 proposed route, Model proposal (unverified): Decline the finding")
-        #expect(card.disclosureAccessibilityLabel == "Reason and alternatives, Finding 1")
+        #expect(card.disclosureAccessibilityLabel == "Reason and Alternatives, Finding 1")
     }
 
     /// A held alternative is named on the card's face, where a closed

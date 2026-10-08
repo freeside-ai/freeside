@@ -615,36 +615,53 @@ struct UnverifiedLabel: View {
 struct SentenceDisclosure<Content: View>: View {
     let label: String
     var summary: String? = nil
+    /// What the control is called aloud where the drawn label alone would
+    /// not say whose it is (one of several folds with the same title). Nil
+    /// speaks the label and summary as drawn.
+    var spokenLabel: String? = nil
     @Binding var isExpanded: Bool
     @ViewBuilder let content: () -> Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
-            Button {
-                isExpanded.toggle()
-            } label: {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Image(systemName: "arrowtriangle.right.fill")
-                        .font(FreesideFont.disclosureGlyph)
-                        .foregroundStyle(Color.accentText)
-                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                        .accessibilityHidden(true)
-                    labelText
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                // A touch target taller than the line, without spreading the
-                // folds a card stacks 12pt apart.
-                .padding(.vertical, 8)
-                .contentShape(Rectangle())
-                .padding(.vertical, -8)
-            }
-            .buttonStyle(.plain)
-            .freesideFocusRing(cornerRadius: 4)
-            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            spoken(toggle)
+                .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
             if isExpanded {
                 content()
             }
         }
+    }
+
+    @ViewBuilder
+    private func spoken(_ control: some View) -> some View {
+        if let spokenLabel {
+            control.accessibilityLabel(Text(spokenLabel))
+        } else {
+            control
+        }
+    }
+
+    private var toggle: some View {
+        Button {
+            isExpanded.toggle()
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "arrowtriangle.right.fill")
+                    .font(FreesideFont.disclosureGlyph)
+                    .foregroundStyle(Color.accentText)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .accessibilityHidden(true)
+                labelText
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // A touch target taller than the line, without spreading the
+            // folds a card stacks 12pt apart.
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+            .padding(.vertical, -8)
+        }
+        .buttonStyle(.plain)
+        .freesideFocusRing(cornerRadius: 4)
     }
 
     @ViewBuilder private var labelText: some View {

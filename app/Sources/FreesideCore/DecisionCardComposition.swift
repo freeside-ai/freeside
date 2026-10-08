@@ -225,9 +225,9 @@ struct DecisionCardComposition: Equatable {
         switch type {
         case .agent_question, .ready_for_final_review, .review_dispute, .system_health, .blocked,
             .execution_failure, .task_proposal, .effect_proposal, .review_diminishing_returns,
-            .spec_approval:
+            .spec_approval, .finding_adjudication:
             return .quoted
-        case .review_contradiction, .review_configuration, .finding_adjudication,
+        case .review_contradiction, .review_configuration,
             .publish_blocked:
             return .dashedCard
         }
@@ -283,10 +283,9 @@ struct DecisionCardComposition: Equatable {
         switch type {
         case .ready_for_final_review, .agent_question, .system_health, .blocked,
             .execution_failure, .task_proposal, .effect_proposal, .review_diminishing_returns,
-            .review_dispute, .spec_approval:
+            .review_dispute, .spec_approval, .finding_adjudication:
             return .refined
-        case .review_contradiction, .review_configuration,
-            .finding_adjudication, .publish_blocked:
+        case .review_contradiction, .review_configuration, .publish_blocked:
             return .legacy
         }
     }
@@ -481,6 +480,25 @@ struct DecisionCardComposition: Equatable {
             return .underAsk
         }
         return reasonPlacement(for: item._type)
+    }
+
+    /// What accepting does, on a finding adjudication whose reason folds: the
+    /// first sentence of the line the daemon writes for it
+    /// (`findingAdjudicationReason` in
+    /// daemon/internal/engine/finding_adjudication.go), which follows any
+    /// "Changed after Discuss" lines. An action's consequence never folds
+    /// (plan §9), and the recommendation beside the batch action says which
+    /// findings accepting covers, not what the run does next. Nil on any
+    /// other item and where the reason carries no such line; the whole
+    /// reason is one disclosure away either way.
+    static func reasonLead(for item: Components.Schemas.AttentionItem) -> String? {
+        guard item._type == .finding_adjudication,
+            reasonPlacement(for: item) == .recordedContext,
+            let line = item.reason.split(separator: "\n")
+                .first(where: { $0.hasPrefix("Accepting ") })
+        else { return nil }
+        guard let end = line.range(of: ". ") else { return String(line) }
+        return String(line[..<end.upperBound]).trimmingCharacters(in: .whitespaces)
     }
 
     /// A place a card draws an unverified keyword the operator can always
@@ -963,16 +981,21 @@ struct DecisionFactPlacement: Equatable {
 
 /// One finding's card on `finding_adjudication` (plan §9 revision 78, visual
 /// audit D09): what the card shows before anything is opened, and what its
-/// "Reason and alternatives" disclosure holds, in render order. Kept apart
+/// "Reason and Alternatives" disclosure holds, in render order. Kept apart
 /// from the view so the destination of each proposal and binding field is
 /// testable without rendering.
 struct FindingCardPresentation: Equatable, Identifiable {
-    static let disclosureTitle = "Reason and alternatives"
+    static let disclosureTitle = "Reason and Alternatives"
 
-    struct Alternative: Equatable {
+    /// One route the operator may send for this finding.
+    struct RouteOption: Equatable {
         let route: Components.Schemas.AdjudicationRoute
         let label: String
-        let consequence: String
+        /// What choosing it does. A proposal states one for each alternative
+        /// and none for its own route, whose rationale stands above the
+        /// list.
+        let consequence: String?
+        let isProposed: Bool
     }
 
     /// The daemon's finding id. An open disclosure and an alternative
@@ -990,17 +1013,28 @@ struct FindingCardPresentation: Equatable, Identifiable {
     let producerUnverifiedKeyword: String?
     let route: String
 
-    // The disclosure, in render order: the proposal in its producer's
-    // register, the daemon's coordinates in theirs, then what the proposal
-    // rests on and what else the operator may choose.
+    /// Whether a model wrote the proposal. Its rationale, evidence, cited
+    /// rules, assumptions, and questions are then the model's words, drawn
+    /// as quotes under unverified keywords; the daemon's fast path wrote
+    /// them otherwise, and they draw as its own text.
+    let modelBacked: Bool
+
+    // An open disclosure joins the rationale and its qualities to the route
+    // (one statement by one producer), then draws, in render order: the
+    // evidence, the daemon's coordinates in their own register, what the
+    // proposal cites and assumes, the routes the operator may send, and
+    // what the proposal left open.
     let rationale: String
-    let proposalRows: [AttentionDisplay.FactRow]
-    let evidenceTitle: String
+    /// The proposal's goal relationship, confidence, and work-unit
+    /// compatibility on one line.
+    let qualities: String
     let evidence: [String]
     let daemonFacts: [AttentionDisplay.FactRow]
-    let assumptions: [String]
     let citedRules: [String]
-    let alternatives: [Alternative]
+    let assumptions: [String]
+    /// The proposed route first, then each alternative the proposal offers.
+    /// Empty when it offers none: one route is not a choice.
+    let routeOptions: [RouteOption]
     let gatingQuestions: [String]
 
     static func cards(
@@ -1024,26 +1058,21 @@ struct FindingCardPresentation: Equatable, Identifiable {
         producerUnverifiedKeyword = producer.unverifiedKeyword
         route = AttentionDisplay.label(proposal.route)
 
+        modelBacked = producer.modelBacked
         rationale = proposal.rationale
-        var proposalRows: [AttentionDisplay.FactRow] = [
-            .init("Goal relationship", AttentionDisplay.label(proposal.goal_relationship)),
-            .init(
-                "Work-unit compatibility",
-                AttentionDisplay.label(proposal.compatibility?.value1)),
+        // An adjudicator that recorded no confidence gets no word for it,
+        // rather than a quality with nothing in it.
+        qualities = [
+            Self.quality(proposal.goal_relationship),
+            proposal.confidence.map { "\(AttentionDisplay.label($0.value1)) confidence" },
+            Self.quality(proposal.compatibility?.value1),
         ]
-        // An adjudicator that recorded no confidence gets no row, rather
-        // than a row with nothing in it.
-        if let confidence = proposal.confidence?.value1 {
-            proposalRows.append(.init("Confidence", AttentionDisplay.label(confidence)))
-        }
-        self.proposalRows = proposalRows
-        // The engine fast path also populates evidence (the finding's own
-        // containment location, a daemon fact), so the title follows the
-        // producer instead of always reading "model-derived" (#892, #984).
-        evidenceTitle =
-            producer.modelBacked ? "Evidence (model-derived)" : "Evidence (daemon-derived)"
+        .compactMap(\.self)
+        .joined(separator: " · ")
         evidence = proposal.evidence
 
+        // The binding digest stays in Technical Details with the rest of
+        // the binding (`AttentionDisplay.findingAdjudicationRows`).
         var daemonFacts: [AttentionDisplay.FactRow] = [
             .init("Finding", proposal.finding_id, monospaced: true)
         ]
@@ -1051,21 +1080,57 @@ struct FindingCardPresentation: Equatable, Identifiable {
             daemonFacts.append(
                 .init("Location", AttentionDisplay.findingLocation(location), monospaced: true))
         }
+        // Two rows, not the frame's one "Run · Round" row: a run id beside a
+        // round has nowhere to break on a phone but mid-token.
         daemonFacts += [
-            .init("Binding digest", binding.adjudication_digest, monospaced: true),
             .init("Run", binding.run_id, monospaced: true),
             .init("Round", "\(binding.round)", monospaced: true),
         ]
         self.daemonFacts = daemonFacts
 
-        assumptions = proposal.assumptions
         citedRules = proposal.cited_rules
-        alternatives = proposal.offered_alternatives.map {
-            .init(
-                route: $0.route, label: AttentionDisplay.label($0.route),
-                consequence: $0.consequence)
-        }
+        assumptions = proposal.assumptions
+        routeOptions =
+            proposal.offered_alternatives.isEmpty
+            ? []
+            : [
+                RouteOption(
+                    route: proposal.route, label: route, consequence: nil, isProposed: true)
+            ]
+                + proposal.offered_alternatives.map {
+                    RouteOption(
+                        route: $0.route, label: AttentionDisplay.label($0.route),
+                        consequence: $0.consequence, isProposed: false)
+                }
         gatingQuestions = proposal.open_questions
+    }
+
+    private static func quality(_ relationship: Components.Schemas.GoalRelationship) -> String {
+        switch relationship {
+        case .required: "Required by the goal"
+        case .adjacent: "Adjacent to the goal"
+        case .contradictory: "Contradicts the goal"
+        case .unclear: "Goal relationship unclear"
+        }
+    }
+
+    private static func quality(
+        _ compatibility: Components.Schemas.WorkUnitCompatibility?
+    ) -> String {
+        guard let compatibility else { return "compatibility not assessed" }
+        return switch compatibility {
+        case .allowed: "allowed in the work unit"
+        case .work_unit_revision_required: "work-unit revision required"
+        case .separate_work_required: "separate work required"
+        case .human_decision_required: "human decision required"
+        case .unknown: "compatibility unknown"
+        }
+    }
+
+    var citedRulesKeyword: String { citedRules.count == 1 ? "Cited Rule" : "Cited Rules" }
+
+    var gatingQuestionsKeyword: String {
+        gatingQuestions.count == 1 ? "Open Question" : "Open Questions"
     }
 
     /// The heading and message as one spoken element.
@@ -1080,13 +1145,13 @@ struct FindingCardPresentation: Equatable, Identifiable {
         "\(heading) proposed route, \(producerLabel): \(route)"
     }
 
-    /// Every card's disclosure reads "Reason and alternatives", so the
+    /// Every card's disclosure reads "Reason and Alternatives", so the
     /// spoken control says whose it is.
     var disclosureAccessibilityLabel: String {
         "\(Self.disclosureTitle), \(heading)"
     }
 
-    /// A held alternative, said on the card's face. The picker sits inside
+    /// A held alternative, said on the card's face. The route list sits inside
     /// the disclosure, so without this a closed card would hide a choice
     /// that "Choose Another Route" still sends, and accepting sends
     /// no choice at all.
