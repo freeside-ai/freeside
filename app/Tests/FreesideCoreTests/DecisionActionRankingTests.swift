@@ -191,6 +191,37 @@ import Testing
         #expect(AttentionDisplay.confirmationConsequence(.snooze, for: item) == nil)
     }
 
+    /// `-FreesideComposer` opens a composer only where a click on its button
+    /// could: offered, served to this device, validated, and submittable.
+    @Test func aLaunchComposerOpensOnlyWhereItsButtonIsEnabled() {
+        let requested = AttentionFixtures.fixture(type: .spec_approval).item.requested_decision
+        func canPresent(
+            _ action: Components.Schemas.Action,
+            served: [Components.Schemas.Action]? = nil,
+            actionsEnabled: Bool = true,
+            isSubmittable: Bool = true
+        ) -> Bool {
+            DecisionLaunchComposerGate.canPresent(
+                action,
+                requested: requested,
+                unavailable: DecisionActionRanking(requested: requested, servedActions: served)
+                    .unavailable,
+                actionsEnabled: actionsEnabled,
+                isSubmittable: isSubmittable)
+        }
+
+        #expect(canPresent(.discuss))
+        #expect(canPresent(.request_changes, served: requested))
+        // Not offered on this item.
+        #expect(!canPresent(.return_to_agent))
+        // Offered, but the served surface leaves it out on this device.
+        #expect(!canPresent(.discuss, served: [.approve, .request_changes, .stop]))
+        // Not yet validated, or a command is in flight.
+        #expect(!canPresent(.discuss, actionsEnabled: false))
+        // Discuss while the conversation awaits the agent.
+        #expect(!canPresent(.discuss, isSubmittable: false))
+    }
+
     @Test func iconsAreLimitedToNavigationRetryAndLossRisk() {
         let iconActions: [Components.Schemas.Action] = [
             .open_pr, .retry, .snooze, .stop, .stop_unattended, .return_to_agent,
