@@ -1745,7 +1745,8 @@ struct DecisionDetailView: View {
         _ reader: SpecApprovalReader,
         item: Components.Schemas.AttentionItem,
         rendersScrollableContent: Bool = true,
-        expandsTechnicalDetails: Bool = false
+        expandsTechnicalDetails: Bool = false,
+        expandsLaterHunks: Bool = false
     ) -> some View {
         switch reader {
         case .specification:
@@ -1770,7 +1771,8 @@ struct DecisionDetailView: View {
                     linesAdded: revision.diff.lines_added,
                     linesRemoved: revision.diff.lines_removed,
                     truncated: revision.diff.truncated,
-                    rendersScrollableContent: rendersScrollableContent)
+                    rendersScrollableContent: rendersScrollableContent,
+                    expandsLaterHunks: expandsLaterHunks)
             } else {
                 UnavailableStateView(
                     title: "Diff unavailable",
@@ -2190,6 +2192,7 @@ struct DecisionDetailView: View {
         _ reader: SpecApprovalReader,
         item: Components.Schemas.AttentionItem,
         expandsTechnicalDetails: Bool = false,
+        expandsLaterHunks: Bool = false,
         asSheet: Bool = false
     ) -> some View {
         VStack(spacing: 0) {
@@ -2202,7 +2205,8 @@ struct DecisionDetailView: View {
                 reader,
                 item: item,
                 rendersScrollableContent: false,
-                expandsTechnicalDetails: expandsTechnicalDetails
+                expandsTechnicalDetails: expandsTechnicalDetails,
+                expandsLaterHunks: expandsLaterHunks
             )
             .padding()
             .frame(maxWidth: .infinity, alignment: .topLeading)

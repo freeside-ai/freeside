@@ -77,6 +77,9 @@
         /// The row a screenshot golden shows hovered; the live panel reads
         /// the pointer instead.
         private var screenshotHoveredRow: Row?
+        /// The row a screenshot golden shows keyboard-highlighted; the live
+        /// panel moves the highlight with the arrow keys.
+        private var screenshotKeyboardRow: Row?
 
         @Environment(\.dismiss) private var dismiss
         @Environment(\.timeZone) private var timeZone
@@ -109,6 +112,14 @@
             panel.screenshotHoveredRow = row
             return panel
         }
+
+        func screenshotHighlighting(_ row: Row) -> Self {
+            var panel = self
+            panel.screenshotKeyboardRow = row
+            return panel
+        }
+
+        private var highlightedRow: Row? { keyboardRow ?? screenshotKeyboardRow }
 
         public var body: some View {
             VStack(alignment: .leading, spacing: 2) {
@@ -207,7 +218,7 @@
                     trailing
                 }
             }
-            .buttonStyle(PanelRowStyle(isHovered: isHovered(id), isHighlighted: keyboardRow == id))
+            .buttonStyle(PanelRowStyle(isHovered: isHovered(id), isHighlighted: highlightedRow == id))
             .disabled(!enabled)
             .onHover { hovering in
                 if hovering {
@@ -399,7 +410,7 @@
                 .buttonStyle(FreesideActionButtonStyle(tone: tone, compact: true, expands: false))
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(keyboardRow == .control ? Color.accentBorder : .clear, lineWidth: 1)
+                        .strokeBorder(highlightedRow == .control ? Color.accentBorder : .clear, lineWidth: 1)
                         .padding(-2)
                 )
                 .padding(.horizontal, 10)

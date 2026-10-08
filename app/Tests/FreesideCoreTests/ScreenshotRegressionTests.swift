@@ -3038,6 +3038,107 @@
                             .padding(12)
                             .background(Color.sidebarGround))))
             }
+
+            // The standing-surface frames no earlier surface drew (#1803).
+            // The revoked banner with its recovery action, then the four
+            // notices the root view can stack, at Mac and phone widths.
+            let mismatch = InboxStore.Freshness.contractMismatch(
+                daemonContract: "sha256:" + String(repeating: "a", count: 64))
+            surfaces.append(
+                Surface(
+                    name: "freshness-banner-revoked",
+                    width: 640,
+                    view: AnyView(
+                        VStack(spacing: 0) {
+                            FreshnessBanner(freshness: .unauthenticated, onRePair: {})
+                            Text("Inbox").padding()
+                        })))
+            for (suffix, width) in [("", CGFloat(640)), ("-phone", CGFloat(390))] {
+                surfaces.append(
+                    Surface(
+                        name: "standing-notices-stack" + suffix,
+                        width: width,
+                        view: AnyView(
+                            VStack(spacing: 0) {
+                                FreshnessBanner(freshness: .fresh, lastUpdatedAt: stoppedStale)
+                                UnattendedStoppedIndicator(
+                                    operation: operatorStopped, freshness: .fresh,
+                                    lastUpdatedAt: stoppedStale,
+                                    reason: { _ in
+                                        "The daemon stopped unattended operation after repeated restarts"
+                                    },
+                                    onOpenItem: { _ in })
+                                FreshnessBanner(freshness: .unauthenticated, onRePair: {})
+                                FreshnessBanner(freshness: mismatch)
+                                Text("Inbox").padding()
+                            })))
+            }
+            // Pairing at phone width, and with under a minute left, where
+            // the countdown keeps the accent.
+            surfaces.append(
+                Surface(
+                    name: "pairing-phone",
+                    width: 390,
+                    view: AnyView(
+                        PairingView(model: pairing) { _ in }.screenshotContent(
+                            now: pairingFacts.code_expires_at.addingTimeInterval(-14 * 60)))))
+            surfaces.append(
+                Surface(
+                    name: "pairing-expiring-phone",
+                    width: 390,
+                    view: AnyView(
+                        PairingView(model: pairing) { _ in }.screenshotContent(
+                            now: pairingFacts.code_expires_at.addingTimeInterval(-45)))))
+            // The readers at the inspector's two narrow widths, where the
+            // header row shortens its keyword, and the diff with its later
+            // hunks open.
+            let paneRevised = AttentionFixtures.revisedSpecification()
+            let paneStore = InboxStore(client: client)
+            paneStore.replaceAll(with: [paneRevised])
+            let paneDetail = DecisionDetailView(
+                store: paneStore,
+                itemID: paneRevised.item.id,
+                graphics: .init(),
+                loadsAttachments: false,
+                showsValidationProgress: false,
+                now: screenshotNow)
+            for width in [CGFloat(320), 480] {
+                surfaces.append(
+                    Surface(
+                        name: "decision-spec_approval-specification-reader-\(Int(width))",
+                        width: width,
+                        view: AnyView(
+                            paneDetail.screenshotSpecApprovalReader(.specification, item: paneRevised.item))))
+                surfaces.append(
+                    Surface(
+                        name: "decision-spec_approval-diff-reader-\(Int(width))",
+                        width: width,
+                        view: AnyView(
+                            paneDetail.screenshotSpecApprovalReader(.diff, item: paneRevised.item))))
+            }
+            surfaces.append(
+                Surface(
+                    name: "decision-spec_approval-diff-reader-later-hunks",
+                    width: 720,
+                    view: AnyView(
+                        paneDetail.screenshotSpecApprovalReader(
+                            .diff, item: paneRevised.item, expandsLaterHunks: true))))
+            // The panel with the pointer on one row and the keyboard
+            // highlight on the daemon control.
+            surfaces.append(
+                Surface(
+                    name: "menu-panel-keyboard-control",
+                    width: 320,
+                    view: AnyView(
+                        DaemonMenuPanel(
+                            state: .running(panelHealth, restartObserved: false),
+                            actionError: nil,
+                            inbox: .init(open: 6, urgent: 2),
+                            actions: panelActions
+                        )
+                        .screenshotHovering(.showInbox)
+                        .screenshotHighlighting(.control))))
+            surfaces.append(contentsOf: try pendingStopsSurfaces())
             return surfaces
         }
 
@@ -3206,6 +3307,40 @@
                                     selection: .constant("retry"))
                             }
                         }.padding(24).foregroundStyle(Color.ink).background(Color.ground2)))
+            }
+        }
+
+        /// The Pending Stops sheet holding two unconfirmed requests.
+        private func pendingStopsSurfaces() throws -> [Surface] {
+            let snapshots = Array(TaskFixtures.defaultTasks().prefix(2))
+            try #require(snapshots.count == 2)
+            let revision = try #require(snapshots.map(\.as_of_revision).max())
+            let cache = InMemoryCacheStore()
+            try cache.save(
+                .init(
+                    cursors: .init(
+                        syncEpoch: "fixture-epoch", lastFullSnapshotRevision: revision,
+                        highestObservedServerRevision: revision), attentionItems: [],
+                    tasks: snapshots))
+            let coordinator = SyncCoordinator(client: APIClientFactory.mock(), cache: cache)
+            coordinator.store.freshness = .fresh
+            for (index, snapshot) in snapshots.enumerated() {
+                let prepared = try #require(coordinator.taskStop.prepare(taskID: snapshot.task.id))
+                // The sheet lists its entries by command id and a prepared
+                // Stop takes a fresh UUID, so pin the ids or the two items
+                // trade places between runs.
+                var command = prepared.entry.command
+                command.command_id = "cmd-stop-\(index)"
+                #expect(
+                    coordinator.retainTaskStop(
+                        PendingTaskStop(
+                            command: command, taskName: prepared.entry.taskName,
+                            projectName: prepared.entry.projectName)))
+            }
+            return [ColorScheme.light, .dark].map { scheme in
+                Surface(
+                    name: "task-stop-pending-\(scheme)", width: 390, colorScheme: scheme,
+                    view: AnyView(TaskStopRecoveryView(coordinator: coordinator).content))
             }
         }
 
