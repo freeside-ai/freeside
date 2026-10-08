@@ -11,6 +11,69 @@ import Testing
 struct UnattendedOperationSyncTests {
     private static let noticeID = "system-health-unattended-stopped-cmd-stop"
 
+    private func backupWaiverServer() -> MockServer {
+        var item = AttentionFixtures.fixture(type: .system_health)
+        item.item.posture = .init(value1: .blocking)
+        item.item.blocking_supersession = .init(
+            value1: .init(kind: .backup_encryption_waiver, repository_id: 424_242))
+        return MockServer(items: [item])
+    }
+
+    @Test func heartbeatBootstrapsBothBackupHealthTransitionsAtTheSameRevision() async throws {
+        let server = backupWaiverServer()
+        let cache = InMemoryCacheStore()
+        let coordinator = makeCoordinator(server: server, cache: cache)
+        await coordinator.bootstrap()
+        let initial = try #require(coordinator.cursors)
+        #expect(coordinator.unattendedOperation == .init(admission: .open, stops: []))
+
+        for healthy in [false, true] {
+            await server.setBackupHealthy(healthy)
+            await coordinator.heartbeat()
+            let expected = try await coordinator.store.client.getSyncRevision().ok.body.json
+            #expect(coordinator.unattendedOperation == expected.unattended_operation)
+            #expect(coordinator.unattendedOperation?.admission == (healthy ? .open : .stopped))
+            #expect(coordinator.cursors == initial)
+            #expect(coordinator.store.freshness == .fresh)
+            // Heartbeats never write this cache: its new verdict proves a
+            // canonical bootstrap was adopted at the unchanged revision.
+            #expect(cache.load()?.unattendedOperation == expected.unattended_operation)
+
+            if !healthy {
+                let adoptedVerdict = coordinator.unattendedOperation
+                let adoptedCursors = coordinator.cursors
+                let operations = OperationLog()
+                await server.setBeforeRespond { await operations.append($0) }
+
+                await coordinator.heartbeat()
+
+                let issued = await operations.ids
+                #expect(!issued.contains("getSyncBootstrap"))
+                #expect(coordinator.unattendedOperation == adoptedVerdict)
+                #expect(coordinator.cursors == adoptedCursors)
+                #expect(coordinator.store.freshness == .fresh)
+                await server.setBeforeRespond(nil)
+            }
+        }
+    }
+
+    @Test func failedBootstrapAfterGateChangeDoesNotLeaveOldVerdictFresh() async throws {
+        let server = backupWaiverServer()
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+        let initial = try #require(coordinator.cursors)
+        await server.setBackupHealthy(false)
+        await server.setBeforeRespond { operationID in
+            if operationID == "getSyncBootstrap" { throw MockOutage() }
+        }
+
+        await coordinator.heartbeat()
+
+        #expect(coordinator.unattendedOperation == .init(admission: .open, stops: []))
+        #expect(coordinator.cursors == initial)
+        #expect(coordinator.store.freshness != .fresh)
+    }
+
     private func makeCoordinator(
         server: MockServer, cache: CacheStore = InMemoryCacheStore()
     ) -> SyncCoordinator {
@@ -149,6 +212,14 @@ struct UnattendedOperationSyncTests {
         #expect(coordinator.cursors == nil)
         #expect(coordinator.unattendedOperation == nil)
         #expect(makeCoordinator(server: server, cache: cache).unattendedOperation == nil)
+    }
+}
+
+private actor OperationLog {
+    private(set) var ids: [String] = []
+
+    func append(_ id: String) {
+        ids.append(id)
     }
 }
 

@@ -152,20 +152,23 @@ paths:
     get:
       operationId: getSyncRevision
       tags: [sync]
-      summary: The current server revision and sync epoch
+      summary: The current server revision, sync epoch, and unattended admission
       description: |
         The periodic revision heartbeat that catches lost invalidations
-        (plan §5.14; sync test 11): a client polls this cheap read and
+        (plan §5.14; sync test 11): a client polls this read and
         compares `revision` against its
         `highest_observed_server_revision`. A gap means invalidations were
         missed, so the client refetches affected resources or bootstraps;
         it never marks the whole cache current from this response (only a
         bootstrap advances `last_full_snapshot_revision`). A changed
         `sync_epoch` (a daemon restore) forces cache discard and a fresh
-        bootstrap.
+        bootstrap. A same-epoch `unattended_operation` that differs from
+        the adopted snapshot also triggers a bootstrap, even without a
+        revision gap. Live backup health can change that verdict without a
+        transaction. The client never adopts the heartbeat's verdict directly.
       responses:
         "200":
-          description: The server's current sync epoch and revision.
+          description: The server's current sync epoch, revision, and admission verdict.
           content:
             application/json:
               schema:
@@ -1070,9 +1073,9 @@ components:
       description: >
         Whether the daemon admits new unattended work, and what stops it
         (plan §4 stop_unattended, §5.7). It is the verdict of the one gate
-        admission enforces, read in the bootstrap transaction, so it is
-        current as of the enclosing snapshot's revision and carries no sync
-        metadata of its own. A client renders it as a standing indicator and
+        admission enforces at the read that produced it. Live inputs can
+        change the verdict without moving the sync revision, so it carries
+        no sync metadata of its own. A client renders it as a standing indicator and
         never infers the state from attention items: acknowledging or
         dismissing an item does not change it.
       additionalProperties: false
@@ -2890,10 +2893,10 @@ components:
       type: object
       description: >
         The revision heartbeat's payload (plan §5.14; sync test 11): the
-        daemon's current ServerState, cheap enough to poll. Carries no
-        entity data; a revision gap tells the client to refetch, never to
-        mark its cache current.
-      required: [sync_epoch, revision]
+        daemon's current ServerState and unattended-admission verdict from
+        one read transaction. A revision gap or a changed verdict tells the
+        client to bootstrap, never to adopt state from this payload.
+      required: [sync_epoch, revision, unattended_operation]
       additionalProperties: false
       properties:
         sync_epoch:
@@ -2907,9 +2910,14 @@ components:
           format: int64
           minimum: 0
           description: The server revision at the moment of the read.
+        unattended_operation:
+          $ref: "#/components/schemas/UnattendedOperationSnapshot"
       example:
         sync_epoch: "a1b2c3d4e5f60718293a4b5c6d7e8f90"
         revision: 42
+        unattended_operation:
+          admission: open
+          stops: []
 
     DeviceSnapshot:
       type: object

@@ -9,8 +9,8 @@ import OpenAPIRuntime
 /// table: only a bootstrap (the daemon's one canonical single-read
 /// snapshot) advances `lastFullSnapshotRevision`, any canonical read
 /// may advance `highestObservedServerRevision`, a heartbeat gap between
-/// them triggers a bootstrap (sync test 11), and an epoch change
-/// discards the cache outright before resyncing (sync test 8). The
+/// them or a changed admission verdict triggers a bootstrap (sync test 11).
+/// An epoch change discards the cache outright before resyncing (sync test 8). The
 /// daemon is sole authority; everything here is rebuildable from one
 /// bootstrap, so every sync failure degrades to the cached read-only
 /// view with a freshness banner, never an error the user must resolve.
@@ -48,7 +48,8 @@ public final class SyncCoordinator {
     /// bootstrap, the only source for the standing stopped indicator: it is
     /// never inferred from attention items, so acknowledging or dismissing
     /// the item that raised a stop cannot clear it. Nil until a bootstrap
-    /// supplies one. Like every restored row it is only as current as
+    /// supplies one. A changed heartbeat verdict triggers another bootstrap,
+    /// never direct adoption. Like every restored row it is only as current as
     /// `store.freshness` says.
     public private(set) var unattendedOperation: Components.Schemas.UnattendedOperationSnapshot?
     public private(set) var timelinesByRunID: [String: Components.Schemas.RunTimeline] = [:]
@@ -317,7 +318,8 @@ public final class SyncCoordinator {
     /// The periodic loss detector (plan §5.14: push and WebSocket are
     /// latency-only; the heartbeat is what catches a missed
     /// invalidation). An epoch mismatch or a revision past the last
-    /// full snapshot resyncs; anything else confirms the cache current.
+    /// full snapshot resyncs, as does a changed admission verdict even with
+    /// no revision gap. Otherwise the heartbeat confirms the cache current.
     public func heartbeat() async {
         if let heartbeatTask {
             await heartbeatTask.value
@@ -373,6 +375,10 @@ public final class SyncCoordinator {
                         // Partial reads may already have shown pieces of
                         // these revisions, but only a bootstrap makes the
                         // whole cache current (test 11).
+                        await bootstrap()
+                    } else if server.unattended_operation != unattendedOperation {
+                        // Backup health can change the gate without a write.
+                        // Only bootstrap replaces the adopted verdict.
                         await bootstrap()
                     } else {
                         store.rebuildTimeBasedOrder()

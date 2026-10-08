@@ -116,6 +116,7 @@ public actor MockServer {
     private var healthStartedAt = Date(timeIntervalSince1970: 1_725_184_800)
     private var healthContractDigest = APIContract.digest
     private var healthAvailable = true
+    private var backupHealthy = true
     private var beforeRespond: BeforeRespond?
     private var afterRespond: BeforeRespond?
     private var commandResultTransform: CommandResultTransform?
@@ -358,6 +359,12 @@ public actor MockServer {
     /// state, so liveness clients can exercise running, outage, and restart.
     public func setHealthAvailable(_ available: Bool) {
         healthAvailable = available
+    }
+
+    /// Models live backup health, which can change admission without a
+    /// synchronized write or a new revision.
+    public func setBackupHealthy(_ healthy: Bool) {
+        backupHealthy = healthy
     }
 
     /// Serves a contract digest other than this client's, so a test can
@@ -784,7 +791,9 @@ public actor MockServer {
     }
 
     func serverRevision() -> Components.Schemas.ServerRevision {
-        return .init(sync_epoch: syncEpoch, revision: revision)
+        return .init(
+            sync_epoch: syncEpoch, revision: revision,
+            unattended_operation: unattendedOperationSnapshot())
     }
 
     func healthStatus() throws -> Components.Schemas.HealthStatus {
@@ -823,15 +832,16 @@ public actor MockServer {
     /// operator stop first, bound to its open resume notice, then every other
     /// open blocking system_health item in id order. The notice is itself a
     /// blocking item, so it is reported once, as the operator stop. The mock
-    /// holds no admission policy to evaluate a supersession against, so an
-    /// item carrying one is treated as superseded.
+    /// evaluates backup supersession against its live backup-health switch,
+    /// which defaults to healthy and moves no revision.
     func unattendedOperationSnapshot() -> Components.Schemas.UnattendedOperationSnapshot {
         let items: [Components.Schemas.AttentionItem] = itemsByID.keys.sorted().compactMap {
             itemsByID[$0]?.item
         }
         let blocking = items.filter { item in
             guard item.status == .open, item._type == .system_health else { return false }
-            return item.posture?.value1 == .blocking && item.blocking_supersession == nil
+            return item.posture?.value1 == .blocking
+                && (item.blocking_supersession == nil || !backupHealthy)
         }
         var stops: [Components.Schemas.UnattendedStop] = []
         var noticeID: String?

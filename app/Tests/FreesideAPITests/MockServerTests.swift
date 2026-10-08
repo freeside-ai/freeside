@@ -4,6 +4,30 @@ import OpenAPIRuntime
 import Testing
 
 @Suite struct MockServerTests {
+    @Test func backupHealthChangesHeartbeatAndBootstrapWithoutMovingRevision() async throws {
+        var item = AttentionFixtures.fixture(type: .system_health)
+        item.item.posture = .init(value1: .blocking)
+        item.item.blocking_supersession = .init(
+            value1: .init(kind: .backup_encryption_waiver, repository_id: 424_242))
+        let server = MockServer(items: [item])
+        let client = APIClientFactory.mock(server: server)
+        let initial = try await client.getSyncRevision().ok.body.json
+        #expect(initial.unattended_operation == .init(admission: .open, stops: []))
+
+        for healthy in [true, false, true] {
+            await server.setBackupHealthy(healthy)
+            let heartbeat = try await client.getSyncRevision().ok.body.json
+            let bootstrap = try await client.getSyncBootstrap().ok.body.json
+            #expect(heartbeat.sync_epoch == initial.sync_epoch)
+            #expect(heartbeat.revision == initial.revision)
+            #expect(bootstrap.revision == initial.revision)
+            #expect(heartbeat.unattended_operation == bootstrap.unattended_operation)
+            #expect(heartbeat.unattended_operation.admission == (healthy ? .open : .stopped))
+            #expect(heartbeat.unattended_operation.stops.map(\.item_id) == (healthy ? [] : [item.item.id]))
+            #expect(heartbeat.unattended_operation.stops.map(\.kind) == (healthy ? [] : [.blocking_system_health]))
+        }
+    }
+
     @Test func healthIsAnonymousAndTracksRestartsAndOutages() async throws {
         let server = MockServer(authMode: .enforcing)
         let client = APIClientFactory.mock(server: server)
