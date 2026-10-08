@@ -762,7 +762,9 @@ struct SystemCallout<Content: View>: View {
 /// The one notice (R14): a full-width wash, a keyword in the tone's tint, a
 /// dim sentence, and an optional trailing text action in the same tint. The
 /// sentence sits beside the keyword while the line fits and stacks under it
-/// when it does not. A notice never folds and never takes the accent bar.
+/// when it does not. At an accessibility size an action takes its own line
+/// under the sentence (R22), so the sentence keeps the notice's width. A
+/// notice never folds and never takes the accent bar.
 struct Notice: View {
     enum Tone: CaseIterable {
         /// A record of something done: nothing to act on.
@@ -808,21 +810,32 @@ struct Notice: View {
     /// the same line as plain text.
     var drawn: Text? = nil
     var action: Action? = nil
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                KeywordLabel(text: keyword, color: tone.tint)
-                sentenceText
-                Spacer(minLength: 0)
-                actionButton
-            }
-            VStack(alignment: .leading, spacing: 4) {
-                KeywordLabel(text: keyword, color: tone.tint)
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
+        Group {
+            if action != nil, dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 4) {
+                    KeywordLabel(text: keyword, color: tone.tint)
                     sentenceText
-                    Spacer(minLength: 0)
-                    actionButton
+                    actionButton.padding(.top, 4)
+                }
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        KeywordLabel(text: keyword, color: tone.tint)
+                        sentenceText
+                        Spacer(minLength: 0)
+                        actionButton
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        KeywordLabel(text: keyword, color: tone.tint)
+                        HStack(alignment: .firstTextBaseline, spacing: 12) {
+                            sentenceText
+                            Spacer(minLength: 0)
+                            actionButton
+                        }
+                    }
                 }
             }
         }
