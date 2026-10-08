@@ -80,6 +80,19 @@ func SubmittedPathBoundary(policy domain.ResolvedPolicy) error {
 	)
 }
 
+// SubmittedEgressPolicy validates the writer profile and any declared registry
+// set before a new run is stored. The rebuild gate reads the set independently
+// of the writer profile, so a declared set must be valid even under provider_only.
+// Whether the composition can enforce the requested profile remains admission's
+// decision. Validation neither inserts defaults nor normalizes policy values.
+func SubmittedEgressPolicy(policy domain.ResolvedPolicy) error {
+	if _, err := domain.EgressProfileFromPolicy(policy); err != nil {
+		return err
+	}
+	_, _, err := domain.RegistrySetFromPolicy(policy)
+	return err
+}
+
 // DeclaredPathScope extracts the resolved policy's paths key as the unit's
 // declared path scope, through the domain's single canonical definition — the
 // same one the store's declaration re-gate re-derives with, so the recorded

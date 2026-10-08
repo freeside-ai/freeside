@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -265,6 +266,28 @@ func (r *intakeReconciler) admit(
 	resolvedPolicy, err := domain.NewResolvedPolicy(specificationRunID, init.PolicyKeys)
 	if err != nil {
 		return domain.IntakeOccurrence{}, fmt.Errorf("resolve policy: %w", err)
+	}
+	if egressErr := engine.SubmittedEgressPolicy(resolvedPolicy); egressErr != nil {
+		// A crash can leave the reserved run durable before BindIntakeAdmission.
+		// Preserve that exact immutable policy on recovery; a partial reservation
+		// or a different stored policy never exempts malformed new intake.
+		recovered := false
+		if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+			stored, err := tx.GetResolvedPolicy(ctx, specificationRunID)
+			if errors.Is(err, store.ErrNotFound) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			recovered = reflect.DeepEqual(stored, resolvedPolicy)
+			return nil
+		}); err != nil {
+			return domain.IntakeOccurrence{}, err
+		}
+		if !recovered {
+			return domain.IntakeOccurrence{}, egressErr
+		}
 	}
 	workItemBody := intakeWorkItemDocument(occurrence)
 	workItem, err := engine.SubmissionArtifact(domain.ArtifactKindSpecification,

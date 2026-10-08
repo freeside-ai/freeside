@@ -15,6 +15,7 @@ import (
 	osexec "os/exec"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"syscall"
@@ -277,7 +278,13 @@ func runPreflightCommandWithEnvironment(
 	if rigErr == nil {
 		manifest.Rig, rigErr = environment.AuthenticateRig(rig.Manifest.Resources.StateRoot, rig.Token)
 	}
-	identity, identityErr := inspectCompositionIdentity(cfg)
+	identityCfg := cfg
+	if rigErr == nil {
+		// The authenticated rig, rather than the acquisition file, names the
+		// database used to recognize an immutable retained policy.
+		identityCfg.DBPath = manifest.Rig.Resources.DatabasePath
+	}
+	identity, identityErr := inspectCompositionIdentity(ctx, identityCfg)
 	manifest.Identity = identity
 	cfg.PublicationAuthor = identity.CommitAuthor
 	// The lineup names every identity, and the review configuration digests
@@ -843,7 +850,7 @@ func evaluateDaemonConflict(
 	return true
 }
 
-func inspectCompositionIdentity(cfg preflightConfig) (compositionIdentity, error) {
+func inspectCompositionIdentity(ctx context.Context, cfg preflightConfig) (compositionIdentity, error) {
 	spec, err := readSubmissionFile(cfg.TaskPath)
 	if err != nil {
 		return compositionIdentity{}, err
@@ -925,6 +932,8 @@ func inspectCompositionIdentity(cfg preflightConfig) (compositionIdentity, error
 	runID := engine.SubmissionRunID(
 		cfg.ProjectID, spec.digest, policyDigest, publicationIdentityDigest, workUnitDigest,
 	)
+	// An empty identity is the documented retained-legacy inspection mode; it
+	// cannot authorize a new submission, so preserve its immutable policy.
 	if cfg.SubmissionID != "" {
 		if !validSubmissionID(cfg.SubmissionID) {
 			return compositionIdentity{}, errors.New("invalid submission identity")
@@ -944,6 +953,13 @@ func inspectCompositionIdentity(cfg preflightConfig) (compositionIdentity, error
 	if err := engine.SubmittedPathBoundary(resolvedPolicy); err != nil {
 		return compositionIdentity{}, err
 	}
+	if cfg.SubmissionID != "" {
+		if err := engine.SubmittedEgressPolicy(resolvedPolicy); err != nil {
+			if !retainedPreflightPolicyMatches(ctx, cfg, resolvedPolicy) {
+				return compositionIdentity{}, err
+			}
+		}
+	}
 	if _, err := resolvedPathAllowlist(resolvedPolicy, resolvedPolicy.Digest, cfg.AllowedPaths); err != nil {
 		return compositionIdentity{}, err
 	}
@@ -962,6 +978,34 @@ func inspectCompositionIdentity(cfg preflightConfig) (compositionIdentity, error
 		ImplementationInvocationID: domain.InvocationID("inv-implement-" + string(runID)),
 		CommitAuthor:               publication.CommitAuthor,
 	}, nil
+}
+
+func retainedPreflightPolicyMatches(ctx context.Context, cfg preflightConfig, policy domain.ResolvedPolicy) bool {
+	if cfg.DBPath == "" {
+		return false
+	}
+	lock, err := daemonlock.Acquire(cfg.DBPath)
+	if err != nil {
+		return false
+	}
+	defer lock.Close() //nolint:errcheck // a failed lookup never exempts validation
+	st, err := store.OpenReadOnly(ctx, cfg.DBPath, store.Options{ApprovedRecipes: map[domain.Digest]bool{cfg.ApprovedRecipe: true}})
+	if err != nil {
+		return false
+	}
+	defer st.Close() //nolint:errcheck // a failed lookup never exempts validation
+	matched := false
+	if st.Read(ctx, func(tx *store.ReadTx) error {
+		stored, err := tx.GetResolvedPolicy(ctx, policy.RunID)
+		if err != nil {
+			return err
+		}
+		matched = reflect.DeepEqual(stored, policy)
+		return nil
+	}) != nil {
+		return false
+	}
+	return matched
 }
 
 func inspectRepositoryAuthority(

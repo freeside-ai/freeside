@@ -422,6 +422,16 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 	if err := engine.SubmittedPathBoundary(resolvedPolicy); err != nil {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
 	}
+	if err := engine.SubmittedEgressPolicy(resolvedPolicy); err != nil {
+		// A retained request may be an already accepted manual submission.
+		// applySubmission distinguishes that replay from a journal that has not
+		// reached the database yet, which must still be refused before writing.
+		if cfg.RunID == "" {
+			if _, retainedErr := matchingRetainedSubmission(cfg); retainedErr != nil {
+				return submitResult{}, fmt.Errorf("submit: %w", err)
+			}
+		}
+	}
 	// Refuse a bad launch size at submission, not when the writer starts.
 	if _, err := ward.ResolveLaunchSizes(resolvedPolicy.Keys); err != nil {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
@@ -512,16 +522,6 @@ func applySubmission(ctx context.Context, st *store.Store, blobs *signet.BlobSto
 			return submitResult{}, fmt.Errorf("submit: validate resolved policy: %w", err)
 		}
 	}
-	// Bytes land before metadata: an artifact row must never name a digest
-	// the blob store cannot serve, since admission materializes stage inputs
-	// by digest.
-	if _, err := blobs.Put(spec.digest, bytes.NewReader(spec.body)); err != nil {
-		return submitResult{}, fmt.Errorf("submit: store specification bytes: %w", err)
-	}
-	if _, err := blobs.Put(policy.digest, bytes.NewReader(policy.body)); err != nil {
-		return submitResult{}, fmt.Errorf("submit: store policy bytes: %w", err)
-	}
-
 	specArtifact, err := engine.SubmissionArtifact(
 		domain.ArtifactKindSpecification, spec.digest, domain.EvidenceMediaTextMarkdown, int64(len(spec.body)))
 	if err != nil {
@@ -563,6 +563,54 @@ func applySubmission(ctx context.Context, st *store.Store, blobs *signet.BlobSto
 			Identity: "cli:" + cfg.SubmissionID, ProjectID: cfg.ProjectID, SourceArtifactID: specArtifact.ID,
 			SourceDigest: spec.digest, RequestDigest: domain.Digest(contentaddr.Sum(fingerprint)), ImplementationRunID: implementationRunID,
 		}
+	}
+	egressErr := engine.SubmittedEgressPolicy(resolvedPolicy)
+	acceptedManual := false
+	acceptedLegacy := false
+	if egressErr != nil && cfg.RunID != "" {
+		if err := st.Read(ctx, func(tx *store.ReadTx) error {
+			stored, err := tx.GetResolvedPolicy(ctx, specificationRunID)
+			if errors.Is(err, store.ErrNotFound) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			acceptedLegacy = reflect.DeepEqual(stored, resolvedPolicy)
+			return nil
+		}); err != nil {
+			return submitResult{}, fmt.Errorf("submit: inspect legacy policy: %w", err)
+		}
+	}
+	if egressErr != nil && manual != nil {
+		if err := st.Read(ctx, func(tx *store.ReadTx) error {
+			original, err := tx.GetManualSubmission(ctx, manual.Identity)
+			if errors.Is(err, store.ErrNotFound) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if original != *manual {
+				return store.ErrImmutableConflict
+			}
+			acceptedManual = true
+			return nil
+		}); err != nil {
+			return submitResult{}, fmt.Errorf("submit: inspect saved submission: %w", err)
+		}
+	}
+	if egressErr != nil && !acceptedManual && !acceptedLegacy {
+		return submitResult{}, fmt.Errorf("submit: %w", egressErr)
+	}
+	// Bytes land before metadata: an artifact row must never name a digest
+	// the blob store cannot serve, since admission materializes stage inputs
+	// by digest.
+	if _, err := blobs.Put(spec.digest, bytes.NewReader(spec.body)); err != nil {
+		return submitResult{}, fmt.Errorf("submit: store specification bytes: %w", err)
+	}
+	if _, err := blobs.Put(policy.digest, bytes.NewReader(policy.body)); err != nil {
+		return submitResult{}, fmt.Errorf("submit: store policy bytes: %w", err)
 	}
 	var submitted engine.SpecificationRun
 	lookupComplete := errors.New("submission lookup complete")
