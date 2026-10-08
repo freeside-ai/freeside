@@ -197,6 +197,55 @@ screencapture -l "$WID" -o composer-light.png
 pkill -x FreesideMac
 ```
 
+### Iterating on a Visible Change
+
+Look at a change through selected renders, and run the whole screenshot
+matrix once before push, not once per step. The full
+`surfacesMatchRecordedPixels` pass draws 2,466 images (411 manifest keys at
+each of six text sizes) one at a time on the main actor: 90 to 180 s on the
+development Mac (2026-10-08), depending on what else was building, before
+the build and the rest of the suite. One card through the selected-key
+probe took 16 to 19 s including an incremental build, and 3.5 s with
+nothing to rebuild.
+
+1. **While iterating, render only the surfaces the step touches,** and look
+   at those images:
+
+   ```sh
+   # From the repository root. Prints the path of each PNG it wrote.
+   bash app/scripts/render-surfaces.sh /tmp/renders decision-blocked
+   FREESIDE_RENDER_SIZES=large,ax5 \
+     bash app/scripts/render-surfaces.sh /tmp/renders decision-blocked message-composer
+   ```
+
+   A surface is a primary-surface key from
+   `Tests/FreesideCoreTests/Resources/ScreenshotDigests.json` without its
+   text-size suffix; `FREESIDE_RENDER_SIZES` defaults to `large`. The script
+   wraps the probe described under
+   [Screenshot Regression Determinism](#screenshot-regression-determinism),
+   which rejects the manifest's supplemental fixtures. It names each key the
+   probe rejected and fails when any image is missing, refuses
+   `FREESIDE_RECORD_SCREENSHOTS=1`, and never compares or records a digest.
+   Run only the affected test suites next to it, from `app/`:
+   `swift test --only-use-versions-from-resolved-file --filter '<SuiteA>|<SuiteB>'`.
+2. **Record digests at the end, once per render-changing commit.** Every
+   commit stays green, so each commit that changes pixels carries its own
+   manifest update. Review the changed images first, then replay the branch
+   with the recording command instead of re-recording during iteration. For
+   example, from the repository root (the `-x` payload stays on one line:
+   Git rejects an exec command that contains a newline):
+
+   ```sh
+   git rebase -x 'FREESIDE_RECORD_SCREENSHOTS=1 swift test --package-path app --only-use-versions-from-resolved-file --filter ScreenshotRegressionTests/surfacesMatchRecordedPixels && git add app/Tests/FreesideCoreTests/Resources/ScreenshotDigests.json && git commit --amend --no-edit' origin/main
+   ```
+
+   The recording rules at the end of the next section still apply.
+3. **Then run the full suite once, before push.**
+   `bash scripts/check.sh app test` compares every digest and runs the rest
+   of the app tests; a selected render compares none, and the recording
+   command runs one test. It comes after recording because a change that
+   moves pixels fails the comparison until its digests are recorded.
+
 ### Screenshot Regression Determinism
 
 The macOS package tests compare exact dimensions-plus-RGBA digests at six
@@ -257,7 +306,9 @@ the first selected key. `FREESIDE_SCREENSHOT_PROBE_REPETITIONS` repeats selected
 captures and checks that their digests agree. Sample diagnostics include the key, dimensions,
 and digest. A diagnostic subset refuses `FREESIDE_RECORD_SCREENSHOTS=1` and
 cannot replace the full manifest. `FREESIDE_SCREENSHOT_TRACE=1` adds the same
-sample diagnostics to a complete matrix run.
+sample diagnostics to a complete matrix run. `scripts/render-surfaces.sh`
+wraps the `selected` mode for everyday use
+([Iterating on a Visible Change](#iterating-on-a-visible-change)).
 
 `FREESIDE_PAIRING_PROBE_REPETITIONS` repeats the four mounted countdown pairs
 after the complete matrix in the same process. Its default is one; a diagnostic
@@ -324,6 +375,11 @@ xcodebuild -project Freeside.xcodeproj -scheme FreesideIOS \
   -destination 'generic/platform=iOS Simulator' -skipPackagePluginValidation \
   CODE_SIGNING_ALLOWED=NO build
 ```
+
+`swift test` renders the whole screenshot matrix. While iterating on a
+visible change, follow
+[Iterating on a Visible Change](#iterating-on-a-visible-change) instead of
+re-running it after every step.
 
 ## Restore After A Production Rig
 
