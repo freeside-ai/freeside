@@ -24,6 +24,10 @@ struct FreesideSegmentedControl<Selection: Hashable>: View {
     @Binding var selection: Selection
     /// A screenshot golden's focus ring; the live control reads real focus.
     var screenshotFocused = false
+    /// A screenshot golden's hovered and pressed segments; the live control
+    /// reads the pointer.
+    var screenshotHovered: Selection?
+    var screenshotPressed: Selection?
 
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -81,7 +85,8 @@ struct FreesideSegmentedControl<Selection: Hashable>: View {
         .buttonStyle(
             SegmentStyle(
                 isSelected: isSelected,
-                isHovered: hoveredSegment == segment.value,
+                isHovered: hoveredSegment == segment.value || screenshotHovered == segment.value,
+                isPressed: screenshotPressed == segment.value,
                 isFocused: (isFocused || screenshotFocused) && isSelected,
                 stacked: stacked)
         )
@@ -126,12 +131,13 @@ struct FreesideSegmentedControl<Selection: Hashable>: View {
 }
 
 /// One segment: medium sans on a 28pt line (40 stacked), the selected
-/// segment on the `segmentSelected` fill, a hovered one on the soft accent
-/// wash, a pressed one on ground-3, and a 1pt accent ring for focus. A
+/// segment on the `segmentSelected` fill, a hovered one on the hover fill,
+/// a pressed one on the soft accent wash, and a 1pt accent ring for focus. A
 /// disabled control keeps its fills and takes the faint cut on every label.
 private struct SegmentStyle: ButtonStyle {
     let isSelected: Bool
     let isHovered: Bool
+    let isPressed: Bool
     let isFocused: Bool
     let stacked: Bool
     @Environment(\.isEnabled) private var isEnabled
@@ -144,7 +150,7 @@ private struct SegmentStyle: ButtonStyle {
             // urgent chip, so the inset stays small.
             .padding(.horizontal, stacked ? 10 : 3)
             .frame(maxWidth: .infinity, minHeight: stacked ? 40 : 28, alignment: stacked ? .leading : .center)
-            .background(RoundedRectangle(cornerRadius: 4).fill(fill(isPressed: configuration.isPressed)))
+            .background(RoundedRectangle(cornerRadius: 4).fill(fill(isPressed: isPressed || configuration.isPressed)))
             .overlay(
                 RoundedRectangle(cornerRadius: 4)
                     .strokeBorder(isFocused ? Color.accentBorder : .clear, lineWidth: 1)
@@ -160,8 +166,8 @@ private struct SegmentStyle: ButtonStyle {
     private func fill(isPressed: Bool) -> Color {
         if isSelected { return .segmentSelected }
         guard isEnabled else { return .clear }
-        if isPressed { return .ground3 }
-        return isHovered ? .accentWashSoft : .clear
+        if isPressed { return .accentWashSoft }
+        return isHovered ? .hover : .clear
     }
 }
 

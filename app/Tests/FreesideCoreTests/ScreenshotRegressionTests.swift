@@ -3013,6 +3013,31 @@
                         view: AnyView(
                             framedDetail.screenshotInspector(framed, at: dynamicTypeSize))))
             }
+            // The two pointer states no other surface can draw: the first
+            // control with a segment hovered, the second with one pressed.
+            let segments: [FreesideSegmentedControl<Int>.Segment] = [
+                .init(value: 0, label: "Open", count: 6),
+                .init(value: 1, label: "Snoozed", count: 2),
+                .init(value: 2, label: "Done"),
+            ]
+            for (suffix, colorScheme) in [("", ColorScheme.light), ("-dark", .dark)] {
+                surfaces.append(
+                    Surface(
+                        name: "segmented-control-pointer-states\(suffix)",
+                        width: 280,
+                        colorScheme: colorScheme,
+                        view: AnyView(
+                            VStack(spacing: 12) {
+                                FreesideSegmentedControl(
+                                    accessibilityLabel: "Scope", segments: segments,
+                                    selection: .constant(0), screenshotHovered: 1)
+                                FreesideSegmentedControl(
+                                    accessibilityLabel: "Scope", segments: segments,
+                                    selection: .constant(0), screenshotPressed: 1)
+                            }
+                            .padding(12)
+                            .background(Color.sidebarGround))))
+            }
             return surfaces
         }
 
