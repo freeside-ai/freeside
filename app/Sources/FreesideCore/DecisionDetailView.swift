@@ -183,11 +183,7 @@ struct DecisionDetailView: View {
                                 wideLayout: usesWideLayout)
                         }
                         .coordinateSpace(name: "decision-card-scroll")
-                        .onGeometryChange(for: CGFloat.self) { geometry in
-                            geometry.size.width
-                        } action: { width in
-                            detailWidth = width
-                        }
+                        .onPaneWidthChange { detailWidth = $0 }
                         .onChange(of: detailsRevealRequest) {
                             revealTechnicalDetailsIfRequested(using: scrollProxy)
                         }
@@ -4162,6 +4158,20 @@ extension StateChip {
 }
 
 extension View {
+    /// Reports the width of the pane a view is offered, not the width the
+    /// view takes. A vertical scroll view is only as wide as its content,
+    /// and the decision card caps its own width until the pane is wide
+    /// enough for two columns, so the scroll view's own width could never
+    /// reach that threshold.
+    func onPaneWidthChange(_ action: @escaping (CGFloat) -> Void) -> some View {
+        frame(maxWidth: .infinity)
+            .onGeometryChange(for: CGFloat.self) { geometry in
+                geometry.size.width
+            } action: { width in
+                action(width)
+            }
+    }
+
     /// The decision card's own padding, ground, and border, inside the
     /// detail's margin.
     fileprivate func decisionCardChrome(compactLayout: Bool, wideLayout: Bool) -> some View {
