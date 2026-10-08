@@ -288,6 +288,16 @@ migrations, `Open` behavior, or refusal of an existing file keep the raw
 `store.Open` path. Tests inside `package store` use `openTemplateStore` or
 `openTemplateStoreAt` because importing `storetest` would create a cycle.
 
+**Repository templates.** Use `repotemplate.Cache[M].Copy` from
+`internal/repotemplate` for repeated small git fixtures. Each key builds once
+per test binary, stores the directory tree in memory, and gives every caller
+an isolated copy with its metadata. The package runs no git: each test
+package's existing git helper still builds fixtures with its fixed identity
+and isolated configuration. Builders must leave no absolute paths in the
+tree; plain `git init` repositories work, local clones and worktrees do not.
+Disable automatic Git maintenance in builders so background writes cannot
+race the snapshot.
+
 **Golden files.** Tests that assert a serialized shape compare it against a
 committed fixture rather than hand-writing the expected bytes inline. Use the
 shared helper `internal/golden` so every lane's golden tests share one shape
