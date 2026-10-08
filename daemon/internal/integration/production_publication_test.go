@@ -4419,6 +4419,7 @@ func TestProductionPublicationRestartsAcrossDurableBoundaries(t *testing.T) {
 	for _, tc := range productionPublicationTransitionMatrix {
 		for _, side := range engine.AllDurableTransitionSides {
 			t.Run(string(tc.transition)+"/"+string(side), func(t *testing.T) {
+				t.Parallel()
 				p := newProductionPublicationHarness(t, "")
 				reviewCalls := &faultReviewSource{ReviewSource: p.reviewer}
 				p.reviewSource = reviewCalls
