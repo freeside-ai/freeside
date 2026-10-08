@@ -28,6 +28,17 @@
 #   VACUUM         command for the OpenAPI linter (default: `go run`
 #                  of the pinned vacuum module, ~7 minutes cold)
 #
+# Local daemon test runs:
+#   DAEMON_TEST_MAX_RUNS   simultaneous test steps (default: 1, or 0 when
+#                          CI is non-empty); 0 turns the limit off
+#   DAEMON_TEST_STATE_DIR  shared per-user state directory (default:
+#                          ${XDG_CACHE_HOME:-$HOME/.cache}/freeside/daemon-test)
+# A queued run names the limit, state directory, and holders every 30 seconds.
+# Outside CI on macOS, when git resolves to /usr/bin/git, the test step uses
+# xcrun's git through a stable directory containing only git on PATH, with
+# its helpers and config preserved. Other git installations and later steps
+# are unchanged.
+#
 # The daemon's opt-in live suites are skipped by `go test` unless their
 # environment is set (FREESIDE_PUBLISH_LIVE_TEST, FREESIDE_WARD_LIVE_TEST,
 # FREESIDE_CLAUDE_TOKEN_LIVE_TEST, FREESIDE_CODEX_ENROLLMENT_LIVE_TEST,
@@ -38,7 +49,7 @@
 # Exit codes:
 #   0  every requested step passed
 #   1  a step failed (its command's output says which)
-#   2  usage error: unknown component or step
+#   2  usage error: unknown component or step, or malformed daemon test limit
 set -euo pipefail
 
 PROG=$(basename "$0")
@@ -95,7 +106,126 @@ daemon_build() {
   in_dir "$ROOT/daemon" env CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
     go build -o /dev/null ./cmd/freeside-export
 }
-daemon_test() { in_dir "$ROOT/daemon" go test ./...; }
+daemon_test_run() { in_dir "$ROOT/daemon" go test ./...; }
+
+daemon_test_take_slot() {
+  local limit=${DAEMON_TEST_MAX_RUNS-1}
+  if [[ ! ${DAEMON_TEST_MAX_RUNS+x} && -n ${CI:-} ]]; then limit=0; fi
+  if [[ ! $limit =~ ^[0-9]+$ ]]; then
+    echo 'daemon test: DAEMON_TEST_MAX_RUNS must be a non-negative integer' >&2
+    return 2
+  fi
+  # Strip leading zeroes so Bash never treats the limit as octal.
+  limit=${limit#"${limit%%[!0]*}"}
+  limit=${limit:-0}
+  [[ $limit != 0 ]] || return 0
+  local state=${DAEMON_TEST_STATE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/freeside/daemon-test}
+  local slot file rc pid waited=0
+  if ! command -v python3 >/dev/null; then
+    echo 'daemon test: python3 unavailable; running without the limit' >&2
+    return 0
+  fi
+  if ! mkdir -p "$state/slots" 2>/dev/null; then
+    echo "daemon test: cannot create $state/slots; running without the limit" >&2
+    return 0
+  fi
+  while :; do
+    for ((slot=1; ; slot++)); do
+      # Compare decimal strings so a large valid limit cannot overflow Bash.
+      # shellcheck disable=SC2071 # Equal-length decimal strings sort numerically.
+      [[ ${#slot} -lt ${#limit} || ( ${#slot} -eq ${#limit} &&
+        ( $slot < "$limit" || $slot == "$limit" ) ) ]] || break
+      file=$state/slots/$slot
+      if ! ( : >>"$file" ) 2>/dev/null; then
+        echo "daemon test: cannot open $file; running without the limit" >&2
+        return 0
+      fi
+      exec 9>>"$file"
+      # flock belongs to the open file description: Python can exit while
+      # this shell holds the lock. lockf would release it with Python.
+      if python3 -c 'import errno, fcntl, sys
+try:
+    fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError as e:
+    sys.exit(75 if e.errno in (errno.EACCES, errno.EAGAIN) else 1)
+' 2>/dev/null; then
+        # $$ names the outer script, not this lock-holding subshell. Bash
+        # 3.2 lacks BASHPID; an exec'd child can report its parent's PID.
+        pid=${BASHPID:-$(exec sh -c 'echo "$PPID"')}
+        printf 'run PID %s: %s\n' "$pid" "$ROOT" >"$file"
+        return 0
+      else
+        rc=$?
+      fi
+      exec 9>&-
+      if [[ $rc != 75 ]]; then
+        echo "daemon test: cannot lock $file; running without the limit" >&2
+        return 0
+      fi
+    done
+    if ((waited % 30 == 0)); then
+      echo "daemon test: waiting for a slot (limit $limit, state $state); DAEMON_TEST_MAX_RUNS=0 disables the limit" >&2
+      for ((slot=1; ; slot++)); do
+        # shellcheck disable=SC2071 # Equal-length decimal strings sort numerically.
+        [[ ${#slot} -lt ${#limit} || ( ${#slot} -eq ${#limit} &&
+          ( $slot < "$limit" || $slot == "$limit" ) ) ]] || break
+        printf '  slot %s: %s\n' "$slot" "$(cat "$state/slots/$slot")" >&2
+      done
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+}
+
+daemon_test_use_real_git() {
+  [[ -z ${CI:-} ]] || return 0
+  [[ $(uname -s) == Darwin && $(command -v git) == /usr/bin/git ]] || return 0
+  local real prefix state dir entry helpers
+  real=$(xcrun -f git 2>/dev/null) || return 0
+  [[ $real == */bin/git && -x $real ]] || return 0
+  prefix=${real%/bin/git}
+  state=${DAEMON_TEST_STATE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/freeside/daemon-test}
+  dir=$state/git$prefix
+  if ! mkdir -p "$dir/bin" 2>/dev/null; then
+    echo "daemon test: cannot create $dir/bin; keeping git PATH" >&2
+    return 0
+  fi
+  # Git locates helpers/config relative to its invocation path, without
+  # resolving symlinks. Mirror its prefix, not just the binary. Never remove
+  # entries: concurrent builders add only missing links, with bin/git last.
+  for entry in "$prefix"/*; do
+    [[ ${entry##*/} != bin ]] || continue
+    if [[ ! -e $dir/${entry##*/} && ! -L $dir/${entry##*/} ]]; then
+      if ! ln -s "$entry" "$dir/${entry##*/}" 2>/dev/null &&
+          [[ ! -L $dir/${entry##*/} ]]; then
+        echo "daemon test: cannot link $entry; keeping git PATH" >&2
+        return 0
+      fi
+    fi
+  done
+  if [[ ! -e $dir/bin/git ]]; then
+    if ! ln -s "$real" "$dir/bin/git" 2>/dev/null && [[ ! -L $dir/bin/git ]]; then
+      echo "daemon test: cannot link $real; keeping git PATH" >&2
+      return 0
+    fi
+  fi
+  helpers=$("$dir/bin/git" --exec-path 2>/dev/null) || helpers=''
+  if [[ ! -x $helpers/git ]]; then
+    echo 'daemon test: git helper directory unavailable; keeping git PATH' >&2
+    return 0
+  fi
+  # A stable PATH lets Go reuse cached tests that read this environment input.
+  export PATH="$dir/bin:$PATH"
+}
+
+daemon_test() (
+  daemon_test_use_real_git
+  daemon_test_take_slot
+  # Bash 3.2 saves a redirection on another descriptor if applied to the
+  # function call. Close it inside a subshell so orphaned children can't
+  # inherit either the slot descriptor or a saved copy.
+  ( exec 9>&-; daemon_test_run )
+)
 daemon_vet() { in_dir "$ROOT/daemon" go vet ./...; }
 daemon_lint() {
   # shellcheck disable=SC2086 # GOLANGCI_LINT may carry arguments
