@@ -1752,13 +1752,17 @@ import Testing
                 == "Show the attachments in the inspector")
     }
 
-    /// The inspector's claims disclosure is labeled `Claims` and draws its
-    /// unverified mark inside the section, so the closed disclosure says
+    /// A sentence disclosure's label carries no unverified register. The
+    /// inspector's `Claims` and a one-pane card's folded `Agent Claims`
+    /// draw the mark inside the section, so the closed disclosure says
     /// aloud that the claims are the agent's and unverified.
-    @Test func theInspectorsClaimsDisclosureSaysTheClaimsAreUnverified() {
+    @Test func aClaimsDisclosureSaysTheClaimsAreUnverified() {
         #expect(
             DecisionDetailView.inspectorClaimsSpokenLabel(count: 2)
                 == "Claims, 2, unverified agent claims")
+        #expect(
+            DecisionDetailView.unverifiedDisclosureSpokenLabel("Agent Claims")
+                == "Agent Claims, unverified")
     }
 
     /// The "Scope kept" row names the exact paths the operator left unchanged,

@@ -1029,7 +1029,7 @@ struct DecisionDetailView: View {
                         at: moduleIndex,
                         prominentClaimIndex: graphics.prominentClaimIndex),
                     title: composition.claimsAreProminent(at: moduleIndex)
-                        ? DecisionCardComposition.leadClaimsKeyword(for: item._type) : "Agent claims",
+                        ? DecisionCardComposition.leadClaimsKeyword(for: item._type) : "Agent Claims",
                     accessibilityLayout: accessibilityLayout,
                     prominent: composition.claimsAreProminent(at: moduleIndex),
                     unverified: register)
@@ -2925,14 +2925,25 @@ struct DecisionDetailView: View {
         @ViewBuilder content: @escaping () -> Content
     ) -> some View {
         if accessibilityLayout {
-            let disclosure = DisclosureGroup(isExpanded: isExpanded) {
+            // The sentence disclosure every other fold on the card and the
+            // inspector's sections use (R2). Its label carries no unverified
+            // register, so a section of agent claims draws the register as
+            // its first line and says it aloud on the disclosure.
+            let disclosure = SentenceDisclosure(
+                label: title,
+                spokenLabel: unverified == nil ? nil : Self.unverifiedDisclosureSpokenLabel(title),
+                isExpanded: isExpanded
+            ) {
                 VStack(alignment: .leading, spacing: 8) {
+                    if let unverified {
+                        UnverifiedLabel(
+                            text: title, carriesInfo: false,
+                            rendersInteractiveControls: unverified.rendersInteractiveControls)
+                    }
                     foldedUnverifiedSentence(unverified)
                     content()
                 }
-                .padding(.top, 8)
-            } label: {
-                sectionTitle(title, unverified: unverified, isDisclosureLabel: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             if unverified != nil {
                 disclosure.frame(maxWidth: .infinity, alignment: .leading)
@@ -2957,6 +2968,12 @@ struct DecisionDetailView: View {
         /// A section's rows start under its label's text, past the glyph.
         static let rowIndent: CGFloat = 19
         static let rowGap: CGFloat = 8
+    }
+
+    /// What VoiceOver calls a one-pane card's folded section of agent
+    /// claims, whose drawn label is the section's title alone.
+    static func unverifiedDisclosureSpokenLabel(_ title: String) -> String {
+        "\(title), unverified"
     }
 
     /// What VoiceOver calls the inspector's claims disclosure. The drawn
