@@ -324,6 +324,206 @@ func TestFollowUpFilerBoundsAnIncompleteListing(t *testing.T) {
 	})
 }
 
+// Membership must be proved from the returned resource, even when its number
+// also exists in the target repository. A number lookup cannot prove lineage.
+func TestFollowUpFilerRequiresRepositoryMembership(t *testing.T) {
+	const target = "http://github.test/repos/" + filingRepo
+	invalid := map[string]map[string]string{
+		"foreign repository":       {"repository_url": "http://github.test/repos/owner/foreign", "url": "http://github.test/repos/owner/foreign/issues/500"},
+		"missing repository":       {"repository_url": ""},
+		"missing issue URL":        {"url": ""},
+		"malformed URL":            {"url": "://SECRET-URL"},
+		"contradictory repository": {"repository_url": "http://github.test/repos/owner/foreign"},
+		"contradictory issue":      {"url": "http://github.test/repos/owner/foreign/issues/500"},
+		"wrong number":             {"url": target + "/issues/501"},
+		"foreign origin":           {"repository_url": "http://foreign.test/repos/" + filingRepo},
+	}
+	for name, membership := range invalid {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			t.Run("create remains unproven then recovers after restart", func(t *testing.T) {
+				h := newFilingHarness(t)
+				instance := h.approve(h.seedRun("run-a", nil, nil), 0)
+				// The fake commits target issue 500 but returns conflicting identity.
+				h.respond(fakeCreateResponse{Membership: membership})
+				h.mustPass()
+				if h.filed(instance.ID) != nil || h.intent(instance.ID).Terminal != nil {
+					t.Fatal("invalid create response was accepted")
+				}
+				h.restart()
+				h.advance(pastSettle)
+				h.mustPass()
+				h.assertLedgered(instance.ID, 500)
+				if h.creates() != 1 {
+					t.Fatal("unproven create was resent")
+				}
+			})
+			t.Run("pre-dispatch listing sends nothing", func(t *testing.T) {
+				h := newFilingHarness(t)
+				instance := h.approve(h.seedRun("run-a", nil, nil), 0)
+				issue := h.botIssue(500)
+				issue.Membership = membership
+				h.plant(issue)
+				if err := h.pass(); err == nil || strings.Contains(err.Error(), "SECRET-URL") {
+					t.Fatalf("invalid listing error = %v", err)
+				}
+				if h.creates() != 0 || h.filed(instance.ID) != nil {
+					t.Fatal("invalid listing allowed filing")
+				}
+			})
+			t.Run("invalid later page prevents partial adoption", func(t *testing.T) {
+				h := newFilingHarness(t)
+				instance := h.approve(h.seedRun("run-a", nil, nil), 0)
+				h.respond(unprovenLost)
+				h.mustPass()
+				h.plant(h.botIssue(500))
+				issue := h.botIssue(500)
+				issue.Membership = membership
+				h.plant(issue)
+				h.gh.filing.pageSize = 1
+				h.restart()
+				h.advance(pastSettle)
+				for range 2 {
+					if err := h.pass(); err == nil {
+						t.Fatal("invalid page reported success")
+					}
+					if h.filed(instance.ID) != nil {
+						t.Fatal("partial listing was adopted")
+					}
+				}
+				h.mustPass()
+				h.assertTerminal(instance.ID, domain.FollowUpFilingAmbiguous, "", "follow_up_filing_ambiguous")
+				if h.creates() != 1 {
+					t.Fatal("unproven create was resent")
+				}
+			})
+		})
+	}
+}
+
+func TestFollowUpFilerRejectsEmptyNextLink(t *testing.T) {
+	t.Parallel()
+	h := newFilingHarness(t)
+	instance := h.approve(h.seedRun("run-a", nil, nil), 0)
+	h.respond(unprovenLost)
+	h.mustPass()
+	h.plant(h.botIssue(500))
+	h.gh.filing.rawLink = `<>; rel="next"`
+	h.advance(pastSettle)
+	for range 2 {
+		before := h.gh.filing.listRequests
+		if err := h.pass(); err == nil || h.filed(instance.ID) != nil || h.gh.filing.listRequests != before+1 {
+			t.Fatalf("empty next link: error %v, ledger %+v, requests %d", err, h.filed(instance.ID), h.gh.filing.listRequests-before)
+		}
+	}
+	h.mustPass()
+	h.assertTerminal(instance.ID, domain.FollowUpFilingAmbiguous, "", "follow_up_filing_ambiguous")
+	if h.creates() != 1 {
+		t.Fatal("unproven create was resent")
+	}
+}
+
+func TestFollowUpFilerRecoversThroughCanonicalPagination(t *testing.T) {
+	t.Parallel()
+	h := newFilingHarness(t)
+	instance := h.approve(h.seedRun("run-a", nil, nil), 0)
+	h.plant(h.botIssue(499))
+	h.respond(unprovenLost)
+	h.mustPass()
+	h.plant(h.botIssue(500))
+	h.gh.filing.pageSize = 1
+	h.advance(pastSettle)
+	h.mustPass()
+	h.assertLedgered(instance.ID, 500)
+	if h.creates() != 1 || h.gh.filing.canonicalReads != 3 {
+		t.Fatalf("creates = %d, canonical reads = %d", h.creates(), h.gh.filing.canonicalReads)
+	}
+}
+
+func TestFollowUpFilerKeepsListingOnTheResolvedRepository(t *testing.T) {
+	for _, laterPage := range []bool{false, true} {
+		t.Run(fmt.Sprintf("later page=%t", laterPage), func(t *testing.T) {
+			t.Parallel()
+			h := newFilingHarness(t)
+			instance := h.approve(h.seedRun("run-a", nil, nil), 0)
+			if laterPage {
+				h.plant(h.botIssue(499))
+			}
+			h.respond(unprovenLost)
+			h.mustPass()
+			if laterPage {
+				h.plant(h.botIssue(500))
+				h.gh.filing.pageSize = 1
+				h.gh.filing.namedNext = true
+			}
+			// Rebind only the public name after the ID lookup. Its replacement
+			// has matching URLs and an otherwise admissible issue from this bot.
+			h.step = func(name string) {
+				if name == "receive GET "+testRepoPath {
+					h.gh.filing.reboundIssues = []fakeFiledIssue{h.botIssue(501)}
+				}
+			}
+			h.advance(pastSettle)
+			h.mustPass()
+			if h.gh.filing.reboundIssues == nil || h.gh.filing.reboundReads != 0 || h.creates() != 1 {
+				t.Fatalf("rebound issues = %+v, replacement reads = %d, creates = %d", h.gh.filing.reboundIssues, h.gh.filing.reboundReads, h.creates())
+			}
+			if laterPage {
+				h.assertLedgered(instance.ID, 500)
+			} else {
+				h.assertTerminal(instance.ID, domain.FollowUpFilingAmbiguous, "", "follow_up_filing_ambiguous")
+			}
+		})
+	}
+}
+
+func TestFollowUpFilerRejectsForeignCollectionLinks(t *testing.T) {
+	for _, next := range []string{
+		"/repos/owner/foreign/issues?page=2",
+		"/repos/" + filingRepo + "/pulls?page=2",
+		"/repos/" + filingRepo + "/issues/500/comments?page=2",
+		"/repos/" + filingRepo + "/issues-extra?page=2",
+		"/repos/" + filingRepo + "/issues?state=all&creator=attacker&per_page=100&page=2",
+		"/repos/" + filingRepo + "/issues?state=all&per_page=100&page=999",
+	} {
+		for _, candidate := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s candidate=%t", next, candidate), func(t *testing.T) {
+				t.Parallel()
+				h := newFilingHarness(t)
+				instance := h.approve(h.seedRun("run-a", nil, nil), 0)
+				h.gh.filing.nextPath = next
+				if err := h.pass(); err == nil || h.creates() != 0 || h.filed(instance.ID) != nil || h.gh.filing.foreignReads != 0 {
+					t.Fatalf("foreign pre-dispatch link: error %v, creates %d", err, h.creates())
+				}
+				h.gh.filing.nextPath = ""
+				h.respond(unprovenLost)
+				h.mustPass()
+				if candidate {
+					h.plant(h.botIssue(500))
+				}
+				h.gh.filing.nextPath = next
+				h.advance(pastSettle)
+				for range 2 {
+					if err := h.pass(); err == nil {
+						t.Fatal("foreign link reported success")
+					}
+					if h.filed(instance.ID) != nil {
+						t.Fatal("partial listing was adopted")
+					}
+				}
+				h.mustPass()
+				h.assertTerminal(instance.ID, domain.FollowUpFilingAmbiguous, "", "follow_up_filing_ambiguous")
+				if h.gh.filing.foreignReads != 0 {
+					t.Fatal("requested a foreign collection")
+				}
+				if h.creates() != 1 {
+					t.Fatal("unproven create was resent")
+				}
+			})
+		}
+	}
+}
+
 // TestFollowUpFilerHoldsAFilingToItsDispatchingIdentity pins issue #1777: a
 // filing's pre-dispatch set and its create belong to one GitHub App, so once
 // the repository is registered to another App the filing neither sends a
@@ -629,7 +829,7 @@ func TestFollowUpFilerRetriesATransientRejectionWithinTheBound(t *testing.T) {
 }
 
 func TestFollowUpFilerNeverResendsAnUnprovenCreate(t *testing.T) {
-	foreign := `{"number":1,"user":{"id":1,"type":"User"},"created_at":"2026-09-02T12:00:00Z"}`
+	foreign := `{"number":1,"repository_url":"http://github.test/repos/freeside-ai/evidence-repo","url":"http://github.test/repos/freeside-ai/evidence-repo/issues/1","user":{"id":1,"type":"User"},"created_at":"2026-09-02T12:00:00Z"}`
 	unproven := map[string]fakeCreateResponse{
 		"500":                           {Status: http.StatusInternalServerError},
 		"502":                           {Status: http.StatusBadGateway},

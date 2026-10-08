@@ -23,9 +23,13 @@ type filingForgeFake struct {
 	createBody   string
 	created      map[string]any
 	// pages are the issue listing's pages, in order.
-	pages      []string
-	listQuery  map[string]string
-	milestones string
+	pages              []string
+	listQuery          map[string]string
+	malformedNextQuery string
+	canonicalNext      int64
+	namedNext          bool
+	listRequests       int
+	milestones         string
 }
 
 func newFilingForgeFake(t *testing.T) (*forge, *filingForgeFake, repoRef) {
@@ -33,19 +37,24 @@ func newFilingForgeFake(t *testing.T) (*forge, *filingForgeFake, repoRef) {
 	fake := &filingForgeFake{t: t}
 	srv := httptest.NewServer(http.HandlerFunc(fake.handle))
 	t.Cleanup(srv.Close)
-	return newForge(draftTestTokenSource{}, srv.Client(), srv.URL), fake, repoRef{owner: "owner", name: "name"}
+	return newForge(draftTestTokenSource{}, srv.Client(), srv.URL+"/api/v3"), fake, repoRef{owner: "owner", name: "name"}
 }
 
 func (g *filingForgeFake) handle(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/v3")
+	render := func(body string) string {
+		return strings.ReplaceAll(body, "$API_ROOT", "http://"+r.Host+"/api/v3")
+	}
 	switch {
-	case r.Method == http.MethodPost && r.URL.Path == "/repos/owner/name/issues":
+	case r.Method == http.MethodPost && path == "/repos/owner/name/issues":
 		body, err := io.ReadAll(r.Body)
 		if err != nil || json.Unmarshal(body, &g.created) != nil {
 			g.t.Errorf("create issue body %q: %v", body, err)
 		}
 		w.WriteHeader(g.createStatus)
-		_, _ = io.WriteString(w, g.createBody)
-	case r.Method == http.MethodGet && r.URL.Path == "/repos/owner/name/issues":
+		_, _ = io.WriteString(w, render(g.createBody))
+	case r.Method == http.MethodGet && (path == "/repos/owner/name/issues" || path == "/repositories/42/issues"):
+		g.listRequests++
 		query := r.URL.Query()
 		page := 1
 		if raw := query.Get("page"); raw != "" {
@@ -58,10 +67,22 @@ func (g *filingForgeFake) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		if page < len(g.pages) {
 			query.Set("page", fmt.Sprint(page+1))
-			w.Header().Set("Link", fmt.Sprintf(`<http://%s%s?%s>; rel="next"`, r.Host, r.URL.Path, query.Encode()))
+			nextPath := r.URL.Path
+			if g.canonicalNext != 0 && page == 1 {
+				nextPath = fmt.Sprintf("/api/v3/repositories/%d/issues", g.canonicalNext)
+			}
+			if g.namedNext {
+				nextPath = "/api/v3/repos/owner/name/issues"
+			}
+			if g.malformedNextQuery != "" {
+				w.Header().Set("Link", fmt.Sprintf(`<http://%s%s?%s&%s>; rel="next"`, r.Host, nextPath, query.Encode(), g.malformedNextQuery))
+				_, _ = io.WriteString(w, render(g.pages[page-1]))
+				return
+			}
+			w.Header().Set("Link", fmt.Sprintf(`<http://%s%s?%s>; rel="next"`, r.Host, nextPath, query.Encode()))
 		}
-		_, _ = io.WriteString(w, g.pages[page-1])
-	case r.Method == http.MethodGet && r.URL.Path == "/repos/owner/name/milestones":
+		_, _ = io.WriteString(w, render(g.pages[page-1]))
+	case r.Method == http.MethodGet && path == "/repos/owner/name/milestones":
 		_, _ = io.WriteString(w, g.milestones)
 	default:
 		g.t.Errorf("unexpected request %s %s", r.Method, r.URL)
@@ -69,7 +90,45 @@ func (g *filingForgeFake) handle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-const filingIssueJSON = `{"number":12,"title":"SECRET-TITLE","user":{"id":7,"type":"Bot","login":"app[bot]"},"created_at":"2026-09-02T12:00:00Z"}`
+const filingIssueJSON = `{"number":12,"repository_url":"$API_ROOT/repos/owner/name","url":"$API_ROOT/repos/owner/name/issues/12","title":"SECRET-TITLE","user":{"id":7,"type":"Bot","login":"app[bot]"},"created_at":"2026-09-02T12:00:00Z"}`
+
+func TestExactNextPageLink(t *testing.T) {
+	t.Parallel()
+	valid := "<https://api.example/issues?page=2>; rel=\"next\", <https://api.example/issues?page=3>; rel=\"last\""
+	for name, headers := range map[string][]string{
+		"next and last":      {valid},
+		"spaced relations":   {"<https://api.example/issues?page=1>; rel=\"prev\", <https://api.example/issues?page=2>; rel=\"next\", <https://api.example/issues?page=3>; rel=\"last\""},
+		"terminal relations": {"<https://api.example/issues?page=1>; rel=\"prev\", <https://api.example/issues?page=1>; rel=\"first\""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			next, err := exactNextPageLink(headers)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "https://api.example/issues?page=2"
+			if name == "terminal relations" {
+				want = ""
+			}
+			if next != want {
+				t.Fatalf("next = %q, want %q", next, want)
+			}
+		})
+	}
+	for name, headers := range map[string][]string{
+		"empty":             {"<>; rel=\"next\""},
+		"semicolon target":  {"<https://api.example/issues?x=1;bad=%ZZ>; rel=\"next\""},
+		"malformed escape":  {"<https://api.example/issues?bad=%ZZ>; rel=\"next\""},
+		"bad after next":    {"<https://api.example/issues?page=2>; rel=\"next\", broken"},
+		"duplicate headers": {"<https://api.example/issues?page=2>; rel=\"next\"", "<https://api.example/issues?page=3>; rel=\"next\""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := exactNextPageLink(headers)
+			if err == nil {
+				t.Fatal("accepted malformed link")
+			}
+		})
+	}
+}
 
 func TestForgeCreateIssue(t *testing.T) {
 	t.Parallel()
@@ -80,7 +139,7 @@ func TestForgeCreateIssue(t *testing.T) {
 		if err != nil {
 			t.Fatalf("newCreateIssueRequest: %v", err)
 		}
-		result, err := f.sendCreateIssue(req)
+		result, err := f.sendCreateIssue(req, repo)
 		if err != nil {
 			t.Fatalf("sendCreateIssue: %v", err)
 		}
@@ -118,14 +177,16 @@ func TestForgeCreateIssue(t *testing.T) {
 	// A response the create may have committed behind is never an error and
 	// never an issue: the caller classifies it.
 	for name, body := range map[string]string{
-		"not JSON":          `<html>`,
-		"no number":         `{"user":{"id":7,"type":"Bot"},"created_at":"2026-09-02T12:00:00Z"}`,
-		"zero number":       `{"number":0,"user":{"id":7,"type":"Bot"},"created_at":"2026-09-02T12:00:00Z"}`,
-		"no author":         `{"number":12,"created_at":"2026-09-02T12:00:00Z"}`,
-		"no author id":      `{"number":12,"user":{"type":"Bot"},"created_at":"2026-09-02T12:00:00Z"}`,
-		"no author type":    `{"number":12,"user":{"id":7},"created_at":"2026-09-02T12:00:00Z"}`,
-		"no creation time":  `{"number":12,"user":{"id":7,"type":"Bot"}}`,
-		"an empty response": ``,
+		"not JSON":               `<html>`,
+		"no number":              strings.Replace(filingIssueJSON, `"number":12,`, "", 1),
+		"zero number":            strings.Replace(filingIssueJSON, `"number":12`, `"number":0`, 1),
+		"no author":              strings.Replace(filingIssueJSON, `"user":`, `"unused":`, 1),
+		"no author id":           strings.Replace(filingIssueJSON, `"id":7,`, "", 1),
+		"no author type":         strings.Replace(filingIssueJSON, `"type":"Bot",`, "", 1),
+		"no creation time":       strings.Replace(filingIssueJSON, `"created_at":`, `"unused":`, 1),
+		"missing repository URL": strings.Replace(filingIssueJSON, `"repository_url":`, `"unused":`, 1),
+		"missing issue URL":      strings.Replace(filingIssueJSON, `"url":`, `"unused":`, 1),
+		"an empty response":      ``,
 	} {
 		t.Run("201 with "+name, func(t *testing.T) {
 			t.Parallel()
@@ -151,14 +212,54 @@ func TestForgeListIssuesCreatedBy(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	since := time.Date(2026, 9, 2, 12, 0, 0, 0, time.FixedZone("", 3600))
+	t.Run("accepts the trusted canonical repository collection", func(t *testing.T) {
+		t.Parallel()
+		f, fake, repo := newFilingForgeFake(t)
+		fake.pages = []string{`[` + filingIssueJSON + `]`, `[]`}
+		fake.canonicalNext = 42
+		issues, err := f.listIssuesCreatedBy(ctx, repo, 42, "app[bot]", since)
+		if err != nil || len(issues) != 1 {
+			t.Fatalf("issues = %+v, err = %v", issues, err)
+		}
+	})
+	t.Run("accepts a named pagination alias under the configured API root", func(t *testing.T) {
+		t.Parallel()
+		f, fake, repo := newFilingForgeFake(t)
+		fake.pages = []string{`[` + filingIssueJSON + `]`, `[]`}
+		fake.namedNext = true
+		issues, err := f.listIssuesCreatedBy(ctx, repo, 42, "app[bot]", since)
+		if err != nil || len(issues) != 1 || fake.listRequests != 2 {
+			t.Fatalf("issues = %+v, err = %v, requests = %d", issues, err, fake.listRequests)
+		}
+	})
+	t.Run("rejects another numeric repository collection", func(t *testing.T) {
+		t.Parallel()
+		f, fake, repo := newFilingForgeFake(t)
+		fake.pages = []string{`[` + filingIssueJSON + `]`, `[]`}
+		fake.canonicalNext = 43
+		issues, err := f.listIssuesCreatedBy(ctx, repo, 42, "app[bot]", since)
+		if err == nil || issues != nil || fake.listRequests != 1 {
+			t.Fatalf("issues = %+v, err = %v, requests = %d", issues, err, fake.listRequests)
+		}
+	})
+	t.Run("preserves a partial body decode failure with a valid next link", func(t *testing.T) {
+		t.Parallel()
+		f, fake, repo := newFilingForgeFake(t)
+		malformed := strings.TrimSuffix(filingIssueJSON, "}") + `,"pull_request":{"url":123}}`
+		fake.pages = []string{`[` + filingIssueJSON + `,` + malformed + `]`, `[]`}
+		issues, err := f.listIssuesCreatedBy(ctx, repo, 42, "app[bot]", since)
+		if err == nil || issues != nil || fake.listRequests != 1 {
+			t.Fatalf("issues = %+v, err = %v, requests = %d", issues, err, fake.listRequests)
+		}
+	})
 	t.Run("reads every page and marks pull requests", func(t *testing.T) {
 		t.Parallel()
 		f, fake, repo := newFilingForgeFake(t)
 		fake.pages = []string{
 			`[` + filingIssueJSON + `]`,
-			`[{"number":13,"user":{"id":8,"type":"User"},"created_at":"2026-09-02T13:00:00+01:00","pull_request":{"url":"x"}}]`,
+			`[{"number":13,"repository_url":"$API_ROOT/repos/owner/name","url":"$API_ROOT/repos/owner/name/issues/13","user":{"id":8,"type":"User"},"created_at":"2026-09-02T13:00:00+01:00","pull_request":{"url":"x"}}]`,
 		}
-		issues, err := f.listIssuesCreatedBy(ctx, repo, "app[bot]", since)
+		issues, err := f.listIssuesCreatedBy(ctx, repo, 42, "app[bot]", since)
 		if err != nil {
 			t.Fatalf("listIssuesCreatedBy: %v", err)
 		}
@@ -176,11 +277,21 @@ func TestForgeListIssuesCreatedBy(t *testing.T) {
 			t.Fatalf("listing query = %v, want %v", fake.listQuery, wantQuery)
 		}
 	})
+	t.Run("rejects malformed next query before following it", func(t *testing.T) {
+		t.Parallel()
+		f, fake, repo := newFilingForgeFake(t)
+		fake.pages = []string{`[` + filingIssueJSON + `]`, `[]`}
+		fake.malformedNextQuery = "state=evil%ZZ"
+		issues, err := f.listIssuesCreatedBy(ctx, repo, 42, "app[bot]", since)
+		if err == nil || issues != nil {
+			t.Fatalf("issues = %+v, err = %v, want a failed read", issues, err)
+		}
+	})
 	t.Run("fails whole on an element it cannot judge", func(t *testing.T) {
 		t.Parallel()
 		f, fake, repo := newFilingForgeFake(t)
-		fake.pages = []string{`[` + filingIssueJSON + `,{"number":13,"created_at":"2026-09-02T12:00:00Z"}]`}
-		issues, err := f.listIssuesCreatedBy(ctx, repo, "app[bot]", since)
+		fake.pages = []string{`[` + filingIssueJSON + `,` + strings.Replace(filingIssueJSON, `"user":`, `"unused":`, 1) + `]`}
+		issues, err := f.listIssuesCreatedBy(ctx, repo, 42, "app[bot]", since)
 		if err == nil || issues != nil || strings.Contains(err.Error(), "SECRET-TITLE") {
 			t.Fatalf("issues = %+v, err = %v, want a failed read that quotes no issue text", issues, err)
 		}
@@ -189,7 +300,7 @@ func TestForgeListIssuesCreatedBy(t *testing.T) {
 		t.Parallel()
 		f, fake, repo := newFilingForgeFake(t)
 		fake.pages = []string{`[` + filingIssueJSON + `]`, `{"message":"Server Error"}`}
-		if issues, err := f.listIssuesCreatedBy(ctx, repo, "app[bot]", since); err == nil || issues != nil {
+		if issues, err := f.listIssuesCreatedBy(ctx, repo, 42, "app[bot]", since); err == nil || issues != nil {
 			t.Fatalf("issues = %+v, err = %v, want a failed read", issues, err)
 		}
 	})

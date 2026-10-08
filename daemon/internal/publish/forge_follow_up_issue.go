@@ -34,8 +34,10 @@ type filedIssue struct {
 // so an element that cannot be judged fails the read instead of being
 // dropped from a candidate count.
 type filedIssueWire struct {
-	Number *int `json:"number"`
-	User   *struct {
+	RepositoryURL string `json:"repository_url"`
+	URL           string `json:"url"`
+	Number        *int   `json:"number"`
+	User          *struct {
 		ID   *int64 `json:"id"`
 		Type string `json:"type"`
 	} `json:"user"`
@@ -45,7 +47,7 @@ type filedIssueWire struct {
 	} `json:"pull_request"`
 }
 
-func (w filedIssueWire) issue() (filedIssue, error) {
+func (w filedIssueWire) issue(baseURL string, repo repoRef) (filedIssue, error) {
 	if w.Number == nil || *w.Number <= 0 {
 		return filedIssue{}, errors.New("issue carries no positive number")
 	}
@@ -54,6 +56,10 @@ func (w filedIssueWire) issue() (filedIssue, error) {
 	}
 	if w.CreatedAt == nil || w.CreatedAt.IsZero() {
 		return filedIssue{}, errors.New("issue carries no creation time")
+	}
+	repositoryURL := baseURL + "/repos/" + repo.path()
+	if w.RepositoryURL != repositoryURL || w.URL != fmt.Sprintf("%s/issues/%d", repositoryURL, *w.Number) {
+		return filedIssue{}, errors.New("issue does not prove target repository membership")
 	}
 	return filedIssue{
 		Number: *w.Number, AuthorID: *w.User.ID, AuthorType: w.User.Type,
@@ -93,7 +99,7 @@ func (f *forge) newCreateIssueRequest(
 // failure only: every response, whatever its status, is returned for
 // classification. A 201 whose body does not decode to an issue returns a nil
 // Issue, never an error, because the create may still have committed.
-func (f *forge) sendCreateIssue(req *http.Request) (issueCreateResult, error) {
+func (f *forge) sendCreateIssue(req *http.Request, repo repoRef) (issueCreateResult, error) {
 	resp, err := f.client.Do(req)
 	if err != nil {
 		return issueCreateResult{}, fmt.Errorf("create issue: %w", err)
@@ -107,7 +113,7 @@ func (f *forge) sendCreateIssue(req *http.Request) (issueCreateResult, error) {
 	if err := decodeResponse(resp.Body, &decoded); err != nil {
 		return result, nil
 	}
-	issue, err := decoded.issue()
+	issue, err := decoded.issue(f.baseURL, repo)
 	if err != nil {
 		return result, nil
 	}
@@ -122,7 +128,7 @@ func (f *forge) sendCreateIssue(req *http.Request) (issueCreateResult, error) {
 // including an element that cannot be judged, fails the whole read: a partial
 // listing would undercount candidates.
 func (f *forge) listIssuesCreatedBy(
-	ctx context.Context, repo repoRef, login string, since time.Time,
+	ctx context.Context, repo repoRef, repositoryID int64, login string, since time.Time,
 ) ([]filedIssue, error) {
 	query := url.Values{
 		"state":    {"all"},
@@ -130,14 +136,21 @@ func (f *forge) listIssuesCreatedBy(
 		"since":    {since.UTC().Format(time.RFC3339)},
 		"per_page": {"100"},
 	}
-	path := "/repos/" + repo.path() + "/issues?" + query.Encode()
-	wire, _, _, _, err := fetchConditionalList[filedIssueWire](ctx, f, repo, path, "")
+	// Repository names can be rebound between the live ID check and this
+	// read. Public reads are not confined by the token’s repository grant.
+	path := fmt.Sprintf("/repositories/%d/issues?%s", repositoryID, query.Encode())
+	apiRoot, err := url.Parse(f.baseURL)
+	if err != nil {
+		return nil, errors.New("list issues: invalid API root")
+	}
+	namedPath := apiRoot.EscapedPath() + "/repos/" + repo.path() + "/issues"
+	wire, _, _, _, err := fetchConditionalListScoped[filedIssueWire](ctx, f, repo, path, "", true, namedPath)
 	if err != nil {
 		return nil, fmt.Errorf("list issues: %w", err)
 	}
 	issues := make([]filedIssue, 0, len(wire))
 	for _, element := range wire {
-		issue, err := element.issue()
+		issue, err := element.issue(f.baseURL, repo)
 		if err != nil {
 			return nil, fmt.Errorf("list issues: %w", err)
 		}

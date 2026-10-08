@@ -44,6 +44,8 @@ type fakeFiledIssue struct {
 	// UpdatedAt is what the since filter compares; zero means CreatedAt.
 	UpdatedAt time.Time
 	IsPR      bool
+	// Membership overrides response URLs, including explicitly empty values.
+	Membership map[string]string
 
 	Title     string
 	Body      string
@@ -60,7 +62,8 @@ type fakeCreateResponse struct {
 	// committed and whose response was lost or mangled.
 	Commit bool
 	// Body, when non-empty, replaces the 201 body.
-	Body string
+	Body       string
+	Membership map[string]string
 	// Drop fails the request at the transport after the handler ran.
 	Drop bool
 }
@@ -77,6 +80,15 @@ type fakeFiling struct {
 	now          func() time.Time
 	creates      int
 	dropNext     bool
+	// nextPath overrides a listing link, even when this page is empty.
+	nextPath       string
+	rawLink        string
+	namedNext      bool
+	reboundIssues  []fakeFiledIssue
+	reboundReads   int
+	listRequests   int
+	canonicalReads int
+	foreignReads   int
 }
 
 func (f *fakeFiling) clock() time.Time {
@@ -125,14 +137,20 @@ func (f *fakeFiling) create(t *testing.T, w http.ResponseWriter, r *http.Request
 		_, _ = w.Write([]byte(response.Body))
 		return
 	}
+	issue.Membership = response.Membership
 	_ = json.NewEncoder(w).Encode(filedIssueJSON(issue))
 }
 
 func filedIssueJSON(issue fakeFiledIssue) map[string]any {
 	out := map[string]any{
 		"number": issue.Number, "title": issue.Title, "body": issue.Body,
-		"user":       map[string]any{"id": issue.UserID, "type": issue.UserType, "login": issue.Login},
-		"created_at": issue.CreatedAt.Format(time.RFC3339),
+		"user":           map[string]any{"id": issue.UserID, "type": issue.UserType, "login": issue.Login},
+		"created_at":     issue.CreatedAt.Format(time.RFC3339),
+		"repository_url": "http://github.test/repos/" + filingRepo,
+		"url":            "http://github.test/repos/" + filingRepo + "/issues/" + strconv.Itoa(issue.Number),
+	}
+	for key, value := range issue.Membership {
+		out[key] = value
 	}
 	if issue.IsPR {
 		out["pull_request"] = map[string]any{"url": "https://api.github.test/pulls/" + strconv.Itoa(issue.Number)}
@@ -141,6 +159,7 @@ func filedIssueJSON(issue fakeFiledIssue) map[string]any {
 }
 
 func (f *fakeFiling) list(w http.ResponseWriter, r *http.Request) {
+	f.listRequests++
 	if f.listFailures > 0 {
 		f.listFailures--
 		w.WriteHeader(http.StatusInternalServerError)
@@ -171,9 +190,19 @@ func (f *fakeFiling) list(w http.ResponseWriter, r *http.Request) {
 		end := min(start+f.pageSize, len(rows))
 		if end < len(rows) {
 			query.Set("page", strconv.Itoa(page+1))
-			w.Header().Set("Link", fmt.Sprintf(`<http://%s%s?%s>; rel="next"`, r.Host, r.URL.Path, query.Encode()))
+			nextPath := r.URL.Path
+			if f.namedNext {
+				nextPath = testRepoPath + "/issues"
+			}
+			w.Header().Set("Link", fmt.Sprintf(`<http://%s%s?%s>; rel="next"`, r.Host, nextPath, query.Encode()))
 		}
 		rows = rows[start:end]
+	}
+	if f.nextPath != "" {
+		w.Header().Set("Link", fmt.Sprintf(`<http://%s%s>; rel="next"`, r.Host, f.nextPath))
+	}
+	if f.rawLink != "" {
+		w.Header().Set("Link", f.rawLink)
 	}
 	_ = json.NewEncoder(w).Encode(rows)
 }
@@ -200,7 +229,25 @@ func (t fakeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	recorder := httptest.NewRecorder()
-	t.h.gh.handle(recorder, req)
+	if next := t.h.gh.filing.nextPath; next != "" && req.URL.Path == strings.SplitN(next, "?", 2)[0] &&
+		(!strings.Contains(next, "?") || strings.TrimPrefix(next, req.URL.Path+"?") == req.URL.RawQuery) {
+		// The foreign collection is empty: checking rows after following the
+		// link would miss the incomplete-listing boundary violation.
+		t.h.gh.filing.foreignReads++
+		_, _ = recorder.WriteString("[]")
+	} else if req.Method == http.MethodGet && req.URL.Path == testRepoPath+"/issues" && t.h.gh.filing.reboundIssues != nil {
+		t.h.gh.filing.reboundReads++
+		rows := []map[string]any{}
+		for _, issue := range t.h.gh.filing.reboundIssues {
+			rows = append(rows, filedIssueJSON(issue))
+		}
+		_ = json.NewEncoder(recorder).Encode(rows)
+	} else if req.Method == http.MethodGet && req.URL.Path == fmt.Sprintf("/repositories/%d/issues", testRepoID) {
+		t.h.gh.filing.canonicalReads++
+		t.h.gh.filing.list(recorder, req)
+	} else {
+		t.h.gh.handle(recorder, req)
+	}
 	t.h.gh.mu.Lock()
 	drop := t.h.gh.filing.dropNext
 	t.h.gh.filing.dropNext = false
@@ -722,7 +769,7 @@ func (h *filingHarness) atCreateToken(do func()) {
 	previous := ""
 	h.step = func(name string) {
 		// The pre-dispatch listing is the last read before the create's token.
-		if name == "token" && previous == "receive GET "+testRepoPath+"/issues" {
+		if name == "token" && previous == fmt.Sprintf("receive GET /repositories/%d/issues", testRepoID) {
 			do()
 		}
 		previous = name

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -238,7 +240,23 @@ func (f *forge) getIssueReactions(ctx context.Context, repo repoRef, number int,
 func fetchConditionalList[E any](
 	ctx context.Context, f *forge, repo repoRef, basePath, etag string,
 ) (items []E, resultETag string, notModified, multiPage bool, err error) {
+	return fetchConditionalListScoped[E](ctx, f, repo, basePath, etag, false, "")
+}
+
+// exactCollection confines next links to the initial collection before any
+// request is sent. Filing needs this even when a foreign page would be empty.
+// Other readers retain their existing API-root pagination scope.
+func fetchConditionalListScoped[E any](
+	ctx context.Context, f *forge, repo repoRef, basePath, etag string, exactCollection bool, alternateCollectionPath string,
+) (items []E, resultETag string, notModified, multiPage bool, err error) {
 	const maxPages = 10
+	var collection *url.URL
+	if exactCollection {
+		collection, err = url.Parse(f.baseURL + basePath)
+		if err != nil {
+			return nil, "", false, false, errors.New("invalid list collection URL")
+		}
+	}
 	path := basePath
 	first := true
 	for pageNum := 0; ; pageNum++ {
@@ -269,6 +287,12 @@ func fetchConditionalList[E any](
 		if decodeErr != nil {
 			return nil, "", false, false, fmt.Errorf("decode response: %w", decodeErr)
 		}
+		if exactCollection {
+			next, err = exactNextPageLink(resp.Header.Values("Link"))
+			if err != nil {
+				return nil, "", false, false, err
+			}
+		}
 		// JSON null decodes into a nil slice without error; an empty page is a
 		// legitimate list, null is not.
 		if batch == nil {
@@ -287,6 +311,86 @@ func fetchConditionalList[E any](
 		if !strings.HasPrefix(next, f.baseURL+"/") {
 			return nil, "", false, false, errors.New("next page is outside the API root")
 		}
+		if exactCollection {
+			target, parseErr := url.Parse(next)
+			if parseErr != nil || target.Scheme != collection.Scheme || target.Host != collection.Host ||
+				target.User != nil || target.Fragment != "" || (target.EscapedPath() != collection.EscapedPath() && target.EscapedPath() != alternateCollectionPath) ||
+				!nextCollectionPage(collection, target, pageNum+2) {
+				return nil, "", false, false, errors.New("next page is outside the list collection")
+			}
+			// Follow validated aliases through the initial stable collection so
+			// a repository-name rebind cannot redirect a later page.
+			path = strings.SplitN(basePath, "?", 2)[0] + "?" + target.RawQuery
+			continue
+		}
 		path = strings.TrimPrefix(next, f.baseURL)
 	}
+}
+
+// exactNextPageLink accepts the GitHub Link form filing supports: complete
+// <target>; rel="next|prev|first|last" entries. Any other form fails closed.
+func exactNextPageLink(headers []string) (string, error) {
+	next := ""
+	for _, header := range headers {
+		for _, entry := range strings.Split(header, ",") {
+			entry = strings.TrimSpace(entry)
+			if entry == "" || !strings.HasPrefix(entry, "<") {
+				return "", errors.New("malformed next page link")
+			}
+			end := strings.IndexByte(entry, '>')
+			if end < 0 {
+				return "", errors.New("malformed next page link")
+			}
+			target, params := entry[1:end], strings.TrimSpace(entry[end+1:])
+			if target == "" || !strings.HasPrefix(params, ";") {
+				return "", errors.New("malformed next page link")
+			}
+			parsedTarget, targetErr := url.Parse(target)
+			if targetErr != nil {
+				return "", errors.New("malformed next page link")
+			}
+			if _, queryErr := url.ParseQuery(parsedTarget.RawQuery); queryErr != nil {
+				return "", errors.New("malformed next page link")
+			}
+			params = strings.TrimSpace(strings.TrimPrefix(params, ";"))
+			if !strings.HasPrefix(params, `rel="`) {
+				return "", errors.New("malformed next page link")
+			}
+			params = strings.TrimPrefix(params, `rel="`)
+			quote := strings.IndexByte(params, '"')
+			if quote < 0 {
+				return "", errors.New("malformed next page link")
+			}
+			relation, trailing := params[:quote], strings.TrimSpace(params[quote+1:])
+			if relation != "next" && relation != "prev" && relation != "first" && relation != "last" {
+				return "", errors.New("malformed next page link")
+			}
+			if trailing != "" {
+				return "", errors.New("malformed next page link")
+			}
+			if relation == "next" {
+				if next != "" {
+					return "", errors.New("malformed next page link")
+				}
+				next = target
+			}
+		}
+	}
+	return next, nil
+}
+
+// nextCollectionPage preserves the filing reader's filters while allowing
+// only the next numbered page in the configured issues collection.
+func nextCollectionPage(collection, target *url.URL, wantPage int) bool {
+	collectionQuery, collectionErr := url.ParseQuery(collection.RawQuery)
+	targetQuery, targetErr := url.ParseQuery(target.RawQuery)
+	if collectionErr != nil || targetErr != nil {
+		return false
+	}
+	pages := targetQuery["page"]
+	if len(pages) != 1 || pages[0] != strconv.Itoa(wantPage) {
+		return false
+	}
+	delete(targetQuery, "page")
+	return targetQuery.Encode() == collectionQuery.Encode()
 }
