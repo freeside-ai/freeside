@@ -9,6 +9,36 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/pathfold"
 )
 
+// CommitReader reads exact commits through one hardened checkout pin. Open and
+// close it within one caller call on one checkout; never store it or use it
+// concurrently. Each read validates its commit and reads only tree/blob data,
+// independent of HEAD, the worktree, and the scratch index.
+type CommitReader struct {
+	runner  *gitRunner
+	scratch string
+}
+
+// OpenCommitReader resolves the checkout's git directory and requires SHA-1
+// once for the group. The caller owns proving the checkout's repository identity.
+func OpenCommitReader(ctx context.Context, gitPath, checkoutDir string) (*CommitReader, error) {
+	scratch, err := os.MkdirTemp("", "freeside-commit-read-*")
+	if err != nil {
+		return nil, fmt.Errorf("create commit-read scratch: %w", err)
+	}
+	runner, err := newGitRunner(ctx, gitPath, checkoutDir, scratch)
+	if err != nil {
+		_ = os.RemoveAll(scratch) // Private scratch cleanup is best effort, as for Close.
+		return nil, fmt.Errorf("open checkout: %w", err)
+	}
+	return &CommitReader{runner: runner, scratch: scratch}, nil
+}
+
+// Close removes the group's private scratch directory, best effort. Reads after
+// Close fail because git's working directory no longer exists.
+func (r *CommitReader) Close() {
+	_ = os.RemoveAll(r.scratch) // Private scratch is best-effort after all handles close.
+}
+
 // ReadRecipeAtCommit reads the default recipe as a regular, size-bounded blob
 // from one exact SHA-1 commit through the verifier's hardened git plumbing.
 func ReadRecipeAtCommit(
@@ -54,16 +84,25 @@ func ReadFileAtCommit(
 	if path == "" || max <= 0 {
 		return nil, false, fmt.Errorf("read %q within %d bytes: %w", path, max, ErrInvalidOptions)
 	}
-	scratch, err := os.MkdirTemp("", "freeside-commit-read-*")
+	reader, err := OpenCommitReader(ctx, gitPath, checkoutDir)
 	if err != nil {
-		return nil, false, fmt.Errorf("create commit-read scratch: %w", err)
+		return nil, false, err
 	}
-	defer os.RemoveAll(scratch) //nolint:errcheck // Private scratch is best-effort after all handles close.
-	runner, err := newGitRunner(ctx, gitPath, checkoutDir, scratch)
-	if err != nil {
-		return nil, false, fmt.Errorf("open checkout: %w", err)
+	defer reader.Close()
+	return reader.ReadFile(ctx, commitSHA, path, max)
+}
+
+// ReadFile has ReadFileAtCommit's content, presence, and error contract, using
+// the repository resolved at open even if the checkout path is later repointed.
+// After open it runs only ls-tree and cat-file, validating each commit name.
+func (r *CommitReader) ReadFile(ctx context.Context, commitSHA, path string, max int64) ([]byte, bool, error) {
+	if !pathfold.ValidSHA1Hex(commitSHA) {
+		return nil, false, fmt.Errorf("commit %q: %w", commitSHA, ErrInvalidOptions)
 	}
-	content, state, err := runner.blobAt(ctx, commitSHA, path, max)
+	if path == "" || max <= 0 {
+		return nil, false, fmt.Errorf("read %q within %d bytes: %w", path, max, ErrInvalidOptions)
+	}
+	content, state, err := r.runner.blobAt(ctx, commitSHA, path, max)
 	if err != nil {
 		return nil, false, fmt.Errorf("read %s at %s: %w", path, commitSHA, err)
 	}

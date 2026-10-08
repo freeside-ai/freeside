@@ -30,13 +30,22 @@ func ObserveBaseInputs(
 	checkoutDir string,
 	commitSHA string,
 ) (domain.ProjectImageBaseInputs, error) {
+	reader, err := verify.OpenCommitReader(ctx, gitPath, checkoutDir)
+	if err != nil {
+		return domain.ProjectImageBaseInputs{}, fmt.Errorf("observe %s at run base: %w", unsupportedInputNames[0], err)
+	}
+	defer reader.Close()
+	return observeBaseInputs(ctx, reader, commitSHA)
+}
+
+func observeBaseInputs(ctx context.Context, reader *verify.CommitReader, commitSHA string) (domain.ProjectImageBaseInputs, error) {
 	inputs := domain.ProjectImageBaseInputs{CommitSHA: commitSHA}
 	for _, name := range unsupportedInputNames {
 		// Only existence matters, in any shape: the builder refuses a commit
 		// that has an entry here at all, and the helper refuses a workspace
 		// that does. The one-byte cap reads nothing worth keeping, and an
 		// entry the reader refuses still exists.
-		_, present, err := verify.ReadFileAtCommit(ctx, gitPath, checkoutDir, commitSHA, name, 1)
+		_, present, err := reader.ReadFile(ctx, commitSHA, name, 1)
 		if errors.Is(err, verify.ErrCommitFileUnreadable) {
 			present = true
 		} else if err != nil {
@@ -50,8 +59,7 @@ func ObserveBaseInputs(
 		"package.json":      &inputs.PackageJSONSHA256,
 		"package-lock.json": &inputs.PackageLockSHA256,
 	} {
-		content, present, err := verify.ReadFileAtCommit(
-			ctx, gitPath, checkoutDir, commitSHA, name, maxManifestBytes)
+		content, present, err := reader.ReadFile(ctx, commitSHA, name, maxManifestBytes)
 		if err != nil {
 			return domain.ProjectImageBaseInputs{}, fmt.Errorf("observe %s at run base: %w", name, err)
 		}
@@ -59,8 +67,8 @@ func ObserveBaseInputs(
 			*hash = manifestSHA256(content)
 		}
 	}
-	recipe, present, err := verify.ReadFileAtCommit(
-		ctx, gitPath, checkoutDir, commitSHA, verify.DefaultRecipePath, verify.DefaultMaxRecipeBytes)
+	recipe, present, err := reader.ReadFile(
+		ctx, commitSHA, verify.DefaultRecipePath, verify.DefaultMaxRecipeBytes)
 	if err != nil {
 		return domain.ProjectImageBaseInputs{}, fmt.Errorf("observe recipe at run base: %w", err)
 	}
