@@ -3394,7 +3394,9 @@ struct DecisionDetailView: View {
     ) -> some View {
         let ranking = actionRanking(item)
         let controlGap = DecisionCardComposition.scale(for: item._type).controlGap
-        let filled = DecisionCardComposition.filledPrincipalIndex(for: item._type, ranking: ranking)
+        let filledAction = DecisionCardComposition.filledAction(for: item, ranking: ranking)
+        // Position, because a repeated action fills only its first button.
+        let filled = filledAction.flatMap(ranking.principal.firstIndex(of:))
         VStack(alignment: .leading, spacing: controlGap) {
             if showsValidationProgress && model.validation == .pending {
                 HStack(spacing: 8) {
@@ -3439,7 +3441,8 @@ struct DecisionDetailView: View {
             }
 
             if includesReviewing, let reviewing = ranking.reviewing {
-                actionButton(reviewing, item: item, tone: .secondary)
+                actionButton(
+                    reviewing, item: item, tone: filledAction == reviewing ? .primary : .secondary)
             }
 
             overflowMenu(ranking.overflow, item: item)
@@ -3468,7 +3471,7 @@ struct DecisionDetailView: View {
             actionButton(
                 reviewing,
                 item: item,
-                tone: DecisionCardComposition.reviewingActionIsFilled(ranking)
+                tone: DecisionCardComposition.filledAction(for: item, ranking: ranking) == reviewing
                     ? .primary : .secondary)
         }
     }
@@ -3481,7 +3484,8 @@ struct DecisionDetailView: View {
             requested: item.requested_decision,
             recommendedAction: DecisionRecommendationPresentation.of(item)?.action,
             reservesRecommendedAction: composition.modules.contains(.recommendation),
-            servedActions: model.actionSurface?.actions)
+            servedActions: model.actionSurface?.actions,
+            alsoOverflowing: DecisionCardComposition.overflowActions(for: item._type))
     }
 
     @ViewBuilder

@@ -15,7 +15,8 @@ struct DecisionActionRanking: Equatable {
         requested: [Components.Schemas.Action],
         recommendedAction: Components.Schemas.Action? = nil,
         reservesRecommendedAction: Bool = true,
-        servedActions: [Components.Schemas.Action]? = nil
+        servedActions: [Components.Schemas.Action]? = nil,
+        alsoOverflowing: Set<Components.Schemas.Action> = []
     ) {
         // The daemon-served action surface is authoritative when present: it is
         // the item's requested decisions already intersected with this device's
@@ -44,14 +45,19 @@ struct DecisionActionRanking: Equatable {
         let reviewingAction = secondaryActions.first(where: Self.isReviewing)
         reviewing = reviewingAction
 
-        let overflowActions = secondaryActions.filter(Self.isOverflow).sorted {
+        // A card may move one more action under More Actions where its
+        // own surface already offers it another way; the shared set is the
+        // same on every card.
+        let overflows = { (action: Components.Schemas.Action) in
+            Self.isOverflow(action) || alsoOverflowing.contains(action)
+        }
+        let overflowActions = secondaryActions.filter(overflows).sorted {
             Self.overflowRank($0) < Self.overflowRank($1)
         }
         overflow = overflowActions
 
         principal = secondaryActions.filter { action in
-            action != reviewingAction
-                && !Self.isOverflow(action)
+            action != reviewingAction && !overflows(action)
         }
         notDecidableHere =
             !requested.isEmpty
@@ -79,16 +85,16 @@ struct DecisionActionRanking: Equatable {
 
     private static func isOverflow(_ action: Components.Schemas.Action) -> Bool {
         switch action {
-        case .snooze, .mark_seen, .acknowledge, .dismiss, .decline, .stop,
-            .stop_unattended:
+        case .snooze, .mark_seen, .continue_under_policy, .resume_unattended, .dismiss,
+            .decline, .stop, .stop_unattended:
             return true
         case .approve, .request_changes, .discuss, .finish_now,
-            .apply_then_finish, .continue_under_policy, .convert_to_policy,
+            .apply_then_finish, .convert_to_policy,
             .retry, .retry_with_capabilities, .answer_and_retry,
             .answer_without_retry, .rerun_trust_evaluation,
             .inspect_trust_failure, .open_pr,
-            .return_to_agent, .start, .start_with_changes, .approve_with_changes, .run_doctor,
-            .resume_unattended, .recover_review, .adopt_review_configuration,
+            .return_to_agent, .start, .start_with_changes, .approve_with_changes, .acknowledge,
+            .run_doctor, .recover_review, .adopt_review_configuration,
             .resolve_reenrollment, .accept_recommended_route,
             .choose_alternative_route:
             return false
@@ -99,18 +105,20 @@ struct DecisionActionRanking: Equatable {
         switch action {
         case .snooze: return 0
         case .mark_seen: return 1
-        case .acknowledge: return 2
+        case .discuss: return 2
+        case .continue_under_policy: return 3
+        case .resume_unattended: return 4
         case .dismiss: return 10
         case .decline: return 11
         case .stop: return 12
         case .stop_unattended: return 13
-        case .approve, .request_changes, .discuss, .finish_now,
-            .apply_then_finish, .continue_under_policy, .convert_to_policy,
+        case .approve, .request_changes, .finish_now,
+            .apply_then_finish, .convert_to_policy,
             .retry, .retry_with_capabilities, .answer_and_retry,
             .answer_without_retry, .rerun_trust_evaluation,
             .inspect_trust_failure, .open_pr,
-            .return_to_agent, .start, .start_with_changes, .approve_with_changes, .run_doctor,
-            .resume_unattended, .recover_review, .adopt_review_configuration,
+            .return_to_agent, .start, .start_with_changes, .approve_with_changes, .acknowledge,
+            .run_doctor, .recover_review, .adopt_review_configuration,
             .resolve_reenrollment, .accept_recommended_route,
             .choose_alternative_route:
             return .max

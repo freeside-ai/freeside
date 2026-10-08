@@ -524,23 +524,51 @@ struct DecisionCardComposition: Equatable {
         }
     }
 
-    /// Which of a card's principal actions draws filled, by position.
-    /// Answering and retrying is the question card's supported next step, so
-    /// it takes the card's one filled button unless a recommendation block
-    /// already holds it. `requested_decision` may repeat an action, so only
-    /// the first one takes the fill and no card draws two.
-    static func filledPrincipalIndex(
-        for type: Components.Schemas.AttentionType, ranking: DecisionActionRanking
-    ) -> Int? {
-        guard type == .agent_question, ranking.recommended == nil else { return nil }
-        return ranking.principal.firstIndex(of: .answer_and_retry)
+    /// The one action a card's row draws filled, or none (R6). A
+    /// recommendation the card draws holds the fill in its own block, so the
+    /// row fills nothing. Without one the fill goes to the type's forward
+    /// action, where the row offers it and it needs no confirmation: a
+    /// destructive action is never filled. `requested_decision` may repeat
+    /// an action, so the row fills only the first and no card draws two.
+    static func filledAction(
+        for item: Components.Schemas.AttentionItem, ranking: DecisionActionRanking
+    ) -> Components.Schemas.Action? {
+        guard ranking.recommended == nil, let forward = forwardAction(for: item._type),
+            ranking.principal.contains(forward) || ranking.reviewing == forward,
+            AttentionDisplay.confirmationConsequence(forward, for: item) == nil
+        else { return nil }
+        return forward
     }
 
-    /// Whether a card's own reviewing action draws filled. View PR is the
-    /// final review's supported next step (D07), so it takes the card's one
-    /// filled button unless a recommendation block already holds it.
-    static func reviewingActionIsFilled(_ ranking: DecisionActionRanking) -> Bool {
-        ranking.recommended == nil
+    /// The type's one forward action, as R6 lists them: the supported next
+    /// step a card with no recommendation still points at. A type whose
+    /// choices are peers (approve or request changes, one route or another)
+    /// has none, and neither do the three types with no frame. The switch is
+    /// exhaustive so a new type has to answer the question.
+    static func forwardAction(
+        for type: Components.Schemas.AttentionType
+    ) -> Components.Schemas.Action? {
+        switch type {
+        case .agent_question: return .answer_and_retry
+        case .ready_for_final_review: return .open_pr
+        case .execution_failure: return .retry
+        case .task_proposal: return .start
+        case .effect_proposal: return .approve
+        case .system_health: return .acknowledge
+        case .spec_approval, .review_dispute, .review_diminishing_returns,
+            .finding_adjudication, .review_contradiction, .review_configuration,
+            .publish_blocked, .blocked:
+            return nil
+        }
+    }
+
+    /// The actions a type moves under More Actions beyond the set every
+    /// card shares. Spec approval's conversation is where a reply starts
+    /// (frame 5.1), so Discuss leaves its row.
+    static func overflowActions(
+        for type: Components.Schemas.AttentionType
+    ) -> Set<Components.Schemas.Action> {
+        type == .spec_approval ? [.discuss] : []
     }
 
     /// Whether the type's `.facts` rows are routine run and binding

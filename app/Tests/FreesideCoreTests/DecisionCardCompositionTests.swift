@@ -514,40 +514,105 @@ import Testing
         }
     }
 
+    private func ranking(
+        _ item: Components.Schemas.AttentionItem,
+        recommending recommended: Components.Schemas.Action? = nil
+    ) -> DecisionActionRanking {
+        DecisionActionRanking(
+            requested: item.requested_decision, recommendedAction: recommended,
+            alsoOverflowing: DecisionCardComposition.overflowActions(for: item._type))
+    }
+
     /// Visual audit D07: View PR is the final review's filled button, and a
     /// card never shows two, so it yields to a recommendation block.
     @Test func viewPRIsFilledUnlessARecommendationHoldsTheFilledButton() {
-        let requested = AttentionFixtures.fixture(type: .ready_for_final_review).item
-            .requested_decision
-        let plain = DecisionActionRanking(requested: requested)
+        let item = AttentionFixtures.fixture(type: .ready_for_final_review).item
+        let plain = ranking(item)
         #expect(plain.reviewing == .open_pr)
-        #expect(DecisionCardComposition.reviewingActionIsFilled(plain))
+        #expect(DecisionCardComposition.filledAction(for: item, ranking: plain) == .open_pr)
 
-        let recommended = DecisionActionRanking(
-            requested: requested, recommendedAction: .return_to_agent)
+        let recommended = ranking(item, recommending: .return_to_agent)
         #expect(recommended.reviewing == .open_pr)
-        #expect(!DecisionCardComposition.reviewingActionIsFilled(recommended))
+        #expect(DecisionCardComposition.filledAction(for: item, ranking: recommended) == nil)
     }
 
-    /// The question card fills Answer and Retry, once, and gives the fill up
-    /// to a recommendation block. No other type fills a principal action.
+    /// The question card fills Answer and Retry, and gives the fill up to a
+    /// recommendation block. The fill names an action, and the row fills
+    /// only its first button, so a repeated request never draws two.
     @Test func answerAndRetryTakesTheQuestionCardsOneFill() {
-        let plain = DecisionActionRanking(requested: [.answer_without_retry, .answer_and_retry, .stop])
+        var item = AttentionFixtures.fixture(type: .agent_question).item
+        item.requested_decision = [.answer_without_retry, .answer_and_retry, .stop]
+        let plain = ranking(item)
         #expect(plain.principal.contains(.answer_and_retry))
+        #expect(DecisionCardComposition.filledAction(for: item, ranking: plain) == .answer_and_retry)
+
         #expect(
-            DecisionCardComposition.filledPrincipalIndex(for: .agent_question, ranking: plain)
-                == plain.principal.firstIndex(of: .answer_and_retry))
+            DecisionCardComposition.filledAction(for: item, ranking: ranking(item, recommending: .stop))
+                == nil)
 
-        let repeated = DecisionActionRanking(requested: [.answer_and_retry, .answer_and_retry])
-        #expect(DecisionCardComposition.filledPrincipalIndex(for: .agent_question, ranking: repeated) == 0)
+        item.requested_decision = [.answer_without_retry, .stop]
+        #expect(DecisionCardComposition.filledAction(for: item, ranking: ranking(item)) == nil)
+    }
 
-        let recommended = DecisionActionRanking(
-            requested: [.answer_and_retry, .answer_without_retry, .stop], recommendedAction: .stop)
-        #expect(DecisionCardComposition.filledPrincipalIndex(for: .agent_question, ranking: recommended) == nil)
+    /// R6: one control is filled, or none. Without a recommendation the fill
+    /// goes to the type's one forward action; a type whose choices are peers,
+    /// and the three with no frame, fill nothing, so View PR is an outline
+    /// there.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func theFillGoesToTheTypesForwardActionOrToNothing(type: Components.Schemas.AttentionType) {
+        let forward: [Components.Schemas.AttentionType: Components.Schemas.Action] = [
+            .agent_question: .answer_and_retry, .ready_for_final_review: .open_pr,
+            .execution_failure: .retry, .task_proposal: .start, .effect_proposal: .approve,
+            .system_health: .acknowledge,
+        ]
+        var item = AttentionFixtures.fixture(type: type).item
+        #expect(DecisionCardComposition.forwardAction(for: type) == forward[type])
+        #expect(DecisionCardComposition.filledAction(for: item, ranking: ranking(item)) == forward[type])
 
-        let withoutRetry = DecisionActionRanking(requested: [.answer_without_retry, .stop])
-        #expect(DecisionCardComposition.filledPrincipalIndex(for: .agent_question, ranking: withoutRetry) == nil)
-        #expect(DecisionCardComposition.filledPrincipalIndex(for: .spec_approval, ranking: plain) == nil)
+        // A card that offers View PR beside peers leaves it an outline.
+        item.requested_decision.append(.open_pr)
+        let withPullRequest = DecisionCardComposition.filledAction(for: item, ranking: ranking(item))
+        #expect(withPullRequest == forward[type])
+    }
+
+    /// A recommendation the card draws holds the fill in its own block, so
+    /// the row under it fills nothing on any type: no card draws two.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func aDrawnRecommendationLeavesTheRowUnfilled(type: Components.Schemas.AttentionType) throws {
+        let item = AttentionFixtures.fixture(type: type).item
+        guard let recommended = item.requested_decision.first else { return }
+        let recommending = ranking(item, recommending: recommended)
+        #expect(recommending.recommended == recommended)
+        #expect(DecisionCardComposition.filledAction(for: item, ranking: recommending) == nil)
+    }
+
+    /// The fill is never a destructive action, and never one the row does
+    /// not draw: an action under More Actions cannot be the filled button.
+    @Test func theFillIsNeverDestructiveOrOutOfTheRow() {
+        var health = AttentionFixtures.fixture(type: .system_health).item
+        health.requested_decision = [.run_doctor, .resume_unattended, .stop_unattended]
+        #expect(DecisionCardComposition.filledAction(for: health, ranking: ranking(health)) == nil)
+
+        for type in Components.Schemas.AttentionType.allCases {
+            let item = AttentionFixtures.fixture(type: type).item
+            if let filled = DecisionCardComposition.filledAction(for: item, ranking: ranking(item)) {
+                #expect(AttentionDisplay.confirmationConsequence(filled, for: item) == nil)
+                #expect(!ranking(item).overflow.contains(filled))
+            }
+        }
+    }
+
+    /// Discuss sits under More Actions on spec approval only, where the
+    /// conversation is the place a reply starts (frame 5.1). The menu still
+    /// draws when Discuss is its one entry.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func discussMovesUnderMoreActionsOnSpecApprovalOnly(type: Components.Schemas.AttentionType) {
+        var item = AttentionFixtures.fixture(type: type).item
+        item.requested_decision = [.approve, .discuss]
+        let ranked = ranking(item)
+        #expect(ranked.overflow.contains(.discuss) == (type == .spec_approval))
+        #expect(ranked.principal.contains(.discuss) == (type != .spec_approval))
+        #expect(DecisionCardComposition.overflowActions(for: type) == (type == .spec_approval ? [.discuss] : []))
     }
 
     /// Visual audit D06: the agent's own question leads, so the shell's
