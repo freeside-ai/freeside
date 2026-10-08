@@ -429,8 +429,10 @@ struct MessageComposerSheet: View {
                     .background(fieldFrame(isFocused: false))
             }
             if let byteLimit {
+                // A fixed face: the platform caption draws under the 11.5pt
+                // floor on macOS.
                 Text("\(byteCount) of \(byteLimit) bytes")
-                    .font(FreesideFont.caption)
+                    .font(FreesideFont.trailingSummary)
                     .foregroundStyle(byteCount > byteLimit ? Color.waxText : Color.inkDim)
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
