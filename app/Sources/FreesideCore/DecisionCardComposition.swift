@@ -224,9 +224,9 @@ struct DecisionCardComposition: Equatable {
     ) -> AgentSectionFrame {
         switch type {
         case .agent_question, .ready_for_final_review, .review_dispute, .system_health, .blocked,
-            .execution_failure, .task_proposal, .effect_proposal:
+            .execution_failure, .task_proposal, .effect_proposal, .review_diminishing_returns:
             return .quoted
-        case .spec_approval, .review_diminishing_returns,
+        case .spec_approval,
             .review_contradiction, .review_configuration, .finding_adjudication,
             .publish_blocked:
             return .dashedCard
@@ -282,10 +282,10 @@ struct DecisionCardComposition: Equatable {
     static func scale(for type: Components.Schemas.AttentionType) -> Scale {
         switch type {
         case .ready_for_final_review, .agent_question, .system_health, .blocked,
-            .execution_failure, .task_proposal, .effect_proposal:
+            .execution_failure, .task_proposal, .effect_proposal, .review_diminishing_returns:
             return .refined
         case .review_dispute, .spec_approval,
-            .review_diminishing_returns, .review_contradiction, .review_configuration,
+            .review_contradiction, .review_configuration,
             .finding_adjudication, .publish_blocked:
             return .legacy
         }
@@ -627,7 +627,11 @@ struct DecisionCardComposition: Equatable {
             // an agent-written reason there shows its keyword.
             return context.platform == .phone && !context.accessibilityLayout
                 && Self.reason(for: item)?.isAgentWritten == true
-        case .foldedFacts, .specRevision, .specification, .stopCause, .checklist, .stageRail,
+        case .stopCause:
+            // The drift audit's explanation and fixes are the audit model's
+            // words, drawn under an unverified keyword (frame 5.2).
+            return DecisionStopCausePresentation(item)?.audit != nil
+        case .foldedFacts, .specRevision, .specification, .checklist, .stageRail,
             .comparison, .yieldChart, .evidence:
             return false
         }
@@ -1689,9 +1693,11 @@ struct DecisionYieldChartModuleView: View {
                 .accessibilityLabel(Text(presentation.summary))
             }
         } else {
-            DecisionModuleContainer(title: Self.title) {
+            VStack(alignment: .leading, spacing: DecisionCardComposition.Scale.refined.moduleGap) {
+                KeywordLabel(text: Self.title)
                 rounds
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Text(presentation.summary))
         }
@@ -1699,52 +1705,62 @@ struct DecisionYieldChartModuleView: View {
 
     private static let title = "Review Yield"
 
+    /// One row a round (frame 5.2): the round on the left, its counts on
+    /// the right in the two fills' colors, and, where bars draw, one capsule
+    /// beneath scaled against the busiest round.
     @ViewBuilder
     private var rounds: some View {
+        let busiest = max(presentation.rounds.map(\.total).max() ?? 1, 1)
         ForEach(presentation.rounds) { round in
-            VStack(alignment: .leading, spacing: 4) {
-                Text(round.text)
-                    .font(FreesideFont.monoCaption)
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text("Round \(round.number)")
+                        .font(FreesideFont.factLabel)
+                        .foregroundStyle(Color.ink)
+                    Spacer(minLength: 0)
+                    Text(
+                        "\(Text("\(round.newFindings) new").foregroundStyle(Color.accentText)) · \(Text("\(round.recurringFindings) recurring").foregroundStyle(Color.waxText))"
+                    )
+                    .font(FreesideFont.monoValue)
+                    .foregroundStyle(Color.inkDim)
+                }
                 if showsBars {
                     GeometryReader { geometry in
-                        let total = max(
-                            presentation.rounds.map(\.total).max() ?? 1,
-                            1)
                         HStack(spacing: 0) {
                             Rectangle()
                                 .fill(Color.accentBorder)
                                 .frame(
                                     width: geometry.size.width
-                                        * CGFloat(round.newFindings) / CGFloat(total))
+                                        * CGFloat(round.newFindings) / CGFloat(busiest))
                             Rectangle()
                                 .fill(Color.waxText)
                                 .frame(
                                     width: geometry.size.width
-                                        * CGFloat(round.recurringFindings) / CGFloat(total))
+                                        * CGFloat(round.recurringFindings) / CGFloat(busiest))
                         }
+                        .clipShape(Capsule())
                     }
                     .frame(height: 8)
-                    .clipShape(Capsule())
                 }
             }
         }
         // The bars carry two fills with no other key; the legend names
         // them where they render.
         if showsBars {
-            HStack(spacing: 12) {
-                legendToken(color: .accentBorder, text: "new")
+            HStack(spacing: 16) {
+                legendToken(color: .accentBorder, text: "new findings")
                 legendToken(color: .waxText, text: "recurring")
             }
         }
     }
 
     private func legendToken(color: Color, text: String) -> some View {
-        HStack(spacing: 4) {
-            RoundedRectangle(cornerRadius: 2)
+        HStack(spacing: 6) {
+            Circle()
                 .fill(color)
                 .frame(width: legendSwatch, height: legendSwatch)
             Text(text)
-                .font(FreesideFont.monoCaption)
+                .font(FreesideFont.cardBody)
                 .foregroundStyle(Color.inkDim)
         }
     }

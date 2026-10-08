@@ -930,7 +930,10 @@ struct DecisionDetailView: View {
             }
         case .stopCause:
             if let presentation = DecisionStopCausePresentation(item) {
-                DecisionStopCauseModuleView(presentation: presentation)
+                DecisionStopCauseModuleView(
+                    presentation: presentation,
+                    carriesInfo: register.carriesInfo,
+                    rendersInteractiveControls: rendersInteractiveControls)
             }
         case .findingFacts:
             // The finding cards lead the §9 finding_adjudication card

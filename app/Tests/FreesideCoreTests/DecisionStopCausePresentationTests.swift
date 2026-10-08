@@ -105,12 +105,10 @@ import Testing
     @Test(arguments: [false, true])
     func anOverHardenedCardWithoutContinueSaysNoActionUndoesTheFixes(simplificationOnContinue: Bool) throws {
         var item = drift(simplificationOnContinue: simplificationOnContinue)
-        #expect(try #require(DecisionStopCausePresentation(item)).continuationTitle == "If you continue")
         item.requested_decision = [.finish_now]
         let narrowed = try #require(DecisionStopCausePresentation(item))
 
         #expect(narrowed.continuation == "No action on this card will undo the listed fixes.")
-        #expect(narrowed.continuationTitle == "Undoing the fixes")
     }
 
     @Test(arguments: [

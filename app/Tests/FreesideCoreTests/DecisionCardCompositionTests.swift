@@ -499,7 +499,7 @@ import Testing
     ) {
         let quoted: [Components.Schemas.AttentionType] = [
             .agent_question, .ready_for_final_review, .review_dispute, .system_health, .blocked,
-            .execution_failure, .task_proposal, .effect_proposal,
+            .execution_failure, .task_proposal, .effect_proposal, .review_diminishing_returns,
         ]
         #expect(
             DecisionCardComposition.agentSectionFrame(for: type)
@@ -842,7 +842,7 @@ import Testing
     func onlyTheComposedCardsTakeTheRefinedScale(type: Components.Schemas.AttentionType) {
         let refined: Set<Components.Schemas.AttentionType> = [
             .ready_for_final_review, .agent_question, .system_health, .blocked,
-            .execution_failure, .task_proposal, .effect_proposal,
+            .execution_failure, .task_proposal, .effect_proposal, .review_diminishing_returns,
         ]
         let scale = DecisionCardComposition.scale(for: type)
         #expect(scale == (refined.contains(type) ? .refined : .legacy))

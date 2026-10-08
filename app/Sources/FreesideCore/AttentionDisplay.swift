@@ -236,7 +236,7 @@ enum AttentionDisplay {
             ]
         case .review_diminishing_returns:
             return [
-                item.billable_cost_so_far.map { .init("Cost so far", costSoFar($0.value1)) },
+                item.billable_cost_so_far.map { .init("Cost so Far", costSoFar($0.value1)) },
                 diffGrowth(item),
             ].compactMap { $0 }
         case .review_dispute:

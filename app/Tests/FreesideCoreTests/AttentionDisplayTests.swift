@@ -219,7 +219,7 @@ import Testing
     @Test func everyTypedLeadComesFromItsOwnFactFieldAndDisappearsWithIt() {
         let expected: [Components.Schemas.AttentionType: [String]] = [
             .execution_failure: ["Outcome", "Stage", "Invocation"],
-            .review_diminishing_returns: ["Cost so far", "Diff Growth"],
+            .review_diminishing_returns: ["Cost so Far", "Diff Growth"],
             .review_dispute: ["Run", "Round", "Disputed findings", "Completion evidence"],
             .ready_for_final_review: ["Diff"],
             .publish_blocked: ["Failed trust rule"],
@@ -813,7 +813,7 @@ import Testing
     @Test func diffGrowthHandlesBothMetricGaps() throws {
         let now = AttentionFixtures.createdInstant
         func diffRow(_ item: Components.Schemas.AttentionItem) -> AttentionDisplay.FactRow? {
-            AttentionDisplay.cardFacts(item, now: now).first { $0.label != "Cost so far" }
+            AttentionDisplay.cardFacts(item, now: now).first { $0.label != "Cost so Far" }
         }
         var item = AttentionFixtures.fixture(type: .review_diminishing_returns).item
         let latest = try #require(item.yield_history?.value1.rounds.indices.last)
