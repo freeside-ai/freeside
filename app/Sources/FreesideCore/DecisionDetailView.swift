@@ -3981,6 +3981,11 @@ func screenshotMetricBase(
 }
 
 struct TaskProposalRevisionSheet: View {
+    /// The header the sheet and its screenshot composition share (R11).
+    private static var header: FreesideSheetHeader {
+        FreesideSheetHeader(eyebrow: "Start with changes", ask: "What should change before it starts?")
+    }
+
     @Environment(\.dismiss) private var dismiss
     @State private var expectedCostText: String
     @State private var componentCount: Int
@@ -4012,7 +4017,7 @@ struct TaskProposalRevisionSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            FreesideSheetHeader(ask: "Start with changes")
+            Self.header
             Form {
                 LabeledContent("Intent", value: "Implement subject")
                     .listRowBackground(Color.ground2)
@@ -4040,6 +4045,7 @@ struct TaskProposalRevisionSheet: View {
             FreesideSheetActionRow(
                 submitLabel: "Submit",
                 isSubmitEnabled: revision != nil,
+                cancelIsOutlined: true,
                 submit: {
                     if let revision {
                         submit(revision)
@@ -4056,36 +4062,40 @@ struct TaskProposalRevisionSheet: View {
     /// The project-owned revision composition without Form and TextField,
     /// whose AppKit-backed controls ImageRenderer cannot draw off-screen.
     func screenshotContent() -> some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("Start with changes")
-                .font(FreesideFont.sectionTitle)
-            VStack(alignment: .leading, spacing: 8) {
-                KeywordLabel(text: "Intent")
-                Text("Implement subject")
-                Divider()
-                KeywordLabel(text: "Expected cost")
-                Text("\(expectedCostText) units")
-                Divider()
-                KeywordLabel(text: "Components")
-                Text("\(componentCount)")
-                Divider()
-                KeywordLabel(text: "Declared paths")
-                Text("\(originalFacts.scope.declared_path_count)")
-                Divider()
-                KeywordLabel(text: "Touches control plane")
-                Text(touchesControlPlane ? "Yes" : "No")
+        VStack(alignment: .leading, spacing: 0) {
+            Self.header
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 8) {
+                    KeywordLabel(text: "Intent")
+                    Text("Implement subject")
+                    Divider()
+                    KeywordLabel(text: "Expected cost")
+                    Text("\(expectedCostText) units")
+                    Divider()
+                    KeywordLabel(text: "Components")
+                    Text("\(componentCount)")
+                    Divider()
+                    KeywordLabel(text: "Declared paths")
+                    Text("\(originalFacts.scope.declared_path_count)")
+                    Divider()
+                    KeywordLabel(text: "Touches control plane")
+                    Text(touchesControlPlane ? "Yes" : "No")
+                }
+                .font(FreesideFont.body)
+                .padding(14)
+                .freesideCard()
+                Text("Expected cost must be a whole number from 1 to 1,000,000 units.")
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.inkDim)
             }
-            .padding(14)
-            .freesideCard()
-            Text("Expected cost must be a whole number from 1 to 1,000,000 units.")
-                .font(FreesideFont.caption)
-                .foregroundStyle(Color.inkDim)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
             FreesideSheetActionRow(
                 submitLabel: "Submit",
                 isSubmitEnabled: revision != nil,
+                cancelIsOutlined: true,
                 submit: {}, cancel: {})
         }
-        .padding(24)
         .frame(maxWidth: 560, alignment: .leading)
         .foregroundStyle(Color.ink)
         // The sheet's own ground, so the dusk composition reads dusk ink on
@@ -4111,6 +4121,11 @@ struct TaskProposalRevisionSheet: View {
 /// toggle for whether the PR closes the issue. The daemon owns the target,
 /// provenance, and origin, so nothing else is editable here (issue #1443).
 struct EffectProposalRevisionSheet: View {
+    /// The header the sheet and its screenshot composition share (R11).
+    private static var header: FreesideSheetHeader {
+        FreesideSheetHeader(eyebrow: "Approve with changes", ask: "Should merging close the issue?")
+    }
+
     @Environment(\.dismiss) private var dismiss
     @State private var resolves: Bool
     private let originalFacts: Components.Schemas.EffectProposalFactsSnapshot
@@ -4138,7 +4153,7 @@ struct EffectProposalRevisionSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            FreesideSheetHeader(ask: "Approve with changes")
+            Self.header
             Form {
                 Toggle(toggleTitle, isOn: $resolves)
                     .listRowBackground(Color.ground2)
@@ -4156,6 +4171,7 @@ struct EffectProposalRevisionSheet: View {
             FreesideSheetActionRow(
                 submitLabel: "Approve",
                 isSubmitEnabled: revision != nil,
+                cancelIsOutlined: true,
                 submit: {
                     if let revision {
                         submit(revision)
@@ -4173,26 +4189,30 @@ struct EffectProposalRevisionSheet: View {
     /// ImageRenderer cannot draw off-screen on macOS; the state renders as
     /// text instead.
     func screenshotContent() -> some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("Approve with changes")
-                .font(FreesideFont.sectionTitle)
-            VStack(alignment: .leading, spacing: 8) {
-                KeywordLabel(text: "On merge")
-                Text(resolves ? "Closes the issue" : "Doesn't close the issue")
-                Divider()
-                Text(toggleTitle)
+        VStack(alignment: .leading, spacing: 0) {
+            Self.header
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 8) {
+                    KeywordLabel(text: "On merge")
+                    Text(resolves ? "Closes the issue" : "Doesn't close the issue")
+                    Divider()
+                    Text(toggleTitle)
+                }
+                .font(FreesideFont.body)
+                .padding(14)
+                .freesideCard()
+                Text("Approving with changes flips only whether the pull request closes the issue.")
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.inkDim)
             }
-            .padding(14)
-            .freesideCard()
-            Text("Approving with changes flips only whether the pull request closes the issue.")
-                .font(FreesideFont.caption)
-                .foregroundStyle(Color.inkDim)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
             FreesideSheetActionRow(
                 submitLabel: "Approve",
                 isSubmitEnabled: revision != nil,
+                cancelIsOutlined: true,
                 submit: {}, cancel: {})
         }
-        .padding(24)
         .frame(maxWidth: 560, alignment: .leading)
         .foregroundStyle(Color.ink)
         // The sheet's own ground, so the dusk composition reads dusk ink on
@@ -4202,6 +4222,11 @@ struct EffectProposalRevisionSheet: View {
 }
 
 struct TaskProposalSnoozeSheet: View {
+    /// The header the sheet and its screenshot composition share (R11).
+    private static var header: FreesideSheetHeader {
+        FreesideSheetHeader(eyebrow: "Snooze proposal", ask: "When should this proposal return?")
+    }
+
     @Environment(\.dismiss) private var dismiss
     @State private var until: Date
     private let now: Date
@@ -4234,7 +4259,7 @@ struct TaskProposalSnoozeSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            FreesideSheetHeader(ask: "Snooze proposal")
+            Self.header
             Form {
                 DatePicker(
                     "Snooze until", selection: $until, in: now...,
@@ -4255,6 +4280,7 @@ struct TaskProposalSnoozeSheet: View {
                 // snooze. The screenshot composition uses the injected
                 // `now` instead, so its golden stays deterministic.
                 isSubmitEnabled: Self.isValidSnooze(until: until, now: Date()),
+                cancelIsOutlined: true,
                 submit: {
                     guard Self.isValidSnooze(until: until, now: Date()) else { return }
                     submit(until)
@@ -4270,25 +4296,28 @@ struct TaskProposalSnoozeSheet: View {
     /// The project-owned snooze composition without Form and DatePicker,
     /// whose AppKit-backed controls ImageRenderer cannot draw off-screen.
     func screenshotContent() -> some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("Snooze proposal")
-                .font(FreesideFont.sectionTitle)
-            VStack(alignment: .leading, spacing: 8) {
-                KeywordLabel(text: "Snooze until")
-                Text(formattedScreenshotUntil)
-                    .font(FreesideFont.body)
+        VStack(alignment: .leading, spacing: 0) {
+            Self.header
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 8) {
+                    KeywordLabel(text: "Snooze until")
+                    Text(formattedScreenshotUntil)
+                }
+                .font(FreesideFont.body)
+                .padding(14)
+                .freesideCard()
+                Text("The proposal returns to the inbox at this date and time.")
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.inkDim)
             }
-            .padding(14)
-            .freesideCard()
-            Text("The proposal returns to the inbox at this date and time.")
-                .font(FreesideFont.caption)
-                .foregroundStyle(Color.inkDim)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
             FreesideSheetActionRow(
                 submitLabel: "Snooze",
                 isSubmitEnabled: Self.isValidSnooze(until: until, now: now),
+                cancelIsOutlined: true,
                 submit: {}, cancel: {})
         }
-        .padding(24)
         .frame(maxWidth: 560, alignment: .leading)
         .foregroundStyle(Color.ink)
         // The sheet's own ground, so the dusk composition reads dusk ink on
