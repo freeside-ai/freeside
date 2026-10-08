@@ -46,6 +46,7 @@ enum DecisionLaunchComposerGate {
 struct DecisionDetailView: View {
     private enum ScrollTarget: Hashable {
         case technicalDetails
+        case evidence
     }
 
     /// A consequential action awaiting its seal. Identified by action and
@@ -88,6 +89,9 @@ struct DecisionDetailView: View {
     @State private var actionDetailsRevealRequest: TechnicalDetailsRevealRequest?
     @State private var sectionPreferences: DecisionSectionPreferences
     @State private var inspectorPresented: Bool
+    /// Set by the card's Evidence pointer and cleared by the inspector once
+    /// it has scrolled to its Evidence section.
+    @State private var revealsInspectorEvidence = false
     @State private var detailWidth: CGFloat = 0
     @State private var recommendationVisible = true
     @State private var provenanceExpanded = false
@@ -412,6 +416,25 @@ struct DecisionDetailView: View {
             model.emitDetailsOpenedBeforeActing()
             consumeDetailsRevealRequest(detailsRevealRequest.nonce)
         }
+
+        /// The card's Evidence pointer is navigation between two panes of
+        /// one card (R3, R18): it opens the section and scrolls to it, and
+        /// sends and records nothing.
+        private func showEvidenceInInspector() {
+            // The reader and the sections take turns in the inspector, so
+            // the sections come back first.
+            specApprovalReader = nil
+            evidenceExpanded.wrappedValue = true
+            revealsInspectorEvidence = true
+        }
+
+        private func revealEvidenceInInspectorIfRequested(using scrollProxy: ScrollViewProxy) {
+            guard revealsInspectorEvidence else { return }
+            revealsInspectorEvidence = false
+            withAnimation {
+                scrollProxy.scrollTo(ScrollTarget.evidence, anchor: .top)
+            }
+        }
     #endif
 
     @ViewBuilder
@@ -484,8 +507,12 @@ struct DecisionDetailView: View {
                                     .onChange(of: detailsRevealRequest) {
                                         revealTechnicalDetailsInInspectorIfRequested(using: scrollProxy)
                                     }
+                                    .onChange(of: revealsInspectorEvidence) {
+                                        revealEvidenceInInspectorIfRequested(using: scrollProxy)
+                                    }
                                     .onAppear {
                                         revealTechnicalDetailsInInspectorIfRequested(using: scrollProxy)
+                                        revealEvidenceInInspectorIfRequested(using: scrollProxy)
                                     }
                                 }
                             }
@@ -1008,39 +1035,25 @@ struct DecisionDetailView: View {
             }
         case .evidence:
             #if os(macOS)
-                if composition.reviewingActionInsertionIndex != nil {
-                    // The open inspector renders the same attachments beside
-                    // the card, so the card's own Evidence module collapses to
-                    // a pointer at the packet rather than drawing it twice
-                    // (#1107). Closing the inspector restores the rows.
-                    //
-                    // The pointer waits on the inspector's own Evidence
-                    // disclosure, which starts closed and persists its state.
-                    // At ordinary type sizes the card's module ignores that
-                    // preference and always draws its rows (`lowerSection`
-                    // only builds a DisclosureGroup for the accessibility
-                    // layout), so pointing at a closed inspector section would
-                    // take visible attachments off screen and leave them
-                    // nowhere. Duplication is what the row exists to prevent,
-                    // and there is none while the inspector is not drawing
-                    // them.
-                    if inspectorPresented, evidenceExpanded.wrappedValue,
-                        !item.evidence_snapshot.isEmpty
-                    {
-                        cardSection("Evidence") {
-                            Text(Self.evidencePointer(item.evidence_snapshot.count))
-                                .foregroundStyle(Color.inkDim)
-                                .accessibilityLabel(
-                                    Text(
-                                        Self.evidencePointerAccessibilityLabel(
-                                            item.evidence_snapshot.count)))
-                        }
-                    } else {
-                        evidence(
-                            item,
-                            accessibilityLayout: accessibilityLayout,
-                            rendersInteractiveControls: rendersInteractiveControls)
-                    }
+                // The open inspector holds the attachments, so the card
+                // points at them rather than drawing them twice (R18). The
+                // pointer's link opens the inspector's Evidence section, so
+                // it no longer waits for that section to be open (#1107).
+                switch composition.macEvidence(
+                    inspectorPresented: inspectorPresented,
+                    attachmentCount: item.evidence_snapshot.count)
+                {
+                case .pointer:
+                    evidencePointer(
+                        count: item.evidence_snapshot.count,
+                        rendersInteractiveControls: rendersInteractiveControls)
+                case .rows:
+                    evidence(
+                        item,
+                        accessibilityLayout: accessibilityLayout,
+                        rendersInteractiveControls: rendersInteractiveControls)
+                case .nothing:
+                    EmptyView()
                 }
             #else
                 evidence(
@@ -1905,18 +1918,60 @@ struct DecisionDetailView: View {
         ]
     }
 
-    /// The card's Evidence module while the inspector holds the same packet:
-    /// how many attachments it has and where they are, never a second copy of
-    /// the rows themselves.
-    static func evidencePointer(_ count: Int) -> String {
-        "\(count == 1 ? "1 attachment" : "\(count) attachments") → inspector"
+    /// What the card's Evidence pointer counts, in the operator's words.
+    static func evidencePointerCount(_ count: Int) -> String {
+        count == 1 ? "1 attachment" : "\(count) attachments"
     }
 
-    /// The pointer row spoken: the arrow is a direction, not a character worth
-    /// reading out.
-    static func evidencePointerAccessibilityLabel(_ count: Int) -> String {
-        "\(count == 1 ? "1 attachment" : "\(count) attachments"), shown in the inspector"
-    }
+    static let evidencePointerLinkTitle = "In inspector"
+    /// The link spoken: the visible title leans on the row it sits in, and
+    /// VoiceOver may reach the link alone.
+    static let evidencePointerLinkAccessibilityLabel = "Show the attachments in the inspector"
+
+    #if os(macOS)
+        /// The card's Evidence module while the inspector holds the
+        /// attachments (frame 6.9): how many there are, then a link to them
+        /// (R3: away is a link), never a second copy of the rows.
+        private func evidencePointer(count: Int, rendersInteractiveControls: Bool) -> some View {
+            let countText = Text(Self.evidencePointerCount(count))
+                .font(FreesideFont.factLabel)
+                .foregroundStyle(Color.ink)
+            let link = evidencePointerLink(rendersInteractiveControls: rendersInteractiveControls)
+            return keywordSection("Evidence") {
+                // One row where it fits, the link at its trailing edge as
+                // a fact row's value is; the link drops under the count at
+                // a size where it does not.
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        countText
+                        Spacer(minLength: 0)
+                        link
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        countText
+                        link
+                    }
+                }
+            }
+        }
+
+        @ViewBuilder
+        private func evidencePointerLink(rendersInteractiveControls: Bool) -> some View {
+            let link = FreesideLink(
+                title: Self.evidencePointerLinkTitle, face: FreesideFont.noticeAction)
+            if rendersInteractiveControls {
+                Button {
+                    showEvidenceInInspector()
+                } label: {
+                    link.contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Self.evidencePointerLinkAccessibilityLabel)
+            } else {
+                link
+            }
+        }
+    #endif
 
     @ViewBuilder
     private func evidence(
@@ -2018,6 +2073,7 @@ struct DecisionDetailView: View {
                                 rendersInteractiveControls: rendersInteractiveControls)
                         }
                     }
+                    .id(ScrollTarget.evidence)
                 }
                 inspectorSection("Details", isExpanded: detailsExpanded) {
                     VStack(alignment: .leading, spacing: 6) {
