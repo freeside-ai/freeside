@@ -24,8 +24,9 @@ real_work_report_failure() {
 # real_work_supervise follows the specification identity until it binds the exact
 # implementation run, then follows that run to publication or actionable
 # attention. It keeps reconciliation live through actionable attention, and
-# returns 0 once publication is durably accepted, 124 for the global timeout,
-# 1 for a terminal state or for observation that stays unreadable across
+# returns 0 once publication is durably accepted or the implementation has
+# completed, 124 for the global timeout, 1 for any other terminal state
+# (including specification completion) or observation that stays unreadable across
 # FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES consecutive attempts (default 10),
 # and 2 for an invalid numeric configuration.
 real_work_supervise() {
@@ -123,7 +124,7 @@ real_work_supervise() {
 			;;
 		specification:waiting_for_specification_approval|specification:pending|specification:unobserved|implementation:pending|implementation:unobserved|implementation:publication_ready)
 			;;
-		implementation:published)
+		implementation:published|implementation:completed)
 			return 0
 			;;
 		implementation:attention_required)
@@ -132,7 +133,7 @@ real_work_supervise() {
 				printf 'observe exact run: freesided resume -db %q -run %q\n' "$db_path" "$run_id" >&2
 			fi
 			;;
-		specification:attention_required|specification:failed|specification:lost|specification:blocked|implementation:failed|implementation:lost|implementation:blocked)
+		specification:attention_required|specification:completed|specification:failed|specification:lost|specification:blocked|implementation:failed|implementation:lost|implementation:blocked)
 			real_work_report_failure "$lane" "$run_id" "$snapshot_path"
 			return 1
 			;;
