@@ -21,6 +21,11 @@ enum AttentionDisplay {
             /// Counts in the diff cuts (R28): successive measurements of one
             /// diff, earliest first.
             case diffs([DiffCounts])
+            /// A system-health item's admission posture, a state: the chip
+            /// sits in the value slot (R9).
+            case posture(Components.Schemas.HealthPosture)
+            /// Another attention item, which the value links to (R3).
+            case item(id: String)
         }
 
         let label: String
@@ -35,6 +40,20 @@ enum AttentionDisplay {
             self.value = value
             self.monospaced = monospaced
             self.form = .plain
+        }
+
+        init(_ label: String, posture: Components.Schemas.HealthPosture) {
+            self.label = label
+            self.value = AttentionDisplay.label(posture)
+            self.monospaced = false
+            self.form = .posture(posture)
+        }
+
+        init(_ label: String, _ value: String, linkingItem id: String) {
+            self.label = label
+            self.value = value
+            self.monospaced = false
+            self.form = .item(id: id)
         }
 
         init(_ label: String, diffs: [DiffCounts]) {
@@ -123,8 +142,16 @@ enum AttentionDisplay {
         case .system_health:
             return "How should this system-health condition be handled?"
         case .blocked:
-            return "What is keeping this run blocked?"
+            // A blocked card offers no decision, so where the daemon typed
+            // the wait the card leads with it (survey frame 5.5).
+            return blockedWaitSentence(item) ?? "What is keeping this run blocked?"
         }
+    }
+
+    /// What a blocked run waits on, as a sentence, where the item's typed
+    /// wait says.
+    static func blockedWaitSentence(_ item: Components.Schemas.AttentionItem) -> String? {
+        item.blocked_on.map { "Waiting on \(phrase($0.value1.kind))." }
     }
 
     static func rowSummary(_ item: Components.Schemas.AttentionItem) -> String {
@@ -175,10 +202,7 @@ enum AttentionDisplay {
             }
             return "\(label(diagnostic.impairs)) is impaired by diagnostic \(diagnostic.code)."
         case .blocked:
-            guard let wait = item.blocked_on?.value1 else {
-                return "A run is waiting on a blocker."
-            }
-            return "Waiting on \(phrase(wait.kind))."
+            return blockedWaitSentence(item) ?? "A run is waiting on a blocker."
         }
     }
 
@@ -232,27 +256,36 @@ enum AttentionDisplay {
             }
             return []
         case .system_health:
-            guard let diagnostic = item.health_diagnostic?.value1 else { return [] }
-            return [
-                .init("Diagnostic", diagnostic.code, monospaced: true),
-                .init("Impairs", label(diagnostic.impairs)),
-            ]
+            var rows: [FactRow] = []
+            if let diagnostic = item.health_diagnostic?.value1 {
+                rows.append(.init("Diagnostic", diagnostic.code, monospaced: true))
+                rows.append(.init("Impairs", label(diagnostic.impairs)))
+            }
+            // Whether the finding gates unattended admission is a fact about
+            // it, so it reads with the diagnostic in either posture.
+            if let posture = item.posture?.value1 {
+                rows.append(.init("Posture", posture: posture))
+            }
+            return rows
         case .blocked:
             guard let wait = item.blocked_on?.value1 else { return [] }
             var rows: [FactRow] = [
-                .init("Waiting on", label(wait.kind)),
                 // The wait reads as the duration the inbox row already uses.
                 // Its exact start is an audit coordinate, so it stays with the
                 // other technical bindings rather than leading the card as a
                 // monospaced timestamp.
-                .init("Waiting for", relativeRowTime(wait.since, now: now)),
+                .init("Waiting", relativeRowTime(wait.since, now: now))
             ]
+            // The item the run waits on is one the operator can open, so the
+            // row links to it; its id is a binding and stays in Details.
             if let blockingItem = wait.item_id {
-                rows.append(.init("Blocking item", blockingItem, monospaced: true))
+                rows.append(.init("Blocked on", label(wait.kind), linkingItem: blockingItem))
+            } else {
+                rows.append(.init("Blocked on", label(wait.kind)))
             }
             if let pull = wait.pr_reference?.value1 {
                 rows.append(
-                    .init("Pull request", "\(pull.repo)#\(pull.number)", monospaced: true))
+                    .init("Pull Request", "\(pull.repo)#\(pull.number)", monospaced: true))
             }
             return rows
         case .agent_question:
@@ -831,10 +864,6 @@ enum AttentionDisplay {
         status != .open
     }
 
-    static func showsPostureBadge(_ posture: Components.Schemas.HealthPosture) -> Bool {
-        posture == .blocking
-    }
-
     static func showsDegradedBadge(_ item: Components.Schemas.AttentionItem) -> Bool {
         item.readiness?.value1._class == .ready_degraded
     }
@@ -915,6 +944,9 @@ enum AttentionDisplay {
         if let wait = item.blocked_on?.value1 {
             rows.append(
                 .init(label: "Waiting Since", value: wait.since.formatted(.iso8601)))
+            if let blockingItem = wait.item_id {
+                rows.append(.init(label: "Blocking Item", value: blockingItem))
+            }
         }
         if let hold = item.publish_block?.value1.hold_reason?.value1 {
             rows.append(.init(label: "Hold Code", value: hold.rawValue))

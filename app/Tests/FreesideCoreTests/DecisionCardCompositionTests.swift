@@ -405,9 +405,51 @@ import Testing
         let expected: DecisionCardComposition.ReasonPlacement =
             switch type {
             case .agent_question, .ready_for_final_review, .finding_adjudication: .recordedContext
+            case .blocked: .detailsOnly
             default: .underAsk
             }
         #expect(DecisionCardComposition.reasonPlacement(for: type) == expected)
+    }
+
+    /// A blocked item's reason says what the run waits on and since when.
+    /// It leaves the card's face only where the lead and the Waiting fact
+    /// say both, which is the one wait the daemon writes today: a
+    /// specification approval. An item with no typed wait, or a wait whose
+    /// reason no writer defines yet, keeps the reason under the ask (plan
+    /// §9 revision 82).
+    @Test func aBlockedReasonLeavesTheFaceOnlyWhereTheLeadStatesTheWait() throws {
+        let now = AttentionFixtures.createdInstant
+        var item = AttentionFixtures.fixture(type: .blocked).item
+        let wait = try #require(item.blocked_on?.value1)
+        #expect(wait.kind == .spec_approval)
+        #expect(DecisionCardComposition.reasonPlacement(for: item) == .detailsOnly)
+        // What stands in for the reason: the lead and the duration.
+        #expect(AttentionDisplay.ask(item) == "Waiting on specification approval.")
+        #expect(AttentionDisplay.cardFacts(item, now: now).map(\.label).contains("Waiting"))
+        // Details still carry it in full.
+        #expect(DecisionCardComposition.reason(for: item)?.text == item.reason)
+
+        for kind in [Components.Schemas.BlockedWaitKind.pr_checks, .external_review] {
+            item.blocked_on = .init(
+                value1: .init(kind: kind, since: wait.since, item_id: nil, pr_reference: nil))
+            #expect(DecisionCardComposition.reasonPlacement(for: item) == .underAsk)
+        }
+
+        item.blocked_on = nil
+        #expect(DecisionCardComposition.reasonPlacement(for: item) == .underAsk)
+    }
+
+    /// Survey frame 5.5: a system-health item's reason is the daemon's
+    /// finding, so it reads as the card's statement and stays ahead of the
+    /// actions. Every other reason the shell draws is the ask's second line.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func onlyTheSystemHealthReasonReadsAsTheCardsStatement(
+        type: Components.Schemas.AttentionType
+    ) {
+        #expect(
+            DecisionCardComposition.reasonFace(for: type)
+                == (type == .system_health ? .statement : .secondLine))
+        #expect(DecisionCardComposition.reasonPlacement(for: .system_health) == .underAsk)
     }
 
     /// The finding card's reason says what accepting does. It may fold only
@@ -432,7 +474,7 @@ import Testing
         type: Components.Schemas.AttentionType
     ) {
         let quoted: [Components.Schemas.AttentionType] = [
-            .agent_question, .ready_for_final_review, .review_dispute,
+            .agent_question, .ready_for_final_review, .review_dispute, .system_health, .blocked,
         ]
         #expect(
             DecisionCardComposition.agentSectionFrame(for: type)
@@ -768,7 +810,9 @@ import Testing
     /// so far. Every other type keeps the earlier scale until its sweep.
     @Test(arguments: Components.Schemas.AttentionType.allCases)
     func onlyTheComposedCardsTakeTheRefinedScale(type: Components.Schemas.AttentionType) {
-        let refined: Set<Components.Schemas.AttentionType> = [.ready_for_final_review, .agent_question]
+        let refined: Set<Components.Schemas.AttentionType> = [
+            .ready_for_final_review, .agent_question, .system_health, .blocked,
+        ]
         let scale = DecisionCardComposition.scale(for: type)
         #expect(scale == (refined.contains(type) ? .refined : .legacy))
     }

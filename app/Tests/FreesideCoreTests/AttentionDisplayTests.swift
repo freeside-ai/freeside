@@ -5,9 +5,19 @@ import Testing
 @testable import FreesideCore
 
 @Suite struct AttentionDisplayTests {
+    /// Every card that asks for a decision asks it in one sentence. A
+    /// blocked item is read-only (plan §4), so where its typed wait says what
+    /// it waits on, it leads with that as a statement (survey frame 5.5);
+    /// without one it keeps the question.
     @Test func everyAttentionTypeHasAOneSentenceQuestionAsk() {
         for type in AttentionFixtures.phase1Types {
-            let ask = AttentionDisplay.ask(AttentionFixtures.fixture(type: type).item)
+            var item = AttentionFixtures.fixture(type: type).item
+            if type == .blocked {
+                #expect(item.requested_decision.isEmpty)
+                #expect(AttentionDisplay.ask(item) == "Waiting on specification approval.")
+                item.blocked_on = nil
+            }
+            let ask = AttentionDisplay.ask(item)
             #expect(!ask.isEmpty)
             #expect(ask.hasSuffix("?"))
             #expect(ask.dropLast().contains("?") == false)
@@ -213,8 +223,8 @@ import Testing
             .review_dispute: ["Run", "Round", "Disputed findings", "Completion evidence"],
             .ready_for_final_review: ["Diff"],
             .publish_blocked: ["Failed trust rule"],
-            .system_health: ["Diagnostic", "Impairs"],
-            .blocked: ["Waiting on", "Waiting for", "Blocking item"],
+            .system_health: ["Diagnostic", "Impairs", "Posture"],
+            .blocked: ["Waiting", "Blocked on"],
             .agent_question: ["Stage", "Blocked on"],
         ]
         let now = AttentionFixtures.createdInstant.addingTimeInterval(18 * 3_600)
@@ -229,6 +239,7 @@ import Testing
             item.diff_stats = nil
             item.publish_block = nil
             item.health_diagnostic = nil
+            item.posture = nil
             item.blocked_on = nil
             item.agent_question = nil
             item.reason = "the build stage failed twice and the run has waited 18h"
@@ -272,7 +283,7 @@ import Testing
         #expect(
             AttentionDisplay.cardFacts(
                 AttentionFixtures.fixture(type: .system_health).item, now: now
-            ).map(\.value) == ["run_projection.unavailable", "Run visibility"])
+            ).map(\.value) == ["run_projection.unavailable", "Run visibility", "Advisory"])
 
         var blocked = AttentionFixtures.fixture(type: .blocked).item
         blocked.blocked_on = .init(
@@ -283,15 +294,55 @@ import Testing
                 pr_reference: .init(value1: .init(repo: "owner/repo", number: 7))))
         #expect(
             AttentionDisplay.cardFacts(blocked, now: now).map(\.label)
-                == ["Waiting on", "Waiting for", "Pull request"])
+                == ["Waiting", "Blocked on", "Pull Request"])
         #expect(AttentionDisplay.cardFacts(blocked, now: now).last?.value == "owner/repo#7")
+        // Nothing to open: the wait names no item.
+        #expect(AttentionDisplay.cardFacts(blocked, now: now)[1] == .init("Blocked on", "PR checks"))
 
         // The card reads the wait as a duration in the register the inbox row
         // uses; the exact instant stays among the technical bindings.
-        #expect(AttentionDisplay.cardFacts(blocked, now: now)[1].value == "18h")
+        #expect(AttentionDisplay.cardFacts(blocked, now: now)[0].value == "18h")
         #expect(
             AttentionDisplay.detailBindingRows(blocked)
                 .contains { $0.label == "Waiting Since" && $0.value.hasPrefix("2026-") })
+    }
+
+    /// Survey frame 5.5: a blocked card leads with the wait its typed facts
+    /// name and links to the item the run waits on. That item's id is a
+    /// binding, so Details keep it (R17).
+    @Test func aBlockedCardLeadsWithItsTypedWaitAndLinksTheBlockingItem() throws {
+        let now = AttentionFixtures.createdInstant.addingTimeInterval(18 * 3_600)
+        var blocked = AttentionFixtures.fixture(type: .blocked).item
+        let blockingItem = try #require(blocked.blocked_on?.value1.item_id)
+
+        #expect(AttentionDisplay.ask(blocked) == "Waiting on specification approval.")
+        #expect(
+            AttentionDisplay.cardFacts(blocked, now: now)
+                == [
+                    .init("Waiting", "18h"),
+                    .init("Blocked on", "Specification approval", linkingItem: blockingItem),
+                ])
+        #expect(
+            AttentionDisplay.detailBindingRows(blocked)
+                .contains(.init(label: "Blocking Item", value: blockingItem)))
+
+        blocked.blocked_on = nil
+        #expect(AttentionDisplay.ask(blocked) == "What is keeping this run blocked?")
+    }
+
+    /// Survey frame 5.5: the posture reads with the diagnostic as a chip, in
+    /// either posture, and comes from its own typed field.
+    @Test func systemHealthFactsCarryThePostureAsAState() {
+        let now = AttentionFixtures.createdInstant
+        var item = AttentionFixtures.fixture(type: .system_health).item
+        item.posture = .init(value1: .blocking)
+        #expect(
+            AttentionDisplay.cardFacts(item, now: now).last
+                == .init("Posture", posture: .blocking))
+        #expect(AttentionDisplay.cardFacts(item, now: now).last?.value == "Blocking")
+
+        item.health_diagnostic = nil
+        #expect(AttentionDisplay.cardFacts(item, now: now).map(\.label) == ["Posture"])
     }
 
     @Test func rowContextRendersTheDaemonsDisplayNamesAndMarksIdentifiers() {
@@ -373,9 +424,6 @@ import Testing
         #expect(AttentionDisplay.showsLifecycleBadge(.superseded))
         #expect(AttentionDisplay.showsLifecycleBadge(.dismissed))
         #expect(AttentionDisplay.showsLifecycleBadge(.expired))
-
-        #expect(AttentionDisplay.showsPostureBadge(.blocking))
-        #expect(!AttentionDisplay.showsPostureBadge(.advisory))
 
         #expect(
             !AttentionDisplay.showsDegradedBadge(

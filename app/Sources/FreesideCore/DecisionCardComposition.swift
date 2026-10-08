@@ -213,11 +213,11 @@ struct DecisionCardComposition: Equatable {
         for type: Components.Schemas.AttentionType
     ) -> AgentSectionFrame {
         switch type {
-        case .agent_question, .ready_for_final_review, .review_dispute:
+        case .agent_question, .ready_for_final_review, .review_dispute, .system_health, .blocked:
             return .quoted
         case .spec_approval, .execution_failure, .review_diminishing_returns,
             .review_contradiction, .review_configuration, .finding_adjudication,
-            .publish_blocked, .task_proposal, .effect_proposal, .system_health, .blocked:
+            .publish_blocked, .task_proposal, .effect_proposal:
             return .dashedCard
         }
     }
@@ -270,12 +270,11 @@ struct DecisionCardComposition: Equatable {
     /// exhaustive so a new type has to answer the question.
     static func scale(for type: Components.Schemas.AttentionType) -> Scale {
         switch type {
-        case .ready_for_final_review, .agent_question:
+        case .ready_for_final_review, .agent_question, .system_health, .blocked:
             return .refined
         case .review_dispute, .spec_approval, .execution_failure,
             .review_diminishing_returns, .review_contradiction, .review_configuration,
-            .finding_adjudication, .publish_blocked, .task_proposal, .effect_proposal,
-            .system_health, .blocked:
+            .finding_adjudication, .publish_blocked, .task_proposal, .effect_proposal:
             return .legacy
         }
     }
@@ -316,25 +315,58 @@ struct DecisionCardComposition: Equatable {
         case underAsk
         /// A closed "Recorded Context" disclosure below the actions.
         case recordedContext
+        /// Off the card's face: Details alone carry it, as they do on every
+        /// type.
+        case detailsOnly
+    }
+
+    /// How the shell sets a reason it draws under the ask.
+    enum ReasonFace: Equatable {
+        /// The ask's dim second line (R0).
+        case secondLine
+        /// The card's own statement, in the serif face and ink.
+        case statement
+    }
+
+    /// A system-health item's reason is the daemon's finding: the sentence
+    /// that says what is wrong, which its diagnostic code and impaired
+    /// capability only classify. It is what the card is about, so it reads
+    /// as the card's statement (survey frame 5.5) and never folds. Every
+    /// other reason the shell draws is context for the ask above it. The
+    /// switch is exhaustive so a new type has to answer the question.
+    static func reasonFace(for type: Components.Schemas.AttentionType) -> ReasonFace {
+        switch type {
+        case .system_health:
+            return .statement
+        case .spec_approval, .execution_failure, .agent_question, .review_diminishing_returns,
+            .review_dispute, .review_contradiction, .review_configuration,
+            .finding_adjudication, .ready_for_final_review, .publish_blocked, .task_proposal,
+            .effect_proposal, .blocked:
+            return .secondLine
+        }
     }
 
     /// Plan §9 (revision 82) places the reason by a per-item test: it folds
     /// only where the card's lead already states it. The question, the final
     /// review, and the finding cards lead with their own module and have that
     /// test (`reasonPlacement(for item:)`), so they keep the recorded
-    /// sentence one disclosure away (D06, D07, D09). Every other type draws
-    /// it under the ask (R0): no type has a boxed Context section, and no
-    /// type folds its reason without a test that says its lead covers it.
-    /// The switch is exhaustive so a new type has to answer the question.
+    /// sentence one disclosure away (D06, D07, D09). A blocked card leads
+    /// with the wait its typed facts name, so its reason leaves the face
+    /// under the same kind of test. Every other type draws it under the ask
+    /// (R0): no type has a boxed Context section, and no type folds its
+    /// reason without a test that says its lead covers it. The switch is
+    /// exhaustive so a new type has to answer the question.
     static func reasonPlacement(
         for type: Components.Schemas.AttentionType
     ) -> ReasonPlacement {
         switch type {
         case .agent_question, .ready_for_final_review, .finding_adjudication:
             return .recordedContext
+        case .blocked:
+            return .detailsOnly
         case .review_dispute, .spec_approval, .execution_failure, .review_diminishing_returns,
             .review_contradiction, .review_configuration, .publish_blocked, .task_proposal,
-            .effect_proposal, .system_health, .blocked:
+            .effect_proposal, .system_health:
             return .underAsk
         }
     }
@@ -352,10 +384,23 @@ struct DecisionCardComposition: Equatable {
     /// recommendation did not revalidate has no other statement of it, and
     /// an action's consequence never folds (plan §9), so its reason stays
     /// under the ask.
+    ///
+    /// A blocked item's reason says what the run waits on and since when
+    /// (`ensureSpecificationBlockedItem` in
+    /// daemon/internal/engine/specification.go, the one writer). The card's
+    /// lead names that wait and its Waiting fact gives the duration, with
+    /// the exact start in Details, so the reason leaves the face. That holds
+    /// only for the wait the daemon writes today: an item with no typed
+    /// wait keeps the generic ask, and no writer yet says what a wait on PR
+    /// checks or an external review records, so both keep the reason under
+    /// the ask.
     static func reasonPlacement(
         for item: Components.Schemas.AttentionItem
     ) -> ReasonPlacement {
         if item._type == .agent_question, rendersAsk(for: item) { return .underAsk }
+        if item._type == .blocked, item.blocked_on?.value1.kind != .spec_approval {
+            return .underAsk
+        }
         if item._type == .finding_adjudication,
             DecisionRecommendationPresentation.of(item) == nil
         {

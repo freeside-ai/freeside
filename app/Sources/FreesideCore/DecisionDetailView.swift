@@ -698,30 +698,35 @@ struct DecisionDetailView: View {
         let foldEnd = actionIndex + composition.foldedModuleCount
         cardModules(0..<(reviewingIndex ?? actionIndex), modules)
         // The reviewing action and the action region are one control group
-        // (R10), whatever a composition draws between them.
-        VStack(alignment: .leading, spacing: scale.controlGap) {
-            if let reviewingIndex {
-                reviewingAction(item)
-                cardModules(reviewingIndex..<actionIndex, modules)
-            }
-            #if os(macOS)
-                actionRegion(
-                    item,
-                    stackedLayout: stackedLayout,
-                    includesReviewing: reviewingIndex == nil,
-                    register: modules.register.at(.actionRegion)
-                )
-                .onGeometryChange(for: CGRect.self) { geometry in
-                    geometry.frame(in: .named(Self.cardCoordinateSpace))
-                } action: { frame in
-                    actionRegionFrameChanged?(frame)
+        // (R10), whatever a composition draws between them. A read-only
+        // item requests no decision, so its card draws no group at all
+        // (survey frame 5.5) rather than an empty one that still takes a
+        // section's gap.
+        if Self.drawsControlGroup(item) {
+            VStack(alignment: .leading, spacing: scale.controlGap) {
+                if let reviewingIndex {
+                    reviewingAction(item)
+                    cardModules(reviewingIndex..<actionIndex, modules)
                 }
-            #else
-                actions(
-                    item,
-                    stackedLayout: stackedLayout,
-                    includesReviewing: reviewingIndex == nil)
-            #endif
+                #if os(macOS)
+                    actionRegion(
+                        item,
+                        stackedLayout: stackedLayout,
+                        includesReviewing: reviewingIndex == nil,
+                        register: modules.register.at(.actionRegion)
+                    )
+                    .onGeometryChange(for: CGRect.self) { geometry in
+                        geometry.frame(in: .named(Self.cardCoordinateSpace))
+                    } action: { frame in
+                        actionRegionFrameChanged?(frame)
+                    }
+                #else
+                    actions(
+                        item,
+                        stackedLayout: stackedLayout,
+                        includesReviewing: reviewingIndex == nil)
+                #endif
+            }
         }
         let foldsReason = foldsReason && DecisionCardComposition.reason(for: item) != nil
         let foldedModules = actionIndex..<foldEnd
@@ -747,6 +752,13 @@ struct DecisionDetailView: View {
             cardModules(foldedModules, modules)
         }
         cardModules(foldEnd..<composition.modules.count, modules)
+    }
+
+    /// Whether the one-column card has a control group to draw: an action
+    /// the item requests, or the agent claims the Mac sets beside them.
+    static func drawsControlGroup(_ item: Components.Schemas.AttentionItem) -> Bool {
+        !item.requested_decision.isEmpty
+            || !DecisionCardComposition.actionRegionClaims(item.agent_claims).isEmpty
     }
 
     /// Whether a folded module has anything to draw, which is what decides
@@ -1172,7 +1184,16 @@ struct DecisionDetailView: View {
         _ item: Components.Schemas.AttentionItem, register: UnverifiedRegister
     ) -> some View {
         if let reason = DecisionCardComposition.reason(for: item) {
-            reasonText(reason, color: .inkDim, register: register)
+            switch DecisionCardComposition.reasonFace(for: item._type) {
+            case .secondLine:
+                reasonText(reason, color: .inkDim, register: register)
+            case .statement:
+                Text(reason.text)
+                    .font(FreesideFont.statement)
+                    .foregroundStyle(Color.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 
@@ -1268,9 +1289,17 @@ struct DecisionDetailView: View {
             DecisionChangeRow(diff: change)
         }
         if !rows.isEmpty {
-            cardSection("Facts") {
-                ForEach(rows) { fact in
-                    factRow(fact)
+            if DecisionCardComposition.scale(for: item._type) == .refined {
+                keywordSection("Facts") {
+                    ForEach(rows) { fact in
+                        factRow(fact)
+                    }
+                }
+            } else {
+                cardSection("Facts") {
+                    ForEach(rows) { fact in
+                        factRow(fact)
+                    }
                 }
             }
         }
@@ -2416,9 +2445,6 @@ struct DecisionDetailView: View {
             if AttentionDisplay.showsPriorityBadge(item.priority) {
                 PriorityBadge(priority: item.priority)
             }
-            if let posture = item.posture?.value1, AttentionDisplay.showsPostureBadge(posture) {
-                HealthPostureBadge(posture: posture)
-            }
             if AttentionDisplay.showsLifecycleBadge(item.status) {
                 StatusBadge(status: item.status)
             }
@@ -2708,6 +2734,18 @@ struct DecisionDetailView: View {
         }
     }
 
+    /// A section the refined card sets apart by spacing alone (R1, R26):
+    /// its keyword, then its content on the module gap, with no box.
+    private func keywordSection(
+        _ title: String, @ViewBuilder content: () -> some View
+    ) -> some View {
+        VStack(alignment: .leading, spacing: DecisionCardComposition.Scale.refined.moduleGap) {
+            KeywordLabel(text: title)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     @ViewBuilder
     private func lowerSection<Content: View>(
         _ title: String,
@@ -2777,6 +2815,10 @@ struct DecisionDetailView: View {
             FactRow(label: fact.label, value: fact.value, drawn: DiffCounts.text(diffs))
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(Text("\(fact.label): \(DiffCounts.spoken(diffs))"))
+        case .posture(let posture):
+            FactRow(label: fact.label, chip: StateChip(posture: posture))
+        case .item(let id):
+            FactLinkRow(label: fact.label, value: fact.value) { onSelectItem(id) }
         }
     }
 
@@ -3470,11 +3512,6 @@ struct DecisionDetailView: View {
                 )
                 .onAppear { model.emitNotDecidableHereShown() }
             }
-            if item._type == .blocked {
-                Text("A blocked item is informational; it resolves when the external wait clears.")
-                    .font(FreesideFont.caption)
-                    .foregroundStyle(Color.inkDim)
-            }
         }
     }
 
@@ -4043,18 +4080,16 @@ struct TaskProposalSnoozeSheet: View {
     }
 }
 
-struct HealthPostureBadge: View {
-    let posture: Components.Schemas.HealthPosture
-
-    var body: some View {
-        StateChip(label: AttentionDisplay.label(posture), color: color)
-    }
-
-    private var color: Color {
-        switch posture {
-        case .blocking: return .waxText
-        case .advisory: return .inkDim
-        }
+extension StateChip {
+    /// A system-health item's admission posture: wax where the finding
+    /// gates unattended admission, dim where it only advises.
+    init(posture: Components.Schemas.HealthPosture) {
+        let color: Color =
+            switch posture {
+            case .blocking: .waxText
+            case .advisory: .inkDim
+            }
+        self.init(label: AttentionDisplay.label(posture), color: color)
     }
 }
 
