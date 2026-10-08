@@ -12,6 +12,12 @@ public final class NavigationModel {
         case cancelled
     }
 
+    /// One composer to present on one inbox item, once per launch.
+    public struct LaunchComposerRequest: Equatable {
+        public let itemID: String
+        public let composer: LaunchInputs.Composer
+    }
+
     public enum Destination: Equatable {
         case attentionItem(String)
         case task(String)
@@ -36,6 +42,11 @@ public final class NavigationModel {
     /// The Devices sheet's presentation flag, shared by the toolbar buttons
     /// and the `-FreesideDevices` launch argument.
     public var devicesPresented: Bool
+    /// The `-FreesideComposer` launch argument until the card acts on it.
+    /// Held here, not in the card, because the Mac detail view is rebuilt on
+    /// every selection: view state would reopen the composer each time the
+    /// item is reselected.
+    public private(set) var launchComposer: LaunchComposerRequest?
     public private(set) var operatorNavigationRevision = 0
 
     public init(launchInputs: LaunchInputs) {
@@ -47,6 +58,10 @@ public final class NavigationModel {
         runSelection = nil
         inspectorPresented = launchInputs.detailsExpanded
         devicesPresented = launchInputs.devicesPresented
+        // `LaunchInputs` leaves the composer nil without an inbox selection.
+        launchComposer = launchInputs.selection.flatMap { itemID in
+            launchInputs.composer.map { LaunchComposerRequest(itemID: itemID, composer: $0) }
+        }
 
         switch launchInputs.screen {
         case .inbox:
@@ -63,6 +78,16 @@ public final class NavigationModel {
                 break
             }
         }
+    }
+
+    /// The launch's composer for this item's card, or nil for any other item
+    /// and once the request is consumed.
+    public func launchComposer(for itemID: String) -> LaunchInputs.Composer? {
+        launchComposer?.itemID == itemID ? launchComposer?.composer : nil
+    }
+
+    public func consumeLaunchComposer() {
+        launchComposer = nil
     }
 
     /// Select the destination's top-level section before replacing that

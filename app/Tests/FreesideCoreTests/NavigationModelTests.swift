@@ -19,6 +19,37 @@ import Testing
         #expect(navigation.inboxPath.isEmpty)
     }
 
+    @Test func aLaunchComposerIsOfferedToItsItemUntilConsumed() {
+        let navigation = NavigationModel(
+            launchInputs: LaunchInputs(
+                colorSchemeRaw: nil, selectionRaw: "item-spec_approval",
+                composerRaw: "request_changes"))
+
+        #expect(
+            navigation.launchComposer
+                == .init(itemID: "item-spec_approval", composer: .requestChanges))
+        #expect(navigation.launchComposer(for: "item-spec_approval") == .requestChanges)
+        #expect(navigation.launchComposer(for: "item-agent_question") == nil)
+
+        // Selecting another item and coming back leaves the request alone;
+        // only the card that opens the composer consumes it.
+        navigation.route(to: .attentionItem("item-agent_question"))
+        navigation.route(to: .attentionItem("item-spec_approval"))
+        #expect(navigation.launchComposer(for: "item-spec_approval") == .requestChanges)
+
+        navigation.consumeLaunchComposer()
+        #expect(navigation.launchComposer == nil)
+        #expect(navigation.launchComposer(for: "item-spec_approval") == nil)
+    }
+
+    @Test func aLaunchWithoutAComposerRequestsNone() {
+        let navigation = NavigationModel(
+            launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: "item-spec_approval"))
+
+        #expect(navigation.attentionSelection == "item-spec_approval")
+        #expect(navigation.launchComposer == nil)
+    }
+
     @Test func aRunLaunchLinkOpensItsTaskWithTheRunPushed() {
         let inputs = LaunchInputs(
             colorSchemeRaw: nil,
