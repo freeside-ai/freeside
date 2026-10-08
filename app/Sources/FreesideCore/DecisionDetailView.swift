@@ -78,8 +78,6 @@ struct DecisionDetailView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.openURL) private var openURL
-    @ScaledMetric(relativeTo: .callout) private var bannerGlyphSize: CGFloat = screenshotMetricBase(
-        10, relativeTo: .callout)
     @State private var model: DecisionModel
     @State private var proposalEditor: ProposalEditor?
     @State private var messageEditor: MessageEditor?
@@ -582,7 +580,7 @@ struct DecisionDetailView: View {
         VStack(alignment: .leading, spacing: CardScale.sectionGap) {
             VStack(alignment: .leading, spacing: CardScale.headGap) {
                 eyebrow(item, register: register, accessibilityLayout: accessibilityLayout)
-                banner(accessibilityLayout: accessibilityLayout)
+                banner()
                 if DecisionCardComposition.rendersAsk(for: item) {
                     Text(AttentionDisplay.ask(item))
                         .font(FreesideFont.ask)
@@ -2163,23 +2161,20 @@ struct DecisionDetailView: View {
     }
 
     func screenshotBanner() -> some View {
-        bannerLabel(
-            "Submission failed: the daemon rejected the command.",
-            systemImage: "exclamationmark",
-            tint: .waxText,
-            wash: .waxWash
-        )
-        .padding()
+        receipt(.wax, "Failed", "Submission failed: the daemon rejected the command.")
+            .padding()
     }
 
-    func screenshotRetryableReceipt(expanded: Bool, accessibilityLayout: Bool) -> some View {
+    func screenshotRetryableReceipt(expanded: Bool) -> some View {
         RetryableReceipt(
             isExpanded: .constant(expanded),
-            accessibilityLayout: accessibilityLayout,
             failureMessage: "the daemon did not answer",
             retry: {}
         )
         .padding()
+        // The card's own ground: the disclosure under the notice has no
+        // wash of its own to carry its ink over the harness's light canvas.
+        .background(Color.ground)
     }
 
     @ViewBuilder
@@ -2626,24 +2621,21 @@ struct DecisionDetailView: View {
     }
 
     @ViewBuilder
-    private func banner(accessibilityLayout: Bool) -> some View {
+    private func banner() -> some View {
         if model.phase == .superseded {
-            bannerLabel(
-                "This item changed before your decision applied. Nothing was committed; re-review the replacement below.",
-                systemImage: "arrow.triangle.2.circlepath",
-                tint: .accentText, wash: .accentWash
+            receipt(
+                .accent, "Superseded",
+                "This item changed before your decision applied. Nothing was committed; re-review the replacement below."
             )
         } else {
             // An applied record persists even when the item stays open
             // (a non-resolving action such as acknowledge or open_pr).
             if let record = model.appliedRecord {
-                // Success is quiet: a plain tick on a neutral wash, never
-                // green and never the accent.
-                bannerLabel(
-                    "Decision applied: \(AttentionDisplay.label(record.action, for: model.snapshot?.item))",
-                    systemImage: "checkmark",
-                    tint: .inkDim, wash: .neutralWash
-                )
+                // Success is quiet: a neutral wash, never green and never
+                // the accent.
+                receipt(
+                    .neutral, "Recorded",
+                    "Decision applied: \(AttentionDisplay.label(record.action, for: model.snapshot?.item))")
             }
             // The retry affordance leads: when a preserved command may
             // hold a recorded result, resending it is the actionable
@@ -2651,23 +2643,14 @@ struct DecisionDetailView: View {
             if model.canRetryLostResponse {
                 RetryableReceipt(
                     isExpanded: $lostResponseExpanded,
-                    accessibilityLayout: accessibilityLayout,
                     failureMessage: model.submissionError
                 ) {
                     Task { await model.retryLostResponse() }
                 }
             } else if case .failed(let message) = model.validation {
-                bannerLabel(
-                    "Couldn't validate current state: \(message)",
-                    systemImage: "exclamationmark",
-                    tint: .waxText, wash: .waxWash
-                )
+                receipt(.wax, "Failed", "Couldn't validate current state: \(message)")
             } else if let message = model.submissionError {
-                bannerLabel(
-                    "Submission failed: \(message)",
-                    systemImage: "exclamationmark",
-                    tint: .waxText, wash: .waxWash
-                )
+                receipt(.wax, "Failed", "Submission failed: \(message)")
             }
         }
     }
@@ -3606,38 +3589,22 @@ struct DecisionDetailView: View {
         }
     }
 
+    /// The uncertain receipt (R12): the accent notice with its trailing
+    /// Retry, and the explanation one disclosure away.
     private struct RetryableReceipt: View {
         @Binding var isExpanded: Bool
-        let accessibilityLayout: Bool
         let failureMessage: String?
         let retry: () -> Void
-        @ScaledMetric(relativeTo: .callout) private var glyphSize: CGFloat = screenshotMetricBase(
-            10, relativeTo: .callout)
 
         var body: some View {
-            let layout =
-                accessibilityLayout
-                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
-                : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 8))
             VStack(alignment: .leading, spacing: 8) {
-                layout {
-                    Label {
-                        Text("The response was lost.")
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.75)
-                            .textSelection(.enabled)
-                    } icon: {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: glyphSize, weight: .semibold))
-                    }
-                    if !accessibilityLayout {
-                        Spacer(minLength: 0)
-                    }
-                    Button("Retry", action: retry)
-                        .buttonStyle(FreesideActionButtonStyle(tone: .tertiary))
-                        .accessibilityLabel("Retry the lost decision")
-                }
-                DisclosureGroup(isExpanded: $isExpanded) {
+                Notice(
+                    tone: .accent, keyword: "Unconfirmed",
+                    sentence: "The daemon did not answer. Nothing is assumed.",
+                    action: .init(label: "Retry", accessibilityLabel: "Retry the lost decision", handler: retry)
+                )
+                .accessibilityElement(children: .contain)
+                SentenceDisclosure(label: "What Happened", isExpanded: $isExpanded) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(
                             "The decision may already be recorded. Retry resends the same command and returns the original result."
@@ -3646,35 +3613,20 @@ struct DecisionDetailView: View {
                             Text(failureMessage)
                         }
                     }
-                    .textSelection(.enabled)
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.inkDim)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                } label: {
-                    Text("Details")
-                        .foregroundStyle(Color.accentText)
                 }
             }
-            .font(FreesideFont.callout)
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.accentWash, in: RoundedRectangle(cornerRadius: 8))
-            .foregroundStyle(Color.accentText)
+            .textSelection(.enabled)
         }
     }
 
-    /// A card banner: tinted wash, glyph and message in the state color.
-    private func bannerLabel(_ text: String, systemImage: String, tint: Color, wash: Color) -> some View {
-        Label {
-            Text(text)
-        } icon: {
-            Image(systemName: systemImage)
-                .font(.system(size: bannerGlyphSize, weight: .semibold))
-        }
-        .font(FreesideFont.callout)
-        .textSelection(.enabled)
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(wash, in: RoundedRectangle(cornerRadius: 8))
-        .foregroundStyle(tint)
+    /// One receipt row (R12): a notice whose keyword names the state.
+    private func receipt(_ tone: Notice.Tone, _ keyword: String, _ sentence: String) -> some View {
+        Notice(tone: tone, keyword: keyword, sentence: sentence)
+            .textSelection(.enabled)
+            .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder
@@ -3740,11 +3692,9 @@ struct DecisionDetailView: View {
             overflowMenu(ranking.overflow, item: item)
 
             if ranking.notDecidableHere {
-                bannerLabel(
-                    "This decision needs a written answer, and this build cannot carry one. Nothing is blocked by opening it; the item stays open until answered.",
-                    systemImage: "exclamationmark.bubble",
-                    tint: .accentText,
-                    wash: .accentWash
+                receipt(
+                    .accent, "Unsupported",
+                    "This decision needs a written answer, and this build cannot carry one. Nothing is blocked by opening it; the item stays open until answered."
                 )
                 .onAppear { model.emitNotDecidableHereShown() }
             }

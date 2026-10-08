@@ -2451,26 +2451,20 @@
                         name: "decision-retryable-receipt",
                         width: 480,
                         view: AnyView(
-                            bannerDetail.screenshotRetryableReceipt(
-                                expanded: false,
-                                accessibilityLayout: dynamicTypeSize >= .accessibility1))))
+                            bannerDetail.screenshotRetryableReceipt(expanded: false))))
                 surfaces.append(
                     Surface(
                         name: "decision-retryable-receipt-open",
                         width: 480,
                         view: AnyView(
-                            bannerDetail.screenshotRetryableReceipt(
-                                expanded: true,
-                                accessibilityLayout: dynamicTypeSize >= .accessibility1))))
+                            bannerDetail.screenshotRetryableReceipt(expanded: true))))
                 surfaces.append(
                     Surface(
                         name: "decision-retryable-receipt-phone-dark",
                         width: 390,
                         colorScheme: .dark,
                         view: AnyView(
-                            bannerDetail.screenshotRetryableReceipt(
-                                expanded: false,
-                                accessibilityLayout: dynamicTypeSize >= .accessibility1))))
+                            bannerDetail.screenshotRetryableReceipt(expanded: false))))
             }
             surfaces.append(
                 Surface(
@@ -3044,7 +3038,7 @@
                     view: AnyView(
                         VStack(alignment: .leading, spacing: 12) {
                             StateChip(label: "Specification Approval Required", cut: .attention)
-                            StateChip(label: "Stop Requested · Awaiting Confirmation", cut: .ink)
+                            StateChip(label: "Stopping", cut: .ink)
                             StateChip(label: "Superseded Run · Historical", cut: .faint)
                             StateChip(
                                 label: "Failed to Stop · Execution May Continue · Inspect the Recorded Outcome",

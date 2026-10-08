@@ -9,7 +9,7 @@ import Testing
             "Queued": "Queued", "No position": "No Execution Position Recorded",
             "Approval required": "Specification Approval Required", "Implementation": "In Progress",
             "Review": "In Progress", "Verification": "On Hold",
-            "Stop pending": "Stop Requested · Awaiting Confirmation",
+            "Stop pending": "Stopping",
             "Stop failed": "Failed to Stop · Execution May Continue", "Stopped": "Stopped",
             "Failed": "Execution Failed", "Ready": "Ready for Final Review",
             "Ready degraded": "Ready for Final Review (Degraded)",

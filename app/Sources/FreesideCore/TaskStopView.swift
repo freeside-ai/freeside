@@ -6,6 +6,7 @@ struct TaskStopView: View {
     let coordinator: SyncCoordinator
     let taskID: String
     @State private var confirmation: TaskStopModel.Confirmation?
+    @State private var showsExplanation = false
 
     private var model: TaskStopModel { coordinator.taskStop }
     private var snapshot: Components.Schemas.TaskSnapshot? {
@@ -24,27 +25,36 @@ struct TaskStopView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let cancellation = snapshot?.task.cancellation?.value1 {
-                Text(Self.cancellationText(cancellation.state))
-                    .font(FreesideFont.callout)
+                Self.cancellationNotice(cancellation.state)
                 if coordinator.store.freshness != .fresh {
-                    Text("Last synced status. Refresh to check current task state.")
+                    note("Last synced status. Refresh to check current task state.")
                 }
             }
             if model.sending.contains(taskID) {
-                Label("Sending Stop…", systemImage: "arrow.up.circle")
+                note("Sending Stop…")
             } else if let pending = model.pending(for: taskID) {
                 if pending.receipt != nil {
                     if snapshot?.task.cancellation == nil {
-                        Text("Stop accepted. Awaiting current daemon confirmation.")
+                        Notice(
+                            tone: .neutral, keyword: "Requested",
+                            sentence: "Stop accepted; waiting for the daemon to confirm."
+                        )
+                        .accessibilityElement(children: .combine)
                     }
                 } else {
-                    Text(
-                        snapshot?.task.cancellation == nil
-                            ? "Stop delivery is uncertain. Retry sends the same request to recover its result."
-                            : "The original request's receipt is unresolved. Retry recovers that receipt; it does not restart cancellation."
+                    Notice(
+                        tone: .accent, keyword: "Unconfirmed",
+                        sentence: snapshot?.task.cancellation == nil
+                            ? "The daemon did not answer the stop. Nothing is assumed."
+                            : "The original request's receipt is unresolved.",
+                        action: .init(
+                            label: "Retry", accessibilityLabel: "Retry sending Stop",
+                            isEnabled: coordinator.store.freshness != .unauthenticated
+                        ) {
+                            Task { await model.retry(pending.command.command_id) }
+                        }
                     )
-                    Button("Retry sending Stop") { Task { await model.retry(pending.command.command_id) } }
-                        .disabled(coordinator.store.freshness == .unauthenticated)
+                    .accessibilityElement(children: .contain)
                 }
             } else if snapshot?.task.cancellation == nil {
                 // Stop is the page's one consequential action, so it sits
@@ -65,17 +75,20 @@ struct TaskStopView: View {
                 .accessibilityLabel("More task actions")
                 .accessibilityHint("Holds Stop Task, which reviews what stopping this task will do")
             }
-            if let reason = model.unavailableReason { Text(reason) }
-            if let message = model.messages[taskID] { Text(message) }
+            if let reason = model.unavailableReason { note(reason) }
+            if let message = model.messages[taskID] { note(message, color: .ink) }
+            if let explanation {
+                SentenceDisclosure(label: "What Happened", isExpanded: $showsExplanation) {
+                    note(explanation)
+                }
+            }
             if snapshot?.task.cancellation != nil || model.pending(for: taskID) != nil || model.unavailableReason != nil
             {
-                Button("Refresh task status") { Task { await model.refresh() } }
+                Button("Refresh Task Status") { Task { await model.refresh() } }
+                    .buttonStyle(FreesideActionButtonStyle(tone: .secondary, expands: false))
             }
         }
-        .font(FreesideFont.callout)
-        .foregroundStyle(Color.ink)
         .fixedSize(horizontal: false, vertical: true)
-        .buttonStyle(FreesideActionButtonStyle(tone: .secondary))
         .sheet(item: $confirmation) { prepared in
             TaskStopConfirmationView(entry: prepared.entry) {
                 confirmation = nil
@@ -84,11 +97,45 @@ struct TaskStopView: View {
         }
     }
 
+    /// The explanation the visible state leaves behind `What Happened`
+    /// (R12): what Retry resends, and that a second Stop does not restart
+    /// cancellation. Nil where the notice already says all there is.
+    private var explanation: String? {
+        let cancellation = snapshot?.task.cancellation?.value1
+        if !model.sending.contains(taskID), let pending = model.pending(for: taskID), pending.receipt == nil {
+            return cancellation == nil
+                ? "Retry sends the same request to recover its result."
+                : "Retry recovers that receipt; it does not restart cancellation."
+        }
+        if cancellation?.state == .failed_to_stop {
+            return "Refresh to check again; sending Stop again does not restart cancellation."
+        }
+        return nil
+    }
+
+    private func note(_ text: String, color: Color = .inkDim) -> some View {
+        Text(text)
+            .font(FreesideFont.cardBody)
+            .foregroundStyle(color)
+    }
+
+    /// The synced cancellation as a receipt notice (R12): the keyword names
+    /// the state and the sentence is `cancellationText`.
+    private static func cancellationNotice(_ state: Components.Schemas.TaskCancellationState) -> some View {
+        let (tone, keyword): (Notice.Tone, String) =
+            switch state {
+            case .requested: (.neutral, "Requested")
+            case .failed_to_stop: (.wax, "Failed")
+            case .confirmed: (.neutral, "Recorded")
+            }
+        return Notice(tone: tone, keyword: keyword, sentence: cancellationText(state))
+            .accessibilityElement(children: .combine)
+    }
+
     static func cancellationText(_ state: Components.Schemas.TaskCancellationState) -> String {
         switch state {
-        case .requested: "Stop requested. Awaiting daemon confirmation."
-        case .failed_to_stop:
-            "Failed to stop. Execution may continue. Refresh to check again; sending Stop again does not restart cancellation."
+        case .requested: "Stop sent; waiting for the daemon to confirm."
+        case .failed_to_stop: "The task did not stop. Execution may continue."
         case .confirmed: "Stop confirmed by the daemon. Existing history and PRs remain available."
         }
     }
