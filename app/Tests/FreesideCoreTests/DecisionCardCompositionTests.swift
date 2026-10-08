@@ -605,6 +605,13 @@ import Testing
         let recommended = ranking(item, recommending: .return_to_agent)
         #expect(recommended.reviewing == .open_pr)
         #expect(DecisionCardComposition.filledAction(for: item, ranking: recommended) == nil)
+
+        // Frame 7.3: a stale review fills nothing, because the proof no
+        // longer covers the head View PR would open.
+        let stale = AttentionFixtures.staleReady().item
+        #expect(DecisionCardComposition.isStale(stale))
+        #expect(!DecisionCardComposition.isStale(item))
+        #expect(DecisionCardComposition.filledAction(for: stale, ranking: ranking(stale)) == nil)
     }
 
     /// The question card fills Answer and Retry, and gives the fill up to a
@@ -972,24 +979,39 @@ import Testing
                 observed: "feedface",
                 observed_at: Date(timeIntervalSince1970: 0)))
         let invalidatedChecklist = try #require(DecisionChecklistPresentation(invalidated))
+        // Frame 7.3: the chip reads Stale beside what the verdict was, and
+        // the moved coordinate is a stale row, not a failed requirement, so
+        // the line counts no failure.
         #expect(invalidatedChecklist.verdict?.result == .failed)
-        #expect(invalidatedChecklist.verdict?.value == "Invalidated")
+        #expect(invalidatedChecklist.verdict?.value == "Stale")
+        #expect(invalidatedChecklist.priorVerdict == "was Clean")
         #expect(
             invalidatedChecklist.summary
-                == "Readiness checklist: Invalidated, 2 failed, 1 note, 3 passed.")
+                == "Readiness checklist: Stale, was Clean, 1 note, 3 passed.")
         #expect(
             invalidatedChecklist.accessibilitySummary.contains(
-                "Verification verdict: Invalidated, needs attention"))
+                "Verification verdict: Stale, needs attention"))
+        #expect(
+            invalidatedChecklist.accessibilitySummary.contains(
+                "Bound to: Head cafebabe → feedface · Base main@deadbeef, stale"))
 
         var legacyInvalidated = invalidated
         legacyInvalidated.readiness = nil
         legacyInvalidated.readiness_detail = nil
         let legacyChecklist = try #require(DecisionChecklistPresentation(legacyInvalidated))
         #expect(legacyChecklist.verdict?.result == .failed)
-        #expect(legacyChecklist.verdict?.value == "Invalidated")
+        #expect(legacyChecklist.verdict?.value == "Stale")
+        #expect(legacyChecklist.priorVerdict == nil)
         #expect(
             legacyChecklist.accessibilitySummary.contains(
-                "Verification verdict: Invalidated, needs attention"))
+                "Verification verdict: Stale, needs attention"))
+        // With no bound coordinates to lead with, the invalidation keeps
+        // its own row.
+        #expect(
+            legacyChecklist.rows.first
+                == .init(
+                    label: "Head changed", value: "cafebabe → feedface", result: .failed,
+                    isStale: true))
 
         var informationalOnly = AttentionFixtures.fixture(type: .ready_for_final_review).item
         informationalOnly.readiness = nil
@@ -1068,15 +1090,18 @@ import Testing
             degraded.summary
                 == "Readiness checklist: Degraded, 1 waived, 1 advisory, 1 note, 4 passed.")
 
-        // The daemon's invalidation demotes the verdict and its bound
-        // coordinates and shows both sides of the divergence.
+        // The daemon's invalidation demotes the verdict, and the Bound-to
+        // row leads with the coordinate that moved and both of its values
+        // (frame 7.3), so no second row repeats the pair.
         let stale = try #require(DecisionChecklistPresentation(AttentionFixtures.staleReady().item))
-        #expect(stale.verdict == .init(label: "Verification verdict", value: "Invalidated", result: .failed))
-        #expect(stale.rows[0] == .init(label: "Bound to", value: "Head cafebabe · Base main@deadbeef", result: .failed))
+        #expect(stale.verdict == .init(label: "Verification verdict", value: "Stale", result: .failed))
         #expect(
-            stale.rows[1]
-                == .init(label: "Head changed", value: "bound cafebabe, observed feedface", result: .failed))
-        #expect(stale.rows[2].result == .note)
+            stale.rows[0]
+                == .init(
+                    label: "Bound to", value: "Head cafebabe → feedface · Base main@deadbeef",
+                    result: .failed, isStale: true))
+        #expect(stale.rows.filter(\.isStale).count == 1)
+        #expect(stale.rows[1].result == .note)
 
         // A base advance the watch observed is the other staleness axis: the
         // verdict is still the daemon's, but it no longer describes the base.
@@ -1088,13 +1113,37 @@ import Testing
         let advancedChecklist = try #require(DecisionChecklistPresentation(advanced))
         #expect(
             advancedChecklist.verdict
-                == .init(label: "Verification verdict", value: "Clean, stale", result: .failed))
-        #expect(advancedChecklist.rows[0].result == .failed)
+                == .init(label: "Verification verdict", value: "Stale", result: .failed))
+        #expect(advancedChecklist.priorVerdict == "was Clean")
         #expect(
-            advancedChecklist.rows.first(where: { $0.label == "Base freshness" })
+            advancedChecklist.rows[0]
                 == .init(
-                    label: "Base freshness", value: "Advanced past deadbeef, now 0badf00d",
-                    result: .failed))
+                    label: "Bound to", value: "Base main@deadbeef → 0badf00d · Head cafebabe",
+                    result: .failed, isStale: true))
+        // The Bound-to row carries the advance, so the freshness row does
+        // not say it a second time.
+        #expect(advancedChecklist.rows.first(where: { $0.label == "Base freshness" }) == nil)
+
+        // Frame 7.3's notice: one sentence, built from the same typed
+        // facts. An item with no verdict to name, or an invalidation whose
+        // coordinates are not revisions, draws none.
+        #expect(
+            DecisionCardComposition.staleNotice(for: advanced)
+                == "The base advanced after verification. The verdict below was clean at head "
+                + "cafebabe against main@deadbeef; main is now at 0badf00d.")
+        #expect(
+            DecisionCardComposition.staleNotice(for: AttentionFixtures.staleReady().item)
+                == "The head changed after verification. The verdict below was clean at head "
+                + "cafebabe; the head is now at feedface.")
+        var retargeted = AttentionFixtures.staleReady().item
+        retargeted.readiness_invalidation?.value1.reason = .retargeted
+        #expect(DecisionCardComposition.staleNotice(for: retargeted) == nil)
+        var unverdicted = advanced
+        unverdicted.readiness = nil
+        #expect(DecisionCardComposition.staleNotice(for: unverdicted) == nil)
+        #expect(
+            DecisionCardComposition.staleNotice(
+                for: AttentionFixtures.fixture(type: .ready_for_final_review).item) == nil)
         #expect(
             AttentionDisplay.shortRevision("0123456789abcdef0123456789abcdef01234567") == "01234567")
         // A base ref and a "repository_id#pr_number" identity are the other

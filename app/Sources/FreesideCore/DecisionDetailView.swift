@@ -576,6 +576,13 @@ struct DecisionDetailView: View {
                 reasonUnderAsk(item, register: register.at(.reason))
             }
 
+            // A stale final review says what moved before anything else on
+            // the card (frame 7.3). The notice carries no action: the
+            // actions stay in the control group where every card keeps them.
+            if let stale = DecisionCardComposition.staleNotice(for: item) {
+                Notice(tone: .wax, keyword: "Stale", sentence: stale)
+            }
+
             if let conversation = model.conversation,
                 !DecisionCardComposition.placesConversationWithSpecification(for: item._type)
             {
@@ -604,6 +611,7 @@ struct DecisionDetailView: View {
             let actionIndex = composition.actionInsertionIndex
             let reviewingIndex = composition.reviewingActionInsertionIndex
             #if os(macOS)
+                let reviewingLeads = !DecisionCardComposition.isStale(item)
                 if wideLayout {
                     // The two columns are read side by side, so the action
                     // region at the top of the right column is reachable
@@ -613,7 +621,9 @@ struct DecisionDetailView: View {
                     // above the split rather than beside it.
                     cardModules(0..<(reviewingIndex ?? actionIndex), modules)
                     if let reviewingIndex {
-                        reviewingAction(item)
+                        if reviewingLeads {
+                            reviewingAction(item)
+                        }
                         cardModules(reviewingIndex..<actionIndex, modules)
                     }
                     HStack(alignment: .top, spacing: 16) {
@@ -626,7 +636,7 @@ struct DecisionDetailView: View {
                             actionRegion(
                                 item,
                                 stackedLayout: accessibilityLayout || compactLayout,
-                                includesReviewing: reviewingIndex == nil,
+                                includesReviewing: reviewingIndex == nil || !reviewingLeads,
                                 register: register.at(.actionRegion)
                             )
                             if reasonPlacement == .recordedContext {
@@ -699,6 +709,10 @@ struct DecisionDetailView: View {
         let actionIndex = composition.actionInsertionIndex
         let reviewingIndex = composition.reviewingActionInsertionIndex
         let foldEnd = actionIndex + composition.foldedModuleCount
+        // The reviewing action leads its group as the card's forward step.
+        // On a stale review it is not one, so it follows the action that
+        // recovers (frame 7.3) inside the action region.
+        let reviewingLeads = !DecisionCardComposition.isStale(item)
         cardModules(0..<(reviewingIndex ?? actionIndex), modules)
         // The reviewing action and the action region are one control group
         // (R10), whatever a composition draws between them. A read-only
@@ -708,14 +722,16 @@ struct DecisionDetailView: View {
         if Self.drawsControlGroup(item) {
             VStack(alignment: .leading, spacing: scale.controlGap) {
                 if let reviewingIndex {
-                    reviewingAction(item)
+                    if reviewingLeads {
+                        reviewingAction(item)
+                    }
                     cardModules(reviewingIndex..<actionIndex, modules)
                 }
                 #if os(macOS)
                     actionRegion(
                         item,
                         stackedLayout: stackedLayout,
-                        includesReviewing: reviewingIndex == nil,
+                        includesReviewing: reviewingIndex == nil || !reviewingLeads,
                         register: modules.register.at(.actionRegion)
                     )
                     .onGeometryChange(for: CGRect.self) { geometry in
@@ -727,7 +743,7 @@ struct DecisionDetailView: View {
                     actions(
                         item,
                         stackedLayout: stackedLayout,
-                        includesReviewing: reviewingIndex == nil)
+                        includesReviewing: reviewingIndex == nil || !reviewingLeads)
                 #endif
             }
         }

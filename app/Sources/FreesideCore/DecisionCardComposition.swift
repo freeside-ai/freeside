@@ -652,16 +652,66 @@ struct DecisionCardComposition: Equatable {
         }
     }
 
+    /// Whether a final review's verdict no longer describes what the pull
+    /// request holds: the daemon superseded the binding, or its base watch
+    /// saw the base move. Both are daemon facts; the client compares nothing.
+    static func isStale(_ item: Components.Schemas.AttentionItem) -> Bool {
+        item._type == .ready_for_final_review
+            && (item.readiness_invalidation != nil || item.base_freshness?.value1.advanced == true)
+    }
+
+    /// The sentence a stale final review leads with (frame 7.3): what moved
+    /// after verification, and the coordinates the verdict was reached at.
+    /// Built only from typed facts the item carries; nil when they can't
+    /// make the sentence (no verdict to name, or an invalidation whose
+    /// coordinates are not revisions), and the checklist's chip and rows
+    /// carry the staleness alone.
+    static func staleNotice(for item: Components.Schemas.AttentionItem) -> String? {
+        guard isStale(item), let readiness = item.readiness?.value1 else { return nil }
+        let was: String
+        switch readiness._class {
+        case .ready_clean: was = "clean"
+        case .ready_degraded: was = "degraded"
+        }
+        let detail = item.readiness_detail?.value1
+        let head = detail.map { " at head \(AttentionDisplay.shortRevision($0.candidate_head))" } ?? ""
+        func baseAdvanced(ref: String, from: String, to: String) -> String {
+            "The base advanced after verification. The verdict below was \(was)\(head) "
+                + "against \(ref)@\(AttentionDisplay.shortRevision(from)); "
+                + "\(ref) is now at \(AttentionDisplay.shortRevision(to))."
+        }
+        if let invalidation = item.readiness_invalidation?.value1 {
+            switch invalidation.reason {
+            case .head_changed:
+                return "The head changed after verification. The verdict below was \(was) at head "
+                    + "\(AttentionDisplay.shortRevision(invalidation.bound)); the head is now at "
+                    + "\(AttentionDisplay.shortRevision(invalidation.observed))."
+            case .base_advanced:
+                guard let detail else { return nil }
+                return baseAdvanced(
+                    ref: detail.base.base_ref, from: invalidation.bound, to: invalidation.observed)
+            case .retargeted, .identity_changed:
+                return nil
+            }
+        }
+        guard let freshness = item.base_freshness?.value1, freshness.advanced else { return nil }
+        return baseAdvanced(
+            ref: freshness.base_ref, from: freshness.admitted_base_sha,
+            to: freshness.observed_base_sha)
+    }
+
     /// The one action a card's row draws filled, or none (R6). A
     /// recommendation the card draws holds the fill in its own block, so the
     /// row fills nothing. Without one the fill goes to the type's forward
     /// action, where the row offers it and it needs no confirmation: a
-    /// destructive action is never filled. `requested_decision` may repeat
+    /// destructive action is never filled. A stale final review fills
+    /// nothing: the proof no longer covers the head `View PR` would open. `requested_decision` may repeat
     /// an action, so the row fills only the first and no card draws two.
     static func filledAction(
         for item: Components.Schemas.AttentionItem, ranking: DecisionActionRanking
     ) -> Components.Schemas.Action? {
-        guard ranking.recommended == nil, let forward = forwardAction(for: item._type),
+        guard !isStale(item), ranking.recommended == nil,
+            let forward = forwardAction(for: item._type),
             ranking.principal.contains(forward) || ranking.reviewing == forward,
             AttentionDisplay.confirmationConsequence(forward, for: item) == nil
         else { return nil }
@@ -1136,8 +1186,14 @@ struct DecisionChecklistPresentation: Equatable {
         let label: String
         let value: String
         let result: Result
+        /// The row holds a coordinate that moved after verification. It
+        /// reads in wax and is not a failed requirement, so the verdict
+        /// line does not count it.
+        var isStale = false
 
         var id: String { label }
+
+        var accessibilityState: String { isStale ? "stale" : result.accessibilityState }
     }
 
     /// The daemon's verdict row, drawn as the module's leading line rather
@@ -1147,7 +1203,11 @@ struct DecisionChecklistPresentation: Equatable {
     /// Every row but the verdict, grouped by severity class and keeping the
     /// daemon's order inside each class.
     let rows: [Row]
-    /// The count tokens alone, without the verdict word.
+    /// What the verdict was before it went stale ("was Clean"), nil on a
+    /// current verdict or where the item carries none.
+    let priorVerdict: String?
+    /// What follows the verdict chip: the prior verdict of a stale card,
+    /// then the count tokens.
     let countSummary: String
     let verdictLine: String
     let summary: String
@@ -1168,38 +1228,75 @@ struct DecisionChecklistPresentation: Equatable {
         // demote the verdict and its bound coordinates; the client compares
         // nothing itself and derives no reason from the verdict class.
         let stale = invalidation != nil || freshness?.advanced == true
-        if invalidation != nil {
-            verdict = .init(label: "Verification verdict", value: "Invalidated", result: .failed)
-        } else if let readiness = item.readiness?.value1 {
-            let word: String
-            switch readiness._class {
-            case .ready_clean: word = "Clean"
-            case .ready_degraded: word = "Degraded"
+        var priorVerdict: String?
+        let verdictWord: String? = item.readiness.map {
+            switch $0.value1._class {
+            case .ready_clean: "Clean"
+            case .ready_degraded: "Degraded"
             }
+        }
+        if stale {
+            verdict = .init(label: "Verification verdict", value: "Stale", result: .failed)
+            priorVerdict = verdictWord.map { "was \($0)" }
+        } else if let verdictWord {
             verdict = .init(
                 label: "Verification verdict",
-                value: stale ? "\(word), stale" : word,
-                result: stale || readiness._class == .ready_degraded ? .failed : .passed)
+                value: verdictWord,
+                result: item.readiness?.value1._class == .ready_degraded ? .failed : .passed)
         } else if item._type == .ready_for_final_review {
             verdict = .init(label: "Verification verdict", value: "Unavailable", result: .failed)
         }
+        // The coordinate that moved leads the Bound-to row with both of its
+        // values (frame 7.3), so the row that went stale is one row and no
+        // second row repeats the pair. An invalidation whose coordinates
+        // are not the bound head or base keeps its own row.
+        var boundRowCarriesBaseAdvance = false
         if let detail {
+            let head = "Head \(AttentionDisplay.shortRevision(detail.candidate_head))"
+            let base =
+                "Base \(detail.base.base_ref)@\(AttentionDisplay.shortRevision(detail.base.base_sha))"
+            // The invalidation's own pair, not the detail's coordinate: the
+            // divergence is the daemon's fact and the row shows both sides.
+            let moved = invalidation.map {
+                "\(AttentionDisplay.shortRevision($0.bound)) → \(AttentionDisplay.shortRevision($0.observed))"
+            }
+            let value: String
+            switch (invalidation?.reason, moved) {
+            case (.head_changed?, let moved?):
+                value = "Head \(moved) · \(base)"
+            case (.base_advanced?, let moved?):
+                value = "Base \(detail.base.base_ref)@\(moved) · \(head)"
+                boundRowCarriesBaseAdvance = true
+            case (.retargeted?, _), (.identity_changed?, _), (.head_changed?, nil),
+                (.base_advanced?, nil):
+                value = "\(head) · \(base)"
+            case (nil, _):
+                if let freshness, freshness.advanced {
+                    value =
+                        "\(base) → \(AttentionDisplay.shortRevision(freshness.observed_base_sha)) · \(head)"
+                    boundRowCarriesBaseAdvance = true
+                } else {
+                    value = "\(head) · \(base)"
+                }
+            }
             rows.append(
                 .init(
-                    label: "Bound to",
-                    value:
-                        "Head \(AttentionDisplay.shortRevision(detail.candidate_head)) · "
-                        + "Base \(detail.base.base_ref)@\(AttentionDisplay.shortRevision(detail.base.base_sha))",
-                    result: stale ? .failed : .passed))
+                    label: "Bound to", value: value, result: stale ? .failed : .passed,
+                    isStale: stale))
         }
         if let invalidation {
-            rows.append(
-                .init(
-                    label: AttentionDisplay.label(invalidation.reason),
-                    value:
-                        "bound \(AttentionDisplay.shortRevision(invalidation.bound)), "
-                        + "observed \(AttentionDisplay.shortRevision(invalidation.observed))",
-                    result: .failed))
+            let movedCoordinateIsBound =
+                detail != nil
+                && (invalidation.reason == .head_changed || invalidation.reason == .base_advanced)
+            if !movedCoordinateIsBound {
+                rows.append(
+                    .init(
+                        label: AttentionDisplay.label(invalidation.reason),
+                        value:
+                            "\(AttentionDisplay.shortRevision(invalidation.bound)) → "
+                            + AttentionDisplay.shortRevision(invalidation.observed),
+                        result: .failed, isStale: true))
+            }
         }
         for requirement in detail?.requirements ?? [] {
             rows.append(Self.requirementRow(requirement))
@@ -1219,15 +1316,16 @@ struct DecisionChecklistPresentation: Equatable {
                     value: AttentionDisplay.label(notice),
                     result: .note))
         }
-        if let freshness {
+        if let freshness, !(freshness.advanced && boundRowCarriesBaseAdvance) {
             rows.append(
                 .init(
                     label: "Base freshness",
                     value: freshness.advanced
-                        ? "Advanced past \(AttentionDisplay.shortRevision(freshness.admitted_base_sha)), "
-                            + "now \(AttentionDisplay.shortRevision(freshness.observed_base_sha))"
+                        ? "\(AttentionDisplay.shortRevision(freshness.admitted_base_sha)) → "
+                            + AttentionDisplay.shortRevision(freshness.observed_base_sha)
                         : "Current",
-                    result: freshness.advanced ? .failed : .passed))
+                    result: freshness.advanced ? .failed : .passed,
+                    isStale: freshness.advanced))
         }
         if let history = item.yield_history?.value1 {
             let unresolved = history.rounds.reduce(into: 0) { count, round in
@@ -1259,11 +1357,13 @@ struct DecisionChecklistPresentation: Equatable {
         // daemon's row order without relying on sort stability.
         self.rows = Result.allCases.flatMap { result in rows.filter { $0.result == result } }
         let countTokens = Result.allCases.compactMap { result -> String? in
-            let count = rows.filter { $0.result == result }.count
+            let count = rows.filter { $0.result == result && !$0.isStale }.count
             return count == 0 ? nil : result.countToken(count)
         }
-        countSummary = countTokens.joined(separator: " · ")
-        let tokens = ([verdict?.value].compactMap { $0 } + countTokens)
+        self.priorVerdict = priorVerdict
+        let trailingTokens = [priorVerdict].compactMap { $0 } + countTokens
+        countSummary = trailingTokens.joined(separator: " · ")
+        let tokens = ([verdict?.value].compactMap { $0 } + trailingTokens)
         verdictLine = tokens.joined(separator: " · ")
         // The spoken label joins the same tokens with commas: a middle dot
         // is a visual separator whose readout depends on the listener's
@@ -1272,7 +1372,7 @@ struct DecisionChecklistPresentation: Equatable {
         accessibilitySummary =
             summary + " "
             + ([verdict].compactMap { $0 } + self.rows).map { row in
-                "\(row.label): \(row.value), \(row.result.accessibilityState)"
+                "\(row.label): \(row.value), \(row.accessibilityState)"
             }.joined(separator: "; ") + "."
     }
 }
@@ -1665,7 +1765,7 @@ struct DecisionChecklistModuleView: View {
         }
         let value = Text(row.value)
             .font(FreesideFont.monoValue)
-            .foregroundStyle(Color.ink)
+            .foregroundStyle(row.isStale ? Color.waxText : Color.ink)
         // The fact-row rule owns when a value is too long for a trailing
         // column; the marker keeps the checklist's own row shape.
         if FactRow.stacks(row.value, at: dynamicTypeSize) {
