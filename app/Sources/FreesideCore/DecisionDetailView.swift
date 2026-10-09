@@ -90,7 +90,6 @@ struct DecisionDetailView: View {
     /// Set by the card's Evidence pointer and cleared by the inspector once
     /// it has scrolled to its Evidence section.
     @State private var revealsInspectorEvidence = false
-    @State private var detailWidth: CGFloat = 0
     @State private var recommendationVisible = true
     @State private var provenanceExpanded = false
     @State private var lostResponseExpanded = false
@@ -171,23 +170,17 @@ struct DecisionDetailView: View {
                 if let snapshot = model.snapshot {
                     ScrollViewReader { scrollProxy in
                         ScrollView {
-                            let twoColumns = drawsTwoColumns(
-                                snapshot.item, paneIsWide: usesWideLayout)
                             card(
                                 snapshot.item,
                                 proposalFacts: model.proposalFacts,
                                 effectProposalFacts: model.effectProposalFacts,
                                 accessibilityLayout: isAccessibilityLayout,
                                 compactLayout: horizontalSizeClass == .compact,
-                                wideLayout: twoColumns,
                                 inspectorPresented: inspectorBinding.wrappedValue
                             )
-                            .detailCard(
-                                compact: horizontalSizeClass == .compact,
-                                twoColumns: twoColumns)
+                            .detailCard(compact: horizontalSizeClass == .compact)
                         }
                         .coordinateSpace(name: "decision-card-scroll")
-                        .onPaneWidthChange { detailWidth = $0 }
                         .onChange(of: detailsRevealRequest) {
                             revealTechnicalDetailsIfRequested(using: scrollProxy)
                         }
@@ -513,14 +506,6 @@ struct DecisionDetailView: View {
         dynamicTypeSize >= .accessibility1
     }
 
-    private var usesWideLayout: Bool {
-        #if os(macOS)
-            detailWidth >= 1_000 && !isAccessibilityLayout
-        #else
-            false
-        #endif
-    }
-
     private var capabilityRetryIsPresented: Binding<Bool> {
         Binding(
             get: { capabilityRetrySnapshot != nil },
@@ -537,7 +522,6 @@ struct DecisionDetailView: View {
         rendersInteractiveControls: Bool = true,
         accessibilityLayout: Bool,
         compactLayout: Bool,
-        wideLayout: Bool,
         inspectorPresented: Bool = false,
         actionRegionFrameChanged: ((CGRect) -> Void)? = nil
     ) -> some View {
@@ -618,42 +602,11 @@ struct DecisionDetailView: View {
 
             let stackedLayout = accessibilityLayout || compactLayout
             let foldsReason = reasonPlacement == .recordedContext
-            #if os(macOS)
-                if wideLayout {
-                    // Two panes of one card (R18, frame 7.8). The left
-                    // column is read first, so what a type places ahead of
-                    // its actions is still ahead of them there (plan §9),
-                    // and the right column starts level with it.
-                    HStack(alignment: .top, spacing: CardScale.columnGap) {
-                        VStack(alignment: .leading, spacing: CardScale.sectionGap) {
-                            cardModules(composition.leadModules, modules)
-                            cardModules(composition.supportingModules, modules)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
-
-                        VStack(alignment: .leading, spacing: CardScale.sectionGap) {
-                            controlGroup(
-                                modules,
-                                stackedLayout: stackedLayout,
-                                actionRegionFrameChanged: actionRegionFrameChanged)
-                            folds(modules, foldsReason: foldsReason)
-                        }
-                        .frame(width: CardScale.controlColumnWidth, alignment: .topLeading)
-                    }
-                } else {
-                    cardColumn(
-                        modules,
-                        stackedLayout: stackedLayout,
-                        foldsReason: foldsReason,
-                        actionRegionFrameChanged: actionRegionFrameChanged)
-                }
-            #else
-                cardColumn(
-                    modules,
-                    stackedLayout: stackedLayout,
-                    foldsReason: foldsReason,
-                    actionRegionFrameChanged: actionRegionFrameChanged)
-            #endif
+            cardColumn(
+                modules,
+                stackedLayout: stackedLayout,
+                foldsReason: foldsReason,
+                actionRegionFrameChanged: actionRegionFrameChanged)
         }
         // The card's own space, so a measurement reads from the card's top
         // edge rather than the scroll view's (#1107).
@@ -687,8 +640,9 @@ struct DecisionDetailView: View {
         }
     }
 
-    /// The card in one column: the modules a decision rests on, the control
-    /// group, the folds, and then the supporting modules.
+    /// The card's one column, at any pane width: the modules a decision
+    /// rests on, the control group, the folds, and then the supporting
+    /// modules.
     @ViewBuilder
     private func cardColumn(
         _ modules: CardModules,
@@ -775,27 +729,12 @@ struct DecisionDetailView: View {
         }
     }
 
-    /// Whether the one-column card has a control group to draw: an action
+    /// Whether the card has a control group to draw: an action
     /// the item requests, or the agent claims the Mac sets beside them.
     static func drawsControlGroup(_ item: Components.Schemas.AttentionItem) -> Bool {
         !item.requested_decision.isEmpty
             || (!DecisionCardComposition.forType(item._type).drawsLeadClaimsInCard
                 && !DecisionCardComposition.actionRegionClaims(item.agent_claims).isEmpty)
-    }
-
-    /// Whether a wide pane draws this card in two columns. The right column
-    /// holds the control group and the folds, so a read-only card with
-    /// neither (a blocked item) stays one column at any width, rather than
-    /// opening an empty pane beside its modules.
-    func drawsTwoColumns(_ item: Components.Schemas.AttentionItem, paneIsWide: Bool) -> Bool {
-        guard paneIsWide else { return false }
-        let composition = DecisionCardComposition.forType(item._type)
-        let foldsReason =
-            composition.drawsReason(for: item)
-            && DecisionCardComposition.reasonPlacement(for: item) == .recordedContext
-            && DecisionCardComposition.reason(for: item) != nil
-        return Self.drawsControlGroup(item) || foldsReason
-            || drawsFoldedModule(item, composition)
     }
 
     /// Whether any folded module has something to draw, which is what
@@ -2149,12 +2088,9 @@ struct DecisionDetailView: View {
         proposalFacts: Components.Schemas.TaskProposalFactsSnapshot? = nil,
         effectProposalFacts: Components.Schemas.EffectProposalFactsSnapshot? = nil,
         compactLayout: Bool = false,
-        detailWidth: CGFloat = 560,
         inspectorPresented: Bool = false,
         actionRegionFrameChanged: ((CGRect) -> Void)? = nil
     ) -> some View {
-        let wideLayout = drawsTwoColumns(
-            item, paneIsWide: detailWidth >= 1_000 && dynamicTypeSize < .accessibility1)
         card(
             item,
             proposalFacts: proposalFacts,
@@ -2162,11 +2098,10 @@ struct DecisionDetailView: View {
             rendersInteractiveControls: false,
             accessibilityLayout: dynamicTypeSize >= .accessibility1,
             compactLayout: compactLayout,
-            wideLayout: wideLayout,
             inspectorPresented: inspectorPresented,
             actionRegionFrameChanged: actionRegionFrameChanged
         )
-        .detailCard(compact: compactLayout, twoColumns: wideLayout)
+        .detailCard(compact: compactLayout)
     }
 
     func screenshotBanner() -> some View {
@@ -4321,37 +4256,19 @@ extension StateChip {
 }
 
 extension View {
-    /// Reports the width of the pane a view is offered, not the width the
-    /// view takes. A vertical scroll view is only as wide as its content,
-    /// and the decision card caps its own width until the pane is wide
-    /// enough for two columns, so the scroll view's own width could never
-    /// reach that threshold.
-    func onPaneWidthChange(_ action: @escaping (CGFloat) -> Void) -> some View {
-        frame(maxWidth: .infinity)
-            .onGeometryChange(for: CGFloat.self) { geometry in
-                geometry.size.width
-            } action: { width in
-                action(width)
-            }
-    }
-
     /// The detail column's card (R18): the card's padding, ground, and
     /// border, top-leading inside the pane's margin and no wider than its
-    /// cap. The decision card, the operational summary, and both timelines
-    /// draw on it, so every detail surface starts at one x and one y. The
-    /// two-column card fills the pane up to its own cap instead.
-    /// `topMargin` replaces the pane's top margin for a card that sits
-    /// under a row of its own.
-    func detailCard(compact: Bool, twoColumns: Bool = false, topMargin: CGFloat? = nil) -> some View {
+    /// cap at any pane width. The decision card, the operational summary,
+    /// and both timelines draw on it, so every detail surface starts at one
+    /// x and one y. `topMargin` replaces the pane's top margin for a card
+    /// that sits under a row of its own.
+    func detailCard(compact: Bool, topMargin: CGFloat? = nil) -> some View {
         var margin = CardScale.paneMargin(compact: compact)
         if let topMargin { margin.top = topMargin }
         return padding(CardScale.padding(compact: compact))
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .freesideCard(cornerRadius: CardScale.cornerRadius)
-            .frame(
-                maxWidth: twoColumns ? CardScale.wideCardWidth : CardScale.cardWidth,
-                alignment: .topLeading
-            )
+            .frame(maxWidth: CardScale.cardWidth, alignment: .topLeading)
             .padding(margin)
             .frame(maxWidth: .infinity, alignment: .topLeading)
     }

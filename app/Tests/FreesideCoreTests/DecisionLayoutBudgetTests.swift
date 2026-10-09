@@ -74,7 +74,6 @@
                 .screenshotCard(
                     snapshot.item,
                     at: .large,
-                    detailWidth: cardWidth,
                     actionRegionFrameChanged: { measurement.minY = $0.minY }
                 )
                 .environment(\.dynamicTypeSize, .large)

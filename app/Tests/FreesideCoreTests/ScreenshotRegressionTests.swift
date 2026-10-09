@@ -1196,24 +1196,15 @@
                                 readyInspector.screenshotInspector(
                                     snapshot.item,
                                     at: dynamicTypeSize))))
-                    surfaces.append(
-                        Surface(
-                            name: "decision-ready_for_final_review-1200",
-                            width: 1_200,
-                            view: AnyView(
-                                detail.screenshotCard(
-                                    snapshot.item,
-                                    at: dynamicTypeSize,
-                                    detailWidth: 1_200))))
-                    // The same card with the inspector open and the
-                    // inspector's Evidence disclosure open with it, which is
-                    // the state the pointer row exists for: the packet is
-                    // being drawn beside the card, so the card's own Evidence
-                    // module stands down to "N attachments → inspector"
-                    // (#1107). Only the evidence preference is raised here, so
-                    // this surface differs from
-                    // decision-ready_for_final_review-1200 in exactly the
-                    // module under test; with the default preferences the
+                    // The card with the inspector open and the inspector's
+                    // Evidence disclosure open with it, which is the state
+                    // the pointer row exists for: the packet is being drawn
+                    // beside the card, so the card's own Evidence module
+                    // stands down to "N attachments → inspector" (#1107).
+                    // Only the evidence preference is raised here, so this
+                    // surface differs from decision-ready_for_final_review
+                    // in exactly the module under test; with the default
+                    // preferences the
                     // inspector shows nothing and the card keeps its rows, so
                     // recording that state would pin a card identical to the
                     // one above and catch no pointer regression at all.
@@ -1236,38 +1227,16 @@
                         sectionPreferences: openEvidencePreferences)
                     surfaces.append(
                         Surface(
-                            name: "decision-ready_for_final_review-inspector-open-1200",
-                            width: 1_200,
+                            name: "decision-ready_for_final_review-inspector-open",
                             view: AnyView(
                                 readyInspectorOpen.screenshotCard(
                                     snapshot.item,
                                     at: dynamicTypeSize,
-                                    detailWidth: 1_200,
                                     inspectorPresented: true))))
-                    // The other readiness shapes the daemon can hand the card
-                    // (issue #982): a degraded verdict listing its waiver and
-                    // advisory entries, and a verdict the daemon invalidated,
-                    // rendered stale beside the bound and observed heads.
-                    surfaces.append(
-                        Surface(
-                            name: "decision-ready_for_final_review-degraded-1200",
-                            width: 1_200,
-                            view: AnyView(
-                                detail.screenshotCard(
-                                    AttentionFixtures.degradedReady().item,
-                                    at: dynamicTypeSize,
-                                    detailWidth: 1_200))))
-                    surfaces.append(
-                        Surface(
-                            name: "decision-ready_for_final_review-stale-1200",
-                            width: 1_200,
-                            view: AnyView(
-                                detail.screenshotCard(
-                                    AttentionFixtures.staleReady().item,
-                                    at: dynamicTypeSize,
-                                    detailWidth: 1_200))))
-                    // Frame 7.3 at the card's own width, and the other
-                    // staleness axis (the base watch) on the phone.
+                    // A verdict the daemon invalidated (issue #982), rendered
+                    // stale beside the bound and observed heads (frame 7.3),
+                    // and the other staleness axis (the base watch) on the
+                    // phone. The degraded verdict is the 4b surfaces'.
                     surfaces.append(
                         Surface(
                             name: "decision-ready_for_final_review-stale",
@@ -1324,7 +1293,7 @@
                     // over_hardened verdict with and without the daemon's
                     // promise to simplify on continue, the stuck verdict, and
                     // a reversal list long enough to collapse, each at phone
-                    // width and at a Mac width.
+                    // width and at the Mac card's.
                     let driftVariants = [
                         ("over_hardened", AttentionFixtures.reviewDiminishing(cause: .drift_audit)),
                         (
@@ -1354,13 +1323,9 @@
                                         compactLayout: true))))
                         surfaces.append(
                             Surface(
-                                name: "decision-review_diminishing_returns-drift-\(variant)-1200",
-                                width: 1_200,
+                                name: "decision-review_diminishing_returns-drift-\(variant)",
                                 view: AnyView(
-                                    detail.screenshotCard(
-                                        drift.item,
-                                        at: dynamicTypeSize,
-                                        detailWidth: 1_200))))
+                                    detail.screenshotCard(drift.item, at: dynamicTypeSize))))
                     }
                     surfaces.append(
                         Surface(
@@ -1447,17 +1412,11 @@
                     view: AnyView(
                         recommendedDetail.screenshotCard(
                             equallyWeighted, at: dynamicTypeSize, compactLayout: true))))
-            for width in [CGFloat(900), CGFloat(1_200)] {
-                surfaces.append(
-                    Surface(
-                        name: "decision-finding_adjudication-recommended-\(Int(width))",
-                        width: width,
-                        view: AnyView(
-                            recommendedDetail.screenshotCard(
-                                adjudication,
-                                at: dynamicTypeSize,
-                                detailWidth: width))))
-            }
+            surfaces.append(
+                Surface(
+                    name: "decision-finding_adjudication-recommended",
+                    view: AnyView(
+                        recommendedDetail.screenshotCard(adjudication, at: dynamicTypeSize))))
             // One finding per route, carrying the daemon's consequence-led
             // reason and recommendation: the card says what accepting does
             // before any route vocabulary (#1551).
@@ -1514,17 +1473,6 @@
                     view: AnyView(
                         destructiveRecommendation.screenshotCard(
                             question, at: dynamicTypeSize))))
-            // The question card in the Mac's two-column layout, where the
-            // action region sits beside the card's modules, not above them.
-            surfaces.append(
-                Surface(
-                    name: "decision-agent_question-1200",
-                    width: 1_200,
-                    view: AnyView(
-                        destructiveRecommendation.screenshotCard(
-                            AttentionFixtures.fixture(type: .agent_question).item,
-                            at: dynamicTypeSize,
-                            detailWidth: 1_200))))
 
             let cache = InMemoryCacheStore()
             let runs = RunFixtures.defaultRuns()
@@ -2983,9 +2931,8 @@
                                 launchProjectID: nil
                             ).screenshotSidebar(now: screenshotNow, activeTaskCount: sidebarTaskCount))))
             }
-            // Frames 7.8 and 6.9 (R18): the finding card at a 1,000pt detail
-            // width with the inspector open, and that inspector, by day and
-            // by dusk. The item carries the frame's three attachments and
+            // Frame 6.9 (R18): the finding card with the inspector open, and
+            // that inspector, by day and by dusk. The item carries the frame's three attachments and
             // two attachment claims, so the pointer row and both counts have
             // something to count, and the inspector opens Evidence and its
             // bindings and leaves Claims closed, as the frame draws it.
@@ -3026,15 +2973,11 @@
             for (suffix, colorScheme) in [("", ColorScheme.light), ("-dark", .dark)] {
                 surfaces.append(
                     Surface(
-                        name: "decision-finding_adjudication-inspector-open-1000\(suffix)",
-                        width: 1_000,
+                        name: "decision-finding_adjudication-inspector-open\(suffix)",
                         colorScheme: colorScheme,
                         view: AnyView(
                             framedDetail.screenshotCard(
-                                framed,
-                                at: dynamicTypeSize,
-                                detailWidth: 1_000,
-                                inspectorPresented: true))))
+                                framed, at: dynamicTypeSize, inspectorPresented: true))))
                 surfaces.append(
                     Surface(
                         name: "decision-finding_adjudication-frame-inspector\(suffix)",
@@ -3261,7 +3204,7 @@
                         width: width,
                         colorScheme: scheme,
                         view: AnyView(
-                            detail.screenshotCard(item, at: dynamicTypeSize, detailWidth: width)))
+                            detail.screenshotCard(item, at: dynamicTypeSize)))
                 }
             }
         }
