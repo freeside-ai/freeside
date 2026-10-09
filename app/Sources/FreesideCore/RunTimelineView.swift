@@ -34,7 +34,11 @@ struct RunTimelineView: View {
     /// does, because the helpers below read locale, time zone, and the
     /// pinned clock from the environment, which only a mounted view has.
     var screenshotTimeline: Components.Schemas.RunTimeline?
+    /// The gap above the card where a row of the column's own sits over it:
+    /// the Mac's Back to Task row. Nil keeps the detail column's top margin.
+    var topMargin: CGFloat?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.timeZone) private var timeZone
     @Environment(\.locale) private var locale
     @Environment(\.pinnedNow) private var pinnedNow
@@ -54,9 +58,8 @@ struct RunTimelineView: View {
     @ViewBuilder var body: some View {
         if let screenshotTimeline {
             composition(screenshotTimeline)
-                .padding(24)
-                .frame(maxWidth: 820, alignment: .leading)
                 .foregroundStyle(Color.ink)
+                .timelinePage(compact: horizontalSizeClass == .compact, topMargin: topMargin)
         } else {
             liveContent
         }
@@ -83,9 +86,8 @@ struct RunTimelineView: View {
                 }
                 folds(hold: timeline?.hold?.value1)
             }
-            .padding(24)
-            .frame(maxWidth: 820, alignment: .leading)
             .foregroundStyle(Color.ink)
+            .timelinePage(compact: horizontalSizeClass == .compact, topMargin: topMargin)
         }
         .navigationTitle(snapshot.run.project_id)
         // A bootstrap now keeps the cached timeline (SyncCoordinator.adopt);
@@ -106,7 +108,7 @@ struct RunTimelineView: View {
     func screenshotContent(_ timeline: Components.Schemas.RunTimeline) -> some View {
         RunTimelineView(
             coordinator: coordinator, snapshot: snapshot, expandsTechnicalDetails: expandsTechnicalDetails,
-            screenshotTimeline: timeline)
+            screenshotTimeline: timeline, topMargin: topMargin)
     }
 
     private func composition(_ timeline: Components.Schemas.RunTimeline) -> some View {

@@ -90,6 +90,40 @@
             #expect(widest.width == Scale.wideCardWidth)
         }
 
+        /// A timeline in a detail column takes the card's seat, and a size
+        /// class that changes under an open timeline (a resized iPad window,
+        /// a rotated phone) re-seats it without rebuilding it, so its folds
+        /// and loaded evidence stay.
+        @Test func aTimelinePageKeepsItsContentAcrossASizeClassChange() throws {
+            let pane = TimelinePageProbe.Pane()
+            let host = NSHostingView(rootView: TimelinePageProbe(pane: pane))
+            let window = NSWindow(
+                contentRect: CGRect(x: 0, y: 0, width: 1_000, height: 600), styleMask: [.borderless],
+                backing: .buffered, defer: false)
+            window.contentView = host
+            func settle(until done: () -> Bool) {
+                let deadline = Date().addingTimeInterval(5)
+                while !done(), Date() < deadline {
+                    RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+                    host.layoutSubtreeIfNeeded()
+                }
+            }
+
+            settle { pane.appearances > 0 && pane.content != nil }
+            let padding = DecisionCardComposition.Scale.padding(compact: false)
+            let card = try #require(cardFrame(paneWidth: 1_000, twoColumns: false))
+            let seated = try #require(pane.content)
+            #expect(seated.minX == card.minX + padding.leading)
+            #expect(seated.minY == card.minY + padding.top)
+            #expect(seated.width == card.width - padding.leading - padding.trailing)
+
+            pane.compact = true
+            settle { pane.content?.minX == 24 }
+            #expect(pane.content?.origin == CGPoint(x: 24, y: 24))
+            #expect(pane.content?.size == CGSize(width: 820 - 48, height: 100))
+            #expect(pane.appearances == 1)
+        }
+
         /// The action region's frame in the space of the card the decision
         /// detail lays out in a pane of the given width.
         private func actionRegionFrame(paneWidth: CGFloat) -> CGRect? {
@@ -199,6 +233,32 @@
             #expect(!detail.drawsTwoColumns(blocked.item, paneIsWide: true))
             #expect(detail.drawsTwoColumns(review.item, paneIsWide: true))
             #expect(!detail.drawsTwoColumns(review.item, paneIsWide: false))
+        }
+    }
+
+    /// A probe under `timelinePage` whose size class the test flips: it
+    /// counts its appearances and reports its frame in the pane.
+    private struct TimelinePageProbe: View {
+        @Observable final class Pane: @unchecked Sendable {
+            var compact = false
+            var appearances = 0
+            var content: CGRect?
+        }
+
+        let pane: Pane
+
+        var body: some View {
+            Color.clear
+                .frame(height: 100)
+                .onAppear { pane.appearances += 1 }
+                .onGeometryChange(for: CGRect.self) { geometry in
+                    geometry.frame(in: .named("pane"))
+                } action: { frame in
+                    pane.content = frame
+                }
+                .timelinePage(compact: pane.compact)
+                .frame(width: 1_000, height: 600, alignment: .topLeading)
+                .coordinateSpace(name: "pane")
         }
     }
 #endif

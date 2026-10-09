@@ -42,6 +42,7 @@ struct TaskTimelineView: View {
     /// leaves it false, so the sections open only on tap.
     var expandsTechnicalDetails = false
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.timeZone) private var timeZone
     @Environment(\.locale) private var locale
     @Environment(\.pinnedNow) private var pinnedNow
@@ -86,9 +87,8 @@ struct TaskTimelineView: View {
                 schedules
                 content(screenshotTimeline)
             }
-            .padding(24)
-            .frame(maxWidth: 820, alignment: .leading)
             .foregroundStyle(Color.ink)
+            .timelinePage(compact: horizontalSizeClass == .compact)
         } else {
             liveContent
         }
@@ -115,9 +115,8 @@ struct TaskTimelineView: View {
                         .frame(maxWidth: .infinity, minHeight: 180)
                 }
             }
-            .padding(24)
-            .frame(maxWidth: 820, alignment: .leading)
             .foregroundStyle(Color.ink)
+            .timelinePage(compact: horizontalSizeClass == .compact)
         }
         .navigationTitle(TaskDisplay.projectName(snapshot.task))
         .task(id: TimelineRequestKey(snapshot: snapshot, cursors: coordinator.cursors)) {

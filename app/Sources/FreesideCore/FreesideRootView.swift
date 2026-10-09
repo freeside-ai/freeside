@@ -686,7 +686,7 @@ public struct FreesideRootView: View {
                     VStack(spacing: 0) {
                         runReturnRow
                         if let run = coordinator.runs.first(where: { $0.run.id == runSelection }) {
-                            RunTimelineView(coordinator: coordinator, snapshot: run)
+                            RunTimelineView(coordinator: coordinator, snapshot: run, topMargin: 10)
                         } else {
                             UnavailableStateView(
                                 title: "Run unavailable",
@@ -723,8 +723,10 @@ public struct FreesideRootView: View {
                 .help("Back to Task")
                 Spacer()
             }
+            // The detail column's x and top margin (R18): the row is the
+            // column's first line here, and the run's card sits under it.
             .padding(.horizontal, 24)
-            .padding(.top, 16)
+            .padding(.top, 20)
         }
     #endif
 

@@ -3653,6 +3653,10 @@
                 .environment(\.calendar, Calendar(identifier: .gregorian))
                 .environment(\.timeZone, timeZone)
                 .environment(\.pinnedNow, screenshotNow)
+                // A surface at phone width is the phone's: the timelines
+                // draw on the page's ground there and in the detail
+                // column's card everywhere else.
+                .transformEnvironment(\.horizontalSizeClass) { if width <= 430 { $0 = .compact } }
                 .frame(width: width, alignment: .topLeading)
                 .fixedSize(horizontal: false, vertical: true)
                 .background(Color.ground)
