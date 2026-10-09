@@ -281,10 +281,11 @@ enum TaskDisplay {
         return run == nil ? "Run Details Unavailable" : "In Progress"
     }
 
-    /// The row's progress strings by the slot the row draws them in. The
-    /// row shows `status` as its chip, `phases` as a line, `facts` joined on
-    /// one line, and `guidance` only when it says something the row itself
-    /// does not; VoiceOver reads all of them, in this order.
+    /// The row's progress strings. The row draws `status` as its keyword
+    /// line and `guidance` only when it says something the row itself does
+    /// not; `phases` and the hold among `facts` are VoiceOver's and the task
+    /// timeline's (R31), and the round rides the context line
+    /// (`currentPhaseAndRound`). VoiceOver reads all of them, in this order.
     struct RowLines: Equatable {
         let status: String
         let phases: String?
@@ -339,15 +340,20 @@ enum TaskDisplay {
             if let round = position.heading?.round { facts.append(round) }
             if let hold = holdCallout(task, position: position) { facts.append(hold.hold) }
         }
-        if task.cancellation?.value1.state == .confirmed, task.lifecycle == .finished {
-            facts.append("Stop Confirmation Recorded")
-        }
+        if let confirmation = stopConfirmation(task) { facts.append(confirmation) }
         return RowLines(
             status: position?.status ?? rowStatus(task), phases: phaseLine, facts: facts,
             guidance: position?.guidance ?? Position.defaultGuidance)
     }
 
-    /// The task's current hold as the task row and the task timeline's
+    /// A stop the daemon confirmed on a task that then finished: the one
+    /// fact the row draws on a closing line of its own.
+    static func stopConfirmation(_ task: Components.Schemas.Task) -> String? {
+        task.cancellation?.value1.state == .confirmed && task.lifecycle == .finished
+            ? "Stop Confirmation Recorded" : nil
+    }
+
+    /// The task's current hold as VoiceOver's row and the task timeline's
     /// callout both state it, so the two cannot drift apart.
     struct HoldCallout: Equatable {
         let round: String?
@@ -494,21 +500,46 @@ enum TaskDisplay {
     /// and when the task was last active, in the run row's time grammar
     /// (coarse under a day, dated from a day on).
     ///
-    /// `labelsActivity` false is the visible row: the time alone, in the one
-    /// short format from a day on. True is the sentence VoiceOver keeps.
+    /// `labelsActivity` true is the sentence VoiceOver keeps for the row's
+    /// context line. False ends the line with the bare time the row trails
+    /// (`rowTime`).
     static func metaLine(_ task: Components.Schemas.Task, now: Date, labelsActivity: Bool = true) -> String {
         var parts = [projectName(task)]
         if let issue = issueReference(task) {
             parts.append(issue)
         }
-        if labelsActivity {
-            parts.append(RunDisplay.lastActiveSegment(task.last_activity_at, now: now))
-        } else if now.timeIntervalSince(task.last_activity_at) < 86_400 {
-            parts.append("\(AttentionDisplay.relativeRowTime(task.last_activity_at, now: now)) ago")
-        } else {
-            parts.append(FreesideFormat.shortTime(task.last_activity_at, now: now))
-        }
+        parts.append(
+            labelsActivity ? RunDisplay.lastActiveSegment(task.last_activity_at, now: now) : rowTime(task, now: now))
         return parts.joined(separator: " · ")
+    }
+
+    /// When the task was last active, as the row's context line trails it:
+    /// coarse under a day, the one short time format from a day on.
+    static func rowTime(_ task: Components.Schemas.Task, now: Date) -> String {
+        if now.timeIntervalSince(task.last_activity_at) < 86_400 {
+            return "\(AttentionDisplay.relativeRowTime(task.last_activity_at, now: now)) ago"
+        }
+        return FreesideFormat.shortTime(task.last_activity_at, now: now)
+    }
+
+    /// The current phase and round as the row's context line carries them
+    /// (R31): "Verification · Round 1". A historical position (a finished,
+    /// stopped, or abandoned task; a finished or superseded run) has no
+    /// current phase, so its line carries the round alone; so does one
+    /// whose heading is its status word ("Ready for Final Review"), which
+    /// the keyword line above already states.
+    static func currentPhaseAndRound(_ position: Position?) -> String? {
+        guard let position, let heading = position.heading else { return nil }
+        return position.historical || heading.label == position.status ? heading.round : heading.text
+    }
+
+    /// The row's context line: project, the issue when the source names
+    /// one, then the current phase and round. The four-phase sentence and
+    /// the hold stay with VoiceOver and the task timeline (`rowLines`,
+    /// `holdCallout`).
+    static func rowContext(_ task: Components.Schemas.Task, position: Position?) -> String {
+        ([projectName(task)] + [issueReference(task), currentPhaseAndRound(position)].compactMap { $0 })
+            .joined(separator: " · ")
     }
 
     /// The exact last-activity instant behind the row's coarse segment,
@@ -543,15 +574,18 @@ struct TaskNameLabel: View {
     var monoFont: Font = FreesideFont.monoCallout
     var color: Color = .ink
     var lineLimit: Int? = 2
+    /// False where the surface draws the mark apart from the name (the task
+    /// row's keyword line). VoiceOver reads it after the name either way.
+    var drawsAgentMark = true
 
     var body: some View {
         var text = Text(name.text)
             .font(name.source == .identifier ? monoFont : font)
             .foregroundStyle(color)
-        if name.source == .agent {
+        if name.source == .agent, drawsAgentMark {
             text =
                 text
-                + Text("  AGENT")
+                + Text(Self.agentMark)
                 .font(FreesideFont.keyword)
                 .tracking(FreesideFont.keywordTracking)
                 .foregroundStyle(Color.inkDim)
@@ -560,5 +594,8 @@ struct TaskNameLabel: View {
             text
             .lineLimit(lineLimit)
             .truncationMode(.middle)
+            .accessibilityLabel(name.source == .agent ? name.text + Self.agentMark : name.text)
     }
+
+    private static let agentMark = "  AGENT"
 }
