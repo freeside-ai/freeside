@@ -1557,6 +1557,24 @@
                             selection: .constant(retryTask.task.id)
                         ).screenshotContent(now: RunFixtures.screenshotInstant)
                     )))
+            // The empty scope at the sidebar's width, by day and by dusk:
+            // the empty state the list centers under its filters.
+            for colorScheme in [ColorScheme.light, .dark] {
+                surfaces.append(
+                    Surface(
+                        name: "tasks-list-empty" + (colorScheme == .dark ? "-dark" : ""),
+                        width: 320,
+                        colorScheme: colorScheme,
+                        view: AnyView(
+                            TasksListView(
+                                tasks: [],
+                                runs: [],
+                                selection: .constant(nil)
+                            ).screenshotContent(now: RunFixtures.screenshotInstant)
+                                .padding(.top, 32)
+                                .background(Color.sidebarGround)
+                        )))
+            }
             for scope in [TaskListFilter.Scope.finished, .all] {
                 surfaces.append(
                     Surface(
@@ -2477,7 +2495,7 @@
                     width: 480,
                     view: AnyView(
                         UnavailableStateView(
-                            title: "No decision selected",
+                            glyph: .inbox, title: "No decision selected",
                             description: "Select an item to inspect its facts."))))
 
             // Freshness banner over fresh vs. genuinely stale data (#1130).
@@ -2934,7 +2952,7 @@
                         selectedAlternativeDetail.screenshotCard(
                             realisticFindings, at: dynamicTypeSize))))
             // The Open scope under a project filter that leaves nothing open
-            // (R13): the key, the statement, and the line that names the
+            // (R13): the glyph, the statement, and the line that names the
             // filter. The project's one item is resolved, so the filter
             // survives and the scope is empty. Drawn last: ahead of another
             // surface it moves that surface's glyph antialiasing (#1698).

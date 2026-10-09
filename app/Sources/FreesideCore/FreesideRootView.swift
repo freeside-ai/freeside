@@ -616,7 +616,7 @@ public struct FreesideRootView: View {
                         RunTimelineView(coordinator: coordinator, snapshot: run)
                     } else {
                         UnavailableStateView(
-                            title: "Not available",
+                            glyph: .tasks, title: "Not available",
                             description: "This task or run is no longer available.")
                     }
                 }
@@ -664,7 +664,7 @@ public struct FreesideRootView: View {
                     // The same two lines the empty Open scope draws in the
                     // sidebar, so the two panes agree.
                     let empty = InboxView.emptyScope(.open, projectID: coordinator.store.projectID)
-                    UnavailableStateView(title: empty.title, description: empty.description)
+                    UnavailableStateView(glyph: .inbox, title: empty.title, description: empty.description)
                 } else {
                     OperationalSummaryView(
                         summary: OperationalSummary(
@@ -689,7 +689,7 @@ public struct FreesideRootView: View {
                             RunTimelineView(coordinator: coordinator, snapshot: run, topMargin: 10)
                         } else {
                             UnavailableStateView(
-                                title: "Run unavailable",
+                                glyph: .tasks, title: "Run unavailable",
                                 description: "This run is no longer available.")
                         }
                     }
@@ -705,7 +705,7 @@ public struct FreesideRootView: View {
                     .id(taskSelection)
                 } else {
                     UnavailableStateView(
-                        title: "Tasks", description: "Select a task to inspect its history.")
+                        glyph: .tasks, title: "Tasks", description: "Select a task to inspect its history.")
                 }
             }
         }
@@ -845,25 +845,11 @@ public struct FreesideRootView: View {
 struct RevokedPane: View {
     let onRePair: () -> Void
 
-    @ScaledMetric(relativeTo: .body) private var glyphSize: CGFloat = screenshotMetricBase(
-        28, relativeTo: .body)
-
     var body: some View {
         VStack(spacing: 6) {
-            Image(systemName: "lock.slash")
-                .font(.system(size: glyphSize))
-                .foregroundStyle(Color.inkFaint)
-                .padding(.bottom, 6)
-                .accessibilityHidden(true)
-            VStack(spacing: 6) {
-                Text("This device is no longer paired")
-                    .font(FreesideFont.statement)
-                    .foregroundStyle(Color.ink)
-                Text("Pair again to act on items. Cached items stay readable.")
-                    .font(FreesideFont.cardBody)
-                    .foregroundStyle(Color.inkDim)
-            }
-            .accessibilityElement(children: .combine)
+            EmptyStateBlock(
+                glyph: .revoked, title: "This device is no longer paired",
+                description: "Pair again to act on items. Cached items stay readable.")
             Button("Pair Again", action: onRePair)
                 .buttonStyle(FreesideActionButtonStyle(tone: .primary, expands: false))
                 .padding(.top, 10)

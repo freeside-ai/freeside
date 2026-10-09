@@ -173,11 +173,13 @@ import Testing
                 ) < 500)
             #expect(
                 minimumHeight(
-                    UnavailableStateView(title: "Tasks", description: "Select a task to inspect its history.")) < 200)
+                    UnavailableStateView(
+                        glyph: .tasks, title: "Tasks", description: "Select a task to inspect its history.")) < 200)
             #expect(
                 minimumHeight(
                     SidebarEmptyState(
-                        title: "No resolved items", description: "Attention items in this scope will appear here."))
+                        glyph: .inbox, title: "No resolved items",
+                        description: "Attention items in this scope will appear here."))
                     < 200)
         }
     #endif

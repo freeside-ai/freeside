@@ -161,7 +161,7 @@ struct SpecificationReaderView: View {
                 }
             } else {
                 UnavailableStateView(
-                    title: "Preview unavailable",
+                    glyph: .inbox, title: "Preview unavailable",
                     description: "This \(byteCount(preview.byteCount)) specification is not text.")
             }
 

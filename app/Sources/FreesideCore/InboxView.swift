@@ -94,7 +94,7 @@ struct InboxView: View {
             case .idle, .loading:
                 ProgressView()
             case .failed(let message):
-                UnavailableStateView(title: "Couldn't load the inbox", description: message)
+                UnavailableStateView(glyph: .inbox, title: "Couldn't load the inbox", description: message)
             case .loaded:
                 VStack(spacing: 0) {
                     scopeBar
@@ -109,10 +109,10 @@ struct InboxView: View {
                         let empty = Self.emptyScope(store.scope, projectID: store.projectID)
                         #if os(macOS)
                             Spacer(minLength: 0)
-                            SidebarEmptyState(title: empty.title, description: empty.description)
+                            SidebarEmptyState(glyph: .inbox, title: empty.title, description: empty.description)
                             Spacer(minLength: 0)
                         #else
-                            UnavailableStateView(title: empty.title, description: empty.description)
+                            UnavailableStateView(glyph: .inbox, title: empty.title, description: empty.description)
                         #endif
                     } else {
                         #if os(iOS)
@@ -340,7 +340,7 @@ struct InboxView: View {
                 .padding(.bottom, 8)
             if store.rows.isEmpty {
                 let empty = Self.emptyScope(store.scope, projectID: store.projectID)
-                SidebarEmptyState(title: empty.title, description: empty.description)
+                SidebarEmptyState(glyph: .inbox, title: empty.title, description: empty.description)
                     .padding(.bottom, 32)
             } else {
                 VStack(spacing: 8) {
