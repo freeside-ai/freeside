@@ -73,7 +73,7 @@ import Testing
     @Test func approvalStopFailureAndHistoryOutrankCapacityGuidance() throws {
         let statuses = [
             "Approval beside capacity": "Specification Approval Required",
-            "Stop requested beside capacity": "Stop Requested · Awaiting Confirmation",
+            "Stop requested beside capacity": "Stopping",
             "Stop failed beside capacity": "Failed to Stop · Execution May Continue",
             "Stopped beside capacity": "Stopped",
             "Historical capacity": "Finished · See Recorded Outcome",
@@ -96,7 +96,7 @@ import Testing
         var stoppedApproval = HoldPresentationFixtures.make("Approval beside capacity")
         stoppedApproval.task.cancellation = TaskProgressFixtures.make("Stop pending").task.cancellation
         #expect(stoppedApproval.position?.guidance == "Open task details.")
-        #expect(stoppedApproval.position?.status == "Stop Requested · Awaiting Confirmation")
+        #expect(stoppedApproval.position?.status == "Stopping")
         #expect(
             TaskDisplay.progressLines(stoppedApproval.task, position: stoppedApproval.position).contains(
                 "Last recorded hold: Waiting for agent capacity"))

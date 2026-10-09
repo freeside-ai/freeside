@@ -17,80 +17,11 @@ struct PairingView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    if dynamicTypeSize.isAccessibilitySize {
-                        pairingCodeField
-                        pasteButton.frame(maxWidth: .infinity, alignment: .trailing)
-                    } else {
-                        HStack {
-                            pairingCodeField
-                            pasteButton
-                        }
-                    }
-                } footer: {
-                    Text("Run the pairing command on the daemon host and enter its one-time code.")
-                        .font(FreesideFont.caption)
-                        .foregroundStyle(Color.inkDim)
-                }
-                .listRowBackground(Color.ground2)
-                Section {
-                    TextField("Device name", text: $model.displayName)
-                } footer: {
-                    Text(
-                        "This name appears in Devices on the host and in the audit record of every decision made from this device."
-                    )
-                    .font(FreesideFont.caption)
-                    .foregroundStyle(Color.inkDim)
-                }
-                .listRowBackground(Color.ground2)
-                Section {
-                    if let facts = model.facts {
-                        Self.detailsContent(facts)
-                    } else {
-                        Text("Enter a code to see host details")
-                            .foregroundStyle(Color.inkDim)
-                    }
-                } header: {
-                    Text("Pairing details")
-                }
-                .listRowBackground(Color.ground2)
-                if case .failed(let message) = model.phase {
-                    Section {
-                        Label(message, systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(Color.waxText)
-                    }
-                    .listRowBackground(Color.ground2)
-                }
-                Section {
-                    Button {
-                        Task {
-                            if let credential = await model.pair() {
-                                onPaired(credential)
-                            }
-                        }
-                    } label: {
-                        if model.phase == .pairing {
-                            ProgressView()
-                        } else {
-                            Text("Pair this device")
-                        }
-                    }
-                    .buttonStyle(FreesideActionButtonStyle(tone: .primary))
-                    .disabled(!model.canSubmit)
-                }
-                // The filled control draws its own ground; a list row behind
-                // it would put ground-2 inside ground-2.
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
+            ScrollView {
+                content(now: nil, rendersInteractiveControls: true)
+                    .frame(maxWidth: .infinity)
             }
-            .formStyle(.grouped)
-            .font(FreesideFont.body)
-            .foregroundStyle(Color.ink)
-            .tint(.accentText)
-            .scrollContentBackground(.hidden)
             .background(Color.ground)
-            .navigationTitle("Pair with Freeside")
             .toolbar {
                 if let onChangeServer {
                     ToolbarItem(placement: .cancellationAction) {
@@ -99,9 +30,13 @@ struct PairingView: View {
                     }
                 }
             }
-            #if os(iOS)
-                .navigationBarTitleDisplayMode(
-                    dynamicTypeSize.isAccessibilitySize ? .inline : .large)
+            #if os(macOS)
+                .navigationTitle("Pair with Freeside")
+            #else
+                // The ask names the screen, so the bar carries no title and
+                // stays only while it has Change server to hold.
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar(onChangeServer == nil ? .hidden : .visible, for: .navigationBar)
             #endif
         }
         // One preview per pause in typing: the task restarts on every code
@@ -112,6 +47,121 @@ struct PairingView: View {
             guard !Task.isCancelled else { return }
             await model.refreshFacts()
         }
+    }
+
+    static let instructions =
+        "Run the pairing command on the daemon host and enter its one-time code. "
+        + "The device name appears in Devices on the host and in the audit record "
+        + "of every decision made from this device."
+
+    /// The one pairing composition, drawn live and by the screenshot suite.
+    /// `now` fixes the clock the expiry row reads; nil lets it tick.
+    /// `rendersInteractiveControls` false draws each field as static text,
+    /// because `ImageRenderer` cannot draw an AppKit-backed text field
+    /// off-screen.
+    private func content(now: Date?, rendersInteractiveControls: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 12) {
+                KeywordLabel(text: "Pairing")
+                Text("Pair this device")
+                    .font(FreesideFont.ask)
+                    .accessibilityAddTraits(.isHeader)
+            }
+            Text(Self.instructions)
+                .font(FreesideFont.cardBody)
+                .foregroundStyle(Color.inkDim)
+                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 16) {
+                labeled("Code") {
+                    if rendersInteractiveControls {
+                        if dynamicTypeSize.isAccessibilitySize {
+                            fieldBox { pairingCodeField }
+                            pasteButton.frame(maxWidth: .infinity, alignment: .trailing)
+                        } else {
+                            HStack(spacing: 12) {
+                                fieldBox { pairingCodeField }
+                                pasteButton
+                            }
+                        }
+                    } else {
+                        fieldBox {
+                            Text(model.formattedPairingCode)
+                                .font(FreesideFont.monoValue)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+                labeled("Device name") {
+                    fieldBox {
+                        if rendersInteractiveControls {
+                            TextField("Device name", text: $model.displayName)
+                                .textFieldStyle(.plain)
+                                .font(FreesideFont.cardBody)
+                                .accessibilityLabel("Device name")
+                        } else {
+                            Text(model.displayName)
+                                .font(FreesideFont.cardBody)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+            }
+            VStack(alignment: .leading, spacing: 11) {
+                KeywordLabel(text: "Host facts")
+                    .accessibilityAddTraits(.isHeader)
+                if let facts = model.facts {
+                    Self.detailsContent(facts, now: now)
+                } else {
+                    Text("Enter a code to see host details")
+                        .font(FreesideFont.cardBody)
+                        .foregroundStyle(Color.inkDim)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if case .failed(let message) = model.phase {
+                Notice(tone: .wax, keyword: "Failed", sentence: message)
+                    .accessibilityElement(children: .combine)
+            }
+            Button {
+                Task {
+                    if let credential = await model.pair() {
+                        onPaired(credential)
+                    }
+                }
+            } label: {
+                if model.phase == .pairing {
+                    ProgressView()
+                } else {
+                    Text("Pair")
+                }
+            }
+            .buttonStyle(FreesideActionButtonStyle(tone: .primary))
+            .disabled(!model.canSubmit)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 20)
+        .frame(maxWidth: 528, alignment: .leading)
+        .foregroundStyle(Color.ink)
+        .tint(.accentText)
+    }
+
+    /// A field under its visible keyword. Each control carries the same
+    /// words as its accessibility label, so VoiceOver reads the label once.
+    private func labeled(_ label: String, @ViewBuilder field: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            KeywordLabel(text: label)
+                .accessibilityHidden(true)
+            field()
+        }
+    }
+
+    private func fieldBox(@ViewBuilder field: () -> some View) -> some View {
+        field()
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Color.ground2, in: RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.rule, lineWidth: 1))
+            .freesideFocusRing()
     }
 
     struct DetailRow {
@@ -186,62 +236,22 @@ struct PairingView: View {
         }
     }
 
-    /// The project-owned pairing composition without Form and TextField,
-    /// whose AppKit-backed controls ImageRenderer cannot draw off-screen.
-    @ViewBuilder
+    /// The pairing composition with static fields and a fixed clock, for
+    /// the screenshot suite.
     func screenshotContent(now: Date) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("Pair with Freeside")
-                .font(FreesideFont.largeTitle)
-            VStack(alignment: .leading, spacing: 6) {
-                KeywordLabel(text: "Pairing code")
-                Text(model.formattedPairingCode)
-                    .font(FreesideFont.monoCallout)
-                Divider()
-                KeywordLabel(text: "Device name")
-                Text(model.displayName)
-                    .font(FreesideFont.body)
-            }
-            .padding(14)
-            .freesideCard()
-            VStack(alignment: .leading, spacing: 6) {
-                KeywordLabel(text: "Pairing details")
-                if let facts = model.facts {
-                    Self.detailsContent(facts, now: now)
-                        .font(FreesideFont.body)
-                        .foregroundStyle(Color.inkDim)
-                } else {
-                    Text("Enter a code to see host details")
-                        .font(FreesideFont.body)
-                        .foregroundStyle(Color.inkDim)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14)
-            .freesideCard()
-            Text(
-                "Run the pairing command on the daemon host and enter its one-time code."
-            )
-            .font(FreesideFont.caption)
-            .foregroundStyle(Color.inkDim)
-            Button("Pair this device") {}
-                .buttonStyle(FreesideActionButtonStyle(tone: .primary))
-                .disabled(!model.canSubmit)
-        }
-        .padding(24)
-        .frame(maxWidth: 560, alignment: .leading)
-        .foregroundStyle(Color.ink)
+        content(now: now, rendersInteractiveControls: false)
     }
 
     private var pasteButton: some View {
-        Button {
+        Button("Paste") {
             if let value = clipboardString {
                 model.applyPairingCodeInput(value)
             }
-        } label: {
-            Label("Paste", systemImage: "doc.on.clipboard")
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.plain)
+        .font(FreesideFont.noticeAction)
+        .foregroundStyle(Color.accentText)
+        .freesideFocusRing(cornerRadius: 4)
     }
 
     @ViewBuilder private var pairingCodeField: some View {
@@ -251,9 +261,11 @@ struct PairingView: View {
                 get: { model.formattedPairingCode },
                 set: { model.applyPairingCodeInput($0) })
         )
+        .textFieldStyle(.plain)
         .textContentType(.oneTimeCode)
         .autocorrectionDisabled()
-        .font(FreesideFont.monoCallout)
+        .font(FreesideFont.monoValue)
+        .accessibilityLabel("Pairing code")
 
         #if os(iOS)
             field

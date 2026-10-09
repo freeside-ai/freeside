@@ -438,14 +438,14 @@ Stop. A task with a cancellation fence shows its daemon status instead.
 
 The client saves the exact command before sending. If delivery is uncertain,
 **Pending Stops** in the Tasks toolbar keeps recovery available across navigation,
-relaunch, and read-cache eviction. **Retry sending Stop** replays that saved
+relaunch, and read-cache eviction. **Retry** on an unconfirmed Stop replays that saved
 command; it never refreshes its version or epoch. Opening, syncing, or
 reconnecting never sends it automatically. A stale rejection requires fresh
 confirmation. A failed disk save sends nothing. Requests belong to the paired
 device and daemon, independently of the existing submission and decision ledgers.
 
 An accepted Stop awaits the runtime's bound quiescence evidence. **Failed to
-stop** means execution may continue; **Refresh task status** only reads state.
+stop** means execution may continue; **Refresh Task Status** only reads state.
 Repeating Stop does not restart provider cancellation. A late receipt cannot
 replace newer synced failure or confirmation. New Stop requests require fresh,
 authenticated task state; offline and unvalidated views explain the restriction.

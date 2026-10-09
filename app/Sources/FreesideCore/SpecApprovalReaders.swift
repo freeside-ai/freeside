@@ -7,6 +7,80 @@ enum SpecApprovalReader: String, Identifiable {
     case diff
 
     var id: String { rawValue }
+
+    /// The reader's name in its header row, and the shorter form a narrow
+    /// pane falls back to.
+    var keyword: (full: String, short: String) {
+        switch self {
+        case .specification: ("Specification reader", "Specification")
+        case .diff: ("Diff reader", "Diff")
+        }
+    }
+}
+
+/// The Mac reader's header row (R16): the reader's keyword with the
+/// revision as a chip, and `Close Reader` as a text control fixed in the
+/// row, so closing never scrolls away with the content. A pane too narrow
+/// for the full keyword draws the short one, and one too narrow for the row
+/// stacks the control under the keyword.
+struct SpecApprovalReaderHeader: View {
+    let reader: SpecApprovalReader
+    let revision: Int?
+    var rendersInteractiveControls = true
+    let close: () -> Void
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            row(reader.keyword.full)
+            row(reader.keyword.short)
+            VStack(alignment: .leading, spacing: 8) {
+                identity(reader.keyword.short)
+                closeControl
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func row(_ keyword: String) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            identity(keyword)
+            Spacer(minLength: 0)
+            closeControl
+        }
+    }
+
+    private func identity(_ keyword: String) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            KeywordLabel(text: keyword)
+                .accessibilityAddTraits(.isHeader)
+            if let chip = SpecApprovalReader.revisionChip(revision) { chip }
+        }
+        .fixedSize()
+    }
+
+    @ViewBuilder private var closeControl: some View {
+        if rendersInteractiveControls {
+            Button("Close Reader", action: close)
+                .buttonStyle(.plain)
+                .font(FreesideFont.noticeAction)
+                .foregroundStyle(Color.accentText)
+                .fixedSize()
+                .freesideFocusRing(cornerRadius: 4)
+                .help("Close reader and show evidence and details")
+        } else {
+            Text("Close Reader")
+                .font(FreesideFont.noticeAction)
+                .foregroundStyle(Color.accentText)
+                .fixedSize()
+        }
+    }
+}
+
+extension SpecApprovalReader {
+    /// The revision a reader shows, as the chip its header carries.
+    static func revisionChip(_ revision: Int?) -> StateChip? {
+        revision.map { StateChip(label: "Revision \($0)", cut: .ink) }
+    }
 }
 
 /// The pane or sheet owns vertical scrolling, including notices and digests.
@@ -54,52 +128,54 @@ struct SpecificationReaderView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 22) {
+            // What makes this text the one under review: the daemon bound
+            // its digest to the approval (the Technical Details row).
+            Text("Bound by the daemon to this approval")
+                .font(FreesideFont.statement)
+                .foregroundStyle(Color.ink)
+                .fixedSize(horizontal: false, vertical: true)
+
             if preview.isTruncated {
-                Label(
-                    "Showing the first \(byteCount(DecisionDetailView.NonImagePreview.textByteLimit)) of \(byteCount(preview.byteCount))",
-                    systemImage: "exclamationmark.triangle"
+                Notice(
+                    tone: .wax, keyword: "Truncated",
+                    sentence:
+                        "Showing the first \(byteCount(DecisionDetailView.NonImagePreview.textByteLimit)) of \(byteCount(preview.byteCount))"
                 )
-                .font(FreesideFont.caption)
-                .foregroundStyle(Color.waxText)
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.waxWash, in: RoundedRectangle(cornerRadius: 8))
+                .accessibilityElement(children: .combine)
             }
 
             if preview.text != nil {
-                Group {
-                    if rendersScrollableContent {
-                        LazyVStack(alignment: .leading, spacing: 10) { specificationContent }
-                    } else {
-                        VStack(alignment: .leading, spacing: 10) { specificationContent }
+                VStack(alignment: .leading, spacing: 10) {
+                    KeywordLabel(text: "Specification (unverified)")
+                        .accessibilityAddTraits(.isHeader)
+                    Group {
+                        if rendersScrollableContent {
+                            LazyVStack(alignment: .leading, spacing: 10) { blockContent }
+                        } else {
+                            VStack(alignment: .leading, spacing: 10) { blockContent }
+                        }
                     }
+                    .padding()
+                    .freesideCard(dashed: true)
                 }
-                .padding()
-                .freesideCard(dashed: true)
             } else {
                 UnavailableStateView(
                     title: "Preview unavailable",
-                    systemImage: "doc",
                     description: "This \(byteCount(preview.byteCount)) specification is not text.")
             }
 
-            TechnicalDetailsSection(
-                rows: [.init(label: "Daemon-Bound Digest", value: digest)],
-                startsExpanded: expandsTechnicalDetails)
+            // The reader's one hairline (R26), above its fold.
+            VStack(alignment: .leading, spacing: 18) {
+                Rectangle()
+                    .fill(Color.rule)
+                    .frame(height: 1)
+                    .accessibilityHidden(true)
+                TechnicalDetailsSection(
+                    rows: [.init(label: "Daemon-Bound Digest", value: digest)],
+                    startsExpanded: expandsTechnicalDetails)
+            }
         }
-    }
-
-    @ViewBuilder private var specificationContent: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Specification (unverified)")
-                .font(FreesideFont.caption)
-                .foregroundStyle(Color.inkDim)
-            Text("Written by the agent, not checked by the daemon.")
-                .font(FreesideFont.caption)
-                .foregroundStyle(Color.inkDim)
-        }
-        blockContent
     }
 
     private func byteCount(_ count: Int) -> String {
@@ -228,19 +304,30 @@ struct UnifiedDiffView: View {
     let linesRemoved: Int
     let truncated: Bool
     let rendersScrollableContent: Bool
+    /// Every hunk after the first sits under one fold and stays unmounted
+    /// until it opens, so a long revision costs one hunk to draw.
+    @State private var hunkWidth: CGFloat = 0
+    @State private var showsLaterHunks: Bool
 
     init(
         unified: String,
         linesAdded: Int,
         linesRemoved: Int,
         truncated: Bool,
-        rendersScrollableContent: Bool = true
+        rendersScrollableContent: Bool = true,
+        expandsLaterHunks: Bool = false
     ) {
         hunks = Self.parse(unified)
         self.linesAdded = linesAdded
         self.linesRemoved = linesRemoved
         self.truncated = truncated
         self.rendersScrollableContent = rendersScrollableContent
+        _showsLaterHunks = State(initialValue: expandsLaterHunks)
+    }
+
+    /// The fold's label: "1 Later Hunk", "2 Later Hunks".
+    static func laterHunksLabel(_ count: Int) -> String {
+        count == 1 ? "1 Later Hunk" : "\(count) Later Hunks"
     }
 
     var body: some View {
@@ -248,37 +335,30 @@ struct UnifiedDiffView: View {
     }
 
     private var content: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("+\(linesAdded) −\(linesRemoved) lines")
-                .font(FreesideFont.mono(.callout))
+        let counts = DiffCounts(added: linesAdded, removed: linesRemoved)
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("\(counts.text) lines")
+                .font(FreesideFont.trailingSummary)
                 .foregroundStyle(Color.inkDim)
+                .accessibilityLabel("\(counts.spoken) lines")
 
             if truncated {
-                Label(
-                    Self.truncationMessage,
-                    systemImage: "exclamationmark.triangle"
-                )
-                .font(FreesideFont.caption)
-                .foregroundStyle(Color.waxText)
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.waxWash, in: RoundedRectangle(cornerRadius: 8))
+                Notice(tone: .wax, keyword: "Truncated", sentence: Self.truncationMessage)
+                    .accessibilityElement(children: .combine)
             }
 
-            ForEach(Array(hunks.enumerated()), id: \.element.id) { index, hunk in
-                if index == 0 {
-                    hunkView(hunk)
-                } else {
-                    DisclosureGroup {
-                        diffRows(Array(hunk.lines.dropFirst()))
-                            .padding(.top, 8)
-                    } label: {
-                        Text(hunk.header)
-                            .font(FreesideFont.mono(.caption))
-                            .foregroundStyle(Color.ink)
+            if let first = hunks.first {
+                hunkView(first)
+            }
+            if hunks.count > 1 {
+                SentenceDisclosure(
+                    label: Self.laterHunksLabel(hunks.count - 1), isExpanded: $showsLaterHunks
+                ) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(hunks.dropFirst()) { hunk in
+                            hunkView(hunk)
+                        }
                     }
-                    .padding(10)
-                    .background(Color.ground2, in: RoundedRectangle(cornerRadius: 8))
                 }
             }
         }
@@ -316,19 +396,32 @@ struct UnifiedDiffView: View {
         return .context
     }
 
-    @ViewBuilder
+    /// One hunk as a bordered block (R3): its header line, then its lines
+    /// in the diff cuts.
     private func hunkView(_ hunk: Hunk) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            diffRows(hunk.lines)
-        }
-        .background(Color.ground2, in: RoundedRectangle(cornerRadius: 8))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        diffRows(hunk.lines)
+            .padding(.vertical, 8)
+            // A zero minimum keeps the block at the reader's width when a
+            // static render has no scroll view to hold a long line.
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.itemBorder, lineWidth: 1))
     }
 
     @ViewBuilder
     private func diffRows(_ lines: [Line]) -> some View {
         if rendersScrollableContent {
-            ScrollView(.horizontal) { diffLineStack(lines) }
+            // A scroll view sizes its content to the widest line, so the
+            // block's own width is the floor that carries a short line's
+            // wash to the border.
+            ScrollView(.horizontal) {
+                diffLineStack(lines).frame(minWidth: hunkWidth, alignment: .leading)
+            }
+            .onGeometryChange(for: CGFloat.self) {
+                $0.size.width
+            } action: {
+                hunkWidth = $0
+            }
         } else {
             diffLineStack(lines)
         }
@@ -342,7 +435,7 @@ struct UnifiedDiffView: View {
                 // line kinds. Each chunk keeps native width/height measurement.
                 ForEach(Array(stride(from: 0, to: lines.count, by: 64)), id: \.self) { start in
                     Text(chunkText(lines[start..<min(start + 64, lines.count)]))
-                        .font(FreesideFont.mono(.caption))
+                        .font(FreesideFont.trailingSummary)
                         .lineSpacing(8)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: true, vertical: false)
@@ -358,8 +451,8 @@ struct UnifiedDiffView: View {
     private func chunkText(_ lines: ArraySlice<Line>) -> AttributedString {
         var result = AttributedString()
         for (index, line) in lines.enumerated() {
-            var text = AttributedString((index == 0 ? "" : "\n") + (line.text.isEmpty ? " " : line.text))
-            text.foregroundColor = foreground(for: line.kind)
+            if index > 0 { result.append(AttributedString("\n")) }
+            var text = Self.cut(line)
             text.backgroundColor = background(for: line.kind)
             result.append(text)
         }
@@ -369,32 +462,57 @@ struct UnifiedDiffView: View {
     @ViewBuilder
     private func diffLines(_ lines: [Line]) -> some View {
         ForEach(lines) { line in
-            Text(line.text.isEmpty ? " " : line.text)
-                .font(FreesideFont.mono(.caption))
-                .foregroundStyle(foreground(for: line.kind))
+            Text(Self.cut(line))
+                .font(FreesideFont.trailingSummary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: true, vertical: false)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
+                // The wash runs the width of the widest line, not of its
+                // own text, so added and removed lines read as bands.
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .background(background(for: line.kind))
         }
     }
 
-    private func foreground(for kind: LineKind) -> Color {
-        switch kind {
-        case .hunk: .waterText
-        case .addition: .waterText
-        case .removal: .waxText
-        case .context: .ink
+    /// One line in its diff cut (R28). A hunk header is dim, with its
+    /// removed and added ranges in the remove and add colors; the text is
+    /// the line as the diff wrote it, so a copy stays exact.
+    static func cut(_ line: Line) -> AttributedString {
+        var text = AttributedString(line.text.isEmpty ? " " : line.text)
+        switch line.kind {
+        case .addition: text.foregroundColor = .diffAdd
+        case .removal: text.foregroundColor = .diffRemove
+        case .context: text.foregroundColor = .ink
+        case .hunk:
+            text.foregroundColor = .inkDim
+            for (range, color) in hunkRanges(in: line.text) {
+                if let lower = AttributedString.Index(range.lowerBound, within: text),
+                    let upper = AttributedString.Index(range.upperBound, within: text)
+                {
+                    text[lower..<upper].foregroundColor = color
+                }
+            }
         }
+        return text
+    }
+
+    /// The `-a,b` and `+c,d` ranges of a `@@ -a,b +c,d @@` header, each with
+    /// the cut it takes. A header in any other shape yields none.
+    static func hunkRanges(in header: String) -> [(Range<String.Index>, Color)] {
+        let tokens = header.split(separator: " ", maxSplits: 3, omittingEmptySubsequences: false)
+        guard tokens.count >= 3, tokens[0] == "@@" else { return [] }
+        var ranges: [(Range<String.Index>, Color)] = []
+        if tokens[1].hasPrefix("-") { ranges.append((tokens[1].startIndex..<tokens[1].endIndex, .diffRemove)) }
+        if tokens[2].hasPrefix("+") { ranges.append((tokens[2].startIndex..<tokens[2].endIndex, .diffAdd)) }
+        return ranges
     }
 
     private func background(for kind: LineKind) -> Color {
         switch kind {
-        case .hunk: .neutralWash
-        case .addition: .waterWash
-        case .removal: .waxWash
-        case .context: .ground2
+        case .addition: .diffAddWash
+        case .removal: .diffRemoveWash
+        case .hunk, .context: .clear
         }
     }
 }

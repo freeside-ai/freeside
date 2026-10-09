@@ -6,6 +6,7 @@ struct TaskStopView: View {
     let coordinator: SyncCoordinator
     let taskID: String
     @State private var confirmation: TaskStopModel.Confirmation?
+    @State private var showsExplanation = false
 
     private var model: TaskStopModel { coordinator.taskStop }
     private var snapshot: Components.Schemas.TaskSnapshot? {
@@ -24,27 +25,36 @@ struct TaskStopView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let cancellation = snapshot?.task.cancellation?.value1 {
-                Text(Self.cancellationText(cancellation.state))
-                    .font(FreesideFont.callout)
+                Self.cancellationNotice(cancellation.state)
                 if coordinator.store.freshness != .fresh {
-                    Text("Last synced status. Refresh to check current task state.")
+                    note("Last synced status. Refresh to check current task state.")
                 }
             }
             if model.sending.contains(taskID) {
-                Label("Sending Stop…", systemImage: "arrow.up.circle")
+                note("Sending Stop…")
             } else if let pending = model.pending(for: taskID) {
                 if pending.receipt != nil {
                     if snapshot?.task.cancellation == nil {
-                        Text("Stop accepted. Awaiting current daemon confirmation.")
+                        Notice(
+                            tone: .neutral, keyword: "Requested",
+                            sentence: "Stop accepted; waiting for the daemon to confirm."
+                        )
+                        .accessibilityElement(children: .combine)
                     }
                 } else {
-                    Text(
-                        snapshot?.task.cancellation == nil
-                            ? "Stop delivery is uncertain. Retry sends the same request to recover its result."
-                            : "The original request's receipt is unresolved. Retry recovers that receipt; it does not restart cancellation."
+                    Notice(
+                        tone: .accent, keyword: "Unconfirmed",
+                        sentence: snapshot?.task.cancellation == nil
+                            ? "The daemon did not answer the stop. Nothing is assumed."
+                            : "The original request's receipt is unresolved.",
+                        action: .init(
+                            label: "Retry", accessibilityLabel: "Retry sending Stop",
+                            isEnabled: coordinator.store.freshness != .unauthenticated
+                        ) {
+                            Task { await model.retry(pending.command.command_id) }
+                        }
                     )
-                    Button("Retry sending Stop") { Task { await model.retry(pending.command.command_id) } }
-                        .disabled(coordinator.store.freshness == .unauthenticated)
+                    .accessibilityElement(children: .contain)
                 }
             } else if snapshot?.task.cancellation == nil {
                 // Stop is the page's one consequential action, so it sits
@@ -65,17 +75,20 @@ struct TaskStopView: View {
                 .accessibilityLabel("More task actions")
                 .accessibilityHint("Holds Stop Task, which reviews what stopping this task will do")
             }
-            if let reason = model.unavailableReason { Text(reason) }
-            if let message = model.messages[taskID] { Text(message) }
+            if let reason = model.unavailableReason { note(reason) }
+            if let message = model.messages[taskID] { note(message, color: .ink) }
+            if let explanation {
+                SentenceDisclosure(label: "What Happened", isExpanded: $showsExplanation) {
+                    note(explanation)
+                }
+            }
             if snapshot?.task.cancellation != nil || model.pending(for: taskID) != nil || model.unavailableReason != nil
             {
-                Button("Refresh task status") { Task { await model.refresh() } }
+                Button("Refresh Task Status") { Task { await model.refresh() } }
+                    .buttonStyle(FreesideActionButtonStyle(tone: .secondary, expands: false))
             }
         }
-        .font(FreesideFont.callout)
-        .foregroundStyle(Color.ink)
         .fixedSize(horizontal: false, vertical: true)
-        .buttonStyle(FreesideActionButtonStyle(tone: .secondary))
         .sheet(item: $confirmation) { prepared in
             TaskStopConfirmationView(entry: prepared.entry) {
                 confirmation = nil
@@ -84,77 +97,159 @@ struct TaskStopView: View {
         }
     }
 
+    /// The explanation the visible state leaves behind `What Happened`
+    /// (R12): what Retry resends, and that a second Stop does not restart
+    /// cancellation. Nil where the notice already says all there is.
+    private var explanation: String? {
+        let cancellation = snapshot?.task.cancellation?.value1
+        if !model.sending.contains(taskID), let pending = model.pending(for: taskID), pending.receipt == nil {
+            return cancellation == nil
+                ? "Retry sends the same request to recover its result."
+                : "Retry recovers that receipt; it does not restart cancellation."
+        }
+        if cancellation?.state == .failed_to_stop {
+            return "Refresh to check again; sending Stop again does not restart cancellation."
+        }
+        return nil
+    }
+
+    private func note(_ text: String, color: Color = .inkDim) -> some View {
+        Text(text)
+            .font(FreesideFont.cardBody)
+            .foregroundStyle(color)
+    }
+
+    /// The synced cancellation as a receipt notice (R12): the keyword names
+    /// the state and the sentence is `cancellationText`.
+    private static func cancellationNotice(_ state: Components.Schemas.TaskCancellationState) -> some View {
+        let (tone, keyword): (Notice.Tone, String) =
+            switch state {
+            case .requested: (.neutral, "Requested")
+            case .failed_to_stop: (.wax, "Failed")
+            case .confirmed: (.neutral, "Recorded")
+            }
+        return Notice(tone: tone, keyword: keyword, sentence: cancellationText(state))
+            .accessibilityElement(children: .combine)
+    }
+
     static func cancellationText(_ state: Components.Schemas.TaskCancellationState) -> String {
         switch state {
-        case .requested: "Stop requested. Awaiting daemon confirmation."
-        case .failed_to_stop:
-            "Failed to stop. Execution may continue. Refresh to check again; sending Stop again does not restart cancellation."
+        case .requested: "Stop sent; waiting for the daemon to confirm."
+        case .failed_to_stop: "The task did not stop. Execution may continue."
         case .confirmed: "Stop confirmed by the daemon. Existing history and PRs remain available."
         }
     }
 }
 
+/// The confirmation the task page's Stop opens (R11): what stopping does,
+/// the task it binds to, and the wax-outlined submit.
 struct TaskStopConfirmationView: View {
+    static let consequence =
+        "Stop any remaining work owned by this task and prevent further work. "
+        + "Existing history and PRs remain. The daemon must confirm that execution has stopped."
+
     let entry: PendingTaskStop
     let onConfirm: () -> Void
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        ScrollView { content }
-            .background(Color.ground2)
-            .freesideSheetPresentation()
-            .frame(idealWidth: 460, minHeight: 340)
+        VStack(spacing: 0) {
+            ScrollView { facts }
+            actionRow
+        }
+        .background(Color.ground2)
+        .freesideSheetPresentation()
+        .frame(idealWidth: 460, minHeight: 340)
     }
 
+    /// The sheet laid out in place of its scroll view, for the screenshot
+    /// suite.
     var content: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("Stop this task?").font(FreesideFont.title)
-            Text(entry.taskName).font(FreesideFont.callout.weight(.semibold))
-            Text(entry.projectName).foregroundStyle(Color.inkDim)
-            Text(
-                "Stop any remaining work owned by this task and prevent further work. Existing history and PRs remain. The daemon must confirm that execution has stopped."
-            )
-            Button("Stop task", role: .destructive, action: onConfirm)
-                .buttonStyle(FreesideActionButtonStyle(tone: .secondary))
-            Button("Keep task") { dismiss() }
-                .keyboardShortcut(.cancelAction)
+        VStack(spacing: 0) {
+            facts
+            actionRow
         }
-        .font(FreesideFont.callout)
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(24)
-        .foregroundStyle(Color.ink)
         .background(Color.ground2)
+    }
+
+    private var facts: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            FreesideSheetHeader(
+                eyebrow: "Stop task", ask: "Stop this task?", consequence: Self.consequence,
+                binding: entry.taskID, askLineLimit: nil)
+            VStack(alignment: .leading, spacing: 11) {
+                FactRow(label: "Task", value: entry.taskName)
+                FactRow(label: "Project", value: entry.projectName)
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
+        }
+    }
+
+    private var actionRow: some View {
+        FreesideSheetActionRow(
+            submitLabel: "Stop Task", tone: .destructive, submitHint: Self.consequence,
+            cancelIsOutlined: true, submitsOnReturn: false, submit: onConfirm, cancel: { dismiss() })
     }
 }
 
+/// The saved Stop requests whose results are not recovered yet (R11). Opening
+/// it never sends one; each entry carries its own state and its own Retry.
 struct TaskStopRecoveryView: View {
     let coordinator: SyncCoordinator
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("Pending Stops").font(FreesideFont.title)
-                Text("Saved requests stay here until their results are recovered. Opening this view never sends them.")
-                ForEach(coordinator.taskStop.pending, id: \.command.command_id) { entry in
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(entry.taskName).font(FreesideFont.callout.weight(.semibold))
-                        Text(entry.projectName).foregroundStyle(Color.inkDim)
-                        TaskStopView(coordinator: coordinator, taskID: entry.taskID)
-                    }
-                    Divider()
-                }
-                if coordinator.taskStop.pending.isEmpty { Text("No pending Stop requests.") }
-                Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
-            }
-            .font(FreesideFont.callout)
-            .padding(24)
-            .foregroundStyle(Color.ink)
-            .background(Color.ground2)
+        VStack(spacing: 0) {
+            ScrollView { entries }
+            FreesideSheetActionRow.done { dismiss() }
         }
         .background(Color.ground2)
         .freesideSheetPresentation()
         .frame(idealWidth: 480, minHeight: 340)
+    }
+
+    /// The sheet laid out in place of its scroll view, for the screenshot
+    /// suite.
+    var content: some View {
+        VStack(spacing: 0) {
+            entries
+            FreesideSheetActionRow.done {}
+        }
+        .background(Color.ground2)
+    }
+
+    private var pending: [PendingTaskStop] { coordinator.taskStop.pending }
+
+    private var entries: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            FreesideSheetHeader(
+                eyebrow: "Stop requests",
+                chip: StateChip(label: "\(pending.count)", cut: .attention),
+                ask: "Pending Stops",
+                consequence:
+                    "Saved requests stay here until their results are recovered. Opening this view never sends them.",
+                askLineLimit: nil)
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(pending, id: \.command.command_id) { entry in
+                    VStack(alignment: .leading, spacing: 11) {
+                        FactRow(label: "Task", value: entry.taskName)
+                        FactRow(label: "Project", value: entry.projectName)
+                        TaskStopView(coordinator: coordinator, taskID: entry.taskID)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+                    .background(Color.ground, in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.itemBorder, lineWidth: 1))
+                }
+                if pending.isEmpty {
+                    Text("No pending Stop requests.")
+                        .font(FreesideFont.cardBody)
+                        .foregroundStyle(Color.inkDim)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
+        }
     }
 }

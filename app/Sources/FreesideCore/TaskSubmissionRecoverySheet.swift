@@ -28,15 +28,7 @@ struct TaskSubmissionRecoverySheet: View {
             } else {
                 content
             }
-            Divider().overlay(Color.rule)
-            HStack {
-                Spacer()
-                Button("Close") { dismiss() }
-                    .font(FreesideFont.callout)
-                    .buttonStyle(FreesideActionButtonStyle(tone: .secondary))
-                    .keyboardShortcut(.cancelAction)
-            }
-            .padding(16)
+            FreesideSheetActionRow.done { dismiss() }
         }
         .background(Color.ground2)
         .freesideSheetPresentation()
@@ -47,55 +39,36 @@ struct TaskSubmissionRecoverySheet: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
             FreesideSheetHeader(
-                ask: "Unconfirmed submissions",
+                eyebrow: "Unconfirmed submissions",
+                chip: StateChip(label: "\(model.pendingSubmissions.count)", cut: .attention),
+                ask: "Saved, not confirmed",
                 consequence:
-                    "These requests may already be accepted. Retry sends the original request to find its result.")
+                    "The daemon did not answer these requests. Nothing is assumed; Retry sends only that one.",
+                askLineLimit: nil)
             VStack(alignment: .leading, spacing: 16) {
                 if model.pendingSubmissions.isEmpty {
-                    Text("No unconfirmed submissions.").font(FreesideFont.callout)
+                    Text("No unconfirmed submissions.")
+                        .font(FreesideFont.cardBody)
+                        .foregroundStyle(Color.inkDim)
                 }
                 ForEach(Array(model.pendingSubmissions.enumerated()), id: \.element.command_id) { index, command in
                     if case .submit_task(let payload) = command.payload {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Submission \(index + 1)")
-                                .font(FreesideFont.caption)
-                                .foregroundStyle(Color.inkDim)
-                            if let name = payload.name, !name.isEmpty {
-                                Text(name).font(FreesideFont.callout.weight(.semibold))
-                            }
-                            Text(payload.project_id)
-                                .font(FreesideFont.caption)
-                                .foregroundStyle(Color.inkDim)
-                            Text(payload.source)
-                                .font(FreesideFont.callout)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .textSelection(.enabled)
-                            Button(retryingID == command.command_id ? "Retrying…" : "Retry") {
-                                retry(command.command_id)
-                            }
-                            .font(FreesideFont.callout)
-                            .buttonStyle(FreesideActionButtonStyle(tone: .secondary))
-                            .disabled(retryingID != nil)
-                            .accessibilityLabel("Retry submission \(index + 1)")
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(16)
-                        .background(Color.ground, in: RoundedRectangle(cornerRadius: 8))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.rule))
+                        request(payload, index: index, commandID: command.command_id)
                     }
                 }
                 if retryingID == nil {
                     switch model.state {
                     case .lost:
-                        Text(
-                            model.freshness == .unauthenticated
+                        Notice(
+                            tone: .accent, keyword: "Unconfirmed",
+                            sentence: model.freshness == .unauthenticated
                                 ? "Authentication is unavailable. Reconnect to this daemon before retrying."
-                                : "Still unconfirmed. Check your connection before retrying."
+                                : "Check your connection before retrying."
                         )
-                        .font(FreesideFont.callout)
-                        .foregroundStyle(Color.waxText)
+                        .accessibilityElement(children: .combine)
                     case .rejected(let reason):
-                        Text(reason).font(FreesideFont.callout).foregroundStyle(Color.waxText)
+                        Notice(tone: .wax, keyword: "Failed", sentence: reason)
+                            .accessibilityElement(children: .combine)
                     case .idle, .submitting, .submitted:
                         EmptyView()
                     }
@@ -104,6 +77,40 @@ struct TaskSubmissionRecoverySheet: View {
             .padding(.horizontal, 16)
             .padding(.bottom, 16)
         }
+    }
+
+    /// One saved request as a bordered item (R3): what it is and where it
+    /// runs, its optional name, the work it asks for, and its own Retry.
+    private func request(
+        _ payload: Components.Schemas.SubmitTaskPayload, index: Int, commandID: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("New task · \(payload.project_id)")
+                    .font(FreesideFont.factLabel)
+                    .foregroundStyle(Color.ink)
+                if let name = payload.name, !name.isEmpty {
+                    Text(name)
+                        .font(FreesideFont.cardBody)
+                        .foregroundStyle(Color.inkDim)
+                }
+                Text(payload.source)
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.ink)
+                    .textSelection(.enabled)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            Button(retryingID == commandID ? "Retrying…" : "Retry") {
+                retry(commandID)
+            }
+            .buttonStyle(FreesideActionButtonStyle(tone: .secondary, expands: false))
+            .disabled(retryingID != nil)
+            .accessibilityLabel("Retry submission \(index + 1)")
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.itemBorder, lineWidth: 1))
     }
 
     private func retry(_ commandID: String) {

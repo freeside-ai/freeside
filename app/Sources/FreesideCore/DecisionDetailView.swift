@@ -78,8 +78,6 @@ struct DecisionDetailView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.openURL) private var openURL
-    @ScaledMetric(relativeTo: .callout) private var bannerGlyphSize: CGFloat = screenshotMetricBase(
-        10, relativeTo: .callout)
     @State private var model: DecisionModel
     @State private var proposalEditor: ProposalEditor?
     @State private var messageEditor: MessageEditor?
@@ -200,7 +198,6 @@ struct DecisionDetailView: View {
                 } else {
                     UnavailableStateView(
                         title: "Item unavailable",
-                        systemImage: "questionmark.circle",
                         description: "This attention item is not in the inbox.")
                 }
             }
@@ -471,29 +468,9 @@ struct DecisionDetailView: View {
                         Group {
                             if let specApprovalReader {
                                 VStack(spacing: 0) {
-                                    HStack(alignment: .top) {
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(
-                                                specApprovalReader == .specification
-                                                    ? "Specification" : "Specification changes"
-                                            )
-                                            .font(FreesideFont.sectionTitle)
-                                            Label("Drag the divider to resize", systemImage: "arrow.left.and.right")
-                                                .font(FreesideFont.caption)
-                                                .foregroundStyle(Color.inkDim)
-                                        }
-                                        Spacer()
-                                        Button {
-                                            self.specApprovalReader = nil
-                                        } label: {
-                                            Label("Close reader", systemImage: "xmark")
-                                                .labelStyle(.iconOnly)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .help("Close reader and show evidence and details")
+                                    specApprovalReaderHeaderRow(specApprovalReader, item: item) {
+                                        self.specApprovalReader = nil
                                     }
-                                    .padding()
-                                    Divider()
                                     SpecApprovalReaderViewport {
                                         specApprovalReaderContent(specApprovalReader, item: item)
                                     }
@@ -526,7 +503,6 @@ struct DecisionDetailView: View {
                     } else {
                         UnavailableStateView(
                             title: "No decision selected",
-                            systemImage: "sidebar.trailing",
                             description: "Select an item to inspect its facts.")
                     }
                 }
@@ -582,7 +558,7 @@ struct DecisionDetailView: View {
         VStack(alignment: .leading, spacing: CardScale.sectionGap) {
             VStack(alignment: .leading, spacing: CardScale.headGap) {
                 eyebrow(item, register: register, accessibilityLayout: accessibilityLayout)
-                banner(accessibilityLayout: accessibilityLayout)
+                banner()
                 if DecisionCardComposition.rendersAsk(for: item) {
                     Text(AttentionDisplay.ask(item))
                         .font(FreesideFont.ask)
@@ -1769,7 +1745,8 @@ struct DecisionDetailView: View {
         _ reader: SpecApprovalReader,
         item: Components.Schemas.AttentionItem,
         rendersScrollableContent: Bool = true,
-        expandsTechnicalDetails: Bool = false
+        expandsTechnicalDetails: Bool = false,
+        expandsLaterHunks: Bool = false
     ) -> some View {
         switch reader {
         case .specification:
@@ -1785,7 +1762,6 @@ struct DecisionDetailView: View {
             } else {
                 UnavailableStateView(
                     title: "Specification unavailable",
-                    systemImage: "doc",
                     description: "This approval does not carry a readable specification.")
             }
         case .diff:
@@ -1795,14 +1771,45 @@ struct DecisionDetailView: View {
                     linesAdded: revision.diff.lines_added,
                     linesRemoved: revision.diff.lines_removed,
                     truncated: revision.diff.truncated,
-                    rendersScrollableContent: rendersScrollableContent)
+                    rendersScrollableContent: rendersScrollableContent,
+                    expandsLaterHunks: expandsLaterHunks)
             } else {
                 UnavailableStateView(
                     title: "Diff unavailable",
-                    systemImage: "doc.text.magnifyingglass",
                     description: "This is the first specification revision.")
             }
         }
+    }
+
+    /// The Mac inspector's reader header: the row and the rule under it.
+    @ViewBuilder
+    private func specApprovalReaderHeaderRow(
+        _ reader: SpecApprovalReader,
+        item: Components.Schemas.AttentionItem,
+        rendersInteractiveControls: Bool = true,
+        close: @escaping () -> Void
+    ) -> some View {
+        SpecApprovalReaderHeader(
+            reader: reader,
+            revision: Self.specificationRevisionIteration(in: item),
+            rendersInteractiveControls: rendersInteractiveControls,
+            close: close
+        )
+        .padding(.horizontal)
+        .padding(.vertical, 14)
+        Divider()
+    }
+
+    /// The iPhone reader sheet's header: the same keyword and revision chip
+    /// over the reader's title.
+    private func specApprovalReaderSheetHeader(
+        _ reader: SpecApprovalReader,
+        item: Components.Schemas.AttentionItem
+    ) -> some View {
+        FreesideSheetHeader(
+            eyebrow: reader.keyword.full,
+            chip: SpecApprovalReader.revisionChip(Self.specificationRevisionIteration(in: item)),
+            ask: reader == .specification ? "Specification" : "Specification changes")
     }
 
     #if os(iOS)
@@ -1812,8 +1819,7 @@ struct DecisionDetailView: View {
             item: Components.Schemas.AttentionItem
         ) -> some View {
             VStack(spacing: 0) {
-                FreesideSheetHeader(
-                    ask: reader == .specification ? "Specification" : "Specification changes")
+                specApprovalReaderSheetHeader(reader, item: item)
                 SpecApprovalReaderViewport {
                     specApprovalReaderContent(reader, item: item)
                 }
@@ -2163,43 +2169,52 @@ struct DecisionDetailView: View {
     }
 
     func screenshotBanner() -> some View {
-        bannerLabel(
-            "Submission failed: the daemon rejected the command.",
-            systemImage: "exclamationmark",
-            tint: .waxText,
-            wash: .waxWash
-        )
-        .padding()
+        receipt(.wax, "Failed", "Submission failed: the daemon rejected the command.")
+            .padding()
     }
 
-    func screenshotRetryableReceipt(expanded: Bool, accessibilityLayout: Bool) -> some View {
+    func screenshotRetryableReceipt(expanded: Bool) -> some View {
         RetryableReceipt(
             isExpanded: .constant(expanded),
-            accessibilityLayout: accessibilityLayout,
             failureMessage: "the daemon did not answer",
             retry: {}
         )
         .padding()
+        // The card's own ground: the disclosure under the notice has no
+        // wash of its own to carry its ink over the harness's light canvas.
+        .background(Color.ground)
     }
 
-    @ViewBuilder
+    /// A reader as its host draws it: the Mac inspector's header row over
+    /// the content, or, with `asSheet`, the iPhone sheet's header and fixed
+    /// Done footer.
     func screenshotSpecApprovalReader(
         _ reader: SpecApprovalReader,
         item: Components.Schemas.AttentionItem,
-        expandsTechnicalDetails: Bool = false
+        expandsTechnicalDetails: Bool = false,
+        expandsLaterHunks: Bool = false,
+        asSheet: Bool = false
     ) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(reader == .specification ? "Specification" : "Specification changes")
-                .font(FreesideFont.sectionTitle)
+        VStack(spacing: 0) {
+            if asSheet {
+                specApprovalReaderSheetHeader(reader, item: item)
+            } else {
+                specApprovalReaderHeaderRow(reader, item: item, rendersInteractiveControls: false) {}
+            }
             specApprovalReaderContent(
                 reader,
                 item: item,
                 rendersScrollableContent: false,
-                expandsTechnicalDetails: expandsTechnicalDetails)
+                expandsTechnicalDetails: expandsTechnicalDetails,
+                expandsLaterHunks: expandsLaterHunks
+            )
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            if asSheet {
+                FreesideSheetActionRow.done {}
+            }
         }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(Color.ground)
+        .background(asSheet ? Color.ground2 : Color.sidebarGround)
     }
 
     #if os(macOS)
@@ -2626,24 +2641,21 @@ struct DecisionDetailView: View {
     }
 
     @ViewBuilder
-    private func banner(accessibilityLayout: Bool) -> some View {
+    private func banner() -> some View {
         if model.phase == .superseded {
-            bannerLabel(
-                "This item changed before your decision applied. Nothing was committed; re-review the replacement below.",
-                systemImage: "arrow.triangle.2.circlepath",
-                tint: .accentText, wash: .accentWash
+            receipt(
+                .accent, "Superseded",
+                "This item changed before your decision applied. Nothing was committed; re-review the replacement below."
             )
         } else {
             // An applied record persists even when the item stays open
             // (a non-resolving action such as acknowledge or open_pr).
             if let record = model.appliedRecord {
-                // Success is quiet: a plain tick on a neutral wash, never
-                // green and never the accent.
-                bannerLabel(
-                    "Decision applied: \(AttentionDisplay.label(record.action, for: model.snapshot?.item))",
-                    systemImage: "checkmark",
-                    tint: .inkDim, wash: .neutralWash
-                )
+                // Success is quiet: a neutral wash, never green and never
+                // the accent.
+                receipt(
+                    .neutral, "Recorded",
+                    "Decision applied: \(AttentionDisplay.label(record.action, for: model.snapshot?.item))")
             }
             // The retry affordance leads: when a preserved command may
             // hold a recorded result, resending it is the actionable
@@ -2651,23 +2663,14 @@ struct DecisionDetailView: View {
             if model.canRetryLostResponse {
                 RetryableReceipt(
                     isExpanded: $lostResponseExpanded,
-                    accessibilityLayout: accessibilityLayout,
                     failureMessage: model.submissionError
                 ) {
                     Task { await model.retryLostResponse() }
                 }
             } else if case .failed(let message) = model.validation {
-                bannerLabel(
-                    "Couldn't validate current state: \(message)",
-                    systemImage: "exclamationmark",
-                    tint: .waxText, wash: .waxWash
-                )
+                receipt(.wax, "Failed", "Couldn't validate current state: \(message)")
             } else if let message = model.submissionError {
-                bannerLabel(
-                    "Submission failed: \(message)",
-                    systemImage: "exclamationmark",
-                    tint: .waxText, wash: .waxWash
-                )
+                receipt(.wax, "Failed", "Submission failed: \(message)")
             }
         }
     }
@@ -3577,7 +3580,6 @@ struct DecisionDetailView: View {
                     } else {
                         UnavailableStateView(
                             title: "Preview unavailable",
-                            systemImage: "doc",
                             description: "This \(byteCount(preview.byteCount)) attachment is not text.")
                     }
                 }
@@ -3606,38 +3608,22 @@ struct DecisionDetailView: View {
         }
     }
 
+    /// The uncertain receipt (R12): the accent notice with its trailing
+    /// Retry, and the explanation one disclosure away.
     private struct RetryableReceipt: View {
         @Binding var isExpanded: Bool
-        let accessibilityLayout: Bool
         let failureMessage: String?
         let retry: () -> Void
-        @ScaledMetric(relativeTo: .callout) private var glyphSize: CGFloat = screenshotMetricBase(
-            10, relativeTo: .callout)
 
         var body: some View {
-            let layout =
-                accessibilityLayout
-                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
-                : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 8))
             VStack(alignment: .leading, spacing: 8) {
-                layout {
-                    Label {
-                        Text("The response was lost.")
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.75)
-                            .textSelection(.enabled)
-                    } icon: {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: glyphSize, weight: .semibold))
-                    }
-                    if !accessibilityLayout {
-                        Spacer(minLength: 0)
-                    }
-                    Button("Retry", action: retry)
-                        .buttonStyle(FreesideActionButtonStyle(tone: .tertiary))
-                        .accessibilityLabel("Retry the lost decision")
-                }
-                DisclosureGroup(isExpanded: $isExpanded) {
+                Notice(
+                    tone: .accent, keyword: "Unconfirmed",
+                    sentence: "The daemon did not answer. Nothing is assumed.",
+                    action: .init(label: "Retry", accessibilityLabel: "Retry the lost decision", handler: retry)
+                )
+                .accessibilityElement(children: .contain)
+                SentenceDisclosure(label: "What Happened", isExpanded: $isExpanded) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(
                             "The decision may already be recorded. Retry resends the same command and returns the original result."
@@ -3646,35 +3632,20 @@ struct DecisionDetailView: View {
                             Text(failureMessage)
                         }
                     }
-                    .textSelection(.enabled)
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.inkDim)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                } label: {
-                    Text("Details")
-                        .foregroundStyle(Color.accentText)
                 }
             }
-            .font(FreesideFont.callout)
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.accentWash, in: RoundedRectangle(cornerRadius: 8))
-            .foregroundStyle(Color.accentText)
+            .textSelection(.enabled)
         }
     }
 
-    /// A card banner: tinted wash, glyph and message in the state color.
-    private func bannerLabel(_ text: String, systemImage: String, tint: Color, wash: Color) -> some View {
-        Label {
-            Text(text)
-        } icon: {
-            Image(systemName: systemImage)
-                .font(.system(size: bannerGlyphSize, weight: .semibold))
-        }
-        .font(FreesideFont.callout)
-        .textSelection(.enabled)
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(wash, in: RoundedRectangle(cornerRadius: 8))
-        .foregroundStyle(tint)
+    /// One receipt row (R12): a notice whose keyword names the state.
+    private func receipt(_ tone: Notice.Tone, _ keyword: String, _ sentence: String) -> some View {
+        Notice(tone: tone, keyword: keyword, sentence: sentence)
+            .textSelection(.enabled)
+            .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder
@@ -3740,11 +3711,9 @@ struct DecisionDetailView: View {
             overflowMenu(ranking.overflow, item: item)
 
             if ranking.notDecidableHere {
-                bannerLabel(
-                    "This decision needs a written answer, and this build cannot carry one. Nothing is blocked by opening it; the item stays open until answered.",
-                    systemImage: "exclamationmark.bubble",
-                    tint: .accentText,
-                    wash: .accentWash
+                receipt(
+                    .accent, "Unsupported",
+                    "This decision needs a written answer, and this build cannot carry one. Nothing is blocked by opening it; the item stays open until answered."
                 )
                 .onAppear { model.emitNotDecidableHereShown() }
             }
@@ -3981,6 +3950,11 @@ func screenshotMetricBase(
 }
 
 struct TaskProposalRevisionSheet: View {
+    /// The header the sheet and its screenshot composition share (R11).
+    private static var header: FreesideSheetHeader {
+        FreesideSheetHeader(eyebrow: "Start with changes", ask: "What should change before it starts?")
+    }
+
     @Environment(\.dismiss) private var dismiss
     @State private var expectedCostText: String
     @State private var componentCount: Int
@@ -4012,7 +3986,7 @@ struct TaskProposalRevisionSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            FreesideSheetHeader(ask: "Start with changes")
+            Self.header
             Form {
                 LabeledContent("Intent", value: "Implement subject")
                     .listRowBackground(Color.ground2)
@@ -4040,6 +4014,7 @@ struct TaskProposalRevisionSheet: View {
             FreesideSheetActionRow(
                 submitLabel: "Submit",
                 isSubmitEnabled: revision != nil,
+                cancelIsOutlined: true,
                 submit: {
                     if let revision {
                         submit(revision)
@@ -4056,36 +4031,40 @@ struct TaskProposalRevisionSheet: View {
     /// The project-owned revision composition without Form and TextField,
     /// whose AppKit-backed controls ImageRenderer cannot draw off-screen.
     func screenshotContent() -> some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("Start with changes")
-                .font(FreesideFont.sectionTitle)
-            VStack(alignment: .leading, spacing: 8) {
-                KeywordLabel(text: "Intent")
-                Text("Implement subject")
-                Divider()
-                KeywordLabel(text: "Expected cost")
-                Text("\(expectedCostText) units")
-                Divider()
-                KeywordLabel(text: "Components")
-                Text("\(componentCount)")
-                Divider()
-                KeywordLabel(text: "Declared paths")
-                Text("\(originalFacts.scope.declared_path_count)")
-                Divider()
-                KeywordLabel(text: "Touches control plane")
-                Text(touchesControlPlane ? "Yes" : "No")
+        VStack(alignment: .leading, spacing: 0) {
+            Self.header
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 8) {
+                    KeywordLabel(text: "Intent")
+                    Text("Implement subject")
+                    Divider()
+                    KeywordLabel(text: "Expected cost")
+                    Text("\(expectedCostText) units")
+                    Divider()
+                    KeywordLabel(text: "Components")
+                    Text("\(componentCount)")
+                    Divider()
+                    KeywordLabel(text: "Declared paths")
+                    Text("\(originalFacts.scope.declared_path_count)")
+                    Divider()
+                    KeywordLabel(text: "Touches control plane")
+                    Text(touchesControlPlane ? "Yes" : "No")
+                }
+                .font(FreesideFont.body)
+                .padding(14)
+                .freesideCard()
+                Text("Expected cost must be a whole number from 1 to 1,000,000 units.")
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.inkDim)
             }
-            .padding(14)
-            .freesideCard()
-            Text("Expected cost must be a whole number from 1 to 1,000,000 units.")
-                .font(FreesideFont.caption)
-                .foregroundStyle(Color.inkDim)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
             FreesideSheetActionRow(
                 submitLabel: "Submit",
                 isSubmitEnabled: revision != nil,
+                cancelIsOutlined: true,
                 submit: {}, cancel: {})
         }
-        .padding(24)
         .frame(maxWidth: 560, alignment: .leading)
         .foregroundStyle(Color.ink)
         // The sheet's own ground, so the dusk composition reads dusk ink on
@@ -4111,6 +4090,11 @@ struct TaskProposalRevisionSheet: View {
 /// toggle for whether the PR closes the issue. The daemon owns the target,
 /// provenance, and origin, so nothing else is editable here (issue #1443).
 struct EffectProposalRevisionSheet: View {
+    /// The header the sheet and its screenshot composition share (R11).
+    private static var header: FreesideSheetHeader {
+        FreesideSheetHeader(eyebrow: "Approve with changes", ask: "Should merging close the issue?")
+    }
+
     @Environment(\.dismiss) private var dismiss
     @State private var resolves: Bool
     private let originalFacts: Components.Schemas.EffectProposalFactsSnapshot
@@ -4138,7 +4122,7 @@ struct EffectProposalRevisionSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            FreesideSheetHeader(ask: "Approve with changes")
+            Self.header
             Form {
                 Toggle(toggleTitle, isOn: $resolves)
                     .listRowBackground(Color.ground2)
@@ -4156,6 +4140,7 @@ struct EffectProposalRevisionSheet: View {
             FreesideSheetActionRow(
                 submitLabel: "Approve",
                 isSubmitEnabled: revision != nil,
+                cancelIsOutlined: true,
                 submit: {
                     if let revision {
                         submit(revision)
@@ -4173,26 +4158,30 @@ struct EffectProposalRevisionSheet: View {
     /// ImageRenderer cannot draw off-screen on macOS; the state renders as
     /// text instead.
     func screenshotContent() -> some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("Approve with changes")
-                .font(FreesideFont.sectionTitle)
-            VStack(alignment: .leading, spacing: 8) {
-                KeywordLabel(text: "On merge")
-                Text(resolves ? "Closes the issue" : "Doesn't close the issue")
-                Divider()
-                Text(toggleTitle)
+        VStack(alignment: .leading, spacing: 0) {
+            Self.header
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 8) {
+                    KeywordLabel(text: "On merge")
+                    Text(resolves ? "Closes the issue" : "Doesn't close the issue")
+                    Divider()
+                    Text(toggleTitle)
+                }
+                .font(FreesideFont.body)
+                .padding(14)
+                .freesideCard()
+                Text("Approving with changes flips only whether the pull request closes the issue.")
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.inkDim)
             }
-            .padding(14)
-            .freesideCard()
-            Text("Approving with changes flips only whether the pull request closes the issue.")
-                .font(FreesideFont.caption)
-                .foregroundStyle(Color.inkDim)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
             FreesideSheetActionRow(
                 submitLabel: "Approve",
                 isSubmitEnabled: revision != nil,
+                cancelIsOutlined: true,
                 submit: {}, cancel: {})
         }
-        .padding(24)
         .frame(maxWidth: 560, alignment: .leading)
         .foregroundStyle(Color.ink)
         // The sheet's own ground, so the dusk composition reads dusk ink on
@@ -4202,6 +4191,11 @@ struct EffectProposalRevisionSheet: View {
 }
 
 struct TaskProposalSnoozeSheet: View {
+    /// The header the sheet and its screenshot composition share (R11).
+    private static var header: FreesideSheetHeader {
+        FreesideSheetHeader(eyebrow: "Snooze proposal", ask: "When should this proposal return?")
+    }
+
     @Environment(\.dismiss) private var dismiss
     @State private var until: Date
     private let now: Date
@@ -4234,7 +4228,7 @@ struct TaskProposalSnoozeSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            FreesideSheetHeader(ask: "Snooze proposal")
+            Self.header
             Form {
                 DatePicker(
                     "Snooze until", selection: $until, in: now...,
@@ -4255,6 +4249,7 @@ struct TaskProposalSnoozeSheet: View {
                 // snooze. The screenshot composition uses the injected
                 // `now` instead, so its golden stays deterministic.
                 isSubmitEnabled: Self.isValidSnooze(until: until, now: Date()),
+                cancelIsOutlined: true,
                 submit: {
                     guard Self.isValidSnooze(until: until, now: Date()) else { return }
                     submit(until)
@@ -4270,25 +4265,28 @@ struct TaskProposalSnoozeSheet: View {
     /// The project-owned snooze composition without Form and DatePicker,
     /// whose AppKit-backed controls ImageRenderer cannot draw off-screen.
     func screenshotContent() -> some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("Snooze proposal")
-                .font(FreesideFont.sectionTitle)
-            VStack(alignment: .leading, spacing: 8) {
-                KeywordLabel(text: "Snooze until")
-                Text(formattedScreenshotUntil)
-                    .font(FreesideFont.body)
+        VStack(alignment: .leading, spacing: 0) {
+            Self.header
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 8) {
+                    KeywordLabel(text: "Snooze until")
+                    Text(formattedScreenshotUntil)
+                }
+                .font(FreesideFont.body)
+                .padding(14)
+                .freesideCard()
+                Text("The proposal returns to the inbox at this date and time.")
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.inkDim)
             }
-            .padding(14)
-            .freesideCard()
-            Text("The proposal returns to the inbox at this date and time.")
-                .font(FreesideFont.caption)
-                .foregroundStyle(Color.inkDim)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
             FreesideSheetActionRow(
                 submitLabel: "Snooze",
                 isSubmitEnabled: Self.isValidSnooze(until: until, now: now),
+                cancelIsOutlined: true,
                 submit: {}, cancel: {})
         }
-        .padding(24)
         .frame(maxWidth: 560, alignment: .leading)
         .foregroundStyle(Color.ink)
         // The sheet's own ground, so the dusk composition reads dusk ink on

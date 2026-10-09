@@ -77,6 +77,9 @@
         /// The row a screenshot golden shows hovered; the live panel reads
         /// the pointer instead.
         private var screenshotHoveredRow: Row?
+        /// The row a screenshot golden shows keyboard-highlighted; the live
+        /// panel moves the highlight with the arrow keys.
+        private var screenshotKeyboardRow: Row?
 
         @Environment(\.dismiss) private var dismiss
         @Environment(\.timeZone) private var timeZone
@@ -110,6 +113,14 @@
             return panel
         }
 
+        func screenshotHighlighting(_ row: Row) -> Self {
+            var panel = self
+            panel.screenshotKeyboardRow = row
+            return panel
+        }
+
+        private var highlightedRow: Row? { keyboardRow ?? screenshotKeyboardRow }
+
         public var body: some View {
             VStack(alignment: .leading, spacing: 2) {
                 row(.openApp, "Open Freeside") { actions.openApp() }
@@ -117,10 +128,6 @@
                     actions.showInbox()
                 }
                 divider
-                KeywordLabel(text: "Daemon")
-                    .padding(.top, 4)
-                    .padding(.bottom, 6)
-                    .padding(.horizontal, 10)
                 stateBlock
                 if state == .needsApproval {
                     row(.openApprovalSettings, "Open Login Items…") { actions.openApprovalSettings() }
@@ -134,7 +141,7 @@
                             Text("↻")
                             Text("Restart observed")
                         }
-                        .font(FreesideFont.callout)
+                        .font(FreesideFont.cardBody)
                         .foregroundStyle(Color.inkDim)
                         .padding(.horizontal, 10)
                         .padding(.bottom, 8)
@@ -142,21 +149,10 @@
                     }
                 }
                 if let unattendedStopped {
-                    insetCard(fill: .waxWash) {
-                        HStack(alignment: .firstTextBaseline, spacing: 10) {
-                            KeywordLabel(text: "Stopped", color: .waxText)
-                            Text(unattendedStopped)
-                                .font(FreesideFont.callout)
-                                .foregroundStyle(Color.ink)
-                        }
-                    }
+                    panelNotice(Notice(tone: .wax, keyword: "Stopped", sentence: unattendedStopped))
                 }
                 if let actionError {
-                    insetCard(fill: .waxWash) {
-                        Text(actionError)
-                            .font(FreesideFont.callout)
-                            .foregroundStyle(Color.waxText)
-                    }
+                    panelNotice(Notice(tone: .wax, keyword: "Failed", sentence: actionError))
                 }
                 if let control {
                     controlButton(control)
@@ -222,7 +218,7 @@
                     trailing
                 }
             }
-            .buttonStyle(PanelRowStyle(isHovered: isHovered(id), isHighlighted: keyboardRow == id))
+            .buttonStyle(PanelRowStyle(isHovered: isHovered(id), isHighlighted: highlightedRow == id))
             .disabled(!enabled)
             .onHover { hovering in
                 if hovering {
@@ -240,7 +236,7 @@
         @ViewBuilder private var inboxTrailing: some View {
             if let inbox {
                 Text("\(inbox.open)")
-                    .font(FreesideFont.monoCaption)
+                    .font(FreesideFont.trailingSummary)
                     .foregroundStyle(Color.inkDim)
                 if inbox.urgent > 0 {
                     StateChip(label: "\(inbox.urgent) Urgent", color: .waxText)
@@ -250,8 +246,8 @@
 
         private func shortcutGloss(_ keys: String) -> some View {
             Text(keys)
-                .font(FreesideFont.monoCaption)
-                .foregroundStyle(Color.inkFaint)
+                .font(FreesideFont.trailingSummary)
+                .foregroundStyle(Color.inkDim)
                 .accessibilityLabel("Command Q")
         }
 
@@ -273,64 +269,37 @@
 
         // MARK: Daemon state
 
+        /// The Daemon section's opening (R27): the keyword on the left and
+        /// the state as the one status mark on the right (R4), over the
+        /// line that explains it. VoiceOver reads the keyword, then the
+        /// state and its explanation as one sentence on the chip.
         private var stateBlock: some View {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    stateGlyph
-                        .frame(width: 12)
-                    Text(stateTitle)
-                        .font(FreesideFont.sans(.body, weight: .medium))
+            VStack(alignment: .leading, spacing: 8) {
+                CardEyebrow(keyword: "Daemon") {
+                    stateChip
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(stateAccessibilityLabel)
                 }
-                .foregroundStyle(stateColor)
                 if let secondary = stateSecondaryLine {
                     secondary
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(.leading, 20)
+                        .accessibilityHidden(true)
                 }
             }
             .padding(.horizontal, 10)
+            .padding(.top, 4)
             .padding(.bottom, 8)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(stateAccessibilityLabel)
         }
 
-        @ViewBuilder private var stateGlyph: some View {
+        private var stateChip: StateChip {
             switch state {
-            case .checking:
-                ProgressView()
-                    .controlSize(.mini)
-                    .tint(Color.waterText)
-            case .running:
-                Text("✓")
-            case .stopped:
-                Text("■")
-            case .needsApproval:
-                Text("!")
-            case .unavailable, .unreachable:
-                Text("✕")
-            case .unsupervised:
-                Text("–")
-            }
-        }
-
-        private var stateTitle: String {
-            switch state {
-            case .checking: "Checking daemon…"
-            case .running: "Running"
-            case .stopped: "Stopped"
-            case .needsApproval: "Approval needed"
-            case .unavailable: "LaunchAgent unavailable"
-            case .unreachable: "Unreachable"
-            case .unsupervised: "No supervised daemon"
-            }
-        }
-
-        private var stateColor: Color {
-            switch state {
-            case .checking, .unsupervised: .inkDim
-            case .running: .ink
-            case .stopped, .needsApproval: .accentText
-            case .unavailable, .unreachable: .waxText
+            case .checking: StateChip(label: "Checking…", cut: .faint)
+            case .running: StateChip(label: "Running", cut: .ink)
+            case .stopped: StateChip(label: "Stopped", cut: .attention)
+            case .needsApproval: StateChip(label: "Approval Needed", cut: .attention)
+            case .unavailable: StateChip(label: "LaunchAgent Unavailable", color: .waxText)
+            case .unreachable: StateChip(label: "Unreachable", color: .waxText)
+            case .unsupervised: StateChip(label: "No Supervised Daemon", cut: .faint)
             }
         }
 
@@ -343,11 +312,11 @@
                 // The one short time format: the year appears only when
                 // the daemon has been up since another year.
                 Text(
-                    "v\(health.version) · started "
+                    "v\(health.version) · from "
                         + FreesideFormat.shortTime(
                             health.startedAt, now: pinnedNow ?? Date(), locale: locale, timeZone: timeZone)
                 )
-                .font(FreesideFont.monoCaption)
+                .font(FreesideFont.trailingSummary)
                 .foregroundStyle(Color.inkDim)
             case .stopped:
                 callout("Actions in the app are disabled until it starts.")
@@ -364,18 +333,18 @@
 
         private func callout(_ string: String) -> Text {
             Text(string)
-                .font(FreesideFont.callout)
+                .font(FreesideFont.cardBody)
                 .foregroundStyle(Color.inkDim)
         }
 
-        /// VoiceOver reads the state block as one element, in the sentence
-        /// the visual line and its explanation add up to.
+        /// What VoiceOver reads for the state: the sentence the chip and
+        /// its explanation add up to.
         private var stateAccessibilityLabel: String {
             switch state {
             case .checking:
                 "Checking daemon"
             case .running(let health, _):
-                "Daemon running, version \(health.version), started "
+                "Daemon running, version \(health.version), from "
                     + health.startedAt.formatted(date: .abbreviated, time: .shortened)
             case .stopped:
                 "Daemon stopped. Actions in the app are disabled until it starts."
@@ -391,27 +360,17 @@
         }
 
         private func mismatchCard(_ health: DaemonHealth) -> some View {
-            insetCard(fill: .accentWashSoft) {
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    KeywordLabel(text: "Mismatch", color: .accentText)
-                    Text(
-                        "Daemon contract \(ContractDigestDisplay.short(health.contractDigest)), "
-                            + "app built for \(ContractDigestDisplay.shortClient) — "
-                            + "update the daemon or the app."
-                    )
-                    .font(FreesideFont.callout)
-                    .foregroundStyle(Color.ink)
-                }
-            }
+            let mismatch = ContractMismatchSentence(daemonContract: health.contractDigest)
+            return panelNotice(
+                Notice(
+                    tone: .accent, keyword: "Mismatch", sentence: mismatch.plain,
+                    drawn: mismatch.text))
         }
 
-        private func insetCard(fill: Color, @ViewBuilder content: () -> some View) -> some View {
-            content()
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.vertical, 8)
-                .padding(.horizontal, 10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 6).fill(fill))
+        /// A notice inside the Daemon section, inset to the rows' text edge
+        /// and read by VoiceOver as one element.
+        private func panelNotice(_ notice: Notice) -> some View {
+            notice
                 .padding(.horizontal, 10)
                 .padding(.bottom, 8)
                 .accessibilityElement(children: .combine)
@@ -451,7 +410,7 @@
                 .buttonStyle(FreesideActionButtonStyle(tone: tone, compact: true, expands: false))
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(keyboardRow == .control ? Color.accentBorder : .clear, lineWidth: 1)
+                        .strokeBorder(highlightedRow == .control ? Color.accentBorder : .clear, lineWidth: 1)
                         .padding(-2)
                 )
                 .padding(.horizontal, 10)
@@ -509,7 +468,7 @@
         }
     }
 
-    /// The panel row: body ink on a 34pt line, ground-3 under the pointer,
+    /// The panel row: body ink on a 34pt line, the hover cut under the pointer,
     /// accent-wash-soft while pressed, and a 1pt accent ring for the
     /// keyboard highlight with no fill change. A disabled row keeps its
     /// place and takes the faint cut.
@@ -535,7 +494,7 @@
         private func fill(isPressed: Bool) -> Color {
             guard isEnabled else { return .clear }
             if isPressed { return .accentWashSoft }
-            return isHovered ? .ground3 : .clear
+            return isHovered ? .hover : .clear
         }
     }
 

@@ -294,6 +294,7 @@ struct TaskRowView: View {
     /// Set when another visible task shares this one's name, so the meta line
     /// carries a short task id to tell the two rows apart.
     var showsIdentifier = false
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         if let now {
@@ -330,9 +331,12 @@ struct TaskRowView: View {
     private func content(at now: Date) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             let lines = TaskDisplay.rowLines(task, position: position)
+            // Two lines at the standard sizes; an accessibility size lifts
+            // the cap, so larger text hides no part of the name (R22).
             TaskNameLabel(
                 name: task.display_names.task, font: FreesideFont.statement,
-                monoFont: FreesideFont.monoValue)
+                monoFont: FreesideFont.monoValue,
+                lineLimit: dynamicTypeSize.isAccessibilitySize ? nil : 2)
             // The chip sits above the meta line, but VoiceOver reads the
             // status with the progress it heads, as it always has: the chip
             // is hidden and the progress block speaks every string in order.
@@ -356,7 +360,11 @@ struct TaskRowView: View {
                         }
                         switch guidance {
                         case .link(let title):
+                            // Wraps like the sentences above it; left to the
+                            // row it ends in an ellipsis at larger sizes.
                             FreesideLink(title: title, face: FreesideFont.noticeAction)
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
                         case .sentence(let sentence): progressText(sentence)
                         case nil: EmptyView()
                         }

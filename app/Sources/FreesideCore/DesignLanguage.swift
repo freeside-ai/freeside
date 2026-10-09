@@ -762,7 +762,9 @@ struct SystemCallout<Content: View>: View {
 /// The one notice (R14): a full-width wash, a keyword in the tone's tint, a
 /// dim sentence, and an optional trailing text action in the same tint. The
 /// sentence sits beside the keyword while the line fits and stacks under it
-/// when it does not. A notice never folds and never takes the accent bar.
+/// when it does not. At an accessibility size an action takes its own line
+/// under the sentence (R22), so the sentence keeps the notice's width. A
+/// notice never folds and never takes the accent bar.
 struct Notice: View {
     enum Tone: CaseIterable {
         /// A record of something done: nothing to act on.
@@ -791,28 +793,49 @@ struct Notice: View {
 
     struct Action {
         let label: String
+        /// Read by VoiceOver in place of the label, where the short label
+        /// alone does not say what it acts on.
+        var accessibilityLabel: String? = nil
+        /// False while the action cannot run. The label stays in place in
+        /// the faint cut every disabled control takes.
+        var isEnabled = true
         let handler: () -> Void
     }
 
     let tone: Tone
     let keyword: String
     let sentence: String
+    /// The sentence as styled text in place of the plain string, where a
+    /// span takes another face, such as a digest in mono. `sentence` holds
+    /// the same line as plain text.
+    var drawn: Text? = nil
     var action: Action? = nil
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                KeywordLabel(text: keyword, color: tone.tint)
-                sentenceText
-                Spacer(minLength: 0)
-                actionButton
-            }
-            VStack(alignment: .leading, spacing: 4) {
-                KeywordLabel(text: keyword, color: tone.tint)
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
+        Group {
+            if action != nil, dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 4) {
+                    KeywordLabel(text: keyword, color: tone.tint)
                     sentenceText
-                    Spacer(minLength: 0)
-                    actionButton
+                    actionButton.padding(.top, 4)
+                }
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        KeywordLabel(text: keyword, color: tone.tint)
+                        sentenceText
+                        Spacer(minLength: 0)
+                        actionButton
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        KeywordLabel(text: keyword, color: tone.tint)
+                        HStack(alignment: .firstTextBaseline, spacing: 12) {
+                            sentenceText
+                            Spacer(minLength: 0)
+                            actionButton
+                        }
+                    }
                 }
             }
         }
@@ -823,7 +846,7 @@ struct Notice: View {
     }
 
     private var sentenceText: some View {
-        Text(sentence)
+        (drawn ?? Text(sentence))
             .font(FreesideFont.cardBody)
             .foregroundStyle(Color.inkDim)
             .multilineTextAlignment(.leading)
@@ -834,9 +857,11 @@ struct Notice: View {
             Button(action.label, action: action.handler)
                 .buttonStyle(.plain)
                 .font(FreesideFont.noticeAction)
-                .foregroundStyle(tone.tint)
+                .foregroundStyle(action.isEnabled ? tone.tint : Color.inkFaint)
                 .fixedSize()
                 .freesideFocusRing(cornerRadius: 4)
+                .disabled(!action.isEnabled)
+                .accessibilityLabel(action.accessibilityLabel ?? action.label)
         }
     }
 }
@@ -1510,9 +1535,12 @@ private struct FreesideActionButtonBody: View {
 /// What a sheet opens with in place of a navigation bar (R11): an optional
 /// eyebrow keyword naming the kind of sheet, the serif ask, the consequence
 /// of answering it in dim sans, and the binding the answer applies to in
-/// mono, 16pt in from the edge.
+/// mono, 16pt in from the edge. A chip, when the sheet has a state or a
+/// count to show, trails the eyebrow the way a card's does.
 struct FreesideSheetHeader: View {
     var eyebrow: String? = nil
+    /// Drawn only beside an eyebrow.
+    var chip: StateChip? = nil
     let ask: String
     var consequence: String? = nil
     var binding: String? = nil
@@ -1527,7 +1555,11 @@ struct FreesideSheetHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let eyebrow {
-                KeywordLabel(text: eyebrow)
+                if let chip {
+                    CardEyebrow(keyword: eyebrow) { chip }
+                } else {
+                    KeywordLabel(text: eyebrow)
+                }
             }
             Text(ask)
                 .font(FreesideFont.sectionTitle)
@@ -1541,7 +1573,7 @@ struct FreesideSheetHeader: View {
             }
             if let binding {
                 Text(binding)
-                    .font(FreesideFont.monoCaption)
+                    .font(FreesideFont.monoValue)
                     .foregroundStyle(Color.inkDim)
             }
         }
@@ -1566,6 +1598,10 @@ struct FreesideSheetActionRow: View {
     /// The refined footer (R11): Cancel as an outline that shares the row
     /// equally with the submit, in place of the hugging text button.
     var cancelIsOutlined = false
+    /// False where Return must not take the submit. The task Stop
+    /// confirmation never bound Return to its destructive control, and
+    /// taking this row's shape does not change that.
+    var submitsOnReturn = true
     let submit: () -> Void
     /// `nil` for a reader's single dismiss: no Cancel is drawn and Escape
     /// routes to `submit`, so both keys close the sheet.
@@ -1642,7 +1678,7 @@ struct FreesideSheetActionRow: View {
             .buttonStyle(
                 FreesideActionButtonStyle(tone: tone, expands: expands)
             )
-            .keyboardShortcut(.defaultAction)
+            .keyboardShortcut(submitsOnReturn ? .defaultAction : nil)
             .disabled(!isSubmitEnabled)
             .accessibilityHint(submitHint ?? "")
     }

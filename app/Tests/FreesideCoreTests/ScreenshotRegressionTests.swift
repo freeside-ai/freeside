@@ -1041,7 +1041,7 @@
                             width: 390,
                             view: AnyView(
                                 revisedDetail.screenshotSpecApprovalReader(
-                                    .specification, item: revised.item))))
+                                    .specification, item: revised.item, asSheet: true))))
                     surfaces.append(
                         Surface(
                             name: "decision-spec_approval-specification-reader-dark",
@@ -1057,7 +1057,7 @@
                             colorScheme: .dark,
                             view: AnyView(
                                 revisedDetail.screenshotSpecApprovalReader(
-                                    .specification, item: revised.item))))
+                                    .specification, item: revised.item, asSheet: true))))
                     surfaces.append(
                         Surface(
                             name: "decision-spec_approval-specification-reader-details",
@@ -1079,7 +1079,7 @@
                             width: 390,
                             view: AnyView(
                                 revisedDetail.screenshotSpecApprovalReader(
-                                    .diff, item: revised.item))))
+                                    .diff, item: revised.item, asSheet: true))))
                     surfaces.append(
                         Surface(
                             name: "decision-spec_approval-diff-reader-dark",
@@ -1095,7 +1095,7 @@
                             colorScheme: .dark,
                             view: AnyView(
                                 revisedDetail.screenshotSpecApprovalReader(
-                                    .diff, item: revised.item))))
+                                    .diff, item: revised.item, asSheet: true))))
                 }
 
                 if snapshot.item._type == .finding_adjudication {
@@ -2141,15 +2141,14 @@
                                     "review-evidence-\(name)-\(Int(width))-\(colorScheme == .dark ? "dark" : "light")",
                                 width: width, colorScheme: colorScheme, nativeAppearance: true,
                                 view: AnyView(
-                                    VStack(alignment: .leading, spacing: 14) {
-                                        Text("Reviewer output").font(FreesideFont.title)
-                                        Text("Agent claims · Round \(round.round) · Head \(round.head_sha.prefix(8))")
-                                            .font(FreesideFont.caption)
-                                        Text("Private, sensitive output. Not publishable verifier evidence.")
-                                            .font(FreesideFont.caption).foregroundStyle(Color.inkDim)
+                                    VStack(alignment: .leading, spacing: 0) {
+                                        ReviewEvidenceContent.sheetHeader(for: round)
                                         ReviewEvidenceContent(
-                                            round: round, evidence: evidence, presentation: presentation)
-                                    }.padding(24))))
+                                            round: round, evidence: evidence, presentation: presentation
+                                        )
+                                        .padding(.horizontal, 16)
+                                        .padding(.bottom, 16)
+                                    }.background(Color.ground2))))
                     }
                     surfaces.append(
                         Surface(
@@ -2157,7 +2156,7 @@
                             width: width, colorScheme: colorScheme, nativeAppearance: true,
                             view: AnyView(
                                 ReviewOutputText(bytes: Array("Retained reviewer output: ".utf8) + [0xff, 0xfe])
-                                    .font(FreesideFont.monoCaption)
+                                    .font(FreesideFont.trailingSummary)
                                     .foregroundStyle(Color.ink)
                                     .padding(24))))
                     var unknownRound = RunFixtures.reviewRound(.completed, availability: .unknown)
@@ -2452,26 +2451,20 @@
                         name: "decision-retryable-receipt",
                         width: 480,
                         view: AnyView(
-                            bannerDetail.screenshotRetryableReceipt(
-                                expanded: false,
-                                accessibilityLayout: dynamicTypeSize >= .accessibility1))))
+                            bannerDetail.screenshotRetryableReceipt(expanded: false))))
                 surfaces.append(
                     Surface(
                         name: "decision-retryable-receipt-open",
                         width: 480,
                         view: AnyView(
-                            bannerDetail.screenshotRetryableReceipt(
-                                expanded: true,
-                                accessibilityLayout: dynamicTypeSize >= .accessibility1))))
+                            bannerDetail.screenshotRetryableReceipt(expanded: true))))
                 surfaces.append(
                     Surface(
                         name: "decision-retryable-receipt-phone-dark",
                         width: 390,
                         colorScheme: .dark,
                         view: AnyView(
-                            bannerDetail.screenshotRetryableReceipt(
-                                expanded: false,
-                                accessibilityLayout: dynamicTypeSize >= .accessibility1))))
+                            bannerDetail.screenshotRetryableReceipt(expanded: false))))
             }
             surfaces.append(
                 Surface(
@@ -2480,7 +2473,6 @@
                     view: AnyView(
                         UnavailableStateView(
                             title: "No decision selected",
-                            systemImage: "sidebar.trailing",
                             description: "Select an item to inspect its facts."))))
 
             // Freshness banner over fresh vs. genuinely stale data (#1130).
@@ -3021,6 +3013,132 @@
                         view: AnyView(
                             framedDetail.screenshotInspector(framed, at: dynamicTypeSize))))
             }
+            // The two pointer states no other surface can draw: the first
+            // control with a segment hovered, the second with one pressed.
+            let segments: [FreesideSegmentedControl<Int>.Segment] = [
+                .init(value: 0, label: "Open", count: 6),
+                .init(value: 1, label: "Snoozed", count: 2),
+                .init(value: 2, label: "Done"),
+            ]
+            for (suffix, colorScheme) in [("", ColorScheme.light), ("-dark", .dark)] {
+                surfaces.append(
+                    Surface(
+                        name: "segmented-control-pointer-states\(suffix)",
+                        width: 280,
+                        colorScheme: colorScheme,
+                        view: AnyView(
+                            VStack(spacing: 12) {
+                                FreesideSegmentedControl(
+                                    accessibilityLabel: "Scope", segments: segments,
+                                    selection: .constant(0), screenshotHovered: 1)
+                                FreesideSegmentedControl(
+                                    accessibilityLabel: "Scope", segments: segments,
+                                    selection: .constant(0), screenshotPressed: 1)
+                            }
+                            .padding(12)
+                            .background(Color.sidebarGround))))
+            }
+
+            // The standing-surface frames no earlier surface drew (#1803).
+            // The revoked banner with its recovery action, then the four
+            // notices the root view can stack, at Mac and phone widths.
+            let mismatch = InboxStore.Freshness.contractMismatch(
+                daemonContract: "sha256:" + String(repeating: "a", count: 64))
+            surfaces.append(
+                Surface(
+                    name: "freshness-banner-revoked",
+                    width: 640,
+                    view: AnyView(
+                        VStack(spacing: 0) {
+                            FreshnessBanner(freshness: .unauthenticated, onRePair: {})
+                            Text("Inbox").padding()
+                        })))
+            for (suffix, width) in [("", CGFloat(640)), ("-phone", CGFloat(390))] {
+                surfaces.append(
+                    Surface(
+                        name: "standing-notices-stack" + suffix,
+                        width: width,
+                        view: AnyView(
+                            VStack(spacing: 0) {
+                                FreshnessBanner(freshness: .fresh, lastUpdatedAt: stoppedStale)
+                                UnattendedStoppedIndicator(
+                                    operation: operatorStopped, freshness: .fresh,
+                                    lastUpdatedAt: stoppedStale,
+                                    reason: { _ in
+                                        "The daemon stopped unattended operation after repeated restarts"
+                                    },
+                                    onOpenItem: { _ in })
+                                FreshnessBanner(freshness: .unauthenticated, onRePair: {})
+                                FreshnessBanner(freshness: mismatch)
+                                Text("Inbox").padding()
+                            })))
+            }
+            // Pairing at phone width, and with under a minute left, where
+            // the countdown keeps the accent.
+            surfaces.append(
+                Surface(
+                    name: "pairing-phone",
+                    width: 390,
+                    view: AnyView(
+                        PairingView(model: pairing) { _ in }.screenshotContent(
+                            now: pairingFacts.code_expires_at.addingTimeInterval(-14 * 60)))))
+            surfaces.append(
+                Surface(
+                    name: "pairing-expiring-phone",
+                    width: 390,
+                    view: AnyView(
+                        PairingView(model: pairing) { _ in }.screenshotContent(
+                            now: pairingFacts.code_expires_at.addingTimeInterval(-45)))))
+            // The readers at the inspector's two narrow widths, where the
+            // header row shortens its keyword, and the diff with its later
+            // hunks open.
+            let paneRevised = AttentionFixtures.revisedSpecification()
+            let paneStore = InboxStore(client: client)
+            paneStore.replaceAll(with: [paneRevised])
+            let paneDetail = DecisionDetailView(
+                store: paneStore,
+                itemID: paneRevised.item.id,
+                graphics: .init(),
+                loadsAttachments: false,
+                showsValidationProgress: false,
+                now: screenshotNow)
+            for width in [CGFloat(320), 480] {
+                surfaces.append(
+                    Surface(
+                        name: "decision-spec_approval-specification-reader-\(Int(width))",
+                        width: width,
+                        view: AnyView(
+                            paneDetail.screenshotSpecApprovalReader(.specification, item: paneRevised.item))))
+                surfaces.append(
+                    Surface(
+                        name: "decision-spec_approval-diff-reader-\(Int(width))",
+                        width: width,
+                        view: AnyView(
+                            paneDetail.screenshotSpecApprovalReader(.diff, item: paneRevised.item))))
+            }
+            surfaces.append(
+                Surface(
+                    name: "decision-spec_approval-diff-reader-later-hunks",
+                    width: 720,
+                    view: AnyView(
+                        paneDetail.screenshotSpecApprovalReader(
+                            .diff, item: paneRevised.item, expandsLaterHunks: true))))
+            // The panel with the pointer on one row and the keyboard
+            // highlight on the daemon control.
+            surfaces.append(
+                Surface(
+                    name: "menu-panel-keyboard-control",
+                    width: 320,
+                    view: AnyView(
+                        DaemonMenuPanel(
+                            state: .running(panelHealth, restartObserved: false),
+                            actionError: nil,
+                            inbox: .init(open: 6, urgent: 2),
+                            actions: panelActions
+                        )
+                        .screenshotHovering(.showInbox)
+                        .screenshotHighlighting(.control))))
+            surfaces.append(contentsOf: try pendingStopsSurfaces())
             return surfaces
         }
 
@@ -3045,7 +3163,7 @@
                     view: AnyView(
                         VStack(alignment: .leading, spacing: 12) {
                             StateChip(label: "Specification Approval Required", cut: .attention)
-                            StateChip(label: "Stop Requested · Awaiting Confirmation", cut: .ink)
+                            StateChip(label: "Stopping", cut: .ink)
                             StateChip(label: "Superseded Run · Historical", cut: .faint)
                             StateChip(
                                 label: "Failed to Stop · Execution May Continue · Inspect the Recorded Outcome",
@@ -3189,6 +3307,40 @@
                                     selection: .constant("retry"))
                             }
                         }.padding(24).foregroundStyle(Color.ink).background(Color.ground2)))
+            }
+        }
+
+        /// The Pending Stops sheet holding two unconfirmed requests.
+        private func pendingStopsSurfaces() throws -> [Surface] {
+            let snapshots = Array(TaskFixtures.defaultTasks().prefix(2))
+            try #require(snapshots.count == 2)
+            let revision = try #require(snapshots.map(\.as_of_revision).max())
+            let cache = InMemoryCacheStore()
+            try cache.save(
+                .init(
+                    cursors: .init(
+                        syncEpoch: "fixture-epoch", lastFullSnapshotRevision: revision,
+                        highestObservedServerRevision: revision), attentionItems: [],
+                    tasks: snapshots))
+            let coordinator = SyncCoordinator(client: APIClientFactory.mock(), cache: cache)
+            coordinator.store.freshness = .fresh
+            for (index, snapshot) in snapshots.enumerated() {
+                let prepared = try #require(coordinator.taskStop.prepare(taskID: snapshot.task.id))
+                // The sheet lists its entries by command id and a prepared
+                // Stop takes a fresh UUID, so pin the ids or the two items
+                // trade places between runs.
+                var command = prepared.entry.command
+                command.command_id = "cmd-stop-\(index)"
+                #expect(
+                    coordinator.retainTaskStop(
+                        PendingTaskStop(
+                            command: command, taskName: prepared.entry.taskName,
+                            projectName: prepared.entry.projectName)))
+            }
+            return [ColorScheme.light, .dark].map { scheme in
+                Surface(
+                    name: "task-stop-pending-\(scheme)", width: 390, colorScheme: scheme,
+                    view: AnyView(TaskStopRecoveryView(coordinator: coordinator).content))
             }
         }
 

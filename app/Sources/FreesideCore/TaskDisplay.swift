@@ -257,7 +257,7 @@ enum TaskDisplay {
         if task.lifecycle == .stopped { return (lifecycleLabel(task).text, false) }
         if let cancellation = task.cancellation?.value1 {
             switch cancellation.state {
-            case .requested: return ("Stop Requested · Awaiting Confirmation", false)
+            case .requested: return ("Stopping", false)
             case .failed_to_stop: return ("Failed to Stop · Execution May Continue", false)
             case .confirmed: break
             }

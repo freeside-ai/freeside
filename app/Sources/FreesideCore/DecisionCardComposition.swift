@@ -1851,6 +1851,7 @@ struct DecisionYieldChartModuleView: View {
     /// A fixed key beside accessibility-size text reads as a speck, and a
     /// legend that can't be identified does not key anything.
     @ScaledMetric(relativeTo: .caption) private var legendSwatch: CGFloat = 8
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let presentation: DecisionYieldPresentation
     var showsBars = true
     /// When set, the rounds fold into a "Review Yield" disclosure in place
@@ -1894,11 +1895,17 @@ struct DecisionYieldChartModuleView: View {
         let busiest = max(presentation.rounds.map(\.total).max() ?? 1, 1)
         ForEach(presentation.rounds) { round in
             VStack(alignment: .leading, spacing: 5) {
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                // The counts drop under the round at accessibility sizes
+                // (R22); beside it they wrap into a narrow column.
+                let layout =
+                    dynamicTypeSize.isAccessibilitySize
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 3))
+                    : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 12))
+                layout {
                     Text("Round \(round.number)")
                         .font(FreesideFont.factLabel)
                         .foregroundStyle(Color.ink)
-                    Spacer(minLength: 0)
+                    if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 0) }
                     Text(
                         "\(Text("\(round.newFindings) new").foregroundStyle(Color.accentText)) · \(Text("\(round.recurringFindings) recurring").foregroundStyle(Color.waxText))"
                     )

@@ -151,9 +151,12 @@ struct RunTimelineView: View {
     var header: some View {
         VStack(alignment: .leading, spacing: 12) {
             eyebrow
+            // One line cut in the middle at the standard sizes; an
+            // accessibility size wraps it, so larger text hides no part of
+            // the run's name (R22).
             Text(RunDisplay.timelineTitle(snapshot.run))
                 .font(FreesideFont.ask)
-                .lineLimit(1)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
                 .truncationMode(.middle)
             if let identity = RunTimelineView.identityLine(
                 snapshot.run, task: task, attentionItems: coordinator.store.orderedSnapshots)
