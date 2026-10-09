@@ -213,7 +213,7 @@ struct TaskStopConfirmationView: View {
     private var actionRow: some View {
         FreesideSheetActionRow(
             submitLabel: "Stop Task", tone: .destructive, submitHint: Self.consequence,
-            cancelIsOutlined: true, submitsOnReturn: false, submit: onConfirm, cancel: { dismiss() })
+            submitsOnReturn: false, submit: onConfirm, cancel: { dismiss() })
     }
 }
 

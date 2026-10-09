@@ -124,7 +124,6 @@ struct NewTaskSheet: View {
             FreesideSheetActionRow(
                 submitLabel: "Submit",
                 isSubmitEnabled: canSubmit,
-                cancelIsOutlined: true,
                 submit: performSubmit,
                 cancel: { dismiss() })
         }

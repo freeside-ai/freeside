@@ -1660,21 +1660,24 @@ struct FreesideSheetHeader: View {
     }
 }
 
-/// The submit row a sheet ends with: Cancel as a tertiary text button and
-/// the submit filled by default and wax-outlined for a consequential
-/// confirmation (R11), both hugging their labels. It carries the
-/// Return and Escape bindings the system toolbar placements used to supply.
-/// A reader's footer (`done`) has the one secondary button and no Cancel.
+/// The submit row a sheet ends with (R11): Cancel, always the outline, and
+/// the submit, sharing the row equally. One fill rule holds for every sheet
+/// in both appearances: the submit fills only while it is enabled, which
+/// each form sheet ties to its form being ready to send, and otherwise
+/// takes the disabled recipe, faint ink on the rule border with no fill. A
+/// consequential confirmation's submit is the wax outline and never fills.
+/// The row carries the Return and Escape bindings the system toolbar
+/// placements used to supply. A reader's footer (`done`) has the one
+/// secondary button and no Cancel.
 struct FreesideSheetActionRow: View {
     let submitLabel: String
     var tone: FreesideActionButtonStyle.Tone = .primary
     /// Read by VoiceOver after the submit label: the consequence sentence
     /// a destructive submit carries.
     var submitHint: String? = nil
+    /// False while the sheet's form cannot be sent: the submit then takes
+    /// the disabled recipe in place of its fill.
     var isSubmitEnabled: Bool = true
-    /// The refined footer (R11): Cancel as an outline that shares the row
-    /// equally with the submit, in place of the hugging text button.
-    var cancelIsOutlined = false
     /// False where Return must not take the submit. The task Stop
     /// confirmation never bound Return to its destructive control, and
     /// taking this row's shape does not change that.
@@ -1702,24 +1705,18 @@ struct FreesideSheetActionRow: View {
 
     @ViewBuilder private var content: some View {
         if let cancel {
-            // Side by side the two labels cannot both hug their text at an
-            // accessibility size without wrapping mid-word, so they stack
-            // and the submit takes the full width.
+            // Side by side the two labels cannot both keep their text at
+            // an accessibility size without wrapping mid-word, so they
+            // stack and each takes the full width.
             if dynamicTypeSize.isAccessibilitySize {
                 VStack(spacing: 12) {
                     submitButton(expands: true)
                     cancelButton(cancel).frame(maxWidth: .infinity)
                 }
-            } else if cancelIsOutlined {
+            } else {
                 HStack(spacing: 10) {
                     cancelButton(cancel)
                     submitButton(expands: true)
-                }
-            } else {
-                HStack(spacing: 12) {
-                    cancelButton(cancel)
-                    Spacer(minLength: 12)
-                    submitButton(expands: false)
                 }
             }
         } else {
@@ -1743,10 +1740,7 @@ struct FreesideSheetActionRow: View {
 
     private func cancelButton(_ cancel: @escaping () -> Void) -> some View {
         Button("Cancel", action: cancel)
-            .buttonStyle(
-                FreesideActionButtonStyle(
-                    tone: cancelIsOutlined ? .secondary : .tertiary, expands: cancelIsOutlined)
-            )
+            .buttonStyle(FreesideActionButtonStyle(tone: .secondary))
             .keyboardShortcut(.cancelAction)
     }
 
