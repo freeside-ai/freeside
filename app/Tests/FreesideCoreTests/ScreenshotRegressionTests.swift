@@ -38,6 +38,9 @@
         }
 
         private let canvasWidth: CGFloat = 960
+        /// A detail column just wide enough for the one-column card at its
+        /// cap (R18): the card and the pane's 24pt margins.
+        private static let detailColumnWidth = DecisionCardComposition.Scale.cardWidth + 48
         private let baselineOperatingSystemKey = "macOS-26.7"
         private let screenshotNow = AttentionFixtures.createdInstant.addingTimeInterval(18 * 3_600)
         private let screenshotTimeZone = TimeZone(identifier: "UTC") ?? .current
@@ -3224,7 +3227,7 @@
                 loadsAttachments: false,
                 showsValidationProgress: false,
                 now: screenshotNow)
-            let width = DecisionCardComposition.Scale.columnWidth
+            let width = Self.detailColumnWidth
             return [("clean", clean), ("degraded", AttentionFixtures.degradedReady().item)].flatMap {
                 name, item in
                 [("light", ColorScheme.light), ("dark", ColorScheme.dark)].map { theme, scheme in

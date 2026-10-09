@@ -182,9 +182,9 @@ struct DecisionDetailView: View {
                                 wideLayout: twoColumns,
                                 inspectorPresented: inspectorBinding.wrappedValue
                             )
-                            .decisionCardChrome(
-                                compactLayout: horizontalSizeClass == .compact,
-                                wideLayout: twoColumns)
+                            .detailCard(
+                                compact: horizontalSizeClass == .compact,
+                                twoColumns: twoColumns)
                         }
                         .coordinateSpace(name: "decision-card-scroll")
                         .onPaneWidthChange { detailWidth = $0 }
@@ -2166,9 +2166,7 @@ struct DecisionDetailView: View {
             inspectorPresented: inspectorPresented,
             actionRegionFrameChanged: actionRegionFrameChanged
         )
-        .decisionCardChrome(
-            compactLayout: compactLayout,
-            wideLayout: wideLayout)
+        .detailCard(compact: compactLayout, twoColumns: wideLayout)
     }
 
     func screenshotBanner() -> some View {
@@ -4343,12 +4341,23 @@ extension View {
             }
     }
 
-    /// The decision card's own padding, ground, and border, inside the
-    /// detail's margin.
-    fileprivate func decisionCardChrome(compactLayout: Bool, wideLayout: Bool) -> some View {
-        padding(CardScale.padding(compact: compactLayout))
+    /// The detail column's card (R18): the card's padding, ground, and
+    /// border, top-leading inside the pane's margin and no wider than its
+    /// cap, so every detail surface that draws on it starts at one x and
+    /// one y. The two-column card fills the pane up to its own cap instead.
+    /// `topMargin` replaces the pane's top margin for a card that sits
+    /// under a row of its own.
+    func detailCard(compact: Bool, twoColumns: Bool = false, topMargin: CGFloat? = nil) -> some View {
+        var margin = CardScale.paneMargin(compact: compact)
+        if let topMargin { margin.top = topMargin }
+        return padding(CardScale.padding(compact: compact))
+            .frame(maxWidth: .infinity, alignment: .topLeading)
             .freesideCard(cornerRadius: CardScale.cornerRadius)
-            .padding()
-            .frame(maxWidth: wideLayout ? 1_040 : CardScale.columnWidth, alignment: .topLeading)
+            .frame(
+                maxWidth: twoColumns ? CardScale.wideCardWidth : CardScale.cardWidth,
+                alignment: .topLeading
+            )
+            .padding(margin)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 }

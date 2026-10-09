@@ -8,7 +8,8 @@
 
     /// The decision detail picks one column or two from the width of its
     /// pane. The card caps its own width until that choice is made, so the
-    /// measurement must not read the card back.
+    /// measurement must not read the card back. The card's own place in the
+    /// pane (R18) is measured here too.
     @Suite(.serialized) @MainActor struct DecisionPaneWidthTests {
         @Test func aScrollViewNarrowerThanItsPaneReportsThePane() {
             final class Measurement: @unchecked Sendable {
@@ -33,6 +34,150 @@
             }
 
             #expect(measurement.width == paneWidth)
+        }
+
+        /// R18: every card in the detail column starts at one x and one y,
+        /// and a one-column card stops at its cap, so selecting something
+        /// changes the content and not its shape.
+        @Test func aOneColumnCardSitsTopLeadingAndStopsAtItsCap() throws {
+            typealias Scale = DecisionCardComposition.Scale
+            let margin = Scale.paneMargin(compact: false)
+
+            let wide = try #require(cardFrame(paneWidth: 1_000, twoColumns: false))
+            #expect(wide.origin == CGPoint(x: 24, y: 20))
+            #expect(wide.origin == CGPoint(x: margin.leading, y: margin.top))
+            #expect(wide.width == 640)
+            #expect(wide.width == Scale.cardWidth)
+
+            // A pane narrower than the cap and its margins shrinks the card
+            // instead of cutting it.
+            let narrow = try #require(cardFrame(paneWidth: 600, twoColumns: false))
+            #expect(narrow.origin == wide.origin)
+            #expect(narrow.width == 600 - margin.leading - margin.trailing)
+
+            // A card under a row of the column's own keeps the x and takes
+            // the row's gap for its top margin.
+            let underRow = try #require(cardFrame(paneWidth: 1_000, twoColumns: false, topMargin: 10))
+            #expect(underRow.origin == CGPoint(x: wide.minX, y: 10))
+            #expect(underRow.width == wide.width)
+        }
+
+        /// The two-column card fills the pane where two columns begin, at
+        /// the one-column card's x and y, and its right column is 360 with
+        /// the rest left to the modules.
+        @Test func theTwoColumnCardFillsThePaneBesideA360Column() throws {
+            typealias Scale = DecisionCardComposition.Scale
+            let margin = Scale.paneMargin(compact: false)
+            let padding = Scale.padding(compact: false)
+
+            let card = try #require(cardFrame(paneWidth: 1_000, twoColumns: true))
+            #expect(card.origin == CGPoint(x: margin.leading, y: margin.top))
+            #expect(card.width == 1_000 - margin.leading - margin.trailing)
+            #expect(card.width == 952)
+
+            // The laid-out card: its action region spans the right column,
+            // so the region's frame in the card's own space is the column's.
+            let column = try #require(actionRegionFrame(paneWidth: 1_000))
+            #expect(column.width == 360)
+            #expect(column.width == Scale.controlColumnWidth)
+            #expect(column.minX == 520 + Scale.columnGap)
+            #expect(column.maxX == card.width - padding.leading - padding.trailing)
+
+            // Past its own cap the card stops growing; what a wider pane
+            // does with the rest is still the owner's call.
+            let widest = try #require(cardFrame(paneWidth: 1_620, twoColumns: true))
+            #expect(widest.origin == card.origin)
+            #expect(widest.width == Scale.wideCardWidth)
+        }
+
+        /// The action region's frame in the space of the card the decision
+        /// detail lays out in a pane of the given width.
+        private func actionRegionFrame(paneWidth: CGFloat) -> CGRect? {
+            _ = FreesideFont.registration
+            let snapshot = AttentionFixtures.fixture(type: .ready_for_final_review)
+            let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+            store.replaceAll(with: [snapshot])
+            let detail = DecisionDetailView(
+                store: store,
+                itemID: snapshot.item.id,
+                loadsAttachments: false,
+                showsValidationProgress: false,
+                now: AttentionFixtures.createdInstant)
+
+            final class Measurement: @unchecked Sendable {
+                var frame: CGRect?
+            }
+            let measurement = Measurement()
+            let card =
+                detail
+                .screenshotCard(
+                    snapshot.item, at: .large, detailWidth: paneWidth,
+                    actionRegionFrameChanged: { measurement.frame = $0 }
+                )
+                .environment(\.dynamicTypeSize, .large)
+                .frame(width: paneWidth, alignment: .topLeading)
+                .fixedSize(horizontal: false, vertical: true)
+
+            let host = NSHostingView(rootView: AnyView(card))
+            host.frame = CGRect(x: 0, y: 0, width: paneWidth, height: 4_000)
+            host.layoutSubtreeIfNeeded()
+            // The callback can report more than once while the layout
+            // settles, so read the frame once it has held still.
+            let deadline = Date().addingTimeInterval(5)
+            var last: CGRect?
+            var unchangedSince: Date?
+            while Date() < deadline {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+                host.layoutSubtreeIfNeeded()
+                if measurement.frame != last {
+                    last = measurement.frame
+                    unchangedSince = last == nil ? nil : Date()
+                } else if let unchangedSince, Date().timeIntervalSince(unchangedSince) >= 0.25 {
+                    break
+                }
+            }
+            return measurement.frame
+        }
+
+        /// The frame of the card `detailCard` draws around a probe in a
+        /// pane of the given width, in the pane's coordinates. The probe is
+        /// the card's content, so the card is the probe's frame grown by the
+        /// card's own padding.
+        private func cardFrame(
+            paneWidth: CGFloat, twoColumns: Bool, topMargin: CGFloat? = nil
+        ) -> CGRect? {
+            final class Measurement: @unchecked Sendable {
+                var content: CGRect?
+            }
+            let measurement = Measurement()
+            let pane = Color.clear
+                .frame(height: 100)
+                .onGeometryChange(for: CGRect.self) { geometry in
+                    geometry.frame(in: .named("pane"))
+                } action: { frame in
+                    measurement.content = frame
+                }
+                .detailCard(compact: false, twoColumns: twoColumns, topMargin: topMargin)
+                .frame(width: paneWidth, height: 600, alignment: .topLeading)
+                .coordinateSpace(name: "pane")
+
+            let host = NSHostingView(rootView: pane)
+            host.frame = CGRect(x: 0, y: 0, width: paneWidth, height: 600)
+            host.layoutSubtreeIfNeeded()
+            // The geometry callback lands on a later main-queue turn.
+            let deadline = Date().addingTimeInterval(5)
+            while measurement.content == nil, Date() < deadline {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+                host.layoutSubtreeIfNeeded()
+            }
+
+            guard let content = measurement.content else { return nil }
+            let padding = DecisionCardComposition.Scale.padding(compact: false)
+            return CGRect(
+                x: content.minX - padding.leading,
+                y: content.minY - padding.top,
+                width: content.width + padding.leading + padding.trailing,
+                height: content.height + padding.top + padding.bottom)
         }
 
         /// The right column holds the control group and the folds. A
