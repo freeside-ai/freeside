@@ -100,6 +100,9 @@ struct OperationalSummaryView: View {
     /// Nil samples the clock each minute, as the inbox row does; a fixed
     /// value keeps the waiting-longest duration stable for screenshots.
     var now: Date? = nil
+    /// The gap above the card where a standing notice sits over it. Nil
+    /// keeps the detail column's top margin.
+    var topMargin: CGFloat? = nil
     /// The reader's own choice for the Freshness fold; nil follows the
     /// daemon state.
     @State private var freshnessExpanded: Bool?
@@ -159,7 +162,7 @@ struct OperationalSummaryView: View {
                 Color.rule.frame(height: 1)
             }
         }
-        .detailCard(compact: false)
+        .detailCard(compact: false, topMargin: topMargin)
         // The pane sits outside a scroll view, so its minimum is the
         // window's. Without a floor, a proposal of no width wraps every
         // line to a character and the window opens taller than the display.

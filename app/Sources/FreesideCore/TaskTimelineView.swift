@@ -41,6 +41,9 @@ struct TaskTimelineView: View {
     /// baseline can capture the section's rows and copy controls. Live use
     /// leaves it false, so the sections open only on tap.
     var expandsTechnicalDetails = false
+    /// The gap above the card where a standing notice sits over it. Nil
+    /// keeps the detail column's top margin.
+    private let topMargin: CGFloat?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.timeZone) private var timeZone
@@ -58,6 +61,7 @@ struct TaskTimelineView: View {
     init(
         coordinator: SyncCoordinator, snapshot: Components.Schemas.TaskSnapshot,
         onOpenRun: @escaping (String) -> Void, onOpenInboxItem: ((String) -> Void)? = nil,
+        topMargin: CGFloat? = nil,
         screenshotTimeline: Components.Schemas.TaskTimeline? = nil,
         expandsTechnicalDetails: Bool = false, disclosures: TaskTimelineDisclosurePreferences? = nil
     ) {
@@ -65,6 +69,7 @@ struct TaskTimelineView: View {
         self.snapshot = snapshot
         self.onOpenRun = onOpenRun
         self.onOpenInboxItem = onOpenInboxItem
+        self.topMargin = topMargin
         self.screenshotTimeline = screenshotTimeline
         self.expandsTechnicalDetails = expandsTechnicalDetails
         _disclosures = State(initialValue: disclosures ?? .shared)
@@ -88,7 +93,7 @@ struct TaskTimelineView: View {
                 content(screenshotTimeline)
             }
             .foregroundStyle(Color.ink)
-            .timelinePage(compact: horizontalSizeClass == .compact)
+            .timelinePage(compact: horizontalSizeClass == .compact, topMargin: topMargin)
         } else {
             liveContent
         }
@@ -116,7 +121,7 @@ struct TaskTimelineView: View {
                 }
             }
             .foregroundStyle(Color.ink)
-            .timelinePage(compact: horizontalSizeClass == .compact)
+            .timelinePage(compact: horizontalSizeClass == .compact, topMargin: topMargin)
         }
         .navigationTitle(TaskDisplay.projectName(snapshot.task))
         .task(id: TimelineRequestKey(snapshot: snapshot, cursors: coordinator.cursors)) {

@@ -112,6 +112,9 @@ struct DecisionDetailView: View {
     private let launchComposer: LaunchInputs.Composer?
     private let onConsumeLaunchComposer: () -> Void
     private let externalInspectorPresented: Binding<Bool>?
+    /// The gap above the card where a standing notice sits over it. Nil
+    /// keeps the detail column's top margin.
+    private let topMargin: CGFloat?
     private let onSelectItem: (String) -> Void
 
     @MainActor
@@ -133,6 +136,7 @@ struct DecisionDetailView: View {
         now: Date = .now,
         sectionPreferences: DecisionSectionPreferences? = nil,
         inspectorPresented: Binding<Bool>? = nil,
+        topMargin: CGFloat? = nil,
         onSelectItem: @escaping (String) -> Void = { _ in },
         onConclusion: @escaping @MainActor (DecisionConclusion) -> Void = { _ in }
     ) {
@@ -157,6 +161,7 @@ struct DecisionDetailView: View {
         self.launchComposer = launchComposer
         self.onConsumeLaunchComposer = onConsumeLaunchComposer
         externalInspectorPresented = inspectorPresented
+        self.topMargin = topMargin
         self.onSelectItem = onSelectItem
         self.graphics = graphics
         self.loadsAttachments = loadsAttachments
@@ -178,7 +183,8 @@ struct DecisionDetailView: View {
                                 compactLayout: horizontalSizeClass == .compact,
                                 inspectorPresented: inspectorBinding.wrappedValue
                             )
-                            .detailCard(compact: horizontalSizeClass == .compact)
+                            .detailCard(
+                                compact: horizontalSizeClass == .compact, topMargin: topMargin)
                         }
                         .coordinateSpace(name: "decision-card-scroll")
                         .onChange(of: detailsRevealRequest) {
@@ -2090,6 +2096,7 @@ struct DecisionDetailView: View {
         effectProposalFacts: Components.Schemas.EffectProposalFactsSnapshot? = nil,
         compactLayout: Bool = false,
         inspectorPresented: Bool = false,
+        topMargin: CGFloat? = nil,
         actionRegionFrameChanged: ((CGRect) -> Void)? = nil
     ) -> some View {
         card(
@@ -2102,7 +2109,7 @@ struct DecisionDetailView: View {
             inspectorPresented: inspectorPresented,
             actionRegionFrameChanged: actionRegionFrameChanged
         )
-        .detailCard(compact: compactLayout)
+        .detailCard(compact: compactLayout, topMargin: topMargin)
     }
 
     func screenshotBanner() -> some View {

@@ -114,8 +114,8 @@ struct UnattendedStoppedPresentation: Equatable {
     }
 }
 
-/// The standing indicator that unattended operation is stopped, shown with
-/// the freshness banner above the synced surface on both platforms. It reads
+/// The standing indicator that unattended operation is stopped, shown under
+/// the freshness banner wherever that draws on either platform. It reads
 /// the same freshness the banner does, so a stale or cached snapshot is
 /// reported as the last known state and never as current.
 struct UnattendedStoppedIndicator: View {
@@ -127,6 +127,7 @@ struct UnattendedStoppedIndicator: View {
     let reason: (String) -> String?
     /// Opens the reopening item. Absent where the surface is read-only.
     let onOpenItem: ((String) -> Void)?
+    var placement = StandingNoticePlacement.window
 
     var body: some View {
         // The same schedule as `FreshnessBanner`: its entries are the
@@ -148,7 +149,7 @@ struct UnattendedStoppedIndicator: View {
             tone: .wax, keyword: presentation.keyword, sentence: presentation.message,
             action: action(for: presentation)
         )
-        .standingNoticeInset()
+        .standingNoticeInset(placement)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("unattended-stopped-indicator")
     }
