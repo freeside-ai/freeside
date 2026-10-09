@@ -7,7 +7,7 @@ startability, or mergeability. Its `contracts` subcommand reports contract
 occupancy instead, and its `unit` subcommand reports one issue's relationships
 and claim state; see Contract Occupancy and Unit Coordination Evidence below.
 
-The runtime requires Go 1.26.6 and an authenticated `gh` CLI with access to the
+The runtime requires Go 1.26.9 and an authenticated `gh` CLI with access to the
 target repository. Run it from this module:
 
 ```sh
