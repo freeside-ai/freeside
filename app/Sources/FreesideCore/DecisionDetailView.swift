@@ -197,7 +197,7 @@ struct DecisionDetailView: View {
                     }
                 } else {
                     UnavailableStateView(
-                        title: "Item unavailable",
+                        glyph: .inbox, title: "Item unavailable",
                         description: "This attention item is not in the inbox.")
                 }
             }
@@ -502,7 +502,7 @@ struct DecisionDetailView: View {
                             max: specApprovalReader == nil ? 440 : 720)
                     } else {
                         UnavailableStateView(
-                            title: "No decision selected",
+                            glyph: .inbox, title: "No decision selected",
                             description: "Select an item to inspect its facts.")
                     }
                 }
@@ -1764,7 +1764,7 @@ struct DecisionDetailView: View {
                     expandsTechnicalDetails: expandsTechnicalDetails)
             } else {
                 UnavailableStateView(
-                    title: "Specification unavailable",
+                    glyph: .inbox, title: "Specification unavailable",
                     description: "This approval does not carry a readable specification.")
             }
         case .diff:
@@ -1778,7 +1778,7 @@ struct DecisionDetailView: View {
                     expandsLaterHunks: expandsLaterHunks)
             } else {
                 UnavailableStateView(
-                    title: "Diff unavailable",
+                    glyph: .inbox, title: "Diff unavailable",
                     description: "This is the first specification revision.")
             }
         }
@@ -3597,7 +3597,7 @@ struct DecisionDetailView: View {
                         }
                     } else {
                         UnavailableStateView(
-                            title: "Preview unavailable",
+                            glyph: .inbox, title: "Preview unavailable",
                             description: "This \(byteCount(preview.byteCount)) attachment is not text.")
                     }
                 }

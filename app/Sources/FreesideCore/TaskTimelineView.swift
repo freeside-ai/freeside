@@ -103,7 +103,7 @@ struct TaskTimelineView: View {
                     content(timeline)
                 } else if coordinator.taskTimelineLoadStates[snapshot.task.id] == .unavailable {
                     UnavailableStateView(
-                        title: "Timeline unavailable",
+                        glyph: .tasks, title: "Timeline unavailable",
                         description: "Freeside could not load the daemon's history for this task."
                     )
                     .frame(maxWidth: .infinity, minHeight: 180)

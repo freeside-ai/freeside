@@ -1243,7 +1243,9 @@ struct FreesideLink: View {
     }
 }
 
-/// The Freeside key (R13): the mark an empty state leads with. Drawn from
+/// The Freeside key (R13). No view draws it: an empty state leads with its
+/// section's system glyph (`EmptyStateGlyph`), and the menu-bar status item
+/// draws the mark from its own image. Drawn from
 /// the one path of the handoff's `assets/key/freeside-key-mono.svg`, in that
 /// file's view box, so the mark sits where the image would. The path cuts
 /// the bow's openings out of the outline, so fill it with the even-odd rule

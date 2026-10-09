@@ -102,10 +102,10 @@ struct TasksListView: View {
             if rows.isEmpty {
                 #if os(macOS)
                     Spacer(minLength: 0)
-                    SidebarEmptyState(title: emptyTitle, description: Self.emptyDescription)
+                    SidebarEmptyState(glyph: .tasks, title: emptyTitle, description: Self.emptyDescription)
                     Spacer(minLength: 0)
                 #else
-                    UnavailableStateView(title: emptyTitle, description: Self.emptyDescription)
+                    UnavailableStateView(glyph: .tasks, title: emptyTitle, description: Self.emptyDescription)
                 #endif
             } else {
                 #if os(iOS)
@@ -230,7 +230,7 @@ struct TasksListView: View {
     func screenshotContent(now: Date) -> some View {
         if visibleTasks.isEmpty {
             // The empty scope, as the sidebar draws it under its filters.
-            SidebarEmptyState(title: emptyTitle, description: Self.emptyDescription)
+            SidebarEmptyState(glyph: .tasks, title: emptyTitle, description: Self.emptyDescription)
                 .padding(.bottom, 32)
         } else {
             VStack(alignment: .leading, spacing: 8) {
