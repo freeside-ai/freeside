@@ -24,6 +24,34 @@ import Testing
         }
     }
 
+    @Test func theRevokedPaneReplacesOnlyAnEmptyDetailPane() {
+        // An open card, timeline, or run stays drawn on a revoked Mac: the
+        // cache stays readable and a lost response can still be resent
+        // (plan §5.14 test 16), so the pane takes the detail column only
+        // when nothing is open there, and the banner holds Pair Again
+        // otherwise.
+        func shows(
+            _ screen: LaunchInputs.Screen, freshness: InboxStore.Freshness = .unauthenticated,
+            item: String? = nil, task: String? = nil, run: String? = nil
+        ) -> Bool {
+            FreesideRootView.showsRevokedPane(
+                freshness: freshness, screen: screen, attentionSelection: item, taskSelection: task,
+                runSelection: run)
+        }
+        #expect(shows(.inbox))
+        #expect(shows(.tasks))
+        #expect(!shows(.inbox, item: "item-spec_approval"))
+        #expect(!shows(.tasks, task: "task-1"))
+        #expect(!shows(.tasks, task: "task-1", run: "run-1"))
+        // The other section's selection is not what this pane draws.
+        #expect(shows(.inbox, task: "task-1", run: "run-1"))
+        #expect(shows(.tasks, item: "item-spec_approval"))
+        for fresh in [InboxStore.Freshness.fresh, .unreachable, .syncFailing, .unvalidated] {
+            #expect(!shows(.inbox, freshness: fresh))
+            #expect(!shows(.tasks, freshness: fresh))
+        }
+    }
+
     @Test func confirmationNamesUnresolvedActionsMadeUnderTheOldPairing() {
         // The confirmation warns only when unresolved commands from the old
         // pairing exist; the app drops them once the device id changes. It

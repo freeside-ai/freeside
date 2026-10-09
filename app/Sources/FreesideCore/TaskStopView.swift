@@ -46,15 +46,9 @@ struct TaskStopView: View {
                         tone: .accent, keyword: "Unconfirmed",
                         sentence: snapshot?.task.cancellation == nil
                             ? "The daemon did not answer the stop. Nothing is assumed."
-                            : "The original request's receipt is unresolved.",
-                        action: .init(
-                            label: "Retry", accessibilityLabel: "Retry sending Stop",
-                            isEnabled: coordinator.store.freshness != .unauthenticated
-                        ) {
-                            Task { await model.retry(pending.command.command_id) }
-                        }
+                            : "The original request's receipt is unresolved."
                     )
-                    .accessibilityElement(children: .contain)
+                    .accessibilityElement(children: .combine)
                 }
             } else if snapshot?.task.cancellation == nil {
                 // Stop is the page's one consequential action, so it sits
@@ -84,8 +78,17 @@ struct TaskStopView: View {
             }
             if snapshot?.task.cancellation != nil || model.pending(for: taskID) != nil || model.unavailableReason != nil
             {
-                Button("Refresh Task Status") { Task { await model.refresh() } }
-                    .buttonStyle(FreesideActionButtonStyle(tone: .secondary, expands: false))
+                // The notice above states; the acts are buttons on their
+                // own row (R14). Side by side while the row fits, and one
+                // under the other across the column where it does not.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: FreesideLadder.current.controlGap) {
+                        controls(expands: false)
+                    }
+                    VStack(spacing: FreesideLadder.current.controlGap) {
+                        controls(expands: true)
+                    }
+                }
             }
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -95,6 +98,27 @@ struct TaskStopView: View {
                 Task { await model.confirm(prepared) }
             }
         }
+    }
+
+    /// The Stop the daemon never answered: the request Retry resends.
+    private var unanswered: PendingTaskStop? {
+        guard !model.sending.contains(taskID), let pending = model.pending(for: taskID),
+            pending.receipt == nil
+        else { return nil }
+        return pending
+    }
+
+    @ViewBuilder
+    private func controls(expands: Bool) -> some View {
+        if let unanswered {
+            Button("Retry Sending Stop") {
+                Task { await model.retry(unanswered.command.command_id) }
+            }
+            .buttonStyle(FreesideActionButtonStyle(tone: .secondary, expands: expands))
+            .disabled(coordinator.store.freshness == .unauthenticated)
+        }
+        Button("Refresh Task Status") { Task { await model.refresh() } }
+            .buttonStyle(FreesideActionButtonStyle(tone: .secondary, expands: expands))
     }
 
     /// The explanation the visible state leaves behind `What Happened`

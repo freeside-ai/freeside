@@ -3053,6 +3053,21 @@
                             FreshnessBanner(freshness: .unauthenticated, onRePair: {})
                             Text("Inbox").padding()
                         })))
+            // The Mac's revoked state: the banner only states, and the
+            // detail pane empties around Pair Again.
+            for (suffix, scheme) in [("", ColorScheme.light), ("-dark", .dark)] {
+                surfaces.append(
+                    Surface(
+                        name: "revoked-pane" + suffix,
+                        width: 640,
+                        colorScheme: scheme,
+                        view: AnyView(
+                            VStack(spacing: 0) {
+                                FreshnessBanner(freshness: .unauthenticated)
+                                RevokedPane(onRePair: {}).frame(height: 320)
+                            }
+                            .background(Color.ground))))
+            }
             for (suffix, width) in [("", CGFloat(640)), ("-phone", CGFloat(390))] {
                 surfaces.append(
                     Surface(
