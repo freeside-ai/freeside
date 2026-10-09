@@ -3802,7 +3802,8 @@ struct DecisionDetailView: View {
                     ProgressView().controlSize(.small)
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 44)
+            // The style sets the height, from the platform's ladder.
+            .frame(maxWidth: .infinity)
         }
         .buttonStyle(FreesideActionButtonStyle(tone: tone))
         .disabled(

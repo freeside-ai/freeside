@@ -255,19 +255,20 @@ struct DecisionCardComposition: Equatable {
         return !Self.reasonIsAgentSummary(item._type) || summaries(from: item.agent_claims).isEmpty
     }
 
-    /// A card's gap ladder, padding, and corner (R10), as survey card 4b
-    /// settled them: 22 between sections, 11 inside a module, 10 within a
-    /// control group, and 18 above the folds, which sit under the card's
-    /// one hairline. Every decision type draws on it.
+    /// A card's gaps, padding, and corner (R10). The gaps between sections,
+    /// inside a module, within a control group, and above the folds, which
+    /// sit under the card's one hairline, are the platform ladder's. Every
+    /// decision type draws on it.
     enum Scale {
-        static let sectionGap: CGFloat = 22
+        private static let ladder = FreesideLadder.current
+        static let sectionGap = ladder.sectionGap
         /// Between the eyebrow and the ask.
-        static let headGap: CGFloat = 12
-        static let moduleGap: CGFloat = 11
-        static let controlGap: CGFloat = 10
-        static let foldGap: CGFloat = 12
+        static let headGap: CGFloat = 10
+        static let moduleGap = ladder.moduleGap
+        static let controlGap = ladder.controlGap
+        static let foldGap: CGFloat = 10
         /// The space between the hairline and the first fold.
-        static let foldLead: CGFloat = 18
+        static let foldLead = ladder.foldLead
         static let cornerRadius: CGFloat = 12
         /// The widest a one-column card grows with the detail's 16pt margin
         /// around it: the card itself is 560 wide.
@@ -280,12 +281,13 @@ struct DecisionCardComposition: Equatable {
         /// column keeps the width it had before the frame.
         static let controlColumnWidth: CGFloat = 360
 
-        /// A phone's card is 20 from each side and 18 from the top and
-        /// bottom; a Mac's sits 28 in, with 24 under its last line.
+        /// A card at phone width is 16 from each side, 18 from the top, and
+        /// 16 from the bottom; a wider one sits 22 in, with 20 under its
+        /// last line.
         static func padding(compact: Bool) -> EdgeInsets {
             compact
-                ? EdgeInsets(top: 18, leading: 20, bottom: 18, trailing: 20)
-                : EdgeInsets(top: 28, leading: 28, bottom: 24, trailing: 28)
+                ? EdgeInsets(top: 18, leading: 16, bottom: 16, trailing: 16)
+                : EdgeInsets(top: 22, leading: 22, bottom: 20, trailing: 22)
         }
     }
 
