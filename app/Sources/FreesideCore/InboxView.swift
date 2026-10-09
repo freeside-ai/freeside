@@ -318,15 +318,17 @@ struct InboxView: View {
     }
 
     /// The sidebar chrome as the operator sees it on macOS: the section
-    /// switcher with the open count, the scope control and urgent chip, the
+    /// switcher with both counts (the caller supplies the task list's, which
+    /// this view does not hold), the scope control and urgent chip, the
     /// project trigger (its label standing in for the Menu, which
     /// ImageRenderer cannot open), and the first rows on the sidebar ground,
     /// or the empty state when the scope holds none.
-    func screenshotSidebar(now: Date) -> some View {
+    func screenshotSidebar(now: Date, activeTaskCount: Int?) -> some View {
         VStack(spacing: 0) {
             FreesideSegmentedControl(
                 accessibilityLabel: "Section",
-                segments: FreesideRootView.sectionSegments(openCount: Self.openCount(in: store)),
+                segments: FreesideRootView.sectionSegments(
+                    openCount: Self.openCount(in: store), activeTaskCount: activeTaskCount),
                 selection: .constant(.inbox)
             )
             .padding()

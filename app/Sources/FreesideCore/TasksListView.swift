@@ -44,6 +44,15 @@ struct TasksListView: View {
         self.newTaskBlockedReason = newTaskBlockedReason
     }
 
+    /// The count shown beside Tasks in the macOS section switcher: the
+    /// Active scope's count across every project, since the project filter
+    /// is this list's own state and the switcher outlives the list. Absent
+    /// until the first snapshot has loaded, when a zero would read as no
+    /// work, as the Inbox count is (`InboxView.openCount`).
+    static func activeCount(in tasks: [Components.Schemas.TaskSnapshot], loaded: Bool) -> Int? {
+        loaded ? TaskListFilter().count(in: tasks, scope: .active) : nil
+    }
+
     private var projects: [String] {
         TaskDisplay.knownProjects(in: tasks)
     }
@@ -65,9 +74,7 @@ struct TasksListView: View {
             }
             FreesideSegmentedControl(
                 accessibilityLabel: "Scope",
-                segments: TaskListFilter.Scope.allCases.map {
-                    .init(value: $0, label: $0.label, count: filter.count(in: tasks, scope: $0))
-                },
+                segments: TaskListFilter.Scope.allCases.map { .init(value: $0, label: $0.label) },
                 selection: $filter.scope
             )
             .padding(.horizontal)
