@@ -841,12 +841,14 @@ struct SystemCallout<Content: View>: View {
     }
 }
 
-/// The one notice (R14): a full-width wash, a keyword in the tone's tint, a
-/// dim sentence, and an optional trailing text action in the same tint. The
-/// sentence sits beside the keyword while the line fits and stacks under it
-/// when it does not. At an accessibility size an action takes its own line
-/// under the sentence (R22), so the sentence keeps the notice's width. A
-/// notice never folds and never takes the accent bar.
+/// The one notice (R14): a full-width wash, a keyword in the tone's tint,
+/// and a dim sentence. The sentence sits beside the keyword while the line
+/// fits and stacks under it otherwise.
+///
+/// A notice states; it never carries a text action. Where it has an act,
+/// the act is a real button on its own line under the sentence: outlined,
+/// and wax-outlined when the notice is wax. A card puts the act in its
+/// control group instead and passes no action here.
 struct Notice: View {
     enum Tone: CaseIterable {
         /// A record of something done: nothing to act on.
@@ -871,6 +873,16 @@ struct Notice: View {
             case .wax: .waxText
             }
         }
+
+        /// The cut of a notice's button: the wax outline under a wax
+        /// notice, where it marks the notice's tint and not a destructive
+        /// act, and the plain outline otherwise. Never the text cut.
+        var actionTone: FreesideActionButtonStyle.Tone {
+            switch self {
+            case .neutral, .accent: .secondary
+            case .wax: .destructive
+            }
+        }
     }
 
     struct Action {
@@ -878,8 +890,8 @@ struct Notice: View {
         /// Read by VoiceOver in place of the label, where the short label
         /// alone does not say what it acts on.
         var accessibilityLabel: String? = nil
-        /// False while the action cannot run. The label stays in place in
-        /// the faint cut every disabled control takes.
+        /// False while the action cannot run. The button stays in place in
+        /// the cut every disabled control takes.
         var isEnabled = true
         let handler: () -> Void
     }
@@ -892,33 +904,26 @@ struct Notice: View {
     /// the same line as plain text.
     var drawn: Text? = nil
     var action: Action? = nil
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        Group {
-            if action != nil, dynamicTypeSize.isAccessibilitySize {
+        VStack(alignment: .leading, spacing: 4) {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    KeywordLabel(text: keyword, color: tone.tint)
+                    sentenceText
+                    Spacer(minLength: 0)
+                }
                 VStack(alignment: .leading, spacing: 4) {
                     KeywordLabel(text: keyword, color: tone.tint)
                     sentenceText
-                    actionButton.padding(.top, 4)
                 }
-            } else {
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        KeywordLabel(text: keyword, color: tone.tint)
-                        sentenceText
-                        Spacer(minLength: 0)
-                        actionButton
-                    }
-                    VStack(alignment: .leading, spacing: 4) {
-                        KeywordLabel(text: keyword, color: tone.tint)
-                        HStack(alignment: .firstTextBaseline, spacing: 12) {
-                            sentenceText
-                            Spacer(minLength: 0)
-                            actionButton
-                        }
-                    }
-                }
+            }
+            if let action {
+                Button(action.label, action: action.handler)
+                    .buttonStyle(FreesideActionButtonStyle(tone: tone.actionTone, expands: false))
+                    .disabled(!action.isEnabled)
+                    .accessibilityLabel(action.accessibilityLabel ?? action.label)
+                    .padding(.top, 2)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -932,19 +937,6 @@ struct Notice: View {
             .font(FreesideFont.cardBody)
             .foregroundStyle(Color.inkDim)
             .multilineTextAlignment(.leading)
-    }
-
-    @ViewBuilder private var actionButton: some View {
-        if let action {
-            Button(action.label, action: action.handler)
-                .buttonStyle(.plain)
-                .font(FreesideFont.noticeAction)
-                .foregroundStyle(action.isEnabled ? tone.tint : Color.inkFaint)
-                .fixedSize()
-                .freesideFocusRing(cornerRadius: 4)
-                .disabled(!action.isEnabled)
-                .accessibilityLabel(action.accessibilityLabel ?? action.label)
-        }
     }
 }
 
