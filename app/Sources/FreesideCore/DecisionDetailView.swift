@@ -724,6 +724,9 @@ struct DecisionDetailView: View {
         let reviewingLeads = !DecisionCardComposition.isStale(item)
         if Self.drawsControlGroup(item) {
             VStack(alignment: .leading, spacing: CardScale.controlGap) {
+                if offersLostResponseRetry {
+                    lostResponseRetry
+                }
                 if hasReviewingAction {
                     if reviewingLeads {
                         reviewingAction(item)
@@ -2173,12 +2176,15 @@ struct DecisionDetailView: View {
             .padding()
     }
 
+    /// The uncertain receipt over the Retry its card's control group leads
+    /// with.
     func screenshotRetryableReceipt(expanded: Bool) -> some View {
-        RetryableReceipt(
-            isExpanded: .constant(expanded),
-            failureMessage: "the daemon did not answer",
-            retry: {}
-        )
+        VStack(alignment: .leading, spacing: CardScale.sectionGap) {
+            RetryableReceipt(
+                isExpanded: .constant(expanded),
+                failureMessage: "the daemon did not answer")
+            lostResponseRetry
+        }
         .padding()
         // The card's own ground: the disclosure under the notice has no
         // wash of its own to carry its ink over the harness's light canvas.
@@ -2657,22 +2663,36 @@ struct DecisionDetailView: View {
                     .neutral, "Recorded",
                     "Decision applied: \(AttentionDisplay.label(record.action, for: model.snapshot?.item))")
             }
-            // The retry affordance leads: when a preserved command may
-            // hold a recorded result, resending it is the actionable
-            // step, whatever else failed.
-            if model.canRetryLostResponse {
+            // The uncertain receipt outranks a failure: when a preserved
+            // command may hold a recorded result, resending it is the
+            // actionable step, whatever else failed.
+            if offersLostResponseRetry {
                 RetryableReceipt(
                     isExpanded: $lostResponseExpanded,
-                    failureMessage: model.submissionError
-                ) {
-                    Task { await model.retryLostResponse() }
-                }
+                    failureMessage: model.submissionError)
             } else if case .failed(let message) = model.validation {
                 receipt(.wax, "Failed", "Couldn't validate current state: \(message)")
             } else if let message = model.submissionError {
                 receipt(.wax, "Failed", "Submission failed: \(message)")
             }
         }
+    }
+
+    /// Whether a command's answer was lost and the card offers to resend
+    /// it: the receipt states it, and the control group holds the Retry.
+    private var offersLostResponseRetry: Bool {
+        model.phase != .superseded && model.canRetryLostResponse
+    }
+
+    /// The uncertain receipt's act (R14). It leads the control group, and
+    /// a card that can retry always draws one: every command a card sends
+    /// is one of its item's requested decisions.
+    private var lostResponseRetry: some View {
+        Button("Retry") {
+            Task { await model.retryLostResponse() }
+        }
+        .buttonStyle(FreesideActionButtonStyle(tone: .secondary))
+        .accessibilityLabel("Retry the lost decision")
     }
 
     /// The recommendation in the register its revalidated provenance
@@ -3608,21 +3628,20 @@ struct DecisionDetailView: View {
         }
     }
 
-    /// The uncertain receipt (R12): the accent notice with its trailing
-    /// Retry, and the explanation one disclosure away.
+    /// The uncertain receipt (R12): the accent notice, and the explanation
+    /// one disclosure away. Its Retry is a button in the card's control
+    /// group (R14).
     private struct RetryableReceipt: View {
         @Binding var isExpanded: Bool
         let failureMessage: String?
-        let retry: () -> Void
 
         var body: some View {
             VStack(alignment: .leading, spacing: 8) {
                 Notice(
                     tone: .accent, keyword: "Unconfirmed",
-                    sentence: "The daemon did not answer. Nothing is assumed.",
-                    action: .init(label: "Retry", accessibilityLabel: "Retry the lost decision", handler: retry)
+                    sentence: "The daemon did not answer. Nothing is assumed."
                 )
-                .accessibilityElement(children: .contain)
+                .accessibilityElement(children: .combine)
                 SentenceDisclosure(label: "What Happened", isExpanded: $isExpanded) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(
