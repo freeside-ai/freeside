@@ -134,6 +134,37 @@
             return measurement.frame
         }
 
+        /// An empty state in the detail pane centers in the column a card
+        /// takes, not in the pane, so a wide pane holds it over the place
+        /// its cards draw. A pane no wider than that column centers it
+        /// across itself, and so does every other pane at any width.
+        @Test func anEmptyStateInTheDetailPaneCentersInTheCardsColumn() throws {
+            typealias Scale = DecisionCardComposition.Scale
+            func block(_ seat: UnavailableStateView.Seat, paneWidth: CGFloat) throws -> CGRect {
+                try #require(
+                    probeFrame(paneWidth: paneWidth, probeWidth: 200) {
+                        AnyView($0.emptyStateSeat(seat))
+                    })
+            }
+            let column = Scale.paneMargin(compact: false).leading + Scale.cardWidth / 2
+            for paneWidth in [CGFloat(1_000), 1_620] {
+                let seated = try block(.detailColumn, paneWidth: paneWidth)
+                #expect(seated.midX == column)
+                #expect(seated.midX == 344)
+                #expect(seated.midY == 300)
+
+                let acrossPane = try block(.pane, paneWidth: paneWidth)
+                #expect(acrossPane.midX == paneWidth / 2)
+                #expect(acrossPane.midY == 300)
+            }
+
+            for seat in [UnavailableStateView.Seat.pane, .detailColumn] {
+                let phone = try block(seat, paneWidth: 390)
+                #expect(phone.midX == 195)
+                #expect(phone.midY == 300)
+            }
+        }
+
         /// The frame of the card `detailCard` draws around a probe in a
         /// pane of the given width, in the pane's coordinates. The probe is
         /// the card's content, so the card is the probe's frame grown by the
@@ -154,13 +185,16 @@
 
         /// The frame of a 100pt-tall probe once `seat` has placed it in a
         /// 600pt-tall pane of the given width, in the pane's coordinates.
-        private func probeFrame(paneWidth: CGFloat, seat: (AnyView) -> AnyView) -> CGRect? {
+        /// The probe takes the width it is offered unless given its own.
+        private func probeFrame(
+            paneWidth: CGFloat, probeWidth: CGFloat? = nil, seat: (AnyView) -> AnyView
+        ) -> CGRect? {
             final class Measurement: @unchecked Sendable {
                 var content: CGRect?
             }
             let measurement = Measurement()
             let probe = Color.clear
-                .frame(height: 100)
+                .frame(width: probeWidth, height: 100)
                 .onGeometryChange(for: CGRect.self) { geometry in
                     geometry.frame(in: .named("pane"))
                 } action: { frame in

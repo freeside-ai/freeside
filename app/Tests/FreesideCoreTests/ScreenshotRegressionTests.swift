@@ -3027,12 +3027,13 @@
                             Text("Inbox").padding()
                         })))
             // The Mac's revoked state: the banner only states, and the
-            // detail pane empties around Pair Again.
+            // detail pane empties around Pair Again, centered in the card's
+            // column of a pane wider than it.
             for (suffix, scheme) in [("", ColorScheme.light), ("-dark", .dark)] {
                 surfaces.append(
                     Surface(
                         name: "revoked-pane" + suffix,
-                        width: 640,
+                        width: 860,
                         colorScheme: scheme,
                         view: AnyView(
                             VStack(spacing: 0) {

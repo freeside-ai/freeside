@@ -617,7 +617,8 @@ public struct FreesideRootView: View {
                     } else {
                         UnavailableStateView(
                             glyph: .tasks, title: "Not available",
-                            description: "This task or run is no longer available.")
+                            description: "This task or run is no longer available.",
+                            seat: .detailColumn)
                     }
                 }
             }
@@ -664,7 +665,9 @@ public struct FreesideRootView: View {
                     // The same two lines the empty Open scope draws in the
                     // sidebar, so the two panes agree.
                     let empty = InboxView.emptyScope(.open, projectID: coordinator.store.projectID)
-                    UnavailableStateView(glyph: .inbox, title: empty.title, description: empty.description)
+                    UnavailableStateView(
+                        glyph: .inbox, title: empty.title, description: empty.description,
+                        seat: .detailColumn)
                 } else {
                     OperationalSummaryView(
                         summary: OperationalSummary(
@@ -690,7 +693,8 @@ public struct FreesideRootView: View {
                         } else {
                             UnavailableStateView(
                                 glyph: .tasks, title: "Run unavailable",
-                                description: "This run is no longer available.")
+                                description: "This run is no longer available.",
+                                seat: .detailColumn)
                         }
                     }
                     .id(runSelection)
@@ -705,7 +709,8 @@ public struct FreesideRootView: View {
                     .id(taskSelection)
                 } else {
                     UnavailableStateView(
-                        glyph: .tasks, title: "Tasks", description: "Select a task to inspect its history.")
+                        glyph: .tasks, title: "Tasks", description: "Select a task to inspect its history.",
+                        seat: .detailColumn)
                 }
             }
         }
@@ -855,8 +860,6 @@ struct RevokedPane: View {
                 .padding(.top, 10)
         }
         .multilineTextAlignment(.center)
-        .padding(.horizontal, 24)
-        .padding(.vertical, 40)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .emptyStateSeat(.detailColumn)
     }
 }

@@ -191,7 +191,8 @@ struct DecisionDetailView: View {
                 } else {
                     UnavailableStateView(
                         glyph: .inbox, title: "Item unavailable",
-                        description: "This attention item is not in the inbox.")
+                        description: "This attention item is not in the inbox.",
+                        seat: .detailColumn)
                 }
             }
             // Re-validate on open and whenever the cache is evicted for a new
