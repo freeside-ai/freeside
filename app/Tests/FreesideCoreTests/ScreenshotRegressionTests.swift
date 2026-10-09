@@ -38,6 +38,9 @@
         }
 
         private let canvasWidth: CGFloat = 960
+        /// A detail column just wide enough for the one-column card at its
+        /// cap (R18): the card and the pane's 24pt margins.
+        private static let detailColumnWidth = DecisionCardComposition.Scale.cardWidth + 48
         private let baselineOperatingSystemKey = "macOS-26.7"
         private let screenshotNow = AttentionFixtures.createdInstant.addingTimeInterval(18 * 3_600)
         private let screenshotTimeZone = TimeZone(identifier: "UTC") ?? .current
@@ -2012,7 +2015,7 @@
             surfaces.append(
                 Surface(
                     name: "operational-summary",
-                    width: 640,
+                    width: Self.detailColumnWidth,
                     view: AnyView(
                         OperationalSummaryView(
                             summary: OperationalSummary(
@@ -2027,7 +2030,7 @@
             surfaces.append(
                 Surface(
                     name: "operational-summary-dark",
-                    width: 640,
+                    width: Self.detailColumnWidth,
                     colorScheme: .dark,
                     view: AnyView(
                         OperationalSummaryView(
@@ -2045,7 +2048,7 @@
             surfaces.append(
                 Surface(
                     name: "operational-summary-contract-mismatch",
-                    width: 640,
+                    width: Self.detailColumnWidth,
                     view: AnyView(
                         OperationalSummaryView(
                             summary: OperationalSummary(
@@ -3224,7 +3227,7 @@
                 loadsAttachments: false,
                 showsValidationProgress: false,
                 now: screenshotNow)
-            let width = DecisionCardComposition.Scale.columnWidth
+            let width = Self.detailColumnWidth
             return [("clean", clean), ("degraded", AttentionFixtures.degradedReady().item)].flatMap {
                 name, item in
                 [("light", ColorScheme.light), ("dark", ColorScheme.dark)].map { theme, scheme in
@@ -3650,6 +3653,10 @@
                 .environment(\.calendar, Calendar(identifier: .gregorian))
                 .environment(\.timeZone, timeZone)
                 .environment(\.pinnedNow, screenshotNow)
+                // A surface at phone width is the phone's: the timelines
+                // draw on the page's ground there and in the detail
+                // column's card everywhere else.
+                .transformEnvironment(\.horizontalSizeClass) { if width <= 430 { $0 = .compact } }
                 .frame(width: width, alignment: .topLeading)
                 .fixedSize(horizontal: false, vertical: true)
                 .background(Color.ground)

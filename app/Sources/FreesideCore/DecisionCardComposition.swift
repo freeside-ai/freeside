@@ -270,9 +270,13 @@ struct DecisionCardComposition: Equatable {
         /// The space between the hairline and the first fold.
         static let foldLead = ladder.foldLead
         static let cornerRadius: CGFloat = 12
-        /// The widest a one-column card grows with the detail's 16pt margin
-        /// around it: the card itself is 560 wide.
-        static let columnWidth: CGFloat = 592
+        /// The widest a one-column card grows (R18). The operational
+        /// summary and both timelines draw in the same card at the same
+        /// width, so selecting something changes the content, not its shape.
+        static let cardWidth: CGFloat = 640
+        /// The widest the two-column card grows. Up to it the card fills
+        /// the pane (frame 7.8); what a wider pane does is still open.
+        static let wideCardWidth: CGFloat = 1_008
         /// Between the two-column card's columns (frame 7.8).
         static let columnGap: CGFloat = 28
         /// The two-column card's right column. The frame draws 280, where
@@ -280,6 +284,15 @@ struct DecisionCardComposition: Equatable {
         /// (`Answer Without Retry`, `Approve With Changes`), so the
         /// column keeps the width it had before the frame.
         static let controlColumnWidth: CGFloat = 360
+
+        /// The pane's margin around a card (R18): 16 all round at phone
+        /// width; in the detail column 24 from each side, 20 from the top,
+        /// and 40 under the card, so every card starts at one x and one y.
+        static func paneMargin(compact: Bool) -> EdgeInsets {
+            compact
+                ? EdgeInsets(top: 16, leading: 16, bottom: 16, trailing: 16)
+                : EdgeInsets(top: 20, leading: 24, bottom: 40, trailing: 24)
+        }
 
         /// A card at phone width is 16 from each side, 18 from the top, and
         /// 16 from the bottom; a wider one sits 22 in, with 20 under its

@@ -182,9 +182,9 @@ struct DecisionDetailView: View {
                                 wideLayout: twoColumns,
                                 inspectorPresented: inspectorBinding.wrappedValue
                             )
-                            .decisionCardChrome(
-                                compactLayout: horizontalSizeClass == .compact,
-                                wideLayout: twoColumns)
+                            .detailCard(
+                                compact: horizontalSizeClass == .compact,
+                                twoColumns: twoColumns)
                         }
                         .coordinateSpace(name: "decision-card-scroll")
                         .onPaneWidthChange { detailWidth = $0 }
@@ -2166,9 +2166,7 @@ struct DecisionDetailView: View {
             inspectorPresented: inspectorPresented,
             actionRegionFrameChanged: actionRegionFrameChanged
         )
-        .decisionCardChrome(
-            compactLayout: compactLayout,
-            wideLayout: wideLayout)
+        .detailCard(compact: compactLayout, twoColumns: wideLayout)
     }
 
     func screenshotBanner() -> some View {
@@ -4343,12 +4341,48 @@ extension View {
             }
     }
 
-    /// The decision card's own padding, ground, and border, inside the
-    /// detail's margin.
-    fileprivate func decisionCardChrome(compactLayout: Bool, wideLayout: Bool) -> some View {
-        padding(CardScale.padding(compact: compactLayout))
+    /// The detail column's card (R18): the card's padding, ground, and
+    /// border, top-leading inside the pane's margin and no wider than its
+    /// cap. The decision card, the operational summary, and both timelines
+    /// draw on it, so every detail surface starts at one x and one y. The
+    /// two-column card fills the pane up to its own cap instead.
+    /// `topMargin` replaces the pane's top margin for a card that sits
+    /// under a row of its own.
+    func detailCard(compact: Bool, twoColumns: Bool = false, topMargin: CGFloat? = nil) -> some View {
+        var margin = CardScale.paneMargin(compact: compact)
+        if let topMargin { margin.top = topMargin }
+        return padding(CardScale.padding(compact: compact))
+            .frame(maxWidth: .infinity, alignment: .topLeading)
             .freesideCard(cornerRadius: CardScale.cornerRadius)
-            .padding()
-            .frame(maxWidth: wideLayout ? 1_040 : CardScale.columnWidth, alignment: .topLeading)
+            .frame(
+                maxWidth: twoColumns ? CardScale.wideCardWidth : CardScale.cardWidth,
+                alignment: .topLeading
+            )
+            .padding(margin)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    /// A timeline's page. At regular width it is the detail column's card,
+    /// seated as `detailCard` seats it; at compact width the timeline is
+    /// the pushed screen itself and draws on the page's ground, as the
+    /// 8 Oct phone frame has it. One chain serves both, with the width
+    /// choosing its values: a branch would rebuild an open timeline when
+    /// its size class changes (a resized iPad window, a rotated phone) and
+    /// drop its folds and loaded evidence.
+    func timelinePage(compact: Bool, topMargin: CGFloat? = nil) -> some View {
+        var margin = compact ? EdgeInsets() : CardScale.paneMargin(compact: false)
+        if !compact, let topMargin { margin.top = topMargin }
+        let inset =
+            compact
+            ? EdgeInsets(top: 24, leading: 24, bottom: 24, trailing: 24)
+            : CardScale.padding(compact: false)
+        return padding(inset)
+            .frame(maxWidth: compact ? 820 : .infinity, alignment: compact ? .leading : .topLeading)
+            .background {
+                if !compact { Color.clear.freesideCard(cornerRadius: CardScale.cornerRadius) }
+            }
+            .frame(maxWidth: compact ? nil : CardScale.cardWidth, alignment: .topLeading)
+            .padding(margin)
+            .frame(maxWidth: compact ? nil : .infinity, alignment: .topLeading)
     }
 }
