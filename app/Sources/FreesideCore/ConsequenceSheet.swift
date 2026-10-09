@@ -47,7 +47,6 @@ struct ConsequenceSheet: View {
                 submitLabel: actionLabel,
                 tone: .destructive,
                 submitHint: consequence,
-                cancelIsOutlined: true,
                 submit: submit,
                 cancel: cancel)
         }

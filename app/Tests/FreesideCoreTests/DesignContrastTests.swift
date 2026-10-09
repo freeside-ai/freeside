@@ -155,7 +155,10 @@ import Testing
 
         // Disabled and validating text. It must stay readable while reading
         // as unavailable, so it clears the disabled floor rather than the
-        // body one, on every ground a disabled control can sit on.
+        // body one, on every ground a disabled control can sit on. This is
+        // the label of the disabled recipe a sheet's submit takes while its
+        // form cannot be sent (faint ink on the rule border, no fill); the
+        // recipe's border is the `rule` hairline, covered below.
         disabledText("inkFaint", FreesidePalette.inkFaint, on: "ground", FreesidePalette.ground),
         disabledText(
             "inkFaint", FreesidePalette.inkFaint, on: "ground2", FreesidePalette.ground2),
@@ -255,7 +258,7 @@ import Testing
 }
 
 extension FreesideColorCuts {
-    fileprivate subscript(cut: DesignContrastTests.Cut) -> UInt32 {
+    subscript(cut: DesignContrastTests.Cut) -> UInt32 {
         switch cut {
         case .day: day
         case .dusk: dusk

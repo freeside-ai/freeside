@@ -537,8 +537,11 @@
             }
 
             // The New Task composer (#1330): the project picker trigger, the
-            // source field, and the optional name, empty and filled, on Mac
-            // and phone. ImageRenderer draws the static stand-ins, not the live
+            // source field, and the optional name, on Mac and phone. Empty
+            // and filled are each drawn by day and by dusk, so the fill rule
+            // shows in both appearances: Submit takes the disabled recipe on
+            // the empty form and its fill on the valid one.
+            // ImageRenderer draws the static stand-ins, not the live
             // TextEditor or Picker; the toolbar action and open sheet are in
             // the PR's real-app screenshots.
             let newTaskProjects = TaskDisplay.knownProjects(in: TaskFixtures.defaultTasks())
@@ -555,6 +558,10 @@
                 ("new-task-sheet-filled-dark", CGFloat(380), ColorScheme.dark, filledSource, "Health endpoint"),
                 ("new-task-sheet-phone", CGFloat(390), ColorScheme.light, "", ""),
                 ("new-task-sheet-phone-filled-dark", CGFloat(390), ColorScheme.dark, filledSource, "Health endpoint"),
+                ("new-task-sheet-dark", CGFloat(380), ColorScheme.dark, "", ""),
+                ("new-task-sheet-filled", CGFloat(380), ColorScheme.light, filledSource, "Health endpoint"),
+                ("new-task-sheet-phone-dark", CGFloat(390), ColorScheme.dark, "", ""),
+                ("new-task-sheet-phone-filled", CGFloat(390), ColorScheme.light, filledSource, "Health endpoint"),
             ] {
                 surfaces.append(
                     Surface(

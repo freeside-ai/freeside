@@ -4032,7 +4032,6 @@ struct TaskProposalRevisionSheet: View {
             FreesideSheetActionRow(
                 submitLabel: "Submit",
                 isSubmitEnabled: revision != nil,
-                cancelIsOutlined: true,
                 submit: {
                     if let revision {
                         submit(revision)
@@ -4080,7 +4079,6 @@ struct TaskProposalRevisionSheet: View {
             FreesideSheetActionRow(
                 submitLabel: "Submit",
                 isSubmitEnabled: revision != nil,
-                cancelIsOutlined: true,
                 submit: {}, cancel: {})
         }
         .frame(maxWidth: 560, alignment: .leading)
@@ -4158,7 +4156,6 @@ struct EffectProposalRevisionSheet: View {
             FreesideSheetActionRow(
                 submitLabel: "Approve",
                 isSubmitEnabled: revision != nil,
-                cancelIsOutlined: true,
                 submit: {
                     if let revision {
                         submit(revision)
@@ -4197,7 +4194,6 @@ struct EffectProposalRevisionSheet: View {
             FreesideSheetActionRow(
                 submitLabel: "Approve",
                 isSubmitEnabled: revision != nil,
-                cancelIsOutlined: true,
                 submit: {}, cancel: {})
         }
         .frame(maxWidth: 560, alignment: .leading)
@@ -4267,7 +4263,6 @@ struct TaskProposalSnoozeSheet: View {
                 // snooze. The screenshot composition uses the injected
                 // `now` instead, so its golden stays deterministic.
                 isSubmitEnabled: Self.isValidSnooze(until: until, now: Date()),
-                cancelIsOutlined: true,
                 submit: {
                     guard Self.isValidSnooze(until: until, now: Date()) else { return }
                     submit(until)
@@ -4302,7 +4297,6 @@ struct TaskProposalSnoozeSheet: View {
             FreesideSheetActionRow(
                 submitLabel: "Snooze",
                 isSubmitEnabled: Self.isValidSnooze(until: until, now: now),
-                cancelIsOutlined: true,
                 submit: {}, cancel: {})
         }
         .frame(maxWidth: 560, alignment: .leading)

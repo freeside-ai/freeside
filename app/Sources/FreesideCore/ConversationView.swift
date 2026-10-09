@@ -449,7 +449,6 @@ struct MessageComposerSheet: View {
             FreesideSheetActionRow(
                 submitLabel: submitLabel,
                 isSubmitEnabled: canSubmit && !isSubmitting,
-                cancelIsOutlined: true,
                 submit: performSubmit,
                 cancel: { dismiss() })
         }
