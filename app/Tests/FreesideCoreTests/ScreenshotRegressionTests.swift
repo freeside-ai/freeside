@@ -1557,6 +1557,24 @@
                             selection: .constant(retryTask.task.id)
                         ).screenshotContent(now: RunFixtures.screenshotInstant)
                     )))
+            // The empty scope at the sidebar's width, by day and by dusk:
+            // the empty state the list centers under its filters.
+            for colorScheme in [ColorScheme.light, .dark] {
+                surfaces.append(
+                    Surface(
+                        name: "tasks-list-empty" + (colorScheme == .dark ? "-dark" : ""),
+                        width: 320,
+                        colorScheme: colorScheme,
+                        view: AnyView(
+                            TasksListView(
+                                tasks: [],
+                                runs: [],
+                                selection: .constant(nil)
+                            ).screenshotContent(now: RunFixtures.screenshotInstant)
+                                .padding(.top, 32)
+                                .background(Color.sidebarGround)
+                        )))
+            }
             for scope in [TaskListFilter.Scope.finished, .all] {
                 surfaces.append(
                     Surface(

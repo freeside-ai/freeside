@@ -102,12 +102,10 @@ struct TasksListView: View {
             if rows.isEmpty {
                 #if os(macOS)
                     Spacer(minLength: 0)
-                    SidebarEmptyState(
-                        title: emptyTitle, description: "Tasks in this scope will appear here.")
+                    SidebarEmptyState(title: emptyTitle, description: Self.emptyDescription)
                     Spacer(minLength: 0)
                 #else
-                    UnavailableStateView(
-                        title: emptyTitle, description: "Tasks in this scope will appear here.")
+                    UnavailableStateView(title: emptyTitle, description: Self.emptyDescription)
                 #endif
             } else {
                 #if os(iOS)
@@ -152,6 +150,8 @@ struct TasksListView: View {
     private var emptyTitle: String {
         filter.scope == .all ? "No tasks" : "No \(filter.scope.label.lowercased()) tasks"
     }
+
+    private static let emptyDescription = "Tasks in this scope will appear here."
 
     private func listRows(_ snapshots: [Components.Schemas.TaskSnapshot]) -> some View {
         ForEach(snapshots, id: \.task.id) { snapshot in
@@ -228,12 +228,18 @@ struct TasksListView: View {
     /// AppKit-backed controls ImageRenderer cannot draw off-screen.
     @ViewBuilder
     func screenshotContent(now: Date) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(visibleTasks.prefix(5)), id: \.task.id) { snapshot in
-                row(snapshot, now: now)
+        if visibleTasks.isEmpty {
+            // The empty scope, as the sidebar draws it under its filters.
+            SidebarEmptyState(title: emptyTitle, description: Self.emptyDescription)
+                .padding(.bottom, 32)
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(visibleTasks.prefix(5)), id: \.task.id) { snapshot in
+                    row(snapshot, now: now)
+                }
             }
+            .padding()
         }
-        .padding()
     }
 }
 
