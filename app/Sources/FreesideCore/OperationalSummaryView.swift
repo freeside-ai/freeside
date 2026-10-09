@@ -89,9 +89,10 @@ struct OperationalSummary: Equatable {
 
 /// The macOS detail column while nothing is selected (6.7): how much is
 /// open, what to take first, and the daemon's state folded under one
-/// hairline. Every value that names something is a link that opens it: an
-/// item in the detail column, the task count on the Tasks screen. A value
-/// with nothing to name stays a plain fact.
+/// hairline, in the card a decision takes its place in (R18). Every
+/// value that names something is a link that opens it: an item in the
+/// detail column, the task count on the Tasks screen. A value with
+/// nothing to name stays a plain fact.
 struct OperationalSummaryView: View {
     let summary: OperationalSummary
     let onSelectItem: (String) -> Void
@@ -158,8 +159,11 @@ struct OperationalSummaryView: View {
                 Color.rule.frame(height: 1)
             }
         }
-        .padding(28)
-        .frame(minWidth: 320, maxWidth: 560, alignment: .leading)
+        .detailCard(compact: false)
+        // The pane sits outside a scroll view, so its minimum is the
+        // window's. Without a floor, a proposal of no width wraps every
+        // line to a character and the window opens taller than the display.
+        .frame(minWidth: 320, alignment: .topLeading)
         // A new daemon state takes the fold back from the reader's last
         // choice, so a daemon that starts failing is never left folded away.
         .onChange(of: summary.daemonState) { freshnessExpanded = nil }

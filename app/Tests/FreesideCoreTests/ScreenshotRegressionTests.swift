@@ -2015,7 +2015,7 @@
             surfaces.append(
                 Surface(
                     name: "operational-summary",
-                    width: 640,
+                    width: Self.detailColumnWidth,
                     view: AnyView(
                         OperationalSummaryView(
                             summary: OperationalSummary(
@@ -2030,7 +2030,7 @@
             surfaces.append(
                 Surface(
                     name: "operational-summary-dark",
-                    width: 640,
+                    width: Self.detailColumnWidth,
                     colorScheme: .dark,
                     view: AnyView(
                         OperationalSummaryView(
@@ -2048,7 +2048,7 @@
             surfaces.append(
                 Surface(
                     name: "operational-summary-contract-mismatch",
-                    width: 640,
+                    width: Self.detailColumnWidth,
                     view: AnyView(
                         OperationalSummaryView(
                             summary: OperationalSummary(

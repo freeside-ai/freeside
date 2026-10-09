@@ -674,10 +674,10 @@ public struct FreesideRootView: View {
                         onSelectItem: { navigation.route(to: .attentionItem($0)) },
                         onShowTasks: { navigation.showActiveTasks() }
                     )
-                    // Pinned to the column's top-leading corner, where the
-                    // decision card it stands in for begins, instead of
-                    // floating at its center.
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    // Pinned to the column's top, where the decision card
+                    // it stands in for begins, instead of floating at its
+                    // center.
+                    .frame(maxHeight: .infinity, alignment: .top)
                 }
             case .tasks:
                 if let runSelection {
