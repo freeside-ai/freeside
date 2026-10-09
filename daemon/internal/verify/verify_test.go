@@ -12,6 +12,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
+	"github.com/freeside-ai/freeside/daemon/internal/repotemplate"
 )
 
 // recordingRoom is the scripted in-test room: deterministic canned
@@ -35,19 +36,28 @@ func (r *recordingRoom) Run(_ context.Context, workdir string, argv []string) (S
 	return StepResult{Output: []byte("ok\n")}, nil
 }
 
+type fixtureHeads struct {
+	base, head string
+}
+
+var candidateRepoTemplates repotemplate.Cache[fixtureHeads]
+
 // verifyFixture is the shared end-to-end fixture: a base repository
 // carrying the trusted recipe, a candidate commit, and ready options.
 func verifyFixture(t *testing.T, changes map[string]string, changeList []importer.Change) (checkout string, opts Options, room *recordingRoom) {
 	t.Helper()
-	dir, base := initRepo(t, map[string]string{
-		testRecipePath: trustedRecipeBytes,
-		"README.md":    "base readme",
+	dir, heads := candidateRepoTemplates.Copy(t, repotemplate.FilesKey(changes), func() (string, fixtureHeads) {
+		dir, base := initRepo(t, map[string]string{
+			testRecipePath: trustedRecipeBytes,
+			"README.md":    "base readme",
+		})
+		head := commitCandidate(t, dir, base, changes)
+		return dir, fixtureHeads{base: base, head: head}
 	})
-	head := commitCandidate(t, dir, base, changes)
 	room = &recordingRoom{}
 	return dir, Options{
-		HeadSHA:      head,
-		BaseSHA:      base,
+		HeadSHA:      heads.head,
+		BaseSHA:      heads.base,
 		InvocationID: domain.InvocationID("inv-1"),
 		RecipeSource: BaseCommitRecipe(),
 		Room:         room,

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/freeside-ai/freeside/daemon/internal/repotemplate"
 )
 
 // runGit runs one git command against dir with a neutral environment,
@@ -55,16 +57,24 @@ func runGitStdin(t *testing.T, dir string, stdin []byte, args ...string) string 
 	return strings.TrimSpace(stdout.String())
 }
 
+var baseRepoTemplates repotemplate.Cache[string]
+
 // initRepo creates a repository whose base commit holds files, and
 // returns its path and base commit SHA.
 func initRepo(t *testing.T, files map[string]string) (dir, baseSHA string) {
 	t.Helper()
-	dir = t.TempDir()
-	runGit(t, dir, "init", "-q", "-b", "main", "--object-format=sha1")
-	writeFiles(t, dir, files)
-	runGit(t, dir, "add", "-A")
-	runGit(t, dir, "commit", "-q", "-m", "base")
-	return dir, runGit(t, dir, "rev-parse", "HEAD")
+	return baseRepoTemplates.Copy(t, repotemplate.FilesKey(files), func() (string, string) {
+		dir := t.TempDir()
+		runGit(t, dir, "init", "-q", "-b", "main", "--object-format=sha1")
+		// The cache snapshots the completed repository. Prevent Git from
+		// starting background maintenance that can add and remove lock files
+		// while that snapshot walks .git.
+		runGit(t, dir, "config", "maintenance.auto", "false")
+		writeFiles(t, dir, files)
+		runGit(t, dir, "add", "-A")
+		runGit(t, dir, "commit", "-q", "-m", "base")
+		return dir, runGit(t, dir, "rev-parse", "HEAD")
+	})
 }
 
 // commitCandidate writes changes on top of the checkout's HEAD as a
