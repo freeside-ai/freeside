@@ -858,16 +858,19 @@ import Testing
         }
     }
 
-    /// R10: the ladder survey card 4b settled, which every decision type
-    /// now draws on.
-    @Test func theCardScaleIsTheLadderCard4bSettled() {
+    /// R10: every decision type draws on its platform's ladder, and a card
+    /// at phone width keeps the phone's padding on either platform.
+    @Test func theCardScaleIsThePlatformLadder() {
         let scale = DecisionCardComposition.Scale.self
-        #expect(scale.sectionGap == 22)
-        #expect(scale.moduleGap == 11)
-        #expect(scale.controlGap == 10)
-        #expect(scale.foldLead == 18)
-        #expect(scale.padding(compact: false) == .init(top: 28, leading: 28, bottom: 24, trailing: 28))
-        #expect(scale.padding(compact: true) == .init(top: 18, leading: 20, bottom: 18, trailing: 20))
+        let ladder = FreesideLadder.current
+        #expect(scale.sectionGap == ladder.sectionGap)
+        #expect(scale.moduleGap == ladder.moduleGap)
+        #expect(scale.controlGap == ladder.controlGap)
+        #expect(scale.foldLead == ladder.foldLead)
+        #expect(scale.headGap == 10)
+        #expect(scale.foldGap == 10)
+        #expect(scale.padding(compact: false) == .init(top: 22, leading: 22, bottom: 20, trailing: 22))
+        #expect(scale.padding(compact: true) == .init(top: 18, leading: 16, bottom: 16, trailing: 16))
     }
 
     /// The reviewing action opens the control group the action region

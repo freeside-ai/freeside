@@ -216,6 +216,74 @@ extension Color {
     }
 #endif
 
+/// One platform's ladder (R10, the interfaces handoff of 8 Oct 2026): the
+/// point size of every fixed face, the height of a control, and the gaps a
+/// card is set on. The Mac sets on its native sizes; the iPhone keeps the
+/// survey card's scale a point smaller. Both are values, so a test pins
+/// either platform's steps from one host; `current` is the one a build draws.
+struct FreesideLadder: Equatable, Sendable {
+    /// The smallest text the platform draws at the default size.
+    let floor: CGFloat
+    /// What a card asks: serif medium.
+    let ask: CGFloat
+    /// What a sheet asks: the ask's face, a step under it on iPhone.
+    let sheetAsk: CGFloat
+    /// A statement at text size: serif.
+    let statement: CGFloat
+    /// A sidebar row's serif line.
+    let rowTitle: CGFloat
+    /// A fact's label, a disclosure's label, and a rail entry's title: sans.
+    let label: CGFloat
+    /// The card body: sans.
+    let body: CGFloat
+    /// A fact's value: mono.
+    let monoValue: CGFloat
+    /// The dim summary trailing a disclosure, and a row's context: mono.
+    let trailingSummary: CGFloat
+    /// The uppercase section keyword: mono medium, tracked 0.08em.
+    let keyword: CGFloat
+    /// A state chip: mono medium, tracked 0.04em.
+    let chip: CGFloat
+    /// A text link: sans medium.
+    let link: CGFloat
+    /// An action's label: sans medium.
+    let actionLabel: CGFloat
+    /// The info control beside an unverified keyword: a mark as tall as
+    /// this, not text.
+    let infoMark: CGFloat
+    /// The least height of an action, and of one at an accessibility size.
+    let actionHeight: CGFloat
+    let accessibilityActionHeight: CGFloat
+    /// An action's padding around its label at the default size.
+    let actionPadding: CGSize
+    /// A card's gaps: between sections, inside a module, within a control
+    /// group, and between the hairline and the first fold.
+    let sectionGap: CGFloat
+    let moduleGap: CGFloat
+    let controlGap: CGFloat
+    let foldLead: CGFloat
+
+    static let mac = FreesideLadder(
+        floor: 11, ask: 20, sheetAsk: 20, statement: 15, rowTitle: 14, label: 13, body: 13, monoValue: 12,
+        trailingSummary: 12, keyword: 11, chip: 11, link: 13, actionLabel: 13, infoMark: 15,
+        actionHeight: 28, accessibilityActionHeight: 40,
+        actionPadding: CGSize(width: 14, height: 4),
+        sectionGap: 18, moduleGap: 9, controlGap: 8, foldLead: 14)
+
+    static let phone = FreesideLadder(
+        floor: 11.5, ask: 24, sheetAsk: 22, statement: 16, rowTitle: 15.5, label: 15, body: 13.5, monoValue: 13.5,
+        trailingSummary: 12.5, keyword: 11.5, chip: 11.5, link: 14, actionLabel: 15, infoMark: 16,
+        actionHeight: 44, accessibilityActionHeight: 56,
+        actionPadding: CGSize(width: 16, height: 7),
+        sectionGap: 20, moduleGap: 10, controlGap: 10, foldLead: 16)
+
+    #if os(macOS)
+        static let current = mac
+    #else
+        static let current = phone
+    #endif
+}
+
 /// The three faces, bundled in `Fonts/` and registered once per process.
 /// Serif carries screen and item titles only; Plex Sans is the chrome;
 /// Plex Mono is the evidence register for every stated fact.
@@ -237,21 +305,28 @@ enum FreesideFont {
 
     /// The platform's own point size for a text style, so the faces sit
     /// at the size the system would give `.body`, `.caption`, and so on
-    /// on each platform (17pt body on iOS, 13pt on macOS). On iOS the
-    /// size is read at the default content size, since `relativeTo:`
-    /// applies the user's Dynamic Type scaling afterwards.
+    /// on each platform (17pt body on iOS, 13pt on macOS), and never under
+    /// the ladder's floor: macOS sets its caption and footnote styles at
+    /// 10pt. On iOS the size is read at the default content size, since
+    /// `relativeTo:` applies the user's Dynamic Type scaling afterwards.
     static func size(of style: Font.TextStyle) -> CGFloat {
         #if canImport(AppKit)
             if let screenshotDynamicTypeSize {
                 return iOSPointSize(of: style, at: screenshotDynamicTypeSize)
             }
-            return NSFont.preferredFont(forTextStyle: platformStyle(style)).pointSize
+            return floored(NSFont.preferredFont(forTextStyle: platformStyle(style)).pointSize)
         #elseif canImport(UIKit)
-            UIFont.preferredFont(
-                forTextStyle: platformStyle(style),
-                compatibleWith: UITraitCollection(preferredContentSizeCategory: .large)
-            ).pointSize
+            floored(
+                UIFont.preferredFont(
+                    forTextStyle: platformStyle(style),
+                    compatibleWith: UITraitCollection(preferredContentSizeCategory: .large)
+                ).pointSize)
         #endif
+    }
+
+    /// A default-size point size held at the ladder's floor.
+    static func floored(_ size: CGFloat, on ladder: FreesideLadder = .current) -> CGFloat {
+        max(size, ladder.floor)
     }
 
     #if canImport(AppKit)
@@ -365,71 +440,78 @@ enum FreesideFont {
         return .custom(name, size: size(of: style), relativeTo: style)
     }
 
-    /// A face the refined scale fixes at one point size on both platforms
-    /// (R10, survey card 4b), scaled by Dynamic Type through `style`. The
-    /// platform faces above follow each platform's own size for a text
-    /// style, which sets a card 13pt on macOS and 17pt on iOS; the card
-    /// scale is one set of sizes. `screenshotMetricBase` applies the iOS
-    /// ratio inside the screenshot bridge, where `relativeTo:` scales
-    /// nothing, so the accessibility digests still render enlarged.
+    /// A face the ladder fixes at one point size per platform (R10), scaled
+    /// by Dynamic Type through `style`. The platform faces above follow each
+    /// platform's own size for a text style; these follow `FreesideLadder`.
+    /// `screenshotMetricBase` applies the iOS ratio inside the screenshot
+    /// bridge, where `relativeTo:` scales nothing, so the accessibility
+    /// digests still render enlarged.
     private static func fixed(
         _ name: String, _ size: CGFloat, relativeTo style: Font.TextStyle
     ) -> Font {
         .custom(name, size: screenshotMetricBase(size, relativeTo: style), relativeTo: style)
     }
 
-    // The card scale. Mono states a fact; sans speaks to the operator; the
-    // serif carries the ask and the statements worth reading as sentences.
-    static let cardBodySize: CGFloat = 14
-    static let keywordSize: CGFloat = 12.5
-    static let chipSize: CGFloat = 12
+    // The ladder's faces. Mono states a fact; sans speaks to the operator;
+    // the serif carries the ask and the statements worth reading as sentences.
+    private static let ladder = FreesideLadder.current
+    static let keywordSize = ladder.keyword
+    static let chipSize = ladder.chip
     /// 0.08em at the keyword's size.
-    static let keywordTracking: CGFloat = 1.0
+    static let keywordTracking: CGFloat = 0.08 * keywordSize
     /// 0.04em at the chip's size.
-    static let chipTracking: CGFloat = 0.48
+    static let chipTracking: CGFloat = 0.04 * chipSize
 
-    static var cardBody: Font { fixed("IBMPlexSans", cardBodySize, relativeTo: .body) }
-    /// What a card or a sheet asks: the one large serif line.
-    static var ask: Font { fixed("FreesideSerif-Medium", 25, relativeTo: .title2) }
+    static var cardBody: Font { fixed("IBMPlexSans", ladder.body, relativeTo: .body) }
+    /// What a card asks: the one large serif line.
+    static var ask: Font { fixed("FreesideSerif-Medium", ladder.ask, relativeTo: .title2) }
+    /// What a sheet asks, in its header.
+    static var sheetAsk: Font { fixed("FreesideSerif-Medium", ladder.sheetAsk, relativeTo: .title3) }
     /// A statement at text size: the agent's summary inside its quote.
-    static var statement: Font { fixed("FreesideSerif-Regular", 17, relativeTo: .body) }
-    /// An agent's message in a thread: the statement face a point smaller,
-    /// since a thread is read as running text, not as one summary.
-    static var message: Font { fixed("FreesideSerif-Regular", 16, relativeTo: .body) }
+    static var statement: Font { fixed("FreesideSerif-Regular", ladder.statement, relativeTo: .body) }
+    /// An agent's message in a thread: the statement face, as the frames
+    /// draw it.
+    static var message: Font { statement }
     /// An option's label: the statement face at medium weight, so the
     /// thing chosen reads above the text that qualifies it.
-    static var optionLabel: Font { fixed("FreesideSerif-Medium", 17, relativeTo: .body) }
+    static var optionLabel: Font { fixed("FreesideSerif-Medium", ladder.statement, relativeTo: .body) }
+    /// A sidebar row's serif line: a step under the statement, since a row
+    /// is one of a list.
+    static var rowTitle: Font { fixed("FreesideSerif-Regular", ladder.rowTitle, relativeTo: .body) }
     /// A fact's label and a disclosure's label.
-    static var factLabel: Font { fixed("IBMPlexSans", 16, relativeTo: .callout) }
+    static var factLabel: Font { fixed("IBMPlexSans", ladder.label, relativeTo: .callout) }
     /// A fact's value.
-    static var monoValue: Font { fixed("IBMPlexMono", 14.5, relativeTo: .callout) }
+    static var monoValue: Font { fixed("IBMPlexMono", ladder.monoValue, relativeTo: .callout) }
     /// The dim summary trailing a disclosure's label.
-    static var trailingSummary: Font { fixed("IBMPlexMono", 13.5, relativeTo: .footnote) }
-    static var actionLabel: Font { fixed("IBMPlexSans-Medm", 15, relativeTo: .body) }
-    /// A text action inside a notice: the card body size, medium.
-    static var noticeAction: Font { fixed("IBMPlexSans-Medm", cardBodySize, relativeTo: .body) }
+    static var trailingSummary: Font { fixed("IBMPlexMono", ladder.trailingSummary, relativeTo: .footnote) }
+    static var actionLabel: Font { fixed("IBMPlexSans-Medm", ladder.actionLabel, relativeTo: .body) }
+    /// A text action: the link's size, medium.
+    static var noticeAction: Font { fixed("IBMPlexSans-Medm", ladder.link, relativeTo: .body) }
     /// A rail entry's title: the fact label's size, semibold on the entry
     /// the rail stands on.
     static func railTitle(emphasized: Bool) -> Font {
-        fixed(emphasized ? "IBMPlexSans-SmBld" : "IBMPlexSans", 16, relativeTo: .callout)
+        fixed(emphasized ? "IBMPlexSans-SmBld" : "IBMPlexSans", ladder.label, relativeTo: .callout)
     }
-    /// A rail entry's detail: the card body's size, between the title and
-    /// the mono lines under it, medium on the entry the rail stands on.
+    /// A rail entry's detail: the card body's size, under the title and
+    /// over the mono lines, medium on the entry the rail stands on.
     static func railDetail(emphasized: Bool) -> Font {
-        fixed(emphasized ? "IBMPlexSans-Medm" : "IBMPlexSans", cardBodySize, relativeTo: .body)
+        fixed(emphasized ? "IBMPlexSans-Medm" : "IBMPlexSans", ladder.body, relativeTo: .body)
     }
     /// An attachment row's facts under its label, its media type, size,
-    /// and digest: mono at the keyword's size (frame 6.9). The platform
-    /// caption styles these lines used are 10pt on macOS, under the
-    /// 11.5pt floor.
+    /// and digest: mono at the keyword's size, the ladder's floor (frame
+    /// 6.9). The platform caption styles these lines used are 10pt on macOS.
     static var attachmentFact: Font { fixed("IBMPlexMono", keywordSize, relativeTo: .caption2) }
     /// An attachment row's state lines (not an image, loading, failed):
     /// sans at the same size, semibold on the line that names the state.
     static func attachmentState(emphasized: Bool = false) -> Font {
         fixed(emphasized ? "IBMPlexSans-SmBld" : "IBMPlexSans", keywordSize, relativeTo: .caption)
     }
-    /// The disclosure chevron, sized as a glyph beside the fact label.
-    static var disclosureGlyph: Font { fixed("IBMPlexSans", 11, relativeTo: .callout) }
+    /// The disclosure chevron: a 10pt glyph beside the label on both
+    /// platforms, a mark and not text, so the floor does not bind it.
+    static var disclosureGlyph: Font { fixed("IBMPlexSans", 10, relativeTo: .callout) }
+    /// The info control beside an unverified keyword, sized as a mark so
+    /// it does not shrink to the keyword's size.
+    static var infoGlyph: Font { fixed("IBMPlexSans", ladder.infoMark, relativeTo: .caption2) }
 
     // The platform text styles, in the language's faces.
     static var title: Font { serif(.title2) }
@@ -443,7 +525,7 @@ enum FreesideFont {
     static var monoCallout: Font { mono(.callout) }
     static var monoCaption: Font { mono(.caption) }
     /// The uppercase mono keyword that heads a section, a banner, and a
-    /// card: a heading, so one size above the chip rather than a footnote.
+    /// card: a heading set by its case and tracking, at the chip's size.
     /// Drawn tracked by `keywordTracking`.
     static var keyword: Font { fixed("IBMPlexMono-Medm", keywordSize, relativeTo: .caption2) }
     /// Medium, not regular: the compact register stays readable without
@@ -611,7 +693,7 @@ struct UnverifiedLabel: View {
 
     private var glyph: some View {
         Image(systemName: "info.circle")
-            .font(FreesideFont.keyword)
+            .font(FreesideFont.infoGlyph)
             .foregroundStyle(Color.inkDim)
     }
 }
@@ -633,7 +715,7 @@ struct SentenceDisclosure<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 11) {
+        VStack(alignment: .leading, spacing: FreesideLadder.current.moduleGap) {
             spoken(toggle)
                 .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
             if isExpanded {
@@ -665,7 +747,7 @@ struct SentenceDisclosure<Content: View>: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             // A touch target taller than the line, without spreading the
-            // folds a card stacks 12pt apart.
+            // folds a card stacks `Scale.foldGap` apart.
             .padding(.vertical, 8)
             .contentShape(Rectangle())
             .padding(.vertical, -8)
@@ -1155,9 +1237,7 @@ struct FreesideLink: View {
     }
 
     /// A link in one of the fixed faces (`FreesideFont.noticeAction` in a
-    /// list row), which hold one point size on both platforms. The platform
-    /// caption a row link used to take draws below the 11.5pt floor (R10)
-    /// on macOS.
+    /// list row), which hold their ladder step on each platform.
     init(title: String, face: Font) {
         self.title = title
         font = face
@@ -1426,8 +1506,9 @@ struct FreesideActionButtonStyle: ButtonStyle {
     }
 
     let tone: Tone
-    /// A dense-chrome control (the menu-bar panel): 28pt minimum height in
-    /// place of the 46 a sheet or card control takes, at every type size.
+    /// A dense-chrome control (the menu-bar panel): 28pt minimum height at
+    /// every type size, where a sheet or card control takes the ladder's
+    /// height and grows at an accessibility size.
     var compact: Bool = false
     /// Whether the control fills its row. A tertiary button always hugs its
     /// label: a full-width control with no fill and no border reads as a
@@ -1455,6 +1536,7 @@ private struct FreesideActionButtonBody: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private let shape = RoundedRectangle(cornerRadius: 6)
+    private let ladder = FreesideLadder.current
 
     var body: some View {
         configuration.label
@@ -1462,7 +1544,7 @@ private struct FreesideActionButtonBody: View {
             .foregroundStyle(labelColor)
             .lineLimit(2)
             .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 12)
+            .padding(.horizontal, ladder.actionPadding.width)
             .padding(.vertical, verticalPadding)
             .frame(minHeight: minHeight)
             .frame(maxWidth: hugsLabel ? nil : .infinity)
@@ -1484,12 +1566,13 @@ private struct FreesideActionButtonBody: View {
 
     private var verticalPadding: CGFloat {
         if compact { return 4 }
-        return dynamicTypeSize >= .accessibility1 ? 12 : 7
+        return ladder.actionPadding.height + (dynamicTypeSize.isAccessibilitySize ? 5 : 0)
     }
 
     private var minHeight: CGFloat {
         if compact { return 28 }
-        return dynamicTypeSize >= .accessibility1 ? 56 : 46
+        return dynamicTypeSize.isAccessibilitySize
+            ? ladder.accessibilityActionHeight : ladder.actionHeight
     }
 
     /// Disabled resolves before tone: every disabled label takes the same
@@ -1562,7 +1645,7 @@ struct FreesideSheetHeader: View {
                 }
             }
             Text(ask)
-                .font(FreesideFont.sectionTitle)
+                .font(FreesideFont.sheetAsk)
                 .foregroundStyle(Color.ink)
                 .lineLimit(askLineLimit)
                 .accessibilityAddTraits(.isHeader)

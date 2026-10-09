@@ -1,14 +1,15 @@
+import CoreGraphics
 import Testing
 
 @testable import FreesideCore
 
 @MainActor
 struct KeywordLabelTests {
-    /// The card scale (R10): a keyword is a heading at 12.5pt tracked
-    /// 0.08em, and a chip sits half a point under it tracked 0.04em.
-    @Test func keywordAndChipSitAtTheCardScale() {
-        #expect(FreesideFont.keywordSize == 12.5)
-        #expect(FreesideFont.chipSize == 12)
+    /// The ladder (R10): a keyword and a chip share one size, the keyword
+    /// tracked 0.08em and the chip 0.04em.
+    @Test func keywordAndChipSitOnTheLadder() {
+        #expect(FreesideFont.keywordSize == FreesideLadder.current.keyword)
+        #expect(FreesideFont.chipSize == FreesideLadder.current.chip)
         #expect(abs(FreesideFont.keywordTracking - 0.08 * FreesideFont.keywordSize) < 0.001)
         #expect(abs(FreesideFont.chipTracking - 0.04 * FreesideFont.chipSize) < 0.001)
     }
@@ -18,14 +19,13 @@ struct KeywordLabelTests {
         /// bridge scales its base by the iOS ratio for its text style;
         /// otherwise the accessibility digests would render at the default.
         @Test func screenshotBridgeScalesAFixedFaceByTheIOSRatio() {
+            let keyword = FreesideFont.keywordSize
+            let enlarged: CGFloat = keyword * 26 / 11
             FreesideFont.$screenshotDynamicTypeSize.withValue(.large) {
-                #expect(
-                    screenshotMetricBase(FreesideFont.keywordSize, relativeTo: .caption2) == 12.5)
+                #expect(screenshotMetricBase(keyword, relativeTo: .caption2) == keyword)
             }
             FreesideFont.$screenshotDynamicTypeSize.withValue(.accessibility5) {
-                #expect(
-                    screenshotMetricBase(FreesideFont.keywordSize, relativeTo: .caption2)
-                        == 12.5 * 26 / 11)
+                #expect(screenshotMetricBase(keyword, relativeTo: .caption2) == enlarged)
             }
         }
     #endif
