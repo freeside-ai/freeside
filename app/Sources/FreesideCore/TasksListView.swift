@@ -44,6 +44,15 @@ struct TasksListView: View {
         self.newTaskBlockedReason = newTaskBlockedReason
     }
 
+    /// The count shown beside Tasks in the macOS section switcher: the
+    /// Active scope's count across every project, since the project filter
+    /// is this list's own state and the switcher outlives the list. Absent
+    /// until the first snapshot has loaded, when a zero would read as no
+    /// work, as the Inbox count is (`InboxView.openCount`).
+    static func activeCount(in tasks: [Components.Schemas.TaskSnapshot], loaded: Bool) -> Int? {
+        loaded ? TaskListFilter().count(in: tasks, scope: .active) : nil
+    }
+
     private var projects: [String] {
         TaskDisplay.knownProjects(in: tasks)
     }
@@ -65,9 +74,7 @@ struct TasksListView: View {
             }
             FreesideSegmentedControl(
                 accessibilityLabel: "Scope",
-                segments: TaskListFilter.Scope.allCases.map {
-                    .init(value: $0, label: $0.label, count: filter.count(in: tasks, scope: $0))
-                },
+                segments: TaskListFilter.Scope.allCases.map { .init(value: $0, label: $0.label) },
                 selection: $filter.scope
             )
             .padding(.horizontal)
@@ -278,11 +285,13 @@ struct TaskListFilter {
     }
 }
 
-/// One task as a sidebar row (R31): the name, the status chip on its own
-/// line beneath it, the project, issue, and last-active meta line, the phase
-/// line, round and hold on one line, and a guidance sentence only when it
-/// says more than "open this row". Armed schedules are the task timeline's
-/// to show. Selection and hover are the inbox row's (`SidebarRowSurface`).
+/// One task as a sidebar row (R31), on the row the inbox draws
+/// (`SidebarRow`): the status as the keyword line, in its cut's color, with
+/// `AGENT` after it for an agent-proposed name; the name in the serif; one
+/// mono context line of project, issue, current phase, and round with the
+/// last activity trailing; and at most one closing line. The four-phase
+/// sentence and the hold are the task timeline's to show, as armed
+/// schedules are.
 struct TaskRowView: View {
     let task: Components.Schemas.Task
     let position: TaskDisplay.Position?
@@ -291,94 +300,114 @@ struct TaskRowView: View {
     /// ticks its own, so the relative last-active text ages without a data
     /// change, as `InboxRowView` does.
     var now: Date?
-    /// Set when another visible task shares this one's name, so the meta line
-    /// carries a short task id to tell the two rows apart.
+    /// Set when another visible task shares this one's name, so the context
+    /// line carries a short task id to tell the two rows apart.
     var showsIdentifier = false
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         if let now {
-            card(at: now)
+            row(at: now)
         } else {
             TimelineView(.periodic(from: .now, by: 60)) { context in
-                card(at: context.date)
+                row(at: context.date)
             }
         }
     }
 
-    private func card(at now: Date) -> some View {
-        content(at: now)
-            .modifier(SidebarRowSurface(isSelected: isSelected, verticalPadding: 14))
-    }
-
-    /// The meta line, whose last-active segment is coarse; macOS hover
-    /// carries the exact instant, as inbox rows do.
-    @ViewBuilder
-    private func metaText(at now: Date) -> some View {
-        let identifier = showsIdentifier ? " · \(ShortIdentifier.short(task.id))" : ""
-        // VoiceOver keeps "last active"; the eye reads the time alone.
-        let text = Text(TaskDisplay.metaLine(task, now: now, labelsActivity: false) + identifier)
-            .font(FreesideFont.trailingSummary)
-            .foregroundStyle(Color.inkDim)
-            .accessibilityLabel(TaskDisplay.metaLine(task, now: now) + identifier)
-        #if os(macOS)
-            text.help(TaskDisplay.exactActivityTimestamp(task))
-        #else
-            text
-        #endif
-    }
-
-    private func content(at now: Date) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            let lines = TaskDisplay.rowLines(task, position: position)
+    private func row(at now: Date) -> some View {
+        let lines = TaskDisplay.rowLines(task, position: position)
+        let name = task.display_names.task
+        let closing = Closing(
+            recorded: TaskDisplay.stopConfirmation(task),
+            guidance: lines.visibleGuidance(attention: position?.attention == true))
+        let spoken = lines.all.joined(separator: ", ")
+        // VoiceOver reads the row as it always has: the name, the meta line
+        // with its "last active" wording, then one element speaking the
+        // status, phases, round, hold, and guidance in that order. So the
+        // keyword line and the trailing time are hidden from it, and one
+        // element after the context line speaks every progress string: the
+        // closing line where the row draws one.
+        return SidebarRow(
+            keyword: .init(
+                text: lines.status, color: TaskDisplay.statusCut(task, position: position).text,
+                marksAgent: name.source == .agent, isSpoken: false),
+            time: .init(
+                text: TaskDisplay.rowTime(task, now: now), exact: TaskDisplay.exactActivityTimestamp(task),
+                isSpoken: false),
+            isSelected: isSelected
+        ) {
+            EmptyView()
+        } title: {
             // Two lines at the standard sizes; an accessibility size lifts
             // the cap, so larger text hides no part of the name (R22).
             TaskNameLabel(
-                name: task.display_names.task, font: FreesideFont.statement,
-                monoFont: FreesideFont.monoValue,
-                lineLimit: dynamicTypeSize.isAccessibilitySize ? nil : 2)
-            // The chip sits above the meta line, but VoiceOver reads the
-            // status with the progress it heads, as it always has: the chip
-            // is hidden and the progress block speaks every string in order.
-            StateChip(label: lines.status, cut: TaskDisplay.statusCut(task, position: position))
-                .accessibilityHidden(true)
-            metaText(at: now)
-            let guidance = lines.visibleGuidance(attention: position?.attention == true)
-            Group {
-                if lines.phases == nil, lines.facts.isEmpty, guidance == nil {
-                    // A task with no position draws no progress line, but
-                    // VoiceOver still reads its status and guidance after the
-                    // meta line, and an element needs a frame to be reached.
-                    Color.clear.frame(height: 1)
-                } else {
-                    VStack(alignment: .leading, spacing: 6) {
-                        if let phases = lines.phases {
-                            progressText(phases)
-                        }
-                        if !lines.facts.isEmpty {
-                            progressText(lines.facts.joined(separator: " · "))
-                        }
-                        switch guidance {
-                        case .link(let title):
-                            // Wraps like the sentences above it; left to the
-                            // row it ends in an ellipsis at larger sizes.
-                            FreesideLink(title: title, face: FreesideFont.noticeAction)
-                                .multilineTextAlignment(.leading)
-                                .fixedSize(horizontal: false, vertical: true)
-                        case .sentence(let sentence): progressText(sentence)
-                        case nil: EmptyView()
-                        }
+                name: name, font: FreesideFont.rowTitle, monoFont: FreesideFont.monoValue,
+                lineLimit: dynamicTypeSize.isAccessibilitySize ? nil : 2, drawsAgentMark: false)
+        } context: {
+            contextText(at: now)
+                .overlay(alignment: .bottom) {
+                    if !closing.isDrawn {
+                        // Nothing closes the row, but VoiceOver still reads
+                        // the progress strings after the meta line, and an
+                        // element needs a frame to be reached. An overlay
+                        // gives it one without a line of its own, so the
+                        // row is no taller than an inbox row.
+                        Color.clear.frame(height: 1)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel(spoken)
                     }
                 }
+        } closing: {
+            if closing.isDrawn {
+                closingLine(closing)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(spoken)
             }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(lines.all.joined(separator: ", "))
         }
     }
-}
 
-extension TaskRowView {
-    fileprivate func progressText(_ line: String) -> some View {
+    /// The context line. It wraps where the sidebar is too narrow for one
+    /// line, since the phase and round at its end are what the row kept
+    /// when the phase sentence left it; each separator stays with the
+    /// segment before it.
+    private func contextText(at now: Date) -> some View {
+        let identifier = showsIdentifier ? " · \(ShortIdentifier.short(task.id))" : ""
+        let context = TaskDisplay.rowContext(task, position: position) + identifier
+        return Text(context.replacingOccurrences(of: " · ", with: "\u{00A0}· "))
+            .font(FreesideFont.trailingSummary)
+            .foregroundStyle(Color.inkDim)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityLabel(TaskDisplay.metaLine(task, now: now) + identifier)
+    }
+
+    /// What closes the row: a recorded stop confirmation, then the guidance
+    /// that says what the row does not, Inbox guidance as a link or a
+    /// capacity wait as a sentence. Most rows draw neither.
+    private struct Closing {
+        let recorded: String?
+        let guidance: TaskDisplay.RowLines.VisibleGuidance?
+
+        var isDrawn: Bool { recorded != nil || guidance != nil }
+    }
+
+    private func closingLine(_ closing: Closing) -> some View {
+        VStack(alignment: .leading, spacing: SidebarRowSurface.lineGap) {
+            if let recorded = closing.recorded { closingText(recorded) }
+            switch closing.guidance {
+            case .link(let title):
+                // Wraps like a sentence; left to the row it ends in an
+                // ellipsis at larger sizes.
+                FreesideLink(title: title, face: FreesideFont.noticeAction)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            case .sentence(let sentence): closingText(sentence)
+            case nil: EmptyView()
+            }
+        }
+    }
+
+    private func closingText(_ line: String) -> some View {
         Text(line)
             .font(FreesideFont.cardBody)
             .foregroundStyle(Color.inkDim)

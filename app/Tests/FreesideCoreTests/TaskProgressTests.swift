@@ -81,6 +81,60 @@ import Testing
         #expect(heldLines.facts.contains { $0.hasPrefix("Hold: ") })
     }
 
+    /// The row's context line carries the current phase and round after the
+    /// project and issue (R31). A historical position has no current phase,
+    /// so it carries the round alone; a heading that only repeats the status
+    /// word and a task with no position add nothing.
+    @Test func rowContextCarriesTheCurrentPhaseAndRound() {
+        let expected: [String: String?] = [
+            "Queued": "Implementation · Round 1", "Approval required": "Specification · Round 1",
+            "Implementation": "Implementation · Round 1", "Review": "Review",
+            "Verification": "Verification · Round 1", "Stop pending": "Implementation · Round 1",
+            "History unavailable": "Implementation · Round 1", "Run unavailable": "Implementation",
+            "Stopped": "Round 1", "Failed": "Round 1", "Finished": "Round 1", "Superseded record": "Round 1",
+            "Abandoned": "Round 1", "Ready": nil, "Ready degraded": nil, "No position": nil,
+        ]
+        for (name, phase) in expected {
+            let fixture = TaskProgressFixtures.make(name)
+            #expect(TaskDisplay.currentPhaseAndRound(fixture.position) == phase, "\(name)")
+            #expect(
+                TaskDisplay.rowContext(fixture.task, position: fixture.position)
+                    == (["freeside", "#654"] + [phase].compactMap { $0 }).joined(separator: " · "), "\(name)")
+        }
+    }
+
+    /// The row moves the phase sentence and the hold off its face, not out
+    /// of what VoiceOver reads: the spoken lines still carry every phase,
+    /// the round, and the hold, and the only fact the row still draws on a
+    /// line of its own is a confirmed stop on a finished task.
+    @Test func rowKeepsEveryMovedFactInItsSpokenLines() throws {
+        let held = TaskProgressFixtures.make("Verification")
+        let position = try #require(held.position)
+        let lines = TaskDisplay.rowLines(held.task, position: position)
+        #expect(lines.phases?.contains("Verification") == true)
+        #expect(lines.facts.first == "Round 1")
+        #expect(lines.facts.contains { $0.hasPrefix("Hold: ") })
+        #expect(!TaskDisplay.rowContext(held.task, position: position).contains("Hold"))
+        #expect(TaskDisplay.stopConfirmation(held.task) == nil)
+
+        var stopped = TaskProgressFixtures.make("Stopped").task
+        #expect(TaskDisplay.stopConfirmation(stopped) == nil)
+        stopped.lifecycle = .finished
+        #expect(TaskDisplay.stopConfirmation(stopped) == "Stop Confirmation Recorded")
+        #expect(TaskDisplay.rowLines(stopped, position: nil).facts == ["Stop Confirmation Recorded"])
+    }
+
+    /// The row's trailing time is coarse under a day and the one short
+    /// format from a day on; the spoken meta line keeps "last active".
+    @Test func rowTimeIsCoarseUnderADay() {
+        let task = TaskProgressFixtures.make("Implementation").task
+        let recent = task.last_activity_at.addingTimeInterval(300)
+        let old = task.last_activity_at.addingTimeInterval(3 * 86_400)
+        #expect(TaskDisplay.rowTime(task, now: recent) == "5m ago")
+        #expect(TaskDisplay.rowTime(task, now: old) == FreesideFormat.shortTime(task.last_activity_at, now: old))
+        #expect(TaskDisplay.metaLine(task, now: recent) == "freeside · #654 · last active 5m ago")
+    }
+
     @Test func progressRetainsApprovalAndEveryRecordedPhase() throws {
         for name in ["Implementation", "Review", "Verification", "Failed", "Run unavailable"] {
             let fixture = TaskProgressFixtures.make(name)

@@ -407,7 +407,9 @@
             // The macOS sidebar chrome in the design language: the section
             // switcher and scope control as Freeside segments, the project
             // trigger, and the first rows, by day and by dusk (the size loop
-            // covers the stacked layout from xxxLarge up).
+            // covers the stacked layout from xxxLarge up). The switcher
+            // carries both counts, so the task fixtures supply the second.
+            let sidebarTaskCount = TasksListView.activeCount(in: TaskFixtures.defaultTasks(), loaded: true)
             for colorScheme in [ColorScheme.light, .dark] {
                 surfaces.append(
                     Surface(
@@ -420,7 +422,7 @@
                                 selection: .constant(inbox.first?.item.id),
                                 launchScope: nil,
                                 launchProjectID: nil
-                            ).screenshotSidebar(now: screenshotNow))))
+                            ).screenshotSidebar(now: screenshotNow, activeTaskCount: sidebarTaskCount))))
             }
             let feedback = DecisionFeedbackModel(
                 announce: { _ in },
@@ -2951,7 +2953,7 @@
                                 selection: .constant(nil),
                                 launchScope: nil,
                                 launchProjectID: nil
-                            ).screenshotSidebar(now: screenshotNow))))
+                            ).screenshotSidebar(now: screenshotNow, activeTaskCount: sidebarTaskCount))))
             }
             // Frames 7.8 and 6.9 (R18): the finding card at a 1,000pt detail
             // width with the inspector open, and that inspector, by day and

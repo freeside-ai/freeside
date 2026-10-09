@@ -318,15 +318,17 @@ struct InboxView: View {
     }
 
     /// The sidebar chrome as the operator sees it on macOS: the section
-    /// switcher with the open count, the scope control and urgent chip, the
+    /// switcher with both counts (the caller supplies the task list's, which
+    /// this view does not hold), the scope control and urgent chip, the
     /// project trigger (its label standing in for the Menu, which
     /// ImageRenderer cannot open), and the first rows on the sidebar ground,
     /// or the empty state when the scope holds none.
-    func screenshotSidebar(now: Date) -> some View {
+    func screenshotSidebar(now: Date, activeTaskCount: Int?) -> some View {
         VStack(spacing: 0) {
             FreesideSegmentedControl(
                 accessibilityLabel: "Section",
-                segments: FreesideRootView.sectionSegments(openCount: Self.openCount(in: store)),
+                segments: FreesideRootView.sectionSegments(
+                    openCount: Self.openCount(in: store), activeTaskCount: activeTaskCount),
                 selection: .constant(.inbox)
             )
             .padding()
@@ -381,8 +383,21 @@ struct InboxView: View {
 /// unselected row takes the hover cut under the pointer.
 struct SidebarRowSurface: ViewModifier {
     let isSelected: Bool
-    /// 12 for an inbox row, 14 for a task row, as the frames draw them.
-    let verticalPadding: CGFloat
+
+    /// The row's padding as the frames draw it: 10 by 12 on the Mac, 11 by
+    /// 13 on iPhone.
+    #if os(macOS)
+        static let padding = CGSize(width: 12, height: 10)
+    #else
+        static let padding = CGSize(width: 13, height: 11)
+    #endif
+    /// The gap between a row's lines, as the frames draw it.
+    static let lineGap: CGFloat = 5
+
+    /// From xxxLarge the chips leave the keyword's line for one of their own.
+    static func stacksHeader(at dynamicTypeSize: DynamicTypeSize) -> Bool {
+        dynamicTypeSize >= .xxxLarge
+    }
 
     func body(content: Content) -> some View {
         HStack(spacing: 0) {
@@ -394,9 +409,10 @@ struct SidebarRowSurface: ViewModifier {
             }
             hoverable(
                 content
-                    .padding(.vertical, verticalPadding)
-                    .padding(.leading, isSelected ? 12 : 14)
-                    .padding(.trailing, 14)
+                    .padding(.vertical, Self.padding.height)
+                    // The selected row gives 2pt of its inset to the bar.
+                    .padding(.leading, Self.padding.width - (isSelected ? 2 : 0))
+                    .padding(.trailing, Self.padding.width)
                     .frame(maxWidth: .infinity, alignment: .leading))
         }
         .background(RoundedRectangle(cornerRadius: 8).fill(isSelected ? Color.accentWash : .ground2))
@@ -421,8 +437,127 @@ struct SidebarRowSurface: ViewModifier {
     }
 }
 
-/// One inbox row (R31): the type as a keyword with its chips trailing, the
-/// summary, and one context line.
+/// One sidebar row in the grammar both lists draw (R31), top to bottom: a
+/// keyword line with the exceptional chips trailing, a serif line, one mono
+/// context line with the time trailing, and at most one closing line. The
+/// inbox and the task list differ only in what they put in each slot; the
+/// layout, its stacking at the large text sizes, and the surface are this
+/// view's, so the two lists cannot drift apart.
+struct SidebarRow<Badges: View, Title: View, Context: View, Closing: View>: View {
+    let keyword: SidebarRowKeyword
+    var time: SidebarRowTime? = nil
+    var isSelected = false
+    /// False draws no chip line where the header stacks.
+    var hasBadges = false
+    @ViewBuilder var badges: Badges
+    @ViewBuilder var title: Title
+    @ViewBuilder var context: Context
+    @ViewBuilder var closing: Closing
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: SidebarRowSurface.lineGap) {
+            if SidebarRowSurface.stacksHeader(at: dynamicTypeSize) {
+                keywordLine
+                if hasBadges {
+                    badges
+                }
+            } else {
+                HStack(alignment: .center, spacing: 10) {
+                    keywordLine
+                    Spacer(minLength: 0)
+                    badges
+                }
+            }
+            title
+            if dynamicTypeSize.isAccessibilitySize {
+                // The time drops under the context line, which then has the
+                // row's width to itself.
+                context
+                timeText
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    context
+                    if time != nil {
+                        Spacer(minLength: 8)
+                        timeText
+                            .fixedSize()
+                    }
+                }
+            }
+            closing
+        }
+        .modifier(SidebarRowSurface(isSelected: isSelected))
+    }
+
+    /// The keyword sized to its own height so a long one wraps at the large
+    /// text sizes; left flexible, the stacked header truncated it. The
+    /// Agent mark sits beside it where both fit on one line and under it
+    /// otherwise, so a long status wraps at its words, never inside one.
+    private var keywordLine: some View {
+        let word = KeywordLabel(text: keyword.text, color: keyword.color)
+            .fixedSize(horizontal: false, vertical: true)
+        return Group {
+            if keyword.marksAgent {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        word
+                        KeywordLabel(text: "Agent")
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        word
+                        KeywordLabel(text: "Agent")
+                    }
+                }
+            } else {
+                word
+            }
+        }
+        .accessibilityHidden(!keyword.isSpoken)
+    }
+
+    @ViewBuilder
+    private var timeText: some View {
+        if let time {
+            let text = Text(time.text)
+                .font(FreesideFont.trailingSummary)
+                .foregroundStyle(Color.inkDim)
+                .lineLimit(1)
+                .accessibilityHidden(!time.isSpoken)
+            #if os(macOS)
+                if let exact = time.exact {
+                    text.help(exact)
+                } else {
+                    text
+                }
+            #else
+                text
+            #endif
+        }
+    }
+}
+
+/// A sidebar row's keyword line: the leading word, with `AGENT` after it
+/// when the row's serif line is agent prose (plan §9).
+struct SidebarRowKeyword {
+    let text: String
+    var color: Color = .inkDim
+    var marksAgent = false
+    /// False where the row speaks this line elsewhere, in its own order.
+    var isSpoken = true
+}
+
+/// The time trailing a sidebar row's context line; `exact` is the macOS
+/// hover help.
+struct SidebarRowTime {
+    let text: String
+    var exact: String? = nil
+    /// False where the context line already speaks the time.
+    var isSpoken = true
+}
+
+/// One inbox row (R31) on the shared row: the type as a keyword with its
+/// chips trailing, the summary, and one context line.
 struct InboxRowView: View {
     let item: Components.Schemas.AttentionItem
     var isSelected = false
@@ -445,21 +580,17 @@ struct InboxRowView: View {
 
     private func row(at now: Date) -> some View {
         let context = AttentionDisplay.rowContext(item)
-        return VStack(alignment: .leading, spacing: 6) {
-            if Self.stacksHeader(at: dynamicTypeSize) {
-                VStack(alignment: .leading, spacing: 5) {
-                    rowTitle
-                    if hasBadges {
-                        rowBadges
-                    }
-                }
-            } else {
-                HStack(alignment: .center, spacing: 10) {
-                    rowTitle
-                    Spacer(minLength: 0)
-                    rowBadges
-                }
-            }
+        let time = AttentionDisplay.relativeRowTime(item, now: now).map {
+            SidebarRowTime(text: $0, exact: AttentionDisplay.exactRowTimestamp(item, now: now))
+        }
+        // The keyword is the word the decision card's eyebrow uses for this
+        // item (R27), so the row and the card it opens name the type alike.
+        return SidebarRow(
+            keyword: .init(text: DecisionCardComposition.eyebrow(for: item).keyword),
+            time: time, isSelected: isSelected, hasBadges: hasBadges
+        ) {
+            rowBadges
+        } title: {
             // The summary says what needs attention, so it takes the serif
             // and the main ink; the type above it is the quiet line (visual
             // audit D01).
@@ -467,29 +598,14 @@ struct InboxRowView: View {
             // fewer words on a line, so the cap lifts there rather than hide
             // what the default size shows (R22).
             Text(AttentionDisplay.rowSummary(item))
-                .font(FreesideFont.statement)
+                .font(FreesideFont.rowTitle)
                 .foregroundStyle(Color.ink)
                 .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
-            let relativeTime = AttentionDisplay.relativeRowTime(item, now: now)
-            if dynamicTypeSize.isAccessibilitySize {
-                // The age drops under the context line, which then has the
-                // row's width to itself.
-                contextLine(context)
-                if let relativeTime {
-                    timeText(relativeTime, now: now)
-                }
-            } else {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    contextLine(context)
-                    if let relativeTime {
-                        Spacer(minLength: 8)
-                        timeText(relativeTime, now: now)
-                            .fixedSize()
-                    }
-                }
-            }
+        } context: {
+            contextLine(context)
+        } closing: {
+            EmptyView()
         }
-        .modifier(SidebarRowSurface(isSelected: isSelected, verticalPadding: 12))
     }
 
     private func contextLine(_ context: AttentionDisplay.RowContext) -> some View {
@@ -503,15 +619,6 @@ struct InboxRowView: View {
                 }
             }
         }
-    }
-
-    /// The word the decision card's eyebrow uses for this item (R27), so the
-    /// row and the card it opens name the type alike. Sized to its own
-    /// height so a long type wraps at the large text sizes; left flexible,
-    /// the stacked header truncated it.
-    private var rowTitle: some View {
-        KeywordLabel(text: DecisionCardComposition.eyebrow(for: item).keyword)
-            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var rowBadges: some View {
@@ -535,7 +642,7 @@ struct InboxRowView: View {
     }
 
     static func stacksHeader(at dynamicTypeSize: DynamicTypeSize) -> Bool {
-        dynamicTypeSize >= .xxxLarge
+        SidebarRowSurface.stacksHeader(at: dynamicTypeSize)
     }
 
     private var separator: some View {
@@ -554,23 +661,6 @@ struct InboxRowView: View {
             .truncationMode(.middle)
         #if os(macOS)
             text.help(segment.value)
-        #else
-            text
-        #endif
-    }
-
-    @ViewBuilder
-    private func timeText(_ relativeTime: String, now: Date) -> some View {
-        let text = Text(relativeTime)
-            .font(FreesideFont.trailingSummary)
-            .foregroundStyle(Color.inkDim)
-            .lineLimit(1)
-        #if os(macOS)
-            if let exact = AttentionDisplay.exactRowTimestamp(item, now: now) {
-                text.help(exact)
-            } else {
-                text
-            }
         #else
             text
         #endif
