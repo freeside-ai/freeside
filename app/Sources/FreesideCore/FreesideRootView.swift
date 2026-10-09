@@ -108,6 +108,40 @@ public struct FreesideRootView: View {
             readinessDirectory: session.readinessDirectory)
     }
 
+    /// Whether the Mac's detail pane draws `RevokedPane`: the device is
+    /// revoked and the pane holds nothing the operator opened. An open card,
+    /// timeline, or run stays drawn, since a revoked device still reads its
+    /// cache and can still resend a command whose answer was lost (plan
+    /// §5.14); Pair Again is then the banner's button, as on iPhone.
+    static func showsRevokedPane(
+        freshness: InboxStore.Freshness, screen: LaunchInputs.Screen,
+        attentionSelection: String?, taskSelection: String?, runSelection: String?
+    ) -> Bool {
+        guard FreshnessBanner.showsRePairAction(for: freshness, hasHandler: true) else { return false }
+        switch screen {
+        case .inbox: return attentionSelection == nil
+        case .tasks: return taskSelection == nil && runSelection == nil
+        }
+    }
+
+    /// Pair Again on the Revoked banner. Where the Mac's detail pane holds
+    /// it instead (`showsRevokedPane`) the banner only states; iPhone has no
+    /// pane beside its list, and always keeps the button under the sentence.
+    private func bannerRePair(_ freshness: InboxStore.Freshness) -> (() -> Void)? {
+        #if os(macOS)
+            if Self.showsRevokedPane(
+                freshness: freshness,
+                screen: operatorSelectedTabBinding.wrappedValue,
+                attentionSelection: rawAttentionSelectionBinding.wrappedValue,
+                taskSelection: operatorTaskSelectionBinding.wrappedValue,
+                runSelection: navigation.runSelection)
+            {
+                return nil
+            }
+        #endif
+        return { rePairConfirmationPresented = true }
+    }
+
     private func synced(_ coordinator: SyncCoordinator) -> some View {
         @Bindable var navigation = navigation
         let pendingUnderOldPairing = Self.unsentActionCount(
@@ -126,7 +160,7 @@ public struct FreesideRootView: View {
             FreshnessBanner(
                 freshness: coordinator.store.freshness,
                 lastUpdatedAt: coordinator.lastUpdatedAt,
-                onRePair: { rePairConfirmationPresented = true })
+                onRePair: bannerRePair(coordinator.store.freshness))
             UnattendedStoppedIndicator(
                 operation: coordinator.unattendedOperation,
                 freshness: coordinator.store.freshness,
@@ -362,13 +396,24 @@ public struct FreesideRootView: View {
                     DecisionFeedbackBanner(
                         feedback: feedback,
                         onView: viewConcludedItem)
-                    macDetail(
-                        coordinator,
-                        screen: selectedTab.wrappedValue,
-                        attentionSelection: attentionSelection.wrappedValue,
-                        taskSelection: taskSelection.wrappedValue,
-                        runSelection: navigation.runSelection
-                    )
+                    Group {
+                        if Self.showsRevokedPane(
+                            freshness: coordinator.store.freshness,
+                            screen: selectedTab.wrappedValue,
+                            attentionSelection: attentionSelection.wrappedValue,
+                            taskSelection: taskSelection.wrappedValue,
+                            runSelection: navigation.runSelection)
+                        {
+                            RevokedPane { rePairConfirmationPresented = true }
+                        } else {
+                            macDetail(
+                                coordinator,
+                                screen: selectedTab.wrappedValue,
+                                attentionSelection: attentionSelection.wrappedValue,
+                                taskSelection: taskSelection.wrappedValue,
+                                runSelection: navigation.runSelection)
+                        }
+                    }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color.ground)
                 }
@@ -785,4 +830,42 @@ public struct FreesideRootView: View {
         }
     }
 
+}
+
+/// The Mac's detail pane while this device's access is revoked and nothing
+/// is open in it (R14): the pane has nothing else to offer, so Pair Again
+/// is its one filled control and the banner above only states. Cached rows
+/// stay in the sidebar, and opening one draws it in place of this pane. The
+/// two lines read to VoiceOver as one element, and the button after them.
+struct RevokedPane: View {
+    let onRePair: () -> Void
+
+    @ScaledMetric(relativeTo: .body) private var glyphSize: CGFloat = screenshotMetricBase(
+        28, relativeTo: .body)
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Image(systemName: "lock.slash")
+                .font(.system(size: glyphSize))
+                .foregroundStyle(Color.inkFaint)
+                .padding(.bottom, 6)
+                .accessibilityHidden(true)
+            VStack(spacing: 6) {
+                Text("This device is no longer paired")
+                    .font(FreesideFont.statement)
+                    .foregroundStyle(Color.ink)
+                Text("Pair again to act on items. Cached items stay readable.")
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.inkDim)
+            }
+            .accessibilityElement(children: .combine)
+            Button("Pair Again", action: onRePair)
+                .buttonStyle(FreesideActionButtonStyle(tone: .primary, expands: false))
+                .padding(.top, 10)
+        }
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 }
