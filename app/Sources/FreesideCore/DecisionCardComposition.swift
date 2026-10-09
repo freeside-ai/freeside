@@ -77,27 +77,6 @@ struct DecisionCardComposition: Equatable {
 
     private var controlGroupStart: Int { reviewingActionInsertionIndex ?? actionInsertionIndex }
 
-    /// Where the two-column card (R18, frame 7.8) draws each module. The
-    /// left column is read first, so a module there is ahead of the actions
-    /// as it is on the one-column card.
-    struct Columns: Equatable {
-        /// Left, in drawing order: the lead modules, then the supporting
-        /// ones.
-        let left: [DecisionCardModule]
-        /// Right, inside the control group, between its reviewing action
-        /// and its actions.
-        let controlGroup: [DecisionCardModule]
-        /// Right, under the control group and the card's hairline.
-        let folds: [DecisionCardModule]
-    }
-
-    var columns: Columns {
-        .init(
-            left: Array(modules[leadModules] + modules[supportingModules]),
-            controlGroup: Array(modules[controlGroupModules]),
-            folds: Array(modules[foldedModules]))
-    }
-
     /// What the Mac card's Evidence module draws.
     enum MacEvidence: Equatable {
         /// One row that counts the attachments and links to the inspector's
@@ -270,20 +249,11 @@ struct DecisionCardComposition: Equatable {
         /// The space between the hairline and the first fold.
         static let foldLead = ladder.foldLead
         static let cornerRadius: CGFloat = 12
-        /// The widest a one-column card grows (R18). The operational
-        /// summary and both timelines draw in the same card at the same
-        /// width, so selecting something changes the content, not its shape.
+        /// The widest a card grows, at any pane width (R18). The
+        /// operational summary and both timelines draw in the same card at
+        /// the same width, so selecting something changes the content, not
+        /// its shape, and a wider pane leaves the rest of itself empty.
         static let cardWidth: CGFloat = 640
-        /// The widest the two-column card grows. Up to it the card fills
-        /// the pane (frame 7.8); what a wider pane does is still open.
-        static let wideCardWidth: CGFloat = 1_008
-        /// Between the two-column card's columns (frame 7.8).
-        static let columnGap: CGFloat = 28
-        /// The two-column card's right column. The frame draws 280, where
-        /// a row of two actions cuts labels the wider column draws whole
-        /// (`Answer Without Retry`, `Approve With Changes`), so the
-        /// column keeps the width it had before the frame.
-        static let controlColumnWidth: CGFloat = 360
 
         /// The pane's margin around a card (R18): 16 all round at phone
         /// width; in the detail column 24 from each side, 20 from the top,

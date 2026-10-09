@@ -888,35 +888,6 @@ import Testing
                 <= composition.modules.count)
     }
 
-    /// Frame 7.8 (R18): from 1,000pt the left column holds what the decision
-    /// rests on and then the supporting modules, and the right column holds
-    /// the control group and the folds. The left column is read first, so
-    /// nothing a type places ahead of its actions may land under them.
-    @Test(arguments: Components.Schemas.AttentionType.allCases)
-    func theTwoColumnCardPlacesEveryModuleOnce(type: Components.Schemas.AttentionType) {
-        let composition = DecisionCardComposition.forType(type)
-        let columns = composition.columns
-        let right: (controlGroup: [DecisionCardModule], folds: [DecisionCardModule]) =
-            switch type {
-            case .ready_for_final_review: ([.factBlock], [.yieldChart])
-            case .agent_question: ([], [.foldedFacts])
-            default: ([], [])
-            }
-        #expect(columns.controlGroup == right.controlGroup)
-        #expect(columns.folds == right.folds)
-        // Each module the right column takes appears once in its type's
-        // list, so removing them by value leaves the left column in order.
-        #expect(
-            columns.left
-                == composition.modules.filter { !(right.controlGroup + right.folds).contains($0) })
-
-        let aheadOfActions = Array(composition.modules.prefix(composition.actionInsertionIndex))
-        #expect(
-            Array(columns.left.prefix(composition.leadModules.count)) + columns.controlGroup
-                == aheadOfActions)
-        #expect(!columns.folds.contains(where: aheadOfActions.contains))
-    }
-
     /// R18: while the inspector is open the Mac card points at the
     /// attachments there, whichever type it is and whether or not the
     /// inspector's Evidence section is open, because the pointer's link opens
@@ -1694,8 +1665,9 @@ import Testing
     }
 
     /// The batch action says what it covers from the bound proposals: every
-    /// one of them, at any count. One finding keeps the action's own label
-    /// (the approved reference shows only the batch).
+    /// one of them, at any count, and by number past two, where the stack
+    /// of findings is longer than a glance takes in. One finding keeps the
+    /// action's own label (the approved reference shows only the batch).
     @Test func acceptingStatesItsScopeFromTheBoundProposals() throws {
         let batch = AttentionFixtures.fixture(type: .finding_adjudication).item
         let single = AttentionFixtures.findingAdjudicationFixture(route: .remediate).item
@@ -1707,6 +1679,18 @@ import Testing
         #expect(
             FindingCardPresentation.acceptanceScope(findingCount: 2)
                 == "Accepting covers every proposed route above: all 2 findings.")
+
+        var six = batch
+        let proposals = try #require(batch.finding_adjudication?.value1.proposals)
+        six.finding_adjudication?.value1.proposals = proposals + proposals + proposals
+        #expect(
+            AttentionDisplay.label(.accept_recommended_route, for: six)
+                == "Accept All 6 Dispositions")
+        var three = batch
+        three.finding_adjudication?.value1.proposals = proposals + proposals.prefix(1)
+        #expect(
+            AttentionDisplay.label(.accept_recommended_route, for: three)
+                == "Accept All 3 Dispositions")
 
         #expect(single.finding_adjudication?.value1.proposals.count == 1)
         #expect(

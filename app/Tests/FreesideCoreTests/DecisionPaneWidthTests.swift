@@ -6,44 +6,19 @@
 
     @testable import FreesideCore
 
-    /// The decision detail picks one column or two from the width of its
-    /// pane. The card caps its own width until that choice is made, so the
-    /// measurement must not read the card back. The card's own place in the
-    /// pane (R18) is measured here too.
+    /// The card's place in the detail pane (R18): one x, one y, and one
+    /// width, whatever the pane's.
     @Suite(.serialized) @MainActor struct DecisionPaneWidthTests {
-        @Test func aScrollViewNarrowerThanItsPaneReportsThePane() {
-            final class Measurement: @unchecked Sendable {
-                var width: CGFloat?
-            }
-            let measurement = Measurement()
-            let paneWidth: CGFloat = 1_200
-            let pane = ScrollView {
-                Color.clear.frame(width: 560, height: 100)
-            }
-            .onPaneWidthChange { measurement.width = $0 }
-            .frame(width: paneWidth, height: 600)
-
-            let host = NSHostingView(rootView: pane)
-            host.frame = CGRect(x: 0, y: 0, width: paneWidth, height: 600)
-            host.layoutSubtreeIfNeeded()
-            // The geometry callback lands on a later main-queue turn.
-            let deadline = Date().addingTimeInterval(5)
-            while measurement.width == nil, Date() < deadline {
-                RunLoop.main.run(until: Date().addingTimeInterval(0.01))
-                host.layoutSubtreeIfNeeded()
-            }
-
-            #expect(measurement.width == paneWidth)
-        }
-
-        /// R18: every card in the detail column starts at one x and one y,
-        /// and a one-column card stops at its cap, so selecting something
-        /// changes the content and not its shape.
-        @Test func aOneColumnCardSitsTopLeadingAndStopsAtItsCap() throws {
+        /// Every card in the detail column starts at one x and one y and
+        /// stops at its cap at any pane width, so selecting something
+        /// changes the content and not its shape, and a wide pane never
+        /// widens a card.
+        @Test(arguments: [CGFloat(1_000), 1_620])
+        func aCardSitsTopLeadingAndStopsAtItsCap(paneWidth: CGFloat) throws {
             typealias Scale = DecisionCardComposition.Scale
             let margin = Scale.paneMargin(compact: false)
 
-            let wide = try #require(cardFrame(paneWidth: 1_000, twoColumns: false))
+            let wide = try #require(cardFrame(paneWidth: paneWidth))
             #expect(wide.origin == CGPoint(x: 24, y: 20))
             #expect(wide.origin == CGPoint(x: margin.leading, y: margin.top))
             #expect(wide.width == 640)
@@ -51,43 +26,29 @@
 
             // A pane narrower than the cap and its margins shrinks the card
             // instead of cutting it.
-            let narrow = try #require(cardFrame(paneWidth: 600, twoColumns: false))
+            let narrow = try #require(cardFrame(paneWidth: 600))
             #expect(narrow.origin == wide.origin)
             #expect(narrow.width == 600 - margin.leading - margin.trailing)
 
             // A card under a row of the column's own keeps the x and takes
             // the row's gap for its top margin.
-            let underRow = try #require(cardFrame(paneWidth: 1_000, twoColumns: false, topMargin: 10))
+            let underRow = try #require(cardFrame(paneWidth: paneWidth, topMargin: 10))
             #expect(underRow.origin == CGPoint(x: wide.minX, y: 10))
             #expect(underRow.width == wide.width)
         }
 
-        /// The two-column card fills the pane where two columns begin, at
-        /// the one-column card's x and y, and its right column is 360 with
-        /// the rest left to the modules.
-        @Test func theTwoColumnCardFillsThePaneBesideA360Column() throws {
-            typealias Scale = DecisionCardComposition.Scale
-            let margin = Scale.paneMargin(compact: false)
-            let padding = Scale.padding(compact: false)
-
-            let card = try #require(cardFrame(paneWidth: 1_000, twoColumns: true))
-            #expect(card.origin == CGPoint(x: margin.leading, y: margin.top))
-            #expect(card.width == 1_000 - margin.leading - margin.trailing)
-            #expect(card.width == 952)
-
-            // The laid-out card: its action region spans the right column,
-            // so the region's frame in the card's own space is the column's.
-            let column = try #require(actionRegionFrame(paneWidth: 1_000))
-            #expect(column.width == 360)
-            #expect(column.width == Scale.controlColumnWidth)
-            #expect(column.minX == 520 + Scale.columnGap)
-            #expect(column.maxX == card.width - padding.leading - padding.trailing)
-
-            // Past its own cap the card stops growing; what a wider pane
-            // does with the rest is still the owner's call.
-            let widest = try #require(cardFrame(paneWidth: 1_620, twoColumns: true))
-            #expect(widest.origin == card.origin)
-            #expect(widest.width == Scale.wideCardWidth)
+        /// The laid-out decision card keeps its one column in a wide pane:
+        /// the action region spans the card under its modules and never
+        /// moves beside them.
+        @Test func aWidePaneKeepsTheActionsUnderTheModules() throws {
+            let padding = DecisionCardComposition.Scale.padding(compact: false)
+            let atCap = try #require(actionRegionFrame(paneWidth: 688))
+            let wide = try #require(actionRegionFrame(paneWidth: 1_620))
+            #expect(wide == atCap)
+            #expect(wide.minX == 0)
+            #expect(
+                wide.width
+                    == DecisionCardComposition.Scale.cardWidth - padding.leading - padding.trailing)
         }
 
         /// A timeline in a detail column takes the card's seat, and a size
@@ -111,7 +72,7 @@
 
             settle { pane.appearances > 0 && pane.content != nil }
             let padding = DecisionCardComposition.Scale.padding(compact: false)
-            let card = try #require(cardFrame(paneWidth: 1_000, twoColumns: false))
+            let card = try #require(cardFrame(paneWidth: 1_000))
             let seated = try #require(pane.content)
             #expect(seated.minX == card.minX + padding.leading)
             #expect(seated.minY == card.minY + padding.top)
@@ -145,7 +106,7 @@
             let card =
                 detail
                 .screenshotCard(
-                    snapshot.item, at: .large, detailWidth: paneWidth,
+                    snapshot.item, at: .large,
                     actionRegionFrameChanged: { measurement.frame = $0 }
                 )
                 .environment(\.dynamicTypeSize, .large)
@@ -173,25 +134,73 @@
             return measurement.frame
         }
 
+        /// An empty state in the detail pane centers in the column a card
+        /// takes, not in the pane, so a wide pane holds it over the place
+        /// its cards draw. A pane no wider than that column centers it
+        /// across itself, and so does every other pane at any width.
+        @Test func anEmptyStateInTheDetailPaneCentersInTheCardsColumn() throws {
+            typealias Scale = DecisionCardComposition.Scale
+            func block(_ seat: UnavailableStateView.Seat, paneWidth: CGFloat) throws -> CGRect {
+                try #require(
+                    probeFrame(paneWidth: paneWidth, probeWidth: 200) {
+                        AnyView($0.emptyStateSeat(seat))
+                    })
+            }
+            let column = Scale.paneMargin(compact: false).leading + Scale.cardWidth / 2
+            for paneWidth in [CGFloat(1_000), 1_620] {
+                let seated = try block(.detailColumn, paneWidth: paneWidth)
+                #expect(seated.midX == column)
+                #expect(seated.midX == 344)
+                #expect(seated.midY == 300)
+
+                let acrossPane = try block(.pane, paneWidth: paneWidth)
+                #expect(acrossPane.midX == paneWidth / 2)
+                #expect(acrossPane.midY == 300)
+            }
+
+            for seat in [UnavailableStateView.Seat.pane, .detailColumn] {
+                let phone = try block(seat, paneWidth: 390)
+                #expect(phone.midX == 195)
+                #expect(phone.midY == 300)
+            }
+        }
+
         /// The frame of the card `detailCard` draws around a probe in a
         /// pane of the given width, in the pane's coordinates. The probe is
         /// the card's content, so the card is the probe's frame grown by the
         /// card's own padding.
-        private func cardFrame(
-            paneWidth: CGFloat, twoColumns: Bool, topMargin: CGFloat? = nil
+        private func cardFrame(paneWidth: CGFloat, topMargin: CGFloat? = nil) -> CGRect? {
+            guard
+                let content = probeFrame(
+                    paneWidth: paneWidth,
+                    seat: { AnyView($0.detailCard(compact: false, topMargin: topMargin)) })
+            else { return nil }
+            let padding = DecisionCardComposition.Scale.padding(compact: false)
+            return CGRect(
+                x: content.minX - padding.leading,
+                y: content.minY - padding.top,
+                width: content.width + padding.leading + padding.trailing,
+                height: content.height + padding.top + padding.bottom)
+        }
+
+        /// The frame of a 100pt-tall probe once `seat` has placed it in a
+        /// 600pt-tall pane of the given width, in the pane's coordinates.
+        /// The probe takes the width it is offered unless given its own.
+        private func probeFrame(
+            paneWidth: CGFloat, probeWidth: CGFloat? = nil, seat: (AnyView) -> AnyView
         ) -> CGRect? {
             final class Measurement: @unchecked Sendable {
                 var content: CGRect?
             }
             let measurement = Measurement()
-            let pane = Color.clear
-                .frame(height: 100)
+            let probe = Color.clear
+                .frame(width: probeWidth, height: 100)
                 .onGeometryChange(for: CGRect.self) { geometry in
                     geometry.frame(in: .named("pane"))
                 } action: { frame in
                     measurement.content = frame
                 }
-                .detailCard(compact: false, twoColumns: twoColumns, topMargin: topMargin)
+            let pane = seat(AnyView(probe))
                 .frame(width: paneWidth, height: 600, alignment: .topLeading)
                 .coordinateSpace(name: "pane")
 
@@ -204,35 +213,7 @@
                 RunLoop.main.run(until: Date().addingTimeInterval(0.01))
                 host.layoutSubtreeIfNeeded()
             }
-
-            guard let content = measurement.content else { return nil }
-            let padding = DecisionCardComposition.Scale.padding(compact: false)
-            return CGRect(
-                x: content.minX - padding.leading,
-                y: content.minY - padding.top,
-                width: content.width + padding.leading + padding.trailing,
-                height: content.height + padding.top + padding.bottom)
-        }
-
-        /// The right column holds the control group and the folds. A
-        /// read-only card has neither, so two columns would leave it an
-        /// empty pane beside its modules.
-        @Test func aCardWithNothingForItsRightColumnStaysOneColumn() {
-            let blocked = AttentionFixtures.fixture(type: .blocked)
-            let review = AttentionFixtures.fixture(type: .ready_for_final_review)
-            let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
-            store.replaceAll(with: [blocked, review])
-            let detail = DecisionDetailView(
-                store: store,
-                itemID: blocked.item.id,
-                loadsAttachments: false,
-                showsValidationProgress: false,
-                now: AttentionFixtures.createdInstant)
-
-            #expect(blocked.item.requested_decision.isEmpty)
-            #expect(!detail.drawsTwoColumns(blocked.item, paneIsWide: true))
-            #expect(detail.drawsTwoColumns(review.item, paneIsWide: true))
-            #expect(!detail.drawsTwoColumns(review.item, paneIsWide: false))
+            return measurement.content
         }
     }
 

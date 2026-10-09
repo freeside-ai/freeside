@@ -21,17 +21,45 @@ enum EmptyStateGlyph {
 }
 
 /// A pane's empty or unavailable state (R13): its section's glyph, a serif
-/// line, and a dim sans line, centered in the pane.
+/// line, and a dim sans line, centered where its seat puts it.
 struct UnavailableStateView: View {
+    /// Where an empty state centers. Both center it in the height offered.
+    enum Seat {
+        /// Across the pane: a list, a reader, a sheet, a card's own body.
+        case pane
+        /// In the column a card takes in the detail pane (R18), at the
+        /// card's x and no wider than its cap, so a wide pane holds the
+        /// state over the place its cards draw. A pane no wider than the
+        /// card and its margins centers it across its own width, as a
+        /// phone does.
+        case detailColumn
+    }
+
     let glyph: EmptyStateGlyph
     let title: String
     let description: String
+    var seat = Seat.pane
 
     var body: some View {
         EmptyStateBlock(glyph: glyph, title: title, description: description)
-            .padding(.horizontal, 24)
-            .padding(.vertical, 40)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .emptyStateSeat(seat)
+    }
+}
+
+extension View {
+    @ViewBuilder
+    func emptyStateSeat(_ seat: UnavailableStateView.Seat) -> some View {
+        switch seat {
+        case .pane:
+            padding(.horizontal, 24)
+                .padding(.vertical, 40)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .detailColumn:
+            padding(.vertical, 40)
+                .frame(maxWidth: DecisionCardComposition.Scale.cardWidth, maxHeight: .infinity)
+                .padding(.horizontal, 24)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
 

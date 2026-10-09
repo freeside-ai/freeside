@@ -12,14 +12,30 @@ struct FreshnessBanner: View {
     /// the plain informational banner; supplied only where the operator can
     /// act, on `FreesideRootView`'s synced surface.
     let onRePair: (() -> Void)?
+    let placement: StandingNoticePlacement
 
     init(
         freshness: InboxStore.Freshness, lastUpdatedAt: Date? = nil,
-        onRePair: (() -> Void)? = nil
+        onRePair: (() -> Void)? = nil, placement: StandingNoticePlacement = .window
     ) {
         self.freshness = freshness
         self.lastUpdatedAt = lastUpdatedAt
         self.onRePair = onRePair
+        self.placement = placement
+    }
+
+    /// Whether the banner draws anything at `now`: every state but a fresh
+    /// or unvalidated one whose last refresh is not yet stale.
+    static func isShowing(
+        freshness: InboxStore.Freshness, lastUpdatedAt: Date?, at now: Date
+    ) -> Bool {
+        switch freshness {
+        case .fresh, .unvalidated:
+            guard let lastUpdatedAt else { return false }
+            return now.timeIntervalSince(lastUpdatedAt) >= SyncCoordinator.stalenessThreshold
+        case .unreachable, .syncFailing, .contractMismatch, .unauthenticated:
+            return true
+        }
     }
 
     /// The revoked state is the only one whose credential the operator can
@@ -53,28 +69,26 @@ struct FreshnessBanner: View {
     private func banner(at now: Date) -> some View {
         switch freshness {
         case .fresh, .unvalidated:
-            if let lastUpdatedAt,
-                now.timeIntervalSince(lastUpdatedAt) >= SyncCoordinator.stalenessThreshold
-            {
+            if Self.isShowing(freshness: freshness, lastUpdatedAt: lastUpdatedAt, at: now) {
                 Notice(
                     tone: .accent, keyword: "Stale",
                     sentence: "The last successful refresh is stale; actions revalidate before use."
                 )
-                .standingNoticeInset()
+                .standingNoticeInset(placement)
             }
         case .unreachable:
             Notice(
                 tone: .accent, keyword: "Unreachable",
                 sentence: "Daemon unreachable. Showing cached items; actions are disabled."
             )
-            .standingNoticeInset()
+            .standingNoticeInset(placement)
         case .syncFailing:
             Notice(
                 tone: .accent, keyword: "Sync failing",
                 sentence:
                     "Daemon is reachable but sync is failing. Showing cached items; actions are disabled."
             )
-            .standingNoticeInset()
+            .standingNoticeInset(placement)
         case .contractMismatch(let daemonContract):
             let mismatch = ContractMismatchSentence(
                 daemonContract: daemonContract,
@@ -83,7 +97,7 @@ struct FreshnessBanner: View {
                 tone: .accent, keyword: "Mismatch",
                 sentence: mismatch.plain, drawn: mismatch.text
             )
-            .standingNoticeInset()
+            .standingNoticeInset(placement)
         case .unauthenticated:
             Notice(
                 tone: .wax, keyword: "Revoked",
@@ -92,7 +106,7 @@ struct FreshnessBanner: View {
                 action: Self.showsRePairAction(for: freshness, hasHandler: onRePair != nil)
                     ? .init(label: "Pair Again", handler: onRePair ?? {}) : nil
             )
-            .standingNoticeInset()
+            .standingNoticeInset(placement)
         }
     }
 }
@@ -115,16 +129,6 @@ struct ContractMismatchSentence {
         Text(
             "Daemon contract \(Text(daemon).font(FreesideFont.trailingSummary)), app \(Text(app).font(FreesideFont.trailingSummary)). Update the daemon or the app.\(tail)"
         )
-    }
-}
-
-extension View {
-    /// The inset a standing notice above the synced surface takes: 16pt
-    /// from each side and 4pt above and below, so two notices sit 8pt
-    /// apart. Each notice carries its own because they come and go
-    /// independently, and a container's padding would outlive them.
-    func standingNoticeInset() -> some View {
-        padding(.horizontal, 16).padding(.vertical, 4)
     }
 }
 

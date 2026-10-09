@@ -26,6 +26,9 @@ public struct FreesideRootView: View {
     @State private var stopRecoveryPresented = false
     @State private var rePairConfirmationPresented = false
     @State private var rePairFailure: String?
+    /// Which of the Mac's columns show. Read to tell a collapsed sidebar,
+    /// where the standing notices take the window's width again.
+    @State private var splitVisibility = NavigationSplitViewVisibility.automatic
     private let launchColorScheme: ColorScheme?
     private let launchInboxScope: InboxStore.Scope?
     private let launchProjectID: String?
@@ -143,6 +146,37 @@ public struct FreesideRootView: View {
         return { rePairConfirmationPresented = true }
     }
 
+    /// Whether the standing notices draw at the top of the detail column,
+    /// so the sidebar is never under one. That takes a column beside a
+    /// list: the Mac with its sidebar shown. An iPhone, and a Mac window
+    /// whose sidebar is collapsed, keep the full-width slot above the
+    /// navigation.
+    private var standingNoticesDrawInDetailColumn: Bool {
+        #if os(macOS)
+            splitVisibility != .detailOnly
+        #else
+            false
+        #endif
+    }
+
+    private func standingNotices(
+        _ coordinator: SyncCoordinator, placement: StandingNoticePlacement
+    ) -> StandingNotices {
+        StandingNotices(
+            saveWarning: coordinator.promptHistory.saveWarning,
+            onDismissSaveWarning: { coordinator.promptHistory.saveWarning = nil },
+            freshness: coordinator.store.freshness,
+            lastUpdatedAt: coordinator.lastUpdatedAt,
+            onRePair: bannerRePair(coordinator.store.freshness),
+            operation: coordinator.unattendedOperation,
+            reason: { coordinator.store.openItemReason($0) },
+            onOpenItem: { itemID in
+                navigation.selectTab(.inbox)
+                navigation.selectAttentionItem(itemID)
+            },
+            placement: placement)
+    }
+
     private func synced(_ coordinator: SyncCoordinator) -> some View {
         @Bindable var navigation = navigation
         let pendingUnderOldPairing = Self.unsentActionCount(
@@ -150,27 +184,9 @@ public struct FreesideRootView: View {
             pendingTaskSubmissions: coordinator.pendingTaskSubmissions.count,
             taskStops: coordinator.pendingTaskStops.values)
         return VStack(spacing: 0) {
-            if let warning = coordinator.promptHistory.saveWarning {
-                Notice(
-                    tone: .wax, keyword: "Not saved", sentence: warning,
-                    action: .init(label: "Dismiss") { coordinator.promptHistory.saveWarning = nil }
-                )
-                .standingNoticeInset()
-                .accessibilityElement(children: .contain)
+            if !standingNoticesDrawInDetailColumn {
+                standingNotices(coordinator, placement: .window)
             }
-            FreshnessBanner(
-                freshness: coordinator.store.freshness,
-                lastUpdatedAt: coordinator.lastUpdatedAt,
-                onRePair: bannerRePair(coordinator.store.freshness))
-            UnattendedStoppedIndicator(
-                operation: coordinator.unattendedOperation,
-                freshness: coordinator.store.freshness,
-                lastUpdatedAt: coordinator.lastUpdatedAt,
-                reason: { coordinator.store.openItemReason($0) },
-                onOpenItem: { itemID in
-                    navigation.selectTab(.inbox)
-                    navigation.selectAttentionItem(itemID)
-                })
             platformNavigation(
                 coordinator,
                 selectedTab: operatorSelectedTabBinding,
@@ -353,7 +369,7 @@ public struct FreesideRootView: View {
                 }
             }
         #else
-            NavigationSplitView {
+            NavigationSplitView(columnVisibility: $splitVisibility) {
                 VStack(spacing: 0) {
                     FreesideSegmentedControl(
                         accessibilityLabel: "Section",
@@ -399,25 +415,31 @@ public struct FreesideRootView: View {
                     DecisionFeedbackBanner(
                         feedback: feedback,
                         onView: viewConcludedItem)
-                    Group {
-                        if Self.showsRevokedPane(
-                            freshness: coordinator.store.freshness,
-                            screen: selectedTab.wrappedValue,
-                            attentionSelection: attentionSelection.wrappedValue,
-                            taskSelection: taskSelection.wrappedValue,
-                            runSelection: navigation.runSelection)
-                        {
-                            RevokedPane { rePairConfirmationPresented = true }
-                        } else {
-                            macDetail(
-                                coordinator,
+                    StandingDetailColumn(
+                        notices: standingNoticesDrawInDetailColumn
+                            ? standingNotices(coordinator, placement: .detailColumn) : nil
+                    ) { topMargin in
+                        Group {
+                            if Self.showsRevokedPane(
+                                freshness: coordinator.store.freshness,
                                 screen: selectedTab.wrappedValue,
                                 attentionSelection: attentionSelection.wrappedValue,
                                 taskSelection: taskSelection.wrappedValue,
                                 runSelection: navigation.runSelection)
+                            {
+                                RevokedPane { rePairConfirmationPresented = true }
+                            } else {
+                                macDetail(
+                                    coordinator,
+                                    screen: selectedTab.wrappedValue,
+                                    attentionSelection: attentionSelection.wrappedValue,
+                                    taskSelection: taskSelection.wrappedValue,
+                                    runSelection: navigation.runSelection,
+                                    topMargin: topMargin)
+                            }
                         }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color.ground)
                 }
             }
@@ -617,7 +639,8 @@ public struct FreesideRootView: View {
                     } else {
                         UnavailableStateView(
                             glyph: .tasks, title: "Not available",
-                            description: "This task or run is no longer available.")
+                            description: "This task or run is no longer available.",
+                            seat: .detailColumn)
                     }
                 }
             }
@@ -640,7 +663,8 @@ public struct FreesideRootView: View {
             screen: LaunchInputs.Screen,
             attentionSelection: String?,
             taskSelection: String?,
-            runSelection: String?
+            runSelection: String?,
+            topMargin: CGFloat?
         ) -> some View {
             switch screen {
             case .inbox:
@@ -654,6 +678,7 @@ public struct FreesideRootView: View {
                         launchComposer: navigation.launchComposer(for: attentionSelection),
                         onConsumeLaunchComposer: navigation.consumeLaunchComposer,
                         inspectorPresented: Bindable(navigation).inspectorPresented,
+                        topMargin: topMargin,
                         onSelectItem: { navigation.route(to: .attentionItem($0)) },
                         onConclusion: { conclusion in
                             handleConclusion(conclusion, coordinator: coordinator)
@@ -664,7 +689,9 @@ public struct FreesideRootView: View {
                     // The same two lines the empty Open scope draws in the
                     // sidebar, so the two panes agree.
                     let empty = InboxView.emptyScope(.open, projectID: coordinator.store.projectID)
-                    UnavailableStateView(glyph: .inbox, title: empty.title, description: empty.description)
+                    UnavailableStateView(
+                        glyph: .inbox, title: empty.title, description: empty.description,
+                        seat: .detailColumn)
                 } else {
                     OperationalSummaryView(
                         summary: OperationalSummary(
@@ -672,7 +699,8 @@ public struct FreesideRootView: View {
                             tasks: coordinator.tasks,
                             freshness: coordinator.store.freshness),
                         onSelectItem: { navigation.route(to: .attentionItem($0)) },
-                        onShowTasks: { navigation.showActiveTasks() }
+                        onShowTasks: { navigation.showActiveTasks() },
+                        topMargin: topMargin
                     )
                     // Pinned to the column's top, where the decision card
                     // it stands in for begins, instead of floating at its
@@ -684,13 +712,14 @@ public struct FreesideRootView: View {
                     // A run opened under its task: the column has no stack to
                     // pop, so a return row leads back to the task.
                     VStack(spacing: 0) {
-                        runReturnRow
+                        runReturnRow(topMargin: topMargin)
                         if let run = coordinator.runs.first(where: { $0.run.id == runSelection }) {
                             RunTimelineView(coordinator: coordinator, snapshot: run, topMargin: 10)
                         } else {
                             UnavailableStateView(
                                 glyph: .tasks, title: "Run unavailable",
-                                description: "This run is no longer available.")
+                                description: "This run is no longer available.",
+                                seat: .detailColumn)
                         }
                     }
                     .id(runSelection)
@@ -700,17 +729,19 @@ public struct FreesideRootView: View {
                     TaskTimelineView(
                         coordinator: coordinator, snapshot: task,
                         onOpenRun: { navigation.route(to: .run(taskID: task.task.id, runID: $0)) },
-                        onOpenInboxItem: { navigation.route(to: .attentionItem($0)) }
+                        onOpenInboxItem: { navigation.route(to: .attentionItem($0)) },
+                        topMargin: topMargin
                     )
                     .id(taskSelection)
                 } else {
                     UnavailableStateView(
-                        glyph: .tasks, title: "Tasks", description: "Select a task to inspect its history.")
+                        glyph: .tasks, title: "Tasks", description: "Select a task to inspect its history.",
+                        seat: .detailColumn)
                 }
             }
         }
 
-        private var runReturnRow: some View {
+        private func runReturnRow(topMargin: CGFloat?) -> some View {
             HStack {
                 Button {
                     navigation.closeRun()
@@ -724,9 +755,10 @@ public struct FreesideRootView: View {
                 Spacer()
             }
             // The detail column's x and top margin (R18): the row is the
-            // column's first line here, and the run's card sits under it.
+            // column's first line here, under any standing notice, and the
+            // run's card sits under it.
             .padding(.horizontal, 24)
-            .padding(.top, 20)
+            .padding(.top, topMargin ?? 20)
         }
     #endif
 
@@ -855,8 +887,6 @@ struct RevokedPane: View {
                 .padding(.top, 10)
         }
         .multilineTextAlignment(.center)
-        .padding(.horizontal, 24)
-        .padding(.vertical, 40)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .emptyStateSeat(.detailColumn)
     }
 }

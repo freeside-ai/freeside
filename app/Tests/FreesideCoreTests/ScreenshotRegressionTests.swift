@@ -1196,24 +1196,15 @@
                                 readyInspector.screenshotInspector(
                                     snapshot.item,
                                     at: dynamicTypeSize))))
-                    surfaces.append(
-                        Surface(
-                            name: "decision-ready_for_final_review-1200",
-                            width: 1_200,
-                            view: AnyView(
-                                detail.screenshotCard(
-                                    snapshot.item,
-                                    at: dynamicTypeSize,
-                                    detailWidth: 1_200))))
-                    // The same card with the inspector open and the
-                    // inspector's Evidence disclosure open with it, which is
-                    // the state the pointer row exists for: the packet is
-                    // being drawn beside the card, so the card's own Evidence
-                    // module stands down to "N attachments → inspector"
-                    // (#1107). Only the evidence preference is raised here, so
-                    // this surface differs from
-                    // decision-ready_for_final_review-1200 in exactly the
-                    // module under test; with the default preferences the
+                    // The card with the inspector open and the inspector's
+                    // Evidence disclosure open with it, which is the state
+                    // the pointer row exists for: the packet is being drawn
+                    // beside the card, so the card's own Evidence module
+                    // stands down to "N attachments → inspector" (#1107).
+                    // Only the evidence preference is raised here, so this
+                    // surface differs from decision-ready_for_final_review
+                    // in exactly the module under test; with the default
+                    // preferences the
                     // inspector shows nothing and the card keeps its rows, so
                     // recording that state would pin a card identical to the
                     // one above and catch no pointer regression at all.
@@ -1236,38 +1227,16 @@
                         sectionPreferences: openEvidencePreferences)
                     surfaces.append(
                         Surface(
-                            name: "decision-ready_for_final_review-inspector-open-1200",
-                            width: 1_200,
+                            name: "decision-ready_for_final_review-inspector-open",
                             view: AnyView(
                                 readyInspectorOpen.screenshotCard(
                                     snapshot.item,
                                     at: dynamicTypeSize,
-                                    detailWidth: 1_200,
                                     inspectorPresented: true))))
-                    // The other readiness shapes the daemon can hand the card
-                    // (issue #982): a degraded verdict listing its waiver and
-                    // advisory entries, and a verdict the daemon invalidated,
-                    // rendered stale beside the bound and observed heads.
-                    surfaces.append(
-                        Surface(
-                            name: "decision-ready_for_final_review-degraded-1200",
-                            width: 1_200,
-                            view: AnyView(
-                                detail.screenshotCard(
-                                    AttentionFixtures.degradedReady().item,
-                                    at: dynamicTypeSize,
-                                    detailWidth: 1_200))))
-                    surfaces.append(
-                        Surface(
-                            name: "decision-ready_for_final_review-stale-1200",
-                            width: 1_200,
-                            view: AnyView(
-                                detail.screenshotCard(
-                                    AttentionFixtures.staleReady().item,
-                                    at: dynamicTypeSize,
-                                    detailWidth: 1_200))))
-                    // Frame 7.3 at the card's own width, and the other
-                    // staleness axis (the base watch) on the phone.
+                    // A verdict the daemon invalidated (issue #982), rendered
+                    // stale beside the bound and observed heads (frame 7.3),
+                    // and the other staleness axis (the base watch) on the
+                    // phone. The degraded verdict is the 4b surfaces'.
                     surfaces.append(
                         Surface(
                             name: "decision-ready_for_final_review-stale",
@@ -1324,7 +1293,7 @@
                     // over_hardened verdict with and without the daemon's
                     // promise to simplify on continue, the stuck verdict, and
                     // a reversal list long enough to collapse, each at phone
-                    // width and at a Mac width.
+                    // width and at the Mac card's.
                     let driftVariants = [
                         ("over_hardened", AttentionFixtures.reviewDiminishing(cause: .drift_audit)),
                         (
@@ -1354,13 +1323,9 @@
                                         compactLayout: true))))
                         surfaces.append(
                             Surface(
-                                name: "decision-review_diminishing_returns-drift-\(variant)-1200",
-                                width: 1_200,
+                                name: "decision-review_diminishing_returns-drift-\(variant)",
                                 view: AnyView(
-                                    detail.screenshotCard(
-                                        drift.item,
-                                        at: dynamicTypeSize,
-                                        detailWidth: 1_200))))
+                                    detail.screenshotCard(drift.item, at: dynamicTypeSize))))
                     }
                     surfaces.append(
                         Surface(
@@ -1447,17 +1412,11 @@
                     view: AnyView(
                         recommendedDetail.screenshotCard(
                             equallyWeighted, at: dynamicTypeSize, compactLayout: true))))
-            for width in [CGFloat(900), CGFloat(1_200)] {
-                surfaces.append(
-                    Surface(
-                        name: "decision-finding_adjudication-recommended-\(Int(width))",
-                        width: width,
-                        view: AnyView(
-                            recommendedDetail.screenshotCard(
-                                adjudication,
-                                at: dynamicTypeSize,
-                                detailWidth: width))))
-            }
+            surfaces.append(
+                Surface(
+                    name: "decision-finding_adjudication-recommended",
+                    view: AnyView(
+                        recommendedDetail.screenshotCard(adjudication, at: dynamicTypeSize))))
             // One finding per route, carrying the daemon's consequence-led
             // reason and recommendation: the card says what accepting does
             // before any route vocabulary (#1551).
@@ -1514,17 +1473,6 @@
                     view: AnyView(
                         destructiveRecommendation.screenshotCard(
                             question, at: dynamicTypeSize))))
-            // The question card in the Mac's two-column layout, where the
-            // action region sits beside the card's modules, not above them.
-            surfaces.append(
-                Surface(
-                    name: "decision-agent_question-1200",
-                    width: 1_200,
-                    view: AnyView(
-                        destructiveRecommendation.screenshotCard(
-                            AttentionFixtures.fixture(type: .agent_question).item,
-                            at: dynamicTypeSize,
-                            detailWidth: 1_200))))
 
             let cache = InMemoryCacheStore()
             let runs = RunFixtures.defaultRuns()
@@ -2555,7 +2503,9 @@
                         })))
 
             // The standing stopped indicator (#980) under the freshness
-            // banner, where the root view places it, on Mac and phone widths.
+            // banner, where the root view places it: at the top of the Mac's
+            // detail column, at the card's x and width, and in the slot
+            // above the list at phone width.
             // It reads the same wall clock the banner does, so the fresh and
             // stale timestamps carry the margins described above. Fresh, it
             // states the stop as current; stale, it sits under the Stale row
@@ -2582,26 +2532,32 @@
                 operation: Components.Schemas.UnattendedOperationSnapshot,
                 lastUpdatedAt: Date
             ) -> Surface {
-                Surface(
+                let inDetailColumn = width > 390
+                let notices = StandingNotices(
+                    saveWarning: nil, onDismissSaveWarning: {},
+                    freshness: .fresh, lastUpdatedAt: lastUpdatedAt, onRePair: nil,
+                    operation: operation,
+                    reason: { _ in
+                        "The daemon stopped unattended operation after repeated restarts"
+                    },
+                    onOpenItem: { _ in },
+                    placement: inDetailColumn ? .detailColumn : .window)
+                return Surface(
                     name: name,
                     width: width,
-                    view: AnyView(
-                        VStack(spacing: 0) {
-                            FreshnessBanner(freshness: .fresh, lastUpdatedAt: lastUpdatedAt)
-                            UnattendedStoppedIndicator(
-                                operation: operation, freshness: .fresh,
-                                lastUpdatedAt: lastUpdatedAt,
-                                reason: { _ in
-                                    "The daemon stopped unattended operation after repeated restarts"
-                                },
-                                onOpenItem: { _ in })
-                            Text("Inbox").padding()
-                        }))
+                    view: inDetailColumn
+                        ? AnyView(
+                            StandingDetailColumn(notices: notices) { _ in Text("Inbox").padding() })
+                        : AnyView(
+                            VStack(spacing: 0) {
+                                notices
+                                Text("Inbox").padding()
+                            }))
             }
             let stoppedFresh = Date().addingTimeInterval(3_600)
             let stoppedStale = Date().addingTimeInterval(
                 -(SyncCoordinator.stalenessThreshold + 1))
-            for (suffix, width) in [("", CGFloat(640)), ("-phone", CGFloat(390))] {
+            for (suffix, width) in [("", Self.detailColumnWidth), ("-phone", CGFloat(390))] {
                 surfaces.append(
                     stoppedSurface(
                         name: "unattended-stopped-fresh" + suffix, width: width,
@@ -2613,7 +2569,7 @@
             }
             surfaces.append(
                 stoppedSurface(
-                    name: "unattended-stopped-finding", width: 640,
+                    name: "unattended-stopped-finding", width: Self.detailColumnWidth,
                     operation: findingStopped, lastUpdatedAt: stoppedFresh))
 
             // The non-image attachment reader as a sheet: inline serif title,
@@ -2983,9 +2939,8 @@
                                 launchProjectID: nil
                             ).screenshotSidebar(now: screenshotNow, activeTaskCount: sidebarTaskCount))))
             }
-            // Frames 7.8 and 6.9 (R18): the finding card at a 1,000pt detail
-            // width with the inspector open, and that inspector, by day and
-            // by dusk. The item carries the frame's three attachments and
+            // Frame 6.9 (R18): the finding card with the inspector open, and
+            // that inspector, by day and by dusk. The item carries the frame's three attachments and
             // two attachment claims, so the pointer row and both counts have
             // something to count, and the inspector opens Evidence and its
             // bindings and leaves Claims closed, as the frame draws it.
@@ -3026,15 +2981,11 @@
             for (suffix, colorScheme) in [("", ColorScheme.light), ("-dark", .dark)] {
                 surfaces.append(
                     Surface(
-                        name: "decision-finding_adjudication-inspector-open-1000\(suffix)",
-                        width: 1_000,
+                        name: "decision-finding_adjudication-inspector-open\(suffix)",
                         colorScheme: colorScheme,
                         view: AnyView(
                             framedDetail.screenshotCard(
-                                framed,
-                                at: dynamicTypeSize,
-                                detailWidth: 1_000,
-                                inspectorPresented: true))))
+                                framed, at: dynamicTypeSize, inspectorPresented: true))))
                 surfaces.append(
                     Surface(
                         name: "decision-finding_adjudication-frame-inspector\(suffix)",
@@ -3070,8 +3021,9 @@
             }
 
             // The standing-surface frames no earlier surface drew (#1803).
-            // The revoked banner with its recovery action, then the four
-            // notices the root view can stack, at Mac and phone widths.
+            // The revoked banner with its recovery action, then the notices
+            // stacked: the three the root view can hold at once over a card
+            // in the Mac's detail column, and four in the phone's slot.
             let mismatch = InboxStore.Freshness.contractMismatch(
                 daemonContract: "sha256:" + String(repeating: "a", count: 64))
             surfaces.append(
@@ -3084,40 +3036,70 @@
                             Text("Inbox").padding()
                         })))
             // The Mac's revoked state: the banner only states, and the
-            // detail pane empties around Pair Again.
+            // detail pane empties around Pair Again. Drawn as the detail
+            // pane of a 1,180pt window, where the banner and the empty state
+            // share the card's column instead of the pane's width.
             for (suffix, scheme) in [("", ColorScheme.light), ("-dark", .dark)] {
                 surfaces.append(
                     Surface(
                         name: "revoked-pane" + suffix,
-                        width: 640,
+                        width: 860,
                         colorScheme: scheme,
                         view: AnyView(
-                            VStack(spacing: 0) {
-                                FreshnessBanner(freshness: .unauthenticated)
+                            StandingDetailColumn(
+                                notices: StandingNotices(
+                                    saveWarning: nil, onDismissSaveWarning: {},
+                                    freshness: .unauthenticated, lastUpdatedAt: nil, onRePair: nil,
+                                    operation: nil, reason: { _ in nil }, onOpenItem: nil,
+                                    placement: .detailColumn)
+                            ) { _ in
                                 RevokedPane(onRePair: {}).frame(height: 320)
                             }
                             .background(Color.ground))))
             }
-            for (suffix, width) in [("", CGFloat(640)), ("-phone", CGFloat(390))] {
-                surfaces.append(
-                    Surface(
-                        name: "standing-notices-stack" + suffix,
-                        width: width,
-                        view: AnyView(
-                            VStack(spacing: 0) {
-                                FreshnessBanner(freshness: .fresh, lastUpdatedAt: stoppedStale)
-                                UnattendedStoppedIndicator(
-                                    operation: operatorStopped, freshness: .fresh,
-                                    lastUpdatedAt: stoppedStale,
-                                    reason: { _ in
-                                        "The daemon stopped unattended operation after repeated restarts"
-                                    },
-                                    onOpenItem: { _ in })
-                                FreshnessBanner(freshness: .unauthenticated, onRePair: {})
-                                FreshnessBanner(freshness: mismatch)
-                                Text("Inbox").padding()
-                            })))
-            }
+            // The 9 Oct 2026 wide-pane frame, option 1a: the detail pane of
+            // a 1,620pt window, with every notice the root view can hold at
+            // once stacked over a card, each at the card's x and width.
+            surfaces.append(
+                Surface(
+                    name: "detail-column-standing-notices",
+                    width: 1_300,
+                    view: AnyView(
+                        StandingDetailColumn(
+                            notices: StandingNotices(
+                                saveWarning:
+                                    "The task was accepted, but its prompt history couldn't be saved.",
+                                onDismissSaveWarning: {},
+                                freshness: .fresh, lastUpdatedAt: stoppedStale, onRePair: nil,
+                                operation: operatorStopped,
+                                reason: { _ in
+                                    "The daemon stopped unattended operation after repeated restarts"
+                                },
+                                onOpenItem: { _ in },
+                                placement: .detailColumn)
+                        ) { topMargin in
+                            recommendedDetail.screenshotCard(
+                                adjudication, at: dynamicTypeSize, topMargin: topMargin)
+                        }
+                        .background(Color.ground))))
+            surfaces.append(
+                Surface(
+                    name: "standing-notices-stack-phone",
+                    width: 390,
+                    view: AnyView(
+                        VStack(spacing: 0) {
+                            FreshnessBanner(freshness: .fresh, lastUpdatedAt: stoppedStale)
+                            UnattendedStoppedIndicator(
+                                operation: operatorStopped, freshness: .fresh,
+                                lastUpdatedAt: stoppedStale,
+                                reason: { _ in
+                                    "The daemon stopped unattended operation after repeated restarts"
+                                },
+                                onOpenItem: { _ in })
+                            FreshnessBanner(freshness: .unauthenticated, onRePair: {})
+                            FreshnessBanner(freshness: mismatch)
+                            Text("Inbox").padding()
+                        })))
             // Pairing at phone width, and with under a minute left, where
             // the countdown keeps the accent.
             surfaces.append(
@@ -3261,7 +3243,7 @@
                         width: width,
                         colorScheme: scheme,
                         view: AnyView(
-                            detail.screenshotCard(item, at: dynamicTypeSize, detailWidth: width)))
+                            detail.screenshotCard(item, at: dynamicTypeSize)))
                 }
             }
         }

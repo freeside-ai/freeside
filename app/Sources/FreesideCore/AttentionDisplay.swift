@@ -647,18 +647,19 @@ enum AttentionDisplay {
 
     /// An action's label where its item is known. On an item that binds
     /// several findings, `accept_recommended_route` applies every proposed
-    /// route at once, so the label says so (visual audit D09); the action and
-    /// what it submits are the same either way.
+    /// route at once, so the label says so (visual audit D09), and past two
+    /// findings it carries their count: the findings stack above the
+    /// action, and the count says how many of them the one press settles.
+    /// The action and what it submits are the same either way.
     static func label(
         _ action: Components.Schemas.Action,
         for item: Components.Schemas.AttentionItem?
     ) -> String {
-        if action == .accept_recommended_route,
-            let binding = item?.finding_adjudication?.value1, binding.proposals.count > 1
-        {
-            return "Accept All Dispositions"
-        }
-        return label(action)
+        guard action == .accept_recommended_route,
+            let findingCount = item?.finding_adjudication?.value1.proposals.count, findingCount > 1
+        else { return label(action) }
+        return findingCount > 2
+            ? "Accept All \(findingCount) Dispositions" : "Accept All Dispositions"
     }
 
     static func systemImage(_ action: Components.Schemas.Action) -> String? {
