@@ -40,7 +40,7 @@ records implementation progress.
 
 The Mac paths below use **Xcode 26.6**, the toolchain used by this repository's
 CI. Install full Xcode and complete its first-launch setup; Command Line Tools
-alone cannot build the app. Building the daemon also needs **Go 1.26.6**, as
+alone cannot build the app. Building the daemon also needs **Go 1.26.9**, as
 declared in [daemon/go.mod](daemon/go.mod). The daemon core builds on Linux,
 but the installation and real execution paths here are Mac-first.
 
