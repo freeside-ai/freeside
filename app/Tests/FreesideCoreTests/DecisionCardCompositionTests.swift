@@ -1665,8 +1665,9 @@ import Testing
     }
 
     /// The batch action says what it covers from the bound proposals: every
-    /// one of them, at any count. One finding keeps the action's own label
-    /// (the approved reference shows only the batch).
+    /// one of them, at any count, and by number past two, where the stack
+    /// of findings is longer than a glance takes in. One finding keeps the
+    /// action's own label (the approved reference shows only the batch).
     @Test func acceptingStatesItsScopeFromTheBoundProposals() throws {
         let batch = AttentionFixtures.fixture(type: .finding_adjudication).item
         let single = AttentionFixtures.findingAdjudicationFixture(route: .remediate).item
@@ -1678,6 +1679,18 @@ import Testing
         #expect(
             FindingCardPresentation.acceptanceScope(findingCount: 2)
                 == "Accepting covers every proposed route above: all 2 findings.")
+
+        var six = batch
+        let proposals = try #require(batch.finding_adjudication?.value1.proposals)
+        six.finding_adjudication?.value1.proposals = proposals + proposals + proposals
+        #expect(
+            AttentionDisplay.label(.accept_recommended_route, for: six)
+                == "Accept All 6 Dispositions")
+        var three = batch
+        three.finding_adjudication?.value1.proposals = proposals + proposals.prefix(1)
+        #expect(
+            AttentionDisplay.label(.accept_recommended_route, for: three)
+                == "Accept All 3 Dispositions")
 
         #expect(single.finding_adjudication?.value1.proposals.count == 1)
         #expect(
