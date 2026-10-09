@@ -216,6 +216,74 @@ extension Color {
     }
 #endif
 
+/// One platform's ladder (R10, the interfaces handoff of 8 Oct 2026): the
+/// point size of every fixed face, the height of a control, and the gaps a
+/// card is set on. The Mac sets on its native sizes; the iPhone keeps the
+/// survey card's scale a point smaller. Both are values, so a test pins
+/// either platform's steps from one host; `current` is the one a build draws.
+struct FreesideLadder: Equatable, Sendable {
+    /// The smallest text the platform draws at the default size.
+    let floor: CGFloat
+    /// What a card asks: serif medium.
+    let ask: CGFloat
+    /// What a sheet asks: the ask's face, a step under it on iPhone.
+    let sheetAsk: CGFloat
+    /// A statement at text size: serif.
+    let statement: CGFloat
+    /// A sidebar row's serif line.
+    let rowTitle: CGFloat
+    /// A fact's label, a disclosure's label, and a rail entry's title: sans.
+    let label: CGFloat
+    /// The card body: sans.
+    let body: CGFloat
+    /// A fact's value: mono.
+    let monoValue: CGFloat
+    /// The dim summary trailing a disclosure, and a row's context: mono.
+    let trailingSummary: CGFloat
+    /// The uppercase section keyword: mono medium, tracked 0.08em.
+    let keyword: CGFloat
+    /// A state chip: mono medium, tracked 0.04em.
+    let chip: CGFloat
+    /// A text link: sans medium.
+    let link: CGFloat
+    /// An action's label: sans medium.
+    let actionLabel: CGFloat
+    /// The info control beside an unverified keyword: a mark as tall as
+    /// this, not text.
+    let infoMark: CGFloat
+    /// The least height of an action, and of one at an accessibility size.
+    let actionHeight: CGFloat
+    let accessibilityActionHeight: CGFloat
+    /// An action's padding around its label at the default size.
+    let actionPadding: CGSize
+    /// A card's gaps: between sections, inside a module, within a control
+    /// group, and between the hairline and the first fold.
+    let sectionGap: CGFloat
+    let moduleGap: CGFloat
+    let controlGap: CGFloat
+    let foldLead: CGFloat
+
+    static let mac = FreesideLadder(
+        floor: 11, ask: 20, sheetAsk: 20, statement: 15, rowTitle: 14, label: 13, body: 13, monoValue: 12,
+        trailingSummary: 12, keyword: 11, chip: 11, link: 13, actionLabel: 13, infoMark: 15,
+        actionHeight: 28, accessibilityActionHeight: 40,
+        actionPadding: CGSize(width: 14, height: 4),
+        sectionGap: 18, moduleGap: 9, controlGap: 8, foldLead: 14)
+
+    static let phone = FreesideLadder(
+        floor: 11.5, ask: 24, sheetAsk: 22, statement: 16, rowTitle: 15.5, label: 15, body: 13.5, monoValue: 13.5,
+        trailingSummary: 12.5, keyword: 11.5, chip: 11.5, link: 14, actionLabel: 15, infoMark: 16,
+        actionHeight: 44, accessibilityActionHeight: 56,
+        actionPadding: CGSize(width: 16, height: 7),
+        sectionGap: 20, moduleGap: 10, controlGap: 10, foldLead: 16)
+
+    #if os(macOS)
+        static let current = mac
+    #else
+        static let current = phone
+    #endif
+}
+
 /// The three faces, bundled in `Fonts/` and registered once per process.
 /// Serif carries screen and item titles only; Plex Sans is the chrome;
 /// Plex Mono is the evidence register for every stated fact.
@@ -237,21 +305,28 @@ enum FreesideFont {
 
     /// The platform's own point size for a text style, so the faces sit
     /// at the size the system would give `.body`, `.caption`, and so on
-    /// on each platform (17pt body on iOS, 13pt on macOS). On iOS the
-    /// size is read at the default content size, since `relativeTo:`
-    /// applies the user's Dynamic Type scaling afterwards.
+    /// on each platform (17pt body on iOS, 13pt on macOS), and never under
+    /// the ladder's floor: macOS sets its caption and footnote styles at
+    /// 10pt. On iOS the size is read at the default content size, since
+    /// `relativeTo:` applies the user's Dynamic Type scaling afterwards.
     static func size(of style: Font.TextStyle) -> CGFloat {
         #if canImport(AppKit)
             if let screenshotDynamicTypeSize {
                 return iOSPointSize(of: style, at: screenshotDynamicTypeSize)
             }
-            return NSFont.preferredFont(forTextStyle: platformStyle(style)).pointSize
+            return floored(NSFont.preferredFont(forTextStyle: platformStyle(style)).pointSize)
         #elseif canImport(UIKit)
-            UIFont.preferredFont(
-                forTextStyle: platformStyle(style),
-                compatibleWith: UITraitCollection(preferredContentSizeCategory: .large)
-            ).pointSize
+            floored(
+                UIFont.preferredFont(
+                    forTextStyle: platformStyle(style),
+                    compatibleWith: UITraitCollection(preferredContentSizeCategory: .large)
+                ).pointSize)
         #endif
+    }
+
+    /// A default-size point size held at the ladder's floor.
+    static func floored(_ size: CGFloat, on ladder: FreesideLadder = .current) -> CGFloat {
+        max(size, ladder.floor)
     }
 
     #if canImport(AppKit)
