@@ -29,10 +29,13 @@ import (
 type fakeTaskSubmitter struct {
 	calls int
 	err   error
+	// last is the input of the most recent call.
+	last signet.TaskSubmissionInput
 }
 
 func (f *fakeTaskSubmitter) SubmitTask(ctx context.Context, tx *store.WriteTx, in signet.TaskSubmissionInput) (signet.TaskSubmissionResult, error) {
 	f.calls++
+	f.last = in
 	if f.err != nil {
 		return signet.TaskSubmissionResult{}, f.err
 	}
@@ -171,6 +174,13 @@ func TestLegacyTaskSubmissionReplayPreservesMissingNameFingerprint(t *testing.T)
 		if *got.Submission != original || got.Revision != revision {
 			t.Fatal("legacy result or revision changed")
 		}
+	}
+	// A historical row predates task lines, so a retry that adds one differs
+	// from what was recorded even though the row holds no digest to compare.
+	withLine := submitTaskCommand(original.CommandID, source, "")
+	withLine.SubmitTask.TaskLines = []domain.TaskLineChoice{{Role: domain.RoleReviewer, Agent: "codex"}}
+	if _, err := service.Submit(ctx, withLine); !errors.Is(err, store.ErrImmutableConflict) {
+		t.Fatalf("legacy replay with a task line: error = %v, want ErrImmutableConflict", err)
 	}
 	if fake.calls != 1 {
 		t.Fatal("legacy replay invoked intake")
@@ -344,6 +354,14 @@ func TestSubmitTaskCommandHTTPRoundTripAndEnvelopeRejection(t *testing.T) {
 // submitter, as the daemon composition does.
 func newRealSubmitTaskHandler(t *testing.T) http.Handler {
 	t.Helper()
+	handler, _ := newRealSubmitTaskHandlerAndStore(t)
+	return handler
+}
+
+// newRealSubmitTaskHandlerAndStore also returns the store, for a test that
+// reads back what an accepted command wrote.
+func newRealSubmitTaskHandlerAndStore(t *testing.T) (http.Handler, *store.Store) {
+	t.Helper()
 	ctx := context.Background()
 	s := storetest.Open(t, t.TempDir()+"/signet-real.db", store.Options{})
 	t.Cleanup(func() { _ = s.Close() })
@@ -376,7 +394,7 @@ func newRealSubmitTaskHandler(t *testing.T) http.Handler {
 		return initiator, true
 	})
 	service := signet.NewService(s, signet.WithBlobStore(blobs), signet.WithTaskSubmitter(submitter))
-	return signet.NewHTTPHandler(service, testAuthorizer)
+	return signet.NewHTTPHandler(service, testAuthorizer), s
 }
 
 func TestSubmitTaskCommandHTTPValidatesOperatorName(t *testing.T) {

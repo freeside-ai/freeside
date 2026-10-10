@@ -99,6 +99,30 @@ func ValidateTaskLineChoices(choices []TaskLineChoice) error {
 	return nil
 }
 
+// CanonicalTaskLineChoices validates the choices and returns them in
+// TaskLineRoles order. A submission's replay identity digests this form, so
+// the set of lines is the identity and the order they were sent in is not.
+// No choices canonicalize to nil.
+func CanonicalTaskLineChoices(choices []TaskLineChoice) ([]TaskLineChoice, error) {
+	if err := ValidateTaskLineChoices(choices); err != nil {
+		return nil, err
+	}
+	if len(choices) == 0 {
+		return nil, nil
+	}
+	byRole := make(map[RoleName]TaskLineChoice, len(choices))
+	for _, choice := range choices {
+		byRole[choice.Role] = choice
+	}
+	canonical := make([]TaskLineChoice, 0, len(choices))
+	for _, role := range TaskLineRoles {
+		if choice, ok := byRole[role]; ok {
+			canonical = append(canonical, choice)
+		}
+	}
+	return canonical, nil
+}
+
 // TaskLineInput carries the caller-supplied fields of a TaskLine. It has no
 // ID, Version, or PredecessorID: the store assigns the version and the
 // predecessor inside the write transaction and the identity is a content

@@ -40,15 +40,25 @@ type ClientCommand struct {
 }
 
 // SubmitTaskPayload mirrors the API contract's SubmitTaskPayload: the project
-// to submit into, the task's source text, and an optional operator-chosen name.
-// It binds to no attention item and no other entity, so a submit_task command
-// carries none of the decision envelope.
+// to submit into, the task's source text, an optional operator-chosen name,
+// and optional task lines. It binds to no attention item and no other entity,
+// so a submit_task command carries none of the decision envelope.
+//
+// The command's request digest is taken over this struct's JSON, so the
+// field names and their order are part of every recorded submission's replay
+// identity.
 type SubmitTaskPayload struct {
 	ProjectID domain.ProjectID
 	Source    string
 	// Name is an optional operator-chosen task name; empty means none, and the
 	// daemon falls back to the source's heading or an identifier.
 	Name string
+	// TaskLines are the operator's per-role agent choices for the new task
+	// (plan §5.4). Nil means none; a present, empty list is malformed. The tag
+	// omits the field when there are none, so a submission without lines
+	// keeps the request digest it had before the field existed and a
+	// recorded one still replays.
+	TaskLines []domain.TaskLineChoice `json:",omitempty"`
 }
 
 // DecisionPayload mirrors the API contract's DecisionPayload: the decision and

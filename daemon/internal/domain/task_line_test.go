@@ -2,6 +2,7 @@ package domain_test
 
 import (
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -60,6 +61,28 @@ func TestValidateTaskLineChoices(t *testing.T) {
 		if err := domain.ValidateTaskLineChoices(tc.choices); !errors.Is(err, tc.want) {
 			t.Fatalf("%s: err = %v, want %v", name, err, tc.want)
 		}
+	}
+}
+
+func TestCanonicalTaskLineChoices(t *testing.T) {
+	t.Parallel()
+	reviewer := domain.TaskLineChoice{Role: domain.RoleReviewer, Agent: "codex"}
+	specifier := domain.TaskLineChoice{Role: domain.RoleSpecifier, Agent: "claude-b"}
+	remediator := domain.TaskLineChoice{Role: domain.RoleRemediator, Agent: "codex"}
+	got, err := domain.CanonicalTaskLineChoices([]domain.TaskLineChoice{reviewer, specifier, remediator})
+	if err != nil {
+		t.Fatalf("canonicalize: %v", err)
+	}
+	if want := []domain.TaskLineChoice{specifier, remediator, reviewer}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("canonical = %+v, want %+v", got, want)
+	}
+	for name, none := range map[string][]domain.TaskLineChoice{"nil": nil, "empty": {}} {
+		if got, err := domain.CanonicalTaskLineChoices(none); err != nil || got != nil {
+			t.Fatalf("%s: canonical = %+v, %v; want nil, nil", name, got, err)
+		}
+	}
+	if _, err := domain.CanonicalTaskLineChoices([]domain.TaskLineChoice{reviewer, reviewer}); !errors.Is(err, domain.ErrDuplicateTaskLineRole) {
+		t.Fatalf("duplicate role: err = %v, want ErrDuplicateTaskLineRole", err)
 	}
 }
 

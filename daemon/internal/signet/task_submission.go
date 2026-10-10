@@ -24,8 +24,8 @@ type TaskSubmitter interface {
 }
 
 // TaskSubmissionInput is the submitter's input: the project, the submitted
-// source and its digest (already stored in the blob store), and an optional
-// operator-chosen name.
+// source and its digest (already stored in the blob store), an optional
+// operator-chosen name, and the operator's task lines.
 type TaskSubmissionInput struct {
 	CommandID     string
 	RequestDigest domain.Digest
@@ -33,6 +33,9 @@ type TaskSubmissionInput struct {
 	Source        []byte
 	SourceDigest  domain.Digest
 	OperatorName  string
+	// TaskLines are validated and in canonical role order; the submitter
+	// records one line per entry on the task it creates.
+	TaskLines []domain.TaskLineChoice
 }
 
 // TaskSubmissionResult identifies the created task, its specification run,
@@ -63,6 +66,14 @@ func (s *Service) submitTask(ctx context.Context, in ClientCommand) (CommandResu
 	if s.blobs == nil || s.taskSubmitter == nil {
 		return CommandResult{}, fmt.Errorf("submit command %q: %w", in.CommandID, ErrTaskSubmissionUnavailable)
 	}
+	// The lines are checked and put in canonical order before the request
+	// digest is taken, so a malformed set writes nothing and a retry that
+	// lists the same lines in another order is the same request.
+	lines, err := canonicalTaskLines(p.TaskLines)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("submit command %q: %w: %w", in.CommandID, ErrInvalidSubmitTaskPayload, err)
+	}
+	p.TaskLines = lines
 	source := []byte(p.Source)
 	digest := domain.Digest(contentaddr.Sum(source))
 	requestBytes, err := json.Marshal(struct {
@@ -87,9 +98,12 @@ func (s *Service) submitTask(ctx context.Context, in ClientCommand) (CommandResu
 		// Idempotency: a retried command_id returns the recorded result with no
 		// second effect (§5.14 test 4). A command_id reused for a different
 		// submission is an immutable conflict, not a silent replay: the recorded
-		// device, project, source, and optional name must match this request.
+		// device, project, source, optional name, and task lines must match
+		// this request.
 		// Historical rows lack the requested-name fingerprint and retain their
-		// original name-insensitive replay check. This mirrors the decision path,
+		// original name-insensitive replay check. Such a row predates task lines,
+		// so a retry that carries any is a different request, not a replay that
+		// would return success and record none. This mirrors the decision path,
 		// where a changed body under an occupied command_id surfaces
 		// store.ErrImmutableConflict from PutCommand (service.go); the fast replay
 		// here returns before PutTaskSubmission would catch it, so the check lives
@@ -100,7 +114,8 @@ func (s *Service) submitTask(ctx context.Context, in ClientCommand) (CommandResu
 				return err
 			}
 			if recorded.DeviceID != in.DeviceID || recorded.ProjectID != p.ProjectID ||
-				recorded.SourceDigest != digest || (original != "" && original != requestDigest) {
+				recorded.SourceDigest != digest || (original != "" && original != requestDigest) ||
+				(original == "" && len(p.TaskLines) != 0) {
 				return fmt.Errorf("submit command %q: %w", in.CommandID, store.ErrImmutableConflict)
 			}
 			record := recorded
@@ -117,6 +132,7 @@ func (s *Service) submitTask(ctx context.Context, in ClientCommand) (CommandResu
 		outcome, err := s.taskSubmitter.SubmitTask(ctx, tx, TaskSubmissionInput{
 			CommandID: in.CommandID, RequestDigest: requestDigest,
 			ProjectID: p.ProjectID, Source: source, SourceDigest: digest, OperatorName: p.Name,
+			TaskLines: p.TaskLines,
 		})
 		if err != nil {
 			return err
@@ -140,4 +156,19 @@ func (s *Service) submitTask(ctx context.Context, in ClientCommand) (CommandResu
 		return CommandResult{}, err
 	}
 	return result, nil
+}
+
+// errEmptyTaskLines rejects a task_lines list that is present but names no
+// role: the contract's minItems, which the decoder does not enforce.
+var errEmptyTaskLines = errors.New("task_lines must name at least one role when present")
+
+// canonicalTaskLines validates a command's task lines and returns them in
+// canonical role order; nil in, nil out. The error is safe to return to the
+// client: domain.ValidateTaskLineChoices never puts refused request text in
+// one.
+func canonicalTaskLines(lines []domain.TaskLineChoice) ([]domain.TaskLineChoice, error) {
+	if lines != nil && len(lines) == 0 {
+		return nil, errEmptyTaskLines
+	}
+	return domain.CanonicalTaskLineChoices(lines)
 }
