@@ -13,6 +13,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
@@ -131,11 +132,18 @@ func resolveReviewSelection(
 // selects the identity the source was composed with. The tree is fixed for
 // the daemon's run, so what can change is the store (a disabled identity, a
 // credential that expired) and the clock (an offer past its not_after).
+//
+// A task line cannot move a review to another agent: the source runs one
+// identity and one agent, fixed when the daemon composed it, until the review
+// admission record exists (#898). So a line is never silently ignored, a
+// request for a task whose reviewer line names any other agent is refused,
+// and so is one whose line does not hold against the command that set it.
+// The shadow reviewer takes no task line and is not checked for one.
 func reviewAdmission(
 	st *store.Store, tree agenttree.Tree, role domain.RoleName, identity domain.AuthIdentityID,
 	now func() time.Time,
-) func(context.Context) error {
-	return func(ctx context.Context) error {
+) func(context.Context, exec.ReviewRequest) error {
+	return func(ctx context.Context, req exec.ReviewRequest) error {
 		agent, err := reviewRoleAgent(ctx, st, tree, role, now())
 		if err != nil {
 			return err
@@ -144,6 +152,29 @@ func reviewAdmission(
 			return &roleAdmissionError{Role: role, Err: fmt.Errorf(
 				"the line now resolves identity %s, the review source runs under %s: %w",
 				agent.Identity.ID, identity, engine.ErrAgentNotAdmissible)}
+		}
+		if !role.TaskLineEligible() {
+			return nil
+		}
+		var (
+			line  domain.TaskLine
+			found bool
+		)
+		if err := st.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			line, found, err = engine.RunTaskLine(ctx, tx, req.RunID, role)
+			return err
+		}); err != nil {
+			return &roleAdmissionError{Role: role, Err: errors.Join(engine.ErrAgentNotAdmissible, err)}
+		}
+		// The refusal names the line by its id and never by its agent. That
+		// name is text an operator typed, and a credential pasted there can
+		// pass the name grammar; this error becomes the review failure's
+		// recorded reason.
+		if found && line.Agent != agent.Line.AgentName {
+			return &roleAdmissionError{Role: role, Err: fmt.Errorf(
+				"task line %s names an agent other than %q, the one the review source runs; it cannot run another agent for one task: %w",
+				line.ID, agent.Line.AgentName, engine.ErrAgentNotAdmissible)}
 		}
 		return nil
 	}

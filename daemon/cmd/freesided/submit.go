@@ -120,7 +120,7 @@ func runSubmitMain(args []string) {
 	var taskLines taskLineFlag
 	flags.Var(&taskLines, "task-line", "choose this task's agent for one role, as role=agent (repeatable; roles: "+
 		taskLineRoleList()+"); a line that cannot be honored refuses the attempt and never falls back to the lineup; "+
-		"a reviewer line is recorded and not read")
+		"a reviewer line must name the agent the review source runs, or the task's review is refused")
 	// Validated here, at the run-creation boundary, so a malformed, out-of-range,
 	// or unsatisfiable writer budget fails before a durable run exists rather
 	// than stranding one when the daemon later parses the same flag. The daemon

@@ -1222,8 +1222,10 @@ lineup line's prompt, and its admission cites the line. A line picks the
 agent only, so the role still needs its lineup line. A line that cannot be
 honored refuses the attempt, and the lineup's agent never runs in its place:
 that covers an agent the tree lacks, a disabled identity, and a line that
-does not hold against the submission that set it. A `reviewer` line is
-recorded and not read.
+does not hold against the submission that set it. The review source runs one
+agent for every task, so a `reviewer` line must name that agent. A review for
+a task whose line names any other agent is refused as a review configuration
+failure instead of run under the composed one.
 
 For a preflight-bound submission, choose one `--submission-id <identity>` and
 pass it to both `preflight` and `submit`. The real-work harness saves this identity
