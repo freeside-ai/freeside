@@ -152,6 +152,9 @@ func main() {
 		case "pairing-code":
 			runPairingCodeMain(os.Args[2:])
 			return
+		case "notify-test":
+			runNotifyTestMain(os.Args[2:])
+			return
 		case "renew-codex":
 			runRenewCodexMain(os.Args[2:])
 			return
@@ -1322,7 +1325,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	}
 	d.pairing.configure(d.readiness().APIURL, attention.MintPairingCode)
 	d.pairing.registerControlRoutes(
-		d.pairing.mux, st, blobs, localBackupFiles, cfg.ApprovedRecipes, integrityProbe, cfg.Environment)
+		d.pairing.mux, st, blobs, localBackupFiles, cfg.ApprovedRecipes, integrityProbe, cfg.Environment, attention)
 	var fakeSched *scheduler.Scheduler
 	var claudeSched *scheduler.Scheduler
 	var activeReconciler *activeResourceReconciler
