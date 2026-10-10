@@ -1082,11 +1082,10 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 				var joined error
 				// Still request exact known teardown for an uncovered legacy task,
 				// but never equate its missing private records with absence.
-				state, err := st.ServerState(stopCtx)
-				if err != nil {
-					joined = errors.Join(joined, fmt.Errorf("server state: %w", err))
-				} else if err := coverage.Covers(run.TaskID, state.SyncEpoch); err != nil {
-					joined = errors.Join(joined, fmt.Errorf("runtime coverage: %w", err))
+				if reason, err := unprovableTaskStop(stopCtx, st, coverage, run.TaskID); err != nil {
+					joined = errors.Join(joined, err)
+				} else if reason != "" {
+					joined = errors.Join(joined, errors.New(reason))
 				}
 				var mu sync.Mutex
 				var children sync.WaitGroup
@@ -1117,6 +1116,9 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 				stop("publication", func() error { return claudeWiring.publisher.ReconcileCancelledRun(stopCtx, run.ID) })
 				children.Wait()
 				return joined
+			},
+			Unprovable: func(ctx context.Context, task domain.TaskID) (string, error) {
+				return unprovableTaskStop(ctx, st, coverage, task)
 			},
 		}))
 		rebuild, err := newProjectImageRebuild(*cfg.Claude, st)
@@ -1478,6 +1480,22 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	success = true
 	lockTransferred = true
 	return d, nil
+}
+
+// unprovableTaskStop reports why no stop attempt can prove that task's
+// runtime work is absent: the coverage refusal. The record is written once and
+// freesided never changes the sync epoch while it runs, so the answer holds
+// for as long as the state root does. A failed epoch read is an error, never a
+// reason, because a reason ends retries of the stop for good.
+func unprovableTaskStop(ctx context.Context, st *store.Store, coverage ward.CancellationCoverage, task domain.TaskID) (string, error) {
+	state, err := st.ServerState(ctx)
+	if err != nil {
+		return "", fmt.Errorf("server state: %w", err)
+	}
+	if err := coverage.Covers(task, state.SyncEpoch); err != nil {
+		return "runtime coverage: " + err.Error(), nil
+	}
+	return "", nil
 }
 
 func parseOperatingMode(raw string) (domain.OperatingMode, error) {
