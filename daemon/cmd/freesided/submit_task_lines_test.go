@@ -11,6 +11,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
@@ -285,5 +286,50 @@ func TestValidateSubmitApplyChecksTaskLines(t *testing.T) {
 		LegacyRunID: "run-legacy", TaskLines: []domain.TaskLineChoice{implementer, reviewer},
 	}); err == nil || !strings.Contains(err.Error(), "legacy run lookup") {
 		t.Fatalf("legacy lookup with lines: error = %v, want the legacy refusal", err)
+	}
+}
+
+// TestSubmitCommandTaskLinesHoldAtAdmission reads the lines a real
+// submission records the way admission does. Admission honors a line only
+// when it holds against the submission that set it, so a line this command
+// writes must pass that check from the specification run on, which runs
+// before the implementation run the submission names is stored.
+func TestSubmitCommandTaskLinesHoldAtAdmission(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	root := t.TempDir()
+	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
+	cfg := submitCommandConfig{
+		SubmissionID: "lines-admission",
+		DBPath:       filepath.Join(root, "freeside.db"),
+		TaskPath:     taskPath, PolicyPath: policyPath, PublicationPath: publicationPath,
+		ProjectID: "proj-submit",
+		TaskLines: []domain.TaskLineChoice{
+			{Role: domain.RoleSpecifier, Agent: "claude-b"}, {Role: domain.RoleReviewer, Agent: "codex"},
+		},
+	}
+	result, err := runSubmitCommand(ctx, cfg)
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	st := storetest.Open(t, cfg.DBPath, store.Options{})
+	defer func() { _ = st.Close() }()
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		if _, err := tx.GetRun(ctx, result.ImplementationRunID); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("implementation run at submission = %v, want it not yet stored", err)
+		}
+		for _, want := range cfg.TaskLines {
+			line, found, err := engine.RunTaskLine(ctx, tx, result.SpecificationRunID, want.Role)
+			if err != nil || !found || line.Agent != want.Agent || line.Source != domain.TaskLineSourceCLISubmit {
+				t.Fatalf("%s line at admission = %+v, %t, %v; want agent %q", want.Role, line, found, err, want.Agent)
+			}
+		}
+		// A role the submission named no line for stays on the lineup.
+		if _, found, err := engine.RunTaskLine(ctx, tx, result.SpecificationRunID, domain.RoleImplementer); err != nil || found {
+			t.Fatalf("implementer line at admission = %t, %v; want none", found, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

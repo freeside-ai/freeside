@@ -118,8 +118,9 @@ func runSubmitMain(args []string) {
 	submissionID := flags.String("submission-id", "", "prepared identity for new work (otherwise generated and saved before submission)")
 	retrySubmissionID := flags.String("retry-submission-id", "", "manually retry a saved submission using its original inputs")
 	var taskLines taskLineFlag
-	flags.Var(&taskLines, "task-line", "record this task's agent choice for one role, as role=agent (repeatable; roles: "+
-		taskLineRoleList()+"); admission does not read task lines yet, so the lineup still selects every agent")
+	flags.Var(&taskLines, "task-line", "choose this task's agent for one role, as role=agent (repeatable; roles: "+
+		taskLineRoleList()+"); a line that cannot be honored refuses the attempt and never falls back to the lineup; "+
+		"a reviewer line is recorded and not read")
 	// Validated here, at the run-creation boundary, so a malformed, out-of-range,
 	// or unsatisfiable writer budget fails before a durable run exists rather
 	// than stranding one when the daemon later parses the same flag. The daemon
