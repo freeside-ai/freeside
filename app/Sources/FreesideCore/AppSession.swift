@@ -34,6 +34,12 @@ public final class AppSession {
     /// The selected deployment, from the pairing screen on; nil before a
     /// connection and for mock and pairing-demo sessions.
     public var serverURL: URL? { connection?.deploymentURL }
+    /// The ntfy server and topic the daemon publishes this device's
+    /// notifications to, from the stored credential. Nil unless paired.
+    public var ntfySubscription: DeviceNtfySubscription? {
+        guard case .ready = phase else { return nil }
+        return (try? connection?.credentials.load())?.ntfySubscription
+    }
     /// The `-FreesideReadinessDir` whose run the window shows: the launch
     /// connected to the deployment its readiness file named, and the session
     /// has not since selected another. Nil otherwise.

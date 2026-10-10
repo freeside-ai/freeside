@@ -1024,6 +1024,28 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
         #expect(coordinator.store.device.deviceID == "device-7")
     }
 
+    /// The Devices sheet shows the phone where to subscribe, so the session
+    /// reports the stored subscription, and only while paired.
+    @Test func aSessionReportsItsNtfySubscriptionOnlyWhilePaired() throws {
+        let subscription = try #require(
+            DeviceNtfySubscription(
+                serverURL: "https://ntfy.example", topic: "fs-00000000000000000000000000000007"))
+        let paired = AppSession(
+            client: APIClientFactory.mock(),
+            credentials: InMemoryCredentialStore(
+                credential: try #require(
+                    DeviceCredential(
+                        deviceID: "device-7", token: testDeviceToken(for: "device-7"),
+                        ntfySubscription: subscription))),
+            cache: InMemoryCacheStore())
+        #expect(paired.ntfySubscription == subscription)
+
+        let unpaired = AppSession(
+            client: APIClientFactory.mock(), credentials: InMemoryCredentialStore(credential: nil),
+            cache: InMemoryCacheStore())
+        #expect(unpaired.ntfySubscription == nil)
+    }
+
     @Test func changingServerPreservesSavedCredentialsAndDeployment() throws {
         let deploymentURL = URL(string: "http://100.64.0.1:7331")!
         let credential = DeviceCredential(

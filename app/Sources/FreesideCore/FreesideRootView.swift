@@ -233,6 +233,7 @@ public struct FreesideRootView: View {
             DevicesView(
                 model: DevicesModel(
                     coordinator: coordinator,
+                    notificationSubscription: phoneNotificationSubscription,
                     signOut: {
                         try session.rePair(endingPairingOf: coordinator)
                         // The sheet leaves with the synced surface, but the
@@ -308,6 +309,18 @@ public struct FreesideRootView: View {
     ) -> Int {
         pendingCommands + pendingTaskSubmissions
             + taskStops.filter { $0.receipt == nil }.count
+    }
+
+    /// The Devices sheet shows this subscription on the iPhone only: the
+    /// notification's link opens the iPhone app, and the Mac app registers
+    /// no link scheme, so a topic shown there would invite a subscription
+    /// whose notifications open nothing.
+    private var phoneNotificationSubscription: DeviceNtfySubscription? {
+        #if os(iOS)
+            session.ntfySubscription
+        #else
+            nil
+        #endif
     }
 
     /// The confirmation copy. A counted command's delivery is unresolved, not

@@ -51,10 +51,20 @@ final class DevicesModel {
     /// reports a newer one reloads and the model's own read does not.
     private var loadedAtRevision: Int64?
 
+    /// Where this device's notifications are published, shown on its own
+    /// card so the operator can subscribe to it in the ntfy app. Nil on a
+    /// platform that takes no notification link (the Mac). The topic is a
+    /// secret: whoever holds it reads this device's notifications.
+    let notificationSubscription: DeviceNtfySubscription?
+
     /// `signOut` deletes this device's credential and returns to pairing. It
     /// runs only after the daemon confirms this device's own revocation.
-    init(coordinator: SyncCoordinator, signOut: @escaping @MainActor () throws -> Void) {
+    init(
+        coordinator: SyncCoordinator, notificationSubscription: DeviceNtfySubscription? = nil,
+        signOut: @escaping @MainActor () throws -> Void
+    ) {
         self.coordinator = coordinator
+        self.notificationSubscription = notificationSubscription
         self.signOut = signOut
     }
 
