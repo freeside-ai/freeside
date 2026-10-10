@@ -1179,7 +1179,38 @@ func TestGolden(t *testing.T) {
 			StoreManifestDigest:  stageDigest("9"),
 			EffectiveEgress:      goldenRoute.InferenceAuthorities,
 			Attended:             true,
+			SelectionSource:      domain.AgentSelectionSourceLineup,
 		},
+		AdmittedAt: ts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The same admission without a selection source is the body recorded
+	// before the field existed. It must keep the id the golden pinned then,
+	// or every stored agent-bound admission would stop validating.
+	legacyAgentAdmission := agentAdmission
+	legacyBinding := *agentAdmission.AgentBinding
+	legacyBinding.SelectionSource = ""
+	legacyAgentAdmission.AgentBinding = &legacyBinding
+	const legacyAgentAdmissionID = "sha256:30c98a416a17ac8c357accdf8cfca31370765dad9e6dafab9a4e427ad647822c"
+	if id, err := legacyAgentAdmission.ComputeID(); err != nil || id != legacyAgentAdmissionID {
+		t.Fatalf("sourceless agent admission id = %s (%v), want %s", id, err, legacyAgentAdmissionID)
+	}
+	// The task-line variant: the same agent chosen by a task line, which the
+	// binding names by the line's id.
+	taskLineBinding := *agentAdmission.AgentBinding
+	taskLineBinding.SelectionSource = domain.AgentSelectionSourceTaskLine
+	taskLineBinding.SelectionRecordID = taskLine.ID
+	taskLineAdmission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
+		InvocationID: "inv-5", RunID: agentAdmission.RunID, StageID: agentAdmission.StageID, AttemptID: "attempt-5",
+		Backend: agentAdmission.Backend, Capabilities: agentAdmission.Capabilities,
+		OperatingMode: agentAdmission.OperatingMode, CredentialMode: agentAdmission.CredentialMode,
+		EgressProfile: agentAdmission.EgressProfile, ImageRef: agentAdmission.ImageRef,
+		SpecDigest: agentAdmission.SpecDigest, PolicyDigest: agentAdmission.PolicyDigest,
+		InputDigest: agentAdmission.InputDigest, Base: agentAdmission.Base,
+		Workspace: agentAdmission.Workspace, StageInputs: agentAdmission.StageInputs,
+		AuthIdentityID: agentAdmission.AuthIdentityID, AgentBinding: &taskLineBinding,
 		AdmittedAt: ts,
 	})
 	if err != nil {
@@ -1218,6 +1249,7 @@ func TestGolden(t *testing.T) {
 			RouteModelID:         "claude-opus-5-5",
 			RequestedEffort:      domain.EffortMax,
 			NativeEffort:         "max",
+			SelectionSource:      domain.AgentSelectionSourceLineup,
 		},
 		AdmittedAt: ts,
 	})
@@ -1864,6 +1896,7 @@ func TestGolden(t *testing.T) {
 		{"execution_admission_waived", waivedAdmission},
 		{"execution_admission_agent", agentAdmission},
 		{"execution_admission_agent_explicit_model", claudeAdmission},
+		{"execution_admission_task_line", taskLineAdmission},
 		{"adapter_conformance", adapterConformance},
 		{"execution_export", export},
 		{"current_import_start", currentImportStart},

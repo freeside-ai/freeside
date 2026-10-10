@@ -22,6 +22,32 @@ const (
 	admissionCapabilityManifestEncodingVersion = "freeside.execution.admission/v5"
 )
 
+// AgentSelectionSource is which selection chose an admission's agent (plan
+// §5.4, admission step 5): the standing lineup, a task line, or the
+// alternate-agent card for one attempt.
+type AgentSelectionSource string
+
+const (
+	AgentSelectionSourceLineup   AgentSelectionSource = "lineup"
+	AgentSelectionSourceTaskLine AgentSelectionSource = "task_line"
+	AgentSelectionSourceCard     AgentSelectionSource = "card"
+)
+
+// AllAgentSelectionSources lists every valid AgentSelectionSource; it is the
+// single registration point.
+var AllAgentSelectionSources = []AgentSelectionSource{
+	AgentSelectionSourceLineup, AgentSelectionSourceTaskLine, AgentSelectionSourceCard,
+}
+
+func (s AgentSelectionSource) valid() bool {
+	switch s {
+	case AgentSelectionSourceLineup, AgentSelectionSourceTaskLine, AgentSelectionSourceCard:
+		return true
+	default:
+		return false
+	}
+}
+
 // digestPinnedImage binds an image reference to one full lowercase sha256
 // digest, not a tag or a merely digest-shaped prefix.
 var digestPinnedImage = regexp.MustCompile(`^[^\s@]+@sha256:[0-9a-f]{64}$`)
@@ -212,6 +238,13 @@ type AdmissionAgentBinding struct {
 	RouteModelID    string      `json:"route_model_id,omitempty"`
 	RequestedEffort EffortLevel `json:"requested_effort,omitempty"`
 	NativeEffort    string      `json:"native_effort,omitempty"`
+	// SelectionSource is which selection chose the agent (§5.4 admission
+	// step 5), and SelectionRecordID is the task line or card record that
+	// chose it; the lineup has no record beyond LineupRevision. Both are
+	// omitted when empty, so a binding admitted before they existed keeps
+	// its bytes and id and reads as carrying no recorded source.
+	SelectionSource   AgentSelectionSource `json:"selection_source,omitempty"`
+	SelectionRecordID Digest               `json:"selection_record_id,omitempty"`
 }
 
 // Validate reports whether the binding is well-formed.
@@ -257,7 +290,39 @@ func (b AdmissionAgentBinding) Validate() error {
 		return fmt.Errorf("admission agent binding requested_effort %q: %w",
 			b.RequestedEffort, ErrInvalidEffortLevel)
 	}
-	return nil
+	return b.validateSelection()
+}
+
+// validateSelection reports whether the selection source and its record id
+// agree. The switch dispatches on the source and omits default, so a new
+// source's author decides whether it names a record.
+func (b AdmissionAgentBinding) validateSelection() error {
+	// An absent source is a binding admitted before the field existed. It
+	// names no record either: a record id with no source says nothing about
+	// what the record is.
+	if b.SelectionSource == "" {
+		if b.SelectionRecordID != "" {
+			return fmt.Errorf("admission agent binding selection_record_id %q without a selection_source: %w",
+				b.SelectionRecordID, ErrAgentSelectionInconsistent)
+		}
+		return nil
+	}
+	switch b.SelectionSource {
+	case AgentSelectionSourceLineup:
+		if b.SelectionRecordID != "" {
+			return fmt.Errorf("admission agent binding selection_record_id %q under the lineup: %w",
+				b.SelectionRecordID, ErrAgentSelectionInconsistent)
+		}
+		return nil
+	case AgentSelectionSourceTaskLine, AgentSelectionSourceCard:
+		if !contentaddr.Valid(string(b.SelectionRecordID)) {
+			return fmt.Errorf("admission agent binding selection_record_id %q under %q: %w",
+				b.SelectionRecordID, b.SelectionSource, ErrInvalidDigest)
+		}
+		return nil
+	}
+	return fmt.Errorf("admission agent binding selection_source %q: %w",
+		b.SelectionSource, ErrInvalidAgentSelectionSource)
 }
 
 // canonicalAgentBinding detaches the binding from the caller's pointer and

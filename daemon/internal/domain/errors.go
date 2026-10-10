@@ -381,6 +381,10 @@ var (
 		"task line source is not an operator path that may set a line")
 	ErrTaskLineInconsistent = errors.New(
 		"task line id or predecessor does not match its content")
+	ErrInvalidAgentSelectionSource = errors.New(
+		"agent selection source is not lineup, task_line, or card")
+	ErrAgentSelectionInconsistent = errors.New(
+		"agent selection record id does not fit its selection source")
 	ErrLineupShadowOnWardRole = errors.New(
 		"lineup shadow line names a ward role; only a wardless role takes one")
 	ErrLineupShadowLimit = errors.New(
