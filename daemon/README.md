@@ -1754,7 +1754,11 @@ earlier version that carries identity, or with an unknown version, is refused,
 which disables the ledger so every call returns its fallback.
 
 Preflight reports `judgment_configuration` and a secret-free
-`judgment_configuration_digest`. The real-run harness accepts the corresponding
+`judgment_configuration_digest`. Beside it, `judgment_roles` admits every
+judgment role as the daemon's startup check will and lists each role in the
+manifest as `admitted`, `off`, or `unbound`. An unbound role fails preflight
+and is named in the check, so a run finds a missing line before it starts
+instead of running every site of that role on its fail-safe. The real-run harness accepts the corresponding
 `FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN`,
 `FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256`,
 `FREESIDE_REAL_RUN_JUDGMENT_MODEL`, and

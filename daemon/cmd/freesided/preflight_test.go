@@ -16,6 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
+	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -46,6 +47,14 @@ type fakePreflightEnvironment struct {
 	codexCalls           int
 	publicationAuthor    engine.ProductionCommitAuthor
 	agentsError          error
+	judgmentRoles        []inference.RoleCheck
+	judgmentRolesError   error
+}
+
+func (e *fakePreflightEnvironment) CheckJudgmentRoles(
+	context.Context, preflightConfig, judgmentRuntime, time.Time,
+) ([]inference.RoleCheck, error) {
+	return e.judgmentRoles, e.judgmentRolesError
 }
 
 // preflightFixtureAgents is what the fixture's lineup resolves to: the
