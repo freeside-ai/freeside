@@ -1798,6 +1798,14 @@ registered task work, fences new invocations and publication, and asks concrete
 stage, review, verification, and judgment adapters to prove quiescence. An
 attempt has a two-minute wait bound; a timeout records `failed_to_stop` and
 retains WIP. Retries never turn a missing local session into proof of exit.
+A failed attempt is retried with exponential backoff, from one second up to
+256, and its warning is logged again only when the error changes. A stop the
+coverage record can never prove, because the task predates the ownership
+checkpoint or the database epoch differs from the record's, gets one attempt:
+it records `failed_to_stop`, logs one line, and isn't retried in that process
+or after a restart, so a known child whose teardown failed in that attempt
+isn't asked again. A stop whose acknowledgement the store refuses because the
+task's episode, runs, or epoch changed gets one attempt per daemon process.
 Specification question and approval cards route Stop through the same fence;
 #1369 owns task-level client controls.
 
