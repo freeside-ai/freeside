@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -44,6 +45,8 @@ func (f *fakeNtfy) recorded(t *testing.T) []publishRequest {
 type deliveryFixture struct {
 	fixture
 	ntfy *fakeNtfy
+	// server is the fake provider, for a test that takes it away.
+	server *httptest.Server
 }
 
 func newDeliveryFixture(t *testing.T) deliveryFixture {
@@ -85,6 +88,7 @@ func newDeliveryFixture(t *testing.T) deliveryFixture {
 	return deliveryFixture{
 		fixture: fixture{service: service, store: f.store, item: f.item, device: f.device, now: f.now},
 		ntfy:    fake,
+		server:  server,
 	}
 }
 
@@ -631,6 +635,54 @@ func TestSubmitDeliverySurvivesCallerCancellation(t *testing.T) {
 	if stored.Status != domain.DeliveryChannelAccepted {
 		t.Errorf("stored row status = %q, want the acceptance recorded despite the canceled caller", stored.Status)
 	}
+}
+
+// TestSubmitDeliveryErrorsNeverNameTheTopic: a device's topic is a capability
+// and the publish URL ends in it, so no error the pipeline returns may carry
+// either, whatever way the publish failed. net/http quotes the request URL in
+// its transport errors, which is the case this pins: the error keeps the
+// failure's class and drops the rest.
+func TestSubmitDeliveryErrorsNeverNameTheTopic(t *testing.T) {
+	ctx := context.Background()
+	f := newDeliveryFixture(t)
+	if _, err := f.service.SubmitDelivery(ctx, f.item.ID, f.device.ID); err != nil {
+		t.Fatalf("SubmitDelivery: %v", err)
+	}
+	topic := f.ntfy.recorded(t)[0].topic
+	serverURL := f.server.URL
+	host := strings.TrimPrefix(serverURL, "http://")
+
+	assertSilent := func(t *testing.T, err error) {
+		t.Helper()
+		for _, secret := range []string{topic, serverURL, host, secretValue} {
+			if strings.Contains(err.Error(), secret) {
+				t.Errorf("error %q carries %q", err, secret)
+			}
+		}
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			t.Errorf("error still wraps the transport's *url.Error %q", urlErr)
+		}
+	}
+
+	f.ntfy.status = http.StatusTooManyRequests
+	_, err := f.service.SubmitDelivery(ctx, f.item.ID, f.device.ID)
+	if !errors.Is(err, signet.ErrChannelRejected) {
+		t.Fatalf("SubmitDelivery error = %v, want ErrChannelRejected", err)
+	}
+	assertSilent(t, err)
+
+	// The provider goes away: the transport fails before any response.
+	f.server.Close()
+	_, err = f.service.SubmitDelivery(ctx, f.item.ID, f.device.ID)
+	if !errors.Is(err, signet.ErrChannelUnreachable) {
+		t.Fatalf("SubmitDelivery error = %v, want ErrChannelUnreachable", err)
+	}
+	var unreachable *signet.ChannelTransportError
+	if !errors.As(err, &unreachable) || unreachable.Kind != "connection failed" {
+		t.Errorf("transport failure = %+v, want kind %q", unreachable, "connection failed")
+	}
+	assertSilent(t, err)
 }
 
 // TestSubmitDeliveryChannelFailureStaysSubmitted: a provider rejection leaves

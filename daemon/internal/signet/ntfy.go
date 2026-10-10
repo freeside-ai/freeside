@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -48,6 +49,50 @@ func (e *ChannelRejectionError) Error() string {
 // Is lets errors.Is(err, ErrChannelRejected) match the class while errors.As
 // recovers the status.
 func (e *ChannelRejectionError) Is(target error) bool { return target == ErrChannelRejected }
+
+// ErrChannelUnreachable is the class sentinel for a publish that got no
+// response from the channel provider; it is carried by
+// *ChannelTransportError.
+var ErrChannelUnreachable = errors.New("channel could not be reached")
+
+// ChannelTransportError reports a publish that got no HTTP response. Kind is
+// one of a fixed set of descriptions and never the underlying error's text:
+// net/http quotes the request URL in its errors, and that URL ends in the
+// device's topic. A topic is a capability (whoever holds it reads that
+// device's notifications), so it must not reach an error a caller may log.
+type ChannelTransportError struct {
+	Kind string
+}
+
+func (e *ChannelTransportError) Error() string { return "ntfy " + e.Kind }
+
+// Is lets errors.Is(err, ErrChannelUnreachable) match the class.
+func (e *ChannelTransportError) Is(target error) bool { return target == ErrChannelUnreachable }
+
+// transportFailure reduces a failed request to its class. The underlying
+// error is dropped, not wrapped: errors.As on the result must not recover the
+// *url.Error and the publish URL inside it.
+func transportFailure(err error) *ChannelTransportError {
+	var (
+		timeout net.Error
+		dns     *net.DNSError
+		cert    *tls.CertificateVerificationError
+		op      *net.OpError
+	)
+	switch {
+	case errors.Is(err, context.Canceled):
+		return &ChannelTransportError{Kind: "request canceled"}
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &timeout) && timeout.Timeout():
+		return &ChannelTransportError{Kind: "request timed out"}
+	case errors.As(err, &dns):
+		return &ChannelTransportError{Kind: "name lookup failed"}
+	case errors.As(err, &cert):
+		return &ChannelTransportError{Kind: "TLS certificate not verified"}
+	case errors.As(err, &op):
+		return &ChannelTransportError{Kind: "connection failed"}
+	}
+	return &ChannelTransportError{Kind: "request failed"}
+}
 
 // NtfyConfig composes the ntfy channel. BaseURL and TopicKey are required.
 type NtfyConfig struct {
@@ -230,12 +275,14 @@ func (c *ntfyChannel) notificationFor(item domain.AttentionItem, device domain.D
 // publish posts one notification. A 2xx is the provider's acceptance — and
 // nothing stronger: the caller records channel_accepted_at, never
 // "delivered". The response body is drained and discarded, mirroring the
-// publish package's outbound discipline.
+// publish package's outbound discipline. Every error it returns is safe to
+// log: a status code or a failure class, never the publish URL.
 func (c *ntfyChannel) publish(ctx context.Context, n notification) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		strings.TrimRight(c.cfg.BaseURL, "/")+"/"+url.PathEscape(n.topic), strings.NewReader(n.body))
 	if err != nil {
-		return fmt.Errorf("ntfy: build request: %w", err)
+		// net/http quotes the URL here too.
+		return fmt.Errorf("ntfy: %w", &ChannelTransportError{Kind: "request could not be built"})
 	}
 	req.Header.Set("Title", n.title)
 	req.Header.Set("Click", n.click)
@@ -249,7 +296,7 @@ func (c *ntfyChannel) publish(ctx context.Context, n notification) error {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("ntfy: %w", err)
+		return fmt.Errorf("ntfy: %w", transportFailure(err))
 	}
 	defer drainAndClose(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
