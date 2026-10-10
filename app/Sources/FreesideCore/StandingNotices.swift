@@ -85,7 +85,8 @@ struct StandingNotices: View {
 /// module gap apart, pinned while the content scrolls. A column with no
 /// notice to draw is the content alone, at the pane's own margin.
 struct StandingDetailColumn<Content: View>: View {
-    /// Nil where the notices draw in the window's slot instead.
+    /// Nil where the notices draw elsewhere: in the window's slot, or in
+    /// the column an open decision holds beside its inspector.
     let notices: StandingNotices?
     /// The selected content. Its argument is the top margin its first
     /// surface takes under a notice; nil keeps the pane's own.
