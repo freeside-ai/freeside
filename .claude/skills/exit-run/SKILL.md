@@ -108,6 +108,13 @@ with a partial run.
   publication), the approved recipe digest, and for client-target mode the
   manual-submission file. Read the header in this session; it is the
   authority and it changes.
+- **A CLI-mode publication file names the target.** When the spec file is
+  the target's bare canonical issue URL, the publication file must be the
+  client record with `source_issue` set to that same URL
+  (`scripts/run-real-work.sh` header); composition preflight refuses it
+  otherwise. Pass a work-unit file as the fourth argument when the exit
+  condition needs the issue closed: without one the pull request links the
+  issue and does not close it.
 - **Credentials are live:** the Codex reviewer token and the provider auth
   identity. An expired token fails at composition preflight, after
   onboarding and image work are already spent (#1363).
@@ -134,7 +141,10 @@ line what you are about to start, because a run can take an hour and the
 operator needs to know when their step is next.
 
 1. Start `scripts/run-real-work.sh` in the derived mode. Record the session
-   directory, the submission id, and the composition-preflight result.
+   directory, the submission id, and the composition-preflight result. In
+   CLI mode, read any publication warning the harness prints before going
+   on: it says when the pull request will carry no issue reference or will
+   not close the issue.
 2. **Checkpoint: pairing.** Once the daemon is up, pair both clients against
    the active campaign's endpoint (a fresh state root) or confirm both still
    reach the retained root's paired endpoint. A startup code that expires
