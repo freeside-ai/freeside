@@ -142,6 +142,28 @@ func matchingRetainedSubmission(cfg submitCommandConfig) (submitCommandConfig, e
 	return saved, nil
 }
 
+// retainedSubmissionHolds reports whether the recovery journal saved under a
+// submission identity holds this task and an equivalent publication file.
+// Preflight uses it to let a session resume whose inputs a later rule would
+// refuse as new. It exempts nothing at submission: submit still decides
+// against the database whether that identity was accepted.
+func retainedSubmissionHolds(db, id string, task, publication []byte) bool {
+	if db == "" || !validSubmissionID(id) {
+		return false
+	}
+	body, err := os.ReadFile(submissionJournalPath(db, id))
+	if err != nil {
+		return false
+	}
+	var saved submitCommandConfig
+	if err := json.Unmarshal(body, &saved); err != nil || saved.SubmissionID != id {
+		return false
+	}
+	return sameSubmissionInputs(
+		map[string][]byte{"task": saved.SavedInputs["task"], "publication": saved.SavedInputs["publication"]},
+		map[string][]byte{"task": task, "publication": publication})
+}
+
 func sameSubmissionInputs(a, b map[string][]byte) bool {
 	if len(a) != len(b) {
 		return false

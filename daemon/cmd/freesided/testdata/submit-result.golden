@@ -20,5 +20,6 @@
   "attempt_number": 2,
   "attempt_reason": "Retry after repairing the acceptance rig",
   "parent_run_id": "run-parent",
-  "approved_spec_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  "approved_spec_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "source_issue": "https://github.com/example/project/issues/82"
 }

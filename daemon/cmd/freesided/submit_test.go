@@ -107,7 +107,8 @@ func TestSubmitUsageDocumentsResultLanes(t *testing.T) {
 	flags.Usage()
 
 	for _, phrase := range []string{
-		"source submission: source_digest, source_artifact_id, publication_digest",
+		"source submission: source_digest, source_artifact_id, publication_digest,\n    and one of source_issue or source_reference_omitted",
+		"source_reference_omitted gives the reason when the pull request\nwill carry no publisher-written issue reference",
 		"specification_policy_digest, specification_policy_artifact_id",
 		"reserved implementation: implementation_run_id, implementation_invocation_id",
 		"run_id, invocation_id, stage_id, and work_unit_id are",
@@ -138,6 +139,9 @@ func TestSubmitResultGolden(t *testing.T) {
 		CampaignID:        "campaign-golden", AttemptNumber: 2,
 		AttemptReason: "Retry after repairing the acceptance rig", ParentRunID: "run-parent",
 		ApprovedSpecDigest: "sha256:" + domain.Digest(strings.Repeat("d", 64)),
+		// source_reference_omitted is the alternative to source_issue and never
+		// accompanies it; TestSubmitCommandSourceReference pins that field.
+		SourceIssue: "https://github.com/example/project/issues/82",
 	}
 	body, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
@@ -825,6 +829,11 @@ func TestSubmitCommandReplaysMatchingPreSpecificationProductionRun(t *testing.T)
 		TaskPath: taskPath, PolicyPath: policyPath, PublicationPath: publicationPath,
 		ProjectID: "proj-submit",
 	}
+	// This row predates the source-reference rule too: its task is one issue
+	// URL and its publication names none. The run-id lookup must still answer.
+	if err := os.WriteFile(taskPath, []byte("https://github.com/example/project/issues/82\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	spec, err := readSubmissionFile(taskPath)
 	if err != nil {
 		t.Fatal(err)
@@ -921,7 +930,8 @@ func TestSubmitCommandReplaysMatchingPreSpecificationProductionRun(t *testing.T)
 		replay.SpecificationRunID != "" || replay.SpecificationInvocationID != "" ||
 		replay.SpecificationStageID != "" || replay.SourceDigest != specArtifact.Digest ||
 		replay.SourceArtifactID != specArtifact.ID ||
-		replay.SpecificationPolicyDigest != "" || replay.SpecificationPolicyArtifactID != "" {
+		replay.SpecificationPolicyDigest != "" || replay.SpecificationPolicyArtifactID != "" ||
+		replay.SourceIssue != "" || replay.SourceReferenceOmitted != sourceOmittedBeforeRule {
 		t.Fatalf("legacy replay result = %+v", replay)
 	}
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {

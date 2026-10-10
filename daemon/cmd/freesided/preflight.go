@@ -645,7 +645,16 @@ func evaluateComposition(
 		passCheck(manifest, "listener_server_url", "operator server URL exactly names the leased listener")
 	}
 
-	if identityErr != nil {
+	var sourceErr sourceReferenceError
+	if errors.As(identityErr, &sourceErr) {
+		remediation := "correct the publication file's source_issue before submission"
+		if rigErr != nil {
+			// The journal that lets a resumed session through lives under the
+			// rig's database path, which is unknown without the rig.
+			remediation += "; a session that submitted before this rule passes once the rig is available"
+		}
+		failCheck(manifest, "source_implementation_identity", sourceErr.Error(), remediation)
+	} else if identityErr != nil {
 		failCheck(manifest, "source_implementation_identity", "submission inputs could not be interpreted canonically", "correct the specification, policy, publication, or work-unit input")
 	} else {
 		passCheck(manifest, "source_implementation_identity", fmt.Sprintf(
@@ -934,6 +943,16 @@ func inspectCompositionIdentity(ctx context.Context, cfg preflightConfig) (compo
 	}
 	if err := publication.Validate(); err != nil {
 		return compositionIdentity{}, err
+	}
+	// The same refusal submit makes, raised here so the harness stops before
+	// it starts a daemon. An empty identity only inspects a retained legacy
+	// run, and a session that submitted before the rule resumes through this
+	// check with the inputs its journal saved.
+	if cfg.SubmissionID != "" {
+		if _, err := submittedSourceReference(spec.body, publication); err != nil &&
+			!retainedSubmissionHolds(cfg.DBPath, cfg.SubmissionID, spec.body, publicationFile.body) {
+			return compositionIdentity{}, err
+		}
 	}
 	publicationBody, err := json.Marshal(publication)
 	if err != nil {
