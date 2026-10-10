@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -86,7 +85,7 @@ func (t *TaskSubmitter) submit(ctx context.Context, tx *store.WriteTx, in signet
 	}
 	publication := ProductionPublication{
 		Recipe:       recipe,
-		SourceIssue:  canonicalSourceIssue(strings.TrimSpace(string(in.Source))),
+		SourceIssue:  TaskSourceIssue(in.Source),
 		CommitAuthor: init.CommitAuthor,
 	}
 	if err := publication.Validate(); err != nil {

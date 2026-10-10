@@ -266,3 +266,20 @@ func TestCanonicalPublicationSourceIssue(t *testing.T) {
 		}
 	}
 }
+
+func TestTaskSourceIssueTrimsOnlySurroundingWhitespace(t *testing.T) {
+	canonical := "https://github.com/example/project/issues/82"
+	for _, source := range []string{canonical, canonical + "\n", "\n  " + canonical + "\r\n\t"} {
+		if got := TaskSourceIssue([]byte(source)); got != canonical {
+			t.Fatalf("TaskSourceIssue(%q) = %q, want the bare issue URL", source, got)
+		}
+	}
+	for _, source := range []string{
+		"", "Please handle " + canonical, canonical + "\n\nAlso fix the README.",
+		canonical + "\n" + canonical, "https://github.com/example/project/pull/82",
+	} {
+		if got := TaskSourceIssue([]byte(source)); got != "" {
+			t.Fatalf("TaskSourceIssue(%q) = %q, want no source issue", source, got)
+		}
+	}
+}
