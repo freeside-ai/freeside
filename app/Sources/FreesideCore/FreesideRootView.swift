@@ -553,6 +553,7 @@ public struct FreesideRootView: View {
                         launchScope: launchInboxScope,
                         launchProjectID: launchProjectID,
                         navigationPath: rawInboxPathBinding,
+                        linkedItemID: navigation.linkedItemID,
                         onFilterChange: navigation.recordOperatorNavigation,
                         lastUpdatedAt: coordinator.lastUpdatedAt,
                         onRefresh: coordinator.refresh,

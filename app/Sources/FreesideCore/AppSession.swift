@@ -237,7 +237,7 @@ public final class AppSession {
             guard navigation.operatorNavigationRevision == arrival else { return }
             // The wait can outlive the pairing the link arrived under.
             guard case .ready(let current) = phase, current === coordinator else { return }
-            navigation.route(to: .attentionItem(itemID))
+            navigation.route(toLinkedItem: itemID)
         }
     }
 

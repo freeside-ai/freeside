@@ -145,6 +145,7 @@ import Testing
         await opening.value
         #expect(navigation.selectedTab == .inbox)
         #expect(navigation.inboxPath == [Self.itemID])
+        #expect(navigation.linkedItemID == Self.itemID)
         #expect(try await openedAttempts(server) == [1])
     }
 
