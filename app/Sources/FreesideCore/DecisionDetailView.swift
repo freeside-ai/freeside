@@ -950,11 +950,7 @@ struct DecisionDetailView: View {
         case .factBlock:
             factBlocks(item, register: register)
         case .summary:
-            if item._type == .ready_for_final_review {
-                readySummary(item, register: register)
-            } else {
-                agentSummary(composition.summaries(from: item.agent_claims), unverified: register)
-            }
+            agentSummary(item, register: register)
         case .claims:
             if composition.drawsClaimsInCard(
                 at: moduleIndex, on: DecisionCardComposition.UnverifiedContext.currentPlatform)
@@ -1026,98 +1022,72 @@ struct DecisionDetailView: View {
         }
     }
 
+    /// The agent's summary on every card that carries one (#1378, #1461):
+    /// a bounded lead in the agent's own voice, the concerns its report
+    /// marks, and the whole report one disclosure away in place (R3). The
+    /// final review states a missing inline summary; another card without
+    /// one has no summary section.
     @ViewBuilder
     private func agentSummary(
-        _ claims: [Components.Schemas.AgentClaim],
-        unverified: UnverifiedRegister
-    ) -> some View {
-        if !claims.isEmpty {
-            cardSection("Agent summary", unverified: unverified) {
-                ForEach(Array(claims.enumerated()), id: \.offset) { _, claim in
-                    if let text = claim.text {
-                        QuoteBlock {
-                            summaryText(text.content, mediaType: text.media_type)
-                        }
-                    }
-                    SentenceDisclosure(
-                        label: "Source and Original Report",
-                        isExpanded: disclosure(.claimSource(claim))
-                    ) {
-                        fullSummaryReport(
-                            claim,
-                            rendersInteractiveControls: unverified.rendersInteractiveControls
-                        )
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, 8)
-                    }
-                }
-            }
-        }
-    }
-
-    /// The final review's summary (survey card 4b): the agent's account of
-    /// the change in its own voice, and the whole report one disclosure away
-    /// in place (R3).
-    @ViewBuilder
-    private func readySummary(
         _ item: Components.Schemas.AttentionItem, register: UnverifiedRegister
     ) -> some View {
         let claims = DecisionCardComposition.forType(item._type).summaries(from: item.agent_claims)
-        VStack(alignment: .leading, spacing: CardScale.controlGap) {
-            sectionTitle("Agent summary", unverified: register)
-            if claims.isEmpty {
-                Text("Inline summary unavailable. Any retained report is listed with the claim attachments.")
-                    .font(FreesideFont.cardBody)
-                    .foregroundStyle(Color.ink)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            ForEach(Array(claims.enumerated()), id: \.offset) { _, claim in
-                if let text = claim.text {
-                    let presentation = DecisionSummaryPresentation(text)
-                    if presentation.isExcerpt {
-                        Text("Report excerpt (incomplete)")
-                            .font(FreesideFont.cardBody)
-                            .foregroundStyle(Color.ink)
-                    }
-                    QuoteBlock {
-                        VStack(alignment: .leading, spacing: CardScale.moduleGap) {
-                            summaryText(
-                                presentation.lead, mediaType: text.media_type,
-                                font: FreesideFont.statement)
-                            if presentation.isExcerpt {
-                                Text("…").accessibilityLabel("Excerpt ends here")
-                            }
-                            if let concerns = presentation.concerns {
-                                KeywordLabel(text: "Remaining concerns")
-                                summaryText(
-                                    concerns, mediaType: text.media_type,
-                                    font: FreesideFont.statement)
+        let isFinalReview = item._type == .ready_for_final_review
+        if isFinalReview || !claims.isEmpty {
+            VStack(alignment: .leading, spacing: CardScale.controlGap) {
+                sectionTitle("Agent summary", unverified: register)
+                if claims.isEmpty {
+                    Text("Inline summary unavailable. Any retained report is listed with the claim attachments.")
+                        .font(FreesideFont.cardBody)
+                        .foregroundStyle(Color.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                ForEach(Array(claims.enumerated()), id: \.offset) { _, claim in
+                    if let text = claim.text {
+                        let presentation = DecisionSummaryPresentation(text)
+                        if presentation.isExcerpt {
+                            Text("Report excerpt (incomplete)")
+                                .font(FreesideFont.cardBody)
+                                .foregroundStyle(Color.ink)
+                        }
+                        QuoteBlock {
+                            VStack(alignment: .leading, spacing: CardScale.moduleGap) {
+                                DecisionSummaryText(blocks: presentation.leadBlocks)
+                                if presentation.isExcerpt {
+                                    Text("…")
+                                        .font(FreesideFont.summary())
+                                        .accessibilityLabel("Excerpt ends here")
+                                }
+                                if let concerns = presentation.concernBlocks {
+                                    KeywordLabel(text: "Remaining concerns")
+                                    DecisionSummaryText(blocks: concerns)
+                                }
                             }
                         }
-                    }
-                    if presentation.concernsUnknown {
-                        Text(
-                            "Concerns have not been extracted; read the full report. Concerns may be outside this excerpt."
-                        )
-                        .font(FreesideFont.cardBody)
-                        .foregroundStyle(Color.inkDim)
-                        .fixedSize(horizontal: false, vertical: true)
-                    }
-                    SentenceDisclosure(
-                        label: "Full Report",
-                        summary: Self.fullReportSummary(claim, presentation: presentation),
-                        isExpanded: summaryReportExpanded(
-                            DecisionSummaryIdentity(itemID: item.id, claim: claim))
-                    ) {
-                        fullSummaryReport(
-                            claim, rendersInteractiveControls: register.rendersInteractiveControls
-                        )
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        if presentation.concernsUnknown {
+                            Text(
+                                "Concerns have not been extracted; read the full report. Concerns may be outside this excerpt."
+                            )
+                            .font(FreesideFont.cardBody)
+                            .foregroundStyle(Color.inkDim)
+                            .fixedSize(horizontal: false, vertical: true)
+                        }
+                        SentenceDisclosure(
+                            label: isFinalReview ? "Full Report" : "Source and Original Report",
+                            summary: Self.fullReportSummary(claim, presentation: presentation),
+                            isExpanded: summaryReportExpanded(
+                                DecisionSummaryIdentity(itemID: item.id, claim: claim))
+                        ) {
+                            fullSummaryReport(
+                                claim, rendersInteractiveControls: register.rendersInteractiveControls
+                            )
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func summaryReportExpanded(_ identity: DecisionSummaryIdentity) -> Binding<Bool> {
@@ -1151,20 +1121,20 @@ struct DecisionDetailView: View {
                 .font(FreesideFont.cardBody).textSelection(.enabled)
             AttachmentRow(
                 label: "Original report", digest: claim.digest, metadata: claim.metadata, attachments: attachments,
-                loadsAttachments: false, text: claim.text, rendersInteractiveControls: rendersInteractiveControls)
+                loadsAttachments: false, text: claim.text, drawsTextAsSummary: true,
+                rendersInteractiveControls: rendersInteractiveControls)
         }
     }
 
-    private func summaryText(
-        _ content: String, mediaType: Components.Schemas.ClaimText.media_typePayload,
-        font: Font = FreesideFont.callout
+    private func claimText(
+        _ content: String, mediaType: Components.Schemas.ClaimText.media_typePayload
     ) -> some View {
         let attributed =
             mediaType == .text_sol_markdown
             ? try? AttributedString(
                 markdown: content, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) : nil
         return Text(attributed ?? AttributedString(content))
-            .font(font)
+            .font(FreesideFont.callout)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1227,21 +1197,36 @@ struct DecisionDetailView: View {
                 if !reason.isAgentWritten {
                     KeywordLabel(text: reason.label)
                 }
-                reasonText(reason, color: .inkDim, register: register)
+                reasonText(
+                    reason, color: .inkDim, register: register,
+                    isSummary: DecisionCardComposition.reasonIsAgentSummary(item._type))
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
+    /// `isSummary` marks a reason that is the agent's Markdown summary (a
+    /// specification approval's), which Details draw as the card draws the
+    /// summary and in full; every other reason is a sentence as written.
     @ViewBuilder
     private func reasonText(
-        _ reason: DecisionCardComposition.Reason, color: Color, register: UnverifiedRegister
+        _ reason: DecisionCardComposition.Reason, color: Color, register: UnverifiedRegister,
+        isSummary: Bool = false
     ) -> some View {
-        let text = Text(reason.text)
-            .font(FreesideFont.callout)
-            .foregroundStyle(color)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        let text = Group {
+            if isSummary {
+                DecisionSummaryText(
+                    blocks: DecisionSummaryPresentation.blocks(
+                        .init(media_type: .text_sol_markdown, content: reason.text)),
+                    color: color)
+            } else {
+                Text(reason.text)
+                    .font(FreesideFont.callout)
+                    .foregroundStyle(color)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
         if reason.isAgentWritten {
             QuoteBlock(
                 producer: reason.label, carriesInfo: register.carriesInfo,
@@ -1856,7 +1841,7 @@ struct DecisionDetailView: View {
         rendersInteractiveControls: Bool
     ) -> some View {
         QuoteBlock {
-            summaryText(text.content, mediaType: text.media_type)
+            claimText(text.content, mediaType: text.media_type)
         }
         SentenceDisclosure(
             label: "Source and Supporting Details",
@@ -3035,6 +3020,9 @@ struct DecisionDetailView: View {
         let attachments: AttachmentLoader
         let loadsAttachments: Bool
         var text: Components.Schemas.ClaimText? = nil
+        /// Draws `text` as the card draws an agent summary, its Markdown as
+        /// blocks, where the row is that summary's original report.
+        var drawsTextAsSummary = false
         var rendersInteractiveControls = true
         /// Draws the row in its own 1pt box, as the inspector lists its
         /// attachments (frame 6.9). A row inside a card section or a
@@ -3060,7 +3048,9 @@ struct DecisionDetailView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(label)
                     .font(FreesideFont.sans(.callout, weight: .semibold))
-                if let text {
+                if let text, drawsTextAsSummary {
+                    DecisionSummaryText(blocks: DecisionSummaryPresentation.blocks(text))
+                } else if let text {
                     // No accessibility override: VoiceOver must hear the
                     // content, and the visible label already names the claim.
                     claimText(text)
