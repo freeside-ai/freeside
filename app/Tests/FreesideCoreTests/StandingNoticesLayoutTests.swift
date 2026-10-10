@@ -134,6 +134,83 @@
             #expect(column.appearances == 1)
         }
 
+        /// An open decision holds the notices itself, inside the view its
+        /// inspector attaches to. The inspector spans only that view, so it
+        /// reaches the pane's top beside the notices instead of starting
+        /// under them, and the card's scroll view starts under the notices
+        /// in the column the inspector leaves.
+        @Test func anOpenInspectorSpansThePaneBesideTheNotices() throws {
+            let pane = CGRect(x: 0, y: 0, width: 1_100, height: 640)
+            let stopped = notices(.unreachable, stopped: true)
+            #expect(stopped.isShowing(at: .now))
+
+            let margin = Scale.paneMargin(compact: false)
+            for held in [nil, stopped] {
+                let detail = try #require(openDecisionFrames(pane: pane, notices: held))
+                #expect(detail.split == pane)
+                #expect(detail.inspector.height == pane.height)
+                #expect(detail.inspector.maxX == pane.maxX)
+                // Wide enough that the inspector leaves the card its cap.
+                #expect(detail.inspector.minX >= margin.leading + Scale.cardWidth + margin.trailing)
+
+                // Window coordinates run up from the pane's bottom, so the
+                // space over the scroll view is what the notices take.
+                let overScroll = pane.maxY - detail.scroll.maxY
+                if let held {
+                    let stack = try #require(noticesHeight(held, paneWidth: detail.inspector.minX))
+                    #expect(overScroll == margin.top - Scale.moduleGap + stack)
+                } else {
+                    #expect(overScroll == 0)
+                }
+            }
+        }
+
+        /// The frames, in a borderless window the size of `pane`, of the
+        /// split view AppKit builds over the view an open decision's
+        /// inspector modifies, of the inspector, and of the card's scroll
+        /// view beside it.
+        private func openDecisionFrames(
+            pane: CGRect, notices: StandingNotices?
+        ) -> (split: CGRect, inspector: CGRect, scroll: CGRect)? {
+            _ = FreesideFont.registration
+            let snapshot = AttentionFixtures.fixture(type: .system_health)
+            let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+            store.replaceAll(with: [snapshot])
+            let detail = DecisionDetailView(
+                store: store, itemID: snapshot.item.id,
+                loadsAttachments: false, showsValidationProgress: false,
+                now: AttentionFixtures.createdInstant,
+                inspectorPresented: .constant(true), standingNotices: notices)
+
+            let host = NSHostingView(rootView: detail)
+            let window = NSWindow(
+                contentRect: pane, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.contentView = host
+            // The inspector is the trailing item of the split view.
+            func inspectorSplit(in view: NSView) -> NSSplitView? {
+                if let split = view as? NSSplitView, split.arrangedSubviews.count == 2 { return split }
+                return view.subviews.lazy.compactMap(inspectorSplit).first
+            }
+            func scrollView(in view: NSView) -> NSScrollView? {
+                if let scroll = view as? NSScrollView { return scroll }
+                return view.subviews.lazy.compactMap(scrollView).first
+            }
+            let deadline = Date().addingTimeInterval(5)
+            while inspectorSplit(in: host) == nil, Date() < deadline {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+                host.layoutSubtreeIfNeeded()
+            }
+            guard let split = inspectorSplit(in: host) else { return nil }
+            host.layoutSubtreeIfNeeded()
+            let inspector = split.arrangedSubviews[1]
+            guard let scroll = scrollView(in: split.arrangedSubviews[0]) else { return nil }
+            return (
+                split.convert(split.bounds, to: nil),
+                inspector.convert(inspector.bounds, to: nil),
+                scroll.convert(scroll.bounds, to: nil)
+            )
+        }
+
         private func notices(
             _ freshness: InboxStore.Freshness, lastUpdatedAt: Date? = nil,
             stopped: Bool = false, saveWarning: String? = nil

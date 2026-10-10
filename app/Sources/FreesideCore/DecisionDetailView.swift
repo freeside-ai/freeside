@@ -112,9 +112,10 @@ struct DecisionDetailView: View {
     private let launchComposer: LaunchInputs.Composer?
     private let onConsumeLaunchComposer: () -> Void
     private let externalInspectorPresented: Binding<Bool>?
-    /// The gap above the card where a standing notice sits over it. Nil
-    /// keeps the detail column's top margin.
-    private let topMargin: CGFloat?
+    /// The standing notices this detail draws over its card on the Mac,
+    /// where it holds them in place of the detail column so its inspector
+    /// stands beside them. Nil where they draw in the window's slot.
+    private let standingNotices: StandingNotices?
     private let onSelectItem: (String) -> Void
 
     @MainActor
@@ -136,7 +137,7 @@ struct DecisionDetailView: View {
         now: Date = .now,
         sectionPreferences: DecisionSectionPreferences? = nil,
         inspectorPresented: Binding<Bool>? = nil,
-        topMargin: CGFloat? = nil,
+        standingNotices: StandingNotices? = nil,
         onSelectItem: @escaping (String) -> Void = { _ in },
         onConclusion: @escaping @MainActor (DecisionConclusion) -> Void = { _ in }
     ) {
@@ -161,7 +162,7 @@ struct DecisionDetailView: View {
         self.launchComposer = launchComposer
         self.onConsumeLaunchComposer = onConsumeLaunchComposer
         externalInspectorPresented = inspectorPresented
-        self.topMargin = topMargin
+        self.standingNotices = standingNotices
         self.onSelectItem = onSelectItem
         self.graphics = graphics
         self.loadsAttachments = loadsAttachments
@@ -170,7 +171,7 @@ struct DecisionDetailView: View {
     }
 
     var body: some View {
-        platformBody(
+        platformBody { topMargin in
             Group {
                 if let snapshot = model.snapshot {
                     ScrollViewReader { scrollProxy in
@@ -367,7 +368,7 @@ struct DecisionDetailView: View {
                     return .handled
                 }
             #endif
-        )
+        }
     }
 
     private var inspectorBinding: Binding<Bool> {
@@ -434,10 +435,15 @@ struct DecisionDetailView: View {
         }
     #endif
 
+    /// Hosts the detail's content, which takes the top margin its card
+    /// draws under: a module gap below a standing notice, nil for the
+    /// pane's own.
     @ViewBuilder
-    private func platformBody<Content: View>(_ content: Content) -> some View {
+    private func platformBody<Content: View>(
+        @ViewBuilder _ content: @escaping (CGFloat?) -> Content
+    ) -> some View {
         #if os(iOS)
-            content.safeAreaInset(edge: .bottom, spacing: 0) {
+            content(nil).safeAreaInset(edge: .bottom, spacing: 0) {
                 // The same ranking gate the card's own recommendation block
                 // uses: the served action surface decides what this client may
                 // submit, so a stored recommendation the surface no longer
@@ -462,7 +468,12 @@ struct DecisionDetailView: View {
                 }
             }
         #else
-            content
+            // The notices stack over the card inside the view the inspector
+            // attaches to. An inspector spans only the view it modifies, so
+            // notices stacked above this detail left a strip of the pane's
+            // ground over the inspector; here it is a column beside both for
+            // the pane's whole height, and narrows a notice with its card.
+            StandingDetailColumn(notices: standingNotices, content: content)
                 .inspector(isPresented: inspectorBinding) {
                     if let item = model.snapshot?.item {
                         Group {

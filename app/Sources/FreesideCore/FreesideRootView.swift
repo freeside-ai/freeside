@@ -415,10 +415,16 @@ public struct FreesideRootView: View {
                     DecisionFeedbackBanner(
                         feedback: feedback,
                         onView: viewConcludedItem)
-                    StandingDetailColumn(
-                        notices: standingNoticesDrawInDetailColumn
-                            ? standingNotices(coordinator, placement: .detailColumn) : nil
-                    ) { topMargin in
+                    let notices =
+                        standingNoticesDrawInDetailColumn
+                        ? standingNotices(coordinator, placement: .detailColumn) : nil
+                    // An open decision draws the notices itself, beside its
+                    // inspector, so the inspector spans the pane's height
+                    // instead of starting under them. Every other surface
+                    // takes them from the column.
+                    let decisionIsOpen =
+                        selectedTab.wrappedValue == .inbox && attentionSelection.wrappedValue != nil
+                    StandingDetailColumn(notices: decisionIsOpen ? nil : notices) { topMargin in
                         Group {
                             if Self.showsRevokedPane(
                                 freshness: coordinator.store.freshness,
@@ -435,7 +441,8 @@ public struct FreesideRootView: View {
                                     attentionSelection: attentionSelection.wrappedValue,
                                     taskSelection: taskSelection.wrappedValue,
                                     runSelection: navigation.runSelection,
-                                    topMargin: topMargin)
+                                    topMargin: topMargin,
+                                    decisionNotices: notices)
                             }
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -664,10 +671,14 @@ public struct FreesideRootView: View {
             attentionSelection: String?,
             taskSelection: String?,
             runSelection: String?,
-            topMargin: CGFloat?
+            topMargin: CGFloat?,
+            decisionNotices: StandingNotices?
         ) -> some View {
             switch screen {
             case .inbox:
+                // The detail closure's `decisionIsOpen` names this branch:
+                // the column gives up the notices exactly when this view
+                // draws them, so a condition added here belongs there too.
                 if let attentionSelection {
                     DecisionDetailView(
                         store: coordinator.store,
@@ -678,7 +689,7 @@ public struct FreesideRootView: View {
                         launchComposer: navigation.launchComposer(for: attentionSelection),
                         onConsumeLaunchComposer: navigation.consumeLaunchComposer,
                         inspectorPresented: Bindable(navigation).inspectorPresented,
-                        topMargin: topMargin,
+                        standingNotices: decisionNotices,
                         onSelectItem: { navigation.route(to: .attentionItem($0)) },
                         onConclusion: { conclusion in
                             handleConclusion(conclusion, coordinator: coordinator)
