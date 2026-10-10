@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"reflect"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -116,6 +117,9 @@ func runSubmitMain(args []string) {
 	runID := flags.String("run-id", "", "lookup-only legacy implementation run id; never creates work")
 	submissionID := flags.String("submission-id", "", "prepared identity for new work (otherwise generated and saved before submission)")
 	retrySubmissionID := flags.String("retry-submission-id", "", "manually retry a saved submission using its original inputs")
+	var taskLines taskLineFlag
+	flags.Var(&taskLines, "task-line", "record this task's agent choice for one role, as role=agent (repeatable; roles: "+
+		taskLineRoleList()+"); admission does not read task lines yet, so the lineup still selects every agent")
 	// Validated here, at the run-creation boundary, so a malformed, out-of-range,
 	// or unsatisfiable writer budget fails before a durable run exists rather
 	// than stranding one when the daemon later parses the same flag. The daemon
@@ -141,6 +145,7 @@ func runSubmitMain(args []string) {
 		CompositionPath:    *compositionPath,
 		RequireComposition: *requireComposition,
 		ProjectID:          domain.ProjectID(*projectID), RunID: domain.RunID(*runID),
+		TaskLines: taskLines,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "freesided:", err)
@@ -165,6 +170,35 @@ type submitCommandConfig struct {
 	RequireComposition bool
 	ProjectID          domain.ProjectID
 	RunID              domain.RunID
+	// TaskLines are the operator's per-role agent choices (plan §5.4), in
+	// canonical role order once runSubmitCommand has checked them. The
+	// recovery journal is this struct's JSON, so a manual retry replays the
+	// saved choice; the tag omits the field when there are none, which keeps
+	// a line-less journal the bytes it was before the field existed.
+	TaskLines []domain.TaskLineChoice `json:",omitempty"`
+}
+
+// taskLineFlag collects repeated --task-line role=agent values. It checks
+// only the role=agent form; runSubmitCommand validates the set.
+type taskLineFlag []domain.TaskLineChoice
+
+func (f *taskLineFlag) String() string { return "" }
+
+func (f *taskLineFlag) Set(value string) error {
+	role, agent, found := strings.Cut(value, "=")
+	if !found || role == "" || agent == "" {
+		return errors.New("want role=agent")
+	}
+	*f = append(*f, domain.TaskLineChoice{Role: domain.RoleName(role), Agent: agent})
+	return nil
+}
+
+func taskLineRoleList() string {
+	roles := make([]string, len(domain.TaskLineRoles))
+	for i, role := range domain.TaskLineRoles {
+		roles[i] = string(role)
+	}
+	return strings.Join(roles, ", ")
 }
 
 // submittedWorkUnit is the --work-unit file's wire shape: exactly the §5.18
@@ -230,6 +264,11 @@ type submitApplyRequest struct {
 	SpecificationRunID    domain.RunID
 	CampaignID            domain.CampaignID
 	CompositionDigest     domain.Digest
+	// TaskLines are the operator's per-role agent choices, in canonical role
+	// order. Omitted when there are none, so a line-less request is the
+	// bytes a daemon that predates the field accepts; that daemon's strict
+	// decode refuses a request that carries lines and never drops them.
+	TaskLines []domain.TaskLineChoice `json:",omitempty"`
 }
 
 // readSubmissionFile hashes one input file under the size cap. The digest is
@@ -266,7 +305,14 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 	if cfg.CompositionPath != "" && cfg.RunID != "" {
 		return submitResult{}, errors.New("submit: --run-id cannot override production composition identity")
 	}
-	var err error
+	// The lines are checked and put in canonical role order before anything
+	// is saved or compared, so the journal, the fingerprint, and a repeated
+	// request all see one form of the same set.
+	lines, err := domain.CanonicalTaskLineChoices(cfg.TaskLines)
+	if err != nil {
+		return submitResult{}, fmt.Errorf("submit: --task-line: %w", err)
+	}
+	cfg.TaskLines = lines
 	cfg, err = prepareSubmission(cfg)
 	if err != nil {
 		return submitResult{}, err
@@ -470,6 +516,7 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		Keys: keys, WorkUnit: workUnit, ResolvedPolicy: resolvedPolicy,
 		ImplementationRunID: implementationRunID, SpecificationRunID: specificationRunID,
 		CampaignID: campaignID, CompositionDigest: composition.digest,
+		TaskLines: cfg.TaskLines,
 	}
 	handle, client, err := openCommandStore(ctx, cfg.DBPath, store.Options{}, storeMigrating)
 	if err != nil {
@@ -552,10 +599,15 @@ func applySubmission(ctx context.Context, st *store.Store, blobs *signet.BlobSto
 
 	var manual *domain.ManualSubmission
 	if cfg.RunID == "" {
+		// The task lines join the fingerprint so a submission identity names
+		// one choice of agents. They are omitted when there are none, which
+		// keeps a line-less submission's digest what it was before the field
+		// existed, so one recorded then still replays.
 		fingerprint, err := json.Marshal(struct {
 			Project                                            domain.ProjectID
 			Source, Policy, Publication, WorkUnit, Composition domain.Digest
-		}{cfg.ProjectID, spec.digest, policyDigest, publicationFile.digest, workUnitDigest, composition.digest})
+			TaskLines                                          []domain.TaskLineChoice `json:",omitempty"`
+		}{cfg.ProjectID, spec.digest, policyDigest, publicationFile.digest, workUnitDigest, composition.digest, req.TaskLines})
 		if err != nil {
 			return submitResult{}, err
 		}
@@ -646,7 +698,13 @@ func applySubmission(ctx context.Context, st *store.Store, blobs *signet.BlobSto
 		if submitErr == nil && replay {
 			return lookupComplete // A replay never commits a write.
 		}
-		return submitErr
+		if submitErr != nil {
+			return submitErr
+		}
+		// Only the submission that creates the task records its lines, in the
+		// same transaction: a replay returned above, so a retry appends no
+		// second version.
+		return recordSubmittedTaskLines(ctx, tx, submitted.Run.TaskID, req.TaskLines, "cli:"+cfg.SubmissionID)
 	})
 	if err != nil && !errors.Is(err, lookupComplete) {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
@@ -679,7 +737,42 @@ func applySubmission(ctx context.Context, st *store.Store, blobs *signet.BlobSto
 	return result, nil
 }
 
+// recordSubmittedTaskLines appends the operator's lines to the task a CLI
+// submission just created. Each line is set when its task is created.
+func recordSubmittedTaskLines(
+	ctx context.Context, tx *store.WriteTx, taskID domain.TaskID, lines []domain.TaskLineChoice, setBy string,
+) error {
+	if len(lines) == 0 {
+		return nil
+	}
+	task, err := tx.GetTask(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	for _, line := range lines {
+		if _, err := tx.AppendTaskLine(ctx, domain.TaskLineInput{
+			TaskID: taskID, Role: line.Role, Agent: line.Agent,
+			Source: domain.TaskLineSourceCLISubmit, SetBy: setBy,
+		}, task.CreatedAt); err != nil {
+			return fmt.Errorf("record task line: %w", err)
+		}
+	}
+	return nil
+}
+
 func validateSubmitApply(req submitApplyRequest) error {
+	// The request crossed the control socket, so its lines are checked again
+	// here and must already be in the canonical form the fingerprint digests.
+	lines, err := domain.CanonicalTaskLineChoices(req.TaskLines)
+	if err != nil {
+		return err
+	}
+	if !slices.Equal(lines, req.TaskLines) {
+		return errors.New("task lines are not in canonical role order")
+	}
+	if req.LegacyRunID != "" && len(req.TaskLines) != 0 {
+		return errors.New("a legacy run lookup carries no task lines")
+	}
 	if len(req.SpecBody) == 0 || len(req.SpecBody) > maxSubmissionFileBytes ||
 		len(req.PolicyBody) == 0 || len(req.PolicyBody) > maxSubmissionFileBytes ||
 		submissionBytes(req.SpecBody).digest != req.SpecDigest ||
