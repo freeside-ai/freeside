@@ -544,6 +544,16 @@ type config struct {
 	// rein resolver and workflow-definition parsing that populate it are a later
 	// unit, so a composition (or a test) supplies them directly for now.
 	IntakeInitiators []intakeInitiator
+	// AttentionDeliveryInterval is how often the daemon sends the
+	// notifications it owes paired devices (#1924). Zero leaves the sender
+	// off, so a test that pairs a device neither publishes to the hosted
+	// default server nor has its items' versions move under it.
+	//
+	// The freesided command leaves it zero too, until #1946: an accepted
+	// notification raises its item's version, and engine work bound to the
+	// exact version (a pending discuss intent, for one) then fails its
+	// binding check and stops the daemon durably.
+	AttentionDeliveryInterval time.Duration
 	// Logger is the process logger the long-running loops report through.
 	// Nil discards their records, which keeps every test composition quiet
 	// without each one having to build a handler.
@@ -657,6 +667,25 @@ type readiness struct {
 
 type sessionCloser interface {
 	Close(context.Context) error
+}
+
+// reportAttentionDelivery logs one thing the notification sender could not
+// do. A send that failed is a warning with its item, device, and attempt; the
+// provider being down is ordinary, and the sender retries on its own
+// schedule. The error names a status code or a failure class and never the
+// device's topic (signet.ChannelTransportError).
+func reportAttentionDelivery(logger *slog.Logger, err error) {
+	if logger == nil {
+		return
+	}
+	var failure *signet.DeliveryFailure
+	if errors.As(err, &failure) {
+		logger.Warn("phone notification not sent",
+			"item_id", failure.ItemID, "device_id", failure.DeviceID,
+			"attempt", failure.Attempt, "last_attempt", failure.Final, "error", failure.Err)
+		return
+	}
+	logger.Warn("phone notification pass failed", "error", err)
 }
 
 type daemon struct {
@@ -1389,6 +1418,25 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		defer d.wg.Done()
 		d.componentExited(parent, ctx, componentLocalBackups, localBackups.Run(ctx))
 	}()
+	if cfg.AttentionDeliveryInterval > 0 {
+		d.wg.Add(1)
+		go func() {
+			defer d.wg.Done()
+			err := attention.RunDeliveries(ctx, cfg.AttentionDeliveryInterval, func(err error) {
+				reportAttentionDelivery(cfg.Logger, err)
+			})
+			if errors.Is(err, signet.ErrNotifierUnavailable) {
+				// A channel that cannot publish is a daemon without
+				// notifications, not a failed component: pairing already
+				// fails closed on the same check, and the inbox still works.
+				if cfg.Logger != nil {
+					cfg.Logger.Warn("phone notifications are off", "error", err)
+				}
+				return
+			}
+			d.componentExited(parent, ctx, componentAttentionDeliveries, err)
+		}()
+	}
 	defer func() {
 		if !success {
 			if stop != nil {
