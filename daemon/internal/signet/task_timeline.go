@@ -55,131 +55,149 @@ type taskTimelineInput struct {
 // store revision, using the same trust gates as GetRunTimeline.
 func (s *Service) GetTaskTimeline(ctx context.Context, id domain.TaskID) (TaskTimeline, error) {
 	var out TaskTimeline
-	taskLoaded := false
 	err := s.store.Read(ctx, func(tx *store.ReadTx) error {
-		state, err := tx.ServerState(ctx)
-		if err != nil {
-			return err
-		}
-		if err := validateServerState(state); err != nil {
-			return err
-		}
-		snapshot, err := tx.GetTaskSnapshot(ctx, id)
-		if err != nil {
-			return err
-		}
-		taskLoaded = true
-		if err := validateSnapshot(state, snapshot.Snapshot); err != nil {
-			return err
-		}
-		task := snapshot.Value
-		names, err := tx.DisplayNamesFor(ctx, task.ProjectID, domain.Subject{Type: domain.SubjectTask, ID: domain.SubjectID(id), TaskID: &id})
-		if err != nil {
-			return err
-		}
-		task.Name = names.Task
-		ids, err := tx.TaskRunIDs(ctx, id)
-		if err != nil {
-			return err
-		}
-		// Enumerate from durable runs as well as the task index. Selecting
-		// only indexed rows would hide a run whose reverse edge was lost.
-		runs, err := tx.ListRuns(ctx)
-		if err != nil {
-			return err
-		}
-		runsByID := make(map[domain.RunID]store.Snapshotted[domain.Run], len(ids))
-		for _, run := range runs {
-			if run.Value.TaskID == id {
-				runsByID[run.Value.ID] = run
-			}
-		}
-		if len(runsByID) != len(ids) {
-			return fmt.Errorf("task run membership: %w", ErrRunObservationIntegrity)
-		}
-		items, err := tx.ListAttentionItems(ctx)
-		if err != nil {
-			return err
-		}
-		inputs := make([]taskTimelineInput, 0, len(ids))
-		for _, runID := range ids {
-			run, ok := runsByID[runID]
-			if !ok {
-				return fmt.Errorf("task run %s is unavailable: %w", runID, ErrRunObservationIntegrity)
-			}
-			if err := validateSnapshot(state, run.Snapshot); err != nil {
-				return err
-			}
-			observation, err := tx.ObserveRun(ctx, runID)
-			if err != nil {
-				return err
-			}
-			if err := authenticateRunObservation(ctx, tx, state, run.Value, observation, items); err != nil {
-				return asRunObservationIntegrityError(err)
-			}
-			observation = withAuthoritativeInvocationStatuses(observation)
-			facts, err := runProjectionFactsFor(ctx, tx, run.Value, observation)
-			if err != nil {
-				return asRunObservationIntegrityError(err)
-			}
-			facts.review, err = runReviewFacts(ctx, tx, runID, observation.Invocations)
-			if err != nil {
-				return asRunObservationIntegrityError(err)
-			}
-			input := taskTimelineInput{run: run.Value, observation: observation, facts: facts}
-			for _, storedItem := range items {
-				item := storedItem.Value
-				if item.Type != domain.AttentionReadyForFinalReview || item.Subject.RunID == nil || *item.Subject.RunID != runID {
-					continue
-				}
-				if item.ProjectID != task.ProjectID || (item.Subject.TaskID != nil && *item.Subject.TaskID != task.ID) {
-					return ErrRunObservationIntegrity
-				}
-				if item.CreatedAt == nil || item.ReadinessDetail == nil || item.Readiness == nil {
-					continue
-				}
-				authenticated, err := taskTimelineReadinessBinding(ctx, tx, runID, item.ID)
-				if err != nil {
-					return asRunObservationIntegrityError(err)
-				}
-				if !authenticated {
-					continue
-				}
-				input.readiness = append(input.readiness, item)
-			}
-			if run.Value.CampaignID != "" {
-				attempt, err := tx.GetProductionAttempt(ctx, run.Value.CampaignID, run.Value.AttemptNumber)
-				if err != nil {
-					return err
-				}
-				// Initial approval and implementation submission commit together.
-				// Retry reservations can legitimately precede their runs.
-				if attempt.AttemptNumber == 1 && attempt.ApprovedSpecDigest != "" {
-					if _, ok := runsByID[attempt.ImplementationRunID]; !ok {
-						return fmt.Errorf("approved campaign %s lacks implementation run %s: %w",
-							attempt.CampaignID, attempt.ImplementationRunID, ErrRunObservationIntegrity)
-					}
-				}
-				input.attempt = &attempt
-			}
-			input.prBinding, err = taskTimelinePRBinding(ctx, tx, runID)
-			if err != nil {
-				return err
-			}
-			inputs = append(inputs, input)
-		}
-		out, err = taskTimeline(task, inputs, state.Revision, time.Now().UTC())
+		var err error
+		out, err = ReadTaskTimeline(ctx, tx, id, time.Now().UTC())
 		return err
 	})
 	if err != nil {
-		// After reconstructing the task, missing required history is corrupt
-		// state rather than an absent requested resource.
-		if taskLoaded && store.IsRowVerdict(err) {
-			err = fmt.Errorf("task history: %w: %w", ErrRunObservationIntegrity, err)
-		}
 		return TaskTimeline{}, fmt.Errorf("get task %q timeline: %w", id, err)
 	}
 	return out, nil
+}
+
+// ReadTaskTimeline is GetTaskTimeline's read in the caller's transaction, so
+// a caller can read the timeline and other facts under one store revision,
+// and can read it with no Service. asOf stamps the result.
+func ReadTaskTimeline(ctx context.Context, tx *store.ReadTx, id domain.TaskID, asOf time.Time) (TaskTimeline, error) {
+	state, err := tx.ServerState(ctx)
+	if err != nil {
+		return TaskTimeline{}, err
+	}
+	if err := validateServerState(state); err != nil {
+		return TaskTimeline{}, err
+	}
+	snapshot, err := tx.GetTaskSnapshot(ctx, id)
+	if err != nil {
+		return TaskTimeline{}, err
+	}
+	out, err := loadedTaskTimeline(ctx, tx, state, snapshot, asOf)
+	if err != nil {
+		// After reconstructing the task, missing required history is corrupt
+		// state rather than an absent requested resource.
+		if store.IsRowVerdict(err) {
+			err = fmt.Errorf("task history: %w: %w", ErrRunObservationIntegrity, err)
+		}
+		return TaskTimeline{}, err
+	}
+	return out, nil
+}
+
+func loadedTaskTimeline(
+	ctx context.Context, tx *store.ReadTx, state store.ServerState,
+	snapshot store.Snapshotted[domain.Task], asOf time.Time,
+) (TaskTimeline, error) {
+	id := snapshot.Value.ID
+	if err := validateSnapshot(state, snapshot.Snapshot); err != nil {
+		return TaskTimeline{}, err
+	}
+	task := snapshot.Value
+	names, err := tx.DisplayNamesFor(ctx, task.ProjectID, domain.Subject{Type: domain.SubjectTask, ID: domain.SubjectID(id), TaskID: &id})
+	if err != nil {
+		return TaskTimeline{}, err
+	}
+	task.Name = names.Task
+	ids, err := tx.TaskRunIDs(ctx, id)
+	if err != nil {
+		return TaskTimeline{}, err
+	}
+	// Enumerate from durable runs as well as the task index. Selecting
+	// only indexed rows would hide a run whose reverse edge was lost.
+	runs, err := tx.ListRuns(ctx)
+	if err != nil {
+		return TaskTimeline{}, err
+	}
+	runsByID := make(map[domain.RunID]store.Snapshotted[domain.Run], len(ids))
+	for _, run := range runs {
+		if run.Value.TaskID == id {
+			runsByID[run.Value.ID] = run
+		}
+	}
+	if len(runsByID) != len(ids) {
+		return TaskTimeline{}, fmt.Errorf("task run membership: %w", ErrRunObservationIntegrity)
+	}
+	items, err := tx.ListAttentionItems(ctx)
+	if err != nil {
+		return TaskTimeline{}, err
+	}
+	inputs := make([]taskTimelineInput, 0, len(ids))
+	for _, runID := range ids {
+		run, ok := runsByID[runID]
+		if !ok {
+			return TaskTimeline{}, fmt.Errorf("task run %s is unavailable: %w", runID, ErrRunObservationIntegrity)
+		}
+		if err := validateSnapshot(state, run.Snapshot); err != nil {
+			return TaskTimeline{}, err
+		}
+		observation, err := tx.ObserveRun(ctx, runID)
+		if err != nil {
+			return TaskTimeline{}, err
+		}
+		if err := authenticateRunObservation(ctx, tx, state, run.Value, observation, items); err != nil {
+			return TaskTimeline{}, asRunObservationIntegrityError(err)
+		}
+		observation = withAuthoritativeInvocationStatuses(observation)
+		facts, err := runProjectionFactsFor(ctx, tx, run.Value, observation)
+		if err != nil {
+			return TaskTimeline{}, asRunObservationIntegrityError(err)
+		}
+		facts.review, err = runReviewFacts(ctx, tx, runID, observation.Invocations)
+		if err != nil {
+			return TaskTimeline{}, asRunObservationIntegrityError(err)
+		}
+		input := taskTimelineInput{run: run.Value, observation: observation, facts: facts}
+		for _, storedItem := range items {
+			item := storedItem.Value
+			if item.Type != domain.AttentionReadyForFinalReview || item.Subject.RunID == nil || *item.Subject.RunID != runID {
+				continue
+			}
+			if item.ProjectID != task.ProjectID || (item.Subject.TaskID != nil && *item.Subject.TaskID != task.ID) {
+				return TaskTimeline{}, ErrRunObservationIntegrity
+			}
+			if item.CreatedAt == nil || item.ReadinessDetail == nil || item.Readiness == nil {
+				continue
+			}
+			authenticated, err := taskTimelineReadinessBinding(ctx, tx, runID, item.ID)
+			if err != nil {
+				return TaskTimeline{}, asRunObservationIntegrityError(err)
+			}
+			if !authenticated {
+				continue
+			}
+			input.readiness = append(input.readiness, item)
+		}
+		if run.Value.CampaignID != "" {
+			attempt, err := tx.GetProductionAttempt(ctx, run.Value.CampaignID, run.Value.AttemptNumber)
+			if err != nil {
+				return TaskTimeline{}, err
+			}
+			// Initial approval and implementation submission commit together.
+			// Retry reservations can legitimately precede their runs.
+			if attempt.AttemptNumber == 1 && attempt.ApprovedSpecDigest != "" {
+				if _, ok := runsByID[attempt.ImplementationRunID]; !ok {
+					return TaskTimeline{}, fmt.Errorf("approved campaign %s lacks implementation run %s: %w",
+						attempt.CampaignID, attempt.ImplementationRunID, ErrRunObservationIntegrity)
+				}
+			}
+			input.attempt = &attempt
+		}
+		input.prBinding, err = taskTimelinePRBinding(ctx, tx, runID)
+		if err != nil {
+			return TaskTimeline{}, err
+		}
+		inputs = append(inputs, input)
+	}
+	return taskTimeline(task, inputs, state.Revision, asOf)
 }
 
 func taskTimelineReadinessBinding(ctx context.Context, tx *store.ReadTx, runID domain.RunID, itemID domain.ItemID) (bool, error) {
