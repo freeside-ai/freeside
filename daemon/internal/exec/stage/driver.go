@@ -229,7 +229,7 @@ func (d *Driver) handoffSpec(ctx context.Context, in intent) (ward.HandoffSpec, 
 	// Detach before checking so provider-retained references cannot change the
 	// policy decision in the gap before ward freezes its own request.
 	hs = detachProviderHandoffSpec(hs)
-	if in.delivery() == PromptFileV1 {
+	if in.delivery().usesPromptFile() {
 		if hs.Agent.PromptFile == nil ||
 			!bytes.Equal(hs.Agent.PromptFile.Body, []byte(in.Prompt)) ||
 			hs.Agent.PromptFile.Validate() != nil {

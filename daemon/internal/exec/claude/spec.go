@@ -403,7 +403,7 @@ func promptByteLimit(delivery stage.PromptDelivery) (int, error) {
 	switch delivery {
 	case "", stage.PromptArgument:
 		return maxPromptBytes, nil
-	case stage.PromptFileV1:
+	case stage.PromptFileV1, stage.PromptFileV2:
 		return ward.MaxPromptFileBytes, nil
 	}
 	return 0, fmt.Errorf("%w: unknown prompt delivery %q", ErrUnsupportedStart, delivery)
@@ -540,6 +540,8 @@ func (p claudeProvider) HandoffSpec(
 			"< "+shellQuote(ward.PromptFilePath), sessionIDFor(id), id, in.Preparation,
 			spec.RouteModelID, spec.NativeEffort)
 		return hs, nil
+	case stage.PromptFileV2:
+		return ward.HandoffSpec{}, fmt.Errorf("%w: no file_v2 launch command", ErrUnsupportedStart)
 	}
 	return ward.HandoffSpec{}, fmt.Errorf("%w: unknown prompt delivery", ErrUnsupportedStart)
 }
