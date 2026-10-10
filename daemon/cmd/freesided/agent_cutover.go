@@ -307,25 +307,59 @@ func activateAgentSelection(
 				"restart it once more after that to clear this item.",
 			retired.Identity, strings.Join(ids, ", "), retired.Identity)
 	}
-	return convergeAgentSelectionItems(ctx, st, causes, "", now)
+	return convergeHealthItems(ctx, st, agentSelectionItemKind, agentSelectionCauses(causes), nil, now)
 }
 
 // reportRoleFailure records the item for a role failure that stopped startup
 // before the engine existed. The retirement items are left as they are: the
 // next start that composes converges them.
 func reportRoleFailure(ctx context.Context, st *store.Store, failure *roleAdmissionError, now time.Time) error {
-	return convergeAgentSelectionItems(ctx, st, map[string]string{
+	return convergeHealthItems(ctx, st, agentSelectionItemKind, agentSelectionCauses(map[string]string{
 		roleCausePrefix + string(failure.Role): fmt.Sprintf(
 			"Agent selection is not active: role %s cannot be admitted (%v). The daemon did not start; "+
 				"fix the line or the enrollment and restart.", failure.Role, failure.Err),
-	}, retiredCausePrefix, now)
+	}), func(cause string) bool { return strings.HasPrefix(cause, retiredCausePrefix) }, now)
 }
 
-// convergeAgentSelectionItems keeps one open system_health item per cause,
-// keyed by the cause in the item id, and resolves the items whose cause is
-// gone. Items whose cause starts with a non-empty keep prefix are left alone.
-func convergeAgentSelectionItems(
-	ctx context.Context, st *store.Store, causes map[string]string, keep string, now time.Time,
+// healthItemKind is one family of system_health items the daemon converges
+// by cause. An item's id is the prefix, the cause, and the revision that
+// created it, so two kinds must not share a prefix.
+type healthItemKind struct {
+	Prefix string
+	Code   string
+}
+
+// healthCause is one open condition of a kind: what the item says, and
+// whether it holds unattended admission.
+type healthCause struct {
+	Reason  string
+	Posture domain.HealthPosture
+	Impairs domain.ImpairedCapability
+}
+
+var agentSelectionItemKind = healthItemKind{Prefix: agentSelectionItemPrefix, Code: "agent_selection_inactive"}
+
+// agentSelectionCauses gives every agent-selection cause its one posture: an
+// inactive selection admits no work, so each item blocks.
+func agentSelectionCauses(reasons map[string]string) map[string]healthCause {
+	causes := make(map[string]healthCause, len(reasons))
+	for cause, reason := range reasons {
+		causes[cause] = healthCause{
+			Reason: reason, Posture: domain.HealthPostureBlocking,
+			Impairs: domain.ImpairedCapabilityUnattendedAdmission,
+		}
+	}
+	return causes
+}
+
+// convergeHealthItems keeps one open system_health item of the kind per
+// cause, keyed by the cause in the item id, and resolves the kind's items
+// whose cause is gone. An item whose cause a non-nil keep reports true for is
+// left alone, which is how a caller converges part of a kind. An item already
+// open for a cause is not rewritten: its reason is the one it opened with.
+func convergeHealthItems(
+	ctx context.Context, st *store.Store, kind healthItemKind, causes map[string]healthCause,
+	keep func(cause string) bool, now time.Time,
 ) error {
 	return st.Write(ctx, func(tx *store.WriteTx) error {
 		items, err := tx.ListOpenAttentionItems(ctx, domain.AttentionSystemHealth)
@@ -334,7 +368,7 @@ func convergeAgentSelectionItems(
 		}
 		open := map[string]bool{}
 		for _, item := range items {
-			rest, ok := strings.CutPrefix(string(item.ID), agentSelectionItemPrefix)
+			rest, ok := strings.CutPrefix(string(item.ID), kind.Prefix)
 			if !ok {
 				continue
 			}
@@ -344,7 +378,7 @@ func convergeAgentSelectionItems(
 				open[cause] = true
 				continue
 			}
-			if keep != "" && strings.HasPrefix(cause, keep) {
+			if keep != nil && keep(cause) {
 				continue
 			}
 			item.Status = domain.StatusResolved
@@ -372,17 +406,15 @@ func convergeAgentSelectionItems(
 			if open[cause] {
 				continue
 			}
-			posture := domain.HealthPostureBlocking
+			posture := causes[cause].Posture
 			item, err := domain.NewAttentionItem(domain.AttentionItemInput{
-				ID:        domain.ItemID(fmt.Sprintf("%s%s-%d", agentSelectionItemPrefix, cause, state.Revision+1)),
+				ID:        domain.ItemID(fmt.Sprintf("%s%s-%d", kind.Prefix, cause, state.Revision+1)),
 				ProjectID: "project-system", Subject: subject,
 				Type: domain.AttentionSystemHealth, Priority: domain.PriorityNormal,
-				Reason:            causes[cause],
+				Reason:            causes[cause].Reason,
 				RequestedDecision: []domain.Action{domain.ActionAcknowledge},
-				HealthDiagnostic: &domain.HealthDiagnostic{
-					Code: "agent_selection_inactive", Impairs: domain.ImpairedCapabilityUnattendedAdmission,
-				},
-				DisplayNames: names, ItemVersion: 1,
+				HealthDiagnostic:  &domain.HealthDiagnostic{Code: kind.Code, Impairs: causes[cause].Impairs},
+				DisplayNames:      names, ItemVersion: 1,
 				InterruptionClass: domain.InterruptionExceptional,
 				CreatedAt:         &createdAt, Posture: &posture, Status: domain.StatusOpen,
 			}, nil)
