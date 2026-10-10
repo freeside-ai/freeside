@@ -43,6 +43,7 @@ func TestOpenAPIEnumsMatchDomain(t *testing.T) {
 		"JudgmentSite":              enumStrings(domain.AllJudgmentSites),
 		"DisplayNameSource":         enumStrings(domain.AllDisplayNameSources),
 		"StageName":                 enumStrings(domain.AllStageNames),
+		"TaskLineRole":              enumStrings(domain.TaskLineRoles),
 		"BlockedWaitKind":           enumStrings(domain.AllBlockedWaitKinds),
 		"BlockedKind":               enumStrings(domain.AllBlockedKinds),
 		"AnswerRoute":               enumStrings(domain.AllAnswerRoutes),
