@@ -13,6 +13,21 @@ import Testing
         #expect(RunReviewSection.availabilityMessage(hasTimeline: true, state: nil, freshness: .unvalidated) != nil)
         #expect(RunReviewSection.availabilityMessage(hasTimeline: true, state: .loaded, freshness: .unreachable) != nil)
         #expect(RunReviewSection.availabilityMessage(hasTimeline: true, state: .loaded, freshness: .fresh) == nil)
+        // A read that ran ahead of the snapshot leaves loaded review details
+        // current; failing sync does not.
+        #expect(RunReviewSection.availabilityMessage(hasTimeline: true, state: .loaded, freshness: .unvalidated) == nil)
+        let failing: [InboxStore.Freshness] = [
+            .unreachable, .syncFailing, .contractMismatch(daemonContract: "other"), .unauthenticated,
+        ]
+        for freshness in failing {
+            #expect(
+                RunReviewSection.availabilityMessage(hasTimeline: true, state: .loaded, freshness: freshness) != nil)
+        }
+        // Retry answers a failed load and nothing else.
+        #expect(RunReviewSection.showsRetry(state: .unavailable))
+        for state: SyncCoordinator.TimelineLoadState? in [nil, .idle, .loading, .loaded] {
+            #expect(!RunReviewSection.showsRetry(state: state))
+        }
         #expect(RunReviewSection.sourceLabel("freeside_invoked").contains("Freeside-invoked"))
         #expect(RunReviewSection.sourceLabel("github").contains("External"))
         #expect(RunReviewSection.sourceLabel("future-source").contains("Unknown"))

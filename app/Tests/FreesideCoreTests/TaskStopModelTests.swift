@@ -435,6 +435,28 @@ import Testing
         #expect(coordinator.taskStop.prepare(taskID: stopped.task.id) == nil)
     }
 
+    @Test func cancellationCaveatNeedsFailingSyncOrNoRoundThisSession() async throws {
+        let cache = InMemoryCacheStore()
+        let coordinator = await coordinator(cache: cache)
+        let taskID = try preparation(coordinator).entry.taskID
+        #expect(!TaskStopView(coordinator: coordinator, taskID: taskID).cancellationMayBeOutdated)
+        // A read ran ahead of the snapshot after a round succeeded: no caveat.
+        coordinator.store.freshness = .unvalidated
+        #expect(!TaskStopView(coordinator: coordinator, taskID: taskID).cancellationMayBeOutdated)
+        let failing: [InboxStore.Freshness] = [
+            .unreachable, .syncFailing, .contractMismatch(daemonContract: "other"), .unauthenticated,
+        ]
+        for freshness in failing {
+            coordinator.store.freshness = freshness
+            #expect(TaskStopView(coordinator: coordinator, taskID: taskID).cancellationMayBeOutdated)
+        }
+        // Relaunched from the cache: no round has succeeded in this session.
+        let relaunched = SyncCoordinator(client: coordinator.store.client, cache: cache)
+        #expect(relaunched.store.freshness == .unvalidated)
+        #expect(relaunched.lastUpdatedAt == nil)
+        #expect(TaskStopView(coordinator: relaunched, taskID: taskID).cancellationMayBeOutdated)
+    }
+
     @Test func nonFreshStatesCannotPrepare() async throws {
         let coordinator = await coordinator()
         let taskID = try preparation(coordinator).entry.taskID

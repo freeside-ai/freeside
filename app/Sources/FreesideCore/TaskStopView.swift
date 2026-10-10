@@ -22,11 +22,19 @@ struct TaskStopView: View {
             && model.messages[taskID] == nil
     }
 
+    /// True when nothing vouches for the synced cancellation on screen: sync
+    /// is failing, or the row came from the cache and no round has succeeded
+    /// in this session.
+    var cancellationMayBeOutdated: Bool {
+        let freshness = coordinator.store.freshness
+        return freshness.isFailing || (freshness == .unvalidated && coordinator.lastUpdatedAt == nil)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let cancellation = snapshot?.task.cancellation?.value1 {
                 Self.cancellationNotice(cancellation.state)
-                if coordinator.store.freshness != .fresh {
+                if cancellationMayBeOutdated {
                     note("Last synced status. Refresh to check current task state.")
                 }
             }

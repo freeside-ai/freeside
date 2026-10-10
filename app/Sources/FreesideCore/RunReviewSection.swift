@@ -35,8 +35,14 @@ struct RunReviewSection: View {
         }
         if state == .loading { return "Showing saved review details while refreshing…" }
         if state == .unavailable { return "Review refresh failed. Showing saved details." }
-        if state != .loaded || freshness != .fresh { return "Saved review details. Freshness unconfirmed." }
+        if state != .loaded || freshness.isFailing { return "Saved review details. Freshness unconfirmed." }
         return nil
+    }
+
+    /// Retry reissues a read that failed. A saved or unconfirmed section
+    /// offers none: the view refetches it when the snapshot's revision moves.
+    static func showsRetry(state: SyncCoordinator.TimelineLoadState?) -> Bool {
+        state == .unavailable
     }
 
     private struct Selection: Identifiable {
@@ -94,7 +100,7 @@ struct RunReviewSection: View {
                     .font(FreesideFont.cardBody)
                     .foregroundStyle(Color.inkDim)
             }
-            if state != .loading && availability != nil {
+            if Self.showsRetry(state: state) {
                 Button("Retry Review Details") { retry += 1 }
                     .buttonStyle(FreesideActionButtonStyle(tone: .secondary, expands: false))
             }
