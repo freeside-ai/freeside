@@ -653,6 +653,7 @@ type publicationHarness struct {
 	baseSHA                   string
 	baseFiles                 map[string]string
 	projectImageInput         func(*domain.ProjectImageInput)
+	cliSubmission             *cliPublicationSubmission
 	recipe                    []byte
 	recipeD                   domain.Digest
 	profile                   domain.AutomationTrustProfile
