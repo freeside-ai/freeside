@@ -86,21 +86,27 @@ func raiseHeldWorkNotice(
 	if err != nil {
 		return err
 	}
-	item, err := heldWorkNoticeItem(ctx, tx, run, hold, now)
+	item, err := HeldWorkNoticeItem(ctx, tx, heldWorkNoticeID(runID, hold.FirstObservedAt), run, hold, now)
 	if err != nil {
 		return err
 	}
 	return tx.PutAttentionItem(ctx, item)
 }
 
-// heldWorkNoticeItem builds the notice. The subject is the run's task, not
+// HeldWorkNoticeItem builds the notice. The subject is the run's task, not
 // the run: an open run-subject item with a requested decision reads as
 // attention_required to run supervision, and a self-resolving advisory must
 // not end a supervised run. The reason names the run instead, and is built
 // only from the run ID, the hold's reason code, and its start: refusal error
 // text never reaches the item.
-func heldWorkNoticeItem(
-	ctx context.Context, tx *store.WriteTx, run domain.Run,
+//
+// The caller chooses the ID because the ID decides who resolves the item.
+// The engine passes heldWorkNoticeID, which reconcileHeldWorkNotices reads
+// back and resolves once the hold span ends. freesided's raise-item command
+// (issue #1941) passes an ID of another form, so the same notice stays open
+// on a run that has no hold at all.
+func HeldWorkNoticeItem(
+	ctx context.Context, tx *store.WriteTx, id domain.ItemID, run domain.Run,
 	hold domain.RunHoldObservation, createdAt time.Time,
 ) (domain.AttentionItem, error) {
 	taskID := run.TaskID
@@ -111,7 +117,7 @@ func heldWorkNoticeItem(
 	}
 	posture := domain.HealthPostureAdvisory
 	return domain.NewAttentionItem(domain.AttentionItemInput{
-		ID:        heldWorkNoticeID(run.ID, hold.FirstObservedAt),
+		ID:        id,
 		ProjectID: run.ProjectID, Subject: subject,
 		Type: domain.AttentionSystemHealth, Priority: domain.PriorityHigh,
 		Reason: fmt.Sprintf(
