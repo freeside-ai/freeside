@@ -312,6 +312,17 @@ format, and CI follow the daemon's pattern, `daemon/.golangci.yml` and
 macOS runs build and test); each new component adds its own on that pattern
 in its first PR and registers its steps in `scripts/check.sh`.
 
+To inspect a running daemon, read its recorded state through `freesided`
+instead of the database or the logs. Start one with
+`bash scripts/dev-instance.sh --daemon-only`, which prints `root=<root>`; its
+database is `<root>/daemon/freeside.db`. `freesided inspect -db <db>` lists
+the reads on offer and the tasks the daemon holds, and
+`freesided inspect task -db <db> -task <task-id>` prints one task's record:
+its timeline, runs, attention items, and counts, as versioned JSON. Both
+write nothing and read through the control socket while a daemon runs, so
+they are safe on any tier. To wait for a state change, read again and
+compare `as_of_revision`. Detail: `daemon/README.md` (Read A Task's Record).
+
 While iterating on a visible `app/` change, render only the surfaces the step
 touches with `bash app/scripts/render-surfaces.sh OUTPUT_DIR SURFACE...` and
 run only the affected test suites. At the end, record screenshot digests per
