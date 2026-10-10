@@ -1565,7 +1565,14 @@ names the lineup line to add. Until the line exists, a wardless role does not
 run: each of its sites returns its declared fail-safe, and the daemon raises a
 `system_health` item naming the role and the missing line, never only a log
 entry. A wardless role whose admission fails at any step behaves the same way.
-The item's posture is the building unit's to settle (#1425). A ward role with
+The drift auditor's item is `blocking` and holds unattended admission, because
+that role's fail-safe carries the run on as if the audit were switched off and
+nothing else surfaces the standing fault. Every other wardless role's item is
+`advisory`: its fail-safe already hands the work to a human or a conservative
+default, or the role only ever advises. One item stays open per such role and
+resolves when the role is next admitted. A role the deployment leaves off, as
+the publication author is with no prompt configured, is not missing a line
+and raises no item. A ward role with
 no line blocks its stage and raises an AttentionItem, because a stage has no fail-safe to return.
 The researcher is the one ward role with a fail-safe (revision 76), so it
 follows the wardless rule: a missing line or a failed admission returns its
@@ -1584,14 +1591,19 @@ key. The treatment digest leaves out the prompt, so the prompt digest is its
 own comparison key beside it.
 
 Every judgment call records the same three layers at call grain: its role and
-site; the agent digest, prompt digest, and treatment digest; the lineup
+site; the agent digest, prompt digest, treatment digest, and site-contract
+digest; the lineup
 revision and the enrollment generation it used; what was observed (effective
 model, serving operator, and usage, as a run records them); the call it
 shadows, if any; and the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) input digests it already records. A call's treatment
 digest is computed like a run's, with the call launch's digest in the launch
 position. That digest is one per proved call launch version and the same at
 every site, so the site stays a separate key and two agents compare at one
-site on equal terms. Comparison is paired, not randomized: a shadow and the
+site on equal terms. The site-contract digest covers the site's fixed
+instruction and its output contract. Both sit outside the prompt digest, and
+the call launch's digest cannot tell one site's instruction from another's, so
+without it calls from before and after an instruction change would group
+together. Comparison is paired, not randomized: a shadow and the
 call it shadows share one input digest, and a workspace role is compared
 before and after a lineup change by treatment and prompt digest.
 
@@ -4980,7 +4992,7 @@ Each run records:
 - outcome and human decisions.
 
 Each judgment call records the Section [5.4](#54-credential-modes-egress-profiles-and-concurrency) call record. Role, site, treatment
-digest, and prompt digest are its comparison keys. Comparison by role is a query over these records; no experiment
+digest, prompt digest, and site-contract digest are its comparison keys. Comparison by role is a query over these records; no experiment
 service or stored projection is built.
 
 Defect issues reference their producing runs and may carry suggested fault
