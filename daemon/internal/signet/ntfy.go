@@ -20,10 +20,10 @@ import (
 
 // ntfy is the Phase 1 notification channel (plan §10 defaults to the hosted
 // service). Notifications are read-only hints (plan §4): a generic title, the
-// attention type, and a Click deep link into canonical state. Item subject
-// and reason text never leave the daemon — on hosted ntfy the payload
-// transits a third party, so the hint stays generic by owner decision (the
-// unit's devlog note); everything real is behind the deep link.
+// attention type, and a Click link that opens the item in the Freeside app.
+// Item subject and reason text never leave the daemon — on hosted ntfy the
+// payload transits a third party, so the hint stays generic by owner decision
+// (the unit's devlog note); everything real is behind the link.
 
 // channelNtfy is the delivery rows' channel key; test fixtures and goldens
 // across domain and store already use this literal.
@@ -49,10 +49,7 @@ func (e *ChannelRejectionError) Error() string {
 // recovers the status.
 func (e *ChannelRejectionError) Is(target error) bool { return target == ErrChannelRejected }
 
-// NtfyConfig composes the ntfy channel. BaseURL and TopicKey are required;
-// ClickBaseURL is required because a notification without its deep link into
-// canonical state would invite the client to act on the hint itself, exactly
-// what "notifications are read-only hints" forbids.
+// NtfyConfig composes the ntfy channel. BaseURL and TopicKey are required.
 type NtfyConfig struct {
 	// BaseURL is the ntfy server, e.g. https://ntfy.sh for the hosted default.
 	BaseURL string
@@ -68,9 +65,6 @@ type NtfyConfig struct {
 	// Pairing returns the derived topic only to that new device; Device and the
 	// sync surfaces never carry it.
 	TopicKey []byte
-	// ClickBaseURL is the deep-link base the Click header points at; the
-	// daemon API origin in Phase 1.
-	ClickBaseURL string
 }
 
 // WithNtfy supplies the ntfy notification channel. Without it, or with an
@@ -103,9 +97,6 @@ func (c *ntfyChannel) validate() error {
 	if err != nil {
 		return fmt.Errorf("ntfy base URL: %w", err)
 	}
-	if _, err := parseHTTPURL(c.cfg.ClickBaseURL); err != nil {
-		return fmt.Errorf("ntfy click base URL: %w", err)
-	}
 	if len(c.cfg.TopicKey) < sha256.Size {
 		return fmt.Errorf("ntfy topic key is %d bytes, want at least %d", len(c.cfg.TopicKey), sha256.Size)
 	}
@@ -135,8 +126,8 @@ func (s *Service) ntfySubscription(id domain.DeviceID) (NtfySubscription, error)
 
 // parseHTTPURL accepts only a credential-free absolute http(s) base URL with
 // a host. Query and fragment syntax cannot be part of a base: string-appending
-// a topic or item path after either would route somewhere other than the
-// returned subscription or Click target.
+// a topic after either would route somewhere other than the returned
+// subscription.
 func parseHTTPURL(raw string) (*url.URL, error) {
 	if raw == "" {
 		return nil, errors.New("empty")
@@ -198,21 +189,40 @@ type notification struct {
 	priority domain.Priority
 }
 
+// notificationLinkScheme is the URL scheme the Freeside iPhone app registers.
+// A tap link uses it instead of the daemon's API origin: a notification
+// arrives in the ntfy app, which hands a tapped link to whatever opens it, and
+// an http link to the API would open a browser that holds no device
+// credential (#1924, revising decision note 2026-07-16-2038). The app parses
+// these forms in app/Sources/FreesideCore/NotificationLink.swift and refuses
+// every other; the two must change together.
+const notificationLinkScheme = "freeside"
+
+// inboxLink opens the app on its inbox. The test notice carries it: it is
+// about no item.
+const inboxLink = notificationLinkScheme + "://inbox"
+
+// attentionItemLink opens the app on one item's card. It carries the
+// delivery's channel and attempt as query parameters, from which the app
+// derives the exact opened-receipt PUT (#130); the link itself asks for
+// nothing but to be shown.
+func attentionItemLink(id domain.ItemID, attempt int) string {
+	return notificationLinkScheme + "://attention/items/" + url.PathEscape(string(id)) +
+		"?channel=" + url.QueryEscape(channelNtfy) + "&attempt=" + strconv.Itoa(attempt)
+}
+
 // notificationFor renders the generic hint for item to device: no subject or
-// reason text, a deep link to the canonical item. The link carries the
-// delivery's channel and attempt as query parameters — the GET it targets
-// stays side-effect-free, and the client derives the exact opened-receipt
-// PUT from them (#130). The provider-visible metadata surface is the item ID
-// and the attempt counter (inside the link) plus the priority; the widening
-// from #69's item-ID-and-priority surface is an owner decision (decision
-// note 2026-07-16-2038).
+// reason text, and the link that opens the item in the app. The
+// provider-visible metadata surface is the item ID and the attempt counter
+// (inside the link) plus the priority; the widening from #69's
+// item-ID-and-priority surface is an owner decision (decision note
+// 2026-07-16-2038).
 func (c *ntfyChannel) notificationFor(item domain.AttentionItem, device domain.DeviceID, attempt int) notification {
 	return notification{
-		topic: c.topic(device),
-		title: "Attention needed",
-		body:  strings.ReplaceAll(string(item.Type), "_", " "),
-		click: strings.TrimRight(c.cfg.ClickBaseURL, "/") + "/attention/items/" + url.PathEscape(string(item.ID)) +
-			"?channel=" + url.QueryEscape(channelNtfy) + "&attempt=" + strconv.Itoa(attempt),
+		topic:    c.topic(device),
+		title:    "Attention needed",
+		body:     strings.ReplaceAll(string(item.Type), "_", " "),
+		click:    attentionItemLink(item.ID, attempt),
 		priority: item.Priority,
 	}
 }

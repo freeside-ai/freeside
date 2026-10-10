@@ -29,7 +29,7 @@ func (h *replyHarness) acknowledgeAmbiguity() {
 		signet.WithPairingKey([]byte("reply-test-pairing-key")),
 		signet.WithHostFacts(signet.HostFacts{DisplayName: "reply test", ConnectionMode: domain.ConnectionLoopback}),
 		signet.WithNtfy(signet.NtfyConfig{
-			BaseURL: "https://ntfy.example.test", TopicKey: []byte(strings.Repeat("n", 32)), ClickBaseURL: "https://daemon.example.test",
+			BaseURL: "https://ntfy.example.test", TopicKey: []byte(strings.Repeat("n", 32)),
 		}),
 	)
 	code, _, err := service.MintPairingCode(ctx)

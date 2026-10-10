@@ -920,7 +920,6 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		signet.WithTaskSubmitter(engine.NewTaskSubmitter(blobs, manualInitiator)),
 		signet.WithNtfy(signet.NtfyConfig{
 			BaseURL: cfg.NtfyURL, TopicKey: topicKey,
-			ClickBaseURL: "http://" + listener.Addr().String(),
 		}),
 		// The effective digest exists only after the Claude composition below;
 		// the func indirection lets the decision-time adoption gate read it

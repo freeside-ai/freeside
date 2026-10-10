@@ -76,11 +76,10 @@ func newDeliveryFixture(t *testing.T) deliveryFixture {
 		signet.WithHostFacts(testHostFacts),
 		signet.WithClock(func() time.Time { return *f.now }),
 		signet.WithNtfy(signet.NtfyConfig{
-			BaseURL:      server.URL,
-			Client:       server.Client(),
-			Token:        signet.Secret(secretValue),
-			TopicKey:     testTopicKey,
-			ClickBaseURL: "https://daemon.example/",
+			BaseURL:  server.URL,
+			Client:   server.Client(),
+			Token:    signet.Secret(secretValue),
+			TopicKey: testTopicKey,
 		}),
 	)
 	return deliveryFixture{
@@ -321,7 +320,6 @@ func TestReportDeliveryOpenedRegatesItemOnReplay(t *testing.T) {
 			signet.WithClock(func() time.Time { return now }),
 			signet.WithNtfy(signet.NtfyConfig{
 				BaseURL: "https://ntfy.example", TopicKey: testTopicKey,
-				ClickBaseURL: "https://daemon.example",
 			}),
 		)
 	}
@@ -487,8 +485,8 @@ func TestOpenToDecisionDerivableFromDeliveries(t *testing.T) {
 // distinctly (the provider's acceptance populates channel_accepted_at only,
 // never anything stronger), opened_at stays null, and the item's timing
 // aggregates move with the row. The published payload is the generic
-// read-only hint: topic derived from the device, deep link to canonical
-// state, and no item subject or reason text.
+// read-only hint: topic derived from the device, the link that opens the
+// item in the app, and no item subject or reason text.
 func TestSubmitDeliveryRecordsHonestReceipts(t *testing.T) {
 	ctx := context.Background()
 	f := newDeliveryFixture(t)
@@ -541,8 +539,8 @@ func TestSubmitDeliveryRecordsHonestReceipts(t *testing.T) {
 	if got.title != "Attention needed" {
 		t.Errorf("title = %q, want the generic hint", got.title)
 	}
-	if got.click != "https://daemon.example/attention/items/"+string(f.item.ID)+"?channel=ntfy&attempt=1" {
-		t.Errorf("click = %q, want the canonical deep link carrying the attempt identity", got.click)
+	if got.click != "freeside://attention/items/"+string(f.item.ID)+"?channel=ntfy&attempt=1" {
+		t.Errorf("click = %q, want the app link carrying the attempt identity", got.click)
 	}
 	if got.priority != "default" {
 		t.Errorf("priority = %q, want default for a normal item", got.priority)
@@ -704,37 +702,28 @@ func TestSubmitDeliveryFailsClosed(t *testing.T) {
 	t.Run("misconfigured channel", func(t *testing.T) {
 		for name, cfg := range map[string]signet.NtfyConfig{
 			"malformed base URL": {
-				BaseURL: "not a url", TopicKey: testTopicKey, ClickBaseURL: "https://daemon.example",
+				BaseURL: "not a url", TopicKey: testTopicKey,
 			},
 			"relative base URL": {
-				BaseURL: "ntfy.example/path", TopicKey: testTopicKey, ClickBaseURL: "https://daemon.example",
+				BaseURL: "ntfy.example/path", TopicKey: testTopicKey,
 			},
 			"userinfo in base URL": {
 				BaseURL: "https://publisher-value@ntfy.example", TopicKey: testTopicKey,
-				ClickBaseURL: "https://daemon.example",
 			},
 			"cleartext non-loopback": {
-				BaseURL: "http://ntfy.internal", TopicKey: testTopicKey, ClickBaseURL: "https://daemon.example",
+				BaseURL: "http://ntfy.internal", TopicKey: testTopicKey,
 			},
 			"query in base URL": {
 				BaseURL: "https://ntfy.example/base?route=shared", TopicKey: testTopicKey,
-				ClickBaseURL: "https://daemon.example",
 			},
 			"fragment in base URL": {
 				BaseURL: "https://ntfy.example/base#shared", TopicKey: testTopicKey,
-				ClickBaseURL: "https://daemon.example",
 			},
 			"out-of-range base port": {
 				BaseURL: "https://ntfy.example:99999", TopicKey: testTopicKey,
-				ClickBaseURL: "https://daemon.example",
-			},
-			"zero click port": {
-				BaseURL: "https://ntfy.example", TopicKey: testTopicKey,
-				ClickBaseURL: "https://daemon.example:0",
 			},
 			"weak topic key": {
 				BaseURL: "https://ntfy.example", TopicKey: []byte("weak"),
-				ClickBaseURL: "https://daemon.example",
 			},
 		} {
 			t.Run(name, func(t *testing.T) {
