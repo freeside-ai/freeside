@@ -137,6 +137,9 @@ func main() {
 		case "abandon":
 			runAbandonMain(os.Args[2:])
 			return
+		case "raise-item":
+			runRaiseItemMain(os.Args[2:])
+			return
 		case "resume":
 			runResumeMain(os.Args[2:])
 			return
@@ -1285,7 +1288,8 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		d.sessionCloser = claudeWiring.closer
 	}
 	d.pairing.configure(d.readiness().APIURL, attention.MintPairingCode)
-	d.pairing.registerControlRoutes(d.pairing.mux, st, blobs, localBackupFiles, cfg.ApprovedRecipes, integrityProbe)
+	d.pairing.registerControlRoutes(
+		d.pairing.mux, st, blobs, localBackupFiles, cfg.ApprovedRecipes, integrityProbe, cfg.Environment)
 	var fakeSched *scheduler.Scheduler
 	var claudeSched *scheduler.Scheduler
 	var activeReconciler *activeResourceReconciler
