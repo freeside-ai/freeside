@@ -388,6 +388,13 @@ func TestLineupAdmissionPicksTheRoleFromTheAttempt(t *testing.T) {
 				t.Fatalf("admission launch %s prompt %s, want role %s",
 					admission.AgentBinding.LaunchDigest, admission.StageInputs.PromptPackageDigest, tc.role)
 			}
+			// Every role is chosen by the lineup until admission reads task
+			// lines (#1640), so no admission names a selection record.
+			if admission.AgentBinding.SelectionSource != domain.AgentSelectionSourceLineup ||
+				admission.AgentBinding.SelectionRecordID != "" {
+				t.Fatalf("admission selection = %q %q, want the lineup and no record",
+					admission.AgentBinding.SelectionSource, admission.AgentBinding.SelectionRecordID)
+			}
 		})
 	}
 
