@@ -372,6 +372,7 @@ type decisionPayloadRequest struct {
 	EffectProposalRevision      *effectProposalRevisionRequest `json:"effect_proposal_revision"`
 	SnoozeUntil                 *time.Time                     `json:"snooze_until"`
 	AlternativeChoices          []AlternativeChoice            `json:"alternative_choices"`
+	TaskLines                   []domain.TaskLineChoice        `json:"task_lines"`
 	CapabilityManifestDigest    *domain.Digest                 `json:"capability_manifest_digest"`
 	AnswerRoute                 *domain.AnswerRoute            `json:"answer_route"`
 	DecisionActionSurfaceDigest *domain.Digest                 `json:"decision_action_surface_digest"`
@@ -481,6 +482,7 @@ func (h httpHandler) submitDecisionCommand(w http.ResponseWriter, r *http.Reques
 		TaskProposalRevision: arm.TaskProposalRevision,
 		SnoozeUntil:          arm.SnoozeUntil,
 		AlternativeChoices:   arm.AlternativeChoices,
+		TaskLines:            arm.TaskLines,
 	}
 	if arm.EffectProposalRevision != nil {
 		if arm.EffectProposalRevision.SourceIssueClosure == nil {

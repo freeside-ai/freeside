@@ -88,6 +88,12 @@ type DecisionPayload struct {
 	SnoozeUntil              *time.Time
 	AlternativeChoices       []AlternativeChoice
 	CapabilityManifestDigest *domain.Digest
+	// TaskLines are per-role agent choices for the task a task_proposal start
+	// creates (plan §5.4). Nil means absent. No decision applies them yet, so
+	// acceptance refuses any decision that carries the field, an empty list
+	// included (submitDecisionTransaction); #1641 binds them to the item
+	// version and lifts the refusal for the two start actions.
+	TaskLines []domain.TaskLineChoice
 	// AnswerRoute is required for answer_and_retry on an implementation-stage
 	// agent_question and forbidden everywhere else (validateAnswerRoute).
 	AnswerRoute *domain.AnswerRoute
