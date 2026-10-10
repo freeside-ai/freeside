@@ -226,3 +226,94 @@ func TestTaskLinesFailClosedOnEditedRow(t *testing.T) {
 		})
 	}
 }
+
+// TestGetTaskLineResolvesAVersionByID covers the read that resolves the line
+// an admission cites: any recorded version resolves by its id, a superseded
+// one included, because the line an attempt was admitted under stays the
+// choice that authorized it. An id nobody recorded is not found.
+func TestGetTaskLineResolvesAVersionByID(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t, store.Options{})
+	taskID, _ := seedTaskSubmissionTarget(t, ctx, s)
+	input := domain.TaskLineInput{
+		TaskID: taskID, Role: domain.RoleImplementer, Agent: "codex",
+		Source: domain.TaskLineSourceSubmitTask, SetBy: "cmd-1",
+	}
+	first, err := appendTaskLine(t, s, input, taskLineSetAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := input
+	changed.Agent = "claude-b"
+	second, err := appendTaskLine(t, s, changed, taskLineSetAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	get := func(id domain.Digest) (domain.TaskLine, error) {
+		var line domain.TaskLine
+		err := s.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			line, err = tx.GetTaskLine(ctx, id)
+			return err
+		})
+		return line, err
+	}
+	for _, want := range []domain.TaskLine{first, second} {
+		got, err := get(want.ID)
+		if err != nil || got.ID != want.ID || got.Agent != want.Agent || got.Version != want.Version ||
+			got.TaskID != taskID {
+			t.Fatalf("GetTaskLine(v%d) = %+v, %v; want %+v", want.Version, got, err, want)
+		}
+	}
+	unknown := domain.Digest("sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+	if _, err := get(unknown); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("GetTaskLine(unrecorded id) = %v, want %v", err, store.ErrNotFound)
+	}
+}
+
+// TestGetTaskLineFailsClosedOnABrokenChain: the cited version is served only
+// out of a chain that reads whole, so an intact row behind a removed or
+// edited one fails the way a current read does.
+func TestGetTaskLineFailsClosedOnABrokenChain(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for name, tamper := range map[string]string{
+		"removed first version": `DELETE FROM task_lines WHERE version = 1`,
+		"edited earlier agent":  `UPDATE task_lines SET agent = 'claude-b' WHERE version = 1`,
+		"edited cited agent":    `UPDATE task_lines SET agent = 'claude-b' WHERE version = 2`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "task-lines.db")
+			s := openStoreAt(t, path, store.Options{})
+			taskID, _ := seedTaskSubmissionTarget(t, ctx, s)
+			input := domain.TaskLineInput{
+				TaskID: taskID, Role: domain.RoleImplementer, Agent: "codex",
+				Source: domain.TaskLineSourceSubmitTask, SetBy: "cmd-1",
+			}
+			var cited domain.TaskLine
+			for range 2 {
+				var err error
+				if cited, err = appendTaskLine(t, s, input, taskLineSetAt); err != nil {
+					t.Fatal(err)
+				}
+			}
+			db, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = db.Close() }()
+			if _, err := db.ExecContext(ctx, tamper); err != nil {
+				t.Fatal(err)
+			}
+			err = s.Read(ctx, func(tx *store.ReadTx) error {
+				_, err := tx.GetTaskLine(ctx, cited.ID)
+				return err
+			})
+			if !errors.Is(err, store.ErrRowInconsistent) {
+				t.Fatalf("GetTaskLine after tampering: err = %v, want %v", err, store.ErrRowInconsistent)
+			}
+		})
+	}
+}
