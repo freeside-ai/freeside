@@ -1132,6 +1132,23 @@ func TestGolden(t *testing.T) {
 		Digest      domain.Digest      `json:"digest"`
 	}{domain.RegistrySetPolicyKey, initialRegistryPolicyValue, registrySet, registrySetDigest}
 
+	// A task line and the version that supersedes it: version 1 has no
+	// predecessor (explicit null) and version 2 names version 1 by id.
+	taskLine, err := domain.NewTaskLine(domain.TaskLineInput{
+		TaskID: "task-1", Role: domain.RoleImplementer, Agent: "codex",
+		Source: domain.TaskLineSourceSubmitTask, SetBy: "cmd-1",
+	}, 1, nil, ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	supersedingTaskLine, err := domain.NewTaskLine(domain.TaskLineInput{
+		TaskID: "task-1", Role: domain.RoleImplementer, Agent: "claude-b",
+		Source: domain.TaskLineSourceCLISubmit, SetBy: "cli:submission-1",
+	}, 2, &taskLine.ID, ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	// The agent-bound (v4) variant: the §5.4 admission step 5 snapshot rides
 	// beside the existing fields, and its presence selects the new encoding
 	// version, which this golden pins through the changed content address.
@@ -1818,6 +1835,8 @@ func TestGolden(t *testing.T) {
 				{Ordinal: 2, Kind: domain.TaskLifecycleCompleted, RunID: "run-1", CampaignID: new(domain.CampaignID("campaign-1")), BindingUnitID: new(domain.WorkUnitID("workunit-run-1")), SourceID: "complete:workunit-run-1", RecordedAt: ts},
 			},
 		}},
+		{"task_line", taskLine},
+		{"task_line_superseding", supersedingTaskLine},
 		{"subject_task", domain.Subject{Type: domain.SubjectTask, ID: "task-1", TaskID: new(domain.TaskID("task-1"))}},
 		{"production_attempt", productionAttempt},
 		{"production_attempt_revision", productionRevisionAttempt},

@@ -373,6 +373,14 @@ var (
 		"stage name resolves to no canonical stage role")
 	ErrInvalidRoleName = errors.New(
 		"role name is not in the closed role list")
+	ErrTaskLineRoleIneligible = errors.New(
+		"role takes no task line; only the specifier, implementer, remediator, and reviewer do")
+	ErrDuplicateTaskLineRole = errors.New(
+		"task lines name a role more than once")
+	ErrInvalidTaskLineSource = errors.New(
+		"task line source is not an operator path that may set a line")
+	ErrTaskLineInconsistent = errors.New(
+		"task line id or predecessor does not match its content")
 	ErrLineupShadowOnWardRole = errors.New(
 		"lineup shadow line names a ward role; only a wardless role takes one")
 	ErrLineupShadowLimit = errors.New(
