@@ -264,6 +264,16 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 // accepting transaction. Command-id replay and durable item policy take
 // precedence over per-action content policy.
 func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientCommand) (CommandResult, error) {
+	// No decision applies task lines yet (#1641), and the recorded command
+	// has no field that would hold them. Accepting the field and dropping it
+	// would start the task on the lineup while the operator believes an agent
+	// was chosen, so every action refuses it, before any write and before the
+	// command-id replay: a retry that adds lines to a recorded decision is
+	// not the request that was recorded.
+	if in.Payload.TaskLines != nil {
+		return CommandResult{}, fmt.Errorf("submit command %q: task_lines are not accepted on a decision: %w",
+			in.CommandID, ErrInvalidProposalDecisionPayload)
+	}
 	if err := s.convergeProposalSnoozes(ctx, s.now().UTC()); err != nil {
 		return CommandResult{}, fmt.Errorf("submit command %q proposal snoozes: %w", in.CommandID, err)
 	}

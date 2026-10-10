@@ -1210,6 +1210,14 @@ saved submission. Retry needs no original input files and never rereads them.
 The journal contains the submitted task and configuration; keep it with the
 database and its access controls.
 
+`--task-line role=agent` records the operator's choice of agent for one role
+of the new task; repeat it for more roles. The roles are `specifier`,
+`implementer`, `remediator`, and `reviewer`. Submit checks only the name's
+shape and saves the lines in the journal with the other inputs, so a retry
+replays them and takes no `--task-line` of its own. Admission does not read
+task lines yet (#1640): until it does, a line is recorded and the lineup
+still selects every agent.
+
 For a preflight-bound submission, choose one `--submission-id <identity>` and
 pass it to both `preflight` and `submit`. The real-work harness saves this identity
 before preflight. Reusing it with different input values is refused. Legacy

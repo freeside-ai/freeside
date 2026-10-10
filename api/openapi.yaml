@@ -1449,6 +1449,33 @@ components:
         scope:
           $ref: "#/components/schemas/TaskProposalScope"
 
+    TaskLineRole:
+      type: string
+      description: >
+        A ward role an operator may choose an agent for on one task (plan
+        §5.4). The shadow reviewer and the roles that run without a ward take
+        their agent from the lineup and are not members.
+      enum: [specifier, implementer, remediator, reviewer]
+
+    TaskLineInput:
+      type: object
+      description: >
+        An operator's choice of agent for one role on one task. It names an
+        agent only; the role's prompt stays the lineup's. The daemon checks
+        the name's shape when it accepts the command and resolves the agent
+        when it admits the role.
+      additionalProperties: false
+      required: [role, agent]
+      properties:
+        role:
+          $ref: "#/components/schemas/TaskLineRole"
+        agent:
+          type: string
+          minLength: 1
+          maxLength: 246
+          pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
+          description: The agent's name in the control-plane tree.
+
     EffectProposalRevisionInput:
       type: object
       description: >
@@ -3263,6 +3290,18 @@ components:
             Per-finding offered routes selected by choose_alternative_route.
             Findings omitted from this list retain their recommended route.
             Absent for every other action; finding IDs must be distinct.
+        task_lines:
+          type: array
+          minItems: 1
+          maxItems: 4
+          items:
+            $ref: "#/components/schemas/TaskLineInput"
+          description: >
+            Per-role agent choices for the task a start or start_with_changes
+            decision on a task_proposal creates; at most one line per role.
+            Absent for every other action and item type. The daemon does not
+            yet apply lines from a decision and rejects a decision that
+            carries this field with 400.
         decision_action_surface_digest:
           type: string
           nullable: true
@@ -3293,9 +3332,10 @@ components:
         create distinct tasks, specification runs and campaigns even with
         identical inputs. Manual Retry reuses the saved exact command and
         returns its original result and revision. New records reject changed
-        device, project, source or submitted optional name under the same ID;
-        equivalent JSON formatting is allowed. Historical records preserve
-        their original name-insensitive replay checks. Source content is
+        device, project, source, submitted optional name or task lines under
+        the same ID; equivalent JSON formatting and a different order of the
+        same task lines are allowed. Historical records preserve their
+        original name-insensitive replay checks. Source content is
         provenance, never a duplicate-work key.
       required: [kind, project_id, source]
       additionalProperties: false
@@ -3323,6 +3363,20 @@ components:
             written; the daemon never truncates it or drops it. The name is
             applied only when the command creates the task and is ignored, but
             still validated, when the command fetches an existing task.
+        task_lines:
+          type: array
+          minItems: 1
+          maxItems: 4
+          items:
+            $ref: "#/components/schemas/TaskLineInput"
+          description: >
+            Optional per-role agent choices for the new task; at most one line
+            per role. A role with no line takes its agent from the lineup. An
+            empty list, a repeated role, or a malformed agent name is rejected
+            with 400 and nothing is written. The lines are recorded when the
+            command creates the task. Admission does not read task lines yet:
+            until it does, a line is recorded and the lineup still selects
+            every agent.
       example:
         kind: "submit_task"
         project_id: "project-1"

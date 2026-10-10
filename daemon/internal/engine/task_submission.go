@@ -174,5 +174,17 @@ func (t *TaskSubmitter) submit(ctx context.Context, tx *store.WriteTx, in signet
 	if err != nil {
 		return signet.TaskSubmissionResult{}, err
 	}
+	// The operator's task lines land in the transaction that creates the
+	// task, so no task exists without the choice it was submitted with. The
+	// boundary replays a recorded command before it reaches here, so a retry
+	// appends no second version. Each line is set when its task is created.
+	for _, line := range in.TaskLines {
+		if _, err := tx.AppendTaskLine(ctx, domain.TaskLineInput{
+			TaskID: task.ID, Role: line.Role, Agent: line.Agent,
+			Source: domain.TaskLineSourceSubmitTask, SetBy: in.CommandID,
+		}, task.CreatedAt); err != nil {
+			return signet.TaskSubmissionResult{}, fmt.Errorf("record task line: %w", err)
+		}
+	}
 	return signet.TaskSubmissionResult{TaskID: task.ID, SpecificationRunID: submitted.Run.ID, Name: task.Name}, nil
 }

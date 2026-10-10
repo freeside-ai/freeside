@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
@@ -26,11 +27,15 @@ func prepareSubmission(cfg submitCommandConfig) (submitCommandConfig, error) {
 		if cfg.SubmissionID != "" || cfg.RetrySubmissionID != "" {
 			return cfg, errors.New("submit: --run-id is lookup-only and cannot name a new submission")
 		}
+		if len(cfg.TaskLines) != 0 {
+			return cfg, errors.New("submit: --run-id is lookup-only and takes no --task-line")
+		}
 		return cfg, nil
 	}
 	if cfg.RetrySubmissionID != "" {
 		if cfg.SubmissionID != "" || cfg.TaskPath != "" || cfg.PolicyPath != "" || cfg.PublicationPath != "" ||
-			cfg.WorkUnitPath != "" || cfg.CompositionPath != "" || cfg.ProjectID != "" || cfg.RequireComposition {
+			cfg.WorkUnitPath != "" || cfg.CompositionPath != "" || cfg.ProjectID != "" || cfg.RequireComposition ||
+			len(cfg.TaskLines) != 0 {
 			return cfg, errors.New("submit: manual retry takes only --db and --retry-submission-id; it uses the saved inputs")
 		}
 		if !validSubmissionID(cfg.RetrySubmissionID) {
@@ -130,7 +135,8 @@ func matchingRetainedSubmission(cfg submitCommandConfig) (submitCommandConfig, e
 		return cfg, err
 	}
 	if saved.DBPath != cfg.DBPath || saved.SubmissionID != cfg.SubmissionID || saved.ProjectID != cfg.ProjectID ||
-		saved.RequireComposition != cfg.RequireComposition || !sameSubmissionInputs(saved.SavedInputs, cfg.SavedInputs) {
+		saved.RequireComposition != cfg.RequireComposition || !slices.Equal(saved.TaskLines, cfg.TaskLines) ||
+		!sameSubmissionInputs(saved.SavedInputs, cfg.SavedInputs) {
 		return cfg, fmt.Errorf("submit: saved submission inputs changed: %w", store.ErrImmutableConflict)
 	}
 	return saved, nil

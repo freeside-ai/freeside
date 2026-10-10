@@ -179,6 +179,32 @@ func TestAdmissionAgentBindingValidate(t *testing.T) {
 		{"harness_default recorded as a sent effort", func(b *domain.AdmissionAgentBinding) {
 			b.RequestedEffort, b.NativeEffort = domain.EffortHarnessDefault, "high"
 		}, domain.ErrInvalidEffortLevel},
+		// The valid case above carries no source: a binding admitted before
+		// the field existed must keep validating.
+		{"lineup source", func(b *domain.AdmissionAgentBinding) {
+			b.SelectionSource = domain.AgentSelectionSourceLineup
+		}, nil},
+		{"lineup source with a record", func(b *domain.AdmissionAgentBinding) {
+			b.SelectionSource, b.SelectionRecordID = domain.AgentSelectionSourceLineup, manifestDigest
+		}, domain.ErrAgentSelectionInconsistent},
+		{"task-line source", func(b *domain.AdmissionAgentBinding) {
+			b.SelectionSource, b.SelectionRecordID = domain.AgentSelectionSourceTaskLine, manifestDigest
+		}, nil},
+		{"task-line source without a record", func(b *domain.AdmissionAgentBinding) {
+			b.SelectionSource = domain.AgentSelectionSourceTaskLine
+		}, domain.ErrInvalidDigest},
+		{"card source", func(b *domain.AdmissionAgentBinding) {
+			b.SelectionSource, b.SelectionRecordID = domain.AgentSelectionSourceCard, manifestDigest
+		}, nil},
+		{"card source with a malformed record", func(b *domain.AdmissionAgentBinding) {
+			b.SelectionSource, b.SelectionRecordID = domain.AgentSelectionSourceCard, "card-1"
+		}, domain.ErrInvalidDigest},
+		{"record without a source", func(b *domain.AdmissionAgentBinding) {
+			b.SelectionRecordID = manifestDigest
+		}, domain.ErrAgentSelectionInconsistent},
+		{"unknown source", func(b *domain.AdmissionAgentBinding) {
+			b.SelectionSource = "intake"
+		}, domain.ErrInvalidAgentSelectionSource},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

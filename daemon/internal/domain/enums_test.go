@@ -64,6 +64,14 @@ func TestEnumValidity(t *testing.T) {
 		valids["LaunchShape"] = append(valids["LaunchShape"], v.valid)
 	}
 	invalids["LaunchShape"] = LaunchShape("").valid
+	for _, v := range AllTaskLineSources {
+		valids["TaskLineSource"] = append(valids["TaskLineSource"], v.valid)
+	}
+	invalids["TaskLineSource"] = TaskLineSource("").valid
+	for _, v := range AllAgentSelectionSources {
+		valids["AgentSelectionSource"] = append(valids["AgentSelectionSource"], v.valid)
+	}
+	invalids["AgentSelectionSource"] = AgentSelectionSource("").valid
 	for _, v := range AllArtifactKinds {
 		valids["ArtifactKind"] = append(valids["ArtifactKind"], v.valid)
 	}

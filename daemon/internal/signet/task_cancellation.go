@@ -28,7 +28,7 @@ func (*StaleTaskError) Error() string { return "task cancellation binding change
 
 func (s *Service) stopTask(ctx context.Context, in ClientCommand) (CommandResult, error) {
 	request := domain.StopTaskRequest{CommandID: in.CommandID, DeviceID: in.DeviceID, TaskID: in.StopTask.TaskID, ProjectID: in.StopTask.ProjectID, ExpectedSyncEpoch: in.StopTask.ExpectedSyncEpoch, ExpectedEntityVersion: in.ExpectedEntityVersion}
-	if request.Validate() != nil || in.SubmitTask != (SubmitTaskPayload{}) || !reflect.ValueOf(in.Payload).IsZero() {
+	if request.Validate() != nil || !reflect.ValueOf(in.SubmitTask).IsZero() || !reflect.ValueOf(in.Payload).IsZero() {
 		return CommandResult{}, ErrInvalidStopTaskPayload
 	}
 	var result CommandResult

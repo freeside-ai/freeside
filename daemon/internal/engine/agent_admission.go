@@ -283,6 +283,9 @@ func resolveAgentAdmission(
 			Attended:            mode != domain.ModeUnattended,
 			RouteModelID:        passes.RouteModelID, RequestedEffort: passes.RequestedEffort,
 			NativeEffort: passes.NativeEffort,
+			// The lineup is the only selection this path reads. Admission
+			// records a task line here once it reads them (#1640).
+			SelectionSource: domain.AgentSelectionSourceLineup,
 		},
 		resolved: resolved, launch: launch, stage: stage,
 		enrollment: enrollment, generation: generation,

@@ -2009,6 +2009,59 @@ public enum Components {
                 ])
             }
         }
+        /// A ward role an operator may choose an agent for on one task (plan §5.4). The shadow reviewer and the roles that run without a ward take their agent from the lineup and are not members.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskLineRole`.
+        @frozen public enum TaskLineRole: String, Codable, Hashable, Sendable, CaseIterable {
+            case specifier = "specifier"
+            case implementer = "implementer"
+            case remediator = "remediator"
+            case reviewer = "reviewer"
+        }
+        /// An operator's choice of agent for one role on one task. It names an agent only; the role's prompt stays the lineup's. The daemon checks the name's shape when it accepts the command and resolves the agent when it admits the role.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskLineInput`.
+        public struct TaskLineInput: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskLineInput/role`.
+            public var role: Components.Schemas.TaskLineRole
+            /// The agent's name in the control-plane tree.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskLineInput/agent`.
+            public var agent: Swift.String
+            /// Creates a new `TaskLineInput`.
+            ///
+            /// - Parameters:
+            ///   - role:
+            ///   - agent: The agent's name in the control-plane tree.
+            public init(
+                role: Components.Schemas.TaskLineRole,
+                agent: Swift.String
+            ) {
+                self.role = role
+                self.agent = agent
+            }
+            public enum CodingKeys: String, CodingKey {
+                case role
+                case agent
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.role = try container.decode(
+                    Components.Schemas.TaskLineRole.self,
+                    forKey: .role
+                )
+                self.agent = try container.decode(
+                    Swift.String.self,
+                    forKey: .agent
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "role",
+                    "agent"
+                ])
+            }
+        }
         /// The bounded revision an operator may apply to a source_issue_closure proposal with approve_with_changes. It carries one required source_issue_closure arm holding only the resolve flag; the daemon owns the target, provenance, and origin, and rebuilds the revised proposal from the prior one. The arm is the sole kind today; a second effect kind would relax this to a union requiring exactly one non-null arm.
         ///
         ///
@@ -6503,6 +6556,11 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/DecisionPayload/alternative_choices`.
             public var alternative_choices: [Components.Schemas.AlternativeChoice]?
+            /// Per-role agent choices for the task a start or start_with_changes decision on a task_proposal creates; at most one line per role. Absent for every other action and item type. The daemon does not yet apply lines from a decision and rejects a decision that carries this field with 400.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/DecisionPayload/task_lines`.
+            public var task_lines: [Components.Schemas.TaskLineInput]?
             /// The digest of the DecisionActionSurface the client rendered the decision from (plan §8). Optional comprehension telemetry: the daemon revalidates it against the live device, item decision surface, capability contract, and offered-action set, and stamps it onto the command's decision_evidence. It never widens the offered actions; it can only reject. Absent for a client build that does not adopt the action surface.
             ///
             ///
@@ -6525,6 +6583,7 @@ public enum Components {
             ///   - effect_proposal_revision: Typed closure revision, present only for approve_with_changes on a source_issue_closure effect proposal. The daemon preserves the proposal's target, provenance, and origin, and rebuilds the revised proposal from the prior one inside the accepting transaction.
             ///   - snooze_until: Typed UTC deferral instant, present only for snooze. The daemon requires a future canonical instant and records it in the proposal ledger.
             ///   - alternative_choices: Per-finding offered routes selected by choose_alternative_route. Findings omitted from this list retain their recommended route. Absent for every other action; finding IDs must be distinct.
+            ///   - task_lines: Per-role agent choices for the task a start or start_with_changes decision on a task_proposal creates; at most one line per role. Absent for every other action and item type. The daemon does not yet apply lines from a decision and rejects a decision that carries this field with 400.
             ///   - decision_action_surface_digest: The digest of the DecisionActionSurface the client rendered the decision from (plan §8). Optional comprehension telemetry: the daemon revalidates it against the live device, item decision surface, capability contract, and offered-action set, and stamps it onto the command's decision_evidence. It never widens the offered actions; it can only reject. Absent for a client build that does not adopt the action surface.
             public init(
                 kind: Components.Schemas.DecisionPayload.kindPayload,
@@ -6541,6 +6600,7 @@ public enum Components {
                 effect_proposal_revision: Components.Schemas.DecisionPayload.effect_proposal_revisionPayload? = nil,
                 snooze_until: Foundation.Date? = nil,
                 alternative_choices: [Components.Schemas.AlternativeChoice]? = nil,
+                task_lines: [Components.Schemas.TaskLineInput]? = nil,
                 decision_action_surface_digest: Swift.String? = nil
             ) {
                 self.kind = kind
@@ -6557,6 +6617,7 @@ public enum Components {
                 self.effect_proposal_revision = effect_proposal_revision
                 self.snooze_until = snooze_until
                 self.alternative_choices = alternative_choices
+                self.task_lines = task_lines
                 self.decision_action_surface_digest = decision_action_surface_digest
             }
             public enum CodingKeys: String, CodingKey {
@@ -6574,6 +6635,7 @@ public enum Components {
                 case effect_proposal_revision
                 case snooze_until
                 case alternative_choices
+                case task_lines
                 case decision_action_surface_digest
             }
             public init(from decoder: any Swift.Decoder) throws {
@@ -6634,6 +6696,10 @@ public enum Components {
                     [Components.Schemas.AlternativeChoice].self,
                     forKey: .alternative_choices
                 )
+                self.task_lines = try container.decodeIfPresent(
+                    [Components.Schemas.TaskLineInput].self,
+                    forKey: .task_lines
+                )
                 self.decision_action_surface_digest = try container.decodeIfPresent(
                     Swift.String.self,
                     forKey: .decision_action_surface_digest
@@ -6653,11 +6719,12 @@ public enum Components {
                     "effect_proposal_revision",
                     "snooze_until",
                     "alternative_choices",
+                    "task_lines",
                     "decision_action_surface_digest"
                 ])
             }
         }
-        /// The payload of a submit_task command (plan §5.11): the project to submit into, the source text of the task, and an optional operator name. It binds to no attention item and to no other entity, so it carries no expected_entity_version and no expected_bindings. The command_id identifies one deliberate submission. Distinct command IDs create distinct tasks, specification runs and campaigns even with identical inputs. Manual Retry reuses the saved exact command and returns its original result and revision. New records reject changed device, project, source or submitted optional name under the same ID; equivalent JSON formatting is allowed. Historical records preserve their original name-insensitive replay checks. Source content is provenance, never a duplicate-work key.
+        /// The payload of a submit_task command (plan §5.11): the project to submit into, the source text of the task, and an optional operator name. It binds to no attention item and to no other entity, so it carries no expected_entity_version and no expected_bindings. The command_id identifies one deliberate submission. Distinct command IDs create distinct tasks, specification runs and campaigns even with identical inputs. Manual Retry reuses the saved exact command and returns its original result and revision. New records reject changed device, project, source, submitted optional name or task lines under the same ID; equivalent JSON formatting and a different order of the same task lines are allowed. Historical records preserve their original name-insensitive replay checks. Source content is provenance, never a duplicate-work key.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/SubmitTaskPayload`.
@@ -6681,6 +6748,11 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/SubmitTaskPayload/name`.
             public var name: Swift.String?
+            /// Optional per-role agent choices for the new task; at most one line per role. A role with no line takes its agent from the lineup. An empty list, a repeated role, or a malformed agent name is rejected with 400 and nothing is written. The lines are recorded when the command creates the task. Admission does not read task lines yet: until it does, a line is recorded and the lineup still selects every agent.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/SubmitTaskPayload/task_lines`.
+            public var task_lines: [Components.Schemas.TaskLineInput]?
             /// Creates a new `SubmitTaskPayload`.
             ///
             /// - Parameters:
@@ -6688,22 +6760,26 @@ public enum Components {
             ///   - project_id: The project the task is submitted into.
             ///   - source: The task's source text, registered as a digest-addressed artifact.
             ///   - name: Optional operator-chosen task name, stored with source operator so the namer never runs for it. The daemon trims surrounding whitespace, then requires one line of 1 to 60 characters (Unicode code points), valid UTF-8, with no credential-shaped token. A name that fails after trimming is rejected with 400 and nothing is written; the daemon never truncates it or drops it. The name is applied only when the command creates the task and is ignored, but still validated, when the command fetches an existing task.
+            ///   - task_lines: Optional per-role agent choices for the new task; at most one line per role. A role with no line takes its agent from the lineup. An empty list, a repeated role, or a malformed agent name is rejected with 400 and nothing is written. The lines are recorded when the command creates the task. Admission does not read task lines yet: until it does, a line is recorded and the lineup still selects every agent.
             public init(
                 kind: Components.Schemas.SubmitTaskPayload.kindPayload,
                 project_id: Swift.String,
                 source: Swift.String,
-                name: Swift.String? = nil
+                name: Swift.String? = nil,
+                task_lines: [Components.Schemas.TaskLineInput]? = nil
             ) {
                 self.kind = kind
                 self.project_id = project_id
                 self.source = source
                 self.name = name
+                self.task_lines = task_lines
             }
             public enum CodingKeys: String, CodingKey {
                 case kind
                 case project_id
                 case source
                 case name
+                case task_lines
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -6723,11 +6799,16 @@ public enum Components {
                     Swift.String.self,
                     forKey: .name
                 )
+                self.task_lines = try container.decodeIfPresent(
+                    [Components.Schemas.TaskLineInput].self,
+                    forKey: .task_lines
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "kind",
                     "project_id",
                     "source",
-                    "name"
+                    "name",
+                    "task_lines"
                 ])
             }
         }
