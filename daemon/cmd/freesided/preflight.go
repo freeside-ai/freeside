@@ -26,6 +26,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/procbound"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
@@ -92,24 +93,59 @@ type compositionImage struct {
 	ResolvedDigest string `json:"resolved_digest,omitempty"`
 }
 
+// compositionJudgmentRole is what the lineup makes of one judgment role:
+// admitted, off (the role is deliberately left without a prompt), or unbound
+// (no admissible line, so its sites would return their fail-safe).
+type compositionJudgmentRole struct {
+	Role   domain.RoleName    `json:"role"`
+	Status judgmentRoleStatus `json:"status"`
+	Reason string             `json:"reason,omitempty"`
+}
+
+type judgmentRoleStatus string
+
+const (
+	judgmentRoleAdmitted judgmentRoleStatus = "admitted"
+	judgmentRoleOff      judgmentRoleStatus = "off"
+	judgmentRoleUnbound  judgmentRoleStatus = "unbound"
+)
+
+// AllJudgmentRoleStatuses is the complete judgment-role status registration
+// set.
+var AllJudgmentRoleStatuses = []judgmentRoleStatus{
+	judgmentRoleAdmitted,
+	judgmentRoleOff,
+	judgmentRoleUnbound,
+}
+
+func (s judgmentRoleStatus) valid() bool {
+	switch s {
+	case judgmentRoleAdmitted, judgmentRoleOff, judgmentRoleUnbound:
+		return true
+	default:
+		return false
+	}
+}
+
 type compositionManifest struct {
-	JudgmentConfigurationDigest     string                 `json:"judgment_configuration_digest,omitempty"`
-	Version                         string                 `json:"version"`
-	Status                          compositionStatus      `json:"status"`
-	Rig                             daemonlock.RigManifest `json:"rig"`
-	DaemonBuild                     string                 `json:"daemon_build"`
-	ServerURL                       string                 `json:"server_url"`
-	Repository                      string                 `json:"repository"`
-	RepositoryID                    int64                  `json:"repository_id"`
-	BaseRef                         string                 `json:"base_ref"`
-	BaseSHA                         string                 `json:"base_sha"`
-	ProfileDigest                   domain.Digest          `json:"profile_digest,omitempty"`
-	ReviewConfigurationDigest       domain.Digest          `json:"review_configuration_digest,omitempty"`
-	ShadowReviewConfigurationDigest domain.Digest          `json:"shadow_review_configuration_digest,omitempty"`
-	ReviewInstructionsPresent       bool                   `json:"review_instructions_present"`
-	ReviewInstructionsDigest        domain.Digest          `json:"review_instructions_digest,omitempty"`
-	BuildEgressDigest               domain.Digest          `json:"build_egress_configuration_digest"`
-	AllowedPaths                    []string               `json:"allowed_paths"`
+	JudgmentConfigurationDigest     string                    `json:"judgment_configuration_digest,omitempty"`
+	JudgmentRoles                   []compositionJudgmentRole `json:"judgment_roles,omitempty"`
+	Version                         string                    `json:"version"`
+	Status                          compositionStatus         `json:"status"`
+	Rig                             daemonlock.RigManifest    `json:"rig"`
+	DaemonBuild                     string                    `json:"daemon_build"`
+	ServerURL                       string                    `json:"server_url"`
+	Repository                      string                    `json:"repository"`
+	RepositoryID                    int64                     `json:"repository_id"`
+	BaseRef                         string                    `json:"base_ref"`
+	BaseSHA                         string                    `json:"base_sha"`
+	ProfileDigest                   domain.Digest             `json:"profile_digest,omitempty"`
+	ReviewConfigurationDigest       domain.Digest             `json:"review_configuration_digest,omitempty"`
+	ShadowReviewConfigurationDigest domain.Digest             `json:"shadow_review_configuration_digest,omitempty"`
+	ReviewInstructionsPresent       bool                      `json:"review_instructions_present"`
+	ReviewInstructionsDigest        domain.Digest             `json:"review_instructions_digest,omitempty"`
+	BuildEgressDigest               domain.Digest             `json:"build_egress_configuration_digest"`
+	AllowedPaths                    []string                  `json:"allowed_paths"`
 	// AgentLineupRevision is the content address of the admitted-agent tree
 	// the roles were resolved against; it pins every identity the run uses.
 	AgentLineupRevision domain.Digest       `json:"agent_lineup_revision,omitempty"`
@@ -221,6 +257,7 @@ type repositoryAuthorityInspection struct {
 type preflightEnvironment interface {
 	AuthenticateRig(string, string) (daemonlock.RigManifest, error)
 	ResolveAgentSelection(context.Context, preflightConfig, time.Time) (preflightAgentSelection, error)
+	CheckJudgmentRoles(context.Context, preflightConfig, judgmentRuntime, time.Time) ([]inference.RoleCheck, error)
 	InspectDatabase(context.Context, preflightConfig, domain.Digest) databaseInspection
 	InspectImage(context.Context, string, string, []string, string) imageInspection
 	InspectCodexCredential(context.Context, preflightConfig, time.Time, bool) codexCredentialInspection
@@ -313,12 +350,21 @@ func runPreflightCommandWithEnvironment(
 	evaluateComposition(ctx, &manifest, cfg, environment, now, rigErr, identityErr,
 		agentsErr, reviewDigestErr, shadowReviewDigestErr)
 	if cfg.Judgments != (judgmentConfig{}) {
-		_, digest, err := composeJudgments(cfg.Judgments, cfg.ReviewInputRoot)
+		runtime, digest, err := composeJudgments(cfg.Judgments, cfg.ReviewInputRoot)
 		if err != nil {
 			failCheck(&manifest, "judgment_configuration", "subscription judgment binding is unavailable or unsafe", "verify the existing setup-token snapshot and exact native CLI pin")
+			notRunCheck(&manifest, "judgment_roles", "the judgment configuration must pass first")
 		} else {
 			manifest.JudgmentConfigurationDigest = digest
 			passCheck(&manifest, "judgment_configuration", "existing Claude subscription and pinned CLI configured; provider call not attempted")
+			if agentsErr != nil {
+				notRunCheck(&manifest, "judgment_roles", "the lineup must resolve first")
+			} else {
+				rolesCfg := cfg
+				rolesCfg.DBPath = manifest.Rig.Resources.DatabasePath
+				checks, err := environment.CheckJudgmentRoles(ctx, rolesCfg, runtime, now)
+				evaluateJudgmentRoles(&manifest, checks, err)
+			}
 		}
 	}
 	body, err := json.MarshalIndent(manifest, "", "  ")
@@ -435,7 +481,7 @@ func newCompositionManifest(cfg preflightConfig, daemonBuild string, now time.Ti
 		names = append(names, "shadow_reviewer_image")
 	}
 	if cfg.Judgments != (judgmentConfig{}) {
-		names = append(names, "judgment_configuration")
+		names = append(names, "judgment_configuration", "judgment_roles")
 	}
 	if cfg.Judgments.PublicationAuthorPrompt != "" {
 		names = append(names, "publication_author_inputs")
@@ -1282,6 +1328,75 @@ func (productionPreflightEnvironment) ResolveAgentSelection(
 	}
 	defer st.Close() //nolint:errcheck // the resolution result is reported independently
 	return resolvePreflightAgents(ctx, st, agents.Tree, agents.LineupRevision, cfg.ShadowReviewImage != "", now)
+}
+
+// CheckJudgmentRoles admits every judgment role as the daemon's startup check
+// will, against the same tree commit and store. Unlike a writer role, a
+// judgment role's whole admission runs here: its prompt is code-owned or the
+// operator's file, and a call takes no operating mode or attempt budget.
+func (productionPreflightEnvironment) CheckJudgmentRoles(
+	ctx context.Context, cfg preflightConfig, runtime judgmentRuntime, now time.Time,
+) ([]inference.RoleCheck, error) {
+	agents, err := loadAgentSelection(ctx, claudeDriverConfig{
+		AgentTreeCheckout: cfg.AgentTreeCheckout, AgentTreeCommit: cfg.AgentTreeCommit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	lock, err := daemonlock.Acquire(cfg.DBPath)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Close() //nolint:errcheck // the check result is reported independently
+	st, err := store.OpenReadOnly(ctx, cfg.DBPath, store.Options{
+		ApprovedRecipes: map[domain.Digest]bool{cfg.ApprovedRecipe: true},
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer st.Close() //nolint:errcheck // the check result is reported independently
+	return inference.CheckRoles(ctx, judgmentRoles{
+		st: st, tree: agents.Tree, revision: agents.LineupRevision, runtime: runtime,
+	}, judgmentSites(inference.Budget{}), now)
+}
+
+// evaluateJudgmentRoles records each judgment role's result and fails the
+// check when one is unbound: every site of that role would return its
+// fail-safe for the whole run, and the drift auditor's would hold unattended
+// admission at startup. A role left off is the operator's choice and passes.
+func evaluateJudgmentRoles(manifest *compositionManifest, checks []inference.RoleCheck, err error) {
+	if err != nil {
+		failCheck(manifest, "judgment_roles", "the admitted-agent tree or the store it resolves against could not be read",
+			"pass the checkout and exact commit that hold policy/ as -agent-tree and -agent-tree-commit")
+		return
+	}
+	var admitted int
+	var off, unbound []string
+	for _, check := range checks {
+		entry := compositionJudgmentRole{Role: check.Role, Status: judgmentRoleAdmitted}
+		switch {
+		case check.Off:
+			entry.Status = judgmentRoleOff
+			off = append(off, string(check.Role))
+		case check.Err != nil:
+			entry.Status, entry.Reason = judgmentRoleUnbound, check.Err.Error()
+			unbound = append(unbound, string(check.Role))
+		default:
+			admitted++
+		}
+		manifest.JudgmentRoles = append(manifest.JudgmentRoles, entry)
+	}
+	if len(unbound) > 0 {
+		failCheck(manifest, "judgment_roles",
+			fmt.Sprintf("judgment roles with no admissible lineup line: %s", strings.Join(unbound, ", ")),
+			"add each role's line to the lineup (freesided auth adopt emits the baseline lines), commit, and pass that commit as -agent-tree-commit")
+		return
+	}
+	evidence := fmt.Sprintf("the lineup admits %d judgment roles", admitted)
+	if len(off) > 0 {
+		evidence += "; left off: " + strings.Join(off, ", ")
+	}
+	passCheck(manifest, "judgment_roles", evidence)
 }
 
 // resolvePreflightAgents resolves the composition's roles. The writer roles

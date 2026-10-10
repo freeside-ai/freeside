@@ -235,7 +235,7 @@ func newFindingAdjudicationFixtureWithOptions(
 	}
 	client, err := inference.New(inference.Config{
 		StatePath: filepath.Join(dir, "inference.json"),
-		Binding:   inference.Binding{Provider: "fake", Model: "test", Driver: driver},
+		Roles:     fake.Roles{Provider: "fake", Model: "test", Driver: driver},
 		Sites: []inference.Site{
 			inference.ClassifierSite(budget), inference.AdjudicatorSite(budget),
 			inference.DriftAuditorSite(budget),

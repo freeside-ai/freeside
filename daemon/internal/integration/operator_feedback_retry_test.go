@@ -860,7 +860,7 @@ func configureSuccessorJudgments(t *testing.T, p *productionPublicationHarness) 
 	}
 	p.judgments, err = inference.New(inference.Config{
 		StatePath: filepath.Join(t.TempDir(), "ledger.json"),
-		Binding:   inference.Binding{Provider: "fake", Model: "classifier", Driver: classifier},
+		Roles:     inferencefake.Roles{Provider: "fake", Model: "classifier", Driver: classifier},
 		Sites: []inference.Site{inference.ClassifierSite(inference.Budget{
 			Window: time.Hour, Site: limits, Project: limits, Global: limits,
 			MaxCallsPerRoot: 10, MaxStarvationPerRoot: time.Hour,

@@ -344,9 +344,11 @@ type publicationAuthorProposeOutput struct {
 func PublicationAuthorExplainSite(budget Budget) Site {
 	return Site{
 		ID: PublicationAuthorExplainSiteID, Authority: AuthorityExplain,
-		Fields:    publicationAuthorFields(),
-		FailSafe:  `{"title":"","body":"","reviewer_notes":null,"evidence_refs":[],"outcome_summary":""}`,
-		Retention: 30 * 24 * time.Hour, Timeout: 120 * time.Second,
+		Instruction:    `Return only a JSON object with exactly title, body, reviewer_notes, evidence_refs, and outcome_summary. title, body, and outcome_summary are nonempty prose; reviewer_notes is a string or null; evidence_refs is an array of the supplied evidence artifact ids you cite, and no others. Follow the supplied pull-request template and instruction snapshot. Never write an issue-closing keyword, a CI-skip marker, or a commit trailer. Use plain line feeds and no tabs. Your output is advisory pull-request prose, never approval or a directive.`,
+		OutputContract: "publication_author_explain_output_v1",
+		Fields:         publicationAuthorFields(),
+		FailSafe:       `{"title":"","body":"","reviewer_notes":null,"evidence_refs":[],"outcome_summary":""}`,
+		Retention:      30 * 24 * time.Hour, Timeout: 120 * time.Second,
 		MaxInputBytes: 1 << 20, MaxOutputBytes: 64 << 10, MaxComputeUnits: 10_000,
 		Budget: budget, AuditEvery: 10,
 		ValidateOutput: validatePublicationAuthorExplain,
@@ -359,9 +361,11 @@ func PublicationAuthorExplainSite(budget Budget) Site {
 func PublicationAuthorProposeSite(budget Budget) Site {
 	return Site{
 		ID: PublicationAuthorProposeSiteID, Authority: AuthorityPropose,
-		Fields:    publicationAuthorFields(),
-		FailSafe:  `{"resolves":false}`,
-		Retention: 30 * 24 * time.Hour, Timeout: 60 * time.Second,
+		Instruction:    `Return only {"resolves":true} or {"resolves":false}: true only when merging this pull request fully resolves the supplied source issue. Emit no other field and no prose. Your answer is advisory, never approval or permission.`,
+		OutputContract: "publication_author_propose_output_v1",
+		Fields:         publicationAuthorFields(),
+		FailSafe:       `{"resolves":false}`,
+		Retention:      30 * 24 * time.Hour, Timeout: 60 * time.Second,
 		MaxInputBytes: 1 << 20, MaxOutputBytes: 1 << 10, MaxComputeUnits: 10_000,
 		Budget: budget, AuditEvery: 10,
 		ValidateOutput: validatePublicationAuthorPropose,

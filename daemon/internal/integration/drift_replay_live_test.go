@@ -13,6 +13,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/claudeinference"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
+	"github.com/freeside-ai/freeside/daemon/internal/inference/fake"
 )
 
 const (
@@ -73,7 +74,7 @@ func TestDriftReplayLive(t *testing.T) {
 	for _, fixture := range loadDriftReplayFixtures(t) {
 		t.Run(filepath.Base(fixture.Dir), func(t *testing.T) {
 			recorder := &driftReplayRecorder{inner: driver}
-			client := driftReplayClient(t, inference.Binding{
+			client := driftReplayClient(t, fake.Roles{
 				Provider: claudeinference.Protocol, Model: model,
 				Credential: inference.Secret(token), Driver: recorder,
 			}, time.Now)

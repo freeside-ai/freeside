@@ -398,6 +398,12 @@ var (
 	// agent's adapter build. A malformed proof fails with its field's error.
 	ErrCallLaunchUnproved = errors.New(
 		"adapter build has no proof that its call launch runs with no tools")
+	// ErrInvalidCallLaunch refuses a call launch that states anything but the
+	// one launch plan §5.4 defines for a judgment call.
+	ErrInvalidCallLaunch = errors.New(
+		"call launch does not state the judgment call's fixed clauses")
+	ErrInvalidLineageRelation = errors.New(
+		"lineage relation is not matched, differed, or unknown")
 	ErrAdmissionDerivationMismatch = errors.New(
 		"admission's derived fields disagree with its admitted agent closure")
 

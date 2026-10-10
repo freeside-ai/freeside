@@ -1656,9 +1656,12 @@ One further optional flag configures the publication-author role's two sites
 
 It names the refinable role prompt file (`prompts/publication-author.md`). The
 daemon reads it at startup, folds the file's content digest into the judgment
-configuration digest preflight records, and hands the bytes to the Claude
-judgment driver, so a different prompt file is a different, preflight-checked
-configuration. With the flag unset, both publication-author sites return their
+configuration digest preflight records, and sends the bytes with each
+publication-author call, so a different prompt file is a different,
+preflight-checked configuration. The role's lineup line names the same file by
+content digest, so a file that differs from the one adopted leaves the role
+unbound until the line is updated. With the flag unset, the role is off: both
+publication-author sites return their
 fail-safe (empty prose and "no close") and nothing blocks. The prompt file must
 be non-empty and at most 32 KiB.
 
@@ -1694,11 +1697,68 @@ audit. The wardless admission class carries this as `InterimCallLaunchAudit`
 adapter only under an audit record naming that adapter's digest and harness
 build. The record compares the adapter's authored harness build, not the
 executable's SHA-256, and which build was audited is deployment configuration
-the caller supplies. No judgment site reads the lineup or that admission yet;
-#1425 wires both.
+the caller supplies.
+
+Every judgment site looks its role up in the lineup at each call
+(`cmd/freesided/judgment_roles.go`, plan §5.4). The daemon resolves the role's
+line against the tree commit it started on and the store, and the inference
+client admits what comes back before it reserves budget or reaches the driver:
+it checks the line's prompt name and digest against the prompt the daemon will
+send, then runs the wardless admission above under the code-owned audit record
+(`judgmentCallAudit`: the baseline call adapter's digest, `claude-code
+2.1.267`, audited 2026-09-09). The client admits what the source returns and
+never takes its word, so a test or a later source cannot hand it an admitted
+call. `freesided auth adopt` writes the lines: one per judgment role with a
+built site, on the baseline call agent `claude-code-call-default`, whose call
+adapter pins the audited build. The publication author gets its line only when
+adopt is given `-judgment-publication-author-prompt`. A deployment adopted
+before these lines existed adds them by patch (`policy/README.md`).
+
+The lineup decides which agent a role is and which prompt it runs. The
+judgment flags below still decide what makes the call and which credential it
+carries, and the call record says so instead of claiming agreement: its
+`credential_source` is `interim_flag` until #1426 reads the credential from
+the line's enrollment, and its requested model is the agent's while its
+observed model is what the CLI reports (#1619). Nothing compares the
+`-judgment-claude-sha256` pin with the audited build; the operator keeps them
+the same.
+
+A role with no admissible line does not run. Each of its sites returns its
+declared fail-safe with the fixed reason `judgment role has no admissible
+lineup line`, and the daemon keeps one open `system_health` item per such role
+(`judgment_role_unbound`) naming the role and why. The drift auditor's item is
+`blocking` and holds unattended admission; every other role's is `advisory`.
+The daemon also admits every judgment role once at startup without making a
+call, so the items exist before a site is reached and an item whose line has
+been fixed resolves on restart. That matters for the drift auditor: its item
+holds the work that would otherwise have called it. For the same reason a
+start that cannot write these items stops with a `check judgment roles` error
+instead of running without them; after startup a failed item write is logged
+and retried on the next call, and never fails the call. The publication
+author with no prompt file is off, not unbound: its sites return their
+fail-safe and no item is raised.
+
+Each call's ledger record (`inference-budget.json`, version
+`freeside.inference-budget/v3`) carries the call identity: the admission (role,
+agent and prompt by name and digest, lineup revision, enrollment and
+generation), the treatment digest, the site-contract digest (the site's fixed
+instruction and output contract), the credential source, the requested model
+and effort, the observed model, serving operator, and output tokens as the
+driver reported them, and, for the adjudicator and drift auditor, whether the
+call's lineage matched each writing role's. Independence is recorded and never
+gates a call. An observed field the driver did not report is `null`, and a
+driver response whose observed fields exceed their bounds is refused before
+anything is recorded. A version 1 or 2 ledger loads and is rewritten as
+version 3; its earlier records keep no identity. A file labelled with an
+earlier version that carries identity, or with an unknown version, is refused,
+which disables the ledger so every call returns its fallback.
 
 Preflight reports `judgment_configuration` and a secret-free
-`judgment_configuration_digest`. The real-run harness accepts the corresponding
+`judgment_configuration_digest`. Beside it, `judgment_roles` admits every
+judgment role as the daemon's startup check will and lists each role in the
+manifest as `admitted`, `off`, or `unbound`. An unbound role fails preflight
+and is named in the check, so a run finds a missing line before it starts
+instead of running every site of that role on its fail-safe. The real-run harness accepts the corresponding
 `FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN`,
 `FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256`,
 `FREESIDE_REAL_RUN_JUDGMENT_MODEL`, and

@@ -9,16 +9,19 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/atomicfile"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
 const (
 	ledgerVersionV1 = "freeside.inference-budget/v1"
-	ledgerVersion   = "freeside.inference-budget/v2"
+	ledgerVersionV2 = "freeside.inference-budget/v2"
+	ledgerVersion   = "freeside.inference-budget/v3"
 )
 
 type usage struct {
@@ -51,6 +54,98 @@ type callRecord struct {
 	AuditRequired    bool      `json:"audit_required"`
 	AuditComplete    bool      `json:"audit_complete"`
 	AuditTransferred bool      `json:"audit_transferred"`
+	// Identity is what the call ran as. Every call this version reserves
+	// carries one; a record a v2 ledger wrote has none, and stays readable
+	// until retention prunes it.
+	Identity *callIdentity `json:"identity,omitempty"`
+}
+
+// callIdentity stamps a call with the admission it ran under and what it
+// was compared by (plan §5.4, §8). It is written when the call is reserved,
+// before the driver runs, and only Observed is written afterwards.
+type callIdentity struct {
+	// Admission is the wardless admission result: role, agent and prompt
+	// digests, lineup revision, enrollment generation, and the launch proof.
+	Admission          domain.WardlessAdmission `json:"admission"`
+	TreatmentDigest    domain.Digest            `json:"treatment_digest"`
+	SiteContractDigest domain.Digest            `json:"site_contract_digest"`
+	// CredentialSource says whose bytes authenticated the call, beside the
+	// enrollment generation the admission names.
+	CredentialSource CredentialSource `json:"credential_source"`
+	// RequestedModelID and RequestedEffort are the admitted agent's. The
+	// call does not yet send them (#1619), so Observed may disagree, and the
+	// record claims no agreement.
+	RequestedModelID string             `json:"requested_model_id"`
+	RequestedEffort  domain.EffortLevel `json:"requested_effort"`
+	// Observed is null until a driver answered within the site's contract.
+	Observed *observedCall `json:"observed"`
+	// ShadowOf is the record id of the call this one shadows. Nothing writes
+	// it yet (#1429).
+	ShadowOf *string `json:"shadow_of"`
+	// SelectionSource and SelectionRecordID are omitted when the lineup
+	// selected the agent, as domain.AdmissionAgentBinding omits them; the
+	// alternate-agent card adds its value (#1432).
+	SelectionSource   domain.AgentSelectionSource `json:"selection_source,omitempty"`
+	SelectionRecordID domain.Digest               `json:"selection_record_id,omitempty"`
+	// Independence is the judging roles' record (plan §7): one entry per
+	// writing role, in domain.WritingRoles order. It is null for every other
+	// role. It is a recorded fact and gates nothing.
+	Independence []independenceEntry `json:"independence"`
+}
+
+// observedCall is what the driver reported. A null identifier is a fact the
+// driver does not have.
+type observedCall struct {
+	ModelID         *string `json:"model_id"`
+	ServingOperator *string `json:"serving_operator"`
+	OutputTokens    int64   `json:"output_tokens"`
+}
+
+type independenceEntry struct {
+	WritingRole domain.RoleName        `json:"writing_role"`
+	Lineage     domain.LineageRelation `json:"lineage"`
+}
+
+func (i callIdentity) validate() error {
+	if err := i.Admission.Validate(); err != nil {
+		return err
+	}
+	if !contentaddr.Valid(string(i.TreatmentDigest)) || !contentaddr.Valid(string(i.SiteContractDigest)) ||
+		!i.CredentialSource.valid() || i.RequestedModelID == "" ||
+		!slices.Contains(domain.AllEffortLevels, i.RequestedEffort) {
+		return errors.New("invalid inference call identity")
+	}
+	if observed := i.Observed; observed != nil {
+		for _, id := range []*string{observed.ModelID, observed.ServingOperator} {
+			if id != nil && (*id == "" || !(Observed{ModelID: *id}).valid()) {
+				return errors.New("invalid inference call observation")
+			}
+		}
+		if observed.OutputTokens < 0 {
+			return errors.New("invalid inference call observation")
+		}
+	}
+	if i.ShadowOf != nil && !contentaddr.Valid(*i.ShadowOf) {
+		return errors.New("invalid inference call shadow link")
+	}
+	switch {
+	case i.SelectionSource == "" && i.SelectionRecordID == "":
+	case !slices.Contains(domain.AllAgentSelectionSources, i.SelectionSource),
+		i.SelectionSource == domain.AgentSelectionSourceLineup,
+		!contentaddr.Valid(string(i.SelectionRecordID)):
+		return errors.New("invalid inference call selection source")
+	}
+	// A stored record is history, so it is checked for shape and never
+	// against today's registries: which roles write, which roles judge, and
+	// which role a site belongs to can all change while a record is retained,
+	// and a ledger that then failed to load would send every site to its
+	// fallback with no way to prune the records that did it.
+	for _, entry := range i.Independence {
+		if !slices.Contains(domain.AllRoleNames, entry.WritingRole) || entry.Lineage.Validate() != nil {
+			return errors.New("invalid inference call independence record")
+		}
+	}
+	return nil
 }
 
 type attentionRecord struct {
@@ -113,18 +208,28 @@ func openLedger(path, anchorPath string, now func() time.Time) (*ledger, error) 
 		l.disabled = errors.New("decode inference ledger")
 		return l, nil
 	}
-	migrateV1 := false
+	migrate := false
 	switch l.state.Version {
 	case ledgerVersionV1:
 		// V1 had no durable summary for a required audit whose detailed call
 		// record was retention-pruned. Refuse a v1-labelled file carrying the
 		// new field; a rolled-back binary would ignore and erase it.
-		if len(l.state.AuditDebt) != 0 {
+		if len(l.state.AuditDebt) != 0 || recordsCarryIdentity(l.state.Calls) {
 			l.disabled = errors.New("decode inference ledger")
 			return l, nil
 		}
 		l.state.Version = ledgerVersion
-		migrateV1 = true
+		migrate = true
+	case ledgerVersionV2:
+		// V2 records carry no call identity. Refuse a v2-labelled file that
+		// carries one, for the reason v1 refuses audit debt: the binary that
+		// writes v2 would ignore the field and erase it on its next write.
+		if recordsCarryIdentity(l.state.Calls) {
+			l.disabled = errors.New("decode inference ledger")
+			return l, nil
+		}
+		l.state.Version = ledgerVersion
+		migrate = true
 	case ledgerVersion:
 	default:
 		l.disabled = errors.New("decode inference ledger")
@@ -145,12 +250,16 @@ func openLedger(path, anchorPath string, now func() time.Time) (*ledger, error) 
 		l.disabled = errors.New("inference ledger anchor missing or mismatched")
 		return l, nil
 	}
-	if migrateV1 {
+	if migrate {
 		if err := l.persist(l.state); err != nil {
 			return l, nil
 		}
 	}
 	return l, nil
+}
+
+func recordsCarryIdentity(records []callRecord) bool {
+	return slices.ContainsFunc(records, func(record callRecord) bool { return record.Identity != nil })
 }
 
 func newLedgerEpoch() (string, error) {
@@ -179,6 +288,13 @@ func validateLedgerState(state ledgerState) error {
 			(record.AuditTransferred && !record.AuditComplete) {
 			return errors.New("invalid inference call record")
 		}
+		// A record written before v3 has no identity; one that has an
+		// identity has a whole one.
+		if identity := record.Identity; identity != nil {
+			if err := identity.validate(); err != nil {
+				return err
+			}
+		}
 	}
 	for site, pending := range state.AuditDebt {
 		if site == "" || !pending {
@@ -193,7 +309,11 @@ func validateLedgerState(state ledgerState) error {
 	return nil
 }
 
-func (l *ledger) reserveCall(site Site, project, root, producer, digest string) (callRecord, error) {
+// reserveCall admits one call against the cumulative budgets and writes its
+// record, identity included, before the driver runs.
+func (l *ledger) reserveCall(
+	site Site, project, root, producer, digest string, identity callIdentity,
+) (callRecord, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.disabled != nil {
@@ -216,6 +336,7 @@ func (l *ledger) reserveCall(site Site, project, root, producer, digest string) 
 		Site: site.ID, Project: project, RootLineage: root, Producer: producer,
 		InputDigest: digest, CalledAt: now, RetainUntil: now.Add(site.Retention), Ordinal: ordinal,
 		AuditRequired: !exhausted && (forceAudit || (ordinal-1)%site.AuditEvery == 0),
+		Identity:      &identity,
 	}
 	called.ID = contentaddr.Sum([]byte(site.ID + "\x00" + project + "\x00" + root + "\x00" +
 		fmt.Sprint(ordinal) + "\x00" + digest + "\x00" + now.Format(time.RFC3339Nano)))
@@ -316,6 +437,33 @@ func (l *ledger) completeAudit(id string) error {
 			return errors.New("call has no audit obligation")
 		}
 		calls[index].AuditComplete = true
+		return l.persist(ledgerState{
+			Version: ledgerVersion, Epoch: l.state.Epoch, Usage: l.state.Usage,
+			Calls: calls, AuditDebt: l.state.AuditDebt, Attention: l.state.Attention,
+		})
+	}
+	return errors.New("unknown inference call record")
+}
+
+// recordObserved writes what the driver reported onto the call's record. It
+// is the only write to an identity after the call was reserved.
+func (l *ledger) recordObserved(id string, observed observedCall) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.disabled != nil {
+		return l.disabled
+	}
+	calls := append([]callRecord(nil), l.state.Calls...)
+	for index := range calls {
+		if calls[index].ID != id {
+			continue
+		}
+		if calls[index].Identity == nil {
+			return errors.New("call record has no identity")
+		}
+		identity := *calls[index].Identity
+		identity.Observed = &observed
+		calls[index].Identity = &identity
 		return l.persist(ledgerState{
 			Version: ledgerVersion, Epoch: l.state.Epoch, Usage: l.state.Usage,
 			Calls: calls, AuditDebt: l.state.AuditDebt, Attention: l.state.Attention,

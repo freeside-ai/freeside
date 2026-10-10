@@ -59,7 +59,7 @@ func testClientWithCredential(
 	statePath := filepath.Join(dir, "ledger.json")
 	client, err := inference.New(inference.Config{
 		StatePath: statePath,
-		Binding:   inference.Binding{Provider: "fake", Model: "test", Credential: inference.Secret(credential), Driver: driver},
+		Roles:     fake.Roles{Provider: "fake", Model: "test", Credential: inference.Secret(credential), Driver: driver},
 		Sites: []inference.Site{
 			classifier, adjudicator, driftAuditor, diagnostic, discussion, namer, explain, propose,
 		}, Advisory: store,
@@ -115,7 +115,7 @@ func TestAuthorRefusalDoesNotForwardArbitraryValidatorErrors(t *testing.T) {
 	site.ValidateOutput = func([]byte) error { return errors.New(secret) }
 	client, err := inference.New(inference.Config{
 		StatePath: filepath.Join(dir, "ledger.json"),
-		Binding:   inference.Binding{Provider: "fake", Model: "test", Driver: driver},
+		Roles:     fake.Roles{Provider: "fake", Model: "test", Driver: driver},
 		Sites:     []inference.Site{site}, Advisory: claims,
 	})
 	if err != nil {
@@ -355,7 +355,7 @@ func TestDiscussionSiteAllowlistAdvisoryFallbackAndBudget(t *testing.T) {
 	}})
 	unavailable, err := inference.New(inference.Config{
 		StatePath: filepath.Join(t.TempDir(), "ledger.json"),
-		Binding: inference.Binding{
+		Roles: fake.Roles{
 			Provider: "fake", Model: "test", Credential: "token-value", Driver: auditDriver,
 		},
 		Sites:    []inference.Site{inference.DiscussionSite(testBudget(1))},
@@ -386,7 +386,7 @@ func TestBudgetPersistsAcrossRestart(t *testing.T) {
 		site := inference.ClassifierSite(testBudget(1))
 		client, err := inference.New(inference.Config{
 			StatePath: filepath.Join(dir, "ledger.json"),
-			Binding:   inference.Binding{Provider: "fake", Model: "test", Driver: driver},
+			Roles:     fake.Roles{Provider: "fake", Model: "test", Driver: driver},
 			Sites:     []inference.Site{site}, Advisory: store, Now: func() time.Time { return time.Unix(100, 0).UTC() },
 		})
 		if err != nil {
@@ -502,7 +502,7 @@ func TestAuditSamplingUsesReservedCallOrdinal(t *testing.T) {
 	site.AuditEvery = 2
 	client, err := inference.New(inference.Config{
 		StatePath: filepath.Join(dir, "ledger.json"),
-		Binding:   inference.Binding{Provider: "fake", Model: "test", Driver: driver},
+		Roles:     fake.Roles{Provider: "fake", Model: "test", Driver: driver},
 		Sites:     []inference.Site{site}, Advisory: store, Now: now,
 	})
 	if err != nil {
@@ -535,7 +535,7 @@ func TestStateDirectoryLossAfterInitializationFailsInferenceClosed(t *testing.T)
 	statePath := filepath.Join(dir, "ledger.json")
 	newClient := func(driver inference.Driver) *inference.Client {
 		client, err := inference.New(inference.Config{
-			StatePath: statePath, Binding: inference.Binding{Provider: "fake", Model: "test", Driver: driver},
+			StatePath: statePath, Roles: fake.Roles{Provider: "fake", Model: "test", Driver: driver},
 			Sites: []inference.Site{inference.ClassifierSite(testBudget(10))}, Advisory: store, Now: now,
 		})
 		if err != nil {
@@ -580,7 +580,7 @@ func TestClientEnforcesHardTimeoutWhenDriverIgnoresContext(t *testing.T) {
 	site.Timeout = 10 * time.Millisecond
 	client, err := inference.New(inference.Config{
 		StatePath: filepath.Join(dir, "ledger.json"),
-		Binding:   inference.Binding{Provider: "stuck", Model: "test", Driver: stuckDriver{release: release}},
+		Roles:     fake.Roles{Provider: "stuck", Model: "test", Driver: stuckDriver{release: release}},
 		Sites:     []inference.Site{site}, Advisory: store, Now: now,
 	})
 	if err != nil {
@@ -637,7 +637,7 @@ func TestFailedRequiredAuditBlocksLaterProviderCalls(t *testing.T) {
 	site.AuditEvery = 1
 	client, err := inference.New(inference.Config{
 		StatePath: filepath.Join(dir, "ledger.json"),
-		Binding:   inference.Binding{Provider: "fake", Model: "test", Driver: driver},
+		Roles:     fake.Roles{Provider: "fake", Model: "test", Driver: driver},
 		Sites:     []inference.Site{site}, Advisory: writer,
 		Now: now,
 	})
@@ -669,7 +669,7 @@ func TestPendingAuditTransfersAcrossRestart(t *testing.T) {
 	newClient := func(driver inference.Driver) *inference.Client {
 		client, newErr := inference.New(inference.Config{
 			StatePath: filepath.Join(dir, "ledger.json"),
-			Binding:   inference.Binding{Provider: "fake", Model: "test", Driver: driver},
+			Roles:     fake.Roles{Provider: "fake", Model: "test", Driver: driver},
 			Sites:     []inference.Site{site}, Advisory: store, Now: now,
 		})
 		if newErr != nil {
@@ -720,7 +720,7 @@ func TestMaintainPrunesExpiredCallMetadataAndPreservesAuditDebt(t *testing.T) {
 	}})
 	client, err := inference.New(inference.Config{
 		StatePath: statePath,
-		Binding:   inference.Binding{Provider: "fake", Model: "test", Driver: failed},
+		Roles:     fake.Roles{Provider: "fake", Model: "test", Driver: failed},
 		Sites:     []inference.Site{site}, Advisory: writer, Now: now,
 	})
 	if err != nil {
@@ -758,7 +758,7 @@ func TestMaintainPrunesExpiredCallMetadataAndPreservesAuditDebt(t *testing.T) {
 	}})
 	client, err = inference.New(inference.Config{
 		StatePath: statePath,
-		Binding:   inference.Binding{Provider: "fake", Model: "test", Driver: recovered},
+		Roles:     fake.Roles{Provider: "fake", Model: "test", Driver: recovered},
 		Sites:     []inference.Site{site}, Advisory: writer, Now: now,
 	})
 	if err != nil {
@@ -820,7 +820,7 @@ func TestMaintainRetainsAnActiveExpiredCallUntilAuditCompletes(t *testing.T) {
 	site.Timeout = time.Hour
 	client, err := inference.New(inference.Config{
 		StatePath: statePath,
-		Binding:   inference.Binding{Provider: "fake", Model: "test", Driver: driver},
+		Roles:     fake.Roles{Provider: "fake", Model: "test", Driver: driver},
 		Sites:     []inference.Site{site}, Advisory: store, Now: now,
 	})
 	if err != nil {
@@ -910,7 +910,7 @@ func TestReserveAtAnotherSiteRetainsAnActiveExpiredCall(t *testing.T) {
 	classifier.Timeout, diagnostic.Timeout = time.Hour, time.Hour
 	client, err := inference.New(inference.Config{
 		StatePath: filepath.Join(dir, "ledger.json"),
-		Binding:   inference.Binding{Provider: "fake", Model: "test", Driver: driver},
+		Roles:     fake.Roles{Provider: "fake", Model: "test", Driver: driver},
 		Sites:     []inference.Site{classifier, diagnostic}, Advisory: store, Now: now,
 	})
 	if err != nil {
@@ -974,7 +974,7 @@ func TestMaintainPrunesTimedOutOrphanCallMetadata(t *testing.T) {
 	site.Timeout = 10 * time.Millisecond
 	client, err := inference.New(inference.Config{
 		StatePath: statePath,
-		Binding: inference.Binding{
+		Roles: fake.Roles{
 			Provider: "stuck", Model: "test", Driver: stuckDriver{release: release},
 		},
 		Sites: []inference.Site{site}, Advisory: store, Now: now,
@@ -1011,7 +1011,7 @@ func TestLedgerV1MigratesBeforeAuditDebtCanBeWritten(t *testing.T) {
 	newClient := func() *inference.Client {
 		client, newErr := inference.New(inference.Config{
 			StatePath: statePath,
-			Binding:   inference.Binding{Provider: "fake", Model: "test", Driver: fake.New()},
+			Roles:     fake.Roles{Provider: "fake", Model: "test", Driver: fake.New()},
 			Sites:     []inference.Site{inference.ClassifierSite(testBudget(10))}, Advisory: store,
 		})
 		if newErr != nil {
@@ -1042,7 +1042,7 @@ func TestLedgerV1MigratesBeforeAuditDebtCanBeWritten(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(migrated), `"version":"freeside.inference-budget/v2"`) {
+	if !strings.Contains(string(migrated), `"version":"freeside.inference-budget/v3"`) {
 		t.Fatalf("legacy ledger was not migrated before use: %s", migrated)
 	}
 }
@@ -1076,7 +1076,7 @@ func TestExhaustedReplacementRetainsPendingAuditDebt(t *testing.T) {
 	diagnostic := inference.DiagnosticSite(budget)
 	client, err := inference.New(inference.Config{
 		StatePath: filepath.Join(dir, "ledger.json"),
-		Binding:   inference.Binding{Provider: "fake", Model: "test", Driver: driver},
+		Roles:     fake.Roles{Provider: "fake", Model: "test", Driver: driver},
 		Sites:     []inference.Site{classifier, diagnostic}, Advisory: store, Now: now,
 	})
 	if err != nil {
@@ -1139,7 +1139,7 @@ func TestAmbiguousLedgerWriteDisablesLaterInference(t *testing.T) {
 	client, err := inference.New(inference.Config{
 		StatePath:  filepath.Join(stateDir, "ledger.json"),
 		AnchorPath: filepath.Join(dir, "ledger.anchor"),
-		Binding:    inference.Binding{Provider: "fake", Model: "test", Driver: driver},
+		Roles:      fake.Roles{Provider: "fake", Model: "test", Driver: driver},
 		Sites:      []inference.Site{inference.ClassifierSite(testBudget(10))}, Advisory: store,
 	})
 	if err != nil {
@@ -1184,7 +1184,7 @@ func TestComputeAndStarvationAreReservedBeforeDriverCall(t *testing.T) {
 	})
 	client, err := inference.New(inference.Config{
 		StatePath: filepath.Join(dir, "ledger.json"),
-		Binding:   inference.Binding{Provider: "fake", Model: "test", Driver: driver},
+		Roles:     fake.Roles{Provider: "fake", Model: "test", Driver: driver},
 		Sites:     []inference.Site{site}, Advisory: store, Now: now,
 	})
 	if err != nil {

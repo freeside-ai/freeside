@@ -179,7 +179,7 @@ func newAttentionDiscussionFixture(
 	}
 	client, err := inference.New(inference.Config{
 		StatePath: filepath.Join(dir, "inference.json"),
-		Binding: inference.Binding{
+		Roles: inferencefake.Roles{
 			Provider: "fake", Model: "test", Driver: inferenceDriver,
 		},
 		Sites: []inference.Site{inference.DiscussionSite(budget)}, Advisory: advisoryStore,

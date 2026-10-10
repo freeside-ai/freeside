@@ -30,7 +30,7 @@ func TestPinnedClaudeCLIProtocol(t *testing.T) {
 	}
 	req := classifierRequest()
 	req.MaxComputeUnits = 1024
-	prompt, site, err := promptFor(req, nil)
+	prompt, site, err := promptFor(req)
 	if err != nil {
 		t.Fatal(err)
 	}

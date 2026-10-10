@@ -134,8 +134,79 @@ func TestBaselineTreeWithoutShadowArmOrReviewAgent(t *testing.T) {
 	}
 	delete(in.Prompts, domain.RoleReviewer)
 	tree = must(agentbaseline.Tree(in))
-	if len(tree.Agents) != 1 || tree.Agents[0].Name != agentbaseline.ClaudeAgentName {
+	if len(tree.Agents) != 2 || tree.Agents[0].Name != agentbaseline.ClaudeCallAgentName ||
+		tree.Agents[1].Name != agentbaseline.ClaudeAgentName {
 		t.Fatalf("agents = %+v", tree.Agents)
+	}
+}
+
+// Every judgment role with a prompt gets a line on the call agent, and that
+// agent is the ward agent with the call adapter in the adapter's place: the
+// same enrollment, route, and offer under a launch with no tools.
+func TestBaselineTreeNamesTheCallAgentForJudgmentRoles(t *testing.T) {
+	in := input(false)
+	roles := agentbaseline.JudgmentRoles()
+	want := []domain.RoleName{
+		domain.RoleDiagnostic, domain.RoleTaskNamer, domain.RolePublicationAuthor,
+		domain.RoleFindingClassifier, domain.RoleFindingAdjudicator, domain.RoleDriftAuditor,
+		domain.RoleAttentionDiscussion,
+	}
+	if !slices.Equal(roles, want) {
+		t.Fatalf("judgment roles = %v, want %v", roles, want)
+	}
+	for _, role := range roles {
+		if role != domain.RolePublicationAuthor {
+			in.Prompts[role] = prompt(string(role))
+		}
+	}
+	tree := must(agenttree.Parse(must(agenttree.Render(must(agentbaseline.Tree(in))))))
+	enrollment, identity := claudeRecords()
+	call := must(tree.ResolveAgent(agentbaseline.ClaudeCallAgentName, enrollment, identity))
+	ward := must(tree.ResolveAgent(agentbaseline.ClaudeAgentName, enrollment, identity))
+	adapter := must(agentbaseline.ClaudeCallAdapter())
+	if call.Adapter.Digest != adapter.Digest || call.Adapter.HarnessBuild != agentbaseline.ClaudeCallHarnessBuild {
+		t.Fatalf("call agent adapter = %+v", call.Adapter)
+	}
+	if call.Route.Digest != ward.Route.Digest || call.Offer.Digest != ward.Offer.Digest ||
+		call.Definition.EnrollmentID != ward.Definition.EnrollmentID {
+		t.Fatal("the call agent does not share the ward agent's enrollment, route, and offer")
+	}
+	if call.Definition.Digest == ward.Definition.Digest {
+		t.Fatal("the call agent and the ward agent share a digest")
+	}
+	for _, capability := range []domain.LaunchCapability{
+		domain.LaunchCapReadTools, domain.LaunchCapMutationTools, domain.LaunchCapRouteStoreContract,
+	} {
+		if adapter.LaunchCapabilities.Has(capability) {
+			t.Fatalf("call adapter declares %s", capability)
+		}
+	}
+
+	lineup := must(tree.ResolveLineup())
+	for _, role := range roles {
+		line, ok := lineup.Line(role)
+		if role == domain.RolePublicationAuthor {
+			// Its prompt is the operator's file; with none named, no line.
+			if ok {
+				t.Fatalf("publication author line without a prompt: %+v", line)
+			}
+			continue
+		}
+		if !ok || line.AgentName != agentbaseline.ClaudeCallAgentName ||
+			line.AgentDigest != call.Definition.Digest || line.PromptName != string(role) {
+			t.Fatalf("lineup line for %s = %+v, %v", role, line, ok)
+		}
+	}
+	for _, mark := range tree.Marks {
+		if mark.Agent == agentbaseline.ClaudeCallAgentName {
+			t.Fatalf("call agent carries an attended mark: %+v", mark)
+		}
+	}
+	// The ward adapters are the ones a conformance record proves.
+	for _, proved := range must(agentbaseline.Adapters()) {
+		if proved.Digest == adapter.Digest {
+			t.Fatal("the call adapter is in the conformance set")
+		}
 	}
 }
 

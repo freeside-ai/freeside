@@ -136,6 +136,10 @@ export FREESIDE_REAL_RUN_PROMPT_PACKAGE=$tmp/implementer
 export FREESIDE_REAL_RUN_SPECIFICATION_PROMPT_PACKAGE=$tmp/specifier
 export FREESIDE_REAL_RUN_REMEDIATION_PROMPT_PACKAGE=$tmp/remediator
 export FREESIDE_REAL_RUN_AGENT_TREE=$tree
+# Judgments are off unless a case switches them on, whatever the caller's
+# environment holds.
+unset FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256 \
+	FREESIDE_REAL_RUN_JUDGMENT_MODEL FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT
 
 # adopt <session> <state-root> <commit> runs the step and leaves its status in
 # $rc and its stderr in <session>/stderr.
@@ -181,6 +185,23 @@ expected_args=(
 	-patch "$tmp/fresh-session/agent-tree.patch"
 )
 [[ "$(cat "$tmp/args")" == "$(printf '%s\n' "${expected_args[@]}")" ]] || fail "auth adopt got unexpected arguments: $(tr '\n' ' ' <"$tmp/args")"
+
+# With subscription judgments on, adoption also gets the publication author's
+# prompt file, the one the harness gives preflight and the daemon: the role is
+# on for both, so the adopted lineup needs its line. Any one of the four
+# variables counts, as it does where the harness builds judgment_args.
+author_prompt_args=(-judgment-publication-author-prompt "$root/prompts/publication-author.md")
+patch_at=$((${#expected_args[@]} - 2))
+judgment_expected_args=("${expected_args[@]:0:patch_at}" "${author_prompt_args[@]}"
+	-patch "$tmp/judgment-session/agent-tree.patch")
+FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN=/opt/claude FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256=sha256:11 \
+	FREESIDE_REAL_RUN_JUDGMENT_MODEL=judgment-model FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT=token \
+	adopt judgment-session root-a "$matching"
+[[ "$rc" == 0 ]] || fail "adoption with judgments on returned $rc"
+[[ "$(cat "$tmp/args")" == "$(printf '%s\n' "${judgment_expected_args[@]}")" ]] || fail "auth adopt with judgments on got unexpected arguments: $(tr '\n' ' ' <"$tmp/args")"
+FREESIDE_REAL_RUN_JUDGMENT_MODEL=judgment-model adopt judgment-session root-a "$matching"
+[[ "$(cat "$tmp/args")" == "$(printf '%s\n' "${judgment_expected_args[@]}")" ]] || fail 'one judgment variable did not give adoption the author prompt'
+[[ -s "$root/prompts/publication-author.md" ]] || fail 'the publication author prompt the harness names is missing'
 
 # A second run on the same root reports both identities reused and proceeds.
 adopt second-session root-a "$matching"
@@ -238,7 +259,7 @@ GIT_CONFIG_GLOBAL=$tmp/gitconfig adopt config-session root-config "$matching"
 # In the harness the step runs after the identities are recorded and before
 # the composition preflight, and its inputs are required but never written to
 # the session's verification environment.
-python3 - "$root/scripts/run-real-work.sh" <<'PY'
+python3 - "$root/scripts/run-real-work.sh" "$root/scripts/real-work-agent-tree.sh" <<'PY'
 import re
 import sys
 
@@ -251,6 +272,14 @@ required = re.search(r"^required=\((.*?)^\)", text, re.S | re.M).group(1)
 for name in ("COST_OWNER", "CLAUDE_ACCOUNT"):
     assert name not in required, f"{name} joined the list written to verification-env.sh"
 assert "missing_adoption_inputs=$(real_work_missing_adoption_inputs)" in text, "the harness does not require the adoption inputs"
+# Adoption, preflight, and the daemon must agree on whether the publication
+# author is on and on its prompt file, so the helper's condition and path are
+# the harness's own.
+helper = open(sys.argv[2], encoding="utf-8").read()
+condition = 'if [[ -n "${FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN:-}${FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256:-}${FREESIDE_REAL_RUN_JUDGMENT_MODEL:-}${FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT:-}" ]]; then'
+assert condition in text and condition in helper, "adoption and the harness switch judgments on differently"
+assert '-judgment-publication-author-prompt "$repo_root/prompts/publication-author.md")' in text, "the harness names another author prompt"
+assert '-judgment-publication-author-prompt "$real_work_agent_tree_repo_root/prompts/publication-author.md")' in helper, "adoption names another author prompt"
 PY
 
 echo 'test-real-work-agent-tree: ok'

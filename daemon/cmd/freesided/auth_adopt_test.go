@@ -19,6 +19,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/wardstore"
 )
@@ -266,6 +267,18 @@ func lineupRoles(tree agenttree.Tree) []string {
 	return roles
 }
 
+// judgmentLines is the lineup lines adoption emits for the judgment roles
+// whose prompt the daemon owns, in lineup order.
+func judgmentLines() []string {
+	var lines []string
+	for _, role := range agentbaseline.JudgmentRoles() {
+		if role != domain.RolePublicationAuthor {
+			lines = append(lines, string(role)+"="+agentbaseline.ClaudeCallAgentName)
+		}
+	}
+	return lines
+}
+
 // TestAuthAdoptEnrollsBothIdentitiesAndEmitsAResolvingTree covers the two
 // adoptions, the interim facts the flag path still reads, and the round trip
 // of the emitted patch through the loader.
@@ -335,6 +348,7 @@ func TestAuthAdoptEnrollsBothIdentitiesAndEmitsAResolvingTree(t *testing.T) {
 		"specifier=" + agentbaseline.ClaudeAgentName, "implementer=" + agentbaseline.ClaudeAgentName,
 		"remediator=" + agentbaseline.ClaudeAgentName, "reviewer=" + agentbaseline.CodexReviewAgentName,
 	}
+	wantRoles = append(wantRoles, judgmentLines()...)
 	if got := lineupRoles(tree); !reflect.DeepEqual(got, wantRoles) {
 		t.Fatalf("lineup = %v, want %v", got, wantRoles)
 	}
@@ -402,7 +416,7 @@ func TestAuthAdoptOneIdentityIsOneAdoption(t *testing.T) {
 		t.Fatalf("enrollments = %+v", snap.Enrollments)
 	}
 	tree := loadAdoptedPatch(t, patch)
-	if len(tree.Agents) != 1 || len(tree.Lineup) != 3 {
+	if len(tree.Agents) != 2 || len(tree.Lineup) != 3+len(judgmentLines()) {
 		t.Fatalf("tree agents = %+v, lineup = %v", tree.Agents, lineupRoles(tree))
 	}
 
@@ -479,8 +493,50 @@ func TestAuthAdoptShadowArm(t *testing.T) {
 		t.Fatalf("auth adopt: %v", err)
 	}
 	roles := lineupRoles(loadAdoptedPatch(t, patch))
-	if len(roles) != 5 || roles[4] != "shadow_reviewer="+agentbaseline.ClaudeAgentName {
+	if len(roles) != 5+len(judgmentLines()) || roles[4] != "shadow_reviewer="+agentbaseline.ClaudeAgentName {
 		t.Fatalf("lineup = %v", roles)
+	}
+}
+
+// TestAuthAdoptJudgmentLines covers the judgment roles' lines: every role
+// with a built site gets one on the call agent, the publication author only
+// when its prompt file is named, and that line records the file's digest.
+func TestAuthAdoptJudgmentLines(t *testing.T) {
+	f := newAuthAdoptFixture(t)
+	if _, _, err := f.run(t, f.args("-judgment-publication-author-prompt",
+		filepath.Join(f.promptDir, "absent"))); err == nil ||
+		!strings.Contains(err.Error(), "-judgment-publication-author-prompt") {
+		t.Fatalf("missing author prompt file = %v", err)
+	}
+	if snap := f.snapshot(t); len(snap.Enrollments) != 0 {
+		t.Fatalf("a refused adoption recorded %+v", snap.Enrollments)
+	}
+	body := []byte("write the pull request for a reviewer\n")
+	authorPrompt := filepath.Join(f.promptDir, "author")
+	if err := os.WriteFile(authorPrompt, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, patch, err := f.run(t, f.args("-judgment-publication-author-prompt", authorPrompt))
+	if err != nil {
+		t.Fatalf("auth adopt: %v", err)
+	}
+	lineup, err := loadAdoptedPatch(t, patch).ResolveLineup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range agentbaseline.JudgmentRoles() {
+		line, ok := lineup.Line(role)
+		if !ok || line.AgentName != agentbaseline.ClaudeCallAgentName {
+			t.Fatalf("line for %s = %+v, %v", role, line, ok)
+		}
+		want, owned := inference.CodeOwnedRolePrompt(role)
+		if !owned {
+			want = inference.OperatorRolePrompt(role, body)
+		}
+		if line.PromptName != want.Name || line.PromptDigest != want.Digest {
+			t.Fatalf("line for %s names prompt %s %s, want %s %s",
+				role, line.PromptName, line.PromptDigest, want.Name, want.Digest)
+		}
 	}
 }
 
@@ -552,7 +608,7 @@ func TestAuthAdoptReportsAnUnadoptableReviewIdentity(t *testing.T) {
 					t.Fatalf("enrollments = %+v", after.Enrollments)
 				}
 				tree := loadAdoptedPatch(t, patch)
-				if len(tree.Agents) != 1 || len(tree.Lineup) != 3 {
+				if len(tree.Agents) != 2 || len(tree.Lineup) != 3+len(judgmentLines()) {
 					t.Fatalf("tree agents = %+v, lineup = %v", tree.Agents, lineupRoles(tree))
 				}
 			})

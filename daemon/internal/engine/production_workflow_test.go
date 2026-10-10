@@ -261,7 +261,7 @@ func TestProductionTerminalFailureWritesAdvisoryDiagnosticOnce(t *testing.T) {
 	site.AuditEvery = 1
 	client, err := inference.New(inference.Config{
 		StatePath: filepath.Join(dir, "ledger.json"),
-		Binding:   inference.Binding{Provider: "fake", Model: "diagnostic", Driver: driver},
+		Roles:     inferencefake.Roles{Provider: "fake", Model: "diagnostic", Driver: driver},
 		Sites:     []inference.Site{site}, Advisory: advisoryStore,
 		Now: now,
 	})
