@@ -14,6 +14,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
@@ -192,7 +193,7 @@ func TestReviewSelectionFailsClosed(t *testing.T) {
 					t.Fatalf("%s after the offer's not_after = %v", role, err)
 				}
 				admit := reviewAdmission(st, tree, role, agent.Identity.ID, func() time.Time { return expired })
-				if err := admit(ctx); !errors.Is(err, engine.ErrAgentNotAdmissible) {
+				if err := admit(ctx, exec.ReviewRequest{}); !errors.Is(err, engine.ErrAgentNotAdmissible) {
 					t.Fatalf("%s review admission after the offer's not_after = %v", role, err)
 				}
 			}
@@ -232,7 +233,7 @@ func TestReviewSelectionFailsClosed(t *testing.T) {
 					t.Fatalf("%s without its attended mark = %v", role, err)
 				}
 				admit := reviewAdmission(st, unmarked, role, agent.Identity.ID, time.Now)
-				if err := admit(ctx); !errors.Is(err, engine.ErrAgentNotAdmissible) {
+				if err := admit(ctx, exec.ReviewRequest{}); !errors.Is(err, engine.ErrAgentNotAdmissible) {
 					t.Fatalf("%s review admission without its attended mark = %v", role, err)
 				}
 			}
@@ -255,20 +256,178 @@ func TestReviewSelectionFailsClosed(t *testing.T) {
 		}
 		tree := loadAdoptedPatch(t, patch)
 		f.withStore(t, func(st *store.Store) {
+			req := exec.ReviewRequest{RunID: seedReviewedRun(t, st, "run-reviewed").ID}
 			admit := reviewAdmission(st, tree, domain.RoleReviewer, "codex-review", time.Now)
-			if err := admit(ctx); err != nil {
+			if err := admit(ctx, req); err != nil {
 				t.Fatalf("review admission of the adopted reviewer: %v", err)
 			}
 			other := reviewAdmission(st, tree, domain.RoleReviewer, "codex-other", time.Now)
-			if err := other(ctx); !errors.Is(err, engine.ErrAgentNotAdmissible) {
+			if err := other(ctx, req); !errors.Is(err, engine.ErrAgentNotAdmissible) {
 				t.Fatalf("review admission under another identity = %v", err)
 			}
 			setIdentityEnabled(t, st, "codex-review", false)
 			var failure *roleAdmissionError
-			if err := admit(ctx); !errors.As(err, &failure) || failure.Role != domain.RoleReviewer ||
+			if err := admit(ctx, req); !errors.As(err, &failure) || failure.Role != domain.RoleReviewer ||
 				!errors.Is(err, engine.ErrAgentNotAdmissible) {
 				t.Fatalf("review admission after the identity was disabled = %v", err)
 			}
+		})
+	})
+}
+
+// seedReviewedRun persists a run, which binds it to a task, and records the
+// submit_task command that created that task: the record a task line's
+// set_by names.
+func seedReviewedRun(t *testing.T, st *store.Store, id domain.RunID) domain.Run {
+	t.Helper()
+	ctx := context.Background()
+	run := domain.Run{ID: id, ProjectID: "project-review", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, run); err != nil {
+			return err
+		}
+		var err error
+		if run, err = tx.GetRun(ctx, id); err != nil {
+			return err
+		}
+		return tx.PutTaskSubmissionRequest(ctx, domain.TaskSubmission{
+			CommandID: "cmd-" + string(id), DeviceID: "device-1", ProjectID: run.ProjectID,
+			SourceDigest: domain.Digest("sha256:" + strings.Repeat("4", 64)), TaskID: run.TaskID,
+			SpecificationRunID: id,
+			Name:               domain.DisplayName{Text: "Reviewed task", Source: domain.DisplayNameSourceOperator},
+		}, domain.Digest("sha256:"+strings.Repeat("c", 64)))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return run
+}
+
+// setReviewedRunLine records a line on the run's task, set by setBy at the
+// task's creation instant plus skew.
+func setReviewedRunLine(
+	t *testing.T, st *store.Store, run domain.Run, role domain.RoleName, agent, setBy string, skew time.Duration,
+) domain.TaskLine {
+	t.Helper()
+	ctx := context.Background()
+	var line domain.TaskLine
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		task, err := tx.GetTask(ctx, run.TaskID)
+		if err != nil {
+			return err
+		}
+		line, err = tx.AppendTaskLine(ctx, domain.TaskLineInput{
+			TaskID: task.ID, Role: role, Agent: agent, Source: domain.TaskLineSourceSubmitTask, SetBy: setBy,
+		}, task.CreatedAt.Add(skew))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return line
+}
+
+// TestReviewAdmissionHoldsTheReviewerTaskLine: the review source runs one
+// agent, fixed when the daemon composed it, so a task's reviewer line cannot
+// move its review. The line is never passed over: a request for a task whose
+// line names another agent is refused, and so is one whose line does not hold
+// against the command that set it. The shadow reviewer takes no task line.
+func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
+	ctx := context.Background()
+	f := newAuthAdoptFixture(t)
+	_, patch, err := f.run(t, f.args("-shadow-review-cost-owner", "operator"))
+	if err != nil {
+		t.Fatalf("auth adopt: %v", err)
+	}
+	tree := loadAdoptedPatch(t, patch)
+	now := time.Now().UTC()
+	f.withStore(t, func(st *store.Store) {
+		reviewer, err := reviewRoleAgent(ctx, st, tree, domain.RoleReviewer, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		shadow, err := reviewRoleAgent(ctx, st, tree, domain.RoleShadowReviewer, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		admit := reviewAdmission(st, tree, domain.RoleReviewer, reviewer.Identity.ID, time.Now)
+		admitShadow := reviewAdmission(st, tree, domain.RoleShadowReviewer, shadow.Identity.ID, time.Now)
+		refused := func(t *testing.T, req exec.ReviewRequest, want string) {
+			t.Helper()
+			err := admit(ctx, req)
+			var failure *roleAdmissionError
+			if !errors.As(err, &failure) || failure.Role != domain.RoleReviewer ||
+				!errors.Is(err, engine.ErrAgentNotAdmissible) || !strings.Contains(err.Error(), want) {
+				t.Fatalf("review admission = %v, want a reviewer refusal naming %q", err, want)
+			}
+		}
+
+		t.Run("no reviewer line", func(t *testing.T) {
+			run := seedReviewedRun(t, st, "run-lineless")
+			// A line for another role is not the reviewer's.
+			setReviewedRunLine(t, st, run, domain.RoleImplementer, "some-other-agent", "cmd-run-lineless", 0)
+			if err := admit(ctx, exec.ReviewRequest{RunID: run.ID}); err != nil {
+				t.Fatalf("review admission with no reviewer line: %v", err)
+			}
+		})
+
+		t.Run("the line names the agent the source runs", func(t *testing.T) {
+			run := seedReviewedRun(t, st, "run-same-agent")
+			setReviewedRunLine(t, st, run, domain.RoleReviewer, reviewer.Line.AgentName, "cmd-run-same-agent", 0)
+			if err := admit(ctx, exec.ReviewRequest{RunID: run.ID}); err != nil {
+				t.Fatalf("review admission with a line naming the composed agent: %v", err)
+			}
+		})
+
+		t.Run("the line names another agent", func(t *testing.T) {
+			run := seedReviewedRun(t, st, "run-other-agent")
+			// The other agent is a real one that passes every admission step
+			// for its own role: the refusal is the source's limit, not the
+			// agent's.
+			if shadow.Line.AgentName == reviewer.Line.AgentName {
+				t.Fatal("the fixture's two review roles share an agent")
+			}
+			line := setReviewedRunLine(t, st, run, domain.RoleReviewer, shadow.Line.AgentName, "cmd-run-other-agent", 0)
+			req := exec.ReviewRequest{RunID: run.ID}
+			refused(t, req, string(line.ID))
+			refused(t, req, "cannot run another agent for one task")
+			// The shadow reviewer reads no line, this task's included.
+			if err := admitShadow(ctx, req); err != nil {
+				t.Fatalf("shadow review admission beside a refused reviewer line: %v", err)
+			}
+		})
+
+		t.Run("the refusal never repeats the line's agent", func(t *testing.T) {
+			run := seedReviewedRun(t, st, "run-pasted-agent")
+			// A credential pasted as the agent can pass the name grammar. The
+			// refusal becomes the review failure's recorded reason, so it
+			// names the line and not the text.
+			const pasted = "0123456789abcdef0123456789abcdef"
+			line := setReviewedRunLine(t, st, run, domain.RoleReviewer, pasted, "cmd-run-pasted-agent", 0)
+			req := exec.ReviewRequest{RunID: run.ID}
+			refused(t, req, string(line.ID))
+			if err := admit(ctx, req); strings.Contains(err.Error(), pasted) {
+				t.Fatalf("review admission = %v, which repeats the line's agent", err)
+			}
+		})
+
+		t.Run("the line does not hold against its command", func(t *testing.T) {
+			// Each line names the composed agent, so only the anchor refuses.
+			unrecorded := seedReviewedRun(t, st, "run-unrecorded")
+			setReviewedRunLine(t, st, unrecorded, domain.RoleReviewer, reviewer.Line.AgentName, "cmd-never-recorded", 0)
+			refused(t, exec.ReviewRequest{RunID: unrecorded.ID}, "cmd-never-recorded")
+
+			borrowed := seedReviewedRun(t, st, "run-borrowed")
+			setReviewedRunLine(t, st, borrowed, domain.RoleReviewer, reviewer.Line.AgentName, "cmd-run-same-agent", 0)
+			refused(t, exec.ReviewRequest{RunID: borrowed.ID}, "that command created task")
+
+			late := seedReviewedRun(t, st, "run-late")
+			setReviewedRunLine(t, st, late, domain.RoleReviewer, reviewer.Line.AgentName, "cmd-run-late", time.Second)
+			refused(t, exec.ReviewRequest{RunID: late.ID}, "its task was created at")
+		})
+
+		t.Run("the request names no stored run", func(t *testing.T) {
+			// Whether the task has a line cannot be read, so the review is
+			// refused instead of run on the assumption that it has none.
+			refused(t, exec.ReviewRequest{RunID: "run-never-stored"}, "run-never-stored")
 		})
 	})
 }

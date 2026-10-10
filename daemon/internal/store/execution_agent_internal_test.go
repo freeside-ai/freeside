@@ -537,3 +537,127 @@ func TestAdapterConformanceStore(t *testing.T) {
 		t.Fatalf("tampered newest row = %v, want %v", err, domain.ErrInvalidLaunchCapability)
 	}
 }
+
+// agentAdmissionCiting rebuilds the agent-bound admission with a binding that
+// names a task line as the selection that chose its agent.
+func agentAdmissionCiting(
+	t *testing.T, generation domain.EnrollmentGeneration, lineID domain.Digest,
+) domain.ExecutionAdmission {
+	t.Helper()
+	admission := agentBoundAdmission(t, generation)
+	binding := *admission.AgentBinding
+	binding.SelectionSource, binding.SelectionRecordID = domain.AgentSelectionSourceTaskLine, lineID
+	cited, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
+		InvocationID: admission.InvocationID, RunID: admission.RunID,
+		StageID: admission.StageID, AttemptID: admission.AttemptID,
+		Backend: admission.Backend, Capabilities: admission.Capabilities,
+		OperatingMode: admission.OperatingMode, CredentialMode: admission.CredentialMode,
+		EgressProfile: admission.EgressProfile, ImageRef: admission.ImageRef,
+		SpecDigest: admission.SpecDigest, PolicyDigest: admission.PolicyDigest,
+		InputDigest: admission.InputDigest, StageInputs: admission.StageInputs,
+		Base: admission.Base, Workspace: admission.Workspace,
+		AuthIdentityID: admission.AuthIdentityID, AgentBinding: &binding,
+		AdmittedAt: admission.AdmittedAt,
+	})
+	if err != nil {
+		t.Fatalf("NewExecutionAdmission: %v", err)
+	}
+	return cited
+}
+
+// appendRunTaskLine records an implementer line on the run's task.
+func appendRunTaskLine(t *testing.T, s *Store, runID domain.RunID, agent string) domain.TaskLine {
+	t.Helper()
+	ctx := context.Background()
+	var line domain.TaskLine
+	if err := s.Write(ctx, func(tx *WriteTx) error {
+		run, err := tx.GetRun(ctx, runID)
+		if err != nil {
+			return err
+		}
+		line, err = tx.AppendTaskLine(ctx, domain.TaskLineInput{
+			TaskID: run.TaskID, Role: domain.RoleImplementer, Agent: agent,
+			Source: domain.TaskLineSourceSubmitTask, SetBy: "cmd-1",
+		}, time.Date(2026, 1, 2, 3, 0, 0, 0, time.UTC))
+		return err
+	}); err != nil {
+		t.Fatalf("append task line: %v", err)
+	}
+	return line
+}
+
+// TestTaskLineAdmissionResolvesTheLineItCites pins the re-gate of a binding
+// under task_line (plan §5.4): the binding's own validation accepts any
+// well-formed digest, so the store resolves the id to a recorded line of the
+// admission run's task, when the admission is recorded and on every read.
+func TestTaskLineAdmissionResolvesTheLineItCites(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	record := func(s *Store, admission domain.ExecutionAdmission) error {
+		return s.Write(ctx, func(tx *WriteTx) error { return tx.RecordExecutionAdmission(ctx, admission) })
+	}
+	read := func(s *Store) (domain.ExecutionAdmission, error) {
+		var got domain.ExecutionAdmission
+		err := s.Read(ctx, func(tx *ReadTx) error {
+			var err error
+			got, err = tx.GetExecutionAdmission(ctx, "inv-1")
+			return err
+		})
+		return got, err
+	}
+
+	t.Run("a recorded line of the run's task", func(t *testing.T) {
+		s := openAgentAdmissionStore(t)
+		generation := seedAgentClosure(t, s)
+		cited := appendRunTaskLine(t, s, "run-1", "codex")
+		// A later version does not unseat the line the attempt was admitted
+		// under.
+		appendRunTaskLine(t, s, "run-1", "claude-b")
+		admission := agentAdmissionCiting(t, generation, cited.ID)
+		if err := record(s, admission); err != nil {
+			t.Fatalf("record = %v", err)
+		}
+		got, err := read(s)
+		if err != nil || got.ID != admission.ID || !reflect.DeepEqual(got.AgentBinding, admission.AgentBinding) {
+			t.Fatalf("read back = %+v, %v", got.AgentBinding, err)
+		}
+		// The line removed afterwards: the stored admission no longer
+		// reconstructs.
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM task_lines`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := read(s); !errors.Is(err, domain.ErrAdmissionDerivationMismatch) {
+			t.Fatalf("read after the line was removed = %v, want %v", err, domain.ErrAdmissionDerivationMismatch)
+		}
+	})
+
+	t.Run("an id no line was recorded under", func(t *testing.T) {
+		s := openAgentAdmissionStore(t)
+		generation := seedAgentClosure(t, s)
+		appendRunTaskLine(t, s, "run-1", "codex")
+		err := record(s, agentAdmissionCiting(t, generation,
+			"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"))
+		// Not ErrNotFound: a caller asking whether an admission exists must
+		// not read a refused one as absent.
+		if !errors.Is(err, domain.ErrAdmissionDerivationMismatch) || errors.Is(err, ErrNotFound) {
+			t.Fatalf("record = %v, want %v and not %v", err, domain.ErrAdmissionDerivationMismatch, ErrNotFound)
+		}
+	})
+
+	t.Run("another task's line", func(t *testing.T) {
+		s := openAgentAdmissionStore(t)
+		generation := seedAgentClosure(t, s)
+		if err := s.Write(ctx, func(tx *WriteTx) error {
+			return tx.PutRun(ctx, domain.Run{
+				ID: "run-2", ProjectID: "proj-1", SpecDigest: agentSpecDigest, PolicyDigest: agentPolicyDigest,
+			})
+		}); err != nil {
+			t.Fatal(err)
+		}
+		other := appendRunTaskLine(t, s, "run-2", "codex")
+		err := record(s, agentAdmissionCiting(t, generation, other.ID))
+		if !errors.Is(err, domain.ErrAdmissionDerivationMismatch) {
+			t.Fatalf("record = %v, want %v", err, domain.ErrAdmissionDerivationMismatch)
+		}
+	})
+}

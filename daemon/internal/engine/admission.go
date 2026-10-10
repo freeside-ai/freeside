@@ -494,7 +494,7 @@ func (e *Engine) admitAttempt(
 			}
 		}
 		resolved, err := resolveAgentAdmission(
-			ctx, e.store, *env.Agents, role, promptPackageDigest, env.OperatingMode, admittedAt,
+			ctx, e.store, *env.Agents, binding.run.ID, role, promptPackageDigest, env.OperatingMode, admittedAt,
 		)
 		if err != nil {
 			return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID, err)

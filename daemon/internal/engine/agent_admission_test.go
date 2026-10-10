@@ -388,8 +388,8 @@ func TestLineupAdmissionPicksTheRoleFromTheAttempt(t *testing.T) {
 				t.Fatalf("admission launch %s prompt %s, want role %s",
 					admission.AgentBinding.LaunchDigest, admission.StageInputs.PromptPackageDigest, tc.role)
 			}
-			// Every role is chosen by the lineup until admission reads task
-			// lines (#1640), so no admission names a selection record.
+			// The task has no lines, so the lineup chooses every role and no
+			// admission names a selection record.
 			if admission.AgentBinding.SelectionSource != domain.AgentSelectionSourceLineup ||
 				admission.AgentBinding.SelectionRecordID != "" {
 				t.Fatalf("admission selection = %q %q, want the lineup and no record",
@@ -498,7 +498,7 @@ func TestLineupAdmissionRefusals(t *testing.T) {
 			if tc.mutate != nil {
 				tc.mutate(t, f, &selection)
 			}
-			_, err := resolveAgentAdmission(ctx, f.store, selection, domain.RoleImplementer, prompt, mode, at)
+			_, err := resolveAgentAdmission(ctx, f.store, selection, f.run.ID, domain.RoleImplementer, prompt, mode, at)
 			if !errors.Is(err, ErrAgentNotAdmissible) || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("resolve = %v, want a refusal naming %q", err, tc.want)
 			}
@@ -533,7 +533,8 @@ func TestLineupAdmissionRequiresAdapterConformance(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	_, err = resolveAgentAdmission(ctx, f.store, f.selection, domain.RoleImplementer, agentTestPrompts[domain.RoleImplementer].Digest,
+	_, err = resolveAgentAdmission(
+		ctx, f.store, f.selection, f.run.ID, domain.RoleImplementer, agentTestPrompts[domain.RoleImplementer].Digest,
 		domain.ModeAttendedDev, agentTestAt,
 	)
 	if !errors.Is(err, ErrAgentNotAdmissible) {
@@ -544,7 +545,7 @@ func TestLineupAdmissionRequiresAdapterConformance(t *testing.T) {
 func TestUnattendedLineupAdmissionRecordsTheMark(t *testing.T) {
 	f := newAgentAdmissionFixture(t)
 	resolved, err := resolveAgentAdmission(
-		context.Background(), f.store, f.selection, domain.RoleImplementer,
+		context.Background(), f.store, f.selection, f.run.ID, domain.RoleImplementer,
 		agentTestPrompts[domain.RoleImplementer].Digest, domain.ModeUnattended, agentTestAt,
 	)
 	if err != nil || resolved.binding.Attended {

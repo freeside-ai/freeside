@@ -1214,9 +1214,18 @@ database and its access controls.
 of the new task; repeat it for more roles. The roles are `specifier`,
 `implementer`, `remediator`, and `reviewer`. Submit checks only the name's
 shape and saves the lines in the journal with the other inputs, so a retry
-replays them and takes no `--task-line` of its own. Admission does not read
-task lines yet (#1640): until it does, a line is recorded and the lineup
-still selects every agent.
+replays them and takes no `--task-line` of its own.
+
+Admission reads the task's line for `specifier`, `implementer`, and
+`remediator`: an attempt of that role runs the agent the line names, on the
+lineup line's prompt, and its admission cites the line. A line picks the
+agent only, so the role still needs its lineup line. A line that cannot be
+honored refuses the attempt, and the lineup's agent never runs in its place:
+that covers an agent the tree lacks, a disabled identity, and a line that
+does not hold against the submission that set it. The review source runs one
+agent for every task, so a `reviewer` line must name that agent. A review for
+a task whose line names any other agent is refused as a review configuration
+failure instead of run under the composed one.
 
 For a preflight-bound submission, choose one `--submission-id <identity>` and
 pass it to both `preflight` and `submit`. The real-work harness saves this identity

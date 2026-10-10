@@ -13,6 +13,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -206,6 +207,24 @@ func TestSubmitTaskCommandHTTPRecordsTaskLines(t *testing.T) {
 	}
 	if want := map[domain.RoleName]string{domain.RoleReviewer: "codex", domain.RoleImplementer: "claude-b"}; !reflect.DeepEqual(agents, want) {
 		t.Fatalf("recorded lines = %v, want %v", agents, want)
+	}
+
+	// Admission honors a line only when it holds against the command that
+	// set it, so the lines this command writes must pass that read.
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		submission, err := tx.GetTaskSubmission(ctx, "cmd-lines")
+		if err != nil {
+			return err
+		}
+		for role, agent := range agents {
+			line, found, err := engine.RunTaskLine(ctx, tx, submission.SpecificationRunID, role)
+			if err != nil || !found || line.Agent != agent {
+				t.Fatalf("%s line at admission = %+v, %t, %v; want agent %q", role, line, found, err, agent)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read the lines as admission does: %v", err)
 	}
 
 	// A retry returns the same task and appends no second version.

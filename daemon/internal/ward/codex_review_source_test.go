@@ -4071,7 +4071,7 @@ func TestCodexReviewWorkspaceBindingSurvivesCleanupThenReconcileRemovesIt(t *tes
 	}
 }
 
-// TestCodexReviewSourceAdmitRefusalRecordsNothing: the lineup recheck runs
+// TestCodexReviewSourceAdmitRefusalRecordsNothing: the admission recheck runs
 // before the request is recorded, so a refused review leaves no request, no
 // workspace, and no credential-bearing launch behind.
 func TestCodexReviewSourceAdmitRefusalRecordsNothing(t *testing.T) {
@@ -4083,7 +4083,11 @@ func TestCodexReviewSourceAdmitRefusalRecordsNothing(t *testing.T) {
 	journal := &fakeCodexReviewJournal{}
 	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
 	refusal := errors.New("the reviewer line no longer resolves")
-	sourceConfig.Admit = func(context.Context) error { return refusal }
+	var admitted []exec.ReviewRequest
+	sourceConfig.Admit = func(_ context.Context, req exec.ReviewRequest) error {
+		admitted = append(admitted, req)
+		return refusal
+	}
 	source, err := NewCodexReviewSource(sourceConfig)
 	if err != nil {
 		t.Fatal(err)
@@ -4122,5 +4126,10 @@ func TestCodexReviewSourceAdmitRefusalRecordsNothing(t *testing.T) {
 	}
 	if journal.intent != nil {
 		t.Fatal("a refused relaunch began a credential-bearing launch")
+	}
+	// The hook decides per request (a task line can refuse one task's review),
+	// so both launch paths hand it the request they are about to launch.
+	if len(admitted) != 2 || admitted[0].RunID != request.RunID || admitted[1].RunID != request.RunID {
+		t.Fatalf("the admit hook saw %+v, want the request from RequestReview and from Inspect", admitted)
 	}
 }

@@ -592,6 +592,41 @@ func (tx *ReadTx) gateReconstructedAdmission(
 	return tx.gateAdmissionWithReviewConfigurationRecovery(ctx, admission, true)
 }
 
+// gateTaskLineSelection resolves the task line an admission cites as the
+// selection that chose its agent. The binding's own validation checks only
+// that the id is a well-formed digest, which a caller can supply for a line
+// that was never recorded; here it must resolve to a recorded line of the
+// admission run's task. The lineup has no record to resolve, and a card's
+// stays shape-only until the card has a writer (#869).
+func (tx *ReadTx) gateTaskLineSelection(
+	ctx context.Context, admission domain.ExecutionAdmission, binding domain.AdmissionAgentBinding,
+) error {
+	if binding.SelectionSource != domain.AgentSelectionSourceTaskLine {
+		return nil
+	}
+	line, err := tx.GetTaskLine(ctx, binding.SelectionRecordID)
+	if errors.Is(err, ErrNotFound) {
+		// Not reported as ErrNotFound: the admission row is present and was
+		// refused, and a caller asking whether a record exists must not read
+		// this as none.
+		return fmt.Errorf("admission %q cites task line %q, which is not recorded: %w",
+			admission.InvocationID, binding.SelectionRecordID, domain.ErrAdmissionDerivationMismatch)
+	}
+	if err != nil {
+		return fmt.Errorf("admission %q cites task line %q: %w",
+			admission.InvocationID, binding.SelectionRecordID, err)
+	}
+	run, err := tx.GetRun(ctx, admission.RunID)
+	if err != nil {
+		return fmt.Errorf("admission %q: %w", admission.InvocationID, err)
+	}
+	if line.TaskID != run.TaskID {
+		return fmt.Errorf("admission %q cites task line %q of task %q, its run belongs to task %q: %w",
+			admission.InvocationID, line.ID, line.TaskID, run.TaskID, domain.ErrAdmissionDerivationMismatch)
+	}
+	return nil
+}
+
 func (tx *ReadTx) gateAdmissionWithReviewConfigurationRecovery(
 	ctx context.Context, admission domain.ExecutionAdmission, allowReviewConfigurationRecovery bool,
 ) error {
@@ -656,6 +691,9 @@ func (tx *ReadTx) gateAdmissionWithReviewConfigurationRecovery(
 			return fmt.Errorf("admission %q store manifest %q, generation records %q: %w",
 				admission.InvocationID, binding.StoreManifestDigest, generation.StoreManifestDigest,
 				domain.ErrAdmissionDerivationMismatch)
+		}
+		if err := tx.gateTaskLineSelection(ctx, admission, *binding); err != nil {
+			return err
 		}
 	}
 	attempt, attemptErr := tx.GetProductionAttemptByRun(ctx, admission.RunID)

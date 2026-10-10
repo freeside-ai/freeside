@@ -61,9 +61,10 @@ type CodexReviewSourceConfig struct {
 	Now                  func() time.Time
 	// Admit, when set, runs before a new review request is recorded. The
 	// daemon uses it to recheck that the review role's lineup line still
-	// resolves to this source's identity (plan §5.4); a refusal fails the
-	// request as a configuration failure and nothing is recorded or started.
-	Admit func(context.Context) error
+	// resolves to this source's identity, and that the request's task has no
+	// line asking for another agent (plan §5.4); a refusal fails the request
+	// as a configuration failure and nothing is recorded or started.
+	Admit func(context.Context, exec.ReviewRequest) error
 
 	// provider supplies the vendor-varying labels, version tags, and review
 	// command. It is unexported so external callers cannot set it; the
@@ -290,7 +291,7 @@ func (s *CodexReviewSource) RequestReview(
 		return &exec.ReviewSourceFailure{Class: domain.ReviewFailureTransient, Err: err}
 	}
 	if s.cfg.Admit != nil {
-		if err := s.cfg.Admit(ctx); err != nil {
+		if err := s.cfg.Admit(ctx, req); err != nil {
 			return &exec.ReviewSourceFailure{Class: domain.ReviewFailureConfiguration, Err: err}
 		}
 	}
@@ -797,11 +798,11 @@ func (s *CodexReviewSource) Inspect(
 	if errors.Is(intentErr, ErrCodexReviewIntentNotFound) ||
 		(intentErr == nil && intent.State != CodexReviewIntentStarted) {
 		// A recorded request whose launch never started launches here, so
-		// the line is rechecked: it may have stopped resolving since the
-		// request was admitted. The request stays recorded for a later
-		// inspection.
+		// the lines are rechecked: the lineup's may have stopped resolving
+		// since the request was admitted. The request stays recorded for a
+		// later inspection.
 		if s.cfg.Admit != nil {
-			if err := s.cfg.Admit(ctx); err != nil {
+			if err := s.cfg.Admit(ctx, request); err != nil {
 				return "", &exec.ReviewSourceFailure{Class: domain.ReviewFailureConfiguration, Err: err}
 			}
 		}

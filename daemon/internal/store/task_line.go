@@ -94,6 +94,36 @@ func (tx *ReadTx) CurrentTaskLines(ctx context.Context, taskID domain.TaskID) (m
 	return current, nil
 }
 
+// GetTaskLine returns the line version with the given id: the read that
+// resolves the line an admission cites. It reads the version's whole chain
+// for its task and role and checks it as CurrentTaskLines does, so a cited
+// line that sits in a broken chain fails here too.
+func (tx *ReadTx) GetTaskLine(ctx context.Context, id domain.Digest) (domain.TaskLine, error) {
+	var (
+		taskID domain.TaskID
+		role   domain.RoleName
+	)
+	if err := tx.tx.QueryRowContext(ctx, `SELECT task_id, role FROM task_lines WHERE id = ?`, id).
+		Scan(&taskID, &role); err != nil {
+		return domain.TaskLine{}, fmt.Errorf("task line %q: %w", id, notFoundOr(err))
+	}
+	chain, err := tx.queryTaskLines(ctx, `SELECT `+taskLineColumns+` FROM task_lines
+		WHERE task_id = ? AND role = ? ORDER BY version`, taskID, role)
+	if err == nil {
+		err = validateTaskLineChains(chain)
+	}
+	if err != nil {
+		return domain.TaskLine{}, fmt.Errorf("task line %q: %w", id, err)
+	}
+	for _, line := range chain {
+		if line.ID == id {
+			return line, nil
+		}
+	}
+	// The id column found the row, and no decoded version resolves to it.
+	return domain.TaskLine{}, fmt.Errorf("task line %q: %w", id, errRowInconsistent)
+}
+
 // queryTaskLines decodes task-line rows and re-runs the record's validation
 // on each: the row is rebuilt from its columns and must resolve to its own
 // id, so an edited column fails closed as a corrupt row.
