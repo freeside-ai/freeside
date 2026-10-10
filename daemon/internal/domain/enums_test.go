@@ -64,6 +64,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["LaunchShape"] = append(valids["LaunchShape"], v.valid)
 	}
 	invalids["LaunchShape"] = LaunchShape("").valid
+	for _, v := range AllLineageRelations {
+		valids["LineageRelation"] = append(valids["LineageRelation"], v.valid)
+	}
+	invalids["LineageRelation"] = LineageRelation("").valid
 	for _, v := range AllTaskLineSources {
 		valids["TaskLineSource"] = append(valids["TaskLineSource"], v.valid)
 	}

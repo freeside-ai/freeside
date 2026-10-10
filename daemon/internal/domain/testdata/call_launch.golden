@@ -1,0 +1,10 @@
+{
+  "encoding_version": 1,
+  "tools": false,
+  "workspace": false,
+  "turns": 1,
+  "structured_output": true,
+  "severance": true,
+  "saved_session": false,
+  "digest": "sha256:888dc3bb4cc54c84f6a35dab49e500e8e5162952528500d12174bd5446ddf847"
+}

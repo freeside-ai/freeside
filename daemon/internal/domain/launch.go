@@ -128,6 +128,92 @@ func DecodeLaunchSpec(body []byte) (LaunchSpec, error) {
 	return l, nil
 }
 
+// CallLaunchEncodingVersion tags the call launch's canonical serialization.
+const CallLaunchEncodingVersion = 1
+
+// CallLaunch is the launch of every §5.13 judgment call (plan §5.4, Roles and
+// Launch Shapes): no tools of any kind, no workspace, one turn, structured
+// output, a harness severed from user and host configuration, and no saved
+// session. It is a sibling of LaunchSpec, not a LaunchSpec with an empty
+// stage: a call belongs to no stage, and none of its clauses is a knob an
+// agent or a site turns. Each field states one clause so the digest names
+// what was launched, and Validate accepts only the one launch the plan
+// defines. A call's treatment digest carries this digest in the launch
+// position, so it is the same at every site and moves only when a new
+// encoding version redefines the launch.
+type CallLaunch struct {
+	EncodingVersion  int    `json:"encoding_version"`
+	Tools            bool   `json:"tools"`
+	Workspace        bool   `json:"workspace"`
+	Turns            int    `json:"turns"`
+	StructuredOutput bool   `json:"structured_output"`
+	Severance        bool   `json:"severance"`
+	SavedSession     bool   `json:"saved_session"`
+	Digest           Digest `json:"digest"`
+}
+
+type canonicalCallLaunch struct {
+	EncodingVersion  int  `json:"encoding_version"`
+	Tools            bool `json:"tools"`
+	Workspace        bool `json:"workspace"`
+	Turns            int  `json:"turns"`
+	StructuredOutput bool `json:"structured_output"`
+	Severance        bool `json:"severance"`
+	SavedSession     bool `json:"saved_session"`
+}
+
+// NewCallLaunch returns the one call launch, with its digest.
+func NewCallLaunch() (CallLaunch, error) {
+	launch := CallLaunch{
+		EncodingVersion: CallLaunchEncodingVersion, Turns: 1,
+		StructuredOutput: true, Severance: true,
+	}
+	digest, err := launch.ComputeDigest()
+	if err != nil {
+		return CallLaunch{}, err
+	}
+	launch.Digest = digest
+	return launch, launch.Validate()
+}
+
+// ComputeDigest hashes the explicit-version canonical encoding. Struct field
+// order is part of the contract and is pinned by a golden.
+func (l CallLaunch) ComputeDigest() (Digest, error) {
+	body, err := json.Marshal(canonicalCallLaunch{
+		EncodingVersion: l.EncodingVersion, Tools: l.Tools, Workspace: l.Workspace,
+		Turns: l.Turns, StructuredOutput: l.StructuredOutput, Severance: l.Severance,
+		SavedSession: l.SavedSession,
+	})
+	if err != nil {
+		return "", fmt.Errorf("call launch canonical encoding: %w", err)
+	}
+	return Digest(contentaddr.Sum(body)), nil
+}
+
+// Validate reports whether the value is the call launch and its digest is
+// authentic. A launch that grants a tool, a workspace, a second turn, or a
+// saved session is not a weaker call launch; it is not one.
+func (l CallLaunch) Validate() error {
+	if l.EncodingVersion != CallLaunchEncodingVersion {
+		return fmt.Errorf("call launch encoding_version %d: %w", l.EncodingVersion, ErrAgentEncodingVersion)
+	}
+	if l.Tools || l.Workspace || l.Turns != 1 || !l.StructuredOutput || !l.Severance || l.SavedSession {
+		return ErrInvalidCallLaunch
+	}
+	if !contentaddr.Valid(string(l.Digest)) {
+		return fmt.Errorf("call launch digest %q: %w", l.Digest, ErrInvalidDigest)
+	}
+	computed, err := l.ComputeDigest()
+	if err != nil {
+		return err
+	}
+	if l.Digest != computed {
+		return fmt.Errorf("call launch digest %q, content resolves to %q: %w",
+			l.Digest, computed, ErrAgentDigestMismatch)
+	}
+	return nil
+}
+
 // RequiredCapabilities derives the launch-capability floor this launch puts
 // on an adapter: the capabilities admission step 3 checks against the
 // adapter build's proved set. Instruction delivery and the per-route store

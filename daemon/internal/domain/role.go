@@ -1,6 +1,9 @@
 package domain
 
-import "slices"
+import (
+	"fmt"
+	"slices"
+)
 
 // Each role's launch shape and its place: the stage a ward role runs in, or
 // the §5.13 sites a wardless role answers (plan §5.4, Roles and Launch
@@ -76,4 +79,68 @@ func RoleForSite(site string) (RoleName, bool) {
 		}
 	}
 	return "", false
+}
+
+// WritingRoles are the roles whose work a judging role judges (plan §7,
+// Review Independence).
+var WritingRoles = []RoleName{RoleImplementer, RoleRemediator}
+
+// JudgesWrittenWork reports whether the role is a judging role (§7): its
+// record says, for each writing role, whether the two shared a lineage group.
+func (r RoleName) JudgesWrittenWork() bool {
+	switch r {
+	case RoleReviewer, RoleFindingAdjudicator, RoleDriftAuditor:
+		return true
+	case RoleSpecifier, RoleImplementer, RoleRemediator, RoleShadowReviewer,
+		RoleDiagnostic, RoleTaskNamer, RolePublicationAuthor, RoleFindingClassifier,
+		RoleAttentionDiscussion, RoleBriefer:
+		return false
+	}
+	return false
+}
+
+// LineageRelation is what a record says about a judging role's lineage group
+// against one writing role's (§7). It is a recorded fact and never a gate
+// (plan revision 65).
+type LineageRelation string
+
+const (
+	LineageMatched  LineageRelation = "matched"
+	LineageDiffered LineageRelation = "differed"
+	// LineageUnknown is recorded when either offer carries no lineage group,
+	// or the writing role has no line to read one from.
+	LineageUnknown LineageRelation = "unknown"
+)
+
+// AllLineageRelations lists every valid LineageRelation.
+var AllLineageRelations = []LineageRelation{LineageMatched, LineageDiffered, LineageUnknown}
+
+func (r LineageRelation) valid() bool {
+	switch r {
+	case LineageMatched, LineageDiffered, LineageUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Validate reports whether the relation is a member of the closed list.
+func (r LineageRelation) Validate() error {
+	if !r.valid() {
+		return fmt.Errorf("lineage relation %q: %w", r, ErrInvalidLineageRelation)
+	}
+	return nil
+}
+
+// CompareLineage relates a judging role's lineage group to a writing role's.
+// An empty group on either side is unknown, never a difference.
+func CompareLineage(judging, writing string) LineageRelation {
+	switch {
+	case judging == "" || writing == "":
+		return LineageUnknown
+	case judging == writing:
+		return LineageMatched
+	default:
+		return LineageDiffered
+	}
 }
