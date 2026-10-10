@@ -1,0 +1,50 @@
+[
+  {
+    "site_id": "execution_diagnostic",
+    "output_contract": "execution_diagnostic_output_v1",
+    "has_instruction": false,
+    "contract_digest": "sha256:e6d360a6780082e3d045999c7197e515d0caec0566cd2f343c09339554f5202b"
+  },
+  {
+    "site_id": "task_namer",
+    "output_contract": "task_namer_output_v1",
+    "has_instruction": true,
+    "contract_digest": "sha256:7d2f442970299a831f52ac465b907ce9bd51b28bcdb86f0a079b47fb65e540a1"
+  },
+  {
+    "site_id": "publication_author_explain",
+    "output_contract": "publication_author_explain_output_v1",
+    "has_instruction": true,
+    "contract_digest": "sha256:ea5505faecfd47d953862664058c8e376f412df647be118f95d2cd9bf63944dd"
+  },
+  {
+    "site_id": "publication_author_propose",
+    "output_contract": "publication_author_propose_output_v1",
+    "has_instruction": true,
+    "contract_digest": "sha256:778f7cf8c9708216139bb6083f25fd615a9dd95d505c9fa2627c67ae16ea9ceb"
+  },
+  {
+    "site_id": "finding_classifier",
+    "output_contract": "finding_classifier_output_v1",
+    "has_instruction": true,
+    "contract_digest": "sha256:c3ad454018bc3a3ae042f1adae3539882fa0f92f82b7a9b092f24f9e730a352b"
+  },
+  {
+    "site_id": "finding_adjudicator",
+    "output_contract": "finding_adjudicator_output_v1",
+    "has_instruction": true,
+    "contract_digest": "sha256:8965930eebde706b73366d39b1ffca028ee240c933712f1b0144976f44c77cd3"
+  },
+  {
+    "site_id": "drift_auditor",
+    "output_contract": "drift_auditor_output_v1",
+    "has_instruction": true,
+    "contract_digest": "sha256:cec829ac5c9d104c8d7090aee6bab8eced6fba9db777bf257274d4670cbdeec2"
+  },
+  {
+    "site_id": "attention_discussion",
+    "output_contract": "attention_discussion_output_v1",
+    "has_instruction": false,
+    "contract_digest": "sha256:c48001f91767943d029802c496ea7b8271dd590ad84f019554aeabb333c3ce62"
+  }
+]

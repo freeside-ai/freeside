@@ -5,11 +5,15 @@ package inference
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"slices"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
 // AuthorityMode is the exhaustive terminal sink of one judgment site.
@@ -172,8 +176,18 @@ type DriftAuditContract struct {
 
 // Site is the complete authority and resource contract for one call site.
 type Site struct {
-	ID              string
-	Authority       AuthorityMode
+	ID        string
+	Authority AuthorityMode
+	// Instruction is the fixed text that tells the model what this site asks
+	// for and what shape its answer takes. The daemon owns it and a driver
+	// composes its prompt from it; it is not refinable, which is what sets
+	// it apart from the role prompt a lineup line names. A site whose driver
+	// instruction is not written yet has none, and a driver refuses it.
+	Instruction string
+	// OutputContract names the version of the answer shape ValidateOutput
+	// accepts. Bump it when that validator accepts or refuses something it
+	// did not before, so the site-contract digest moves with it.
+	OutputContract  string
 	Fields          []FieldPolicy
 	FailSafe        string
 	Retention       time.Duration
@@ -189,8 +203,28 @@ type Site struct {
 	ValidateOutput  func([]byte) error
 }
 
+// siteContractEncodingVersion tags the canonical encoding ContractDigest
+// hashes.
+const siteContractEncodingVersion = 1
+
+// ContractDigest is the content digest of what the site asks for: its id,
+// its instruction, and its output-contract version. A call record carries it
+// beside the prompt digest, so a comparison across calls sees a change to
+// the site's own text that the role, treatment, and prompt digests do not
+// (plan §8).
+func (s Site) ContractDigest() domain.Digest {
+	// A struct of three strings and an int always marshals.
+	body, _ := json.Marshal(struct {
+		EncodingVersion int    `json:"encoding_version"`
+		SiteID          string `json:"site_id"`
+		Instruction     string `json:"instruction"`
+		OutputContract  string `json:"output_contract"`
+	}{siteContractEncodingVersion, s.ID, s.Instruction, s.OutputContract})
+	return domain.Digest(contentaddr.Sum(body))
+}
+
 func (s Site) validate() error {
-	if s.ID == "" || !s.Authority.valid() || s.FailSafe == "" || s.Retention <= 0 || s.Timeout <= 0 ||
+	if s.ID == "" || s.OutputContract == "" || !s.Authority.valid() || s.FailSafe == "" || s.Retention <= 0 || s.Timeout <= 0 ||
 		s.MaxInputBytes < 1 || s.MaxOutputBytes < 1 || s.Budget.Window <= 0 ||
 		s.MaxComputeUnits < 1 || s.Budget.MaxCallsPerRoot < 1 || s.Budget.MaxStarvationPerRoot <= 0 ||
 		s.AuditEvery < 1 || s.ValidateOutput == nil || len(s.Fields) == 0 {
