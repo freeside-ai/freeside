@@ -147,9 +147,12 @@ func (b *Backend) readWriterOutcomeProof(
 // not its authorship. The writer shares a PID namespace with the launcher, so
 // the nonce is readable from the launcher's own cmdline and cannot stop the
 // writer composing a well-formed line. What stops it placing one is the
-// marker's directory: root-owned 0700 inside a sticky evidence directory an
-// unprivileged writer can neither write, rename, nor unlink. Relaxing those
-// modes removes the control, whatever this function proves about the bytes.
+// marker's directory: root-owned, writable by nobody else, and inside a
+// root-owned sticky evidence directory, so an unprivileged writer can neither
+// write into it, rename it, nor unlink it. A launcher may leave the directory
+// searchable while it is empty, and closes it to 0700 before it writes
+// anything there. Giving up the ownership, the write bits, or the sticky
+// parent removes the control, whatever this function proves about the bytes.
 func verifyWriterOutcomeProof(data []byte, nonce string) (int, error) {
 	if len(data) == 0 || data[len(data)-1] != '\n' ||
 		strings.Count(string(data), "\n") != 1 {

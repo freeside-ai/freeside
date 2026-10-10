@@ -102,7 +102,11 @@ func (claudeProvider) RenderPrompt(inputs stage.ProviderPromptInputs) (string, e
 	return renderPromptParts(inputs)
 }
 
-func (claudeProvider) PromptDelivery() stage.PromptDelivery { return stage.PromptFileV1 }
+// launchDelivery is the protocol every new Claude launch selects. Stored
+// intents keep the member they were started under.
+const launchDelivery = stage.PromptFileV2
+
+func (claudeProvider) PromptDelivery() stage.PromptDelivery { return launchDelivery }
 
 // ValidatePromptInputs runs the production Claude renderer over one fully
 // materialized bundle. Specification uses it before committing a follow-up
@@ -115,7 +119,7 @@ func ValidatePromptInputs(inputs exec.StageInputs) error {
 		priorBodies[i] = prior[i].Bytes()
 	}
 	_, err := renderPromptParts(stage.ProviderPromptInputs{
-		Delivery:       stage.PromptFileV1,
+		Delivery:       launchDelivery,
 		Specification:  inputs.Specification().Bytes(),
 		PromptPackage:  inputs.PromptPackage().Bytes(),
 		Policy:         inputs.Policy().Bytes(),
@@ -132,11 +136,43 @@ const (
 	maxPromptBytes        = 31 << 10
 )
 
+// launcherFiles says where the root launcher keeps its own files, the
+// evidence descriptor and the CLI transcript, while the agent runs. Both end
+// in the §5.6 evidence subtree either way, which is where ward's observer and
+// the exporter read them once the writer is gone.
+type launcherFiles int
+
+const (
+	// launcherFilesInWorkspace is the argument and file_v1 command. It writes
+	// the descriptor and streams the transcript into the evidence subtree
+	// before the agent exits, beside a 0700 control directory. A tool the agent
+	// runs over the repository root meets all three (#1929). Recovery rebuilds
+	// this command for a run started under it, so it never changes.
+	launcherFilesInWorkspace launcherFiles = iota
+	// launcherFilesDeferred is the file_v2 command. Until the agent exits the
+	// launcher adds only two empty, world-readable directories to the
+	// workspace: the transcript streams to launchDir on the container's own
+	// filesystem and the descriptor is not written. Afterwards the launcher
+	// closes both directories to the agent and moves both files into the
+	// subtree.
+	launcherFilesDeferred
+)
+
+// launchDir holds the in-flight transcript of a launcherFilesDeferred run. It
+// sits outside every mount, so nothing reaches it after the container is
+// gone, and it is root-only, so the agent reaches the transcript by no path:
+// only through the output descriptors it was started with, as it always
+// could.
+const (
+	launchDir            = "/var/lib/freeside-launch"
+	launchTranscriptPath = launchDir + "/agent-transcript.jsonl"
+)
+
 // agentCommand is the pinned CLI's unattended argv. The workspace is the
-// working directory, and the transcript goes to the §5.6 evidence subtree,
-// which the repo walk skips. The root launcher declares that transcript as
-// sensitive evidence before dropping privilege, so it crosses only through
-// the evidence channel after the writer is gone.
+// working directory, and the transcript ends in the §5.6 evidence subtree,
+// which the repo walk skips. The root launcher, never the agent, declares
+// that transcript as sensitive evidence, so it crosses only through the
+// evidence channel after the writer is gone.
 //
 // When prepare is non-empty the root phase hydrates the workspace with the
 // project image's preparation command before ownership is handed to the agent,
@@ -156,11 +192,13 @@ const (
 func agentCommand(
 	prompt, sessionID string, invocationID domain.InvocationID, prepare []string, model, effort string,
 ) []string {
-	return agentCommandWithInput(shellQuote(prompt), sessionID, invocationID, prepare, model, effort)
+	return agentCommandWithInput(
+		shellQuote(prompt), sessionID, invocationID, prepare, model, effort, launcherFilesInWorkspace)
 }
 
 func agentCommandWithInput(
 	promptInput, sessionID string, invocationID domain.InvocationID, prepare []string, model, effort string,
+	files launcherFiles,
 ) []string {
 	selection := ""
 	if model != "" {
@@ -213,22 +251,66 @@ func agentCommandWithInput(
 	fileExists := func(p string) string {
 		return "[ -f " + shellQuote(p) + " ] && [ ! -L " + shellQuote(p) + " ]"
 	}
-	// After the writer exits, redeclare the descriptor for whichever fixed
+	// After the writer exits, declare the descriptor for whichever fixed
 	// sources exist. One descriptor is written, listing every present
 	// source, so the evidence channel never carries a source the workspace
 	// lacks. Each fragment appears once to keep the sh argument under the
 	// Linux single-argument limit.
-	declareFixedSources := "sources=" + shellQuote(sourceFragment("transcript", transcriptSource)) + "; declare=0; " +
-		"if " + fileExists(export.PublicationEvidencePath) + "; then " +
-		"sources=\"$sources\"," + shellQuote(sourceFragment("publication", publicationSource)) + "; declare=1; fi; " +
-		"if " + fileExists(export.SummaryEvidencePath) + "; then " +
-		"sources=\"$sources\"," + shellQuote(sourceFragment("summary", summarySource)) + "; declare=1; fi; " +
-		"if " + fileExists(export.BlockedEvidencePath) + "; then " +
-		"sources=\"$sources\"," + shellQuote(sourceFragment("blocked", blockedSource)) + "; declare=1; fi; " +
-		"if " + fileExists(export.ScopeConflictEvidencePath) + "; then " +
-		"sources=\"$sources\"," + shellQuote(sourceFragment("scope-conflict", scopeConflictSource)) + "; declare=1; fi; " +
-		"if [ \"$declare\" = 1 ]; then printf '%s\\n' " + shellQuote(descriptorPrefix) + "\"$sources\"']}' > " +
-		shellQuote(transcriptDescriptorPath) + "; fi; "
+	collectSources := func(afterFirst, onPresent string) string {
+		script := "sources=" + shellQuote(sourceFragment("transcript", transcriptSource)) + "; " + afterFirst
+		for _, present := range []struct {
+			name   string
+			source export.EvidenceSource
+		}{
+			{"publication", publicationSource},
+			{"summary", summarySource},
+			{"blocked", blockedSource},
+			{"scope-conflict", scopeConflictSource},
+		} {
+			script += "if " + fileExists(present.source.Path) + "; then " +
+				"sources=\"$sources\"," + shellQuote(sourceFragment(present.name, present.source)) +
+				"; " + onPresent + "fi; "
+		}
+		return script
+	}
+	writeDescriptor := func(target string) string {
+		return "printf '%s\\n' " + shellQuote(descriptorPrefix) + "\"$sources\"']}' > " + shellQuote(target)
+	}
+	evidenceDir, controlDir := path.Dir(transcriptPath), path.Dir(writerOutcomePath)
+	// The in-workspace command fixes the transcript-only descriptor before
+	// the drop and rewrites it afterwards only when the agent left a source.
+	excludeReserved, controlMode, transcriptTarget := "", "0700", transcriptPath
+	beforeAgent := "printf '%s\\n' " + shellQuote(string(descriptor)) + " > " + shellQuote(transcriptDescriptorPath) +
+		"; chown 0:0 " + shellQuote(transcriptDescriptorPath) + "; chmod 0644 " + shellQuote(transcriptDescriptorPath) + "; "
+	afterAgent := collectSources("declare=0; ", "declare=1; ") +
+		"if [ \"$declare\" = 1 ]; then " + writeDescriptor(transcriptDescriptorPath) + "; fi; "
+	if files == launcherFilesDeferred {
+		excludeReserved, controlMode, transcriptTarget = excludeReservedPaths(), "0755", launchTranscriptPath
+		beforeAgent = "rm -rf " + shellQuote(launchDir) + "; mkdir " + shellQuote(launchDir) +
+			"; chown 0:0 " + shellQuote(launchDir) + "; chmod 0700 " + shellQuote(launchDir) + "; "
+		// Everything from here runs while a process the agent left behind may
+		// still be alive, so the launcher first takes that process's write
+		// access away: the evidence directory stops being world-writable and
+		// the control directory closes. Each file is then completed inside
+		// the control directory and renamed onto its final path. Both paths
+		// are on the workspace volume, so mv is one rename: it replaces
+		// whatever entry the agent left there without following it, and -T
+		// makes a directory there an error and not a destination. rm first
+		// clears a directory the agent left. set -e stops before the marker
+		// when any step fails.
+		place := func(staged, final string) string {
+			return "chmod 0644 " + shellQuote(staged) + "; rm -rf -- " + shellQuote(final) +
+				"; mv -T " + shellQuote(staged) + " " + shellQuote(final) + "; "
+		}
+		stagedDescriptor := controlDir + "/" + path.Base(transcriptDescriptorPath)
+		stagedTranscript := controlDir + "/" + path.Base(transcriptPath)
+		afterAgent = "chmod 0755 " + shellQuote(evidenceDir) + "; chmod 0700 " + shellQuote(controlDir) + "; " +
+			collectSources("", "") + writeDescriptor(stagedDescriptor) + "; " +
+			place(stagedDescriptor, transcriptDescriptorPath) +
+			// No transcript exists when the agent never launched.
+			"if [ -f " + shellQuote(launchTranscriptPath) + " ]; then cp " + shellQuote(launchTranscriptPath) +
+			" " + shellQuote(stagedTranscript) + "; " + place(stagedTranscript, transcriptPath) + "fi; "
+	}
 	// hydrate runs before the chown sweep; guardPrefix turns the token check
 	// into a two-branch guard that reports the prepare failure and skips the
 	// agent. Both are empty/"if " with no preparation, so the command stays
@@ -244,12 +326,12 @@ func agentCommandWithInput(
 	return []string{"sh", "-c", fmt.Sprintf(
 		"set -eu; "+
 			"chmod 0711 /root; "+
-			"rm -rf %s; %s"+
+			"rm -rf %s; %s%s"+
 			"find %s -mindepth 1 -maxdepth 1 -exec chown -hR %s:%s {} +; "+
 			"chown 0:0 %s; chmod 1777 %s; "+
 			"mkdir -p %s; chown 0:0 %s; chmod 1777 %s; "+
-			"mkdir -p %s; chown 0:0 %s; chmod 0700 %s; "+
-			"printf '%%s\\n' %s > %s; chown 0:0 %s; chmod 0644 %s; "+
+			"mkdir -p %s; chown 0:0 %s; chmod %s %s; "+
+			"%s"+
 			"chown %s:%s %s %s; chmod 0700 %s %s; "+
 			"cd %s; status=86; "+
 			"%s[ -s %s ] && token=$(cat %s); then "+
@@ -266,16 +348,13 @@ func agentCommandWithInput(
 			"%s"+
 			"rm -rf -- %s; "+
 			"printf '%%s %%s\\n' %s \"$status\" > %s; sync; exit \"$status\"",
-		shellQuote(path.Dir(transcriptPath)), hydrate,
+		shellQuote(evidenceDir), excludeReserved, hydrate,
 		shellQuote(workspaceDir),
 		agentUID, agentGID,
 		shellQuote(workspaceDir), shellQuote(workspaceDir),
-		shellQuote(path.Dir(transcriptPath)), shellQuote(path.Dir(transcriptPath)),
-		shellQuote(path.Dir(transcriptPath)),
-		shellQuote(path.Dir(writerOutcomePath)), shellQuote(path.Dir(writerOutcomePath)),
-		shellQuote(path.Dir(writerOutcomePath)),
-		shellQuote(string(descriptor)), shellQuote(transcriptDescriptorPath),
-		shellQuote(transcriptDescriptorPath), shellQuote(transcriptDescriptorPath),
+		shellQuote(evidenceDir), shellQuote(evidenceDir), shellQuote(evidenceDir),
+		shellQuote(controlDir), shellQuote(controlDir), controlMode, shellQuote(controlDir),
+		beforeAgent,
 		agentUID, agentGID,
 		shellQuote(ward.ClaudeContinuityTarget), shellQuote(ward.ClaudeSessionScratchTarget),
 		shellQuote(ward.ClaudeContinuityTarget), shellQuote(ward.ClaudeSessionScratchTarget),
@@ -284,8 +363,8 @@ func agentCommandWithInput(
 		shellQuote(credentialTokenPath), shellQuote(credentialTokenPath),
 		shellQuote(ward.ClaudeConfigRootTarget), agentUID, agentGID, promptInput,
 		shellQuote(sessionID), shellQuote(instructionBundlePath), selection,
-		shellQuote(transcriptPath),
-		declareFixedSources,
+		shellQuote(transcriptTarget),
+		afterAgent,
 		shellQuote(workspaceDir+"/node_modules"),
 		shellQuote(ward.WriterNoncePlaceholder),
 		shellQuote(writerOutcomePath),
@@ -312,6 +391,19 @@ func evidenceDescriptorPrefix() string {
 		panic("marshal fixed Claude descriptor head: " + err.Error())
 	}
 	return strings.TrimSuffix(string(head), "null}") + "["
+}
+
+// excludeReservedPaths appends Freeside's reserved workspace paths to the
+// checkout's own exclude file, so a tool that honors git excludes skips what
+// the agent later writes there. The export walk records .git unexplored, so
+// the entries never leave the workspace. It runs as root before hydration,
+// when the tree holds only the daemon's seed, which ward refuses to build
+// from a source containing a symlink.
+func excludeReservedPaths() string {
+	gitDir := workspaceDir + "/.git"
+	return "if [ -d " + shellQuote(gitDir) + " ] && [ ! -L " + shellQuote(gitDir) + " ]; then mkdir -p " +
+		shellQuote(gitDir+"/info") + "; printf '\\n%s\\n%s\\n' " + shellQuote("/"+export.EvidenceWorkspaceDir+"/") + " " +
+		shellQuote("/"+export.CommitPlanFilename) + " >> " + shellQuote(gitDir+"/info/exclude") + "; fi; "
 }
 
 // shellJoin renders an argv as space-separated single-quoted shell words.
@@ -523,13 +615,7 @@ func (p claudeProvider) HandoffSpec(
 			return ward.HandoffSpec{}, fmt.Errorf("instruction base for %s: %w", boundary, err)
 		}
 	}
-	switch in.PromptDelivery {
-	case "", stage.PromptArgument:
-		if len(in.Prompt) > maxPromptBytes {
-			return ward.HandoffSpec{}, fmt.Errorf("%w: legacy prompt exceeds argument limit", ErrUnsupportedStart)
-		}
-		return hs, nil
-	case stage.PromptFileV1:
+	withPromptFile := func(files launcherFiles) (ward.HandoffSpec, error) {
 		hs.Agent.PromptFile = ward.NewPromptFile([]byte(in.Prompt))
 		if err := hs.Agent.PromptFile.Validate(); err != nil {
 			return ward.HandoffSpec{}, fmt.Errorf("%w: %w", ErrUnsupportedStart, err)
@@ -538,15 +624,24 @@ func (p claudeProvider) HandoffSpec(
 		// bytes never enter argv, and remain user input rather than instructions.
 		hs.Agent.Command = agentCommandWithInput(
 			"< "+shellQuote(ward.PromptFilePath), sessionIDFor(id), id, in.Preparation,
-			spec.RouteModelID, spec.NativeEffort)
+			spec.RouteModelID, spec.NativeEffort, files)
 		return hs, nil
+	}
+	switch in.PromptDelivery {
+	case "", stage.PromptArgument:
+		if len(in.Prompt) > maxPromptBytes {
+			return ward.HandoffSpec{}, fmt.Errorf("%w: legacy prompt exceeds argument limit", ErrUnsupportedStart)
+		}
+		return hs, nil
+	case stage.PromptFileV1:
+		return withPromptFile(launcherFilesInWorkspace)
 	case stage.PromptFileV2:
-		return ward.HandoffSpec{}, fmt.Errorf("%w: no file_v2 launch command", ErrUnsupportedStart)
+		return withPromptFile(launcherFilesDeferred)
 	}
 	return ward.HandoffSpec{}, fmt.Errorf("%w: unknown prompt delivery", ErrUnsupportedStart)
 }
 
-// transcriptPath is where the CLI's stream-json transcript lands: inside the
+// transcriptPath is where the CLI's stream-json transcript ends: inside the
 // reserved evidence subtree, which the repo-change walk skips entirely, so
 // the transcript can only leave through the root launcher's declared evidence
 // descriptor and never pollutes the candidate commit.

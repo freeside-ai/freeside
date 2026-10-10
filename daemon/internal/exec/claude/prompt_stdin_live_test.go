@@ -121,12 +121,12 @@ func TestPinnedClaudePromptStdinLive(t *testing.T) {
 	}
 	prompt := []byte(strings.Repeat("Synthetic UTF-8 α ' $() \\n\n", 2500) + "end")
 	sum := sha256.Sum256(prompt)
-	command := agentCommandWithInput("< '/probe/prompt.txt'", "24a8a5f8-fc85-439f-bf98-002ea19ca53e", domain.InvocationID("inv-prompt-probe"), nil, "", "")[2]
+	command := agentCommandWithInput("< '/probe/prompt.txt'", "24a8a5f8-fc85-439f-bf98-002ea19ca53e", domain.InvocationID("inv-prompt-probe"), nil, "", "", launcherFilesDeferred)[2]
 	_, command, ok := strings.Cut(command, "setpriv --reuid=")
 	if !ok {
 		t.Fatal("production privilege drop missing")
 	}
-	command, _, ok = strings.Cut(command, "> "+shellQuote(transcriptPath))
+	command, _, ok = strings.Cut(command, "> "+shellQuote(launchTranscriptPath))
 	if !ok {
 		t.Fatal("production transcript redirect missing")
 	}

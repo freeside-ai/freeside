@@ -6,12 +6,15 @@ Daemon CI builds and tests on **Linux as well as macOS from day one**: the daemo
 
 ## Protected Prompt Delivery
 
-New Claude stage intents select `file_v1`. The renderer accepts at most 1 MiB
+New Claude stage intents select `file_v2`. The renderer accepts at most 1 MiB
 of complete UTF-8 input. Ward verifies its digest on a separate protected
 volume before writer creation, journals the volume binding with launch state,
-and supplies the root-opened file as Claude's user stdin. Existing intents
-retain argument delivery and the original 31-KiB limit. This changes transport;
-it neither retries a failed invocation nor grants successor publication.
+and supplies the root-opened file as Claude's user stdin. `file_v2` delivers
+the prompt exactly as `file_v1` does; it differs in keeping the launcher's own
+files out of the workspace while the agent runs. Existing intents retain the
+protocol they started under: `file_v1` its launch command, and argument
+delivery its original 31-KiB limit. This changes transport; it neither retries
+a failed invocation nor grants successor publication.
 
 The optional `TestPinnedClaudePromptStdinLive` probe uses a cached, pinned
 Claude 2.1.220 image, synthetic text larger than the argument limit, and a mock
