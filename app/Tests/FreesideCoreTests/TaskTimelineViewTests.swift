@@ -204,6 +204,8 @@ import Testing
         #expect(history() == nil)
         #expect(review() == nil)
         #expect(!RunReviewSection.showsRetry(state: coordinator.timelineLoadStates[runID]))
+        #expect(coordinator.taskStop.unavailableReason == nil)
+        #expect(coordinator.taskStop.prepare(taskID: taskID) != nil)
         #expect(!banner())
 
         await server.setBeforeRespond { _ in throw InjectedFailure() }
@@ -211,6 +213,7 @@ import Testing
         #expect(coordinator.store.freshness == .unreachable)
         #expect(history() == "Saved task history. Freshness unconfirmed.")
         #expect(review() == "Saved review details. Freshness unconfirmed.")
+        #expect(coordinator.taskStop.unavailableReason == "Offline. Connect to the daemon before sending Stop.")
         #expect(banner())
     }
 

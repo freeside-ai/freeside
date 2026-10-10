@@ -18,6 +18,7 @@ struct TaskStopView: View {
     /// in flight.
     var showsOnlyTheStopButton: Bool {
         snapshot?.task.cancellation == nil && !model.sending.contains(taskID)
+            && !model.confirming.contains(taskID)
             && model.pending(for: taskID) == nil && model.unavailableReason == nil
             && model.messages[taskID] == nil
     }
@@ -40,6 +41,10 @@ struct TaskStopView: View {
             }
             if model.sending.contains(taskID) {
                 note("Sending Stop…")
+            } else if model.confirming.contains(taskID) {
+                // The confirmed Stop is validating current state: no menu,
+                // so a second Stop cannot start beside it.
+                note("Checking current task state…")
             } else if let pending = model.pending(for: taskID) {
                 if pending.receipt != nil {
                     if snapshot?.task.cancellation == nil {
