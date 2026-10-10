@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +25,12 @@ import (
 type TaskCancellationRuntime struct {
 	StopRun func(context.Context, domain.Run, []domain.ReviewRequestRecord) error
 	Timeout time.Duration
+	// Unprovable is optional. A non-empty reason says no attempt can ever
+	// prove a stop of the task, so one that has reached failed_to_stop is not
+	// retried; the reason must hold for as long as the state root does. An
+	// error says only that the check failed and leaves the stop retryable. A
+	// nil hook keeps every failed stop retryable.
+	Unprovable func(context.Context, domain.TaskID) (reason string, err error)
 }
 
 func WithTaskCancellationRuntime(runtime TaskCancellationRuntime) Option {
@@ -38,6 +47,32 @@ type taskCancellationCoordinator struct {
 	mu       sync.Mutex
 	runtime  TaskCancellationRuntime
 	attempts map[string]*taskStopAttempt
+	retries  map[string]*taskStopRetry
+}
+
+// taskStopRetry paces one open stop request for the life of this process.
+// Nothing here is durable: a restarted daemon rebuilds it from the request's
+// recorded state and the runtime's Unprovable answer.
+type taskStopRetry struct {
+	failures  int
+	notBefore time.Time
+	logged    string // key of the last failure written, so a repeat stays quiet
+	settled   bool   // no further attempt or log line in this process
+}
+
+// taskStopRetryDelay is the schedule reviewRetryDelay uses: one second,
+// doubling per consecutive failure, capped at 2^8 seconds.
+func taskStopRetryDelay(failures int) time.Duration {
+	return time.Second << min(failures-1, 8)
+}
+
+// taskStopFailureKey identifies a failure for log deduplication. Children
+// stop concurrently and their errors join in completion order, so the same
+// failures can arrive in a different order on each attempt.
+func taskStopFailureKey(failure error) string {
+	lines := strings.Split(failure.Error(), "\n")
+	slices.Sort(lines)
+	return strings.Join(lines, "\n")
 }
 
 type taskStopAttempt struct {
@@ -122,7 +157,9 @@ func requireTaskExecutionOpen(ctx context.Context, tx *store.ReadTx, runID domai
 // behind provider execution or another task's teardown. A worker's timeout
 // records failed_to_stop; it cannot authorize confirmation. A worker that
 // ignores cancellation remains registered until it actually returns, so later
-// passes cannot accumulate duplicate stop attempts.
+// passes cannot accumulate duplicate stop attempts. A failed stop is retried
+// with backoff, and one that can never be proven is settled after its first
+// failure instead of retried.
 func (e *Engine) ReconcileTaskCancellations(ctx context.Context) error {
 	e.cancellation.mu.Lock()
 	defer e.cancellation.mu.Unlock()
@@ -137,27 +174,53 @@ func (e *Engine) ReconcileTaskCancellations(ctx context.Context) error {
 	if e.cancellation.attempts == nil {
 		e.cancellation.attempts = make(map[string]*taskStopAttempt)
 	}
+	if e.cancellation.retries == nil {
+		e.cancellation.retries = make(map[string]*taskStopRetry)
+	}
+	open := make(map[string]struct{}, len(e.cancellation.retries))
 	for _, snapshot := range tasks {
 		c := snapshot.Value.Cancellation
 		if c == nil || c.State == domain.TaskCancellationConfirmed {
 			continue
 		}
+		// Runs for a settled request too: after a restart this is what keeps
+		// this process from launching work for the fenced task.
 		e.taskExecution(c.Target.TaskID).cancel()
+		open[c.RequestID] = struct{}{}
+		retry := e.cancellation.retries[c.RequestID]
+		if retry == nil {
+			retry = &taskStopRetry{}
+			e.cancellation.retries[c.RequestID] = retry
+		}
 		attempt := e.cancellation.attempts[c.RequestID]
 		if attempt == nil {
+			if retry.settled || time.Now().Before(retry.notBefore) {
+				continue
+			}
+			runtime := e.cancellation.runtime
+			if c.State == domain.TaskCancellationFailed && runtime.Unprovable != nil {
+				// An earlier attempt, usually an earlier process's, already
+				// recorded the failure. When no attempt can prove the stop,
+				// another only repeats the refusal. A failed check is not an
+				// answer, so the attempt goes ahead.
+				if reason, err := runtime.Unprovable(ctx, c.Target.TaskID); err == nil && reason != "" {
+					e.settleTaskStop(retry, "task stop cannot be proven; not retrying",
+						"request", c.RequestID, "reason", reason)
+					continue
+				}
+			}
 			runs, err := e.cancellationRuns(ctx, *c)
 			if err != nil {
 				return err
 			}
 			if len(runs) == 0 {
-				if err := e.acknowledgeTaskStop(ctx, *c, true); err != nil {
+				if err := e.acknowledgeTaskStop(ctx, retry, *c, true); err != nil {
 					return err
 				}
 				continue
 			}
-			runtime := e.cancellation.runtime
 			if runtime.StopRun == nil {
-				if err := e.acknowledgeTaskStop(ctx, *c, false); err != nil {
+				if err := e.acknowledgeTaskStop(ctx, retry, *c, false); err != nil {
 					return err
 				}
 				continue
@@ -198,21 +261,68 @@ func (e *Engine) ReconcileTaskCancellations(ctx context.Context) error {
 		select {
 		case <-attempt.done:
 			delete(e.cancellation.attempts, c.RequestID)
-			if attempt.err != nil && e.logger != nil {
-				e.logger.Warn("task stop proof failed", "request", c.RequestID, "error", attempt.err)
-			}
-			if err := e.acknowledgeTaskStop(ctx, *c, attempt.err == nil); err != nil {
+			if err := e.acknowledgeTaskStop(ctx, retry, *c, attempt.err == nil); err != nil {
 				return err
 			}
+			// A refused acknowledgement settled the request above.
+			if attempt.err != nil && !retry.settled {
+				e.deferTaskStop(ctx, retry, *c, attempt.err)
+			}
 		default:
-			if !time.Now().Before(attempt.deadline) {
-				if err := e.acknowledgeTaskStop(ctx, *c, false); err != nil {
+			// A refusal at the deadline settled the request, so later passes
+			// only wait for the worker to return.
+			if !retry.settled && !time.Now().Before(attempt.deadline) {
+				if err := e.acknowledgeTaskStop(ctx, retry, *c, false); err != nil {
 					return err
 				}
 			}
 		}
 	}
+	// A confirmed or vanished request needs no pacing, and dropping it bounds
+	// the map by the requests still open.
+	maps.DeleteFunc(e.cancellation.retries, func(id string, _ *taskStopRetry) bool {
+		_, ok := open[id]
+		return !ok
+	})
 	return nil
+}
+
+// settleTaskStop ends attempts on a request for the life of this process and
+// writes the one line that says so.
+func (e *Engine) settleTaskStop(retry *taskStopRetry, msg string, args ...any) {
+	if retry.settled {
+		return
+	}
+	retry.settled = true
+	if e.logger != nil {
+		e.logger.Warn(msg, args...)
+	}
+}
+
+// deferTaskStop handles an attempt that failed and was recorded as
+// failed_to_stop. A stop the runtime can never prove is settled; any other
+// failure may clear, so it backs off and is logged only when its text changes.
+func (e *Engine) deferTaskStop(ctx context.Context, retry *taskStopRetry, c domain.TaskCancellation, failure error) {
+	if unprovable := e.cancellation.runtime.Unprovable; unprovable != nil {
+		reason, err := unprovable(ctx, c.Target.TaskID)
+		if err == nil && reason != "" {
+			e.settleTaskStop(retry, "task stop cannot be proven; not retrying",
+				"request", c.RequestID, "reason", reason, "error", failure)
+			return
+		}
+		if err != nil {
+			failure = errors.Join(failure, fmt.Errorf("unprovable check: %w", err))
+		}
+	}
+	retry.failures++
+	delay := taskStopRetryDelay(retry.failures)
+	retry.notBefore = time.Now().Add(delay)
+	if key := taskStopFailureKey(failure); key != retry.logged {
+		retry.logged = key
+		if e.logger != nil {
+			e.logger.Warn("task stop proof failed", "request", c.RequestID, "error", failure, "retry_in", delay)
+		}
+	}
 }
 
 func (e *Engine) cancellationRuns(ctx context.Context, cancellation domain.TaskCancellation) ([]cancellationRun, error) {
@@ -244,7 +354,11 @@ func (e *Engine) cancellationRuns(ctx context.Context, cancellation domain.TaskC
 	return runs, err
 }
 
-func (e *Engine) acknowledgeTaskStop(ctx context.Context, c domain.TaskCancellation, stopped bool) error {
+// acknowledgeTaskStop records an attempt's outcome. The store refuses it with
+// store.ErrCancellationBinding when the task's episode, run membership, or
+// sync epoch changed after the Stop was accepted. None of those changes back,
+// so a refusal settles the request instead of leaving it to be retried.
+func (e *Engine) acknowledgeTaskStop(ctx context.Context, retry *taskStopRetry, c domain.TaskCancellation, stopped bool) error {
 	state := domain.TaskCancellationFailed
 	if stopped {
 		state = domain.TaskCancellationConfirmed
@@ -280,8 +394,13 @@ func (e *Engine) acknowledgeTaskStop(ctx context.Context, c domain.TaskCancellat
 		}
 		return err
 	})
-	if errors.Is(err, errReplay) || errors.Is(err, store.ErrCancellationBinding) {
+	if errors.Is(err, store.ErrCancellationBinding) {
 		// A changed episode or epoch cannot inherit this worker's proof.
+		e.settleTaskStop(retry, "task stop acknowledgement refused; not retrying in this process",
+			"request", c.RequestID, "state", state)
+		return nil
+	}
+	if errors.Is(err, errReplay) {
 		return nil
 	}
 	return err

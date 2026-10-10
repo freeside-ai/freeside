@@ -1,9 +1,12 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -243,6 +246,14 @@ func TestTaskCancellationRetryAfterMissingProofReleasesOnlyBoundWIP(t *testing.T
 			t.Fatal(err)
 		}
 		synctest.Wait()
+		if calls != 1 {
+			t.Fatalf("retried before the backoff ended: %d", calls)
+		}
+		time.Sleep(taskStopRetryDelay(1))
+		if err := e.ReconcileTaskCancellations(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
 		if err := e.ReconcileTaskCancellations(t.Context()); err != nil {
 			t.Fatal(err)
 		}
@@ -292,6 +303,222 @@ func TestTaskCancellationRetryAfterMissingProofReleasesOnlyBoundWIP(t *testing.T
 			t.Fatalf("replayed proof changed receipt state: before=%+v after=%+v err=%v", before, after, err)
 		}
 	})
+}
+
+// reconcileTaskStopPasses drives the loop at its production interval and lets
+// an attempt a pass started finish before the next pass.
+func reconcileTaskStopPasses(t *testing.T, e *Engine, passes int) {
+	t.Helper()
+	for range passes {
+		if err := e.ReconcileTaskCancellations(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// taskStopLogEngine is a fresh coordinator on st, which models a restart with
+// only durable ownership, and the buffer its log lines land in.
+func taskStopLogEngine(st *store.Store, runtime TaskCancellationRuntime) (*Engine, *bytes.Buffer) {
+	var logs bytes.Buffer
+	e := &Engine{store: st, logger: slog.New(slog.NewTextHandler(&logs, nil))}
+	e.cancellation.runtime = runtime
+	return e, &logs
+}
+
+func TestTaskCancellationUnprovableStopIsAttemptedOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		st := watchTestStore(t)
+		c := cancelledTaskFixture(t, st, 1, true)
+		const refusal = "fixture task outside runtime coverage"
+		calls := 0
+		runtime := TaskCancellationRuntime{
+			Timeout: time.Second,
+			StopRun: func(context.Context, domain.Run, []domain.ReviewRequestRecord) error {
+				calls++
+				return errors.New(refusal)
+			},
+			Unprovable: func(context.Context, domain.TaskID) (string, error) { return refusal, nil },
+		}
+		for _, process := range []string{"first", "restarted"} {
+			e, logs := taskStopLogEngine(st, runtime)
+			// Ten seconds of passes spans several backoff delays, so a stop
+			// that was only paced, not settled, would be attempted again.
+			reconcileTaskStopPasses(t, e, 100)
+			if calls != 1 {
+				t.Fatalf("%s process: unprovable stop attempted %d times", process, calls)
+			}
+			if got := logs.String(); strings.Count(got, "\n") != 1 || !strings.Contains(got, "task stop cannot be proven; not retrying") {
+				t.Fatalf("%s process: want one settled line, got:\n%s", process, got)
+			}
+			task := cancellationTask(t, st, c.Target.TaskID)
+			if task.Cancellation.State != domain.TaskCancellationFailed || !domain.TaskWIP(task) {
+				t.Fatalf("%s process: unprovable stop released or lost its task: %+v", process, task)
+			}
+		}
+	})
+}
+
+func TestTaskCancellationClearableFailureBacksOff(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		st := watchTestStore(t)
+		c := cancelledTaskFixture(t, st, 1, true)
+		stage, review := errors.New("fixture stage still running"), errors.New("fixture review still running")
+		// Children join in completion order, so the first two are one failure.
+		failures := []error{
+			errors.Join(stage, review),
+			errors.Join(review, stage),
+			errors.New("fixture child exit unobserved"),
+		}
+		calls := 0
+		e, logs := taskStopLogEngine(st, TaskCancellationRuntime{
+			Timeout: time.Second,
+			StopRun: func(context.Context, domain.Run, []domain.ReviewRequestRecord) error {
+				calls++
+				if calls <= len(failures) {
+					return failures[calls-1]
+				}
+				return nil
+			},
+			Unprovable: func(context.Context, domain.TaskID) (string, error) { return "", nil },
+		})
+		attempt := func() {
+			t.Helper()
+			for range 2 {
+				if err := e.ReconcileTaskCancellations(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				synctest.Wait()
+			}
+		}
+		attempt()
+		for failed := 1; failed <= len(failures); failed++ {
+			if got := cancellationTask(t, st, c.Target.TaskID); calls != failed || got.Cancellation.State != domain.TaskCancellationFailed || !domain.TaskWIP(got) {
+				t.Fatalf("failure %d: calls=%d task=%+v", failed, calls, got)
+			}
+			time.Sleep(taskStopRetryDelay(failed) - time.Nanosecond)
+			attempt()
+			if calls != failed {
+				t.Fatalf("failure %d: retried before the backoff ended", failed)
+			}
+			time.Sleep(time.Nanosecond)
+			attempt()
+		}
+		// The proving attempt observes each run twice.
+		if got := cancellationTask(t, st, c.Target.TaskID); calls != len(failures)+2 || got.Cancellation.State != domain.TaskCancellationConfirmed || domain.TaskWIP(got) {
+			t.Fatalf("retry did not confirm and release: calls=%d task=%+v", calls, got)
+		}
+		// Three failures carry two distinct errors, so two lines.
+		if got := logs.String(); strings.Count(got, "\n") != 2 || strings.Count(got, "task stop proof failed") != 2 {
+			t.Fatalf("want one line per distinct failure, got:\n%s", got)
+		}
+		attempt()
+		if len(e.cancellation.retries) != 0 {
+			t.Fatalf("confirmed request kept its retry record: %+v", e.cancellation.retries)
+		}
+		if got := taskStopRetryDelay(100); got != 256*time.Second {
+			t.Fatalf("backoff is not capped: %s", got)
+		}
+	})
+}
+
+func TestTaskCancellationFailedUnprovableCheckKeepsTheStopRetryable(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		st := watchTestStore(t)
+		c := cancelledTaskFixture(t, st, 1, true)
+		calls := 0
+		runtime := TaskCancellationRuntime{
+			Timeout: time.Second,
+			StopRun: func(context.Context, domain.Run, []domain.ReviewRequestRecord) error {
+				calls++
+				return errors.New("fixture task outside runtime coverage")
+			},
+			// A check that cannot answer must never end retries for good.
+			Unprovable: func(context.Context, domain.TaskID) (string, error) {
+				return "", errors.New("fixture epoch read failed")
+			},
+		}
+		for i, process := range []string{"first", "restarted"} {
+			e, logs := taskStopLogEngine(st, runtime)
+			// Attempts at 0s, 1s, 3s, and 7s fit in ten seconds of passes.
+			reconcileTaskStopPasses(t, e, 100)
+			if want := (i + 1) * 4; calls != want {
+				t.Fatalf("%s process: want %d backed-off attempts, got %d", process, want, calls)
+			}
+			if got := logs.String(); strings.Count(got, "\n") != 1 || !strings.Contains(got, "task stop proof failed") ||
+				!strings.Contains(got, "unprovable check: fixture epoch read failed") {
+				t.Fatalf("%s process: want one retryable-failure line, got:\n%s", process, got)
+			}
+			if task := cancellationTask(t, st, c.Target.TaskID); task.Cancellation.State != domain.TaskCancellationFailed || !domain.TaskWIP(task) {
+				t.Fatalf("%s process: failed check released or lost the task: %+v", process, task)
+			}
+		}
+	})
+}
+
+func TestTaskCancellationRefusedAcknowledgementSettlesTheRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		stopErr         error
+		outlivesTimeout bool
+	}{
+		{name: "proved"},
+		{name: "failed", stopErr: errors.New("fixture child still running")},
+		{name: "outlives timeout", outlivesTimeout: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				st := watchTestStore(t)
+				c := cancelledTaskFixture(t, st, 1, true)
+				// A new epoch moves the task's target off the one the Stop bound.
+				if _, err := st.NewEpoch(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				finish := make(chan struct{})
+				if !tc.outlivesTimeout {
+					close(finish)
+				}
+				calls := 0
+				runtime := TaskCancellationRuntime{
+					Timeout: time.Second,
+					StopRun: func(context.Context, domain.Run, []domain.ReviewRequestRecord) error {
+						calls++
+						<-finish
+						return tc.stopErr
+					},
+				}
+				// One attempt per process; a proving attempt observes each run twice.
+				perProcess := 2
+				if tc.stopErr != nil {
+					perProcess = 1
+				}
+				for i, process := range []string{"first", "restarted"} {
+					e, logs := taskStopLogEngine(st, runtime)
+					reconcileTaskStopPasses(t, e, 100)
+					if tc.outlivesTimeout && process == "first" {
+						if calls != 1 || strings.Count(logs.String(), "\n") != 1 {
+							t.Fatalf("refusal at the deadline: calls=%d logs:\n%s", calls, logs)
+						}
+						close(finish)
+						reconcileTaskStopPasses(t, e, 100)
+						if len(e.cancellation.attempts) != 0 {
+							t.Fatal("returned worker stayed registered")
+						}
+					}
+					if want := (i + 1) * perProcess; calls != want {
+						t.Fatalf("%s process: want %d StopRun calls, got %d", process, want, calls)
+					}
+					if got := logs.String(); strings.Count(got, "\n") != 1 || !strings.Contains(got, "task stop acknowledgement refused") {
+						t.Fatalf("%s process: want one refusal line, got:\n%s", process, got)
+					}
+					if task := cancellationTask(t, st, c.Target.TaskID); task.Cancellation.State != domain.TaskCancellationRequested || !domain.TaskWIP(task) {
+						t.Fatalf("%s process: refused acknowledgement changed the request: %+v", process, task)
+					}
+				}
+			})
+		})
+	}
 }
 
 func TestTaskCancellationTimeoutDoesNotBlockDiscoveryOrConfirm(t *testing.T) {
