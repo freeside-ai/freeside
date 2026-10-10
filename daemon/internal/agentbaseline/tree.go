@@ -35,7 +35,8 @@ type TreeInput struct {
 	OfferNotAfter   time.Time
 	// Prompts maps each role that gets a line to its prompt. A role absent
 	// from the map gets no line: shadow_reviewer is present only while the
-	// shadow arm is on.
+	// shadow arm is on, and publication_author only when the operator names
+	// its prompt file.
 	Prompts map[domain.RoleName]Prompt
 }
 
@@ -53,16 +54,35 @@ var wardRoleAgents = []struct {
 	{domain.RoleShadowReviewer, false},
 }
 
+// JudgmentRoles returns the wardless roles with a built judgment site, in
+// role order: the roles a baseline lineup can name on the call agent. The
+// briefer has no site yet, so it has no line.
+func JudgmentRoles() []domain.RoleName {
+	var roles []domain.RoleName
+	for _, role := range domain.AllRoleNames {
+		if len(role.Sites()) > 0 {
+			roles = append(roles, role)
+		}
+	}
+	return roles
+}
+
 // Tree builds the baseline tree: the fragments, the agents with their
 // resolved enrollment ids, a lineup line for each role with a prompt, and
 // the attended marks. A mark covers each launch the agent ran before the
 // cutover, which is the operator's standing evidence that the pair ran
-// attended; committing the patch is the operator making the mark.
+// attended; committing the patch is the operator making the mark. The call
+// agent gets no mark: attended evidence gates unattended ward launches, and
+// a call is admitted by its launch proof.
 func Tree(in TreeInput) (agenttree.Tree, error) {
 	if in.ClaudeEnrollment.HarnessClient != domain.HarnessClientClaudeCode {
 		return agenttree.Tree{}, errors.New("baseline tree: the Claude enrollment is not a claude_code enrollment")
 	}
 	claudeAdapter, err := ClaudeWardAdapter()
+	if err != nil {
+		return agenttree.Tree{}, err
+	}
+	claudeCallAdapter, err := ClaudeCallAdapter()
 	if err != nil {
 		return agenttree.Tree{}, err
 	}
@@ -90,13 +110,23 @@ func Tree(in TreeInput) (agenttree.Tree, error) {
 		return agenttree.Tree{}, err
 	}
 	tree := agenttree.Tree{
+		// The call agent shares the ward agent's enrollment, route, and offer
+		// and differs by adapter alone: the same subscription answers a call
+		// through a launch with no tools.
 		Agents: []domain.AgentSource{{
 			Name: ClaudeAgentName, Enrollment: string(in.ClaudeEnrollment.ID),
 			Route: in.ClaudeEnrollment.Route, Adapter: ClaudeAdapterName,
 			Offer: ClaudeOfferName, Effort: domain.EffortHarnessDefault,
+		}, {
+			Name: ClaudeCallAgentName, Enrollment: string(in.ClaudeEnrollment.ID),
+			Route: in.ClaudeEnrollment.Route, Adapter: ClaudeCallAdapterName,
+			Offer: ClaudeOfferName, Effort: domain.EffortHarnessDefault,
 		}},
-		Routes:   []agenttree.Route{{Name: in.ClaudeEnrollment.Route, Fragment: claudeRoute}},
-		Adapters: []agenttree.Adapter{{Name: ClaudeAdapterName, Fragment: claudeAdapter}},
+		Routes: []agenttree.Route{{Name: in.ClaudeEnrollment.Route, Fragment: claudeRoute}},
+		Adapters: []agenttree.Adapter{
+			{Name: ClaudeAdapterName, Fragment: claudeAdapter},
+			{Name: ClaudeCallAdapterName, Fragment: claudeCallAdapter},
+		},
 		Offers: []agenttree.Offer{{
 			Route: in.ClaudeEnrollment.Route, Name: ClaudeOfferName, Fragment: claudeOffer,
 		}},
@@ -143,6 +173,19 @@ func Tree(in TreeInput) (agenttree.Tree, error) {
 			continue // the implementer and remediator share one launch
 		}
 		tree.Marks = append(tree.Marks, mark)
+	}
+	for _, role := range JudgmentRoles() {
+		prompt, ok := in.Prompts[role]
+		if !ok {
+			continue
+		}
+		tree.Lineup = append(tree.Lineup, agenttree.LineupLine{
+			Key: string(role),
+			Selection: domain.LineupSelection{
+				AgentName: ClaudeCallAgentName, AgentDigest: digests[ClaudeCallAgentName],
+				PromptName: prompt.Name, PromptDigest: prompt.Digest,
+			},
+		})
 	}
 	// Tree slices are sorted by name, so the rendered files are stable.
 	tree.Sort()

@@ -22,6 +22,10 @@ real_work_missing_adoption_inputs() {
 	done
 }
 
+# The checkout this file is in: run-real-work.sh's own repo_root, because the
+# two sit in one directory.
+real_work_agent_tree_repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
 # The paths agenttree.ReadCommit reads under the checkout's policy/ (the
 # daemon's internal/agenttree): two directories and two files. Anything else
 # under policy/ is not the admitted-agent tree and is not compared.
@@ -58,6 +62,13 @@ real_work_agent_tree_matches() {
 # environment because auth adopt defaults each to the current date, and a tree
 # committed on one day would stop matching on the next.
 #
+# When the harness runs subscription judgments it gives preflight and the
+# daemon the publication author's prompt file, which switches that role on,
+# and the role then needs a lineup line naming the same file. Adoption writes
+# that line only when it is given the file, so it gets the file under the
+# condition and at the path run-real-work.sh uses for judgment_args. Without
+# it preflight reports the role unbound and stops every such run.
+#
 # Adoption's own output, and git's while comparing, goes to files in the
 # session and is never echoed: the report and the patch name the identities
 # and adoption's errors can quote a cost owner, and the operator pastes
@@ -66,6 +77,10 @@ real_work_adopt_agent_tree() {
 	local freesided=$1 db_path=$2 session=$3
 	local patch="$session/agent-tree.patch" report="$session/auth-adopt.json"
 	local log="$session/auth-adopt.log" rc=0
+	local author_prompt=()
+	if [[ -n "${FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN:-}${FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256:-}${FREESIDE_REAL_RUN_JUDGMENT_MODEL:-}${FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT:-}" ]]; then
+		author_prompt=(-judgment-publication-author-prompt "$real_work_agent_tree_repo_root/prompts/publication-author.md")
+	fi
 	rm -f "$patch"
 	"$freesided" auth adopt \
 		-db "$db_path" \
@@ -84,6 +99,7 @@ real_work_adopt_agent_tree() {
 		-prompt-package "$FREESIDE_REAL_RUN_PROMPT_PACKAGE" \
 		-specification-prompt-package "$FREESIDE_REAL_RUN_SPECIFICATION_PROMPT_PACKAGE" \
 		-remediation-prompt-package "$FREESIDE_REAL_RUN_REMEDIATION_PROMPT_PACKAGE" \
+		${author_prompt[@]+"${author_prompt[@]}"} \
 		-patch "$patch" >"$report" 2>"$log" || rc=$?
 	if [[ "$rc" != 0 || ! -s "$patch" ]]; then
 		echo "run-real-work: freesided auth adopt failed or emitted no tree patch; its report is $report and its log is $log" >&2

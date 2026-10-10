@@ -15,6 +15,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 	"github.com/freeside-ai/freeside/daemon/internal/wardstore"
@@ -56,7 +57,10 @@ type authAdoptConfig struct {
 	// The daemon's three prompt-package files; the lineup lines record their
 	// digests. The review prompt is code-owned and needs no file.
 	PromptPackage, SpecificationPromptPackage, RemediationPromptPackage string
-	PatchPath                                                           string
+	// JudgmentPublicationAuthorPrompt is the daemon's flag of the same name.
+	// The other judgment roles' prompts are code-owned and need no file.
+	JudgmentPublicationAuthorPrompt string
+	PatchPath                       string
 	// RetireUnadoptable names the one identity to retire when this run
 	// reports it unadoptable.
 	RetireUnadoptable string
@@ -341,7 +345,10 @@ func adoptReportEntry(
 
 // readAdoptPrompts digests the daemon's prompt packages into the writer
 // roles' lineup prompts: the role name, with the digest admission records for
-// the package (the content address of its bytes).
+// the package (the content address of its bytes). Each judgment role gets
+// its code-owned prompt; the publication author gets a prompt, and so a
+// line, only when its prompt file is named, because without the file the
+// daemon leaves that role off.
 func readAdoptPrompts(cfg authAdoptConfig) (map[domain.RoleName]agentbaseline.Prompt, error) {
 	prompts := map[domain.RoleName]agentbaseline.Prompt{}
 	for _, entry := range []struct {
@@ -362,6 +369,21 @@ func readAdoptPrompts(cfg authAdoptConfig) (map[domain.RoleName]agentbaseline.Pr
 	}
 	if cfg.ShadowReviewCostOwner != "" {
 		prompts[domain.RoleShadowReviewer] = reviewPrompt()
+	}
+	for _, role := range agentbaseline.JudgmentRoles() {
+		prompt, ok := inference.CodeOwnedRolePrompt(role)
+		if !ok {
+			continue
+		}
+		prompts[role] = agentbaseline.Prompt{Name: prompt.Name, Digest: prompt.Digest}
+	}
+	if cfg.JudgmentPublicationAuthorPrompt != "" {
+		body, err := readJudgmentPrompt(cfg.JudgmentPublicationAuthorPrompt)
+		if err != nil {
+			return nil, fmt.Errorf("-judgment-publication-author-prompt: %w", err)
+		}
+		prompt := inference.OperatorRolePrompt(domain.RolePublicationAuthor, body)
+		prompts[domain.RolePublicationAuthor] = agentbaseline.Prompt{Name: prompt.Name, Digest: prompt.Digest}
 	}
 	return prompts, nil
 }
@@ -422,6 +444,8 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 		"the daemon's -specification-prompt-package (required)")
 	flags.StringVar(&cfg.RemediationPromptPackage, "remediation-prompt-package", "",
 		"the daemon's -remediation-prompt-package (required)")
+	flags.StringVar(&cfg.JudgmentPublicationAuthorPrompt, "judgment-publication-author-prompt", "",
+		"the daemon's -judgment-publication-author-prompt (optional; without it the publication author gets no line)")
 	flags.StringVar(&cfg.RetireUnadoptable, "retire-unadoptable", "",
 		"identity to retire if this run reports it unadoptable: disable it and stop the open tasks it owns")
 	flags.StringVar(&cfg.PatchPath, "patch", "-", "file to write the tree patch to, outside any checkout; - is stdout")
