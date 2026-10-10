@@ -143,6 +143,9 @@ func main() {
 		case "follow":
 			runFollowMain(os.Args[2:])
 			return
+		case "inspect":
+			runInspectMain(os.Args[2:])
+			return
 		case "pairing-code":
 			runPairingCodeMain(os.Args[2:])
 			return

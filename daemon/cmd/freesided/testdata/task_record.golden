@@ -1,0 +1,649 @@
+{
+  "version": "freeside-task-record-v1",
+  "as_of_revision": 21,
+  "as_of": "2026-10-01T09:00:00Z",
+  "task_id": "task-GOLDEN",
+  "task": {
+    "project_id": "freeside",
+    "created_at": "2026-09-01T00:00:00Z",
+    "lifecycle_facts": [
+      {
+        "ordinal": 1,
+        "kind": "started",
+        "run_id": "run-specification-4e43b0ee6a2c5cade4f35788f3138230700ac6f98d5524dd68f013c0e5db8e6b",
+        "campaign_id": "campaign-990f4cfbab43a5af0acc80a9774dfbb61e270c320e801f60b679c414acbbeea3",
+        "binding_unit_id": null,
+        "source_id": "start:run-specification-4e43b0ee6a2c5cade4f35788f3138230700ac6f98d5524dd68f013c0e5db8e6b",
+        "recorded_at": "2026-09-01T13:00:00Z"
+      }
+    ],
+    "cancellation": null
+  },
+  "task_error": null,
+  "timeline": {
+    "as_of_revision": 21,
+    "as_of": "2026-10-01T09:00:00Z",
+    "task_id": "task-GOLDEN",
+    "project_id": "freeside",
+    "name": {
+      "text": "Repair the acceptance rig",
+      "source": "operator"
+    },
+    "events": [
+      {
+        "milestone": null,
+        "review": null,
+        "verification": null,
+        "kind": "task_created",
+        "recorded_at": "2026-09-01T00:00:00Z",
+        "campaign_id": null,
+        "run_id": null,
+        "approved_spec_digest": null,
+        "specification_run_id": null,
+        "pr_number": null,
+        "merge_commit_sha": null
+      },
+      {
+        "milestone": null,
+        "review": {
+          "invocation_id": "review-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315-3",
+          "round": 3,
+          "head_sha": "cafebabe",
+          "base_sha": "deadbeef",
+          "outcome": "findings",
+          "failure": null
+        },
+        "verification": null,
+        "kind": "review_completed",
+        "recorded_at": "2026-09-01T14:07:00Z",
+        "campaign_id": null,
+        "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+        "approved_spec_digest": null,
+        "specification_run_id": null,
+        "pr_number": null,
+        "merge_commit_sha": null
+      },
+      {
+        "milestone": {
+          "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+          "kind": "run_submitted",
+          "invocation_id": "inv-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+          "terminal": null,
+          "outcome": null,
+          "reason": null,
+          "recorded_at": "2026-09-01T13:55:00Z"
+        },
+        "review": null,
+        "verification": null,
+        "kind": "run_milestone",
+        "recorded_at": "2026-09-01T13:55:00Z",
+        "campaign_id": null,
+        "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+        "approved_spec_digest": null,
+        "specification_run_id": null,
+        "pr_number": null,
+        "merge_commit_sha": null
+      },
+      {
+        "milestone": {
+          "run_id": "run-freeside-656",
+          "kind": "terminal_recorded",
+          "invocation_id": "inv-run-freeside-656",
+          "terminal": "failed",
+          "outcome": null,
+          "reason": null,
+          "recorded_at": "2026-09-01T13:51:00Z"
+        },
+        "review": null,
+        "verification": null,
+        "kind": "run_milestone",
+        "recorded_at": "2026-09-01T13:51:00Z",
+        "campaign_id": null,
+        "run_id": "run-freeside-656",
+        "approved_spec_digest": null,
+        "specification_run_id": null,
+        "pr_number": null,
+        "merge_commit_sha": null
+      },
+      {
+        "milestone": {
+          "run_id": "run-freeside-656",
+          "kind": "run_submitted",
+          "invocation_id": "inv-run-freeside-656",
+          "terminal": null,
+          "outcome": null,
+          "reason": null,
+          "recorded_at": "2026-09-01T13:31:00Z"
+        },
+        "review": null,
+        "verification": null,
+        "kind": "run_milestone",
+        "recorded_at": "2026-09-01T13:31:00Z",
+        "campaign_id": null,
+        "run_id": "run-freeside-656",
+        "approved_spec_digest": null,
+        "specification_run_id": null,
+        "pr_number": null,
+        "merge_commit_sha": null
+      },
+      {
+        "milestone": null,
+        "review": null,
+        "verification": null,
+        "kind": "specification_approved",
+        "recorded_at": "2026-09-01T13:31:00Z",
+        "campaign_id": "campaign-990f4cfbab43a5af0acc80a9774dfbb61e270c320e801f60b679c414acbbeea3",
+        "run_id": "run-freeside-656",
+        "approved_spec_digest": "sha256:991a2714c751292b0b241243e3c411e6722584bbcf31701b7575898a74820b13",
+        "specification_run_id": "run-specification-4e43b0ee6a2c5cade4f35788f3138230700ac6f98d5524dd68f013c0e5db8e6b",
+        "pr_number": null,
+        "merge_commit_sha": null
+      },
+      {
+        "milestone": null,
+        "review": null,
+        "verification": null,
+        "kind": "campaign_allocated",
+        "recorded_at": "2026-09-01T13:00:00Z",
+        "campaign_id": "campaign-990f4cfbab43a5af0acc80a9774dfbb61e270c320e801f60b679c414acbbeea3",
+        "run_id": null,
+        "approved_spec_digest": null,
+        "specification_run_id": "run-specification-4e43b0ee6a2c5cade4f35788f3138230700ac6f98d5524dd68f013c0e5db8e6b",
+        "pr_number": null,
+        "merge_commit_sha": null
+      },
+      {
+        "milestone": {
+          "run_id": "run-specification-4e43b0ee6a2c5cade4f35788f3138230700ac6f98d5524dd68f013c0e5db8e6b",
+          "kind": "run_submitted",
+          "invocation_id": "inv-specify-run-specification-4e43b0ee6a2c5cade4f35788f3138230700ac6f98d5524dd68f013c0e5db8e6b-1",
+          "terminal": null,
+          "outcome": null,
+          "reason": null,
+          "recorded_at": "2026-09-01T13:00:00Z"
+        },
+        "review": null,
+        "verification": null,
+        "kind": "run_milestone",
+        "recorded_at": "2026-09-01T13:00:00Z",
+        "campaign_id": null,
+        "run_id": "run-specification-4e43b0ee6a2c5cade4f35788f3138230700ac6f98d5524dd68f013c0e5db8e6b",
+        "approved_spec_digest": null,
+        "specification_run_id": null,
+        "pr_number": null,
+        "merge_commit_sha": null
+      },
+      {
+        "milestone": null,
+        "review": null,
+        "verification": null,
+        "kind": "task_started",
+        "recorded_at": "2026-09-01T13:00:00Z",
+        "campaign_id": "campaign-990f4cfbab43a5af0acc80a9774dfbb61e270c320e801f60b679c414acbbeea3",
+        "run_id": "run-specification-4e43b0ee6a2c5cade4f35788f3138230700ac6f98d5524dd68f013c0e5db8e6b",
+        "approved_spec_digest": null,
+        "specification_run_id": null,
+        "pr_number": null,
+        "merge_commit_sha": null
+      }
+    ],
+    "sections": [
+      {
+        "campaign_id": "campaign-990f4cfbab43a5af0acc80a9774dfbb61e270c320e801f60b679c414acbbeea3",
+        "events": [
+          {
+            "milestone": null,
+            "review": null,
+            "verification": null,
+            "kind": "specification_approved",
+            "recorded_at": "2026-09-01T13:31:00Z",
+            "campaign_id": "campaign-990f4cfbab43a5af0acc80a9774dfbb61e270c320e801f60b679c414acbbeea3",
+            "run_id": "run-freeside-656",
+            "approved_spec_digest": "sha256:991a2714c751292b0b241243e3c411e6722584bbcf31701b7575898a74820b13",
+            "specification_run_id": "run-specification-4e43b0ee6a2c5cade4f35788f3138230700ac6f98d5524dd68f013c0e5db8e6b",
+            "pr_number": null,
+            "merge_commit_sha": null
+          },
+          {
+            "milestone": null,
+            "review": null,
+            "verification": null,
+            "kind": "campaign_allocated",
+            "recorded_at": "2026-09-01T13:00:00Z",
+            "campaign_id": "campaign-990f4cfbab43a5af0acc80a9774dfbb61e270c320e801f60b679c414acbbeea3",
+            "run_id": null,
+            "approved_spec_digest": null,
+            "specification_run_id": "run-specification-4e43b0ee6a2c5cade4f35788f3138230700ac6f98d5524dd68f013c0e5db8e6b",
+            "pr_number": null,
+            "merge_commit_sha": null
+          }
+        ],
+        "runs": [
+          {
+            "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+            "role": "implementation",
+            "attempt_number": 2,
+            "attempt_reason": "Retry after repairing the acceptance rig",
+            "parent_run_id": "run-freeside-656",
+            "superseded_by": null,
+            "milestones": [
+              {
+                "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+                "kind": "invocation_admitted",
+                "invocation_id": "inv-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+                "terminal": null,
+                "outcome": null,
+                "reason": null,
+                "recorded_at": "2026-09-01T13:56:00Z"
+              },
+              {
+                "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+                "kind": "run_submitted",
+                "invocation_id": "inv-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+                "terminal": null,
+                "outcome": null,
+                "reason": null,
+                "recorded_at": "2026-09-01T13:55:00Z"
+              }
+            ],
+            "hold": {
+              "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+              "invocation_id": "inv-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+              "reason": "verification_findings",
+              "first_observed_at": "2026-09-01T14:10:00Z",
+              "last_observed_at": "2026-09-01T14:20:00Z"
+            },
+            "events": []
+          },
+          {
+            "run_id": "run-freeside-656",
+            "role": "implementation",
+            "attempt_number": 1,
+            "attempt_reason": null,
+            "parent_run_id": null,
+            "superseded_by": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+            "milestones": [
+              {
+                "run_id": "run-freeside-656",
+                "kind": "terminal_recorded",
+                "invocation_id": "inv-run-freeside-656",
+                "terminal": "failed",
+                "outcome": null,
+                "reason": null,
+                "recorded_at": "2026-09-01T13:51:00Z"
+              },
+              {
+                "run_id": "run-freeside-656",
+                "kind": "execution_outcome_recorded",
+                "invocation_id": "inv-run-freeside-656",
+                "terminal": null,
+                "outcome": "failed",
+                "reason": null,
+                "recorded_at": "2026-09-01T13:50:00Z"
+              },
+              {
+                "run_id": "run-freeside-656",
+                "kind": "invocation_admitted",
+                "invocation_id": "inv-run-freeside-656",
+                "terminal": null,
+                "outcome": null,
+                "reason": null,
+                "recorded_at": "2026-09-01T13:32:00Z"
+              },
+              {
+                "run_id": "run-freeside-656",
+                "kind": "run_submitted",
+                "invocation_id": "inv-run-freeside-656",
+                "terminal": null,
+                "outcome": null,
+                "reason": null,
+                "recorded_at": "2026-09-01T13:31:00Z"
+              }
+            ],
+            "hold": null,
+            "events": []
+          },
+          {
+            "run_id": "run-specification-4e43b0ee6a2c5cade4f35788f3138230700ac6f98d5524dd68f013c0e5db8e6b",
+            "role": "specification",
+            "attempt_number": 1,
+            "attempt_reason": null,
+            "parent_run_id": null,
+            "superseded_by": "run-freeside-656",
+            "milestones": [
+              {
+                "run_id": "run-specification-4e43b0ee6a2c5cade4f35788f3138230700ac6f98d5524dd68f013c0e5db8e6b",
+                "kind": "run_submitted",
+                "invocation_id": "inv-specify-run-specification-4e43b0ee6a2c5cade4f35788f3138230700ac6f98d5524dd68f013c0e5db8e6b-1",
+                "terminal": null,
+                "outcome": null,
+                "reason": null,
+                "recorded_at": "2026-09-01T13:00:00Z"
+              }
+            ],
+            "hold": null,
+            "events": []
+          }
+        ]
+      }
+    ]
+  },
+  "timeline_error": null,
+  "runs": [
+    {
+      "run_id": "run-specification-4e43b0ee6a2c5cade4f35788f3138230700ac6f98d5524dd68f013c0e5db8e6b",
+      "conclusion": {
+        "outcome": "pending",
+        "hold_reason": null,
+        "terminal_status": null,
+        "final": false
+      },
+      "hold": null,
+      "invocations": [],
+      "admissions": [],
+      "resolved_policy_digest": "sha256:6bda16bf57c2fe51cc15caa7e490006616c7000cbd37105f607c5c9e339e9088",
+      "billable_cost": null,
+      "errors": []
+    },
+    {
+      "run_id": "run-freeside-656",
+      "conclusion": {
+        "outcome": "failed",
+        "hold_reason": null,
+        "terminal_status": "failed",
+        "final": true
+      },
+      "hold": null,
+      "invocations": [
+        {
+          "invocation_id": "inv-run-freeside-656",
+          "run_id": "run-freeside-656",
+          "status": "failed",
+          "live": false,
+          "observed_at": "2026-09-01T13:51:00Z"
+        }
+      ],
+      "admissions": [
+        {
+          "id": "sha256:57045174e3b72d639c7eb198fa7ed9e6267c5acdfb22287b4adf2995e2aa6441",
+          "invocation_id": "inv-run-freeside-656",
+          "stage_id": "stage-run-freeside-656",
+          "attempt_id": "attempt-inv-run-freeside-656",
+          "admitted_at": "2026-09-01T13:32:00Z",
+          "operating_mode": "attended_dev",
+          "credential_mode": "local_trusted",
+          "egress_profile": "clean_verification",
+          "image_ref": "ghcr.io/example/agent@sha256:b8258f51a529f30203f7d46b3b58e628f8c598118bfe095a76477ad57c7cd00e",
+          "base": {
+            "repo": "example/freeside",
+            "repository_id": 1001,
+            "base_ref": "refs/heads/main",
+            "base_sha": "deadbeef"
+          },
+          "spec_digest": "sha256:991a2714c751292b0b241243e3c411e6722584bbcf31701b7575898a74820b13",
+          "policy_digest": "sha256:8813d5d7e2f9097c5050f515830edf01fc20f9effb6c98eecc82109bd8a1c61b",
+          "input_digest": "sha256:c0a155240ea42dea42c32d6e57f27548f45078d7682b80209e95b6d4fbb29dc3",
+          "trust_profile_digest": null,
+          "agent": null
+        }
+      ],
+      "resolved_policy_digest": null,
+      "billable_cost": null,
+      "errors": []
+    },
+    {
+      "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+      "conclusion": {
+        "outcome": "pending",
+        "hold_reason": null,
+        "terminal_status": null,
+        "final": false
+      },
+      "hold": {
+        "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+        "invocation_id": "inv-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+        "reason": "verification_findings",
+        "first_observed_at": "2026-09-01T14:10:00Z",
+        "last_observed_at": "2026-09-01T14:20:00Z"
+      },
+      "invocations": [
+        {
+          "invocation_id": "inv-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+          "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+          "status": "running",
+          "live": true,
+          "observed_at": "2026-09-01T14:20:00Z"
+        }
+      ],
+      "admissions": [
+        {
+          "id": "sha256:374fc2079368338ce954ba48deb6efe9867e926ce78d3f1b4ad537e430b11910",
+          "invocation_id": "inv-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+          "stage_id": "stage-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+          "attempt_id": "attempt-inv-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+          "admitted_at": "2026-09-01T13:56:00Z",
+          "operating_mode": "attended_dev",
+          "credential_mode": "local_trusted",
+          "egress_profile": "clean_verification",
+          "image_ref": "ghcr.io/example/agent@sha256:b8258f51a529f30203f7d46b3b58e628f8c598118bfe095a76477ad57c7cd00e",
+          "base": {
+            "repo": "example/freeside",
+            "repository_id": 1001,
+            "base_ref": "refs/heads/main",
+            "base_sha": "deadbeef"
+          },
+          "spec_digest": "sha256:991a2714c751292b0b241243e3c411e6722584bbcf31701b7575898a74820b13",
+          "policy_digest": "sha256:8813d5d7e2f9097c5050f515830edf01fc20f9effb6c98eecc82109bd8a1c61b",
+          "input_digest": "sha256:562e6547345758554455ef9ffbaae6f8676fad604faa84aeb2994cbb24126b50",
+          "trust_profile_digest": null,
+          "agent": null
+        }
+      ],
+      "resolved_policy_digest": null,
+      "billable_cost": null,
+      "errors": []
+    }
+  ],
+  "items": [
+    {
+      "id": "execution-failure-run-freeside-656",
+      "type": "execution_failure",
+      "status": "open",
+      "run_id": "run-freeside-656",
+      "created_at": "2026-09-01T14:00:00Z",
+      "decided_at": null,
+      "health_diagnostic": null,
+      "execution_failure": null,
+      "publish_block": null,
+      "blocked_on": null,
+      "commands": [],
+      "deliveries": [
+        {
+          "device_id": "device-golden",
+          "channel": "ntfy",
+          "attempt": 1,
+          "status": "submitted",
+          "submitted_at": "2026-10-01T09:00:00Z",
+          "channel_accepted_at": null,
+          "opened_at": null
+        }
+      ]
+    },
+    {
+      "id": "finding-adjudication-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+      "type": "finding_adjudication",
+      "status": "open",
+      "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+      "created_at": "2026-09-01T14:07:00Z",
+      "decided_at": null,
+      "health_diagnostic": null,
+      "execution_failure": null,
+      "publish_block": null,
+      "blocked_on": null,
+      "commands": [],
+      "deliveries": []
+    },
+    {
+      "id": "invocation-stalled-inv-run-freeside-656-21",
+      "type": "system_health",
+      "status": "open",
+      "run_id": null,
+      "created_at": "2026-10-01T09:00:00Z",
+      "decided_at": null,
+      "health_diagnostic": {
+        "code": "invocation_stalled",
+        "impairs": "none"
+      },
+      "execution_failure": null,
+      "publish_block": null,
+      "blocked_on": null,
+      "commands": [],
+      "deliveries": []
+    },
+    {
+      "id": "review-configuration-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+      "type": "review_configuration",
+      "status": "open",
+      "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+      "created_at": "2026-09-01T14:04:00Z",
+      "decided_at": null,
+      "health_diagnostic": null,
+      "execution_failure": null,
+      "publish_block": null,
+      "blocked_on": null,
+      "commands": [],
+      "deliveries": []
+    },
+    {
+      "id": "review-contradiction-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+      "type": "review_contradiction",
+      "status": "open",
+      "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+      "created_at": "2026-09-01T14:03:00Z",
+      "decided_at": null,
+      "health_diagnostic": null,
+      "execution_failure": null,
+      "publish_block": null,
+      "blocked_on": null,
+      "commands": [],
+      "deliveries": []
+    },
+    {
+      "id": "review-diminishing-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+      "type": "review_diminishing_returns",
+      "status": "open",
+      "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+      "created_at": "2026-09-01T14:01:00Z",
+      "decided_at": null,
+      "health_diagnostic": null,
+      "execution_failure": null,
+      "publish_block": null,
+      "blocked_on": null,
+      "commands": [],
+      "deliveries": []
+    },
+    {
+      "id": "review-dispute-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+      "type": "review_dispute",
+      "status": "open",
+      "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+      "created_at": "2026-09-01T14:02:00Z",
+      "decided_at": null,
+      "health_diagnostic": null,
+      "execution_failure": null,
+      "publish_block": null,
+      "blocked_on": null,
+      "commands": [],
+      "deliveries": []
+    },
+    {
+      "id": "spec-approval-run-freeside-656-1",
+      "type": "spec_approval",
+      "status": "resolved",
+      "run_id": "run-specification-4e43b0ee6a2c5cade4f35788f3138230700ac6f98d5524dd68f013c0e5db8e6b",
+      "created_at": "2026-09-01T13:20:00Z",
+      "decided_at": "2026-09-01T13:30:00Z",
+      "health_diagnostic": null,
+      "execution_failure": null,
+      "publish_block": null,
+      "blocked_on": null,
+      "commands": [
+        {
+          "command_id": "approve-spec-approval-run-freeside-656-1",
+          "action": "approve",
+          "device_id": "device-seed-fixture"
+        }
+      ],
+      "deliveries": []
+    }
+  ],
+  "items_error": null,
+  "counts": {
+    "items_by_type": [
+      {
+        "type": "spec_approval",
+        "count": 1
+      },
+      {
+        "type": "execution_failure",
+        "count": 1
+      },
+      {
+        "type": "agent_question",
+        "count": 0
+      },
+      {
+        "type": "review_diminishing_returns",
+        "count": 1
+      },
+      {
+        "type": "review_dispute",
+        "count": 1
+      },
+      {
+        "type": "review_contradiction",
+        "count": 1
+      },
+      {
+        "type": "review_configuration",
+        "count": 1
+      },
+      {
+        "type": "finding_adjudication",
+        "count": 1
+      },
+      {
+        "type": "ready_for_final_review",
+        "count": 0
+      },
+      {
+        "type": "publish_blocked",
+        "count": 0
+      },
+      {
+        "type": "task_proposal",
+        "count": 0
+      },
+      {
+        "type": "effect_proposal",
+        "count": 0
+      },
+      {
+        "type": "system_health",
+        "count": 1
+      },
+      {
+        "type": "blocked",
+        "count": 0
+      }
+    ],
+    "health_notices_by_code": [
+      {
+        "code": "invocation_stalled",
+        "count": 1
+      }
+    ],
+    "runs_held": 1,
+    "failed_stops": 0
+  }
+}
