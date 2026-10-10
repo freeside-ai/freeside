@@ -17,6 +17,14 @@ func invocationStalledPrefix(id domain.InvocationID) string {
 	return invocationStalledItemPrefix + string(id) + "-"
 }
 
+// isInvocationStallNotice reports whether itemID is a stall notice filed for
+// exactly this invocation. The remainder after the prefix is the filing
+// revision alone, so invocation "inv-a" never matches the notice of "inv-a-b".
+func isInvocationStallNotice(itemID string, id domain.InvocationID) bool {
+	revision, ok := strings.CutPrefix(itemID, invocationStalledPrefix(id))
+	return ok && revision != "" && strings.Trim(revision, "0123456789") == ""
+}
+
 // invocationStallNotice returns the stage driver's Stall hook: it files one
 // advisory invocation_stalled health notice when ward reports a running
 // writer stalled, and resolves it when ward reports recovery or the end of
@@ -33,10 +41,7 @@ func invocationStallNotice(
 	return func(ctx context.Context, id domain.InvocationID, stalled bool) error {
 		return st.Write(ctx, func(tx *store.WriteTx) error {
 			open, err := openInvocationStallNotices(ctx, tx, func(itemID string) bool {
-				// The remainder is the filing revision alone, so invocation
-				// "inv-a" never matches the notice of "inv-a-b".
-				revision, ok := strings.CutPrefix(itemID, invocationStalledPrefix(id))
-				return ok && revision != "" && strings.Trim(revision, "0123456789") == ""
+				return isInvocationStallNotice(itemID, id)
 			})
 			if err != nil {
 				return err
