@@ -44,7 +44,7 @@ func (p *productionPublicationHarness) configureAdjudicator(t *testing.T) *infer
 	}
 	p.judgments, err = inference.New(inference.Config{
 		StatePath: filepath.Join(t.TempDir(), "ledger.json"),
-		Binding:   inference.Binding{Provider: "fake", Model: "adjudicator", Driver: driver},
+		Roles:     inferencefake.Roles{Provider: "fake", Model: "adjudicator", Driver: driver},
 		Sites:     []inference.Site{inference.ClassifierSite(budget), inference.AdjudicatorSite(budget)},
 		Advisory:  advisoryStore, Now: func() time.Time { return p.now },
 	})

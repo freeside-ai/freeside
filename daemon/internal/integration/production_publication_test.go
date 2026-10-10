@@ -2156,7 +2156,7 @@ func testProductionAdjudicatedRemediation(t *testing.T, p *productionPublication
 	}
 	p.judgments, err = inference.New(inference.Config{
 		StatePath: filepath.Join(t.TempDir(), "ledger.json"),
-		Binding:   inference.Binding{Provider: "fake", Model: "classifier", Driver: classifier},
+		Roles:     inferencefake.Roles{Provider: "fake", Model: "classifier", Driver: classifier},
 		Sites: []inference.Site{inference.ClassifierSite(inference.Budget{
 			Window: time.Hour, Site: limits, Project: limits, Global: limits,
 			MaxCallsPerRoot: 10, MaxStarvationPerRoot: time.Hour,
@@ -2419,7 +2419,7 @@ func TestProductionUndeliverableRemediationTerminalizesPerRun(t *testing.T) {
 	}
 	p.judgments, err = inference.New(inference.Config{
 		StatePath: filepath.Join(t.TempDir(), "ledger.json"),
-		Binding:   inference.Binding{Provider: "fake", Model: "classifier", Driver: classifier},
+		Roles:     inferencefake.Roles{Provider: "fake", Model: "classifier", Driver: classifier},
 		Sites: []inference.Site{inference.ClassifierSite(inference.Budget{
 			Window: time.Hour, Site: limits, Project: limits, Global: limits,
 			MaxCallsPerRoot: 10, MaxStarvationPerRoot: time.Hour,
@@ -2532,7 +2532,7 @@ func testProductionRemediationNoopPushback(
 	}
 	p.judgments, err = inference.New(inference.Config{
 		StatePath: filepath.Join(t.TempDir(), "ledger.json"),
-		Binding:   inference.Binding{Provider: "fake", Model: "classifier", Driver: classifier},
+		Roles:     inferencefake.Roles{Provider: "fake", Model: "classifier", Driver: classifier},
 		Sites: []inference.Site{inference.ClassifierSite(inference.Budget{
 			Window: time.Hour, Site: limits, Project: limits, Global: limits,
 			MaxCallsPerRoot: 10, MaxStarvationPerRoot: time.Hour,
@@ -2685,7 +2685,7 @@ func TestProductionClassifierPersistsAnnotationAndEscalatesLowConfidenceP1(t *te
 	limits := inference.Limits{Calls: 10, ComputeUnits: 100_000, AttentionItems: 10, Starvation: time.Hour}
 	p.judgments, err = inference.New(inference.Config{
 		StatePath: filepath.Join(t.TempDir(), "ledger.json"),
-		Binding:   inference.Binding{Provider: "fake", Model: "classifier", Driver: driver},
+		Roles:     inferencefake.Roles{Provider: "fake", Model: "classifier", Driver: driver},
 		Sites: []inference.Site{inference.ClassifierSite(inference.Budget{
 			Window: time.Hour, Site: limits, Project: limits, Global: limits,
 			MaxCallsPerRoot: 10, MaxStarvationPerRoot: time.Hour,
@@ -7096,7 +7096,7 @@ func prepareRemediationPublicationLifecycleWithScope(
 	}
 	p.judgments, err = inference.New(inference.Config{
 		StatePath: filepath.Join(t.TempDir(), "ledger.json"),
-		Binding: inference.Binding{
+		Roles: inferencefake.Roles{
 			Provider: "fake", Model: "classifier", Driver: classifier,
 		},
 		Sites: []inference.Site{inference.ClassifierSite(inference.Budget{

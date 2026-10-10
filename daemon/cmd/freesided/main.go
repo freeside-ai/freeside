@@ -1001,27 +1001,25 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			// mix of sites.
 			MaxCallsPerRoot: 20, MaxStarvationPerRoot: 40 * time.Minute,
 		}
-		judgmentBinding, err := composeRuntimeJudgments(cfg.Claude.Judgments, cfg.Claude.ReviewInputRoot)
+		judgmentRuntime, err := composeRuntimeJudgments(cfg.Claude.Judgments, cfg.Claude.ReviewInputRoot)
 		if err != nil {
 			return nil, fmt.Errorf("compose subscription judgments: %w", err)
 		}
-		ownedJudgments, err := ward.NewTaskJudgments(filepath.Join(cfg.StateDir, "task-judgments"), judgmentBinding.Driver)
+		ownedJudgments, err := ward.NewTaskJudgments(filepath.Join(cfg.StateDir, "task-judgments"), judgmentRuntime.Driver)
 		if err != nil {
 			return nil, err
 		}
-		judgmentBinding.Driver = ownedJudgments
+		judgmentRuntime.Driver = ownedJudgments
+		judgmentHealth := newJudgmentRoleHealth(st, func() time.Time { return time.Now().UTC() }, cfg.Logger)
 		judgments, err := inference.New(inference.Config{
 			StatePath:  filepath.Join(cfg.StateDir, "inference-budget.json"),
 			AnchorPath: cfg.DBPath + ".inference-budget-anchor",
-			Binding:    judgmentBinding,
-			Sites: []inference.Site{
-				inference.ClassifierSite(judgmentBudget), inference.AdjudicatorSite(judgmentBudget),
-				inference.DriftAuditorSite(judgmentBudget),
-				inference.DiagnosticSite(judgmentBudget), inference.DiscussionSite(judgmentBudget),
-				inference.TaskNamerSite(judgmentBudget),
-				inference.PublicationAuthorExplainSite(judgmentBudget),
-				inference.PublicationAuthorProposeSite(judgmentBudget),
+			Roles: judgmentRoles{
+				st: st, tree: claudeWiring.env.Agents.Tree, revision: claudeWiring.env.Agents.LineupRevision,
+				runtime: judgmentRuntime,
 			},
+			Health:   judgmentHealth,
+			Sites:    judgmentSites(judgmentBudget),
 			Advisory: advisoryWriter, Now: func() time.Time { return time.Now().UTC() },
 		})
 		if err != nil {
@@ -1183,6 +1181,12 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		// is not.
 		if err := activateAgentSelection(ctx, st, claudeWiring.selectionFailure, startupNow(cfg.now)); err != nil {
 			return nil, fmt.Errorf("activate agent selection: %w", err)
+		}
+		// The same for the judgment roles: name each one the lineup cannot
+		// fill before a site returns its fail-safe for it, and resolve the
+		// item of a role fixed since the last start.
+		if err := checkJudgmentRolesAtStartup(ctx, judgments, judgmentHealth, cfg.Logger); err != nil {
+			return nil, fmt.Errorf("check judgment roles: %w", err)
 		}
 		claudeWiring.driver.SetRecoveryLauncher(workflow.ResumeTaskInvocation)
 		for _, source := range []exec.ReviewSource{claudeWiring.reviewSource, claudeWiring.shadowReviewSource} {

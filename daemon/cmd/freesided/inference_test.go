@@ -37,11 +37,13 @@ func judgmentFixture(t *testing.T) (judgmentConfig, string) {
 }
 
 func TestPublicationAuthorPromptBindingAndFailsafe(t *testing.T) {
-	// The unavailable binding drives both sites to their fail-safe with nothing
-	// blocking, and it carries no driver.
+	// With no prompt file the publication author is off: the role source says
+	// so before it reads a line, both sites return their fail-safe with
+	// nothing blocking, and the runtime carries no driver.
 	unavailable, digest, err := composeJudgments(judgmentConfig{}, t.TempDir())
-	if err != nil || digest != "" || unavailable.Driver != nil || unavailable.Provider != "unavailable" {
-		t.Fatalf("unavailable binding = %+v, digest=%q, err=%v", unavailable, digest, err)
+	if err != nil || digest != "" || unavailable.Driver != nil || unavailable.AuthorPrompt != nil ||
+		unavailable.Credential.Reveal() != "" {
+		t.Fatalf("unconfigured runtime carries a driver, prompt, or credential; digest=%q, err=%v", digest, err)
 	}
 	budget := inference.Budget{
 		Window: time.Hour,
@@ -55,7 +57,7 @@ func TestPublicationAuthorPromptBindingAndFailsafe(t *testing.T) {
 	}
 	client, err := inference.New(inference.Config{
 		StatePath: filepath.Join(t.TempDir(), "ledger.json"),
-		Binding:   unavailable,
+		Roles:     judgmentRoles{runtime: unavailable},
 		Sites:     []inference.Site{inference.PublicationAuthorExplainSite(budget), inference.PublicationAuthorProposeSite(budget)},
 		Advisory:  store,
 	})
@@ -90,7 +92,7 @@ func TestPublicationAuthorPromptBindingAndFailsafe(t *testing.T) {
 	}
 	cfg.PublicationAuthorPrompt = promptPath
 	bound, withPrompt, err := composeJudgments(cfg, root)
-	if err != nil || bound.Driver == nil || withPrompt == base {
+	if err != nil || bound.Driver == nil || withPrompt == base || string(bound.AuthorPrompt) != "role prompt one" {
 		t.Fatalf("prompt digest = %q (base %q), err = %v", withPrompt, base, err)
 	}
 	if err := os.WriteFile(promptPath, []byte("role prompt two, different"), 0o600); err != nil {
@@ -119,7 +121,7 @@ func TestPublicationAuthorPromptBindingAndFailsafe(t *testing.T) {
 func TestJudgmentBindingAndReceipt(t *testing.T) {
 	cfg, root := judgmentFixture(t)
 	b, digest, err := composeJudgments(cfg, root)
-	if err != nil || b.Driver == nil || digest == "" || b.Model != "test-model" || b.Credential.Reveal() != "synthetic-subscription-token" {
+	if err != nil || b.Driver == nil || digest == "" || b.Credential.Reveal() != "synthetic-subscription-token" {
 		t.Fatalf("binding failed: %v", err)
 	}
 	_, again, err := composeJudgments(cfg, root)
@@ -181,7 +183,7 @@ func TestJudgmentStartupRequiresPreflightBinding(t *testing.T) {
 		})
 	}
 	binding, err := composeRuntimeJudgments(judgmentConfig{}, "")
-	if err != nil || binding.Driver != nil || binding.Provider != "unavailable" {
+	if err != nil || binding.Driver != nil || binding.Credential.Reveal() != "" {
 		t.Fatal("unconfigured startup fallback changed")
 	}
 }
@@ -218,7 +220,7 @@ func TestJudgmentConfigRefusesUnsafeSnapshots(t *testing.T) {
 		})
 	}
 	b, digest, err := composeJudgments(judgmentConfig{}, "")
-	if err != nil || b.Driver != nil || digest != "" || b.Provider != "unavailable" {
+	if err != nil || b.Driver != nil || digest != "" || b.Credential.Reveal() != "" {
 		t.Fatal("unconfigured fallback changed")
 	}
 }

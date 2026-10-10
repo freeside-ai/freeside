@@ -39,7 +39,7 @@ func taskNamingClient(t *testing.T, driver inference.Driver) *inference.Client {
 	})
 	client, err := inference.New(inference.Config{
 		StatePath: filepath.Join(root, "ledger.json"), Advisory: claims,
-		Binding: inference.Binding{Provider: "fake", Model: "namer", Driver: driver}, Sites: []inference.Site{site},
+		Roles: inferencefake.Roles{Provider: "fake", Model: "namer", Driver: driver}, Sites: []inference.Site{site},
 	})
 	if err != nil {
 		t.Fatal(err)

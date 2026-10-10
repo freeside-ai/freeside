@@ -10,7 +10,10 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -420,12 +423,46 @@ type Request struct {
 	Fields          map[string]string `json:"fields"`
 	MaxOutput       int               `json:"max_output_bytes"`
 	MaxComputeUnits int64             `json:"max_compute_units"`
+	// RolePrompt is the admitted role's refinable prompt and RolePromptDigest
+	// its content digest, the one the call record carries. A driver sends
+	// these bytes and no other role prompt; they are empty for a role whose
+	// whole instruction is its site contract. Neither is part of the task
+	// data a driver serializes.
+	RolePrompt       []byte        `json:"-"`
+	RolePromptDigest domain.Digest `json:"-"`
 }
 
-// Response is untrusted driver output plus its measured compute proxy.
+// Observed is what a driver saw answer, as opposed to what the admitted
+// agent asked for. Every field is the driver's claim about an external
+// service: the call record stores it as an observation and nothing decides
+// on it. A zero field is a fact the driver does not have.
+type Observed struct {
+	ModelID         string
+	ServingOperator string
+	OutputTokens    int64
+}
+
+// maxObservedIDBytes bounds each observed identifier a driver reports.
+const maxObservedIDBytes = 256
+
+func (o Observed) valid() bool {
+	for _, id := range []string{o.ModelID, o.ServingOperator} {
+		// Graphic characters only: no control and no format character
+		// (a bidirectional override, a zero-width joiner) reaches the record.
+		if len(id) > maxObservedIDBytes || !utf8.ValidString(id) ||
+			strings.ContainsFunc(id, func(r rune) bool { return !unicode.IsGraphic(r) }) {
+			return false
+		}
+	}
+	return o.OutputTokens >= 0
+}
+
+// Response is untrusted driver output plus its measured compute proxy and
+// what the driver observed.
 type Response struct {
 	Output       []byte
 	ComputeUnits int64
+	Observed     Observed
 }
 
 // Driver performs one structured completion without tools or a workspace.
@@ -436,19 +473,110 @@ type Driver interface {
 	Complete(context.Context, Request, Secret) (Response, error)
 }
 
-// Binding pins the non-choosable provider identity and credential.
-type Binding struct {
-	Provider   string
-	Model      string
-	Credential Secret
-	Driver     Driver
+// CredentialSource says where the bytes a call authenticated with came from.
+// A record carries it beside the admitted enrollment generation so it never
+// claims a credential the call did not use.
+type CredentialSource string
+
+const (
+	// CredentialSourceInterimFlag is the setup-token snapshot the
+	// -judgment-auth-snapshot flag names. The admitted enrollment generation
+	// is the line's; the bytes are the flag's (#1426 closes the gap).
+	CredentialSourceInterimFlag CredentialSource = "interim_flag"
+)
+
+// AllCredentialSources lists every valid CredentialSource. A value stays
+// listed for as long as a retained call record can carry it: the ledger
+// refuses a record whose source it does not know.
+var AllCredentialSources = []CredentialSource{CredentialSourceInterimFlag}
+
+func (s CredentialSource) valid() bool {
+	switch s {
+	case CredentialSourceInterimFlag:
+		return true
+	default:
+		return false
+	}
 }
 
-func (b Binding) producer() string { return b.Provider + "/" + b.Model }
+// ErrRoleOff is a RoleSource's answer for a role the deployment's
+// configuration leaves off: the publication author with no prompt file. Its
+// sites return their fail-safe, as they do for an unbound role, but the role
+// is not unbound and raises no health item; no lineup line would turn it on.
+var ErrRoleOff = errors.New("judgment role is off in this configuration")
+
+// RoleSource resolves what a judgment role's lineup line selects, at the
+// moment of a call. It returns the inputs of the wardless admission and
+// never its result: Client runs domain.AdmitWardlessRole on what it is
+// handed, so no call can run on an admission its source only asserted.
+type RoleSource interface {
+	ResolveRole(context.Context, domain.RoleName) (RoleCall, error)
+}
+
+// RoleCall is a role's line resolved against the agent tree and the store,
+// with the means to make the call.
+type RoleCall struct {
+	Line           domain.LineupSelection
+	LineupRevision domain.Digest
+	Agent          domain.AgentDefinition
+	Route          domain.RouteFragment
+	Adapter        domain.AdapterFragment
+	Offer          domain.OfferFragment
+	Enrollment     domain.ClientEnrollment
+	Generation     domain.EnrollmentGeneration
+	ExpiryMargin   time.Duration
+	// LaunchProof is the deployment's record of the call launch's audit.
+	// The source reads it from that record and never builds it from Adapter
+	// (domain.WardlessAdmissionInput.LaunchProof).
+	LaunchProof *domain.InterimCallLaunchAudit
+	// Prompt is the prompt the line's prompt name resolves to. Client holds
+	// its bytes to its digest and its name and digest to the line.
+	Prompt RolePrompt
+	// WriterLineage maps each writing role (domain.WritingRoles) to the
+	// lineage group of the offer its own line selects. A role with no
+	// resolvable line is absent, and a judging call records it as unknown.
+	WriterLineage map[domain.RoleName]string
+
+	Driver           Driver
+	Credential       Secret
+	CredentialSource CredentialSource
+}
+
+// HealthReporter hears whether a judgment role could be admitted. Client
+// reports on every call that reaches admission, so an implementation keeps
+// the reports idempotent. Neither method can fail a call: the site's
+// fail-safe already carries an unbound role, and the item only makes the
+// standing fault visible.
+type HealthReporter interface {
+	// RoleUnbound reports that the role has no usable line or failed its
+	// wardless admission, with the reason.
+	RoleUnbound(ctx context.Context, role domain.RoleName, reason string)
+	// RoleResolved reports that the role is not unbound: a call was
+	// admitted, or the configuration leaves the role off.
+	RoleResolved(ctx context.Context, role domain.RoleName)
+}
+
+// unboundProducer labels a fail-safe result no agent produced.
+const unboundProducer = "unavailable/unbound"
+
+// CallIdentity is what a call ran as: the record that stamps it and the
+// digests a comparison keys on (plan §8). A shadow call links to the call
+// it shadows by RecordID (#1429).
+type CallIdentity struct {
+	RecordID           string
+	Role               domain.RoleName
+	AgentDigest        domain.Digest
+	PromptDigest       domain.Digest
+	TreatmentDigest    domain.Digest
+	SiteContractDigest domain.Digest
+}
 
 // CallResult is a schema-validated, producer-labeled output.
 type CallResult struct {
-	Output      []byte
+	Output []byte
+	// Producer names the admitted agent's service operator and route model
+	// (`<service_operator>/<route_model_id>`), or unavailable/unbound for a
+	// fail-safe returned before any agent was admitted.
 	Producer    string
 	InputDigest string
 	Fallback    bool
@@ -456,6 +584,10 @@ type CallResult struct {
 	// AuthorOutputRefusalReason is set only for a classified explain-site refusal.
 	// It contains fixed field/category text, never a provider or validator error.
 	AuthorOutputRefusalReason string
+	// Identity is set once the call has a ledger record, whether it answered
+	// or fell back after that point; it is nil for a fail-safe returned
+	// before one existed.
+	Identity *CallIdentity
 }
 
 // ErrUnavailable is the fail-safe inference-down condition.

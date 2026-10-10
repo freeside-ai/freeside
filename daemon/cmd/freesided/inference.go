@@ -53,48 +53,49 @@ func readJudgmentPrompt(path string) ([]byte, error) {
 }
 
 // composeRuntimeJudgments binds startup to the successful preflight evidence.
-func composeRuntimeJudgments(cfg judgmentConfig, inputRoot string) (inference.Binding, error) {
+func composeRuntimeJudgments(cfg judgmentConfig, inputRoot string) (judgmentRuntime, error) {
 	expected := cfg.ExpectedDigest
 	cfg.ExpectedDigest = ""
 	if cfg != (judgmentConfig{}) && !contentaddr.Valid(expected) {
-		return inference.Binding{}, errors.New("judgment startup requires a preflight configuration digest")
+		return judgmentRuntime{}, errors.New("judgment startup requires a preflight configuration digest")
 	}
-	binding, actual, err := composeJudgments(cfg, inputRoot)
+	runtime, actual, err := composeJudgments(cfg, inputRoot)
 	if err != nil {
-		return inference.Binding{}, err
+		return judgmentRuntime{}, err
 	}
 	if actual != expected {
-		return inference.Binding{}, errors.New("judgment configuration differs from preflight")
+		return judgmentRuntime{}, errors.New("judgment configuration differs from preflight")
 	}
-	return binding, nil
+	return runtime, nil
 }
 
 // composeJudgments reuses the private setup-token reader used by shadow review.
 // No new credential enrollment, refresh mechanism, or provider API is involved.
-func composeJudgments(cfg judgmentConfig, inputRoot string) (inference.Binding, string, error) {
+// An empty configuration composes the zero runtime: judgments switched off.
+func composeJudgments(cfg judgmentConfig, inputRoot string) (judgmentRuntime, string, error) {
 	if cfg == (judgmentConfig{}) {
-		return inference.Binding{Provider: "unavailable", Model: "unbound"}, "", nil
+		return judgmentRuntime{}, "", nil
 	}
 	if cfg.AuthSnapshot == "" || filepath.IsAbs(cfg.AuthSnapshot) || filepath.Clean(cfg.AuthSnapshot) != cfg.AuthSnapshot {
-		return inference.Binding{}, "", errors.New("judgment auth snapshot must be relative to the private review input root")
+		return judgmentRuntime{}, "", errors.New("judgment auth snapshot must be relative to the private review input root")
 	}
 	var authorPrompt []byte
 	authorPromptDigest := ""
 	if cfg.PublicationAuthorPrompt != "" {
 		prompt, err := readJudgmentPrompt(cfg.PublicationAuthorPrompt)
 		if err != nil {
-			return inference.Binding{}, "", err
+			return judgmentRuntime{}, "", err
 		}
 		authorPrompt = prompt
 		authorPromptDigest = contentaddr.Sum(authorPrompt)
 	}
-	driver, err := claudeinference.New(cfg.CLI, claudeinference.WithPublicationAuthorPrompt(authorPrompt))
+	driver, err := claudeinference.New(cfg.CLI)
 	if err != nil {
-		return inference.Binding{}, "", err
+		return judgmentRuntime{}, "", err
 	}
 	token, err := readSetupTokenSnapshot(inputRoot, filepath.Join(inputRoot, cfg.AuthSnapshot))
 	if err != nil {
-		return inference.Binding{}, "", errors.New("judgment setup-token snapshot is unavailable or unsafe")
+		return judgmentRuntime{}, "", errors.New("judgment setup-token snapshot is unavailable or unsafe")
 	}
 	// The outer digest commits to configuration and credential content without
 	// storing either the credential or its separately usable content digest. The
@@ -107,6 +108,7 @@ func composeJudgments(cfg judgmentConfig, inputRoot string) (inference.Binding, 
 		TokenDigest                   string
 		PublicationAuthorPromptDigest string
 	}{claudeinference.Protocol, cfg, contentaddr.Sum(token), authorPromptDigest})
-	digest := contentaddr.Sum(receipt)
-	return inference.Binding{Provider: claudeinference.Protocol + ":" + digest, Model: cfg.CLI.Model, Credential: inference.Secret(token), Driver: driver}, digest, nil
+	return judgmentRuntime{
+		Driver: driver, Credential: inference.Secret(token), AuthorPrompt: authorPrompt,
+	}, contentaddr.Sum(receipt), nil
 }

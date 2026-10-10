@@ -414,7 +414,7 @@ func scriptPublicationSites(
 	}
 	client, err := inference.New(inference.Config{
 		StatePath: filepath.Join(t.TempDir(), "ledger.json"),
-		Binding:   inference.Binding{Provider: "fake", Model: "author", Driver: driver},
+		Roles:     inferencefake.Roles{Provider: "fake", Model: "author", Driver: driver},
 		Sites:     sites,
 		Advisory:  advisoryStore, Now: func() time.Time { return p.now },
 	})

@@ -289,7 +289,7 @@ func (f driftReplayFixture) routeInput(t *testing.T, audit domain.DriftAudit) st
 
 // driftReplayClient builds an inference client around the real drift-auditor
 // site, with the advisory sizing the daemon composes.
-func driftReplayClient(t *testing.T, binding inference.Binding, now func() time.Time) *inference.Client {
+func driftReplayClient(t *testing.T, roles fake.Roles, now func() time.Time) *inference.Client {
 	t.Helper()
 	dir := t.TempDir()
 	claims, err := advisory.Open(filepath.Join(dir, "advisory.json"), 2_000, 64<<10, advisory.WithClock(now))
@@ -299,7 +299,7 @@ func driftReplayClient(t *testing.T, binding inference.Binding, now func() time.
 	limits := inference.Limits{Calls: 1, ComputeUnits: 10_000, AttentionItems: 1, Starvation: time.Hour}
 	client, err := inference.New(inference.Config{
 		StatePath: filepath.Join(dir, "ledger.json"),
-		Binding:   binding,
+		Roles:     roles,
 		Sites: []inference.Site{inference.DriftAuditorSite(inference.Budget{
 			Window: time.Hour, Site: limits, Project: limits, Global: limits,
 			MaxCallsPerRoot: 1, MaxStarvationPerRoot: time.Hour,
@@ -436,7 +436,7 @@ func TestDriftReplay(t *testing.T) {
 		driver.Script(inference.DriftAuditorSiteID, fake.Script{Response: inference.Response{
 			Output: fixture.Recording.Output, ComputeUnits: fixture.Recording.ComputeUnits,
 		}})
-		client := driftReplayClient(t, inference.Binding{
+		client := driftReplayClient(t, fake.Roles{
 			Provider: "fake", Model: fixture.Recording.Model,
 			Credential: "token-value", Driver: driver,
 		}, now)

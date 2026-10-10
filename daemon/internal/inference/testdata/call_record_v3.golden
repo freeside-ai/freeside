@@ -1,0 +1,50 @@
+{
+  "id": "sha256:e9b1c16b2de13bc0dad0d28894a58dccf8259e2cad7f462aafeb13299b12be3c",
+  "site": "finding_adjudicator",
+  "project": "project-1",
+  "root_lineage": "run-1",
+  "producer": "fake/test",
+  "input_digest": "sha256:264b51b327a0222bb577adf02570c113be34417480a9363e8a17280f07648a9e",
+  "called_at": "1970-01-01T00:01:40Z",
+  "retain_until": "1970-01-31T00:01:40Z",
+  "ordinal": 1,
+  "audit_required": true,
+  "audit_complete": true,
+  "audit_transferred": false,
+  "identity": {
+    "admission": {
+      "role": "finding_adjudicator",
+      "agent_digest": "sha256:2d53f7248307abced55ab6026ceb6324d7a626bae8c4a6c4aabcf2f850ad05d5",
+      "prompt_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "lineup_revision": "sha256:50553131c846469aeebbb5ec42d910da0aa50e9567650a2a1124d85d0b81cef7",
+      "enrollment_id": "fake-a/claude_code",
+      "enrollment_generation": 1,
+      "interim_launch_audit": {
+        "adapter_digest": "sha256:3a7d6167dd93ef441a2533456f754b5b4dd643f0a81543f9c232de73f9fa4938",
+        "harness_build": "claude-code 2.1.267",
+        "audited_on": "2026-09-09"
+      }
+    },
+    "treatment_digest": "sha256:e69c60d9e21a47c7f28a786f06d434edb5c57ff83ee17551f9a4ddd563195383",
+    "site_contract_digest": "sha256:8965930eebde706b73366d39b1ffca028ee240c933712f1b0144976f44c77cd3",
+    "credential_source": "interim_flag",
+    "requested_model_id": "test",
+    "requested_effort": "harness_default",
+    "observed": {
+      "model_id": "observed-model",
+      "serving_operator": null,
+      "output_tokens": 4
+    },
+    "shadow_of": null,
+    "independence": [
+      {
+        "writing_role": "implementer",
+        "lineage": "matched"
+      },
+      {
+        "writing_role": "remediator",
+        "lineage": "unknown"
+      }
+    ]
+  }
+}
