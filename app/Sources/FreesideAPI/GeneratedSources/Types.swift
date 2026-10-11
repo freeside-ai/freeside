@@ -10307,7 +10307,7 @@ public enum Components {
                 ])
             }
         }
-        /// The authority or event a blocked work unit is waiting on.
+        /// The authority or event a blocked item was waiting on. Retired with the `blocked` attention type (plan revision 84); it stays so closed items stored before the retirement still decode.
         ///
         /// - Remark: Generated from `#/components/schemas/BlockedWaitKind`.
         @frozen public enum BlockedWaitKind: String, Codable, Hashable, Sendable, CaseIterable {
@@ -10315,7 +10315,7 @@ public enum Components {
             case pr_checks = "pr_checks"
             case external_review = "external_review"
         }
-        /// The reference variant must match kind.
+        /// What a `blocked` item was waiting on. The reference variant must match kind. Retired with the `blocked` attention type (plan revision 84); only a closed item carries one.
         ///
         /// - Remark: Generated from `#/components/schemas/BlockedWait`.
         public struct BlockedWait: Codable, Hashable, Sendable {
@@ -10982,6 +10982,8 @@ public enum Components {
             }
             /// - Remark: Generated from `#/components/schemas/AttentionItem/diff_stats`.
             public var diff_stats: Components.Schemas.AttentionItem.diff_statsPayload?
+            /// Retired with the `blocked` attention type (plan revision 84). Non-null only on a closed `blocked` item stored before the retirement.
+            ///
             /// - Remark: Generated from `#/components/schemas/AttentionItem/blocked_on`.
             public struct blocked_onPayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/AttentionItem/blocked_on/value1`.
@@ -11000,6 +11002,8 @@ public enum Components {
                     try self.value1.encode(to: encoder)
                 }
             }
+            /// Retired with the `blocked` attention type (plan revision 84). Non-null only on a closed `blocked` item stored before the retirement.
+            ///
             /// - Remark: Generated from `#/components/schemas/AttentionItem/blocked_on`.
             public var blocked_on: Components.Schemas.AttentionItem.blocked_onPayload?
             /// - Remark: Generated from `#/components/schemas/AttentionItem/health_diagnostic`.
@@ -11227,7 +11231,7 @@ public enum Components {
             ///   - execution_failure:
             ///   - publish_block:
             ///   - diff_stats:
-            ///   - blocked_on:
+            ///   - blocked_on: Retired with the `blocked` attention type (plan revision 84). Non-null only on a closed `blocked` item stored before the retirement.
             ///   - health_diagnostic:
             ///   - review_dispute:
             ///   - spec_revision: Authenticated revision facts for a revised spec_approval item; null on the initial approval and every other item type.
@@ -13040,7 +13044,7 @@ public enum Components {
                 case invocation_id
             }
         }
-        /// The kind of decision an attention item asks for (plan §4).
+        /// The kind of decision an attention item asks for (plan §4). `blocked` is retired (plan revision 84): nothing raises it and no item of the type is ever open. The member stays so closed items stored before the retirement still decode.
         ///
         /// - Remark: Generated from `#/components/schemas/AttentionType`.
         @frozen public enum AttentionType: String, Codable, Hashable, Sendable, CaseIterable {
