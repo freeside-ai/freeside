@@ -426,7 +426,7 @@ func parsePreflightConfig(args []string, stderr io.Writer) (preflightConfig, err
 	flags.StringVar(&cfg.TaskPath, "task", "", "task source file (required)")
 	flags.StringVar(&cfg.PolicyPath, "policy", "", "resolved policy file (required)")
 	flags.StringVar(&cfg.PublicationPath, "publication", "", "publication metadata file (required)")
-	flags.StringVar(&cfg.WorkUnitPath, "work-unit", "", "work-unit declaration file (optional)")
+	flags.StringVar(&cfg.WorkUnitPath, "work-unit", "", "work-unit declaration file (required with -submission-id)")
 	flags.StringVar((*string)(&cfg.ProjectID), "project", "", "project id (required)")
 	flags.StringVar(&cfg.BuildProxy, "build-proxy", "", "image-build proxy URL overriding the managed build proxy")
 	flags.StringVar(&cfg.LaunchAgentLabel, "launch-agent-label", defaultRigLaunchAgentLabel, "supervised daemon label")
@@ -645,15 +645,23 @@ func evaluateComposition(
 		passCheck(manifest, "listener_server_url", "operator server URL exactly names the leased listener")
 	}
 
+	// A refusal submit would make carries its own text, which repeats no
+	// submitted bytes; any other input error stays generic.
 	var sourceErr sourceReferenceError
-	if errors.As(identityErr, &sourceErr) {
-		remediation := "correct the publication file's source_issue before submission"
+	refusal, remediation := "", ""
+	switch {
+	case errors.As(identityErr, &sourceErr):
+		refusal, remediation = sourceErr.Error(), "correct the publication file's source_issue before submission"
+	case errors.Is(identityErr, errWorkUnitRequired):
+		refusal, remediation = errWorkUnitRequired.Error(), "pass the work-unit declaration file before submission"
+	}
+	if refusal != "" {
 		if rigErr != nil {
 			// The journal that lets a resumed session through lives under the
 			// rig's database path, which is unknown without the rig.
 			remediation += "; a session that submitted before this rule passes once the rig is available"
 		}
-		failCheck(manifest, "source_implementation_identity", sourceErr.Error(), remediation)
+		failCheck(manifest, "source_implementation_identity", refusal, remediation)
 	} else if identityErr != nil {
 		failCheck(manifest, "source_implementation_identity", "submission inputs could not be interpreted canonically", "correct the specification, policy, publication, or work-unit input")
 	} else {
@@ -993,6 +1001,12 @@ func inspectCompositionIdentity(ctx context.Context, cfg preflightConfig) (compo
 			return compositionIdentity{}, err
 		}
 		workUnitDigest = submissionBytes(canonicalBody).digest
+	} else if cfg.SubmissionID != "" &&
+		!retainedUndeclaredSubmissionHolds(cfg.DBPath, cfg.SubmissionID, spec.body, publicationFile.body) {
+		// Submit's declaration refusal, with the exceptions the source rule
+		// above has: legacy inspection, and a session that submitted without
+		// a declaration before one was required.
+		return compositionIdentity{}, errWorkUnitRequired
 	}
 	runID := engine.SubmissionRunID(
 		cfg.ProjectID, spec.digest, policyDigest, publicationIdentityDigest, workUnitDigest,

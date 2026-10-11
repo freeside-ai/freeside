@@ -120,9 +120,16 @@ with a partial run.
   the target's bare canonical issue URL, the publication file must be the
   client record with `source_issue` set to that same URL
   (`scripts/run-real-work.sh` header); composition preflight refuses it
-  otherwise. Pass a work-unit file as the fourth argument when the exit
-  condition needs the issue closed: without one the pull request links the
-  issue and does not close it.
+  otherwise. A target in the managed repository then becomes the pull
+  request's closing reference; one in another repository is linked and
+  stays open.
+- **The work-unit declaration is written.** It is the required fourth
+  argument in both modes: the task's own input in CLI mode, and the seed's
+  in client-target mode. The smallest file is
+  `{"completion_criterion": "bound_pr_merged"}`, which finishes the task
+  when its pull request merges. The harness, composition preflight, and
+  `freesided submit` refuse a submission without it, because a task accepted
+  with no declaration never records completion.
 - **Credentials are live:** the Codex reviewer token and the provider auth
   identity. An expired token fails at composition preflight, after
   onboarding and image work are already spent (#1363).
@@ -244,7 +251,9 @@ its link arrived, and the merge resolved the card before `open_pr`,
   separately.
 - After the merge, wait for and record the completion fact (the
   `work_unit_completions` row or its current equivalent) and the resolved
-  ready item.
+  ready item. The daemon records that fact against the task's work-unit
+  declaration: the one you passed in CLI mode, or the one the daemon wrote
+  for the client-composed task in client-target mode.
 - Then raise the alert gates, while the run's daemon is still up. The
   review-growth alert is refused until the completion fact is recorded, and
   the session's `complete` command stops the daemon, so this is the only

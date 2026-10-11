@@ -294,6 +294,7 @@ ID_STUB
   : >"$input_dir/spec.md"
   : >"$input_dir/policy.json"
   : >"$input_dir/publication.json"
+  : >"$input_dir/work-unit.json"
   touch "$input_dir/prompts.json" "$input_dir/specifier.md" "$input_dir/remediator.md" "$input_dir/CLAUDE.md"
   mkdir -p "$CASE_DIR/review-input"
   touch "$CASE_DIR/review-input/auth.json" "$CASE_DIR/review-input/AGENTS.md"
@@ -675,7 +676,7 @@ SLEEP_STUB
 	fi
   digest="sha256:$(printf 'a%.0s' {1..64})"
 
-  run_args=("$input_dir/spec.md" "$input_dir/policy.json" "$input_dir/publication.json")
+  run_args=("$input_dir/spec.md" "$input_dir/policy.json" "$input_dir/publication.json" "$input_dir/work-unit.json")
   if [[ -n "$resume_mode" ]]; then
     mkdir -p "$CASE_DIR/old/submission-inputs" "$CASE_DIR/state/freeside.db.checkpoints"
     cp "$input_dir/spec.md" "$CASE_DIR/old/submission-inputs/spec.json"

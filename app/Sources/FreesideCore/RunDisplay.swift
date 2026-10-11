@@ -326,7 +326,12 @@ enum RunDisplay {
     }
 
     static func label(_ value: Components.Schemas.RunMilestoneKind) -> String {
-        value.rawValue.replacingOccurrences(of: "_", with: " ").capitalized
+        switch value {
+        // The milestone says one agent invocation ended, whatever its result.
+        // The raw kind read as "Terminal Recorded", as if the task were done.
+        case .terminal_recorded: "Invocation Ended"
+        default: value.rawValue.replacingOccurrences(of: "_", with: " ").capitalized
+        }
     }
 
     static func label(_ value: Components.Schemas.ReviewProgressState) -> String {

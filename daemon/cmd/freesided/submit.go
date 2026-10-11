@@ -119,7 +119,8 @@ func runSubmitMain(args []string) {
 		"a task that is exactly one GitHub issue URL needs source_issue set to that URL")
 	compositionPath := flags.String("composition-manifest", "", "passing production-composition manifest bound to the submitted inputs")
 	requireComposition := flags.Bool("require-composition", false, "require trusted production-composition evidence (unattended submission)")
-	workUnitPath := flags.String("work-unit", "", "work-unit declaration JSON file (optional; §5.18 capture)")
+	workUnitPath := flags.String("work-unit", "", "work-unit declaration JSON file (required for new work; §5.18 capture); "+
+		`the smallest is {"completion_criterion":"bound_pr_merged"}`)
 	projectID := flags.String("project", "", "project id the run belongs to (required)")
 	runID := flags.String("run-id", "", "lookup-only legacy implementation run id; never creates work")
 	submissionID := flags.String("submission-id", "", "prepared identity for new work (otherwise generated and saved before submission)")
@@ -268,6 +269,18 @@ type sourceReference struct{ issue, omitted string }
 type sourceReferenceError string
 
 func (e sourceReferenceError) Error() string { return string(e) }
+
+// errWorkUnitRequired refuses a new submission that declares no work unit
+// (#1931). Completion is recorded against the declaration, so a task accepted
+// without one stays unfinished after its pull request merges and holds its
+// work-in-progress slot. The operator writes the declaration and nothing is
+// defaulted: its digest joins the run identity, so a default would change the
+// identity a saved submission recomputes on retry. The text repeats no
+// submitted bytes, so preflight can print it.
+var errWorkUnitRequired = errors.New(
+	`a new submission needs a work-unit declaration: pass --work-unit with a JSON file, ` +
+		`the smallest being {"completion_criterion":"bound_pr_merged"}; ` +
+		`a task submitted without one never finishes when its pull request merges`)
 
 // submittedSourceReference checks a publication file against the task source
 // (#1928). A task that is exactly one issue URL must name that issue in
@@ -497,6 +510,14 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 			return submitResult{}, fmt.Errorf("submit: encode work-unit declaration: %w", err)
 		}
 		workUnitDigest = submissionBytes(canonicalBody).digest
+	} else if cfg.RunID == "" {
+		// Refused before retainSubmission, with the source rule's exception:
+		// a journal that already exists may belong to a submission the
+		// database accepted without a declaration, and applySubmission
+		// tells that replay from a journal that never reached the database.
+		if _, retainedErr := matchingRetainedSubmission(cfg); retainedErr != nil {
+			return submitResult{}, fmt.Errorf("submit: %w", errWorkUnitRequired)
+		}
 	}
 
 	implementationRunID := cfg.RunID
@@ -715,7 +736,7 @@ func applySubmission(ctx context.Context, st *store.Store, blobs *signet.BlobSto
 			return submitResult{}, fmt.Errorf("submit: inspect legacy policy: %w", err)
 		}
 	}
-	if (egressErr != nil || sourceErr != nil) && manual != nil {
+	if (egressErr != nil || sourceErr != nil || workUnit == nil) && manual != nil {
 		if err := st.Read(ctx, func(tx *store.ReadTx) error {
 			original, err := tx.GetManualSubmission(ctx, manual.Identity)
 			if errors.Is(err, store.ErrNotFound) {
@@ -740,6 +761,11 @@ func applySubmission(ctx context.Context, st *store.Store, blobs *signet.BlobSto
 	// has nothing to refuse there.
 	if sourceErr != nil && manual != nil && !acceptedManual {
 		return submitResult{}, fmt.Errorf("submit: %w", sourceErr)
+	}
+	// The declaration rule is checked on this side of the control socket too,
+	// and likewise leaves a lookup and an accepted submission's replay alone.
+	if workUnit == nil && manual != nil && !acceptedManual {
+		return submitResult{}, fmt.Errorf("submit: %w", errWorkUnitRequired)
 	}
 	// Bytes land before metadata: an artifact row must never name a digest
 	// the blob store cannot serve, since admission materializes stage inputs

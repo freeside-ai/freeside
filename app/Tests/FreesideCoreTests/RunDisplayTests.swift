@@ -382,4 +382,12 @@ import Testing
         ]
         for (outcome, label) in cases { #expect(RunDisplay.label(outcome) == label) }
     }
+
+    @Test func milestoneLabelNamesTheInvocationEnding() {
+        // An invocation ending is not the task finishing, so the label must
+        // not read as a finished task; every other kind keeps its raw name.
+        #expect(RunDisplay.label(Components.Schemas.RunMilestoneKind.terminal_recorded) == "Invocation Ended")
+        #expect(RunDisplay.label(Components.Schemas.RunMilestoneKind.publication_ready) == "Publication Ready")
+        #expect(RunDisplay.label(Components.Schemas.RunMilestoneKind.work_unit_completed) == "Work Unit Completed")
+    }
 }
