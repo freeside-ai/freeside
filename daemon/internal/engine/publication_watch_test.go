@@ -176,6 +176,32 @@ func TestCompatibleTerminalItemIgnoresBaseFreshness(t *testing.T) {
 	}
 }
 
+// TestCompatibleTerminalItemIgnoresTiming: a delivery or an opened receipt
+// changes a stored item's timing and leaves its item_version alone (#1946),
+// so the stored item is neither a byte-for-byte replay of the rebuilt one nor
+// a later version of it. Recovery must still accept it, or a notification
+// sent for a ready item would strand that item's publication task.
+func TestCompatibleTerminalItemIgnoresTiming(t *testing.T) {
+	st := watchTestStore(t)
+	expected := watchTestItem(t, st, domain.StatusOpen)
+	submitted := time.Date(2026, 2, 3, 5, 0, 0, 0, time.UTC)
+	opened := submitted.Add(time.Minute)
+	gap := opened.Sub(submitted)
+	current := expected
+	current.Timing = domain.TimingSummary{
+		DeliveryCount: 1, FirstSubmittedAt: &submitted, FirstAcceptedAt: &submitted,
+		FirstOpenedAt: &opened, SubmitToFirstOpen: &gap,
+	}
+	if !compatibleTerminalItem(expected, current) {
+		t.Fatal("delivered item at the rebuilt version rejected during recovery compatibility")
+	}
+	foreign := current
+	foreign.Reason = "a different item"
+	if compatibleTerminalItem(expected, foreign) {
+		t.Fatal("genuinely different item accepted")
+	}
+}
+
 // TestCompatibleTerminalItemIgnoresReadinessInvalidation: the invalidation
 // fact is recorded in the same transition that supersedes the ready item
 // (§7, issue #496), so a crash seam can leave the persisted item superseded

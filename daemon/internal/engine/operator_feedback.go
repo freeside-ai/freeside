@@ -276,7 +276,10 @@ func implementationSourceInvocation(item domain.AttentionItem, run domain.Run) (
 // GetAttentionItemRecord, and GetAttentionItem projects the task's current
 // name into DisplayNames, so a task rename after the answer (a specification
 // title or heading, the task namer) would otherwise reject every consumed
-// answer on every later pass (#1556).
+// answer on every later pass (#1556). Timing is left out of the comparison: a
+// notification accepted or opened between the caller's read and this
+// transaction changes the record without changing what was answered (#1946),
+// and a mismatch here ends the engine loop.
 func requireUnchangedFeedbackItem(
 	ctx context.Context, tx *store.ReadTx, item domain.AttentionItem,
 ) (domain.AttentionItem, error) {
@@ -287,6 +290,7 @@ func requireUnchangedFeedbackItem(
 	if err != nil {
 		return domain.AttentionItem{}, err
 	}
+	item.Timing = record.Timing
 	if !reflect.DeepEqual(record, item) {
 		return domain.AttentionItem{}, domain.ErrParentKeyMismatch
 	}
