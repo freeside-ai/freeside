@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # run-real-work.sh — the §11 1A.2 gated-unattended production exercise.
 #
-# Usage: run-real-work.sh <spec-file> <resolved-policy-keys.json> <publication.json> [work-unit.json]
-#        run-real-work.sh --client-target <spec-file> <resolved-policy-keys.json> <publication.json> [work-unit.json]
+# Usage: run-real-work.sh <spec-file> <resolved-policy-keys.json> <publication.json> <work-unit.json>
+#        run-real-work.sh --client-target <spec-file> <resolved-policy-keys.json> <publication.json> <work-unit.json>
 #        run-real-work.sh --resume-session <completed-session-directory>
 #        run-real-work.sh --recover-codex-credentials [--approved-recipe <digest>]...
 # Resume keeps the existing run and starts no submission or client command.
 # Recovery serves paired-client credential recovery with execution disabled.
 # It uses the same required environment, but takes no submission files.
 #
-# Client-target mode submits the three files exactly as the CLI mode does, but
-# only as a visibility seed it never follows or verifies. It then waits for the
+# Client-target mode submits the four files exactly as the CLI mode does, but
+# only as a visibility seed it never follows or verifies. The seed is a CLI
+# submission, so it needs the work-unit declaration too. It then waits for the
 # operator to submit the real target from a Freeside client and to name it with
 # `real-work-session.sh select-target <session> <task-id>`. The harness saves
 # that selection durably before it follows anything, resolves the selected
@@ -265,15 +266,22 @@
 # attribution fields. Before execution, the daemon resolves that account from
 # the App registration selected by its installation token and requires an
 # exact match. The fields contain no credential or publication authority.
-# The optional fourth argument is the §5.18 work-unit declaration JSON that
+# The fourth argument is the §5.18 work-unit declaration JSON that
 # `freesided submit -work-unit` captures (completion criterion, bound issue,
-# dependencies). It is operator input like the other three: its canonical
-# digest joins the run-identity derivation, so a declared submission is a
-# distinct implementation run from an undeclared submission of the same spec,
-# policy, and publication bytes.
-# A declared source_issue becomes a closing reference only with this
-# declaration: without it the pull request carries "Source issue: <url>" and
-# does not close the issue.
+# dependencies). A new session requires it in both modes, because a task
+# finishes only against its declaration. The smallest file is
+#   {"completion_criterion":"bound_pr_merged"}
+# which finishes the task when its pull request merges. Submit and preflight
+# refuse a new submission without one. A task accepted without a declaration
+# before that rule never finishes: after its pull request merges it still
+# reads as in progress, and it keeps its work-in-progress slot until
+#   freesided abandon -db <database> -task <task-id>
+# The file is operator input like the other three: its canonical digest joins
+# the run-identity derivation, so the same spec, policy, and publication bytes
+# under another declaration are a distinct implementation run.
+# A declared source_issue in the managed repository becomes a closing
+# reference; one in another repository is carried as "Source issue: <url>",
+# which closes nothing.
 set -euo pipefail
 umask 077
 
@@ -313,8 +321,17 @@ policy_file="${2:-}"
 publication_file="${3:-}"
 work_unit_file="${4:-}"
 if [[ "$recover_codex_credentials" == false ]]; then
+  usage='usage: run-real-work.sh <spec-file> <resolved-policy-keys.json> <publication.json> <work-unit.json>'
   if [[ -z "$spec_file" || -z "$policy_file" || -z "$publication_file" ]]; then
-    echo "usage: run-real-work.sh <spec-file> <resolved-policy-keys.json> <publication.json> [work-unit.json]" >&2
+    echo "$usage" >&2
+    exit 2
+  fi
+  # A resumed session passes the file only when it retained one: it submitted
+  # before the declaration was required, and preflight decides from its saved
+  # journal whether it may resume.
+  if [[ -z "$work_unit_file" && -z "$retained_session" ]]; then
+    echo "$usage" >&2
+    echo 'run-real-work: the work-unit declaration is required: a task submitted without one never finishes when its pull request merges; the smallest file is {"completion_criterion":"bound_pr_merged"}' >&2
     exit 2
   fi
   for path in "$spec_file" "$policy_file" "$publication_file" ${work_unit_file:+"$work_unit_file"}; do
@@ -329,7 +346,7 @@ if [[ "$recover_codex_credentials" == false ]]; then
   # field's value: the daemon's own encoding of a client record carries empty
   # "title" and "body" keys, and submit accepts that file.
   if [[ -z "$retained_session" ]]; then
-    python3 - "$publication_file" "$work_unit_file" <<'PY' >&2
+    python3 - "$publication_file" <<'PY' >&2
 import json, sys
 try:
     publication = json.load(open(sys.argv[1], encoding='utf-8'))
@@ -341,10 +358,6 @@ if publication.get('title') or publication.get('body'):
     print('run-real-work: warning: the publication file gives a literal "title" or "body", so the pull request '
           'is published as written with no publisher-written issue reference; for an issue source use '
           '"recipe": "freeside.client-publication/v2" with "source_issue"')
-if publication.get('source_issue') and not sys.argv[2]:
-    print('run-real-work: warning: the publication file names "source_issue" but no work-unit file was given, '
-          'so the pull request will link the issue ("Source issue: <url>") and will not close it; pass a '
-          'work-unit declaration as the fourth argument for a closing reference')
 PY
   fi
 fi
