@@ -114,7 +114,7 @@ func TestPinnedClaudeCLIProtocol(t *testing.T) {
 	if err := os.WriteFile(root+"/CLAUDE.md", []byte("repository-canary must not be read"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.CommandContext(t.Context(), copyPath, commandArgs(model, prompt)...) //nolint:gosec // G204: private content-verified native CLI in an opt-in synthetic probe.
+	cmd := exec.CommandContext(t.Context(), copyPath, commandArgs(model, "", prompt)...) //nolint:gosec // G204: private content-verified native CLI in an opt-in synthetic probe.
 	cmd.Dir = root
 	cmd.Env = append(commandEnv(root, "synthetic-test-only", req, site), "ANTHROPIC_BASE_URL="+server.URL)
 	cmd.Stdin = bytes.NewReader(input)

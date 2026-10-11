@@ -286,7 +286,7 @@ func TestCallRecordGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	indented.WriteByte('\n')
-	golden.Assert(t, "call_record_v3", indented.Bytes())
+	golden.Assert(t, "call_record_v4", indented.Bytes())
 
 	reopened, err := inference.New(inference.Config{
 		StatePath: statePath, Roles: roles, Sites: []inference.Site{site},
@@ -322,12 +322,13 @@ func rewriteLedger(t *testing.T, statePath string, edit func(state map[string]an
 	}
 }
 
-// A v2 ledger's records have no identity. They load, the file moves to v3,
-// and the old records stay readable beside the stamped ones written after.
-// An older-labelled file that already carries an identity is refused, because
-// the binary that writes that version would erase the field; so is a version
-// this binary does not know.
-func TestLedgerV2LoadsAndOlderLabelsCarryingIdentityAreRefused(t *testing.T) {
+// A v2 ledger's records have no identity, and a v3 ledger's identities have
+// no effective effort. Both load, the file moves to v4, and the old records
+// stay readable beside the ones written after. An older-labelled file that
+// already carries the newer field is refused, because the binary that writes
+// that version would erase the field; so is a version this binary does not
+// know.
+func TestLedgerOlderVersionsLoadAndNewerFieldsUnderOlderLabelsAreRefused(t *testing.T) {
 	site := inference.ClassifierSite(testBudget(10))
 	roles := fake.Roles{Provider: "fake", Model: "test", Driver: fake.New()}
 	call := func(t *testing.T, statePath, root string) inference.CallResult {
@@ -370,13 +371,83 @@ func TestLedgerV2LoadsAndOlderLabelsCarryingIdentityAreRefused(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(body), `"version":"freeside.inference-budget/v3"`) {
+		if !strings.Contains(string(body), `"version":"freeside.inference-budget/v4"`) {
 			t.Fatalf("the v2 ledger was not migrated: %s", body)
 		}
 		calls := ledgerCalls(t, statePath)
 		if len(calls) != 2 || bytes.Contains(calls[0], []byte(`"identity"`)) ||
 			!bytes.Contains(calls[1], []byte(`"identity"`)) {
 			t.Fatalf("records after migration = %s", calls)
+		}
+	})
+	t.Run("v3 records load", func(t *testing.T) {
+		statePath := seed(t)
+		rewriteLedger(t, statePath, func(state map[string]any) {
+			state["version"] = "freeside.inference-budget/v3"
+			for _, record := range state["calls"].([]any) {
+				delete(record.(map[string]any)["identity"].(map[string]any), "effective_effort")
+			}
+		})
+		if result := call(t, statePath, "run-2"); result.Identity == nil {
+			t.Fatalf("a v3 ledger refused a call: %+v", result)
+		}
+		body, err := os.ReadFile(statePath) //nolint:gosec // test-owned state path
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(body), `"version":"freeside.inference-budget/v4"`) {
+			t.Fatalf("the v3 ledger was not migrated: %s", body)
+		}
+		// The carried record keeps its identity and gains no effective
+		// effort: nothing recorded what its launch sent.
+		calls := ledgerCalls(t, statePath)
+		if len(calls) != 2 || !bytes.Contains(calls[0], []byte(`"identity"`)) ||
+			bytes.Contains(calls[0], []byte(`"effective_effort"`)) ||
+			!bytes.Contains(calls[1], []byte(`"effective_effort":"harness_default"`)) {
+			t.Fatalf("records after migration = %s", calls)
+		}
+	})
+	t.Run("freeside.inference-budget/v3 carrying an effective effort is refused", func(t *testing.T) {
+		statePath := seed(t)
+		rewriteLedger(t, statePath, func(state map[string]any) { state["version"] = "freeside.inference-budget/v3" })
+		if result := call(t, statePath, "run-2"); !result.Fallback || result.Identity != nil {
+			t.Fatalf("a v3-labelled ledger carrying an effective effort was used: %+v", result)
+		}
+	})
+	// Today's effort table clamps nothing, so no call writes two different
+	// efforts. A record that holds a clamp must still load: the table can
+	// change while the record is retained.
+	t.Run("a clamped effort loads", func(t *testing.T) {
+		statePath := seed(t)
+		rewriteLedger(t, statePath, func(state map[string]any) {
+			identity := state["calls"].([]any)[0].(map[string]any)["identity"].(map[string]any)
+			identity["requested_effort"], identity["effective_effort"] = "max", "xhigh"
+		})
+		if result := call(t, statePath, "run-2"); result.Identity == nil {
+			t.Fatalf("a ledger holding a clamped effort was refused: %+v", result)
+		}
+		var first struct {
+			Identity struct {
+				Requested domain.EffortLevel `json:"requested_effort"`
+				Effective string             `json:"effective_effort"`
+			} `json:"identity"`
+		}
+		if err := json.Unmarshal(ledgerCalls(t, statePath)[0], &first); err != nil {
+			t.Fatal(err)
+		}
+		clamp := domain.EffortTranslation{Requested: first.Identity.Requested, Native: first.Identity.Effective}
+		if clamp.String() != "max → xhigh" {
+			t.Fatalf("the reloaded record renders its efforts as %q", clamp)
+		}
+	})
+	t.Run("an effective effort that is not printable is refused", func(t *testing.T) {
+		statePath := seed(t)
+		rewriteLedger(t, statePath, func(state map[string]any) {
+			identity := state["calls"].([]any)[0].(map[string]any)["identity"].(map[string]any)
+			identity["effective_effort"] = "high\u202e"
+		})
+		if result := call(t, statePath, "run-2"); !result.Fallback || result.Identity != nil {
+			t.Fatalf("a record with a malformed effective effort was accepted: %+v", result)
 		}
 	})
 	for _, version := range []string{"freeside.inference-budget/v1", "freeside.inference-budget/v2"} {
@@ -393,7 +464,7 @@ func TestLedgerV2LoadsAndOlderLabelsCarryingIdentityAreRefused(t *testing.T) {
 	}
 	t.Run("unknown version is refused", func(t *testing.T) {
 		statePath := seed(t)
-		rewriteLedger(t, statePath, func(state map[string]any) { state["version"] = "freeside.inference-budget/v4" })
+		rewriteLedger(t, statePath, func(state map[string]any) { state["version"] = "freeside.inference-budget/v5" })
 		if result := call(t, statePath, "run-2"); !result.Fallback || result.Identity != nil {
 			t.Fatalf("a ledger of an unknown version was used: %+v", result)
 		}
@@ -438,6 +509,64 @@ func TestLedgerV2LoadsAndOlderLabelsCarryingIdentityAreRefused(t *testing.T) {
 			t.Fatalf("a record with a malformed independence entry was accepted: %+v", result)
 		}
 	})
+}
+
+// The request carries what the admitted agent's launch passes. An explicit
+// offer names its model. The native-default offer names none, so the driver
+// launches with its configured model, and harness_default sends no effort.
+func TestCallCarriesTheAgentsLaunchSelection(t *testing.T) {
+	site := inference.ClassifierSite(testBudget(10))
+	for _, tc := range []struct{ name, offerModel, wantModel string }{
+		{"explicit offer", "claude-explicit-1", "claude-explicit-1"},
+		{"native-default offer", domain.ClaudeCodeNativeDefaultRouteModelID, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			driver := fake.New()
+			client, statePath := lookupClient(t, fake.Roles{
+				Provider: "fake", Model: tc.offerModel, Driver: driver,
+			}, nil, []inference.Site{site})
+			result, err := client.Call(context.Background(), site.ID, "project-1", "run-1", siteFields(site))
+			if err != nil || result.Identity == nil {
+				t.Fatalf("result = %+v, %v", result, err)
+			}
+			requests := driver.Requests()
+			if len(requests) != 1 || requests[0].Model != tc.wantModel || requests[0].NativeEffort != "" {
+				t.Fatalf("driver requests = %+v, want model %q and no effort", requests, tc.wantModel)
+			}
+			serialized, err := json.Marshal(requests[0])
+			if err != nil || bytes.Contains(serialized, []byte("claude-explicit-1")) {
+				t.Fatalf("the launch selection is serialized with the task data: %s, %v", serialized, err)
+			}
+			if calls := ledgerCalls(t, statePath); len(calls) != 1 ||
+				!bytes.Contains(calls[0], []byte(`"requested_model_id":"`+tc.offerModel+`"`)) ||
+				!bytes.Contains(calls[0], []byte(`"requested_effort":"harness_default","effective_effort":"harness_default"`)) {
+				t.Fatalf("call records = %s", calls)
+			}
+		})
+	}
+}
+
+// An offer only has to name a non-empty model, so one whose model the launch
+// could not pass as a single option value admits nowhere: the role is
+// unbound and reported, and no call reserves budget or reaches the driver.
+func TestAnOfferTheLaunchCannotPassLeavesTheRoleUnbound(t *testing.T) {
+	site := inference.ClassifierSite(testBudget(10))
+	for _, model := range []string{"claude explicit", "--dangerously-skip-permissions", strings.Repeat("m", 257)} {
+		driver := fake.New()
+		health := newRoleHealth()
+		client, statePath := lookupClient(t, fake.Roles{Provider: "fake", Model: model, Driver: driver},
+			health, []inference.Site{site})
+		result, err := client.Call(context.Background(), site.ID, "project-1", "run-1", siteFields(site))
+		if err != nil || !result.Fallback || result.Identity != nil {
+			t.Fatalf("model %q: result = %+v, %v", model, result, err)
+		}
+		if len(driver.Requests()) != 0 || len(ledgerCalls(t, statePath)) != 0 {
+			t.Fatalf("model %q reached the driver or the ledger", model)
+		}
+		if health.unbound[domain.RoleFindingClassifier] == "" {
+			t.Fatalf("model %q: the refusal was not reported", model)
+		}
+	}
 }
 
 // Two calls that differ only in the role prompt are the same treatment under

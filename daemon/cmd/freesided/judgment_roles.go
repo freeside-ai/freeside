@@ -19,12 +19,12 @@ import (
 )
 
 // Each judgment site looks its role up in the lineup at every call (plan
-// §5.4, issue #1425). The lineup decides which agent a role is and which
-// prompt it runs; the judgment flags still decide what makes the call (the
-// pinned CLI and the model it is launched with) and which credential it
-// carries. The record says so: credential_source is interim_flag until #1426
-// reads the credential from the line's enrollment, and the requested model is
-// the agent's while the observed one is whatever the CLI reports (#1619).
+// §5.4, issue #1425). The lineup decides which agent a role is, which prompt
+// it runs, and the model and effort its call launches with; the judgment
+// flags still decide the pinned CLI, the model a line on the native-default
+// offer launches with, and which credential the call carries. The record
+// says so: credential_source is interim_flag until #1426 reads the credential
+// from the line's enrollment.
 
 // judgmentCallAudit is the hand audit that proves the judgment call launch:
 // Claude CLI 2.1.267, audited on 2026-09-09

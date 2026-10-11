@@ -30,6 +30,7 @@
     "credential_source": "interim_flag",
     "requested_model_id": "test",
     "requested_effort": "harness_default",
+    "effective_effort": "harness_default",
     "observed": {
       "model_id": "observed-model",
       "serving_operator": null,

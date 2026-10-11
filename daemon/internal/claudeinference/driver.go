@@ -1,6 +1,7 @@
 // Package claudeinference adapts the existing Claude subscription CLI to the
 // tool-free daemon inference interface. Execution capability stays here, outside
 // the inference contract, and cannot be selected by a Request or model output.
+// A Request names only the model and effort its admitted agent's launch passes.
 package claudeinference
 
 import (
@@ -30,8 +31,10 @@ const Protocol = "claude-subscription-inference-v1"
 
 var errCompletion = errors.New("claude inference completion unavailable")
 
-// Config is deployment-owned. Neither the executable nor the model can be
-// changed by the request. SHA256 pins the installed native CLI, not an alias.
+// Config is deployment-owned. The request cannot change the executable.
+// SHA256 pins the installed native CLI, not an alias. Model is what a launch
+// passes when the request names none, which is a judgment line on the
+// native-default offer; any other line's request carries its offer's model.
 type Config struct {
 	Binary string `json:"binary"`
 	SHA256 string `json:"sha256"`
@@ -145,6 +148,17 @@ func (d *Driver) CompleteAndConfirm(ctx context.Context, req inference.Request, 
 	if err != nil || len(body) > site.MaxInputBytes {
 		return inference.Response{}, true, errCompletion
 	}
+	// The request's model and effort come from a stored offer and agent, and
+	// an offer only has to name a non-empty model. Refuse a value the CLI
+	// could read as anything but one option value before any process starts.
+	// The client refuses the same at admission; this is the exec boundary.
+	if !inference.ValidLaunchValue(req.Model) || !inference.ValidLaunchValue(req.NativeEffort) {
+		return inference.Response{}, true, errCompletion
+	}
+	model := d.config.Model
+	if req.Model != "" {
+		model = req.Model
+	}
 	callCtx, cancel := context.WithTimeout(ctx, site.Timeout)
 	defer cancel()
 	call, err := d.acquire(callCtx, site.ID, cancel)
@@ -174,7 +188,7 @@ func (d *Driver) CompleteAndConfirm(ctx context.Context, req inference.Request, 
 	if copyErr != nil || closeErr != nil {
 		return inference.Response{}, true, errCompletion
 	}
-	cmd := exec.CommandContext(callCtx, binary, commandArgs(d.config.Model, prompt)...) //nolint:gosec // G204: private content-pinned CLI copy and daemon-owned arguments; no shell.
+	cmd := exec.CommandContext(callCtx, binary, commandArgs(model, req.NativeEffort, prompt)...) //nolint:gosec // G204: private content-pinned CLI copy; arguments are daemon-owned but for the model and effort checked above; no shell.
 	cmd.Dir = root
 	// Do not inherit API keys, alternative endpoints, plugins, debug paths,
 	// proxy settings, or host CLI configuration. The existing setup token is
@@ -189,15 +203,22 @@ func (d *Driver) CompleteAndConfirm(ctx context.Context, req inference.Request, 
 	if err != nil || callCtx.Err() != nil || !quiescent {
 		return inference.Response{}, quiescent, errCompletion
 	}
-	result, err = decodeCompletion(output.Bytes(), d.config.Model, req, site)
+	result, err = decodeCompletion(output.Bytes(), model, req, site)
 	return result, quiescent, err
 }
 
-func commandArgs(model, prompt string) []string {
-	return []string{
-		"-p", "--output-format", "json", "--model", model, "--safe-mode", "--tools", "",
-		"--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--no-session-persistence", "--max-turns", "1", "--system-prompt", prompt,
+// commandArgs is the whole argument list of a call. An empty effort adds
+// nothing, so a launch that sends none is the list the 2026-09-09 audit
+// covered.
+func commandArgs(model, effort, prompt string) []string {
+	args := []string{"-p", "--output-format", "json", "--model", model}
+	if effort != "" {
+		args = append(args, "--effort", effort)
 	}
+	return append(args,
+		"--safe-mode", "--tools", "",
+		"--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--no-session-persistence", "--max-turns", "1", "--system-prompt", prompt,
+	)
 }
 
 func commandEnv(root string, credential inference.Secret, req inference.Request, site inference.Site) []string {
@@ -263,7 +284,7 @@ func decodeCompletion(body []byte, model string, req inference.Request, site inf
 		return inference.Response{}, errCompletion
 	}
 	// The one modelUsage key is the model the CLI says answered. It equals
-	// the pinned model here because the check above refuses anything else;
+	// the model the launch passed because the check above refuses anything else;
 	// it is reported as an observation all the same, so the record's observed
 	// fact comes from the completion and not from configuration. The CLI
 	// reports no serving operator.

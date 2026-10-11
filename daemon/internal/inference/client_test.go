@@ -1042,7 +1042,7 @@ func TestLedgerV1MigratesBeforeAuditDebtCanBeWritten(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(migrated), `"version":"freeside.inference-budget/v3"`) {
+	if !strings.Contains(string(migrated), `"version":"freeside.inference-budget/v4"`) {
 		t.Fatalf("legacy ledger was not migrated before use: %s", migrated)
 	}
 }

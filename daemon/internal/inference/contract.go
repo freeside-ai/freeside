@@ -430,6 +430,26 @@ type Request struct {
 	// data a driver serializes.
 	RolePrompt       []byte        `json:"-"`
 	RolePromptDigest domain.Digest `json:"-"`
+	// Model and NativeEffort are what the admitted agent's launch passes
+	// (domain.DeriveAgentLaunchSelection). An empty Model means the driver's
+	// configured model, which is the native-default offer's case; an empty
+	// NativeEffort means the launch sends no effort. Like the role prompt,
+	// they come from the admission and are no part of the task data.
+	Model        string `json:"-"`
+	NativeEffort string `json:"-"`
+}
+
+// ValidLaunchValue reports whether a launch can pass a model or a native
+// effort as one option value: graphic characters with no whitespace, no
+// leading dash a CLI would parse as another option, and no more bytes than
+// an observed identifier may have, since the model comes back as one. Empty
+// is valid: it selects the driver's configured model, or no effort. The
+// client holds an admitted agent to this so a bad offer is an unbound role
+// with a health item, and a driver holds its request to it before it starts
+// a process.
+func ValidLaunchValue(value string) bool {
+	return len(value) <= maxObservedIDBytes && !strings.HasPrefix(value, "-") && utf8.ValidString(value) &&
+		!strings.ContainsFunc(value, func(r rune) bool { return unicode.IsSpace(r) || !unicode.IsGraphic(r) })
 }
 
 // Observed is what a driver saw answer, as opposed to what the admitted
