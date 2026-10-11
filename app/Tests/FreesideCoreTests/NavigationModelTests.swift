@@ -153,6 +153,51 @@ import Testing
         #expect(navigation.inboxPath == ["item-spec_approval"])
     }
 
+    @Test func aLinkedItemStaysRoutedWhenTheListDoesNotHoldIt() {
+        // A notification's link can name an item that has since resolved:
+        // the Open scope doesn't list it, and its card must stay up.
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        var snapshots = AttentionFixtures.defaultInbox()
+        let resolved = snapshots.indices.first { snapshots[$0].item.id == "item-spec_approval" }!
+        snapshots[resolved].item.status = .resolved
+        store.replaceAll(with: snapshots)
+        let listed = Set(store.rows.map(\.item.id))
+        #expect(store.scope == .open)
+        #expect(!listed.contains("item-spec_approval"))
+        let navigation = NavigationModel(launchInputs: .standard())
+
+        navigation.route(toLinkedItem: "item-spec_approval")
+        navigation.inboxPath = NavigationModel.repairedPath(
+            navigation.inboxPath, availableIDs: listed, keeping: navigation.linkedItemID)
+        #expect(navigation.inboxPath == ["item-spec_approval"])
+
+        // The same item reached any other way is repaired as before.
+        navigation.route(to: .attentionItem("item-blocked"))
+        navigation.route(to: .attentionItem("item-spec_approval"))
+        #expect(navigation.linkedItemID == nil)
+        navigation.inboxPath = NavigationModel.repairedPath(
+            navigation.inboxPath, availableIDs: listed, keeping: navigation.linkedItemID)
+        #expect(navigation.inboxPath.isEmpty)
+    }
+
+    @Test func leavingALinkedItemEndsItsExemption() {
+        let navigation = NavigationModel(launchInputs: .standard())
+
+        navigation.route(toLinkedItem: "item-spec_approval")
+        #expect(navigation.linkedItemID == "item-spec_approval")
+        // Routing to the linked item again keeps it.
+        navigation.route(to: .attentionItem("item-spec_approval"))
+        #expect(navigation.linkedItemID == "item-spec_approval")
+
+        // Back to the list, as the stack's back button writes it.
+        navigation.setInboxPath([])
+        #expect(navigation.linkedItemID == nil)
+
+        navigation.route(toLinkedItem: "item-spec_approval")
+        navigation.selectAttentionItem("item-blocked")
+        #expect(navigation.linkedItemID == nil)
+    }
+
     @Test func repairPopsOnlyAPathWhoseDestinationDisappeared() {
         let navigation = NavigationModel(
             launchInputs: LaunchInputs(

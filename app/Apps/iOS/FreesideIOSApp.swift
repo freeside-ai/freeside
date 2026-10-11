@@ -4,18 +4,35 @@ import UIKit
 
 @main
 struct FreesideIOSApp: App {
+    @State private var session: AppSession
+    @State private var navigation: NavigationModel
     @State private var flowPreferences = DecisionFlowPreferences()
-    private let launchInputs = LaunchInputs.standard()
+    private let launchInputs: LaunchInputs
+
+    init() {
+        let launchInputs = LaunchInputs.standard()
+        self.launchInputs = launchInputs
+        _session = State(initialValue: .fromEnvironment())
+        _navigation = State(initialValue: NavigationModel(launchInputs: launchInputs))
+    }
 
     var body: some Scene {
         WindowGroup {
             FreesideRootView(
-                session: .fromEnvironment(), launchInputs: launchInputs,
+                session: session, launchInputs: launchInputs, navigation: navigation,
                 flowPreferences: flowPreferences
             )
             .background(
                 AccessibilityContrastOverride(contrast: launchInputs.contrast)
-                    .frame(width: 0, height: 0))
+                    .frame(width: 0, height: 0)
+            )
+            // A notification's tap link (`NotificationLink`). On a cold
+            // start this fires while the inbox is still loading; the route
+            // it sets waits in the navigation model until the list arrives.
+            .onOpenURL { url in
+                guard let link = NotificationLink(url) else { return }
+                Task { await session.open(link, in: navigation) }
+            }
         }
     }
 }

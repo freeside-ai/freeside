@@ -809,12 +809,12 @@ func TestHTTPReportDeliveryOpenedRevokedDevice(t *testing.T) {
 // TestHTTPLateNotificationDeepLinksToCanonicalState is §5.14 test 9 over the
 // wire: a notification goes out to a second device, the item is resolved on
 // another device before the notification is acted on, and the late
-// notification still leads only to truth. Its deep link (the published Click
-// URL followed against the real handler) returns the canonical resolved
-// snapshot, and the decision the notification had invited — prepared against
+// notification still leads only to truth. Its link (the published Click URL,
+// read as the app reads it and followed against the real handler) returns the
+// canonical resolved snapshot, and the decision the notification had invited — prepared against
 // the notified state — is refused with the canonical replacement and no side
 // effect. The notification was a read-only hint; canonical state lives only
-// behind the deep link. The link's channel/attempt query identity still
+// behind the link. The link's channel/attempt query identity still
 // yields a working late receipt (#130): opening a resolved item's attempt is
 // honest telemetry, recorded after the refused decision.
 func TestHTTPLateNotificationDeepLinksToCanonicalState(t *testing.T) {
@@ -855,7 +855,13 @@ func TestHTTPLateNotificationDeepLinksToCanonicalState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse click URL %q: %v", requests[0].click, err)
 	}
-	linked := bearerRequest(t, handler, http.MethodGet, click.Path, "Bearer test-device-2", nil)
+	// The app reads freeside://attention/items/<id> as the item to fetch: the
+	// link's host and path together are the API path.
+	if click.Scheme != "freeside" || click.Host != "attention" {
+		t.Fatalf("click URL %q, want a freeside://attention link", requests[0].click)
+	}
+	itemPath := "/" + click.Host + click.Path
+	linked := bearerRequest(t, handler, http.MethodGet, itemPath, "Bearer test-device-2", nil)
 	if linked.Code != http.StatusOK {
 		t.Fatalf("deep link status = %d body=%s, want 200", linked.Code, linked.Body.String())
 	}
@@ -916,7 +922,7 @@ func TestHTTPLateNotificationDeepLinksToCanonicalState(t *testing.T) {
 		t.Fatalf("click identity = channel %q attempt %q, want ntfy/1", channel, attempt)
 	}
 	receipt := bearerRequest(t, handler, http.MethodPut,
-		click.Path+"/deliveries/"+channel+"/"+attempt+"/opened", "Bearer test-device-2", nil)
+		itemPath+"/deliveries/"+channel+"/"+attempt+"/opened", "Bearer test-device-2", nil)
 	if receipt.Code != http.StatusOK {
 		t.Fatalf("late receipt status = %d body=%s, want 200", receipt.Code, receipt.Body.String())
 	}

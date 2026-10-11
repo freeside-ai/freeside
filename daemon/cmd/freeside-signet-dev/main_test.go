@@ -144,9 +144,9 @@ func revision(t *testing.T, r readiness, bearer string) (string, int64) {
 
 // TestControlSubmitDeliveryDrivesThePipeline: the control route runs the real
 // delivery pipeline against a scripted ntfy — the row comes back
-// channel_accepted, the notification's deep link points into this harness's
-// own contract listener, and without -ntfy-url the same route reports the
-// pipeline's fail-closed refusal.
+// channel_accepted, the notification's link opens the item in the app, and
+// without -ntfy-url the same route reports the pipeline's fail-closed
+// refusal.
 func TestControlSubmitDeliveryDrivesThePipeline(t *testing.T) {
 	var (
 		clicksMu sync.Mutex
@@ -193,8 +193,8 @@ func TestControlSubmitDeliveryDrivesThePipeline(t *testing.T) {
 		t.Errorf("delivery = %s, want channel_accepted", delivery)
 	}
 	clicksMu.Lock()
-	if len(clicks) != 1 || clicks[0] != r.APIURL+"/attention/items/item-notify?channel=ntfy&attempt=1" {
-		t.Errorf("published clicks = %v, want the harness deep link with the attempt identity", clicks)
+	if len(clicks) != 1 || clicks[0] != "freeside://attention/items/item-notify?channel=ntfy&attempt=1" {
+		t.Errorf("published clicks = %v, want the app link with the attempt identity", clicks)
 	}
 	clicksMu.Unlock()
 

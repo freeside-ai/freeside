@@ -35,6 +35,8 @@ struct InboxView: View {
     let launchProjectID: String?
     private let interactiveSelection: Binding<String?>?
     private let navigationPath: Binding<[String]>?
+    /// The routed item list repair must leave alone (`NavigationModel.linkedItemID`).
+    private let linkedItemID: String?
     private let onFilterChange: () -> Void
     private let onMoveSelection: (Int) -> Void
     private let onRefresh: @MainActor () async -> Void
@@ -48,6 +50,7 @@ struct InboxView: View {
         launchProjectID: String?,
         interactiveSelection: Binding<String?>? = nil,
         navigationPath: Binding<[String]>? = nil,
+        linkedItemID: String? = nil,
         onFilterChange: @escaping () -> Void = {},
         onMoveSelection: @escaping (Int) -> Void = { _ in },
         lastUpdatedAt: Date? = nil,
@@ -60,6 +63,7 @@ struct InboxView: View {
         self.launchProjectID = launchProjectID
         self.interactiveSelection = interactiveSelection
         self.navigationPath = navigationPath
+        self.linkedItemID = linkedItemID
         self.onFilterChange = onFilterChange
         self.onMoveSelection = onMoveSelection
         self.onRefresh = onRefresh
@@ -305,7 +309,8 @@ struct InboxView: View {
             if let path = navigationPath?.wrappedValue {
                 let repairedPath = NavigationModel.repairedPath(
                     path,
-                    availableIDs: Set(store.rows.map(\.item.id)))
+                    availableIDs: Set(store.rows.map(\.item.id)),
+                    keeping: linkedItemID)
                 if repairedPath != path {
                     navigationPath?.wrappedValue = repairedPath
                 }

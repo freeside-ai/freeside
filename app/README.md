@@ -148,6 +148,49 @@ from that device. **Revoke** asks for confirmation. Revoking this device signs
 the app out: once the daemon confirms, the stored credential is deleted and
 the app returns to pairing, which takes a new code from the daemon's host.
 
+## Phone Notifications
+
+Freeside notifies the iPhone through [ntfy](https://ntfy.sh). The daemon
+publishes to a topic that belongs to one paired device, the ntfy app shows the
+notification, and tapping it opens Freeside. Freeside has no Apple push channel
+of its own in Phase 1, so the ntfy app is what listens while Freeside is
+closed.
+
+**Status.** The setup and the test notification below work. The daemon does
+not yet send a notification when an item needs you: the sender is built, and
+the `freesided` command leaves it off until #1946 is fixed.
+
+Set a phone up once:
+
+1. Install the ntfy app on the iPhone and allow its notifications.
+2. In Freeside on the iPhone, open **Devices**. This device's card shows
+   **Phone notifications** with a **Server** and a **Topic**, each with a copy
+   control.
+3. In the ntfy app, subscribe to that topic. Enter the server too when it is
+   not ntfy's own `https://ntfy.sh`.
+4. On the daemon's host, send a test notification:
+   `freesided notify-test -state-dir /path/to/daemon-state`.
+5. Tap the notification on the phone. Freeside opens on the inbox. If the
+   Devices sheet is still open, the inbox is under it.
+
+- **The topic is a secret.** Whoever has it can read this phone's
+  notifications. It is shown only on the paired phone's own card, and the
+  daemon never logs or prints it. A notification carries no task content: a
+  generic title, the item's type, and a link that names the item.
+- **Server.** The daemon publishes to `https://ntfy.sh` unless it is started
+  with `-ntfy-url`. A self-hosted ntfy server must set
+  `upstream-base-url: "https://ntfy.sh"` before it can reach an iPhone: iOS
+  delivers instant notifications only through ntfy.sh's Apple push connection.
+  ntfy documents that the upstream receives a poll request with the message ID
+  and a hash of the topic, not the notification.
+- **A link only shows something.** `freeside://inbox` opens the inbox, and
+  `freeside://attention/items/<id>?channel=ntfy&attempt=<n>` opens one item's
+  card after reporting that its notification was opened. Any app on the phone
+  can open such a link, so a link never carries a decision, and the app
+  ignores every other form. A link to an item that is already resolved opens
+  its card in its current state, with no enabled action.
+- **iPhone only.** The Mac app registers no link scheme and shows no topic.
+
 ## Capturing screenshots
 
 The launch inputs above make a capture run deterministic end to end: no System Settings mutation, no accessibility scripting, no clicking. The only host permission involved is Screen Recording for the invoking terminal (a one-time grant `screencapture` prompts for). `-ApplePersistenceIgnoreState YES` skips AppKit saved-state restoration so the window opens at the scene default (960×640) regardless of how it was last resized.

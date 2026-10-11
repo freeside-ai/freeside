@@ -129,6 +129,9 @@ struct DevicesView: View {
                 }
             }
             .accessibilityElement(children: .combine)
+            if row.isCurrent, !row.isRevoked, let subscription = model.notificationSubscription {
+                phoneNotifications(subscription)
+            }
             if !row.isRevoked {
                 Button(model.revokingID == row.id ? "Revoking…" : "Revoke") {
                     confirming = row
@@ -144,6 +147,26 @@ struct DevicesView: View {
         .padding(.vertical, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.itemBorder, lineWidth: 1))
+    }
+
+    static let phoneNotificationsInstruction =
+        "To get a notification when an item needs you, subscribe to this topic on this server in the ntfy app."
+
+    /// Where this phone's notifications are published. The ntfy app receives
+    /// them, so the operator copies both values into a subscription there.
+    private func phoneNotifications(_ subscription: DeviceNtfySubscription) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            KeywordLabel(text: "Phone notifications")
+                .accessibilityAddTraits(.isHeader)
+            Text(Self.phoneNotificationsInstruction)
+                .font(FreesideFont.cardBody)
+                .foregroundStyle(Color.inkDim)
+                .fixedSize(horizontal: false, vertical: true)
+            // The copy controls draw in a screenshot too: a touch platform
+            // has no hover to reveal them.
+            TechnicalDetailRow(row: .init(label: "Server", value: subscription.serverURL), stacksAlways: true)
+            TechnicalDetailRow(row: .init(label: "Topic", value: subscription.topic), stacksAlways: true)
+        }
     }
 
     /// One recorded instant in the shared short time format, with the exact

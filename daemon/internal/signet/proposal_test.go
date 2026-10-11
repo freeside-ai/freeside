@@ -294,7 +294,6 @@ func TestTaskProposalSnoozeAdvancesVersionAndRetryConverges(t *testing.T) {
 		signet.WithClock(func() time.Time { return *f.now }),
 		signet.WithNtfy(signet.NtfyConfig{
 			BaseURL: "http://127.0.0.1:1", TopicKey: []byte("0123456789abcdef0123456789abcdef"),
-			ClickBaseURL: "http://127.0.0.1:2",
 		}),
 	)
 	if _, err := deliveryService.SubmitDelivery(context.Background(), f.item.ID, f.device.ID); !errors.Is(err, signet.ErrProposalSnoozed) {

@@ -27,7 +27,17 @@ public final class NavigationModel {
     }
 
     public var selectedTab: LaunchInputs.Screen
-    public var inboxPath: [String]
+    public var inboxPath: [String] {
+        didSet {
+            if inboxPath.last != linkedItemID { linkedItemID = nil }
+        }
+    }
+    /// The item a notification link opened, while it is still the routed
+    /// item. The inbox's list repair keeps it routed even when the rows
+    /// don't hold it: a link can name an item that has since resolved, or
+    /// one that a cold start's cached list hasn't caught up to, and the card
+    /// shows either from canonical state. Leaving the card ends it.
+    public private(set) var linkedItemID: String?
     /// The tasks stack: the selected task, then the run opened under it.
     public var tasksPath: [String]
     public var attentionSelection: String?
@@ -112,6 +122,12 @@ public final class NavigationModel {
             runSelection = runID
             tasksPath = [taskID, runID]
         }
+    }
+
+    /// Route to the item a notification link named; see `linkedItemID`.
+    public func route(toLinkedItem itemID: String) {
+        route(to: .attentionItem(itemID))
+        linkedItemID = itemID
     }
 
     public func selectTab(_ screen: LaunchInputs.Screen) {
@@ -233,8 +249,11 @@ public final class NavigationModel {
         route(to: .attentionItem(itemIDs[nextIndex]))
     }
 
-    static func repairedPath(_ path: [String], availableIDs: Set<String>) -> [String] {
-        guard let routedID = path.last, !availableIDs.contains(routedID) else { return path }
+    static func repairedPath(
+        _ path: [String], availableIDs: Set<String>, keeping linkedItemID: String? = nil
+    ) -> [String] {
+        guard let routedID = path.last, routedID != linkedItemID, !availableIDs.contains(routedID)
+        else { return path }
         return Array(path.dropLast())
     }
 

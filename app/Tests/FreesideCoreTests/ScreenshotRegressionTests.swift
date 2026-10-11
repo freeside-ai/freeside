@@ -596,17 +596,20 @@
 
             // The Devices sheet (#981) with every state it renders: this
             // device, another active one, and a revoked one never seen.
+            // The phone's own card also shows where its notifications are
+            // published (#1924).
             let devicesModel = await DevicesScreenshots.model()
-            for (name, width, scheme) in [
-                ("devices", CGFloat(380), ColorScheme.light),
-                ("devices-dark", CGFloat(380), ColorScheme.dark),
-                ("devices-phone", CGFloat(390), ColorScheme.light),
-                ("devices-phone-dark", CGFloat(390), ColorScheme.dark),
+            let phoneDevicesModel = await DevicesScreenshots.model(notificationSubscription: .mock)
+            for (name, width, scheme, model) in [
+                ("devices", CGFloat(380), ColorScheme.light, devicesModel),
+                ("devices-dark", CGFloat(380), ColorScheme.dark, devicesModel),
+                ("devices-phone", CGFloat(390), ColorScheme.light, phoneDevicesModel),
+                ("devices-phone-dark", CGFloat(390), ColorScheme.dark, phoneDevicesModel),
             ] {
                 surfaces.append(
                     Surface(
                         name: name, width: width, colorScheme: scheme,
-                        view: AnyView(DevicesView(model: devicesModel, rendersInteractiveControls: false))))
+                        view: AnyView(DevicesView(model: model, rendersInteractiveControls: false))))
             }
 
             // The Answer-and-retry composer with the route picker (#1083): the

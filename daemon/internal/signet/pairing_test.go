@@ -171,25 +171,21 @@ func TestPairRequiresUsableNtfyBeforeConsumingCode(t *testing.T) {
 		"absent channel": nil,
 		"URL credentials": {
 			BaseURL: "https://publisher-value@ntfy.example", TopicKey: testTopicKey,
-			ClickBaseURL: "https://daemon.example",
 		},
 		"remote cleartext": {
-			BaseURL: "http://ntfy.example", TopicKey: testTopicKey, ClickBaseURL: "https://daemon.example",
+			BaseURL: "http://ntfy.example", TopicKey: testTopicKey,
 		},
 		"query base": {
 			BaseURL: "https://ntfy.example/base?route=shared", TopicKey: testTopicKey,
-			ClickBaseURL: "https://daemon.example",
 		},
 		"fragment base": {
 			BaseURL: "https://ntfy.example/base#shared", TopicKey: testTopicKey,
-			ClickBaseURL: "https://daemon.example",
 		},
 		"out-of-range base port": {
 			BaseURL: "https://ntfy.example:99999", TopicKey: testTopicKey,
-			ClickBaseURL: "https://daemon.example",
 		},
 		"weak topic key": {
-			BaseURL: "https://ntfy.example", TopicKey: []byte("weak"), ClickBaseURL: "https://daemon.example",
+			BaseURL: "https://ntfy.example", TopicKey: []byte("weak"),
 		},
 	}
 	for name, cfg := range invalid {
@@ -349,7 +345,6 @@ func TestPairingFailsClosedWithoutHostFacts(t *testing.T) {
 		signet.WithClock(func() time.Time { return *f.now }),
 		signet.WithNtfy(signet.NtfyConfig{
 			BaseURL: "https://ntfy.example", TopicKey: testTopicKey,
-			ClickBaseURL: "https://daemon.example",
 		}),
 	)
 	if _, err := unconfigured.PreviewPairing(ctx, plaintext); err == nil || errors.Is(err, signet.ErrPairingRejected) {

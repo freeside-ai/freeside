@@ -221,12 +221,10 @@ func run(ctx context.Context, cfg config) (_ *harness, err error) {
 		}),
 	}
 	if cfg.NtfyURL != "" {
-		// topicKey was resolved before store.Open (above); the deep link points
-		// at this process's own contract listener.
+		// topicKey was resolved before store.Open (above).
 		options = append(options, signet.WithNtfy(signet.NtfyConfig{
-			BaseURL:      cfg.NtfyURL,
-			TopicKey:     topicKey,
-			ClickBaseURL: "http://" + apiListener.Addr().String(),
+			BaseURL:  cfg.NtfyURL,
+			TopicKey: topicKey,
 		}))
 	}
 	service := signet.NewService(st, options...)
