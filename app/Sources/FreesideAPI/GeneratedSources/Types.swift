@@ -10506,7 +10506,7 @@ public enum Components {
                 ])
             }
         }
-        /// A decision request (plan §4); mirrors domain.AttentionItem. item_version increments on every state change and version-binds client decisions; timing is daemon-derived, never client-set.
+        /// A decision request (plan §4); mirrors domain.AttentionItem. item_version increments on every state change except a change to timing alone, and version-binds client decisions. timing is daemon-derived, never client-set; a notification delivery or an opened receipt that changes it raises the snapshot's entity_version and leaves item_version where it was.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/AttentionItem`.
