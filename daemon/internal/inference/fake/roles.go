@@ -28,6 +28,9 @@ type Roles struct {
 	// route model id; the client's producer label is "Provider/Model".
 	Provider string
 	Model    string
+	// Effort is the effort every role's agent asks; empty is harness_default.
+	// The offer allows it and the baseline call adapter can send it.
+	Effort domain.EffortLevel
 	// LineageGroup is the lineage of the offer every judgment role runs on.
 	LineageGroup string
 	// WriterLineage is what the source reports for the writing roles' offers.
@@ -87,11 +90,15 @@ func (r Roles) ResolveRole(_ context.Context, role domain.RoleName) (inference.R
 	if route.Digest, err = route.ComputeDigest(); err != nil {
 		return inference.RoleCall{}, err
 	}
+	effort := r.Effort
+	if effort == "" {
+		effort = domain.EffortHarnessDefault
+	}
 	offer := domain.OfferFragment{
 		EncodingVersion: domain.AgentFragmentEncodingVersion,
 		RouteModelID:    r.Model, LineageGroup: r.LineageGroup,
 		IdentityStability: domain.IdentityOpaque,
-		AllowedEfforts:    []domain.EffortLevel{domain.EffortHarnessDefault},
+		AllowedEfforts:    []domain.EffortLevel{effort},
 		PricingRevision:   "2026-10", NotAfter: offerNotAfter,
 	}
 	if offer.Digest, err = offer.ComputeDigest(); err != nil {
@@ -106,7 +113,7 @@ func (r Roles) ResolveRole(_ context.Context, role domain.RoleName) (inference.R
 		Source: domain.AgentSource{
 			Name: agentName, Enrollment: string(enrollment.ID), Route: routeName,
 			Adapter: agentbaseline.ClaudeCallAdapterName, Offer: "fake-offer",
-			Effort: domain.EffortHarnessDefault,
+			Effort: effort,
 		},
 		Identity: identity, Enrollment: enrollment,
 		Route: route, Adapter: adapter, Offer: offer, OfferRoute: routeName,

@@ -21,16 +21,21 @@ const (
 // not an image pin: a call runs the operator's host binary, which the
 // -judgment-claude-sha256 flag pins by content. It differs from the ward
 // build on purpose. The audit is evidence about the build it ran against, so
-// the call adapter names that build, and a ward image bump moves no call
-// adapter digest.
+// the call adapters name that build and write their sendable efforts out,
+// and neither a ward image bump nor a change to the claude_code effort table
+// moves a call adapter digest.
 const ClaudeCallHarnessBuild = "claude-code 2.1.267"
 
 // Adapter build ids: the Freeside launch code each adapter fragment names.
-// Bump one when the launch it describes changes what it honours.
+// Bump one when the launch it describes changes what it honours. The call
+// launch has two: v1 sends no effort, and v2 sends each effort the
+// claude_code table can. v1 stays so a line a deployment adopted on it keeps
+// its digest and its audit record.
 const (
-	ClaudeWardAdapterBuild  = "claude_code_ward_v1"
-	ClaudeCallAdapterBuild  = "claude_code_call_v1"
-	CodexReviewAdapterBuild = "codex_review_v1"
+	ClaudeWardAdapterBuild   = "claude_code_ward_v1"
+	ClaudeCallAdapterBuild   = "claude_code_call_v2"
+	ClaudeCallAdapterV1Build = "claude_code_call_v1"
+	CodexReviewAdapterBuild  = "codex_review_v1"
 )
 
 // Tree names of the baseline documents. Names enter no digest.
@@ -77,19 +82,40 @@ func ClaudeWardAdapter() (domain.AdapterFragment, error) {
 // under the site's output contract, and a harness severed from user and
 // project settings. It declares no tool capability and no route-store
 // contract (the call's credential arrives in the driver's environment, not
-// from a mounted store), and it sends no effort. Runner conformance has no
-// part in a call, so this adapter is in no conformance record: wardless
-// admission proves it by the audit record that names its digest and build.
+// from a mounted store). Runner conformance has no part in a call, so this
+// adapter is in no conformance record: wardless admission proves it by the
+// audit record that names its digest and build.
+//
+// It sends every effort the claude_code table can send today. The list is
+// written out, not read from the table, because the audit covered exactly
+// these efforts: when the table gains one, sending it takes a new adapter
+// and a new audit, and a test holds this list to the table so the gap shows.
 func ClaudeCallAdapter() (domain.AdapterFragment, error) {
+	return claudeCallAdapter(ClaudeCallAdapterBuild, []domain.EffortLevel{
+		domain.EffortHarnessDefault, domain.EffortLow, domain.EffortMedium, domain.EffortHigh, domain.EffortMax,
+	})
+}
+
+// ClaudeCallAdapterV1 is the call adapter the baseline carried before the
+// call launch could send an effort: the same launch, declaring
+// harness_default as its only sendable effort. The baseline tree no longer
+// names it. It stays defined because a deployment that adopted it holds its
+// digest in a committed tree, and the daemon's audit record for that digest
+// is held to this definition.
+func ClaudeCallAdapterV1() (domain.AdapterFragment, error) {
+	return claudeCallAdapter(ClaudeCallAdapterV1Build, []domain.EffortLevel{domain.EffortHarnessDefault})
+}
+
+func claudeCallAdapter(build string, sendable []domain.EffortLevel) (domain.AdapterFragment, error) {
 	return sealAdapter(domain.AdapterFragment{
 		EncodingVersion: domain.AgentFragmentEncodingVersion,
-		AdapterBuild:    ClaudeCallAdapterBuild, HarnessBuild: ClaudeCallHarnessBuild,
+		AdapterBuild:    build, HarnessBuild: ClaudeCallHarnessBuild,
 		ClientKind: domain.HarnessClientClaudeCode, Vendor: domain.AgentVendorClaude,
 		LaunchCapabilities: domain.NewLaunchCapabilitySet(
 			domain.LaunchCapInstructionDelivery, domain.LaunchCapStructuredOutput,
 			domain.LaunchCapContextSeverance,
 		),
-		SendableEfforts: []domain.EffortLevel{domain.EffortHarnessDefault},
+		SendableEfforts: sendable,
 	})
 }
 

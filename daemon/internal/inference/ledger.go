@@ -21,7 +21,8 @@ import (
 const (
 	ledgerVersionV1 = "freeside.inference-budget/v1"
 	ledgerVersionV2 = "freeside.inference-budget/v2"
-	ledgerVersion   = "freeside.inference-budget/v3"
+	ledgerVersionV3 = "freeside.inference-budget/v3"
+	ledgerVersion   = "freeside.inference-budget/v4"
 )
 
 type usage struct {
@@ -54,9 +55,9 @@ type callRecord struct {
 	AuditRequired    bool      `json:"audit_required"`
 	AuditComplete    bool      `json:"audit_complete"`
 	AuditTransferred bool      `json:"audit_transferred"`
-	// Identity is what the call ran as. Every call this version reserves
-	// carries one; a record a v2 ledger wrote has none, and stays readable
-	// until retention prunes it.
+	// Identity is what the call ran as. Every call reserved since v3 carries
+	// one; a record a v2 ledger wrote has none, and stays readable until
+	// retention prunes it.
 	Identity *callIdentity `json:"identity,omitempty"`
 }
 
@@ -72,11 +73,18 @@ type callIdentity struct {
 	// CredentialSource says whose bytes authenticated the call, beside the
 	// enrollment generation the admission names.
 	CredentialSource CredentialSource `json:"credential_source"`
-	// RequestedModelID and RequestedEffort are the admitted agent's. The
-	// call does not yet send them (#1619), so Observed may disagree, and the
-	// record claims no agreement.
+	// RequestedModelID and RequestedEffort are the admitted agent's, and
+	// EffectiveEffort is what its launch sent: the harness-native value, or
+	// harness_default when it sent none, as the treatment digest covers it
+	// (domain.EffortTranslation.Effective). The two efforts differing is a
+	// clamp. A record a v3 ledger wrote has no effective effort. The model
+	// the launch sent is the requested one, except that the native-default
+	// offer launches with the daemon's configured model; Observed is the
+	// CLI's own account, and the driver refuses a completion that reports
+	// another model than the launch passed.
 	RequestedModelID string             `json:"requested_model_id"`
 	RequestedEffort  domain.EffortLevel `json:"requested_effort"`
+	EffectiveEffort  string             `json:"effective_effort,omitempty"`
 	// Observed is null until a driver answered within the site's contract.
 	Observed *observedCall `json:"observed"`
 	// ShadowOf is the record id of the call this one shadows. Nothing writes
@@ -112,7 +120,8 @@ func (i callIdentity) validate() error {
 	}
 	if !contentaddr.Valid(string(i.TreatmentDigest)) || !contentaddr.Valid(string(i.SiteContractDigest)) ||
 		!i.CredentialSource.valid() || i.RequestedModelID == "" ||
-		!slices.Contains(domain.AllEffortLevels, i.RequestedEffort) {
+		!slices.Contains(domain.AllEffortLevels, i.RequestedEffort) ||
+		!(Observed{ModelID: i.EffectiveEffort}).valid() {
 		return errors.New("invalid inference call identity")
 	}
 	if observed := i.Observed; observed != nil {
@@ -230,6 +239,16 @@ func openLedger(path, anchorPath string, now func() time.Time) (*ledger, error) 
 		}
 		l.state.Version = ledgerVersion
 		migrate = true
+	case ledgerVersionV3:
+		// V3 identities carry no effective effort. Refuse a v3-labelled file
+		// that carries one, for the same reason again: the binary that
+		// writes v3 would drop the field on its next write.
+		if recordsCarryEffectiveEffort(l.state.Calls) {
+			l.disabled = errors.New("decode inference ledger")
+			return l, nil
+		}
+		l.state.Version = ledgerVersion
+		migrate = true
 	case ledgerVersion:
 	default:
 		l.disabled = errors.New("decode inference ledger")
@@ -260,6 +279,12 @@ func openLedger(path, anchorPath string, now func() time.Time) (*ledger, error) 
 
 func recordsCarryIdentity(records []callRecord) bool {
 	return slices.ContainsFunc(records, func(record callRecord) bool { return record.Identity != nil })
+}
+
+func recordsCarryEffectiveEffort(records []callRecord) bool {
+	return slices.ContainsFunc(records, func(record callRecord) bool {
+		return record.Identity != nil && record.Identity.EffectiveEffort != ""
+	})
 }
 
 func newLedgerEpoch() (string, error) {

@@ -12,22 +12,51 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
 // This opt-in protocol probe uses no real credential or provider. It executes
 // the configured native CLI against a localhost synthetic Messages endpoint,
 // using the production argument/environment builders without exposing an
 // endpoint override in production configuration.
+//
+// It runs the launch once for each effort the baseline call adapter declares
+// it can send, harness_default (no --effort) included, so a passing run on a
+// build is the evidence an audit record for that adapter and build rests on.
 func TestPinnedClaudeCLIProtocol(t *testing.T) {
 	bin := os.Getenv("FREESIDE_JUDGMENT_CLI")
 	if bin == "" {
 		t.Skip("set FREESIDE_JUDGMENT_CLI and FREESIDE_JUDGMENT_CLI_SHA256 for the local mock-provider probe")
 	}
-	const model = "claude-sonnet-4-6"
-	driver, err := New(Config{Binary: bin, SHA256: os.Getenv("FREESIDE_JUDGMENT_CLI_SHA256"), Model: model})
+	driver, err := New(Config{Binary: bin, SHA256: os.Getenv("FREESIDE_JUDGMENT_CLI_SHA256"), Model: probeModel})
 	if err != nil {
 		t.Fatal(err)
 	}
+	adapter, err := agentbaseline.ClaudeCallAdapter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, effort := range adapter.SendableEfforts {
+		translation, err := domain.TranslateEffort(adapter.ClientKind, effort)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Run(string(effort), func(t *testing.T) { probePinnedCLI(t, driver, translation.Native) })
+	}
+}
+
+const probeModel = "claude-sonnet-4-6"
+
+// probePinnedCLI runs one launch with the given native effort, "" for none,
+// and holds it to the audited contract: one request, to the model passed,
+// with no tools, the site's compute bound, thinking disabled, the task data
+// as the only input, and the effort passed as the request's effort. What a
+// launch with no --effort sends is the harness's own default and is logged,
+// not asserted.
+func probePinnedCLI(t *testing.T, driver *Driver, effort string) {
+	const model = probeModel
 	req := classifierRequest()
 	req.MaxComputeUnits = 1024
 	prompt, site, err := promptFor(req)
@@ -58,6 +87,9 @@ func TestPinnedClaudeCLIProtocol(t *testing.T) {
 			Thinking  struct {
 				Type string `json:"type"`
 			} `json:"thinking"`
+			OutputConfig struct {
+				Effort string `json:"effort"`
+			} `json:"output_config"`
 			Messages []struct {
 				Role    string `json:"role"`
 				Content []struct {
@@ -72,6 +104,11 @@ func TestPinnedClaudeCLIProtocol(t *testing.T) {
 		}
 		if request.Model != model || len(request.Tools) != 0 || request.MaxTokens != req.MaxComputeUnits || request.Thinking.Type != "disabled" {
 			t.Error("CLI changed model/tool/compute contract")
+		}
+		if effort == "" {
+			t.Logf("with no --effort the CLI sent output_config.effort %q", request.OutputConfig.Effort)
+		} else if request.OutputConfig.Effort != effort {
+			t.Errorf("--effort %s reached the provider as output_config.effort %q", effort, request.OutputConfig.Effort)
 		}
 		found := false
 		for _, m := range request.Messages {
@@ -114,7 +151,7 @@ func TestPinnedClaudeCLIProtocol(t *testing.T) {
 	if err := os.WriteFile(root+"/CLAUDE.md", []byte("repository-canary must not be read"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.CommandContext(t.Context(), copyPath, commandArgs(model, prompt)...) //nolint:gosec // G204: private content-verified native CLI in an opt-in synthetic probe.
+	cmd := exec.CommandContext(t.Context(), copyPath, commandArgs(model, effort, prompt)...) //nolint:gosec // G204: private content-verified native CLI in an opt-in synthetic probe.
 	cmd.Dir = root
 	cmd.Env = append(commandEnv(root, "synthetic-test-only", req, site), "ANTHROPIC_BASE_URL="+server.URL)
 	cmd.Stdin = bytes.NewReader(input)

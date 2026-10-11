@@ -1797,7 +1797,7 @@ Configure all four flags together:
 ```text
 -judgment-claude-bin /absolute/path/to/claude
 -judgment-claude-sha256 <sha256-of-that-native-executable>
--judgment-model <explicit-Claude-model>
+-judgment-model <Claude-model-for-native-default-lines>
 -judgment-auth-snapshot <existing-token-file-relative-to-review-input-root>
 ```
 
@@ -1852,7 +1852,14 @@ build: the executable `-judgment-claude-bin` names, pinned by
 `-judgment-claude-sha256`. The recorded basis is the localhost
 synthetic-provider probe of Claude CLI 2.1.267 on 2026-09-09
 (`devlog/2026-09-09-2145-subscription-judgments.md`), which observed one model
-request with an empty tool list. The audit covers that build and no other, so
+request with an empty tool list. A second run of the probe on the same build,
+on 2026-10-11, covered the launch with `--effort` at each value the call can
+send (`devlog/2026-10-11-0927-judgment-call-model-effort.md`): each made one
+request with an empty tool list and thinking disabled, carrying the effort
+passed. The probe is `TestPinnedClaudeCLIProtocol`
+(`internal/claudeinference/cli_live_test.go`), opt-in through
+`FREESIDE_JUDGMENT_CLI` and `FREESIDE_JUDGMENT_CLI_SHA256`. The audits cover
+that build and no other, so
 a different pin runs unaudited until it is audited again. The deterministic
 fake driver and the site budgets do not stand in for it: they cover output
 handling, not what the harness can do. No second call driver joins on a hand
@@ -1868,9 +1875,19 @@ Every judgment site looks its role up in the lineup at each call
 line against the tree commit it started on and the store, and the inference
 client admits what comes back before it reserves budget or reaches the driver:
 it checks the line's prompt name and digest against the prompt the daemon will
-send, then runs the wardless admission above under the code-owned audit record
-(`judgmentCallAudit`: the baseline call adapter's digest, `claude-code
-2.1.267`, audited 2026-09-09). The client admits what the source returns and
+send, then runs the wardless admission above under a code-owned audit
+record. The daemon holds two (`judgmentCallAudits`), one per call adapter,
+both for `claude-code 2.1.267`:
+
+- **`claude_code_call_v1`, audited 2026-09-09.** It sends `harness_default`
+  only, so its launch passes no `--effort`. The baseline named it before the
+  call could send an effort, and a line adopted on it still admits.
+- **`claude_code_call_v2`, audited 2026-10-11.** It sends every effort the
+  `claude_code` table can. The baseline call agent is on it.
+
+The role source hands admission the record that names the resolved adapter's
+digest, and none for any other call adapter, which admission then refuses for
+want of a launch proof. The client admits what the source returns and
 never takes its word, so a test or a later source cannot hand it an admitted
 call. `freesided auth adopt` writes the lines: one per judgment role with a
 built site, on the baseline call agent `claude-code-call-default`, whose call
@@ -1878,14 +1895,38 @@ adapter pins the audited build. The publication author gets its line only when
 adopt is given `-judgment-publication-author-prompt`. A deployment adopted
 before these lines existed adds them by patch (`policy/README.md`).
 
-The lineup decides which agent a role is and which prompt it runs. The
-judgment flags below still decide what makes the call and which credential it
-carries, and the call record says so instead of claiming agreement: its
+The lineup decides which agent a role is, which prompt it runs, and which
+model and effort its call launches with. Each call passes its own agent's
+selection, so two roles on different lines launch differently through the one
+driver:
+
+- **An explicit offer sends its model.** The launch passes `--model
+  <route_model_id>`. The driver refuses a completion that reports any other
+  model, so the offer's `route_model_id` must be the exact id the CLI reports
+  in `modelUsage`. An alias or a short name never matches, and every call on
+  that line then returns `inference unavailable` with no health item, because
+  the role is admitted.
+- **The native-default offer launches with `-judgment-model`.** A line on
+  `claude-code-native-default` names no model, so the launch passes the
+  flag's value, as every call did before. That holds until the flag is
+  retired.
+- **An effort other than `harness_default` is sent as `--effort <native
+  value>`,** translated by the `claude_code` table
+  (`domain.TranslateEffort`). `harness_default` sends no `--effort`. The
+  call keeps `MAX_THINKING_TOKENS=0` and its output limit at every effort.
+  The agent must be on `claude_code_call_v2`: an agent on v1 that asks
+  another effort does not resolve, so its role is unbound.
+- **A model or effort that is not one plain option value leaves the role
+  unbound:** one that holds whitespace or a control or format character,
+  begins with `-`, or is longer than 256 bytes. An offer only has to name a
+  non-empty model, so admission checks this and the role gets its health
+  item; the driver checks it again before it starts any process.
+
+The judgment flags below still decide the executable and which credential the
+call carries, and the call record says so instead of claiming agreement: its
 `credential_source` is `interim_flag` until #1426 reads the credential from
-the line's enrollment, and its requested model is the agent's while its
-observed model is what the CLI reports (#1619). Nothing compares the
-`-judgment-claude-sha256` pin with the audited build; the operator keeps them
-the same.
+the line's enrollment. Nothing compares the `-judgment-claude-sha256` pin with
+the audited build; the operator keeps them the same.
 
 A role with no admissible line does not run. Each of its sites returns its
 declared fail-safe with the fixed reason `judgment role has no admissible
@@ -1903,19 +1944,24 @@ author with no prompt file is off, not unbound: its sites return their
 fail-safe and no item is raised.
 
 Each call's ledger record (`inference-budget.json`, version
-`freeside.inference-budget/v3`) carries the call identity: the admission (role,
+`freeside.inference-budget/v4`) carries the call identity: the admission (role,
 agent and prompt by name and digest, lineup revision, enrollment and
 generation), the treatment digest, the site-contract digest (the site's fixed
-instruction and output contract), the credential source, the requested model
-and effort, the observed model, serving operator, and output tokens as the
-driver reported them, and, for the adjudicator and drift auditor, whether the
-call's lineage matched each writing role's. Independence is recorded and never
-gates a call. An observed field the driver did not report is `null`, and a
-driver response whose observed fields exceed their bounds is refused before
-anything is recorded. A version 1 or 2 ledger loads and is rewritten as
-version 3; its earlier records keep no identity. A file labelled with an
-earlier version that carries identity, or with an unknown version, is refused,
-which disables the ledger so every call returns its fallback.
+instruction and output contract), the credential source, the requested model,
+the requested and the effective effort, the observed model, serving operator,
+and output tokens as the driver reported them, and, for the adjudicator and
+drift auditor, whether the call's lineage matched each writing role's.
+`effective_effort` is the native value the launch sent, or `harness_default`
+when it sent none; the two efforts differing is a clamp. Independence is
+recorded and never gates a call. An observed field the driver did not report
+is `null`, and a driver response whose observed fields exceed their bounds is
+refused before anything is recorded. A version 1, 2, or 3 ledger loads and is
+rewritten as version 4. Records from versions 1 and 2 keep no identity, and a
+version 3 record keeps its identity with no `effective_effort`. A file
+labelled with an earlier version that carries a field that version never
+wrote (an identity under 1 or 2, an `effective_effort` under 3), or with an
+unknown version, is refused, which disables the ledger so every call returns
+its fallback.
 
 Preflight reports `judgment_configuration` and a secret-free
 `judgment_configuration_digest`. Beside it, `judgment_roles` admits every

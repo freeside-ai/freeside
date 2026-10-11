@@ -180,6 +180,8 @@ type admittedCall struct {
 	prompt     RolePrompt
 	driver     Driver
 	credential Secret
+	// launch is the model and effort the driver passes for the admitted agent.
+	launch domain.AgentLaunchSelection
 }
 
 // errRoleUnbound is the fixed fallback reason for a role that could not be
@@ -237,10 +239,24 @@ func admitRole(
 	if err != nil {
 		return admittedCall{}, fmt.Errorf("role %s: %w", role, err)
 	}
+	// What the launch passes is the ward admission's derivation, so a call
+	// and a run read one effort table and one native-default rule.
+	selection, err := domain.DeriveAgentLaunchSelection(resolved.Agent, resolved.Adapter, resolved.Offer)
+	if err != nil {
+		return admittedCall{}, fmt.Errorf("role %s: %w", role, err)
+	}
+	// An offer only has to name a non-empty model. One the launch could not
+	// pass leaves the role unbound here, where it is reported, instead of
+	// failing every call at the driver with nothing said.
+	if !ValidLaunchValue(selection.RouteModelID) || !ValidLaunchValue(selection.NativeEffort) {
+		return admittedCall{}, fmt.Errorf("role %s: model %q or effort %q cannot be passed to a launch as one option value",
+			role, selection.RouteModelID, selection.NativeEffort)
+	}
 	identity := callIdentity{
 		Admission: admission, TreatmentDigest: treatment, SiteContractDigest: site.ContractDigest(),
 		CredentialSource: resolved.CredentialSource,
 		RequestedModelID: resolved.Offer.RouteModelID, RequestedEffort: resolved.Agent.Effort,
+		EffectiveEffort: effort.Effective(),
 	}
 	if role.JudgesWrittenWork() {
 		// Recorded, never enforced (plan revision 65): the call runs whatever
@@ -255,6 +271,7 @@ func admitRole(
 	return admittedCall{
 		identity: identity, producer: resolved.Route.ServiceOperator + "/" + resolved.Offer.RouteModelID,
 		prompt: prompt, driver: resolved.Driver, credential: resolved.Credential,
+		launch: selection,
 	}, nil
 }
 
@@ -349,6 +366,7 @@ func (c *Client) Call(ctx context.Context, siteID, project, root string, fields 
 		SiteID: site.ID, InputDigest: digest, Fields: cloneStrings(outbound),
 		MaxOutput: site.MaxOutputBytes, MaxComputeUnits: site.MaxComputeUnits,
 		RolePrompt: bytes.Clone(admitted.prompt.Body), RolePromptDigest: admitted.prompt.Digest,
+		Model: admitted.launch.RouteModelID, NativeEffort: admitted.launch.NativeEffort,
 	}
 	go func() {
 		response, err := admitted.driver.Complete(callCtx, request, admitted.credential)
