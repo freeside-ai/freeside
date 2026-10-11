@@ -130,7 +130,9 @@ struct DevicesView: View {
             }
             .accessibilityElement(children: .combine)
             if row.isCurrent, !row.isRevoked, let subscription = model.notificationSubscription {
-                PhoneNotificationSetup(subscription: subscription)
+                PhoneNotificationSetup(
+                    subscription: subscription,
+                    openedAt: model.notificationOpens?.openedAt(deviceID: row.id))
             }
             if !row.isRevoked {
                 Button(model.revokingID == row.id ? "Revoking…" : "Revoke") {

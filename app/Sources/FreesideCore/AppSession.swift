@@ -207,11 +207,18 @@ public final class AppSession {
     /// receipt returned: a link that a newer link, or the operator's own
     /// navigation, has overtaken is dropped instead of pulling the app back
     /// to the older item.
+    ///
+    /// `opens` is where the paired device's setup reads that a notification
+    /// was opened here (`NotificationOpenLog`).
     public func open(
         _ link: NotificationLink, in navigation: NavigationModel,
+        recording opens: NotificationOpenLog? = nil,
         receiptBound: Duration = .seconds(3)
     ) async {
         guard case .ready(let coordinator) = phase, let client = connection?.client else { return }
+        // Either form came from a notification's tap, so both count, and at
+        // arrival: the tap happened whether or not the receipt lands.
+        opens?.record(deviceID: coordinator.store.device.deviceID)
         // Counted now, on both forms, so that this link supersedes any older
         // one still waiting on its receipt.
         navigation.recordOperatorNavigation()

@@ -20,6 +20,7 @@ public struct FreesideRootView: View {
     @State private var navigation: NavigationModel
     @State private var feedback: DecisionFeedbackModel
     @State private var flowPreferences: DecisionFlowPreferences
+    private let notificationOpens: NotificationOpenLog
     @State private var technicalDetailsRequest: TechnicalDetailsRevealRequest?
     @State private var showsInboxClearResult: Bool
     @State private var connectionAddress = ""
@@ -44,6 +45,7 @@ public struct FreesideRootView: View {
         launchInputs: LaunchInputs = .standard(),
         navigation: NavigationModel? = nil,
         flowPreferences: DecisionFlowPreferences? = nil,
+        notificationOpens: NotificationOpenLog? = nil,
         environment: FreesideEnvironment = .prod
     ) {
         FreesideFont.registration
@@ -54,6 +56,7 @@ public struct FreesideRootView: View {
         _feedback = State(initialValue: DecisionFeedbackModel())
         _flowPreferences = State(
             initialValue: flowPreferences ?? DecisionFlowPreferences())
+        self.notificationOpens = notificationOpens ?? NotificationOpenLog()
         _technicalDetailsRequest = State(initialValue: nil)
         _showsInboxClearResult = State(initialValue: false)
         launchColorScheme = launchInputs.colorScheme
@@ -234,6 +237,7 @@ public struct FreesideRootView: View {
                 model: DevicesModel(
                     coordinator: coordinator,
                     notificationSubscription: phoneNotificationSubscription,
+                    notificationOpens: notificationOpens,
                     signOut: {
                         try session.rePair(endingPairingOf: coordinator)
                         // The sheet leaves with the synced surface, but the

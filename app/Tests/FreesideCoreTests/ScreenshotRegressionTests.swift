@@ -596,10 +596,12 @@
 
             // The Devices sheet (#981) with every state it renders: this
             // device, another active one, and a revoked one never seen.
-            // The phone's own card also shows where its notifications are
-            // published (#1924).
+            // The phone's own card also shows how to set its notifications
+            // up (#1924): here on a server that is not ntfy's own, after a
+            // notification was opened.
             let devicesModel = await DevicesScreenshots.model()
-            let phoneDevicesModel = await DevicesScreenshots.model(notificationSubscription: .mock)
+            let phoneDevicesModel = await DevicesScreenshots.model(
+                notificationSubscription: .mock, openedAt: screenshotNow.addingTimeInterval(-3600))
             for (name, width, scheme, model) in [
                 ("devices", CGFloat(380), ColorScheme.light, devicesModel),
                 ("devices-dark", CGFloat(380), ColorScheme.dark, devicesModel),
