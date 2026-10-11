@@ -174,7 +174,7 @@ func TestResumeTaskBeforeSpecificationApproval(t *testing.T) {
 	dbPath := filepath.Join(root, "state.db")
 	submitted, err := runSubmitCommand(t.Context(), submitCommandConfig{
 		DBPath: dbPath, TaskPath: taskPath, PolicyPath: policyPath,
-		PublicationPath: publicationPath, ProjectID: "project-resume",
+		WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath, ProjectID: "project-resume",
 	})
 	if err != nil {
 		t.Fatal(err)

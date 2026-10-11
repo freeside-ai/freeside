@@ -79,7 +79,7 @@ func TestSubmitCommandSourceReference(t *testing.T) {
 			task, policy, publication := writeSubmissionSource(t, root, tc)
 			cfg := submitCommandConfig{
 				DBPath: filepath.Join(root, "state.db"), SubmissionID: "source", ProjectID: "proj-source",
-				TaskPath: task, PolicyPath: policy, PublicationPath: publication,
+				TaskPath: task, PolicyPath: policy, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publication,
 			}
 			result, err := runSubmitCommand(t.Context(), cfg)
 			if tc.refused() {
@@ -185,7 +185,7 @@ func TestSubmitApplySourceReference(t *testing.T) {
 	t.Parallel()
 	for _, tc := range submissionSourceCases() {
 		t.Run(tc.name, func(t *testing.T) {
-			req := sourceApplyRequest(t, tc)
+			req := declareApplyRequest(t, sourceApplyRequest(t, tc))
 			st := storetest.Open(t, filepath.Join(t.TempDir(), "state.db"), store.Options{})
 			blobs, err := signet.NewBlobStore(t.TempDir())
 			if err != nil {
@@ -330,7 +330,7 @@ func TestPreflightSourceReference(t *testing.T) {
 	for _, tc := range submissionSourceCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			args, env := preflightFixture(t)
-			args = append(args, "-submission-id", "source")
+			args = append(args, "-work-unit", declaredWorkUnit(t), "-submission-id", "source")
 			cfg, err := parsePreflightConfig(args, &bytes.Buffer{})
 			if err != nil {
 				t.Fatal(err)

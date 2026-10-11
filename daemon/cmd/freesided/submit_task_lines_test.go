@@ -44,14 +44,17 @@ func submittedTaskLines(t *testing.T, dbPath string, result submitResult) ([]dom
 	return lines, task
 }
 
-// lineLessFingerprint is the fingerprint a CLI submission was digested over
-// before the task-lines field existed.
+// lineLessFingerprint is the fingerprint a CLI submission that declared
+// smallestWorkUnit was digested over before the task-lines field existed.
 func lineLessFingerprint(t *testing.T, project domain.ProjectID, result submitResult) []byte {
 	t.Helper()
 	fingerprint, err := json.Marshal(struct {
 		Project                                            domain.ProjectID
 		Source, Policy, Publication, WorkUnit, Composition domain.Digest
-	}{project, result.SourceDigest, result.SpecificationPolicyDigest, result.PublicationDigest, "", ""})
+	}{
+		project, result.SourceDigest, result.SpecificationPolicyDigest, result.PublicationDigest,
+		submissionBytes([]byte(smallestWorkUnit)).digest, "",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +90,7 @@ func TestSubmitCommandRecordsTaskLines(t *testing.T) {
 	cfg := submitCommandConfig{
 		SubmissionID: "lines-test",
 		DBPath:       filepath.Join(root, "freeside.db"),
-		TaskPath:     taskPath, PolicyPath: policyPath, PublicationPath: publicationPath,
+		TaskPath:     taskPath, PolicyPath: policyPath, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath,
 		ProjectID: "proj-submit",
 		TaskLines: []domain.TaskLineChoice{reviewer, implementer},
 	}
@@ -176,7 +179,7 @@ func TestSubmitFingerprintWithoutLinesIsUnchanged(t *testing.T) {
 	cfg := submitCommandConfig{
 		SubmissionID: "plain-test",
 		DBPath:       filepath.Join(root, "freeside.db"),
-		TaskPath:     taskPath, PolicyPath: policyPath, PublicationPath: publicationPath,
+		TaskPath:     taskPath, PolicyPath: policyPath, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath,
 		ProjectID: "proj-submit",
 	}
 	result, err := runSubmitCommand(ctx, cfg)
@@ -205,7 +208,7 @@ func TestSubmitCommandRefusesBadTaskLines(t *testing.T) {
 	base := submitCommandConfig{
 		SubmissionID: "bad-lines",
 		DBPath:       filepath.Join(root, "freeside.db"),
-		TaskPath:     taskPath, PolicyPath: policyPath, PublicationPath: publicationPath,
+		TaskPath:     taskPath, PolicyPath: policyPath, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath,
 		ProjectID: "proj-submit",
 	}
 	for name, tc := range map[string]struct {
@@ -302,7 +305,7 @@ func TestSubmitCommandTaskLinesHoldAtAdmission(t *testing.T) {
 	cfg := submitCommandConfig{
 		SubmissionID: "lines-admission",
 		DBPath:       filepath.Join(root, "freeside.db"),
-		TaskPath:     taskPath, PolicyPath: policyPath, PublicationPath: publicationPath,
+		TaskPath:     taskPath, PolicyPath: policyPath, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath,
 		ProjectID: "proj-submit",
 		TaskLines: []domain.TaskLineChoice{
 			{Role: domain.RoleSpecifier, Agent: "claude-b"}, {Role: domain.RoleReviewer, Agent: "codex"},

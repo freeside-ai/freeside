@@ -323,7 +323,7 @@ func TestSubmitCommandEgressPolicy(t *testing.T) {
 			root := t.TempDir()
 			task, policy, publication := writeSubmissionInputs(t, root)
 			writeSubmissionEgressPolicy(t, policy, tc.values)
-			cfg := submitCommandConfig{DBPath: filepath.Join(root, "state.db"), SubmissionID: "egress", ProjectID: "proj-egress", TaskPath: task, PolicyPath: policy, PublicationPath: publication}
+			cfg := submitCommandConfig{DBPath: filepath.Join(root, "state.db"), SubmissionID: "egress", ProjectID: "proj-egress", TaskPath: task, PolicyPath: policy, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publication}
 			_, err := runSubmitCommand(t.Context(), cfg)
 			checkSubmissionEgressError(t, err, tc)
 			if tc.wantErr != nil {
@@ -408,10 +408,7 @@ func TestSubmitApplyEgressPolicy(t *testing.T) {
 	t.Parallel()
 	for _, tc := range submissionEgressCases() {
 		t.Run(tc.name, func(t *testing.T) {
-			req := egressApplyRequest(t, tc.values)
-			if err := validateSubmitApply(req); err != nil {
-				t.Fatalf("structural request validation = %v", err)
-			}
+			req := declareApplyRequest(t, egressApplyRequest(t, tc.values))
 			st := storetest.Open(t, filepath.Join(t.TempDir(), "state.db"), store.Options{})
 			blobs, err := signet.NewBlobStore(t.TempDir())
 			if err != nil {
@@ -443,7 +440,7 @@ func TestPreflightEgressPolicy(t *testing.T) {
 	for _, tc := range submissionEgressCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			args, env := preflightFixture(t)
-			args = append(args, "-submission-id", "egress")
+			args = append(args, "-work-unit", declaredWorkUnit(t), "-submission-id", "egress")
 			cfg, err := parsePreflightConfig(args, &bytes.Buffer{})
 			if err != nil {
 				t.Fatal(err)
@@ -517,7 +514,7 @@ func TestPreflightRetainedModernEgressPolicyInspection(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			args, env := preflightFixture(t)
-			args = append(args, "-submission-id", "retained-modern")
+			args = append(args, "-work-unit", declaredWorkUnit(t), "-submission-id", "retained-modern")
 			cfg, err := parsePreflightConfig(args, &bytes.Buffer{})
 			if err != nil {
 				t.Fatal(err)
@@ -552,7 +549,7 @@ func TestPreflightRetainedModernEgressPolicyInspection(t *testing.T) {
 func TestPreflightRetainedModernEgressPolicyRequiresMatchingStoredPolicy(t *testing.T) {
 	t.Parallel()
 	args, env := preflightFixture(t)
-	args = append(args, "-submission-id", "retained-modern")
+	args = append(args, "-work-unit", declaredWorkUnit(t), "-submission-id", "retained-modern")
 	cfg, err := parsePreflightConfig(args, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
@@ -598,7 +595,13 @@ func preflightResolvedPolicy(t *testing.T, cfg preflightConfig) domain.ResolvedP
 	if err != nil {
 		t.Fatal(err)
 	}
-	runID := engine.ManualSubmissionRunID("cli:"+cfg.SubmissionID, cfg.ProjectID, spec.digest, policyDigest, submissionBytes(publicationBody).digest, "")
+	// The callers declare smallestWorkUnit, whose bytes are already the
+	// canonical form the declaration's digest is taken over.
+	workUnit, err := readSubmissionFile(cfg.WorkUnitPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := engine.ManualSubmissionRunID("cli:"+cfg.SubmissionID, cfg.ProjectID, spec.digest, policyDigest, submissionBytes(publicationBody).digest, workUnit.digest)
 	specificationRunID, err := engine.SpecificationRunIDForImplementation(runID)
 	if err != nil {
 		t.Fatal(err)

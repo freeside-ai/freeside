@@ -215,7 +215,7 @@ func TestControlRoutesUseRunningDaemonStore(t *testing.T) {
 	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
 	submitted, err := runSubmitCommand(ctx, submitCommandConfig{
 		SubmissionID: "control-submit", DBPath: dbPath, TaskPath: taskPath,
-		PolicyPath: policyPath, PublicationPath: publicationPath, ProjectID: "project-control",
+		PolicyPath: policyPath, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath, ProjectID: "project-control",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -371,7 +371,7 @@ func TestControlRefusesHeldLockWithoutSocket(t *testing.T) {
 			return runResumeCommand(ctx, []string{"-db", dbPath, "-run", "run-1", "-once"}, io.Discard, io.Discard)
 		},
 		"submit": func() error {
-			_, err := runSubmitCommand(ctx, submitCommandConfig{DBPath: dbPath, TaskPath: taskPath, PolicyPath: policyPath, PublicationPath: publicationPath, ProjectID: "project-control", SubmissionID: "held-lock"})
+			_, err := runSubmitCommand(ctx, submitCommandConfig{DBPath: dbPath, TaskPath: taskPath, PolicyPath: policyPath, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath, ProjectID: "project-control", SubmissionID: "held-lock"})
 			return err
 		},
 		"abandon": func() error {

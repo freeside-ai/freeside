@@ -17,7 +17,7 @@ func TestSubmissionIdentityNewWorkAndSavedManualRetry(t *testing.T) {
 	task, policy, publication := writeSubmissionInputs(t, root)
 	cfg := submitCommandConfig{
 		DBPath: filepath.Join(root, "state.db"), TaskPath: task, PolicyPath: policy,
-		PublicationPath: publication, ProjectID: "project-submit",
+		WorkUnitPath: declaredWorkUnit(t), PublicationPath: publication, ProjectID: "project-submit",
 	}
 	first, err := runSubmitCommand(t.Context(), cfg)
 	if err != nil {
@@ -56,7 +56,7 @@ func TestSubmissionIdentityRetainedBeforeFirstCommit(t *testing.T) {
 	task, policy, publication := writeSubmissionInputs(t, root)
 	cfg := submitCommandConfig{
 		DBPath: filepath.Join(root, "state.db"), TaskPath: task, PolicyPath: policy,
-		PublicationPath: publication, ProjectID: "project-submit", SubmissionID: "prepared-before-crash",
+		WorkUnitPath: declaredWorkUnit(t), PublicationPath: publication, ProjectID: "project-submit", SubmissionID: "prepared-before-crash",
 	}
 	prepared, err := prepareSubmission(cfg)
 	if err != nil {
@@ -109,7 +109,7 @@ func TestSubmissionIdentityInvalidInputsDoNotOccupyPreparedIdentity(t *testing.T
 			task, policy, publication := writeSubmissionInputs(t, root)
 			cfg := submitCommandConfig{
 				DBPath: filepath.Join(root, "state.db"), TaskPath: task, PolicyPath: policy,
-				PublicationPath: publication, ProjectID: "project-submit", SubmissionID: "correctable",
+				WorkUnitPath: declaredWorkUnit(t), PublicationPath: publication, ProjectID: "project-submit", SubmissionID: "correctable",
 			}
 			bad := cfg
 			switch invalid {
@@ -166,7 +166,7 @@ func TestSubmissionIdentityJournalFailureDoesNotOpenDatabase(t *testing.T) {
 	task, policy, publication := writeSubmissionInputs(t, root)
 	cfg := submitCommandConfig{
 		DBPath: filepath.Join(root, "state.db"), TaskPath: task, PolicyPath: policy,
-		PublicationPath: publication, ProjectID: "project-submit", SubmissionID: "save-failed",
+		WorkUnitPath: declaredWorkUnit(t), PublicationPath: publication, ProjectID: "project-submit", SubmissionID: "save-failed",
 	}
 	if err := os.WriteFile(cfg.DBPath+".submissions", []byte("blocked directory"), 0o600); err != nil {
 		t.Fatal(err)
@@ -190,7 +190,7 @@ func TestSubmissionIdentityReplaysAcceptedInvalidUTF8(t *testing.T) {
 	}
 	cfg := submitCommandConfig{
 		DBPath: filepath.Join(root, "state.db"), TaskPath: task, PolicyPath: policy,
-		PublicationPath: publication, ProjectID: "project-submit", SubmissionID: "accepted-utf8",
+		WorkUnitPath: declaredWorkUnit(t), PublicationPath: publication, ProjectID: "project-submit", SubmissionID: "accepted-utf8",
 	}
 	first, err := runSubmitCommand(t.Context(), cfg)
 	if err != nil {

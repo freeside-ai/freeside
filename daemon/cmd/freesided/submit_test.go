@@ -87,6 +87,48 @@ func writeSubmissionInputs(t *testing.T, root string) (taskPath, policyPath, pub
 	return taskPath, policyPath, publicationPath
 }
 
+// smallestWorkUnit is the smallest work-unit declaration: the task finishes
+// when its pull request merges.
+const smallestWorkUnit = `{"completion_criterion":"bound_pr_merged"}`
+
+// declaredWorkUnit writes smallestWorkUnit to a file. A test whose subject
+// is an ordinary new submission passes it, as an operator's submission does.
+func declaredWorkUnit(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "work-unit.json")
+	if err := os.WriteFile(path, []byte(smallestWorkUnit), 0o600); err != nil {
+		t.Fatalf("write work-unit declaration: %v", err)
+	}
+	return path
+}
+
+// declareApplyRequest gives a prepared request smallestWorkUnit and rebinds
+// the identities that derive from the declaration's digest.
+func declareApplyRequest(t *testing.T, req submitApplyRequest) submitApplyRequest {
+	t.Helper()
+	req.WorkUnit = &domain.WorkUnitDeclarationInput{
+		CompletionCriterion: domain.CompletionBoundPRMerged,
+		DeclaredPaths:       engine.DeclaredPathScope(req.Keys),
+	}
+	req.WorkUnitDigest = submissionBytes([]byte(smallestWorkUnit)).digest
+	req.ImplementationRunID = engine.ManualSubmissionRunID("cli:"+req.SubmissionID,
+		req.ProjectID, req.SpecDigest, req.PolicyDigest, req.PublicationBodyDigest, req.WorkUnitDigest)
+	var err error
+	if req.SpecificationRunID, err = engine.SpecificationRunIDForImplementation(req.ImplementationRunID); err != nil {
+		t.Fatal(err)
+	}
+	if req.CampaignID, err = engine.ProductionCampaignIDForImplementation(req.ImplementationRunID); err != nil {
+		t.Fatal(err)
+	}
+	if req.ResolvedPolicy, err = domain.NewResolvedPolicy(req.SpecificationRunID, req.Keys); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateSubmitApply(req); err != nil {
+		t.Fatalf("declared request validation = %v", err)
+	}
+	return req
+}
+
 func submissionPolicyBody(paths, digestHex string) string {
 	provenance := `,"provenance":{"source":"override","digest":"sha256:` + digestHex + `"}}`
 	return `[{"key":"paths","value":"` + paths + `"` + provenance +
@@ -162,7 +204,7 @@ func TestSubmitCommandBindsCompositionManifest(t *testing.T) {
 	}
 	cfg := submitCommandConfig{
 		DBPath: filepath.Join(root, "freeside.db"), TaskPath: taskPath,
-		PolicyPath: policyPath, PublicationPath: publicationPath,
+		PolicyPath: policyPath, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath,
 		CompositionPath: manifestPath, RequireComposition: true, SubmissionID: "composition-test",
 		ProjectID: "proj-submit",
 	}
@@ -256,11 +298,14 @@ func submissionCompositionManifest(
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The submission this manifest is for declares smallestWorkUnit.
+	workUnitDigest := submissionBytes([]byte(smallestWorkUnit)).digest
 	identity := compositionIdentity{
 		SubmissionID: "composition-test", SourceDigest: spec.digest, PolicyDigest: policyDigest, PublicationDigest: submissionBytes(publicationBody).digest,
+		WorkUnitDigest: workUnitDigest,
 	}
 	identity.ImplementationRunID = engine.ManualSubmissionRunID(
-		"cli:composition-test", projectID, spec.digest, policyDigest, submissionBytes(publicationBody).digest, "",
+		"cli:composition-test", projectID, spec.digest, policyDigest, submissionBytes(publicationBody).digest, workUnitDigest,
 	)
 	identity.ImplementationInvocationID = domain.InvocationID(
 		"inv-implement-" + string(identity.ImplementationRunID),
@@ -282,7 +327,7 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 	cfg := submitCommandConfig{
 		SubmissionID: "convergence-test",
 		DBPath:       filepath.Join(root, "freeside.db"),
-		TaskPath:     taskPath, PolicyPath: policyPath, PublicationPath: publicationPath,
+		TaskPath:     taskPath, PolicyPath: policyPath, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath,
 		ProjectID: "proj-submit",
 	}
 
@@ -979,7 +1024,7 @@ func TestStoreAdmissionAuthorityDerivesFallbackCommitMessage(t *testing.T) {
 	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
 	cfg := submitCommandConfig{
 		DBPath: filepath.Join(root, "freeside.db"), TaskPath: taskPath,
-		PolicyPath: policyPath, PublicationPath: publicationPath,
+		PolicyPath: policyPath, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath,
 		ProjectID: "proj-submit-message",
 	}
 	submitted, err := runSubmitCommand(ctx, cfg)
@@ -1072,8 +1117,8 @@ func TestSubmitRefusesAnExistingStoreWithoutItsTopicKey(t *testing.T) {
 
 	_, err = runSubmitCommand(ctx, submitCommandConfig{
 		DBPath: dbPath, TaskPath: taskPath, PolicyPath: policyPath,
-		PublicationPath: publicationPath,
-		ProjectID:       "proj-submit",
+		WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath,
+		ProjectID: "proj-submit",
 	})
 	if !errors.Is(err, errTopicKeyMissing) {
 		t.Fatalf("submit error = %v, want errTopicKeyMissing", err)
@@ -1087,7 +1132,7 @@ func TestSubmitCommandRefusesBadInputs(t *testing.T) {
 	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
 	base := submitCommandConfig{
 		DBPath:   filepath.Join(root, "freeside.db"),
-		TaskPath: taskPath, PolicyPath: policyPath, PublicationPath: publicationPath,
+		TaskPath: taskPath, PolicyPath: policyPath, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath,
 		ProjectID: "proj-submit",
 	}
 
@@ -1285,8 +1330,22 @@ func TestSubmitCommandCapturesWorkUnitDeclaration(t *testing.T) {
 		t.Fatalf("close store: %v", err)
 	}
 
-	// The declaration joins the default run-id derivation: the same inputs
-	// without it converge on a different (pre-capture) run id.
+	// The declaration joins the run-id derivation by the digest of its
+	// canonical form and by nothing else.
+	boundIssue := 443
+	canonical, err := json.Marshal(submittedWorkUnit{
+		CompletionCriterion: domain.CompletionBoundIssueClosedByMergedPR, BoundIssue: &boundIssue,
+		DependsOnIssues: []int{440, 442}, ContractSerialized: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := engine.ManualSubmissionRunID("cli:"+declared.SubmissionID, cfg.ProjectID, declared.SourceDigest,
+		declared.SpecificationPolicyDigest, declared.PublicationDigest, submissionBytes(canonical).digest); declared.RunID != want {
+		t.Fatalf("declared run id = %q, want %q", declared.RunID, want)
+	}
+
+	// The same inputs without it converge on a different (pre-capture) run id.
 	undeclared := cfg
 	undeclared.WorkUnitPath = ""
 	undeclared.DBPath = filepath.Join(root, "undeclared.db")

@@ -235,7 +235,7 @@ func legacyAdmittedTask(t *testing.T, identityID domain.AuthIdentityID) (*store.
 	work, policyFile, publicationFile := writeSubmissionInputs(t, root)
 	cfg := submitCommandConfig{
 		DBPath: filepath.Join(root, "freeside.db"), TaskPath: work,
-		PolicyPath: policyFile, PublicationPath: publicationFile, ProjectID: "agent-cutover",
+		PolicyPath: policyFile, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationFile, ProjectID: "agent-cutover",
 	}
 	submitted, err := runSubmitCommand(ctx, cfg)
 	if err != nil {

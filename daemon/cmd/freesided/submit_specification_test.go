@@ -108,7 +108,7 @@ func testSubmitCommandSpecificationDigest(
 	}
 	cfg := submitCommandConfig{
 		DBPath: filepath.Join(root, "state.db"), TaskPath: taskPath,
-		PolicyPath: policyPath, PublicationPath: publicationPath,
+		PolicyPath: policyPath, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath,
 		ProjectID: "project-submit-specification", SubmissionID: "implementation-from-submit",
 	}
 	submitted, err := runSubmitCommand(t.Context(), cfg)
