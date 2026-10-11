@@ -20,7 +20,9 @@ func siteRequest(site inference.Site) inference.Request {
 	for _, field := range site.Fields {
 		fields[field.Name] = "synthetic"
 	}
-	return inference.Request{SiteID: site.ID, Fields: fields, MaxOutput: site.MaxOutputBytes, MaxComputeUnits: site.MaxComputeUnits}
+	return inference.Request{
+		SiteID: site.ID, Fields: fields, MaxOutput: site.MaxOutputBytes, MaxComputeUnits: site.MaxComputeUnits, Model: "test-model",
+	}
 }
 
 // A real CLI namer blocks on a FIFO. Every later workflow CLI checks that the

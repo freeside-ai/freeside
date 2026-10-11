@@ -32,7 +32,21 @@ func judgmentFixture(t *testing.T) (judgmentConfig, string) {
 	if err := os.WriteFile(bin, b, 0o700); err != nil { //nolint:gosec // G306: executable fixture in an owner-only test directory.
 		t.Fatal(err)
 	}
-	return judgmentConfig{CLI: claudeinference.Config{Binary: bin, SHA256: hex.EncodeToString(h[:]), Model: "test-model"}}, root
+	return judgmentConfig{CLI: claudeinference.Config{Binary: bin, SHA256: hex.EncodeToString(h[:])}}, root
+}
+
+// pinAnotherJudgmentCLI points cfg at a second executable under root, pinned
+// by its own digest: a configuration that composes and differs from the
+// fixture's.
+func pinAnotherJudgmentCLI(t *testing.T, cfg *judgmentConfig, root string) {
+	t.Helper()
+	bin := filepath.Join(root, "other-cli")
+	b := []byte("#!/bin/sh\nexit 2\n")
+	h := sha256.Sum256(b)
+	if err := os.WriteFile(bin, b, 0o700); err != nil { //nolint:gosec // G306: executable fixture in an owner-only test directory.
+		t.Fatal(err)
+	}
+	cfg.CLI = claudeinference.Config{Binary: bin, SHA256: hex.EncodeToString(h[:])}
 }
 
 func TestPublicationAuthorPromptBindingAndFailsafe(t *testing.T) {
@@ -119,7 +133,7 @@ func TestPublicationAuthorPromptBindingAndFailsafe(t *testing.T) {
 // The receipt commits to the configuration and to no credential: nothing the
 // judgment flags compose reads one.
 func TestJudgmentBindingAndReceipt(t *testing.T) {
-	cfg, _ := judgmentFixture(t)
+	cfg, root := judgmentFixture(t)
 	b, digest, err := composeJudgments(cfg)
 	if err != nil || b.Driver == nil || digest == "" {
 		t.Fatalf("binding failed: %v", err)
@@ -128,25 +142,25 @@ func TestJudgmentBindingAndReceipt(t *testing.T) {
 	if err != nil || again != digest {
 		t.Fatal("unstable binding")
 	}
-	cfg.CLI.Model = "changed-model"
+	pinAnotherJudgmentCLI(t, &cfg, root)
 	_, changed, err := composeJudgments(cfg)
 	if err != nil || changed == digest {
-		t.Fatal("model absent from receipt")
+		t.Fatal("CLI pin absent from receipt")
 	}
 }
 
 func TestJudgmentStartupRequiresPreflightBinding(t *testing.T) {
-	for _, change := range []string{"unchanged", "changed model", "missing digest", "invalid digest"} {
+	for _, change := range []string{"unchanged", "changed CLI", "missing digest", "invalid digest"} {
 		t.Run(change, func(t *testing.T) {
-			cfg, _ := judgmentFixture(t)
+			cfg, root := judgmentFixture(t)
 			_, digest, err := composeJudgments(cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
 			cfg.ExpectedDigest = digest
 			switch change {
-			case "changed model":
-				cfg.CLI.Model = "changed-model"
+			case "changed CLI":
+				pinAnotherJudgmentCLI(t, &cfg, root)
 			case "missing digest":
 				cfg.ExpectedDigest = ""
 			case "invalid digest":
@@ -170,7 +184,7 @@ func TestJudgmentStartupRequiresPreflightBinding(t *testing.T) {
 
 func TestJudgmentConfigRefusesAPartialPin(t *testing.T) {
 	cfg, _ := judgmentFixture(t)
-	cfg.CLI.Model = ""
+	cfg.CLI.SHA256 = ""
 	if _, _, err := composeJudgments(cfg); err == nil {
 		t.Fatal("partial configuration accepted")
 	}
@@ -180,12 +194,13 @@ func TestJudgmentConfigRefusesAPartialPin(t *testing.T) {
 	}
 }
 
-// The judgment flags name the CLI pin and the model. -judgment-auth-snapshot
-// is gone with the host token file it named (#1426): a command line that
-// still passes it is refused, not silently ignored.
+// The judgment flags name the CLI pin and no model. -judgment-auth-snapshot
+// is gone with the host token file it named (#1426), and -judgment-model
+// with the fallback it fed (#1964): a command line that still passes either
+// is refused, not silently ignored.
 func TestJudgmentFlags(t *testing.T) {
 	cfg, _ := judgmentFixture(t)
-	args := []string{"-judgment-claude-bin", cfg.CLI.Binary, "-judgment-claude-sha256", cfg.CLI.SHA256, "-judgment-model", cfg.CLI.Model}
+	args := []string{"-judgment-claude-bin", cfg.CLI.Binary, "-judgment-claude-sha256", cfg.CLI.SHA256}
 	parse := func(args []string) (judgmentConfig, error) {
 		var parsed judgmentConfig
 		flags := flag.NewFlagSet("test", flag.ContinueOnError)
@@ -203,15 +218,17 @@ func TestJudgmentFlags(t *testing.T) {
 	if _, _, err := composeJudgments(parsed); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := parse(append(args, "-judgment-auth-snapshot", "token")); err == nil ||
-		!strings.Contains(err.Error(), "flag provided but not defined") {
-		t.Fatalf("removed flag: err = %v, want it unknown", err)
+	for _, removed := range []string{"-judgment-auth-snapshot", "-judgment-model"} {
+		if _, err := parse(append(slices.Clone(args), removed, "value")); err == nil ||
+			!strings.Contains(err.Error(), "flag provided but not defined") {
+			t.Fatalf("removed flag %s: err = %v, want it unknown", removed, err)
+		}
 	}
 }
 
 // Preflight binds the judgment configuration and refuses one whose CLI pin
-// does not hold. It reads no host token file: the removed flag is unknown to
-// it too.
+// does not hold. It reads no host token file and names no model: the removed
+// flags are unknown to it too.
 func TestJudgmentPreflightBindsAndRejectsConfiguration(t *testing.T) {
 	base, environment := preflightFixture(t)
 	cfg, _ := judgmentFixture(t)
@@ -228,21 +245,21 @@ func TestJudgmentPreflightBindsAndRejectsConfiguration(t *testing.T) {
 		}
 		return manifest, err
 	}
-	manifest, err := run("-judgment-claude-bin", cfg.CLI.Binary, "-judgment-claude-sha256", cfg.CLI.SHA256,
-		"-judgment-model", cfg.CLI.Model)
+	manifest, err := run("-judgment-claude-bin", cfg.CLI.Binary, "-judgment-claude-sha256", cfg.CLI.SHA256)
 	if err != nil || manifest.JudgmentConfigurationDigest == "" ||
 		checkStatus(manifest, "judgment_configuration") != compositionPassed {
 		t.Fatalf("valid judgment preflight failed: %v", err)
 	}
-	manifest, err = run("-judgment-claude-bin", cfg.CLI.Binary, "-judgment-claude-sha256", strings.Repeat("0", 64),
-		"-judgment-model", cfg.CLI.Model)
+	manifest, err = run("-judgment-claude-bin", cfg.CLI.Binary, "-judgment-claude-sha256", strings.Repeat("0", 64))
 	if err == nil || manifest.JudgmentConfigurationDigest != "" ||
 		checkStatus(manifest, "judgment_configuration") != compositionFailed {
 		t.Fatal("judgment preflight passed a CLI that does not match its pin")
 	}
-	manifest, err = run("-judgment-claude-bin", cfg.CLI.Binary, "-judgment-claude-sha256", cfg.CLI.SHA256,
-		"-judgment-model", cfg.CLI.Model, "-judgment-auth-snapshot", "judgment-token")
-	if err == nil || len(manifest.Checks) != 0 {
-		t.Fatalf("preflight accepted the removed -judgment-auth-snapshot flag: %v", err)
+	for _, removed := range []string{"-judgment-auth-snapshot", "-judgment-model"} {
+		manifest, err = run("-judgment-claude-bin", cfg.CLI.Binary, "-judgment-claude-sha256", cfg.CLI.SHA256,
+			removed, "value")
+		if err == nil || len(manifest.Checks) != 0 {
+			t.Fatalf("preflight accepted the removed %s flag: %v", removed, err)
+		}
 	}
 }

@@ -17,8 +17,7 @@ import (
 )
 
 // recordingDriver is a driver over a stub CLI that writes its arguments to
-// the returned path and answers as the model `reported`. The driver's
-// configured model is "test-model".
+// the returned path and answers as the model `reported`.
 func recordingDriver(t *testing.T, reported string) (*Driver, string) {
 	t.Helper()
 	answer := completion()
@@ -65,7 +64,7 @@ func TestCompletePassesTheRequestsModelAndEffort(t *testing.T) {
 			t.Fatalf("launch arguments = %q, %v", args, err)
 		}
 	})
-	t.Run("an empty selection launches with the configured model and no effort", func(t *testing.T) {
+	t.Run("a selection with no effort launches with its model and no effort", func(t *testing.T) {
 		d, argsPath := recordingDriver(t, "test-model")
 		got, err := d.Complete(t.Context(), classifierRequest(), "token")
 		if err != nil || got.Observed.ModelID != "test-model" {
@@ -77,26 +76,21 @@ func TestCompletePassesTheRequestsModelAndEffort(t *testing.T) {
 			t.Fatalf("launch arguments = %q, %v", args, err)
 		}
 	})
-	// The exact-match check follows the model the launch passed: a request
-	// with its own model is refused when the configured model answers, and
-	// the configured model's launch is refused when another answers.
+	// The exact-match check follows the model the launch passed.
 	t.Run("a completion from another model than the launch passed is refused", func(t *testing.T) {
 		d, _ := recordingDriver(t, "test-model")
 		r := classifierRequest()
 		r.Model = "claude-explicit-1"
 		if _, err := d.Complete(t.Context(), r, "token"); err == nil {
-			t.Fatal("accepted the configured model's answer to a request that named another model")
-		}
-		d, _ = recordingDriver(t, "claude-explicit-1")
-		if _, err := d.Complete(t.Context(), classifierRequest(), "token"); err == nil {
-			t.Fatal("accepted another model's answer to the configured model's launch")
+			t.Fatal("accepted another model's answer to a request that named claude-explicit-1")
 		}
 	})
 }
 
 // A stored offer only has to name a non-empty model, so the driver refuses a
 // value the CLI could read as anything but one option value, and it does so
-// before it starts a process.
+// before it starts a process. It refuses a request with no model the same
+// way: the driver has no model of its own to launch with.
 func TestCompleteStartsNoProcessForAnUnsafeSelection(t *testing.T) {
 	for _, tc := range []struct{ name, model, effort string }{
 		{"model with a space", "claude explicit", ""},
@@ -105,8 +99,9 @@ func TestCompleteStartsNoProcessForAnUnsafeSelection(t *testing.T) {
 		{"model with a format character", "claude\u202eexplicit", ""},
 		{"model that is an option", "--dangerously-skip-permissions", ""},
 		{"model that is not UTF-8", "claude\xff", ""},
-		{"effort with a tab", "", "me\tdium"},
-		{"effort that is an option", "", "-high"},
+		{"no model", "", ""},
+		{"effort with a tab", "claude-explicit-1", "me\tdium"},
+		{"effort that is an option", "claude-explicit-1", "-high"},
 		{"effort with a trailing space", "claude-explicit-1", "high "},
 		{"model longer than an observed identifier", strings.Repeat("m", 257), ""},
 	} {

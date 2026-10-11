@@ -25,8 +25,7 @@ import (
 func TestPreflightReportsJudgmentRoles(t *testing.T) {
 	args, environment := preflightFixture(t)
 	cfg, _ := judgmentFixture(t)
-	args = append(args, "-judgment-claude-bin", cfg.CLI.Binary, "-judgment-claude-sha256", cfg.CLI.SHA256,
-		"-judgment-model", cfg.CLI.Model)
+	args = append(args, "-judgment-claude-bin", cfg.CLI.Binary, "-judgment-claude-sha256", cfg.CLI.SHA256)
 	run := func() (compositionManifest, error) {
 		t.Helper()
 		var stdout, stderr bytes.Buffer

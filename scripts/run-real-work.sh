@@ -163,11 +163,14 @@
 #                                    explicit reviewed replacement is supplied.
 #   FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN absolute native Claude CLI path
 #   FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256 exact executable content pin
-#   FREESIDE_REAL_RUN_JUDGMENT_MODEL explicit Claude model for daemon judgments;
-#                                    all three go together
+#   FREESIDE_REAL_RUN_JUDGMENT_MODEL exact Claude model the adopted judgment
+#                                    lines name; all three go together
 #   When all three are set, bind the publication-author role prompt from this
 #   checkout's prompts/publication-author.md. Preflight includes its content
-#   digest in judgment_configuration_digest. Each judgment call authenticates
+#   digest in judgment_configuration_digest. The model goes to adoption
+#   (auth adopt -judgment-model), which writes it into the call offer the
+#   judgment lines name; preflight and the daemon take no model flag and
+#   read each role's model from its line. Each judgment call authenticates
 #   with the credential stored for the enrollment its role's lineup line
 #   names, so no variable names a token file;
 #   FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT is refused.
@@ -873,7 +876,6 @@ if [[ -n "${FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN:-}${FREESIDE_REAL_RUN_JUDGMENT
   # preflight records its content digest.
   judgment_args=(-judgment-claude-bin "$FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN"
     -judgment-claude-sha256 "$FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256"
-    -judgment-model "$FREESIDE_REAL_RUN_JUDGMENT_MODEL"
     -judgment-publication-author-prompt "$repo_root/prompts/publication-author.md")
   preflight_args+=("${judgment_args[@]}")
 fi
@@ -898,6 +900,11 @@ if [[ -n "$retained_session" ]]; then
     echo 'Continuing the same approved migration attempt with unchanged inputs and reviewed build.' >&2
   else
     # Preflight may audit existing-schema authority, but cannot migrate or seed.
+    # The saved binary gets the new binary's flags on purpose. One saved
+    # before #1964 requires -judgment-model and fails here, before the upgrade
+    # is marked started. Passing it the model could not let the session
+    # resume: the new binary's composition names another judgment digest,
+    # which the comparison after the upgrade refuses.
     retained_preflight_binary="$retained_session/freesided"
     if [[ ! -f "$retained_session/runtime-upgrade-started" && -f "$retained_session/runtime-upgrade-inherited" ]]; then
       retained_preflight_binary="$workdir/restore-freesided"

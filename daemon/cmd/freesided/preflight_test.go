@@ -279,7 +279,7 @@ func TestPreflightShadowApprovalPrecedesProtectedAccess(t *testing.T) {
 	enableShadowReviewFixture(t, &args)
 	judgments, _ := judgmentFixture(t)
 	args = append(args, "-judgment-claude-bin", judgments.CLI.Binary,
-		"-judgment-claude-sha256", judgments.CLI.SHA256, "-judgment-model", judgments.CLI.Model)
+		"-judgment-claude-sha256", judgments.CLI.SHA256)
 	environment.database.ShadowReviewError = domain.ErrShadowReviewConfigUnapproved
 	var stdout, stderr bytes.Buffer
 	err := runPreflightCommandWithEnvironment(

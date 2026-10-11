@@ -23,8 +23,8 @@ import (
 // it runs, and the model and effort its call launches with, and the call
 // authenticates with the token stored in the credential volume of the line's
 // enrollment generation (#1426), which the record names as credential_source
-// enrollment. The judgment flags still decide the pinned CLI and the model a
-// line on the native-default offer launches with.
+// enrollment. The judgment flags decide only the pinned CLI and the
+// publication-author prompt file; no flag names a model.
 
 // judgmentCallAudits are the hand audits that prove the judgment call launch,
 // one per call adapter, each naming its adapter by the digest that adapter

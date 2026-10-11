@@ -78,10 +78,11 @@ type callIdentity struct {
 	// harness_default when it sent none, as the treatment digest covers it
 	// (domain.EffortTranslation.Effective). The two efforts differing is a
 	// clamp. A record a v3 ledger wrote has no effective effort. The model
-	// the launch sent is the requested one, except that the native-default
-	// offer launches with the daemon's configured model; Observed is the
-	// CLI's own account, and the driver refuses a completion that reports
-	// another model than the launch passed.
+	// the launch sent is the requested one; Observed is the CLI's own
+	// account, and the driver refuses a completion that reports another
+	// model than the launch passed. A record written while the daemon had a
+	// -judgment-model flag may name the native-default offer's id here,
+	// which launched with that flag's model.
 	RequestedModelID string             `json:"requested_model_id"`
 	RequestedEffort  domain.EffortLevel `json:"requested_effort"`
 	EffectiveEffort  string             `json:"effective_effort,omitempty"`

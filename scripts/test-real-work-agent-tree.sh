@@ -297,6 +297,18 @@ for value, status in (("token", 2), ("", 0)):
     assert ("no longer read" in ran.stderr) == bool(value), ran.stderr
 assert '-judgment-publication-author-prompt "$real_work_agent_tree_repo_root/prompts/publication-author.md")' in helper, "adoption names another author prompt"
 assert 'judgment_lines=(-judgment-model "${FREESIDE_REAL_RUN_JUDGMENT_MODEL:-}"' in helper, "adoption does not take the harness's judgment model"
+# The model reaches the daemon through the adopted lineup alone: preflight
+# and the daemon take no model flag, so the harness passes none.
+# The harness still requires the three judgment variables together, and the
+# retained-run receipt still covers the model through the same list.
+names = re.search(r"^judgment_names=\((.*?)\)$", text, re.S | re.M)
+assert names and names.group(1).split() == [
+    "FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN", "FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256",
+    "FREESIDE_REAL_RUN_JUDGMENT_MODEL"], "the harness no longer requires the judgment model with the CLI pin"
+assert '"${required[@]}" FREESIDE_REAL_RUN_BUILD_PROXY "${judgment_names[@]}")' in text, "the retained-run receipt dropped the judgment inputs"
+daemon_judgment_args = re.search(r"^  judgment_args=\((.*?)\)$", text, re.S | re.M)
+assert daemon_judgment_args, "the harness no longer builds the daemon's judgment arguments"
+assert "-judgment-model" not in daemon_judgment_args.group(1), "the harness still passes the removed judgment model flag"
 PY
 
 echo 'test-real-work-agent-tree: ok'
