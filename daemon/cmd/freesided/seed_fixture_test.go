@@ -102,9 +102,9 @@ func assertFixtureServed(t *testing.T, h *daemon) {
 			notices++
 		}
 	}
-	// 14 fixture items plus the daemon's execution-configuration notice.
-	if len(items) != 15 || notices != 1 {
-		t.Errorf("attention items = %d with %d execution notices, want 15 with 1", len(items), notices)
+	// 13 fixture items plus the daemon's execution-configuration notice.
+	if len(items) != 14 || notices != 1 {
+		t.Errorf("attention items = %d with %d execution notices, want 14 with 1", len(items), notices)
 	}
 }
 

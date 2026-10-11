@@ -689,6 +689,19 @@ struct RealDaemonConvergenceTests {
         _ type: Components.Schemas.AttentionType
     ) async throws {
         let control = try ConvergenceHarness.control()
+        if type == .blocked {
+            // blocked is retired (plan revision 84): the daemon refuses an
+            // open item of the type before any action policy runs, so the
+            // matrix has no cell to compare.
+            let refused = try await control.seedItemOutcome(
+                id: ConvergenceHarness.uniqueItemID("pol-blocked-retired"),
+                type: type, actions: [])
+            #expect(refused.statusCode == 400)
+            #expect(
+                refused.message?.contains("retired attention type cannot be open") == true,
+                "expected the retirement refusal, got: \(refused.message ?? "")")
+            return
+        }
         if type == .agent_question {
             // Terminal-backed questions have a narrower producer contract than
             // the type-level Signet policy exercised by the generic matrix.
@@ -717,8 +730,8 @@ struct RealDaemonConvergenceTests {
         }
         let constructibleAllowed = allowed.filter(constructible)
 
-        // The whole allowed set reaches the post-policy boundary (blocked: the
-        // empty set). Task proposals then fail with the specialized-admission
+        // The whole allowed set reaches the post-policy boundary. Task
+        // proposals then fail with the specialized-admission
         // sentinel because this generic fixture route cannot atomically create
         // their instance, carrier, and binding. Any disallowed action would fail
         // earlier with the distinct policy error.
@@ -765,18 +778,15 @@ struct RealDaemonConvergenceTests {
             }
         }
 
-        // Every actionable type must offer at least one decision; the empty set
-        // is the client-visible ErrNoActions 400. blocked is the read-only
-        // exception, proven accepted by the whole-set seed above.
-        if type != .blocked {
-            let empty = try await control.seedItemOutcome(
-                id: ConvergenceHarness.uniqueItemID("pol-\(type.rawValue)-empty"),
-                type: type, actions: [])
-            #expect(empty.statusCode == 400)
-            #expect(
-                empty.message?.contains("offers no requested decision") == true,
-                "expected ErrNoActions for \(type.rawValue), got: \(empty.message ?? "")")
-        }
+        // Every type must offer at least one decision; the empty set is the
+        // client-visible ErrNoActions 400.
+        let empty = try await control.seedItemOutcome(
+            id: ConvergenceHarness.uniqueItemID("pol-\(type.rawValue)-empty"),
+            type: type, actions: [])
+        #expect(empty.statusCode == 400)
+        #expect(
+            empty.message?.contains("offers no requested decision") == true,
+            "expected ErrNoActions for \(type.rawValue), got: \(empty.message ?? "")")
     }
 
     /// The invalid/unknown arm: an unrecognized attention type or action string

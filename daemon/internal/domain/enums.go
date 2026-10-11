@@ -14,7 +14,7 @@ package domain
 // EligibleForEvidenceSnapshot in artifact.go for the pattern.
 
 // AttentionType is the kind of decision an AttentionItem asks for. The Phase 1
-// types include the consolidated blocked item and explicit review recovery.
+// types include explicit review recovery and the retired blocked item.
 type AttentionType string
 
 const (
@@ -31,7 +31,10 @@ const (
 	AttentionTaskProposal        AttentionType = "task_proposal"
 	AttentionEffectProposal      AttentionType = "effect_proposal"
 	AttentionSystemHealth        AttentionType = "system_health"
-	AttentionBlocked             AttentionType = "blocked"
+	// AttentionBlocked is retired (plan revision 84). The member stays so
+	// closed items stored before the retirement still load; no item of this
+	// type is ever open (AttentionItem.Validate).
+	AttentionBlocked AttentionType = "blocked"
 )
 
 // AllAttentionTypes lists every valid AttentionType; it drives table-driven
@@ -433,7 +436,8 @@ func (k CommandKind) valid() bool {
 	}
 }
 
-// BlockedWaitKind identifies the authority a blocked card is waiting on.
+// BlockedWaitKind identifies the authority a blocked card was waiting on.
+// It is retired with AttentionBlocked and stays for closed items.
 type BlockedWaitKind string
 
 const (

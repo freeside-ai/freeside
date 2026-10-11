@@ -18,18 +18,19 @@ import (
 //     campaign's approved spec_approval and the completed run's resolved
 //     ready_for_final_review.
 var representativeInventory = Inventory{
-	Projects: 2, Tasks: 6, Runs: 8, AttentionItems: 14, WorkUnitPRBindings: 2,
+	Projects: 2, Tasks: 6, Runs: 8, AttentionItems: 13, WorkUnitPRBindings: 2,
 }
 
 // OpenItemTypes are the attention types the representative fixture leaves
 // one open item of: every type except task_proposal and effect_proposal,
-// whose only trusted creation path is a dedicated opener.
+// whose only trusted creation path is a dedicated opener, and the retired
+// blocked, which is never open.
 var OpenItemTypes = []domain.AttentionType{
 	domain.AttentionSpecApproval, domain.AttentionExecutionFailure, domain.AttentionAgentQuestion,
 	domain.AttentionReviewDiminishing, domain.AttentionReviewDispute, domain.AttentionReviewContradiction,
 	domain.AttentionReviewConfiguration, domain.AttentionFindingAdjudication,
 	domain.AttentionReadyForFinalReview, domain.AttentionPublishBlocked,
-	domain.AttentionSystemHealth, domain.AttentionBlocked,
+	domain.AttentionSystemHealth,
 }
 
 func seedRepresentative(ctx context.Context, st *store.Store) (Inventory, error) {
@@ -37,8 +38,7 @@ func seedRepresentative(ctx context.Context, st *store.Store) (Inventory, error)
 	if err := registerProjects(s, freesideProject, orioleProject); err != nil {
 		return Inventory{}, fmt.Errorf("register projects: %w", err)
 	}
-	awaiting, approval, err := seedAwaitingApproval(s)
-	if err != nil {
+	if err := seedAwaitingApproval(s); err != nil {
 		return Inventory{}, err
 	}
 	failed, active, err := seedRetryCampaign(s)
@@ -57,7 +57,7 @@ func seedRepresentative(ctx context.Context, st *store.Store) (Inventory, error)
 	if err != nil {
 		return Inventory{}, err
 	}
-	if err := seedItems(s, failed, active, verification, awaiting, approval); err != nil {
+	if err := seedItems(s, failed, active, verification); err != nil {
 		return Inventory{}, err
 	}
 	return representativeInventory, nil

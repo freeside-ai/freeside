@@ -105,8 +105,8 @@ struct ControlClient {
     /// raw wire strings sent only when non-nil: raw strings reach the real
     /// per-type policy for the invalid/unknown cases the typed enums cannot
     /// represent, and a nil field lets the daemon apply its default. An explicit
-    /// empty `actions` (`[]`) is distinct from nil — it drives the blocked accept
-    /// and the non-blocked no-actions rejection.
+    /// empty `actions` (`[]`) is distinct from nil — it drives the no-actions
+    /// rejection.
     func seedItemOutcome(
         id: String, version: Int = 1, type: String?, actions: [String]?
     ) async throws -> SeedOutcome {

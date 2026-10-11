@@ -494,9 +494,8 @@ func TestControlPutItemPolicyBoundary(t *testing.T) {
 	}{
 		{"task proposal requires admission", "task_proposal", []string{"start", "start_with_changes", "decline", "snooze"}, http.StatusBadRequest, "requires atomic proposal admission"},
 		{"disallowed action rejected", "task_proposal", []string{"approve"}, http.StatusBadRequest, "is not allowed for"},
-		{"empty set on non-blocked rejected", "spec_approval", []string{}, http.StatusBadRequest, "offers no requested decision"},
-		{"blocked accepts the empty set", "blocked", []string{}, http.StatusOK, ""},
-		{"blocked rejects any action", "blocked", []string{"stop"}, http.StatusBadRequest, "is not allowed for"},
+		{"empty set rejected", "spec_approval", []string{}, http.StatusBadRequest, "offers no requested decision"},
+		{"retired blocked refused open", "blocked", []string{}, http.StatusBadRequest, "retired attention type cannot be open"},
 		{"review contradiction accepts recovery", "review_contradiction", []string{"recover_review"}, http.StatusOK, ""},
 		{"system health accepts reenrollment recovery", "system_health", []string{"resolve_reenrollment"}, http.StatusOK, ""},
 		{"wrong type rejects reenrollment recovery", "spec_approval", []string{"resolve_reenrollment"}, http.StatusBadRequest, "is not allowed for"},

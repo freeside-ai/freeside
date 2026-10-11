@@ -830,6 +830,11 @@ func (i AttentionItem) Validate() error {
 	if !i.Status.valid() {
 		return fmt.Errorf("item status %q: %w", i.Status, ErrInvalidItemStatus)
 	}
+	// blocked is retired (plan revision 84): nothing raises it, and migration
+	// 0096 closed the open rows. A closed item stays valid so history loads.
+	if i.Type == AttentionBlocked && i.Status == StatusOpen {
+		return fmt.Errorf("item %s type %q: %w", i.ID, i.Type, ErrRetiredItemTypeOpen)
+	}
 	// Optional pointers mean "absent" when nil; a present pointer must carry a
 	// real value, never an empty id or a zero time that serializes as a
 	// present-but-unusable field.

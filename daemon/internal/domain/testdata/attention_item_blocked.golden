@@ -63,5 +63,5 @@
   "decided_at": null,
   "posture": null,
   "blocking_supersession": null,
-  "status": "open"
+  "status": "superseded"
 }

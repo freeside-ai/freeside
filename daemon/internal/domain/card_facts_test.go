@@ -338,7 +338,7 @@ func TestSpecRevisionFacts(t *testing.T) {
 		name   string
 		mutate func(*domain.AttentionItemInput)
 	}{
-		{"wrong item type", func(in *domain.AttentionItemInput) { in.Type = domain.AttentionBlocked }},
+		{"wrong item type", func(in *domain.AttentionItemInput) { in.Type = domain.AttentionSystemHealth }},
 		{"same prior item", func(in *domain.AttentionItemInput) { in.SpecRevision.PriorItemID = in.ID }},
 		{"comment digest", func(in *domain.AttentionItemInput) { in.SpecRevision.PriorComments[0].Digest = "sha256:other" }},
 		{"comment artifact id", func(in *domain.AttentionItemInput) {

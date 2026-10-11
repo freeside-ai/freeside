@@ -410,7 +410,7 @@ func TestAttentionItemReadAuthenticatesBlockedWait(t *testing.T) {
 			Kind: domain.BlockedWaitSpecApproval, Since: at, ItemID: &approvalID,
 		},
 		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
-		CreatedAt: &at, Status: domain.StatusOpen,
+		CreatedAt: &at, Status: domain.StatusSuperseded,
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -562,6 +562,58 @@ func TestAttentionItemReadAuthenticatesBlockedWait(t *testing.T) {
 	err = st.Write(ctx, func(tx *WriteTx) error { return putTestAttentionItem(ctx, tx, &successor) })
 	if !errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("restored blocked wait put = %v, want ErrParentKeyMismatch", err)
+	}
+}
+
+// TestStoreRefusesOpenBlockedItem pins the retirement at the store boundary
+// (#1925): neither a new open blocked item nor a reopened closed one can be
+// written, and a row reopened behind the store's back does not load.
+func TestStoreRefusesOpenBlockedItem(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openTemplateStoreAt(t, t.TempDir()+"/refuse-open-blocked.db", Options{})
+	id := plantClosedBlockedWait(t, ctx, st, "refused")
+
+	var closed domain.AttentionItem
+	if err := st.Read(ctx, func(tx *ReadTx) error {
+		var err error
+		closed, err = tx.GetAttentionItem(ctx, id)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before := readBlockedRow(t, ctx, st.db, id)
+	beforeCount := attentionItemCount(t, ctx, st.db)
+
+	reopened := closed
+	reopened.Status = domain.StatusOpen
+	reopened.ItemVersion++
+	fresh := closed
+	fresh.ID = "blocked-fresh"
+	fresh.Status = domain.StatusOpen
+	for name, item := range map[string]domain.AttentionItem{"reopened": reopened, "new": fresh} {
+		err := st.Write(ctx, func(tx *WriteTx) error { return tx.PutAttentionItem(ctx, item) })
+		if !errors.Is(err, domain.ErrRetiredItemTypeOpen) {
+			t.Fatalf("put %s open blocked item = %v, want ErrRetiredItemTypeOpen", name, err)
+		}
+	}
+	if after := readBlockedRow(t, ctx, st.db, id); after != before {
+		t.Fatalf("refused write changed the row:\n got %+v\nwant %+v", after, before)
+	}
+	if got := attentionItemCount(t, ctx, st.db); got != beforeCount {
+		t.Fatalf("attention item count = %d, want %d (no open item stored)", got, beforeCount)
+	}
+
+	if _, err := st.db.ExecContext(ctx, `UPDATE attention_items
+		SET status = 'open', body = json_set(body, '$.status', 'open') WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	err := st.Read(ctx, func(tx *ReadTx) error {
+		_, err := tx.GetAttentionItem(ctx, id)
+		return err
+	})
+	if !errors.Is(err, domain.ErrRetiredItemTypeOpen) {
+		t.Fatalf("read of a reopened row = %v, want ErrRetiredItemTypeOpen", err)
 	}
 }
 

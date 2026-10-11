@@ -387,18 +387,17 @@ func (s seeder) approveSpecification(
 }
 
 // seedAwaitingApproval is a campaign stopped at its specification gate.
-func seedAwaitingApproval(s seeder) (domain.Run, domain.AttentionItem, error) {
+func seedAwaitingApproval(s seeder) error {
 	at := base
-	_, specificationRun, approval, err := s.specificationCampaign(freesideProject, awaitingImplementationRunID, at)
+	_, specificationRun, _, err := s.specificationCampaign(freesideProject, awaitingImplementationRunID, at)
 	if err != nil {
-		return domain.Run{}, domain.AttentionItem{}, err
+		return err
 	}
-	err = s.write(func(tx *store.WriteTx) error {
+	return s.write(func(tx *store.WriteTx) error {
 		return s.name(tx, specificationRun.ID, domain.DisplayName{
 			Text: "Time grammar for inbox rows", Source: domain.DisplayNameSourceAgent,
 		}, at)
 	})
-	return specificationRun, approval, err
 }
 
 // seedRetryCampaign is an implementation campaign whose first attempt failed

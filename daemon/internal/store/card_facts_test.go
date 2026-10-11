@@ -905,7 +905,8 @@ func storeCardFactItems(t *testing.T) map[string]domain.AttentionItem {
 			Reason: "waiting for specification approval", RequestedDecision: []domain.Action{},
 			BlockedOn:    &domain.BlockedWait{Kind: domain.BlockedWaitSpecApproval, Since: at, ItemID: &itemID},
 			DisplayNames: runNames,
-			ItemVersion:  1, InterruptionClass: domain.InterruptionPlannedGate, CreatedAt: &at, Status: domain.StatusOpen,
+			// The type is retired, so the fixture is the closed item history keeps.
+			ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate, CreatedAt: &at, Status: domain.StatusSuperseded,
 		},
 		"health_diagnostic": {
 			ID: "item-card-health", ProjectID: "proj-1",
