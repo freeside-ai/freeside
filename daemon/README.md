@@ -280,6 +280,31 @@ database from the CLI, restart the daemon, change work or grant paired devices
 host authority. A wrong or unavailable endpoint fails. The network API offers
 only the existing pairing preview and redemption, never code minting.
 
+To check a phone's notification setup, run this as the daemon's OS user:
+
+```sh
+freesided notify-test -state-dir /path/to/existing/daemon-state
+```
+
+The running daemon publishes one test notification to the ntfy topic of each
+active paired device. The command prints a line per device: its name, its ID,
+and either `accepted by ntfy` or `not sent:` with the provider's status or a
+failure class. `-device ID` tests one device. The command fails when a notice
+was not accepted or no active device matched.
+
+Acceptance is the provider's, not the phone's. Whether the notification
+appeared, and whether tapping it opened Freeside, is what the operator checks;
+the phone's side of the setup is in `app/README.md` (Phone Notifications). The
+output and the daemon log never name a topic: a topic is the capability to
+read that device's notifications. A test notice records no delivery and
+changes no item.
+
+The sender that notifies each active device once for each open item lives in
+`internal/signet` (`RunDeliveries`), with up to six attempts per item and
+device on waits of 1, 2, 4, 8, and 16 minutes. The `freesided` command does
+not start it yet: an accepted notification raises its item's version, which
+stops engine work bound to the exact version (#1946).
+
 ## Testing conventions
 
 **Template store.** Use `storetest.Open(t, path, opts)` from

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -22,8 +23,11 @@ import (
 // scriptable status, so tests can assert both the honest receipt timestamps
 // and that only the generic hint ever reaches the provider.
 type fakeNtfy struct {
-	mu        sync.Mutex
-	status    int
+	mu     sync.Mutex
+	status int
+	// location, when set, is the response's Location header, which turns a
+	// 3xx status into a redirect a client could follow.
+	location  string
 	onPublish func()
 	requests  []publishRequest
 }
@@ -44,6 +48,8 @@ func (f *fakeNtfy) recorded(t *testing.T) []publishRequest {
 type deliveryFixture struct {
 	fixture
 	ntfy *fakeNtfy
+	// server is the fake provider, for a test that takes it away.
+	server *httptest.Server
 }
 
 func newDeliveryFixture(t *testing.T) deliveryFixture {
@@ -68,6 +74,9 @@ func newDeliveryFixture(t *testing.T) deliveryFixture {
 		if fake.onPublish != nil {
 			fake.onPublish()
 		}
+		if fake.location != "" {
+			w.Header().Set("Location", fake.location)
+		}
 		w.WriteHeader(fake.status)
 	}))
 	t.Cleanup(server.Close)
@@ -76,16 +85,16 @@ func newDeliveryFixture(t *testing.T) deliveryFixture {
 		signet.WithHostFacts(testHostFacts),
 		signet.WithClock(func() time.Time { return *f.now }),
 		signet.WithNtfy(signet.NtfyConfig{
-			BaseURL:      server.URL,
-			Client:       server.Client(),
-			Token:        signet.Secret(secretValue),
-			TopicKey:     testTopicKey,
-			ClickBaseURL: "https://daemon.example/",
+			BaseURL:  server.URL,
+			Client:   server.Client(),
+			Token:    signet.Secret(secretValue),
+			TopicKey: testTopicKey,
 		}),
 	)
 	return deliveryFixture{
 		fixture: fixture{service: service, store: f.store, item: f.item, device: f.device, now: f.now},
 		ntfy:    fake,
+		server:  server,
 	}
 }
 
@@ -321,7 +330,6 @@ func TestReportDeliveryOpenedRegatesItemOnReplay(t *testing.T) {
 			signet.WithClock(func() time.Time { return now }),
 			signet.WithNtfy(signet.NtfyConfig{
 				BaseURL: "https://ntfy.example", TopicKey: testTopicKey,
-				ClickBaseURL: "https://daemon.example",
 			}),
 		)
 	}
@@ -487,8 +495,8 @@ func TestOpenToDecisionDerivableFromDeliveries(t *testing.T) {
 // distinctly (the provider's acceptance populates channel_accepted_at only,
 // never anything stronger), opened_at stays null, and the item's timing
 // aggregates move with the row. The published payload is the generic
-// read-only hint: topic derived from the device, deep link to canonical
-// state, and no item subject or reason text.
+// read-only hint: topic derived from the device, the link that opens the
+// item in the app, and no item subject or reason text.
 func TestSubmitDeliveryRecordsHonestReceipts(t *testing.T) {
 	ctx := context.Background()
 	f := newDeliveryFixture(t)
@@ -541,8 +549,8 @@ func TestSubmitDeliveryRecordsHonestReceipts(t *testing.T) {
 	if got.title != "Attention needed" {
 		t.Errorf("title = %q, want the generic hint", got.title)
 	}
-	if got.click != "https://daemon.example/attention/items/"+string(f.item.ID)+"?channel=ntfy&attempt=1" {
-		t.Errorf("click = %q, want the canonical deep link carrying the attempt identity", got.click)
+	if got.click != "freeside://attention/items/"+string(f.item.ID)+"?channel=ntfy&attempt=1" {
+		t.Errorf("click = %q, want the app link carrying the attempt identity", got.click)
 	}
 	if got.priority != "default" {
 		t.Errorf("priority = %q, want default for a normal item", got.priority)
@@ -635,6 +643,108 @@ func TestSubmitDeliverySurvivesCallerCancellation(t *testing.T) {
 	}
 }
 
+// TestSubmitDeliveryErrorsNeverNameTheTopic: a device's topic is a capability
+// and the publish URL ends in it, so no error the pipeline returns may carry
+// either, whatever way the publish failed. net/http quotes the request URL in
+// its transport errors, which is the case this pins: the error keeps the
+// failure's class and drops the rest.
+func TestSubmitDeliveryErrorsNeverNameTheTopic(t *testing.T) {
+	ctx := context.Background()
+	f := newDeliveryFixture(t)
+	if _, err := f.service.SubmitDelivery(ctx, f.item.ID, f.device.ID); err != nil {
+		t.Fatalf("SubmitDelivery: %v", err)
+	}
+	topic := f.ntfy.recorded(t)[0].topic
+	serverURL := f.server.URL
+	host := strings.TrimPrefix(serverURL, "http://")
+
+	assertSilent := func(t *testing.T, err error) {
+		t.Helper()
+		for _, secret := range []string{topic, serverURL, host, secretValue} {
+			if strings.Contains(err.Error(), secret) {
+				t.Errorf("error %q carries %q", err, secret)
+			}
+		}
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			t.Errorf("error still wraps the transport's *url.Error %q", urlErr)
+		}
+	}
+
+	f.ntfy.status = http.StatusTooManyRequests
+	_, err := f.service.SubmitDelivery(ctx, f.item.ID, f.device.ID)
+	if !errors.Is(err, signet.ErrChannelRejected) {
+		t.Fatalf("SubmitDelivery error = %v, want ErrChannelRejected", err)
+	}
+	assertSilent(t, err)
+
+	// The provider goes away: the transport fails before any response.
+	f.server.Close()
+	_, err = f.service.SubmitDelivery(ctx, f.item.ID, f.device.ID)
+	if !errors.Is(err, signet.ErrChannelUnreachable) {
+		t.Fatalf("SubmitDelivery error = %v, want ErrChannelUnreachable", err)
+	}
+	var unreachable *signet.ChannelTransportError
+	if !errors.As(err, &unreachable) || unreachable.Kind != "connection failed" {
+		t.Errorf("transport failure = %+v, want kind %q", unreachable, "connection failed")
+	}
+	assertSilent(t, err)
+}
+
+// TestSubmitDeliveryFollowsNoRedirect: a redirect from the channel is a
+// rejection, never followed. Following it would send the next host the
+// publish URL, which ends in the device's topic, as a Referer; and for 301,
+// 302, and 303 the POST would become a GET whose 200 from a landing or
+// sign-in page reads as the provider accepting a notification it never got.
+func TestSubmitDeliveryFollowsNoRedirect(t *testing.T) {
+	ctx := context.Background()
+	f := newDeliveryFixture(t)
+	var (
+		mu       sync.Mutex
+		followed []string
+	)
+	landing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		followed = append(followed, r.Method+" "+r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(landing.Close)
+	f.ntfy.location = landing.URL + "/sign-in"
+
+	// The daemon configures no client and gets the channel's private one;
+	// the fixture supplies its own. Neither may follow.
+	private := signet.NewService(f.store,
+		signet.WithPairingKey(testPairingKey),
+		signet.WithHostFacts(testHostFacts),
+		signet.WithClock(func() time.Time { return *f.now }),
+		signet.WithNtfy(signet.NtfyConfig{BaseURL: f.server.URL, TopicKey: testTopicKey}),
+	)
+	for name, service := range map[string]*signet.Service{"supplied": f.service, "private": private} {
+		for _, status := range []int{
+			http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther,
+			http.StatusTemporaryRedirect, http.StatusPermanentRedirect,
+		} {
+			f.ntfy.status = status
+			row, err := service.SubmitDelivery(ctx, f.item.ID, f.device.ID)
+			var rejection *signet.ChannelRejectionError
+			if !errors.As(err, &rejection) || rejection.Status != status {
+				t.Errorf("%s client, status %d: SubmitDelivery error = %v, want a rejection carrying the status",
+					name, status, err)
+			}
+			if row.Status != domain.DeliverySubmitted {
+				t.Errorf("%s client, status %d: row status = %q, want submitted", name, status, row.Status)
+			}
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(followed) != 0 {
+		t.Errorf("the redirect was followed: %v", followed)
+	}
+}
+
 // TestSubmitDeliveryChannelFailureStaysSubmitted: a provider rejection leaves
 // the honest submitted-only row (only submitted_at is claimed, which is
 // true), surfaces a typed error carrying the status and never the response
@@ -704,37 +814,28 @@ func TestSubmitDeliveryFailsClosed(t *testing.T) {
 	t.Run("misconfigured channel", func(t *testing.T) {
 		for name, cfg := range map[string]signet.NtfyConfig{
 			"malformed base URL": {
-				BaseURL: "not a url", TopicKey: testTopicKey, ClickBaseURL: "https://daemon.example",
+				BaseURL: "not a url", TopicKey: testTopicKey,
 			},
 			"relative base URL": {
-				BaseURL: "ntfy.example/path", TopicKey: testTopicKey, ClickBaseURL: "https://daemon.example",
+				BaseURL: "ntfy.example/path", TopicKey: testTopicKey,
 			},
 			"userinfo in base URL": {
 				BaseURL: "https://publisher-value@ntfy.example", TopicKey: testTopicKey,
-				ClickBaseURL: "https://daemon.example",
 			},
 			"cleartext non-loopback": {
-				BaseURL: "http://ntfy.internal", TopicKey: testTopicKey, ClickBaseURL: "https://daemon.example",
+				BaseURL: "http://ntfy.internal", TopicKey: testTopicKey,
 			},
 			"query in base URL": {
 				BaseURL: "https://ntfy.example/base?route=shared", TopicKey: testTopicKey,
-				ClickBaseURL: "https://daemon.example",
 			},
 			"fragment in base URL": {
 				BaseURL: "https://ntfy.example/base#shared", TopicKey: testTopicKey,
-				ClickBaseURL: "https://daemon.example",
 			},
 			"out-of-range base port": {
 				BaseURL: "https://ntfy.example:99999", TopicKey: testTopicKey,
-				ClickBaseURL: "https://daemon.example",
-			},
-			"zero click port": {
-				BaseURL: "https://ntfy.example", TopicKey: testTopicKey,
-				ClickBaseURL: "https://daemon.example:0",
 			},
 			"weak topic key": {
 				BaseURL: "https://ntfy.example", TopicKey: []byte("weak"),
-				ClickBaseURL: "https://daemon.example",
 			},
 		} {
 			t.Run(name, func(t *testing.T) {

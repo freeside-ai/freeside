@@ -34,6 +34,12 @@ public final class AppSession {
     /// The selected deployment, from the pairing screen on; nil before a
     /// connection and for mock and pairing-demo sessions.
     public var serverURL: URL? { connection?.deploymentURL }
+    /// The ntfy server and topic the daemon publishes this device's
+    /// notifications to, from the stored credential. Nil unless paired.
+    public var ntfySubscription: DeviceNtfySubscription? {
+        guard case .ready = phase else { return nil }
+        return (try? connection?.credentials.load())?.ntfySubscription
+    }
     /// The `-FreesideReadinessDir` whose run the window shows: the launch
     /// connected to the deployment its readiness file named, and the session
     /// has not since selected another. Nil otherwise.
@@ -184,6 +190,61 @@ public final class AppSession {
     public func rePair(endingPairingOf coordinator: SyncCoordinator) throws {
         guard case .ready(let current) = phase, current === coordinator else { return }
         try rePair()
+    }
+
+    /// Opens the link a tapped notification carried. A link is untrusted
+    /// input: any app or web page on the device can open one, so this only
+    /// navigates and marks this device's own delivery attempt opened. An
+    /// unpaired session ignores it.
+    ///
+    /// The receipt goes first and navigation waits for it, up to
+    /// `receiptBound`. The receipt raises the item's version, so a card
+    /// loaded before it landed would have its first decision refused as
+    /// stale. A receipt that fails or outlasts the bound is dropped: it is
+    /// telemetry, and the card must open without it.
+    ///
+    /// The wait is why a link is ordered by when it arrived, not by when its
+    /// receipt returned: a link that a newer link, or the operator's own
+    /// navigation, has overtaken is dropped instead of pulling the app back
+    /// to the older item.
+    public func open(
+        _ link: NotificationLink, in navigation: NavigationModel,
+        receiptBound: Duration = .seconds(3)
+    ) async {
+        guard case .ready(let coordinator) = phase, let client = connection?.client else { return }
+        // Counted now, on both forms, so that this link supersedes any older
+        // one still waiting on its receipt.
+        navigation.recordOperatorNavigation()
+        let arrival = navigation.operatorNavigationRevision
+        switch link {
+        case .inbox:
+            // The inbox as it stands: a card already open stays open, since
+            // a link any app can send must not discard what the operator has
+            // in progress on it.
+            navigation.selectTab(.inbox)
+        case .attentionItem(let itemID, let channel, let attempt):
+            // Whichever finishes first ends the wait. Awaiting the cancelled
+            // receipt instead would wait on the transport to honor it.
+            let (finished, signal) = AsyncStream.makeStream(of: Void.self)
+            let receipt = Task {
+                _ = try? await client.reportDeliveryOpened(
+                    path: .init(item_id: itemID, channel: channel, attempt: attempt))
+                signal.yield()
+            }
+            let deadline = Task {
+                try? await Task.sleep(for: receiptBound)
+                signal.yield()
+            }
+            var signals = finished.makeAsyncIterator()
+            await signals.next()
+            receipt.cancel()
+            deadline.cancel()
+            // A newer link or the operator navigated during the wait.
+            guard navigation.operatorNavigationRevision == arrival else { return }
+            // The wait can outlive the pairing the link arrived under.
+            guard case .ready(let current) = phase, current === coordinator else { return }
+            navigation.route(toLinkedItem: itemID)
+        }
     }
 
     private init(

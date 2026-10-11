@@ -34,44 +34,12 @@ func runPairingCodeCommand(ctx context.Context, args []string, stdout, stderr io
 	if flags.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
-	canonical, err := canonicalPairingStateDir(*stateDir)
+	canonical, client, closeClient, err := pairingControlClient(*stateDir, 5*time.Second)
 	if err != nil {
 		return err
 	}
-	// Discovery is read-only. Only the running daemon may mint in its store.
-	body, err := os.ReadFile(filepath.Join(canonical, pairingControlFileName)) //nolint:gosec // host-selected state directory
-	if err != nil {
-		return fmt.Errorf("read pairing control address (is this daemon running?): %w", err)
-	}
-	var address pairingControlAddress
-	if err := strictjson.Decode(body, &address, strictjson.RejectInvalidUTF8, 16<<10); err != nil ||
-		!filepath.IsAbs(address.SocketPath) {
-		return errors.New("invalid pairing control address")
-	}
-	transport := &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			conn, err := (&net.Dialer{}).DialContext(ctx, "unix", address.SocketPath)
-			if err != nil {
-				return nil, err
-			}
-			unixConn, ok := conn.(*net.UnixConn)
-			if !ok {
-				_ = conn.Close()
-				return nil, errors.New("pairing control requires a Unix socket")
-			}
-			if err := authenticatePairingPeer(unixConn, unixPeerUID); err != nil {
-				_ = conn.Close()
-				return nil, err
-			}
-			return conn, nil
-		},
-	}
-	defer transport.CloseIdleConnections()
-	client := &http.Client{
-		Transport: transport, Timeout: 5 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
-	body, err = json.Marshal(pairingCodeRequest{StateDir: canonical})
+	defer closeClient()
+	body, err := json.Marshal(pairingCodeRequest{StateDir: canonical})
 	if err != nil {
 		return err
 	}
@@ -97,4 +65,48 @@ func runPairingCodeCommand(ctx context.Context, args []string, stdout, stderr io
 		return fmt.Errorf("write pairing code: %w", err)
 	}
 	return nil
+}
+
+// pairingControlClient connects a host command to the running daemon that
+// owns stateDir. It returns the canonical state directory, which every
+// request names so a daemon refuses a command meant for another, and a client
+// whose every connection is a peer-authenticated Unix socket. Discovery is
+// read-only: only the running daemon may write in its store.
+func pairingControlClient(stateDir string, timeout time.Duration) (string, *http.Client, func(), error) {
+	canonical, err := canonicalPairingStateDir(stateDir)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	body, err := os.ReadFile(filepath.Join(canonical, pairingControlFileName)) //nolint:gosec // host-selected state directory
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("read pairing control address (is this daemon running?): %w", err)
+	}
+	var address pairingControlAddress
+	if err := strictjson.Decode(body, &address, strictjson.RejectInvalidUTF8, 16<<10); err != nil ||
+		!filepath.IsAbs(address.SocketPath) {
+		return "", nil, nil, errors.New("invalid pairing control address")
+	}
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			conn, err := (&net.Dialer{}).DialContext(ctx, "unix", address.SocketPath)
+			if err != nil {
+				return nil, err
+			}
+			unixConn, ok := conn.(*net.UnixConn)
+			if !ok {
+				_ = conn.Close()
+				return nil, errors.New("pairing control requires a Unix socket")
+			}
+			if err := authenticatePairingPeer(unixConn, unixPeerUID); err != nil {
+				_ = conn.Close()
+				return nil, err
+			}
+			return conn, nil
+		},
+	}
+	client := &http.Client{
+		Transport: transport, Timeout: timeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	return canonical, client, transport.CloseIdleConnections, nil
 }

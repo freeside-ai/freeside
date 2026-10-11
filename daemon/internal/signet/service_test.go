@@ -95,7 +95,6 @@ func newServiceFixture(t *testing.T, seedItem bool) fixture {
 		signet.WithClock(func() time.Time { return now }),
 		signet.WithNtfy(signet.NtfyConfig{
 			BaseURL: "https://ntfy.example", TopicKey: testTopicKey,
-			ClickBaseURL: "https://daemon.example",
 		}),
 	)
 	if seedItem {

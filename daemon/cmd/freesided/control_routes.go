@@ -120,7 +120,9 @@ func decodeControlPayload[T any](body json.RawMessage) (T, error) {
 func (p *pairingControl) registerControlRoutes(
 	mux *http.ServeMux, st *store.Store, blobs *signet.BlobStore, backupFiles *store.LocalBackupFiles,
 	approved map[domain.Digest]bool, integrityProbe credentialIntegrityProbe, env environment,
+	attention *signet.Service,
 ) {
+	p.registerNotifyTest(mux, st, attention)
 	observation := observedb.Borrow(st)
 	p.handleGet(mux, "/observe/runs/{run_id}", func(ctx context.Context, r *http.Request) (any, error) {
 		return observation.ObserveRun(ctx, domain.RunID(r.PathValue("run_id")))
