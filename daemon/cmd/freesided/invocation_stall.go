@@ -90,11 +90,12 @@ func invocationStalledItem(
 
 // concludeInvocationStallNotices resolves every open stall notice at
 // startup. No writer wait survives a daemon restart, so any open notice is
-// stale.
+// stale. A held-work notice raised by `freesided raise-item` goes in the
+// same write, so a start costs one revision, not two.
 func concludeInvocationStallNotices(ctx context.Context, st *store.Store) error {
 	return st.Write(ctx, func(tx *store.WriteTx) error {
 		open, err := openInvocationStallNotices(ctx, tx, func(itemID string) bool {
-			return strings.HasPrefix(itemID, invocationStalledItemPrefix)
+			return strings.HasPrefix(itemID, invocationStalledItemPrefix) || isRaisedHeldWorkNotice(itemID)
 		})
 		if err != nil {
 			return err

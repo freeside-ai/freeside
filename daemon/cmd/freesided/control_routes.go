@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/observe"
@@ -118,7 +119,7 @@ func decodeControlPayload[T any](body json.RawMessage) (T, error) {
 
 func (p *pairingControl) registerControlRoutes(
 	mux *http.ServeMux, st *store.Store, blobs *signet.BlobStore, backupFiles *store.LocalBackupFiles,
-	approved map[domain.Digest]bool, integrityProbe credentialIntegrityProbe,
+	approved map[domain.Digest]bool, integrityProbe credentialIntegrityProbe, env environment,
 ) {
 	observation := observedb.Borrow(st)
 	p.handleGet(mux, "/observe/runs/{run_id}", func(ctx context.Context, r *http.Request) (any, error) {
@@ -195,6 +196,13 @@ func (p *pairingControl) registerControlRoutes(
 			return nil, err
 		}
 		return runReattemptCommand(withStore(ctx), cfg)
+	})
+	p.handle(mux, raiseItemRoute, func(ctx context.Context, body json.RawMessage) (any, error) {
+		req, err := decodeControlPayload[raiseItemCommandConfig](body)
+		if err != nil {
+			return nil, err
+		}
+		return raiseItem(ctx, st, env, time.Now().UTC(), req)
 	})
 	p.handleGet(mux, "/tasks/{task_id}/latest-run", func(ctx context.Context, r *http.Request) (any, error) {
 		return latestTaskRun(ctx, st, domain.TaskID(r.PathValue("task_id")))

@@ -646,6 +646,40 @@ driver, or unknown fixture name. An ephemeral driverless daemon configures the
 attended_dev admission floor so the seeded runs keep reading after a restart
 without the flag. The fixtures are Go code in `internal/seedfixture`.
 
+`freesided raise-item` raises the attention item behind one alert on a
+running `ephemeral` daemon, to prove that the alert reaches the operator
+when its condition can't be caused on cue (#1941). `-list` prints the alert
+names:
+
+```sh
+freesided raise-item -list
+freesided raise-item -db <db> -alert stall
+freesided raise-item -db <db> -alert held-work -run <run-id>
+freesided raise-item -db <db> -alert review-growth -run <run-id>
+```
+
+It prints the raised item's ID, type, and alert as one JSON line. Each item
+has the type and reason code its real condition raises, and it reaches the
+clients and the notification pass the same way:
+
+- `stall` raises the `system_health` notice `invocation_stalled`, about the
+  daemon. Like every stall notice, it resolves at the next daemon start.
+- `held-work` raises the `system_health` notice `work_held`, about the run's
+  task. No hold is recorded, so the run is not held. With no hold to clear,
+  the notice stays open until the next daemon start resolves it.
+- `review-growth` raises a `review_diminishing_returns` item with the cause
+  `growth_without_blockers`, about the run. It requires a run whose work
+  unit is recorded complete, because any other run can review again and the
+  card would then stand where that review's own decision record belongs.
+  The card takes the second round past the run's last review.
+
+The items are synthetic: nothing stalled, nothing is held, and no review
+round stands behind the card. A decision on the review card closes it and
+changes nothing else, because the engine acts only on a decision the store
+can bind to a review record. The command only adds items. It is refused by a
+`dev` or `prod` daemon, and with no daemon running, since only a running
+daemon knows its tier.
+
 `freesided setup -operator <login> -operator-id <id>` creates the Phase 1A
 single-directory layout and the canonical empty installation-authority
 document. The default is `~/.freeside`; `-config-dir` selects another root.

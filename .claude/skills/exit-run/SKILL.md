@@ -81,6 +81,14 @@ dedicated challenge repository, never the real target (#1275 is the
 precedent), or record the gate as not measurable, before the run rather
 than after.
 
+Three alert gates need no real condition, only proof that the alert reaches
+the operator: a stalled writer, held work, and a review that keeps growing.
+`freesided raise-item` is their trigger. It raises the item each condition
+raises, on the run's own daemon, and the walkthrough below says when. Write
+each into the contract as a **synthetic-trigger proof**: it proves the item
+is delivered and shown, and the Go tests, not the run, prove the condition
+raises it.
+
 ## Preflight (Stop on Failure)
 
 Check each item and record the result. A failure here is reported on the
@@ -226,11 +234,33 @@ its link arrived, and the merge resolved the card before `open_pr`,
   separately.
 - After the merge, wait for and record the completion fact (the
   `work_unit_completions` row or its current equivalent) and the resolved
-  ready item. Then complete the session deliberately with its printed
-  `complete` command. If the harness died first, use
-  `real-work-session.sh recover` rather than a fresh session; a session
-  the host killed is recoverable and a second session would not be this
-  run's evidence.
+  ready item.
+- Then raise the alert gates, while the run's daemon is still up. The
+  review-growth alert is refused until the completion fact is recorded, and
+  the session's `complete` command stops the daemon, so this is the only
+  point where all three work. Use the session's retained binary and the
+  implementation run's id:
+
+  ```sh
+  db="$(cat /absolute/session/state-root)/freeside.db"
+  /absolute/session/freesided raise-item -db "$db" -alert stall
+  /absolute/session/freesided raise-item -db "$db" -alert held-work -run <run-id>
+  /absolute/session/freesided raise-item -db "$db" -alert review-growth -run <run-id>
+  ```
+
+  Each prints the raised item's ID and type. Have the operator report, per
+  alert and per device, whether the notification arrived and what the card
+  shows, and record the item ID beside the report. Every one of these is a
+  synthetic-trigger proof and the record says so: nothing stalled, nothing
+  was held, and no review round stands behind the review card, so the
+  operator reads the cards and decides nothing on them. `raise-item -list`
+  names the alerts the binary can raise; a refusal (a daemon that is not
+  `ephemeral`, no daemon, a run with no completion) is a finding, not
+  something to work around.
+- Complete the session deliberately with its printed `complete` command. If
+  the harness died first, use `real-work-session.sh recover` rather than a
+  fresh session; a session the host killed is recoverable and a second
+  session would not be this run's evidence.
 - Verify the supervised daemon is restored, not just requested: restoration
   has timed out with `registered=false` more than once, and relaunching the
   Mac client can re-register the normal daemon beside a campaign daemon.
@@ -321,6 +351,8 @@ note.
   and head.
 - **Actions exercised** on real items, per device, and the ones not
   evidenced with why.
+- **Synthetic-trigger proofs**, apart from the real items: per raised alert,
+  the command, the item ID, and what each device received.
 - **Findings table:** issue, what's wrong, severity, lane, disposition,
   reason or trigger.
 - **Start order** for the exit set (Required and Investigate before exit;
@@ -375,6 +407,7 @@ This skill restates rules that live elsewhere: the tracking-issue format and
 lane table (docs/coordination.md), the harness environment
 (`scripts/run-real-work.sh` header), the walkthrough and recovery steps
 (docs/production-walkthrough.md), the Stop check
-(docs/task-cancellation-check.md), and the Forge Edits and label rules
-(AGENTS.md). Those documents are authoritative; when they change, mirror the
-change here, and when this skill disagrees with them, they win.
+(docs/task-cancellation-check.md), the `raise-item` command
+(daemon/README.md, Operational Commands), and the Forge Edits and label
+rules (AGENTS.md). Those documents are authoritative; when they change,
+mirror the change here, and when this skill disagrees with them, they win.

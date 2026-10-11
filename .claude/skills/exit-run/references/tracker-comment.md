@@ -39,6 +39,10 @@ Evidence basis: the run itself from `main` at `<sha>`, the state root
 
 **Actions exercised on real items:** <action (card, device)> ...
 **Not evidenced this run:** <action: why; what covers it instead> ...
+**Synthetic-trigger proofs:** <alert: `freesided raise-item` command; item
+ID; what arrived and what the card showed, per device> ... These items were
+raised by command, not by the condition: they prove delivery and display,
+and the daemon's tests prove the condition raises the item.
 
 ### Findings
 
