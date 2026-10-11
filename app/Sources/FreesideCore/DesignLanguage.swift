@@ -467,8 +467,19 @@ enum FreesideFont {
     static var ask: Font { fixed("FreesideSerif-Medium", ladder.ask, relativeTo: .title2) }
     /// What a sheet asks, in its header.
     static var sheetAsk: Font { fixed("FreesideSerif-Medium", ladder.sheetAsk, relativeTo: .title3) }
-    /// A statement at text size: the agent's summary inside its quote.
+    /// A statement at text size: a sentence a card states as its own line.
     static var statement: Font { fixed("FreesideSerif-Regular", ladder.statement, relativeTo: .body) }
+    /// The agent's summary inside its quote: the card body's face at the
+    /// statement's size, so it reads as the card's own text and is no
+    /// smaller than an agent's reply in a thread (#1461). Strong text and
+    /// headings take the semibold and code the mono, all at that one size.
+    static func summary(strong: Bool = false, code: Bool = false) -> Font {
+        let name =
+            code
+            ? (strong ? "IBMPlexMono-SmBld" : "IBMPlexMono")
+            : (strong ? "IBMPlexSans-SmBld" : "IBMPlexSans")
+        return fixed(name, ladder.statement, relativeTo: .body)
+    }
     /// An agent's message in a thread: the statement face, as the frames
     /// draw it.
     static var message: Font { statement }

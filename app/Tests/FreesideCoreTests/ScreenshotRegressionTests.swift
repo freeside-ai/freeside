@@ -867,6 +867,8 @@
                     let openDetail = DecisionDetailView(
                         store: store,
                         itemID: snapshot.item.id,
+                        // The summary's report is its own fold (#1461).
+                        expandsSummaryReports: true,
                         expandedDisclosures: Set(
                             [.runDetails, .recordedContext, .reviewYield]
                                 + snapshot.item.agent_claims.map { .claimSource($0) }),
@@ -999,6 +1001,57 @@
                                     snapshot.item,
                                     at: dynamicTypeSize,
                                     proposalFacts: proposalFacts))))
+
+                    // The approval card's summary (#1461): the observed
+                    // one-paragraph shape and the specifier's headings, by
+                    // day and by dusk at both widths, closed and opened.
+                    for (name, content) in [
+                        ("legacy", DecisionSummaryFixtures.specificationLegacy),
+                        ("structured", DecisionSummaryFixtures.specificationStructured),
+                    ] {
+                        let summarySnapshot = DecisionSummaryFixtures.snapshot(
+                            content: content, type: .spec_approval)
+                        for expanded in [false, true] {
+                            let summaryDetail = DecisionDetailView(
+                                store: store, itemID: summarySnapshot.item.id,
+                                expandsSummaryReports: expanded, loadsAttachments: false,
+                                showsValidationProgress: false, now: screenshotNow)
+                            for width: CGFloat in [720, 390] {
+                                for theme in [ColorScheme.light, .dark] {
+                                    surfaces.append(
+                                        Surface(
+                                            name:
+                                                "decision-spec_approval-summary-\(name)-\(expanded ? "expanded-tail" : "collapsed")-\(Int(width))-\(theme)",
+                                            width: width, colorScheme: theme,
+                                            view: AnyView(
+                                                summaryDetail.screenshotCard(
+                                                    summarySnapshot.item, at: dynamicTypeSize,
+                                                    proposalFacts: proposalFacts,
+                                                    compactLayout: width == 390
+                                                )
+                                                .fixedSize(horizontal: false, vertical: true)
+                                                // The same bounded tail as the ready card's
+                                                // expanded report below.
+                                                .frame(height: expanded ? 1_600 : nil, alignment: .bottom)
+                                                .clipped())))
+                                }
+                            }
+                        }
+                        if name == "structured" {
+                            // Details carry the approval's reason, which is
+                            // the same summary, in full and drawn the same.
+                            let reasonInspector = DecisionDetailView(
+                                store: store, itemID: summarySnapshot.item.id, detailsExpanded: true,
+                                loadsAttachments: false, showsValidationProgress: false)
+                            surfaces.append(
+                                Surface(
+                                    name: "decision-spec_approval-summary-structured-details",
+                                    width: 360,
+                                    view: AnyView(
+                                        reasonInspector.screenshotInspector(
+                                            summarySnapshot.item, at: dynamicTypeSize))))
+                        }
+                    }
 
                     let revised = AttentionFixtures.revisedSpecification()
                     let revisedStore = InboxStore(client: client)
@@ -1137,10 +1190,14 @@
                         ("structured", Optional(DecisionSummaryFixtures.structured)),
                         ("legacy", Optional(DecisionSummaryFixtures.legacy)),
                         ("short", Optional(DecisionSummaryFixtures.change)),
+                        ("wrapped", Optional(DecisionSummaryFixtures.wrapped)),
                         ("artifact-only", nil),
                     ] {
                         let summarySnapshot = DecisionSummaryFixtures.snapshot(content: content)
-                        for expanded in [false, true] where content != nil || !expanded {
+                        // The wrapped report is short, so its closed card
+                        // already shows all of it.
+                        for expanded in [false, true]
+                        where !expanded || (content != nil && name != "wrapped") {
                             let summaryDetail = DecisionDetailView(
                                 store: store, itemID: summarySnapshot.item.id,
                                 expandsSummaryReports: expanded, loadsAttachments: false,
