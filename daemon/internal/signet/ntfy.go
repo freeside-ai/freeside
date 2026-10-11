@@ -100,6 +100,7 @@ type NtfyConfig struct {
 	BaseURL string
 	// Client is the outbound HTTP client; nil gets a private client with a
 	// timeout, so an unresponsive provider cannot hang the pipeline forever.
+	// Either one publishes without following a redirect (publishClient).
 	Client *http.Client
 	// Token is the optional ntfy access token; it is revealed only into the
 	// Authorization header.
@@ -290,11 +291,7 @@ func (c *ntfyChannel) publish(ctx context.Context, n notification) error {
 	if token := c.cfg.Token.Reveal(); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	client := c.cfg.Client
-	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
-	}
-	resp, err := client.Do(req)
+	resp, err := c.publishClient().Do(req)
 	if err != nil {
 		return fmt.Errorf("ntfy: %w", transportFailure(err))
 	}
@@ -303,6 +300,25 @@ func (c *ntfyChannel) publish(ctx context.Context, n notification) error {
 		return fmt.Errorf("ntfy: %w", &ChannelRejectionError{Status: resp.StatusCode})
 	}
 	return nil
+}
+
+// publishClient is the configured client, or a private one with a timeout,
+// that follows no redirect. ntfy answers a publish itself, so a redirect
+// means a misconfigured base URL or a proxy in front of the server. Following
+// it would hand the next host the publish URL, and with it the device's
+// topic, in a Referer header, and the access token when that host is on the
+// same site. net/http also turns a redirected POST into a GET for 301, 302,
+// and 303, so a landing or sign-in page's 200 would count as acceptance of a
+// notification the provider never received. Unfollowed, the 3xx is a
+// rejection that carries its status, or a transport failure when its
+// Location does not parse.
+func (c *ntfyChannel) publishClient() *http.Client {
+	client := http.Client{Timeout: 30 * time.Second}
+	if c.cfg.Client != nil {
+		client = *c.cfg.Client
+	}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &client
 }
 
 // drainAndClose discards at most a small remainder so the connection can be
