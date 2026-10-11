@@ -16,6 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 // Preflight reports every judgment role beside judgment_configuration and
@@ -24,13 +25,8 @@ import (
 func TestPreflightReportsJudgmentRoles(t *testing.T) {
 	args, environment := preflightFixture(t)
 	cfg, _ := judgmentFixture(t)
-	root := args[slices.Index(args, "-review-input-root")+1]
-	tokenPath := filepath.Join(root, "judgment-token")
-	if err := os.WriteFile(tokenPath, []byte("synthetic-subscription-token"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	args = append(args, "-judgment-claude-bin", cfg.CLI.Binary, "-judgment-claude-sha256", cfg.CLI.SHA256,
-		"-judgment-model", cfg.CLI.Model, "-judgment-auth-snapshot", "judgment-token")
+		"-judgment-model", cfg.CLI.Model)
 	run := func() (compositionManifest, error) {
 		t.Helper()
 		var stdout, stderr bytes.Buffer
@@ -93,10 +89,10 @@ func TestPreflightReportsJudgmentRoles(t *testing.T) {
 		t.Fatalf("lineup unresolved: check = %+v", got)
 	}
 
+	// A CLI pin that does not match the binary fails the configuration, and
+	// the roles are not checked against a runtime that did not compose.
 	environment.agentsError = nil
-	if err := os.WriteFile(tokenPath, []byte("invalid\ntoken"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	args[slices.Index(args, "-judgment-claude-sha256")+1] = strings.Repeat("0", 64)
 	manifest, _ = run()
 	if got := check(manifest); got.Status != compositionNotRun ||
 		checkStatus(manifest, "judgment_configuration") != compositionFailed {
@@ -123,6 +119,7 @@ func TestPreflightJudgmentRoleCheckReadsTheAdoptedLineup(t *testing.T) {
 	revision := domain.Digest("sha256:" + strings.Repeat("4", 64))
 	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
 	f.withStore(t, func(st *store.Store) {
+		credentials := fixedJudgmentCredentials(t)
 		evaluate := func(tree agenttree.Tree, runtime judgmentRuntime) compositionManifest {
 			t.Helper()
 			manifest := compositionManifest{
@@ -130,7 +127,7 @@ func TestPreflightJudgmentRoleCheckReadsTheAdoptedLineup(t *testing.T) {
 				Checks: []compositionCheck{{Name: "judgment_roles", Status: compositionNotRun}},
 			}
 			checks, err := inference.CheckRoles(ctx,
-				judgmentRoles{st: st, tree: tree, revision: revision, runtime: runtime},
+				judgmentRoles{st: st, tree: tree, revision: revision, runtime: runtime, credentials: credentials},
 				judgmentSites(inference.Budget{}), now)
 			evaluateJudgmentRoles(&manifest, checks, err)
 			return manifest
@@ -164,6 +161,26 @@ func TestPreflightJudgmentRoleCheckReadsTheAdoptedLineup(t *testing.T) {
 			!strings.Contains(manifest.Checks[0].Evidence, "drift_auditor") ||
 			strings.Contains(manifest.Checks[0].Evidence, "publication_author") {
 			t.Fatalf("unlined drift auditor: manifest = %+v", manifest)
+		}
+
+		// A role whose enrollment's stored credential cannot be read is
+		// unbound too, for the one fixed reason, and the remedy names the
+		// credential volume.
+		credentials = newJudgmentCredentials(
+			func(context.Context, domain.ClientEnrollmentID, int) (ward.SetupToken, error) {
+				return ward.SetupToken{}, errors.New("credential volume \"freeside-claude-main-auth\": absent")
+			}, nil)
+		manifest = evaluate(adopted, judgmentRuntime{AuthorPrompt: authorBody})
+		if manifest.Status != compositionFailed || len(manifest.JudgmentRoles) != 7 ||
+			!strings.Contains(manifest.Checks[0].Remediation, "credential volume") {
+			t.Fatalf("unreadable credential: manifest = %+v", manifest)
+		}
+		for _, role := range manifest.JudgmentRoles {
+			if role.Status != judgmentRoleUnbound ||
+				!strings.Contains(role.Reason, errJudgmentCredentialUnavailable.Error()) ||
+				strings.Contains(role.Reason, "freeside-claude-main-auth") {
+				t.Fatalf("role with an unreadable credential = %+v", role)
+			}
 		}
 	})
 }
