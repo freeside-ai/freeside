@@ -26,17 +26,39 @@ import (
 // says so: credential_source is interim_flag until #1426 reads the credential
 // from the line's enrollment.
 
-// judgmentCallAudit is the hand audit that proves the judgment call launch:
-// Claude CLI 2.1.267, audited on 2026-09-09
-// (devlog/2026-09-09-2145-subscription-judgments.md). It names the baseline
-// call adapter by the digest that adapter had when the audit was recorded.
-// Wardless admission compares it to the adapter a line resolves, so the
-// record is code-owned and written out here: built from the adapter under
-// admission it would prove whatever the lineup named.
-var judgmentCallAudit = domain.InterimCallLaunchAudit{
+// judgmentCallAudits are the hand audits that prove the judgment call launch,
+// one per call adapter, each naming its adapter by the digest that adapter
+// had when the audit was recorded. Both ran against Claude CLI 2.1.267.
+//
+//   - claude_code_call_v1, audited 2026-09-09: the launch with no effort
+//     (devlog/2026-09-09-2145-subscription-judgments.md).
+//   - claude_code_call_v2, audited 2026-10-11: the same launch with
+//     no effort and with each effort the adapter can send
+//     (devlog/2026-10-11-0927-judgment-call-model-effort.md).
+//
+// Wardless admission compares a record to the adapter a line resolves, so
+// the records are code-owned and written out here: built from the adapter
+// under admission, a record would prove whatever the lineup named.
+var judgmentCallAudits = []domain.InterimCallLaunchAudit{{
 	AdapterDigest: "sha256:3a7d6167dd93ef441a2533456f754b5b4dd643f0a81543f9c232de73f9fa4938",
 	HarnessBuild:  "claude-code 2.1.267",
 	AuditedOn:     "2026-09-09",
+}, {
+	AdapterDigest: "sha256:b6b0ddc8d05d55d198a72b7a15824c943b702cf7a50a855b040c2436bab55a5b",
+	HarnessBuild:  "claude-code 2.1.267",
+	AuditedOn:     "2026-10-11",
+}}
+
+// judgmentCallAuditFor returns the audit record that names the adapter, or
+// nil. It picks a record and decides nothing: admission refuses a call with
+// no proof, and compares the digest and the harness build again itself.
+func judgmentCallAuditFor(adapter domain.Digest) *domain.InterimCallLaunchAudit {
+	for _, audit := range judgmentCallAudits {
+		if audit.AdapterDigest == adapter {
+			return &audit
+		}
+	}
+	return nil
 }
 
 // judgmentSites is every judgment site the daemon registers. Preflight checks
@@ -94,13 +116,12 @@ func (j judgmentRoles) ResolveRole(ctx context.Context, role domain.RoleName) (i
 	if err != nil {
 		return inference.RoleCall{}, err
 	}
-	audit := judgmentCallAudit
 	call := inference.RoleCall{
 		Line: agent.Line, LineupRevision: j.revision,
 		Agent: agent.Resolved.Definition, Route: agent.Resolved.Route,
 		Adapter: agent.Resolved.Adapter, Offer: agent.Resolved.Offer,
 		Enrollment: agent.Enrollment, Generation: agent.Generation, ExpiryMargin: agentExpiryMargin,
-		LaunchProof: &audit, Prompt: prompt,
+		LaunchProof: judgmentCallAuditFor(agent.Resolved.Adapter.Digest), Prompt: prompt,
 		Driver: j.runtime.Driver, Credential: j.runtime.Credential,
 		CredentialSource: inference.CredentialSourceInterimFlag,
 	}

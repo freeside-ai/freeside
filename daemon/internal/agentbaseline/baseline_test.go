@@ -140,6 +140,35 @@ func TestBaselineTreeWithoutShadowArmOrReviewAgent(t *testing.T) {
 	}
 }
 
+// The two call adapters are one launch that differs in the efforts it can
+// send: v2 declares every effort the claude_code table can send, v1 declares
+// harness_default alone, and nothing else about them differs. v1's digest is
+// written out because committed trees hold it: a deployment adopted on v1
+// keeps admitting only while this definition still produces that digest. v2
+// writes its efforts out, so a table that gains an effort fails here: the
+// answer is a new adapter under a new audit, not an edit to v2.
+func TestCallAdapterV2AddsOnlyTheEffortsItCanSend(t *testing.T) {
+	v1, v2 := must(agentbaseline.ClaudeCallAdapterV1()), must(agentbaseline.ClaudeCallAdapter())
+	const v1Digest = "sha256:3a7d6167dd93ef441a2533456f754b5b4dd643f0a81543f9c232de73f9fa4938"
+	if v1.Digest != v1Digest || v1.AdapterBuild != "claude_code_call_v1" {
+		t.Fatalf("v1 call adapter = %s %s, want the adopted %s", v1.AdapterBuild, v1.Digest, v1Digest)
+	}
+	if !slices.Equal(v1.SendableEfforts, []domain.EffortLevel{domain.EffortHarnessDefault}) {
+		t.Fatalf("v1 sendable efforts = %v", v1.SendableEfforts)
+	}
+	if !slices.Equal(v2.SendableEfforts, domain.ClaudeCodeSendableEfforts()) || len(v2.SendableEfforts) < 2 {
+		t.Fatalf("v2 sendable efforts = %v, want %v", v2.SendableEfforts, domain.ClaudeCodeSendableEfforts())
+	}
+	if v2.AdapterBuild != "claude_code_call_v2" || v2.Digest == v1.Digest {
+		t.Fatalf("v2 call adapter = %s %s", v2.AdapterBuild, v2.Digest)
+	}
+	same := v2
+	same.AdapterBuild, same.SendableEfforts, same.Digest = v1.AdapterBuild, v1.SendableEfforts, v1.Digest
+	if !reflect.DeepEqual(same, v1) {
+		t.Fatalf("the call adapters differ beyond build and sendable efforts:\nv1 %+v\nv2 %+v", v1, v2)
+	}
+}
+
 // Every judgment role with a prompt gets a line on the call agent, and that
 // agent is the ward agent with the call adapter in the adapter's place: the
 // same enrollment, route, and offer under a launch with no tools.

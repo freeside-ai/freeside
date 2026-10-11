@@ -1852,7 +1852,14 @@ build: the executable `-judgment-claude-bin` names, pinned by
 `-judgment-claude-sha256`. The recorded basis is the localhost
 synthetic-provider probe of Claude CLI 2.1.267 on 2026-09-09
 (`devlog/2026-09-09-2145-subscription-judgments.md`), which observed one model
-request with an empty tool list. The audit covers that build and no other, so
+request with an empty tool list. A second run of the probe on the same build,
+on 2026-10-11, covered the launch with `--effort` at each value the call can
+send (`devlog/2026-10-11-0927-judgment-call-model-effort.md`): each made one
+request with an empty tool list and thinking disabled, carrying the effort
+passed. The probe is `TestPinnedClaudeCLIProtocol`
+(`internal/claudeinference/cli_live_test.go`), opt-in through
+`FREESIDE_JUDGMENT_CLI` and `FREESIDE_JUDGMENT_CLI_SHA256`. The audits cover
+that build and no other, so
 a different pin runs unaudited until it is audited again. The deterministic
 fake driver and the site budgets do not stand in for it: they cover output
 handling, not what the harness can do. No second call driver joins on a hand
@@ -1868,9 +1875,19 @@ Every judgment site looks its role up in the lineup at each call
 line against the tree commit it started on and the store, and the inference
 client admits what comes back before it reserves budget or reaches the driver:
 it checks the line's prompt name and digest against the prompt the daemon will
-send, then runs the wardless admission above under the code-owned audit record
-(`judgmentCallAudit`: the baseline call adapter's digest, `claude-code
-2.1.267`, audited 2026-09-09). The client admits what the source returns and
+send, then runs the wardless admission above under a code-owned audit
+record. The daemon holds two (`judgmentCallAudits`), one per call adapter,
+both for `claude-code 2.1.267`:
+
+- **`claude_code_call_v1`, audited 2026-09-09.** It sends `harness_default`
+  only, so its launch passes no `--effort`. The baseline named it before the
+  call could send an effort, and a line adopted on it still admits.
+- **`claude_code_call_v2`, audited 2026-10-11.** It sends every effort the
+  `claude_code` table can. The baseline call agent is on it.
+
+The role source hands admission the record that names the resolved adapter's
+digest, and none for any other call adapter, which admission then refuses for
+want of a launch proof. The client admits what the source returns and
 never takes its word, so a test or a later source cannot hand it an admitted
 call. `freesided auth adopt` writes the lines: one per judgment role with a
 built site, on the baseline call agent `claude-code-call-default`, whose call
@@ -1897,6 +1914,8 @@ driver:
   value>`,** translated by the `claude_code` table
   (`domain.TranslateEffort`). `harness_default` sends no `--effort`. The
   call keeps `MAX_THINKING_TOKENS=0` and its output limit at every effort.
+  The agent must be on `claude_code_call_v2`: an agent on v1 that asks
+  another effort does not resolve, so its role is unbound.
 - **A model or effort that is not one plain option value leaves the role
   unbound:** one that holds whitespace or a control or format character,
   begins with `-`, or is longer than 256 bytes. An offer only has to name a

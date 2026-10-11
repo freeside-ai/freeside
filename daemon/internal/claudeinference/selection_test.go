@@ -1,12 +1,19 @@
 package claudeinference
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/advisory"
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/inference"
+	"github.com/freeside-ai/freeside/daemon/internal/inference/fake"
 )
 
 // recordingDriver is a driver over a stub CLI that writes its arguments to
@@ -115,5 +122,118 @@ func TestCompleteStartsNoProcessForAnUnsafeSelection(t *testing.T) {
 				t.Fatalf("the CLI started for an unsafe selection: %v", statErr)
 			}
 		})
+	}
+}
+
+// rolesByName resolves each role through its own fake source, so two roles
+// can sit on different offers and efforts under one client.
+type rolesByName map[domain.RoleName]fake.Roles
+
+func (r rolesByName) ResolveRole(ctx context.Context, role domain.RoleName) (inference.RoleCall, error) {
+	return r[role].ResolveRole(ctx, role)
+}
+
+// Two sites on one client and one driver each launch with their own line's
+// model and effort, and each call's record carries what it asked for. The
+// driver's configured model is passed for neither.
+func TestTwoSitesOnOneDriverLaunchWithTheirOwnSelection(t *testing.T) {
+	answer := func(model, result string) string {
+		m := completion()
+		m["result"] = result
+		m["modelUsage"] = map[string]any{model: map[string]any{"outputTokens": 12, "webSearchRequests": 0}}
+		b, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	const classifierModel, namerModel = "claude-site-a", "claude-site-b"
+	argsPath := filepath.Join(t.TempDir(), "args")
+	driver := testDriver(t, `printf '%s\n' "$*" >> '`+argsPath+`'
+cat > /dev/null
+case "$*" in
+*"--model `+classifierModel+` "*) printf '%s' '`+answer(classifierModel, completion()["result"].(string))+`' ;;
+*) printf '%s' '`+answer(namerModel, `{"name":"Pass the selection"}`)+`' ;;
+esac
+`)
+	limits := inference.Limits{Calls: 10, ComputeUnits: 1_000_000, AttentionItems: 10, Starvation: time.Hour}
+	budget := inference.Budget{
+		Window: time.Hour, Site: limits, Project: limits, Global: limits,
+		MaxCallsPerRoot: 10, MaxStarvationPerRoot: time.Hour,
+	}
+	classifier, namer := inference.ClassifierSite(budget), inference.TaskNamerSite(budget)
+	source := func(model string, effort domain.EffortLevel) fake.Roles {
+		return fake.Roles{Provider: "fake", Model: model, Effort: effort, Driver: driver, Credential: "synthetic-token"}
+	}
+	dir := t.TempDir()
+	now := func() time.Time { return time.Unix(100, 0).UTC() }
+	store, err := advisory.Open(filepath.Join(dir, "advisory.json"), 100, 16<<10, advisory.WithClock(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(dir, "ledger.json")
+	client, err := inference.New(inference.Config{
+		StatePath: statePath,
+		Roles: rolesByName{
+			domain.RoleFindingClassifier: source(classifierModel, domain.EffortHigh),
+			domain.RoleTaskNamer:         source(namerModel, domain.EffortLow),
+		},
+		Sites: []inference.Site{classifier, namer}, Advisory: store, Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, site := range []inference.Site{classifier, namer} {
+		fields := map[string]inference.InputField{}
+		for _, policy := range site.Fields {
+			fields[policy.Name] = inference.InputField{Value: "data", Sensitivity: policy.Sensitivity}
+		}
+		result, err := client.Call(t.Context(), site.ID, "project-1", "run-1", fields)
+		if err != nil || result.Fallback || result.Identity == nil {
+			t.Fatalf("%s = %+v, %v", site.ID, result, err)
+		}
+	}
+
+	args, err := os.ReadFile(argsPath) //nolint:gosec // G304: test-owned path
+	if err != nil {
+		t.Fatal(err)
+	}
+	launches := strings.Split(strings.TrimSuffix(string(args), "\n"), "\n")
+	want := []string{
+		"-p --output-format json --model " + classifierModel + " --effort high --safe-mode ",
+		"-p --output-format json --model " + namerModel + " --effort low --safe-mode ",
+	}
+	if len(launches) != len(want) || !strings.HasPrefix(launches[0], want[0]) || !strings.HasPrefix(launches[1], want[1]) {
+		t.Fatalf("launches = %q, want prefixes %q", launches, want)
+	}
+	body, err := os.ReadFile(statePath) //nolint:gosec // G304: test-owned path
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state struct {
+		Calls []struct {
+			Identity struct {
+				RequestedModelID string `json:"requested_model_id"`
+				RequestedEffort  string `json:"requested_effort"`
+				EffectiveEffort  string `json:"effective_effort"`
+				Observed         struct {
+					ModelID string `json:"model_id"`
+				} `json:"observed"`
+			} `json:"identity"`
+		} `json:"calls"`
+	}
+	if err := json.Unmarshal(body, &state); err != nil {
+		t.Fatal(err)
+	}
+	type recorded struct{ model, requested, effective, observed string }
+	var got []recorded
+	for _, call := range state.Calls {
+		i := call.Identity
+		got = append(got, recorded{i.RequestedModelID, i.RequestedEffort, i.EffectiveEffort, i.Observed.ModelID})
+	}
+	if wantRecords := []recorded{
+		{classifierModel, "high", "high", classifierModel}, {namerModel, "low", "low", namerModel},
+	}; !slices.Equal(got, wantRecords) {
+		t.Fatalf("call records = %+v, want %+v", got, wantRecords)
 	}
 }

@@ -19,20 +19,42 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
-// The audit record is written out, not derived, so this is what notices the
-// baseline call adapter changing under it: a changed adapter is a launch
-// nobody audited, and the record must be re-earned, not regenerated.
-func TestJudgmentCallAuditNamesTheBaselineCallAdapter(t *testing.T) {
-	adapter, err := agentbaseline.ClaudeCallAdapter()
+// The audit records are written out, not derived, so this is what notices a
+// call adapter changing under its record: a changed adapter is a launch
+// nobody audited, and the record must be re-earned, not regenerated. Each
+// record is held to its own adapter, so the v2 audit never stands in for v1.
+func TestJudgmentCallAuditsNameTheCallAdapters(t *testing.T) {
+	v1, err := agentbaseline.ClaudeCallAdapterV1()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := judgmentCallAudit.Validate(); err != nil {
+	v2, err := agentbaseline.ClaudeCallAdapter()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if judgmentCallAudit.AdapterDigest != adapter.Digest || judgmentCallAudit.HarnessBuild != adapter.HarnessBuild {
-		t.Fatalf("audit covers %s %q, the baseline call adapter is %s %q",
-			judgmentCallAudit.AdapterDigest, judgmentCallAudit.HarnessBuild, adapter.Digest, adapter.HarnessBuild)
+	audited := []struct {
+		adapter domain.AdapterFragment
+		on      string
+	}{{v1, "2026-09-09"}, {v2, "2026-10-11"}}
+	if len(judgmentCallAudits) != len(audited) {
+		t.Fatalf("%d audit records for %d call adapters", len(judgmentCallAudits), len(audited))
+	}
+	for i, want := range audited {
+		audit, adapter := judgmentCallAudits[i], want.adapter
+		if err := audit.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		if audit.AdapterDigest != adapter.Digest || audit.HarnessBuild != adapter.HarnessBuild || audit.AuditedOn != want.on {
+			t.Fatalf("audit covers %s %q on %s, the call adapter %s is %s %q, audited %s",
+				audit.AdapterDigest, audit.HarnessBuild, audit.AuditedOn,
+				adapter.AdapterBuild, adapter.Digest, adapter.HarnessBuild, want.on)
+		}
+		if got := judgmentCallAuditFor(adapter.Digest); got == nil || *got != audit {
+			t.Fatalf("audit for %s = %+v, want %+v", adapter.AdapterBuild, got, audit)
+		}
+	}
+	if got := judgmentCallAuditFor(domain.Digest("sha256:" + strings.Repeat("0", 64))); got != nil {
+		t.Fatalf("audit for an adapter nobody audited = %+v", got)
 	}
 }
 
@@ -283,6 +305,144 @@ func TestJudgmentSitesReadTheAdoptedLineup(t *testing.T) {
 		for role, item := range items {
 			if blocking := *item.Posture == domain.HealthPostureBlocking; blocking != (role == domain.RoleDriftAuditor) {
 				t.Fatalf("item for %s has posture %s", role, *item.Posture)
+			}
+		}
+	})
+}
+
+// One daemon admits a line on each audited call adapter and hands each call
+// its own agent's model and effort. A line on the earlier adapter keeps
+// admitting under the earlier audit; a call adapter no record names is
+// refused for want of a launch proof, whatever else about it matches.
+func TestJudgmentLinesAdmitOnEachAuditedCallAdapter(t *testing.T) {
+	ctx := context.Background()
+	f := newAuthAdoptFixture(t)
+	_, patch, err := f.run(t, f.args())
+	if err != nil {
+		t.Fatalf("auth adopt: %v", err)
+	}
+	tree := loadAdoptedPatch(t, patch)
+	baseline, ok := tree.Agent(agentbaseline.ClaudeCallAgentName)
+	if !ok {
+		t.Fatal("the adopted tree has no call agent")
+	}
+	v1, err := agentbaseline.ClaudeCallAdapterV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The v2 launch under a build id no audit covers.
+	unaudited, err := agentbaseline.ClaudeCallAdapter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unaudited.AdapterBuild = "claude_code_call_v3"
+	if unaudited.Digest, err = unaudited.ComputeDigest(); err != nil {
+		t.Fatal(err)
+	}
+	const explicitModel, explicitOffer = "claude-explicit-1", "explicit-high"
+	var explicit domain.OfferFragment
+	for _, offer := range tree.Offers {
+		if offer.Route == baseline.Route && offer.Name == baseline.Offer {
+			explicit = offer.Fragment
+		}
+	}
+	explicit.RouteModelID, explicit.AllowedEfforts = explicitModel, []domain.EffortLevel{domain.EffortHigh}
+	if explicit.Digest, err = explicit.ComputeDigest(); err != nil {
+		t.Fatal(err)
+	}
+	tree.Adapters = append(slices.Clone(tree.Adapters),
+		agenttree.Adapter{Name: agentbaseline.ClaudeCallAdapterV1Build, Fragment: v1},
+		agenttree.Adapter{Name: unaudited.AdapterBuild, Fragment: unaudited})
+	tree.Offers = append(slices.Clone(tree.Offers),
+		agenttree.Offer{Route: baseline.Route, Name: explicitOffer, Fragment: explicit})
+	agent := func(name, adapter, offer string, effort domain.EffortLevel) domain.AgentSource {
+		source := baseline
+		source.Name, source.Adapter, source.Offer, source.Effort = name, adapter, offer, effort
+		return source
+	}
+	const onV1, onV2, onUnaudited = "call-on-v1", "call-explicit-high", "call-unaudited"
+	tree.Agents = append(slices.Clone(tree.Agents),
+		agent(onV1, agentbaseline.ClaudeCallAdapterV1Build, baseline.Offer, domain.EffortHarnessDefault),
+		agent(onV2, agentbaseline.ClaudeCallAdapterName, explicitOffer, domain.EffortHigh),
+		agent(onUnaudited, unaudited.AdapterBuild, baseline.Offer, domain.EffortHarnessDefault))
+	agents := map[domain.RoleName]string{
+		domain.RoleFindingClassifier: onV1, domain.RoleFindingAdjudicator: onV2, domain.RoleDiagnostic: onUnaudited,
+	}
+	tree.Lineup = slices.Clone(tree.Lineup)
+	for i, line := range tree.Lineup {
+		name, moved := agents[domain.RoleName(line.Key)]
+		if !moved {
+			continue
+		}
+		digest, err := tree.AgentDigest(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tree.Lineup[i].Selection.AgentName, tree.Lineup[i].Selection.AgentDigest = name, digest
+	}
+	tree.Sort()
+	if _, err := agenttree.Render(tree); err != nil {
+		t.Fatalf("the edited tree does not render: %v", err)
+	}
+
+	f.withStore(t, func(st *store.Store) {
+		now := func() time.Time { return time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC) }
+		driver := inferencefake.New()
+		sites := judgmentTestSites()
+		client, err := inference.New(inference.Config{
+			StatePath: filepath.Join(t.TempDir(), "ledger.json"),
+			Roles: judgmentRoles{
+				st: st, tree: tree, revision: domain.Digest("sha256:" + strings.Repeat("4", 64)),
+				runtime: judgmentRuntime{Driver: driver, Credential: "synthetic-token"},
+			},
+			Health: newJudgmentRoleHealth(st, now, nil), Sites: sites,
+			Advisory: advisory.Unavailable(errors.New("unused")), Now: now,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, check := range client.CheckRoles(ctx) {
+			unbound := check.Role == domain.RoleDiagnostic
+			// The fixture configures no publication author prompt.
+			if check.Off != (check.Role == domain.RolePublicationAuthor) || (check.Err != nil) != unbound {
+				t.Fatalf("role %s = %+v", check.Role, check)
+			}
+			if unbound && !strings.Contains(check.Err.Error(), "launch proof") {
+				t.Fatalf("role on an unaudited call adapter was refused for another reason: %v", check.Err)
+			}
+		}
+		type launch struct{ model, effort string }
+		want := map[domain.RoleName]launch{
+			domain.RoleFindingClassifier:  {},
+			domain.RoleFindingAdjudicator: {explicitModel, "high"},
+			domain.RoleDriftAuditor:       {},
+		}
+		for _, site := range sites {
+			role, _ := domain.RoleForSite(site.ID)
+			if _, called := want[role]; !called && role != domain.RoleDiagnostic {
+				continue
+			}
+			fields := map[string]inference.InputField{}
+			for _, policy := range site.Fields {
+				fields[policy.Name] = inference.InputField{Value: "data", Sensitivity: policy.Sensitivity}
+			}
+			before := len(driver.Requests())
+			result, err := client.Call(ctx, site.ID, "project-1", "run-1", fields)
+			if err != nil {
+				t.Fatal(err)
+			}
+			requests := driver.Requests()
+			if role == domain.RoleDiagnostic {
+				if !result.Fallback || result.Identity != nil || len(requests) != before {
+					t.Fatalf("%s on an unaudited call adapter = %+v", site.ID, result)
+				}
+				continue
+			}
+			if result.Identity == nil || len(requests) != before+1 {
+				t.Fatalf("%s = %+v after %d driver calls", site.ID, result, len(requests)-before)
+			}
+			if got := (launch{requests[before].Model, requests[before].NativeEffort}); got != want[role] {
+				t.Fatalf("%s launched with %+v, want %+v", site.ID, got, want[role])
 			}
 		}
 	})
