@@ -239,6 +239,55 @@ func TestBaselineTreeNamesTheCallAgentForJudgmentRoles(t *testing.T) {
 	}
 }
 
+// rolesOff lists the roles the baseline gives no lineup line even with every
+// optional input supplied, each with its reason. A role needs a line only
+// while policy asks for its work (plan §5.4), so a role belongs here only
+// while nothing can ask.
+var rolesOff = map[domain.RoleName]string{
+	domain.RoleBriefer: "no judgment site is built, so nothing asks for its work",
+}
+
+// With every optional input supplied, each role in the closed list has a
+// lineup line keyed by its own name or a stated reason for being off, never
+// both, and no line is keyed by anything else. A role added to AllRoleNames
+// fails here until its author decides which.
+func TestBaselineLineupCoversEveryRole(t *testing.T) {
+	in := input(true)
+	for _, role := range agentbaseline.JudgmentRoles() {
+		in.Prompts[role] = prompt(string(role))
+	}
+	tree := must(agenttree.Parse(must(agenttree.Render(must(agentbaseline.Tree(in))))))
+
+	keys := map[string]bool{}
+	for _, line := range tree.Lineup {
+		if !slices.Contains(domain.AllRoleNames, domain.RoleName(line.Key)) {
+			// A stage name is the likeliest stray key, and no stage name is
+			// a role name.
+			t.Errorf("lineup key %q is not a role name", line.Key)
+		}
+		if keys[line.Key] {
+			t.Errorf("lineup key %q appears twice", line.Key)
+		}
+		keys[line.Key] = true
+	}
+	for _, role := range domain.AllRoleNames {
+		reason, off := rolesOff[role]
+		switch {
+		case keys[string(role)] && off:
+			t.Errorf("role %s has a lineup line and is listed as off (%s)", role, reason)
+		case !keys[string(role)] && !off:
+			t.Errorf("role %s has no baseline lineup line and no reason in rolesOff", role)
+		case off && reason == "":
+			t.Errorf("role %s is listed as off with no reason", role)
+		}
+	}
+	for role := range rolesOff {
+		if !slices.Contains(domain.AllRoleNames, role) {
+			t.Errorf("rolesOff names %q, which is not a role", role)
+		}
+	}
+}
+
 // The declared sets cover the two writer launches and nothing more: review's
 // `forbidden` policy needs a control neither adapter has, so its coverage
 // fails closed until an adapter proves it (#898).
