@@ -37,34 +37,36 @@ func observeCredentialVolume(
 	manifest CredentialManifestPolicy,
 	authorize RuntimeResourceAuthorizer,
 ) (string, error) {
-	proof, err := observeCredentialVolumeProof(ctx, runtime, exporterImage, volume, manifest, authorize, false)
+	proof, _, err := observeCredentialVolumeProof(
+		ctx, runtime, exporterImage, volume, manifest, authorize, credObserverGate)
 	return proof.tree, err
 }
 
 // observeCredentialVolumeProof runs one credential observer over the volume
-// and returns its parsed proof; integrity selects the integrity observer
-// (observeCredentialProof).
+// and returns its parsed proof, with the token a token-read observer read;
+// observer selects the script (observeCredentialProof).
 func observeCredentialVolumeProof(
 	ctx context.Context,
 	runtime Runtime,
 	exporterImage, volume string,
 	manifest CredentialManifestPolicy,
 	authorize RuntimeResourceAuthorizer,
-	integrity bool,
-) (credProof, error) {
+	observer credObserver,
+) (credProof, SetupToken, error) {
+	fail := func(err error) (credProof, SetupToken, error) { return credProof{}, SetupToken{}, err }
 	if runtime == nil || exporterImage == "" || volume == "" || !manifest.valid() {
-		return credProof{}, errors.New("credential manifest inspection requires a runtime, exporter image, volume, and policy")
+		return fail(errors.New("credential manifest inspection requires a runtime, exporter image, volume, and policy"))
 	}
 	cfg := (Config{ExporterImage: exporterImage}).withDefaults()
 	owner, err := newOwnershipLabel()
 	if err != nil {
-		return credProof{}, err
+		return fail(err)
 	}
 	runID := "preflight-" + owner.Value[:12]
 	name := "freeside-preflight-credential-" + owner.Value[:12]
 	if authorize != nil {
 		if err := authorize(ctx, RuntimeResourceNames{Containers: []string{name}}); err != nil {
-			return credProof{}, err
+			return fail(err)
 		}
 	}
 	handoff := HandoffSpec{
@@ -81,12 +83,12 @@ func observeCredentialVolumeProof(
 	}
 	state := &runState{ownershipLabel: owner}
 	var claim objectClaim
-	proof, inspectErr := backend.observeCredentialProof(ctx, handoff, name, state, &claim, integrity)
+	proof, token, inspectErr := backend.observeCredentialProof(ctx, handoff, name, state, &claim, observer)
 	if inspectErr == nil {
-		return proof, nil
+		return proof, token, nil
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), max(cfg.TeardownTimeout, time.Second))
 	defer cancel()
 	cleanupErr := backend.runtimeOps.reapUnlistedContainer(cleanupCtx, name, claim, owner)
-	return credProof{}, errors.Join(inspectErr, cleanupErr)
+	return fail(errors.Join(inspectErr, cleanupErr))
 }

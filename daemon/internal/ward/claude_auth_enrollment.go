@@ -34,11 +34,16 @@ const (
 	claudeCredentialReadyDir                 = "/credential-ready"  //nolint:gosec // G101: a mount path
 )
 
-// SetupToken is a Claude setup token on its way into a credential volume.
-// Every implicit rendering (fmt verbs, JSON) yields a fixed placeholder, so a
-// value that reaches a log line or an error by mistake shows nothing; the
-// bytes leave only through the staged file the seeder copies.
+// SetupToken is a Claude setup token on its way into a credential volume or
+// read back out of one. Every implicit rendering (fmt verbs, JSON) yields a
+// fixed placeholder, so a value that reaches a log line or an error by
+// mistake shows nothing; the bytes leave only through the staged file the
+// seeder copies and through Reveal.
 type SetupToken struct{ value []byte }
+
+// Reveal returns a copy of the token's bytes, for the one caller that must
+// hand them to a launch. The zero SetupToken reveals nothing.
+func (t SetupToken) Reveal() []byte { return bytes.Clone(t.value) }
 
 // NewSetupToken validates and wraps an operator-entered token: printable
 // ASCII with no whitespace, within the byte bounds, carrying the setup-token

@@ -56,15 +56,33 @@ func ObserveSetupTokenIntegrity(
 	exporterImage, volume string,
 	authorize RuntimeResourceAuthorizer,
 ) (SetupTokenIntegrity, error) {
+	seen, _, err := observeSetupTokenStore(ctx, runtime, exporterImage, volume, authorize, credObserverIntegrity)
+	return seen, err
+}
+
+// observeSetupTokenStore runs the integrity or token-read observer over an
+// existing setup-token volume and returns what its proof attests, with the
+// token a token-read observer read. A missing volume or token file is
+// ErrCredentialStoreAbsent.
+func observeSetupTokenStore(
+	ctx context.Context,
+	runtime Runtime,
+	exporterImage, volume string,
+	authorize RuntimeResourceAuthorizer,
+	observer credObserver,
+) (SetupTokenIntegrity, SetupToken, error) {
+	fail := func(err error) (SetupTokenIntegrity, SetupToken, error) {
+		return SetupTokenIntegrity{}, SetupToken{}, err
+	}
 	if runtime == nil || volume == "" {
-		return SetupTokenIntegrity{}, errors.New("setup-token integrity observation requires a runtime and a volume")
+		return fail(errors.New("setup-token integrity observation requires a runtime and a volume"))
 	}
 	if !digestPinnedImagePattern.MatchString(exporterImage) {
-		return SetupTokenIntegrity{}, errors.New("exporter image is not digest-pinned")
+		return fail(errors.New("exporter image is not digest-pinned"))
 	}
 	volumes, err := runtime.ListVolumes(ctx)
 	if err != nil {
-		return SetupTokenIntegrity{}, fmt.Errorf("list volumes: %w", err)
+		return fail(fmt.Errorf("list volumes: %w", err))
 	}
 	present := false
 	for _, v := range volumes {
@@ -74,28 +92,28 @@ func ObserveSetupTokenIntegrity(
 		}
 	}
 	if !present {
-		return SetupTokenIntegrity{}, fmt.Errorf("credential volume %q: %w", volume, ErrCredentialStoreAbsent)
+		return fail(fmt.Errorf("credential volume %q: %w", volume, ErrCredentialStoreAbsent))
 	}
-	proof, err := observeCredentialVolumeProof(
-		ctx, runtime, exporterImage, volume, CredentialManifestOpaque, authorize, true,
+	proof, stored, err := observeCredentialVolumeProof(
+		ctx, runtime, exporterImage, volume, CredentialManifestOpaque, authorize, observer,
 	)
 	if err != nil {
-		return SetupTokenIntegrity{}, err
+		return fail(err)
 	}
 	if proof.tokenDigest == "" {
-		return SetupTokenIntegrity{}, fmt.Errorf(
-			"credential volume %q holds no token file: %w", volume, ErrCredentialStoreAbsent)
+		return fail(fmt.Errorf(
+			"credential volume %q holds no token file: %w", volume, ErrCredentialStoreAbsent))
 	}
 	tree, treeOK := contentaddr.FromHex(proof.tree)
 	token, tokenOK := contentaddr.FromHex(proof.tokenDigest)
 	if !treeOK || !tokenOK {
-		return SetupTokenIntegrity{}, errors.New("credential volume proof carries a malformed digest")
+		return fail(errors.New("credential volume proof carries a malformed digest"))
 	}
 	return SetupTokenIntegrity{
 		TreeDigest:  domain.Digest(tree),
 		TokenDigest: domain.Digest(token),
 		Truncated:   !proof.tokenLengthOK,
-	}, nil
+	}, stored, nil
 }
 
 // CodexStoreIntegrity is what the integrity observation saw in a Codex host
