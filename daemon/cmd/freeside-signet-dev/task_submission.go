@@ -19,7 +19,6 @@ func convergenceManualInitiator(project domain.ProjectID) (engine.ManualInitiato
 		{specify.PolicySpecApproval, "true"},
 		{specify.PolicyMaxIterations, "4"},
 		{specify.PolicyStageActiveTime, "1m"},
-		{specify.PolicyApprovalWait, "1m"},
 		{specify.PolicyResearchAllowlist, "https://example.com"},
 		{specify.PolicyResearchMaxBytes, "1024"},
 		{"paths", "src/**"},

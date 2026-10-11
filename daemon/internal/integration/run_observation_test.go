@@ -171,7 +171,6 @@ func TestApprovedImplementationRemainsServedWhenObservationLagsExport(t *testing
 			{Key: specify.PolicySpecApproval, Value: "true", Provenance: provenance},
 			{Key: specify.PolicyMaxIterations, Value: "1", Provenance: provenance},
 			{Key: specify.PolicyStageActiveTime, Value: "1m", Provenance: provenance},
-			{Key: specify.PolicyApprovalWait, Value: "1m", Provenance: provenance},
 			{Key: specify.PolicyResearchAllowlist, Value: "https://docs.example", Provenance: provenance},
 			{Key: specify.PolicyResearchMaxBytes, Value: "1024", Provenance: provenance},
 		},

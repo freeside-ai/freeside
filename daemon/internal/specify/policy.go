@@ -16,7 +16,6 @@ const (
 	PolicySpecApproval          = "gates.spec_approval"
 	PolicyMaxIterations         = policyKeyPrefix + "max_iterations"
 	PolicyStageActiveTime       = "budgets.stage_active_time"
-	PolicyApprovalWait          = "waiting.spec_approval_attention_after"
 	PolicyResearchAllowlist     = "research.allowlist"
 	PolicyResearchMaxBytes      = "research.max_response_bytes"
 	MaxSpecificationIterations  = 16
@@ -29,7 +28,6 @@ type Policy struct {
 	SpecApproval      bool
 	MaxIterations     int
 	StageActiveTime   time.Duration
-	ApprovalWait      time.Duration
 	ResearchAllowlist []string
 	ResearchMaxBytes  int64
 }
@@ -71,10 +69,6 @@ func ParsePolicy(resolved domain.ResolvedPolicy) (Policy, error) {
 	if err != nil {
 		return Policy{}, err
 	}
-	wait, err := durationPolicy(require, PolicyApprovalWait)
-	if err != nil {
-		return Policy{}, err
-	}
 	allowlistValue, err := require(PolicyResearchAllowlist)
 	if err != nil {
 		return Policy{}, err
@@ -101,7 +95,7 @@ func ParsePolicy(resolved domain.ResolvedPolicy) (Policy, error) {
 	}
 	return Policy{
 		SpecApproval: specApproval, MaxIterations: iterations,
-		StageActiveTime: active, ApprovalWait: wait,
+		StageActiveTime:   active,
 		ResearchAllowlist: allowlist, ResearchMaxBytes: maxBytes,
 	}, nil
 }

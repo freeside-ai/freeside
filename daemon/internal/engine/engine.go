@@ -273,9 +273,8 @@ func (e *Engine) Reconcile(ctx context.Context) (ReconcileResult, error) {
 		return result, fmt.Errorf("reconcile attention discussions: %w", err)
 	}
 	if e.specification != nil {
-		startedRuns, blocked, gateErr := e.reconcileSpecificationGates(ctx)
+		startedRuns, gateErr := e.reconcileSpecificationGates(ctx)
 		result.RunTransitions += startedRuns
-		result.BlockedItemsCreated += blocked
 		if gateErr != nil {
 			return result, fmt.Errorf("reconcile specification gates: %w", gateErr)
 		}

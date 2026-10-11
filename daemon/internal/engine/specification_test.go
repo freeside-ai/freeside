@@ -266,7 +266,6 @@ func newSpecificationFixture(t *testing.T, specApproval bool, maxIterations int)
 		{Key: specify.PolicySpecApproval, Value: boolString(specApproval), Provenance: provenance},
 		{Key: specify.PolicyMaxIterations, Value: intString(maxIterations), Provenance: provenance},
 		{Key: specify.PolicyStageActiveTime, Value: "1m", Provenance: provenance},
-		{Key: specify.PolicyApprovalWait, Value: "1m", Provenance: provenance},
 		{Key: specify.PolicyResearchAllowlist, Value: "https://docs.example", Provenance: provenance},
 		{Key: specify.PolicyResearchMaxBytes, Value: "1024", Provenance: provenance},
 	})
@@ -2717,18 +2716,29 @@ func TestSpecificationClocksCancelActiveWorkAndConsolidateWaiting(t *testing.T) 
 		if _, err := engine.Reconcile(t.Context()); err != nil {
 			t.Fatal(err)
 		}
-		*f.now = f.now.Add(2 * time.Minute)
+		// The retired blocked item appeared one minute into the wait; a day
+		// later the approval is still the only item the wait has raised.
+		*f.now = f.now.Add(24 * time.Hour)
 		result, err := engine.Reconcile(t.Context())
-		if err != nil || result.BlockedItemsCreated != 1 {
+		if err != nil || result.BlockedItemsCreated != 0 {
 			t.Fatalf("waiting reconcile = %+v, %v", result, err)
 		}
-		if replay, err := engine.Reconcile(t.Context()); err != nil || replay.BlockedItemsCreated != 0 {
-			t.Fatalf("waiting replay = %+v, %v", replay, err)
+		assertOnlyApproval := func(status domain.ItemStatus) {
+			t.Helper()
+			var items []store.Snapshotted[domain.AttentionItem]
+			if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+				var err error
+				items, err = tx.ListAttentionItems(t.Context())
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if len(items) != 1 || items[0].Value.ID != "spec-approval-implementation-run-1" ||
+				items[0].Value.Type != domain.AttentionSpecApproval || items[0].Value.Status != status {
+				t.Fatalf("items = %+v, want only the %s approval", items, status)
+			}
 		}
-		item, _ := f.item(t, "blocked-spec-approval-implementation-run-1")
-		if item.Type != domain.AttentionBlocked || item.Status != domain.StatusOpen {
-			t.Fatalf("blocked item = %+v", item)
-		}
+		assertOnlyApproval(domain.StatusOpen)
 		approval, snapshot := f.item(t, "spec-approval-implementation-run-1")
 		if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
 			CommandID: "approve-waiting-spec", DeviceID: "device-1", ExpectedEntityVersion: snapshot.EntityVersion,
@@ -2742,10 +2752,7 @@ func TestSpecificationClocksCancelActiveWorkAndConsolidateWaiting(t *testing.T) 
 		if _, err := engine.Reconcile(t.Context()); err != nil {
 			t.Fatal(err)
 		}
-		item, _ = f.item(t, item.ID)
-		if item.Status != domain.StatusSuperseded {
-			t.Fatalf("cleared blocked item = %+v", item)
-		}
+		assertOnlyApproval(domain.StatusResolved)
 	})
 }
 
@@ -3877,8 +3884,8 @@ func TestLoadSpecificationBindingRejectsOrphanedSameRunResearch(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if started, blocked, err := engine.reconcileSpecificationGates(t.Context()); err != nil || started != 0 || blocked != 0 {
-		t.Fatalf("unauthorized gate reconciliation = started %d blocked %d, %v", started, blocked, err)
+	if started, err := engine.reconcileSpecificationGates(t.Context()); err != nil || started != 0 {
+		t.Fatalf("unauthorized gate reconciliation = started %d, %v", started, err)
 	}
 	if _, err := f.run("implementation-run"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("unauthorized gate created implementation run: %v", err)
