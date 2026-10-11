@@ -1386,6 +1386,12 @@ if grep -q -- '-agent-image' "$CASE_DIR/preflight.args" &&
 else
 	report_failure "composition preflight omitted a required binding"
 fi
+# The review agents name the model and the effort, so preflight takes neither.
+if grep -qxE -- '-(shadow-)?review-(model|reasoning-effort)' "$CASE_DIR/preflight.args"; then
+	report_failure "composition preflight got a review model or effort flag it no longer defines"
+else
+	pass=$((pass + 1))
+fi
 assert_exists "$CASE_DIR/go.log"
 assert_exists "$CASE_DIR/rig-hold.args"
 
@@ -1488,6 +1494,11 @@ if grep -qx -- '-prompt-package' "$CASE_DIR/daemon.args" &&
 	pass=$((pass + 1))
 else
 	report_failure "daemon invocation omitted one of the three stage prompt flags"
+fi
+if grep -qxE -- '-(shadow-)?review-(model|reasoning-effort)' "$CASE_DIR/daemon.args"; then
+	report_failure "daemon invocation got a review model or effort flag it no longer defines"
+else
+	pass=$((pass + 1))
 fi
 if grep -q -- '-rig-token-file' "$CASE_DIR/daemon.args" &&
   grep -q -- 'rig cleanup -state-root' "$CASE_DIR/rig-cleanup.args"; then

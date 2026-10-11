@@ -448,7 +448,7 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 		"private root containing the review identity's live Codex auth store")
 	flags.StringVar(&cfg.ClaudeRoute, "claude-route", agentbaseline.DefaultClaudeRoute, "route name for the Claude enrollment")
 	flags.StringVar(&cfg.CodexRoute, "codex-route", agentbaseline.DefaultCodexRoute, "route name for the Codex enrollment")
-	flags.StringVar(&cfg.ReviewModel, "review-model", "", "the daemon's -review-model, pinned by the review offer")
+	flags.StringVar(&cfg.ReviewModel, "review-model", "", "Codex model the review agent's offer names")
 	flags.StringVar((*string)(&cfg.ReviewEffort), "review-effort", "",
 		fmt.Sprintf("effort the review agent asks, one of %v", reviewEfforts))
 	flags.StringVar(&cfg.ShadowReviewModel, "shadow-review-model", "",
@@ -591,8 +591,9 @@ func validateShadowReviewSelection(cfg authAdoptConfig) error {
 
 // validReviewLaunchModel reports whether a review launch can pass the model
 // as one command-line argument: the shape every launch value has, and the
-// review launch's own rule, which the daemon holds the agent to before it
-// launches. A value that fails either would write a line that never reviews.
+// review launch's own rule. Adoption holds its flags to it and the daemon
+// holds a review role's offer to it (reviewRoleAgent), so a tree adoption
+// wrote is never refused for its model's shape.
 func validReviewLaunchModel(model string) bool {
 	return inference.ValidLaunchValue(model) &&
 		ward.ValidateCodexReviewModelConfiguration(model, string(domain.EffortHigh)) == nil

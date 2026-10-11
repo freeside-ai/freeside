@@ -181,13 +181,9 @@ type preflightConfig struct {
 	ReviewInstructions          string
 	PublicationStateDir         string
 	PublicationCredentialsDir   string
-	ReviewModel                 string
-	ReviewReasoningEffort       string
 	ReviewWorkspaceSizeMB       int64
 	ShadowReviewImage           string
 	ShadowReviewAuthSnapshot    string
-	ShadowReviewModel           string
-	ShadowReviewReasoningEffort string
 	ShadowReviewWorkspaceSizeMB int64
 	ShadowReviewRate            float64
 	// Agents is what the lineup resolved; zero until the rig names the
@@ -238,16 +234,20 @@ type codexCredentialInspection struct {
 
 // preflightAgentSelection is what the roles the production composition uses
 // resolve to: the writer identity and the volume its current generation
-// mounts, and the review identities and cost owners the approved review
-// configuration digests take as inputs.
+// mounts, and the review identities, cost owners, models, and native efforts
+// the approved review configuration digests take as inputs.
 type preflightAgentSelection struct {
-	LineupRevision             domain.Digest
-	AuthIdentityID             domain.AuthIdentityID
-	AuthVolume                 string
-	ReviewAuthIdentityID       domain.AuthIdentityID
-	ReviewCostOwner            string
-	ShadowReviewAuthIdentityID domain.AuthIdentityID
-	ShadowReviewCostOwner      string
+	LineupRevision              domain.Digest
+	AuthIdentityID              domain.AuthIdentityID
+	AuthVolume                  string
+	ReviewAuthIdentityID        domain.AuthIdentityID
+	ReviewCostOwner             string
+	ReviewModel                 string
+	ReviewReasoningEffort       string
+	ShadowReviewAuthIdentityID  domain.AuthIdentityID
+	ShadowReviewCostOwner       string
+	ShadowReviewModel           string
+	ShadowReviewReasoningEffort string
 }
 
 type repositoryAuthorityInspection struct {
@@ -426,13 +426,9 @@ func parsePreflightConfig(args []string, stderr io.Writer) (preflightConfig, err
 	flags.StringVar(&cfg.ReviewInstructions, "review-instructions", "", "review host instructions file (required)")
 	flags.StringVar(&cfg.PublicationStateDir, "publication-state-dir", "", "publication state directory (required)")
 	flags.StringVar(&cfg.PublicationCredentialsDir, "publication-credentials-dir", "", "publication credentials directory (required)")
-	flags.StringVar(&cfg.ReviewModel, "review-model", "", "pinned review model (required)")
-	flags.StringVar(&cfg.ReviewReasoningEffort, "review-reasoning-effort", "", "review reasoning effort (required)")
 	flags.Int64Var(&cfg.ReviewWorkspaceSizeMB, "review-workspace-size-mb", 8192, "review workspace size")
 	flags.StringVar(&cfg.ShadowReviewImage, "shadow-review-image", "", "digest-pinned Claude shadow reviewer image (optional)")
 	flags.StringVar(&cfg.ShadowReviewAuthSnapshot, "shadow-review-auth-snapshot", "", "Claude setup-token snapshot under review-input-root")
-	flags.StringVar(&cfg.ShadowReviewModel, "shadow-review-model", "", "pinned Claude shadow review model")
-	flags.StringVar(&cfg.ShadowReviewReasoningEffort, "shadow-review-reasoning-effort", "", "Claude shadow review reasoning effort")
 	flags.Int64Var(&cfg.ShadowReviewWorkspaceSizeMB, "shadow-review-workspace-size-mb", 8192, "Claude shadow review workspace size")
 	flags.Float64Var(&cfg.ShadowReviewRate, "shadow-review-rate", 0.2, "fallback Claude shadow review rate in [0,1]")
 	flags.StringVar(&cfg.TaskPath, "task", "", "task source file (required)")
@@ -459,22 +455,17 @@ func parsePreflightConfig(args []string, stderr io.Writer) (preflightConfig, err
 		cfg.AuthVolume == "" || cfg.ReviewInputRoot == "" || cfg.ReviewAuthMode == "" ||
 		cfg.ReviewAuthSnapshot == "" || cfg.ReviewInstructions == "" || len(cfg.AllowedPaths) == 0 ||
 		cfg.PublicationStateDir == "" || cfg.PublicationCredentialsDir == "" ||
-		cfg.ReviewModel == "" ||
-		cfg.ReviewReasoningEffort == "" ||
 		cfg.ReviewWorkspaceSizeMB <= 0 || cfg.TaskPath == "" || cfg.PolicyPath == "" ||
 		cfg.PublicationPath == "" || cfg.ProjectID == "" {
 		return preflightConfig{}, errors.New("all production composition flags except -work-unit and -build-proxy are required")
 	}
 	if cfg.ShadowReviewImage != "" &&
-		(cfg.ShadowReviewAuthSnapshot == "" || cfg.ShadowReviewModel == "" ||
-			cfg.ShadowReviewReasoningEffort == "" ||
+		(cfg.ShadowReviewAuthSnapshot == "" ||
 			cfg.ShadowReviewWorkspaceSizeMB <= 0 || math.IsNaN(cfg.ShadowReviewRate) ||
 			math.IsInf(cfg.ShadowReviewRate, 0) || cfg.ShadowReviewRate < 0 || cfg.ShadowReviewRate > 1) {
 		return preflightConfig{}, errors.New("all shadow review flags are required when -shadow-review-image enables the arm")
 	}
-	if cfg.ShadowReviewImage == "" &&
-		(cfg.ShadowReviewAuthSnapshot != "" || cfg.ShadowReviewModel != "" ||
-			cfg.ShadowReviewReasoningEffort != "") {
+	if cfg.ShadowReviewImage == "" && cfg.ShadowReviewAuthSnapshot != "" {
 		return preflightConfig{}, errors.New("-shadow-review-image is required when shadow review fields are set")
 	}
 	return cfg, nil
@@ -1227,7 +1218,7 @@ func inspectLocalRepositoryBase(ctx context.Context, cfg preflightConfig) error 
 
 func reviewConfigurationDigest(cfg preflightConfig) (domain.Digest, error) {
 	if err := ward.ValidateCodexReviewModelConfiguration(
-		cfg.ReviewModel, cfg.ReviewReasoningEffort,
+		cfg.Agents.ReviewModel, cfg.Agents.ReviewReasoningEffort,
 	); err != nil {
 		return "", err
 	}
@@ -1238,8 +1229,8 @@ func reviewConfigurationDigest(cfg preflightConfig) (domain.Digest, error) {
 	return ward.CodexReviewConfigurationDigest(ward.CodexReviewConfig{
 		InputRoot: cfg.ReviewInputRoot, WorkspaceTarget: "/workspace/project",
 		ProviderEndpoints: endpoints, ApprovedImage: cfg.ReviewImage,
-		ObserverImage: cfg.ExporterImage, Model: cfg.ReviewModel,
-		ReasoningEffort:          cfg.ReviewReasoningEffort,
+		ObserverImage: cfg.ExporterImage, Model: cfg.Agents.ReviewModel,
+		ReasoningEffort:          cfg.Agents.ReviewReasoningEffort,
 		AccessTokenLifetimeFloor: time.Hour, AccessTokenRefreshThreshold: 2 * time.Hour,
 	}, cfg.ReviewWorkspaceSizeMB, cfg.ReviewAuthMode, cfg.Agents.ReviewAuthIdentityID, cfg.Agents.ReviewCostOwner)
 }
@@ -1252,7 +1243,7 @@ func preflightShadowReviewConfigurationDigest(cfg preflightConfig) (domain.Diges
 		InputRoot: cfg.ReviewInputRoot, WorkspaceTarget: "/workspace/project",
 		ProviderEndpoints: []string{"api.anthropic.com:443"},
 		ApprovedImage:     cfg.ShadowReviewImage, ObserverImage: cfg.ExporterImage,
-		Model: cfg.ShadowReviewModel, ReasoningEffort: cfg.ShadowReviewReasoningEffort,
+		Model: cfg.Agents.ShadowReviewModel, ReasoningEffort: cfg.Agents.ShadowReviewReasoningEffort,
 	}, cfg.ShadowReviewWorkspaceSizeMB, ward.CodexAuthSetupToken,
 		cfg.Agents.ShadowReviewAuthIdentityID, cfg.Agents.ShadowReviewCostOwner)
 	if err != nil {
@@ -1486,12 +1477,14 @@ func resolvePreflightAgents(
 		return preflightAgentSelection{}, err
 	}
 	selection.ReviewAuthIdentityID, selection.ReviewCostOwner = reviewer.Identity.ID, reviewer.Identity.CostOwner
+	selection.ReviewModel, selection.ReviewReasoningEffort = reviewer.Model, reviewer.NativeEffort
 	if shadow {
 		agent, err := reviewRoleAgent(ctx, st, tree, domain.RoleShadowReviewer, now)
 		if err != nil {
 			return preflightAgentSelection{}, err
 		}
 		selection.ShadowReviewAuthIdentityID, selection.ShadowReviewCostOwner = agent.Identity.ID, agent.Identity.CostOwner
+		selection.ShadowReviewModel, selection.ShadowReviewReasoningEffort = agent.Model, agent.NativeEffort
 	}
 	return selection, nil
 }

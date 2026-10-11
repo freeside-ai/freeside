@@ -102,24 +102,25 @@ type claudeDriverConfig struct {
 	ReviewAuthMode              ward.CodexAuthMode
 	ReviewAuthSnapshot          string
 	ReviewInstructions          string
-	ReviewModel                 string
-	ReviewReasoningEffort       string
 	ReviewWorkspaceSizeMB       int64
 	ShadowReviewImage           string
 	ShadowReviewAuthSnapshot    string
-	ShadowReviewModel           string
-	ShadowReviewReasoningEffort string
 	ShadowReviewWorkspaceSizeMB int64
 	ShadowReviewRate            float64
 
-	// The review identities and cost owners are resolved from the reviewer
-	// and shadow reviewer lineup lines (resolveReviewSelection), never set by
-	// a flag. They feed the review sources and the approved configuration
-	// digests, which is why they stay beside the review fields.
-	ReviewAuthIdentityID       domain.AuthIdentityID
-	ReviewCostOwner            string
-	ShadowReviewAuthIdentityID domain.AuthIdentityID
-	ShadowReviewCostOwner      string
+	// The review identities, cost owners, models, and efforts are resolved
+	// from the reviewer and shadow reviewer lineup lines
+	// (resolveReviewSelection), never set by a flag. An effort is the native
+	// value the launch passes. They feed the review sources and the approved
+	// configuration digests, which is why they stay beside the review fields.
+	ReviewAuthIdentityID        domain.AuthIdentityID
+	ReviewCostOwner             string
+	ReviewModel                 string
+	ReviewReasoningEffort       string
+	ShadowReviewAuthIdentityID  domain.AuthIdentityID
+	ShadowReviewCostOwner       string
+	ShadowReviewModel           string
+	ShadowReviewReasoningEffort string
 }
 
 var errBackendConformanceUnavailable = errors.New("exact passing backend conformance proof is unavailable")
@@ -176,8 +177,7 @@ func (c claudeDriverConfig) validate() error {
 		return fmt.Errorf("-publication-state-dir and -publication-credentials-dir are required in claude driver mode")
 	case c.OperatingMode == domain.ModeUnattended &&
 		(c.ReviewImage == "" || c.ReviewInputRoot == "" ||
-			c.ReviewAuthSnapshot == "" || c.ReviewInstructions == "" || c.ReviewModel == "" ||
-			c.ReviewReasoningEffort == "" || c.ReviewWorkspaceSizeMB <= 0):
+			c.ReviewAuthSnapshot == "" || c.ReviewInstructions == "" || c.ReviewWorkspaceSizeMB <= 0):
 		return fmt.Errorf("codex review configuration is required in claude driver mode")
 	case c.OperatingMode == domain.ModeUnattended && domain.ImageRef(c.ReviewImage).Validate() != nil:
 		return fmt.Errorf("-review-image must be digest-pinned")
@@ -185,29 +185,19 @@ func (c claudeDriverConfig) validate() error {
 		(!filepath.IsAbs(c.ReviewInputRoot) || filepath.Clean(c.ReviewInputRoot) != c.ReviewInputRoot):
 		return fmt.Errorf("-review-input-root must be a clean absolute path")
 	case c.OperatingMode == domain.ModeUnattended &&
-		(strings.IndexByte(c.ReviewModel, 0) >= 0 || strings.IndexByte(c.ReviewReasoningEffort, 0) >= 0):
-		return fmt.Errorf("codex review model configuration must be NUL-free")
-	case c.OperatingMode == domain.ModeUnattended &&
 		c.ReviewAuthMode != ward.CodexAuthSubscription && c.ReviewAuthMode != ward.CodexAuthAPIKey:
 		return fmt.Errorf("-review-auth-mode is invalid")
 	case c.ShadowReviewImage != "" && c.OperatingMode != domain.ModeUnattended:
 		return fmt.Errorf("shadow review requires unattended mode")
-	case c.ShadowReviewImage == "" &&
-		(c.ShadowReviewAuthSnapshot != "" || c.ShadowReviewModel != "" ||
-			c.ShadowReviewReasoningEffort != ""):
+	case c.ShadowReviewImage == "" && c.ShadowReviewAuthSnapshot != "":
 		return fmt.Errorf("-shadow-review-image is required when shadow review fields are set")
 	case c.ShadowReviewImage != "" &&
-		(c.ShadowReviewAuthSnapshot == "" || c.ShadowReviewModel == "" ||
-			c.ShadowReviewReasoningEffort == "" ||
+		(c.ShadowReviewAuthSnapshot == "" ||
 			c.ShadowReviewWorkspaceSizeMB <= 0 || math.IsNaN(c.ShadowReviewRate) ||
 			math.IsInf(c.ShadowReviewRate, 0) || c.ShadowReviewRate < 0 || c.ShadowReviewRate > 1):
 		return fmt.Errorf("complete shadow review configuration is required when enabled")
 	case c.ShadowReviewImage != "" && domain.ImageRef(c.ShadowReviewImage).Validate() != nil:
 		return fmt.Errorf("-shadow-review-image must be digest-pinned")
-	case c.ShadowReviewImage != "" &&
-		(strings.IndexByte(c.ShadowReviewModel, 0) >= 0 ||
-			strings.IndexByte(c.ShadowReviewReasoningEffort, 0) >= 0):
-		return fmt.Errorf("shadow review model configuration must be NUL-free")
 	}
 	return nil
 }

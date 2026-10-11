@@ -47,27 +47,35 @@ func (e *roleAdmissionError) Error() string {
 
 func (e *roleAdmissionError) Unwrap() error { return e.Err }
 
+// reviewAgent is a review role's resolved agent with what its launch passes:
+// the offer's model and the effort as the harness names it.
+type reviewAgent struct {
+	engine.RoleAgent
+	Model, NativeEffort string
+}
+
 // reviewRoleAgent resolves a review role's line and checks what the daemon
 // can check without a review launch record (#898 adds launch coverage): the
 // line runs the code-owned review prompt, the agent's harness is the one this
 // role's review source drives, the offer is still on sale, the enrollment
-// holds a current credential, and the agent carries the attended mark for the
-// review launch. Review sources run only in an unattended daemon, so the mark
-// is always required. A review has no attempt budget until #898, so the offer
+// holds a current credential, the agent carries the attended mark for the
+// review launch, and the agent names a model and an effort the launch can
+// pass. Review sources run only in an unattended daemon, so the mark is
+// always required. A review has no attempt budget until #898, so the offer
 // and the credential are held to the instant of the check.
 func reviewRoleAgent(
 	ctx context.Context, st *store.Store, tree agenttree.Tree, role domain.RoleName, now time.Time,
-) (engine.RoleAgent, error) {
+) (reviewAgent, error) {
 	client := domain.HarnessClientCodexCLI
 	if role == domain.RoleShadowReviewer {
 		client = domain.HarnessClientClaudeCode
 	}
 	agent, err := engine.ResolveRole(ctx, st, tree, role)
 	if err != nil {
-		return engine.RoleAgent{}, &roleAdmissionError{Role: role, Err: err}
+		return reviewAgent{}, &roleAdmissionError{Role: role, Err: err}
 	}
-	refuse := func(format string, args ...any) (engine.RoleAgent, error) {
-		return engine.RoleAgent{}, &roleAdmissionError{
+	refuse := func(format string, args ...any) (reviewAgent, error) {
+		return reviewAgent{}, &roleAdmissionError{
 			Role: role, Err: fmt.Errorf("%s: %w", fmt.Sprintf(format, args...), engine.ErrAgentNotAdmissible),
 		}
 	}
@@ -98,13 +106,35 @@ func reviewRoleAgent(
 		return refuse("agent %s has no attended mark for launch %s, so it cannot review unattended",
 			agent.Line.AgentName, launch.Digest)
 	}
-	return agent, nil
+	// Every review launch passes a model and an effort, and the approved
+	// review configuration digest covers both. An agent that names neither
+	// would be a launch nobody approved, so it is refused, not run on the
+	// harness's own defaults.
+	selection, err := domain.DeriveAgentLaunchSelection(
+		agent.Resolved.Definition, agent.Resolved.Adapter, agent.Resolved.Offer)
+	if err != nil {
+		return refuse("%v", err)
+	}
+	if selection.RouteModelID == "" {
+		return refuse("agent %s is on an offer that names no model, and a review launch always passes one",
+			agent.Line.AgentName)
+	}
+	if selection.NativeEffort == "" {
+		return refuse("agent %s asks effort %s, which sends none, and a review launch always passes one",
+			agent.Line.AgentName, agent.Resolved.Definition.Effort)
+	}
+	if !validReviewLaunchModel(selection.RouteModelID) {
+		return refuse("agent %s is on an offer whose model the review launch cannot pass as one argument",
+			agent.Line.AgentName)
+	}
+	return reviewAgent{RoleAgent: agent, Model: selection.RouteModelID, NativeEffort: selection.NativeEffort}, nil
 }
 
-// resolveReviewSelection fills the review identities and cost owners the
-// removed flags carried from the reviewer and shadow reviewer lines, so the
-// review sources and the approved configuration digests read the values the
-// lineup selects. A role the configuration does not use is not resolved.
+// resolveReviewSelection fills the review identities, cost owners, models,
+// and efforts the removed flags carried from the reviewer and shadow reviewer
+// lines, so the review sources and the approved configuration digests read
+// the values the lineup selects. A role the configuration does not use is
+// not resolved.
 func resolveReviewSelection(
 	ctx context.Context, st *store.Store, tree agenttree.Tree, cfg claudeDriverConfig, now time.Time,
 ) (claudeDriverConfig, error) {
@@ -116,6 +146,7 @@ func resolveReviewSelection(
 		return cfg, err
 	}
 	cfg.ReviewAuthIdentityID, cfg.ReviewCostOwner = reviewer.Identity.ID, reviewer.Identity.CostOwner
+	cfg.ReviewModel, cfg.ReviewReasoningEffort = reviewer.Model, reviewer.NativeEffort
 	if cfg.ShadowReviewImage == "" {
 		return cfg, nil
 	}
@@ -124,6 +155,7 @@ func resolveReviewSelection(
 		return cfg, err
 	}
 	cfg.ShadowReviewAuthIdentityID, cfg.ShadowReviewCostOwner = shadow.Identity.ID, shadow.Identity.CostOwner
+	cfg.ShadowReviewModel, cfg.ShadowReviewReasoningEffort = shadow.Model, shadow.NativeEffort
 	return cfg, nil
 }
 
@@ -131,7 +163,9 @@ func resolveReviewSelection(
 // role's line still resolves, still holds a current credential, and still
 // selects the identity the source was composed with. The tree is fixed for
 // the daemon's run, so what can change is the store (a disabled identity, a
-// credential that expired) and the clock (an offer past its not_after).
+// credential that expired) and the clock (an offer past its not_after). The
+// model and effort the source was composed with come from the tree alone, so
+// they cannot move under a running source and are not compared here.
 //
 // A task line cannot move a review to another agent: the source runs one
 // identity and one agent, fixed when the daemon composed it, until the review

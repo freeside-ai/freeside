@@ -1033,8 +1033,12 @@ require the tree as a checkout and an exact commit:
 The tree is read from that commit through git, never from the working tree,
 so an uncommitted edit selects nothing. The flags `-auth-identity`,
 `-review-auth-identity`, `-review-cost-owner`, and `-shadow-review-cost-owner`
-are gone from the daemon and from `preflight`, and so is `-judgment-model`;
-the review and shadow review model and effort flags stay.
+are gone from the daemon and from `preflight`, and so are `-judgment-model`,
+`-review-model`, `-review-reasoning-effort`, `-shadow-review-model`, and
+`-shadow-review-reasoning-effort`: each review role launches with the model
+its agent's offer names and the effort its agent asks. A review role whose
+agent names no model, or asks `harness_default`, is refused by name: the
+daemon stops at startup and `preflight` fails until the tree names both.
 
 `freesided auth adopt` moves an instance that ran on those flags. Stop the
 daemon, then name the identities and cost owners the flags carried:
@@ -1086,7 +1090,58 @@ Each review agent names the model and the effort its launch passes:
 
 The review agent runs through the adapter `codex_review_v2`, which can send
 every effort above. `codex_review_v1` sends `harness_default` only; it stays
-defined and conformance still records it, so a tree committed on it parses.
+defined and conformance still records it, so a tree committed on it parses,
+but its reviewer asks no effort and is refused.
+
+**Upgrade a deployment adopted before the review agents named a model and an
+effort.** The daemon and `preflight` no longer take the four review model and
+effort flags. A tree adopted earlier has a reviewer that asks
+`harness_default` and, with the shadow arm on, a `shadow_reviewer` line on
+the writer agent, whose offer names no model. On the new build both roles are
+refused until the tree changes. Before starting the new build:
+
+1. Stop the daemon. Remove `-review-model`, `-review-reasoning-effort`,
+   `-shadow-review-model`, and `-shadow-review-reasoning-effort` from the
+   `freesided` and `freesided preflight` command lines; both now refuse them
+   as unknown flags.
+2. Run `freesided auth adopt` again with the original adoption's flags plus
+   `-review-effort` and, with the shadow arm on, `-shadow-review-model` and
+   `-shadow-review-effort`. Give each model the value its removed flag had,
+   and each effort the level for the removed flag's value: `low`, `medium`,
+   and `high` are themselves, and Codex's `xhigh` is `max`. The approved
+   review configuration digests then stay as they were. Codex's `minimal`
+   and Claude's `xhigh` have no level: pick another, and the review
+   configuration digest that results needs its own approval.
+3. Pass the three dated inputs the committed tree carries, because each
+   defaults to today and an agent's digest covers its route and its offer:
+   `-terms-basis-date` (`terms_basis_date` in `policy/fragments/routes/`),
+   and `-pricing-revision` and `-offer-not-after` (`pricing_revision` and
+   `not_after` in `policy/fragments/offers/`). The command reports each
+   identity `reused` and prints the whole baseline tree as a patch of new
+   files, so the patch does not apply over the tree already committed.
+4. Take the review agents' parts from that patch. On a tree with no
+   hand-authored agent, replace the tree with the patch
+   ([Enroll The Identities And Check The Agent Tree](../docs/production-walkthrough.md#enroll-the-identities-and-check-the-agent-tree)
+   has the two commands) and check that the staged diff changes only what
+   this list names. Otherwise copy each part:
+   - The adapter `policy/fragments/adapters/codex_review_v2`.
+   - The review offer
+     `policy/fragments/offers/<codex-route>/codex-review-default`, which now
+     allows the review effort.
+   - The agent `policy/agents/codex-review-default` and its mark file
+     `codex-review-default.attended`.
+   - With the shadow arm on, the offer
+     `policy/fragments/offers/<claude-route>/claude-shadow-review-default`,
+     the agent `policy/agents/claude-shadow-review-default`, and its mark
+     file. The writer agent's mark file loses the review launch's line,
+     which marked a launch that agent no longer runs.
+   - The `reviewer` and `shadow_reviewer` lines in `policy/lineup`.
+   - The `policy/agents.lock` entries for each agent, offer, and adapter
+     above. `codex_review_v1` and its lock entry may stay or go together.
+5. Commit, pass the commit as `-agent-tree-commit`, and run preflight. A
+   review role that still lacks a model or an effort fails it by name, and a
+   tree whose lock disagrees with its content is refused. The lineup revision
+   is new, so a real-work session retained on the earlier tree cannot resume.
 
 `-judgment-model` is where the judgment roles get their model. With it, the
 patch also has the call agent `claude-code-call-default`, on an offer of the

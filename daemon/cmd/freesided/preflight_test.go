@@ -47,9 +47,11 @@ type fakePreflightEnvironment struct {
 	codexCalls           int
 	publicationAuthor    engine.ProductionCommitAuthor
 	agentsError          error
-	judgmentRoles        []inference.RoleCheck
-	judgmentRolesError   error
-	judgmentRolesCalls   int
+	// reviewModel replaces the model the fixture's reviewer agent names.
+	reviewModel        string
+	judgmentRoles      []inference.RoleCheck
+	judgmentRolesError error
+	judgmentRolesCalls int
 }
 
 func (e *fakePreflightEnvironment) CheckJudgmentRoles(
@@ -60,12 +62,15 @@ func (e *fakePreflightEnvironment) CheckJudgmentRoles(
 }
 
 // preflightFixtureAgents is what the fixture's lineup resolves to: the
-// identities and cost owners the removed flags used to carry.
+// identities, cost owners, models, and efforts the removed flags used to
+// carry.
 var preflightFixtureAgents = preflightAgentSelection{
 	LineupRevision: domain.Digest("sha256:" + strings.Repeat("9", 64)),
 	AuthIdentityID: "claude-1", AuthVolume: "claude-auth-volume",
 	ReviewAuthIdentityID: "codex-1", ReviewCostOwner: "subscription:operator",
+	ReviewModel: "gpt-5.6-codex", ReviewReasoningEffort: "high",
 	ShadowReviewAuthIdentityID: "claude-1", ShadowReviewCostOwner: "subscription:shadow",
+	ShadowReviewModel: "claude-opus", ShadowReviewReasoningEffort: "high",
 }
 
 func (e *fakePreflightEnvironment) ResolveAgentSelection(
@@ -75,8 +80,12 @@ func (e *fakePreflightEnvironment) ResolveAgentSelection(
 		return preflightAgentSelection{}, e.agentsError
 	}
 	agents := preflightFixtureAgents
+	if e.reviewModel != "" {
+		agents.ReviewModel = e.reviewModel
+	}
 	if cfg.ShadowReviewImage == "" {
 		agents.ShadowReviewAuthIdentityID, agents.ShadowReviewCostOwner = "", ""
+		agents.ShadowReviewModel, agents.ShadowReviewReasoningEffort = "", ""
 	}
 	return agents, nil
 }
@@ -342,11 +351,11 @@ func TestProductionPreflightDatabaseStopsAtShadowApproval(t *testing.T) {
 		Agents: preflightAgentSelection{
 			AuthIdentityID: "missing-claude", ReviewAuthIdentityID: "missing-codex",
 			ShadowReviewAuthIdentityID: "missing-claude", ShadowReviewCostOwner: "subscription:shadow",
+			ShadowReviewModel: "claude-opus", ShadowReviewReasoningEffort: "high",
 		},
-		ShadowReviewImage: "ghcr.io/x/claude@sha256:" + strings.Repeat("6", 64),
-		ExporterImage:     "ghcr.io/x/exporter@sha256:" + strings.Repeat("5", 64),
-		ReviewInputRoot:   "/var/freeside/review-inputs",
-		ShadowReviewModel: "claude-opus", ShadowReviewReasoningEffort: "high",
+		ShadowReviewImage:           "ghcr.io/x/claude@sha256:" + strings.Repeat("6", 64),
+		ExporterImage:               "ghcr.io/x/exporter@sha256:" + strings.Repeat("5", 64),
+		ReviewInputRoot:             "/var/freeside/review-inputs",
 		ShadowReviewWorkspaceSizeMB: 4096,
 		ShadowReviewRate:            0.2,
 	}
@@ -497,8 +506,6 @@ func enableShadowReviewFixture(t *testing.T, args *[]string) string {
 	*args = append(*args,
 		"-shadow-review-image", image,
 		"-shadow-review-auth-snapshot", setupToken,
-		"-shadow-review-model", "claude-opus",
-		"-shadow-review-reasoning-effort", "high",
 		"-shadow-review-workspace-size-mb", "4096",
 		"-shadow-review-rate", "0.4",
 	)
@@ -577,12 +584,8 @@ func TestPreflightFailureFixtures(t *testing.T) {
 		{"unsupported reviewer CLI or model", func(_ *[]string, env *fakePreflightEnvironment) {
 			env.imageErrors["codex"] = errors.New("unsupported")
 		}, "reviewer_image"},
-		{"invalid review model argument", func(args *[]string, _ *fakePreflightEnvironment) {
-			for i := range *args {
-				if (*args)[i] == "-review-model" {
-					(*args)[i+1] = "model,readonly"
-				}
-			}
+		{"a reviewer agent whose model is no single argument", func(_ *[]string, env *fakePreflightEnvironment) {
+			env.reviewModel = "model,readonly"
 		}, "review_configuration"},
 		{"missing topic key", func(_ *[]string, env *fakePreflightEnvironment) {
 			env.topicError = errors.New("missing")
@@ -884,11 +887,10 @@ func preflightFixture(t *testing.T) ([]string, *fakePreflightEnvironment) {
 		"-auth-volume", "claude-auth-volume",
 		"-review-input-root", reviewInputRoot,
 		"-review-auth-mode", "subscription",
-		"-review-auth-snapshot", reviewSnapshot, "-review-model", "gpt-5.6-codex",
+		"-review-auth-snapshot", reviewSnapshot,
 		"-review-instructions", reviewInstructions,
 		"-publication-state-dir", filepath.Join(root, "app-state"),
 		"-publication-credentials-dir", filepath.Join(root, "app-creds"),
-		"-review-reasoning-effort", "high",
 		"-task", taskPath, "-policy", policyPath, "-publication", publicationPath,
 		"-project", "project-test", "-allowed-paths", "daemon/**",
 	}

@@ -110,6 +110,32 @@ func currentAccountHome() (string, error) {
 	return account.HomeDir, nil
 }
 
+// reviewFlagValues are the daemon's review flags. No model and no effort is
+// among them: each review role's agent names the pair its launch passes
+// (resolveReviewSelection), so a command line that still passes
+// -review-model, -review-reasoning-effort, -shadow-review-model, or
+// -shadow-review-reasoning-effort is refused, not silently ignored.
+type reviewFlagValues struct {
+	Image, InputRoot, AuthMode, AuthSnapshot, Instructions string
+	WorkspaceSizeMB                                        int64
+	ShadowImage, ShadowAuthSnapshot                        string
+	ShadowWorkspaceSizeMB                                  int64
+	ShadowRate                                             float64
+}
+
+func reviewFlags(flags *flag.FlagSet, v *reviewFlagValues) {
+	flags.StringVar(&v.Image, "review-image", "", "digest-pinned Codex review image")
+	flags.StringVar(&v.InputRoot, "review-input-root", "", "private root containing Codex review auth and instruction snapshots")
+	flags.StringVar(&v.AuthMode, "review-auth-mode", "", "Codex review auth mode: subscription or api_key")
+	flags.StringVar(&v.AuthSnapshot, "review-auth-snapshot", "", "Codex auth.json snapshot under review-input-root")
+	flags.StringVar(&v.Instructions, "review-instructions", "", "operator-host Codex instruction source snapshotted with explicit absence")
+	flags.Int64Var(&v.WorkspaceSizeMB, "review-workspace-size-mb", 8192, "Codex review workspace volume size")
+	flags.StringVar(&v.ShadowImage, "shadow-review-image", "", "digest-pinned Claude shadow review image (enables the shadow arm)")
+	flags.StringVar(&v.ShadowAuthSnapshot, "shadow-review-auth-snapshot", "", "Claude setup-token snapshot under review-input-root")
+	flags.Int64Var(&v.ShadowWorkspaceSizeMB, "shadow-review-workspace-size-mb", 8192, "Claude shadow review workspace volume size")
+	flags.Float64Var(&v.ShadowRate, "shadow-review-rate", 0.2, "fallback Claude shadow review sampling rate in [0,1]")
+}
+
 func main() {
 	// §10 verbs never collide with the original flag-mode invocation because
 	// flags begin with '-'. Keeping dispatch here preserves compatibility with
@@ -244,24 +270,12 @@ func main() {
 	baseRef := flags.String("base-ref", "", "managed repository base branch")
 	baseSHA := flags.String("base-sha", "", "exact 40-character base commit tasks run against")
 	allowedPaths := flags.String("allowed-paths", "", "comma-separated candidate path allowlist (required in claude driver mode)")
-	reviewImage := flags.String("review-image", "", "digest-pinned Codex review image")
-	reviewInputRoot := flags.String("review-input-root", "", "private root containing Codex review auth and instruction snapshots")
-	reviewAuthMode := flags.String("review-auth-mode", "", "Codex review auth mode: subscription or api_key")
+	var review reviewFlagValues
+	reviewFlags(flags, &review)
 	agentTree := flags.String("agent-tree", "",
 		"local checkout holding the admitted-agent tree under policy/; its lineup selects the agent and identity every role runs under (required in claude driver mode)")
 	agentTreeCommit := flags.String("agent-tree-commit", "",
 		"exact commit of -agent-tree whose tree is read; the working tree is never read")
-	reviewAuthSnapshot := flags.String("review-auth-snapshot", "", "Codex auth.json snapshot under review-input-root")
-	reviewInstructions := flags.String("review-instructions", "", "operator-host Codex instruction source snapshotted with explicit absence")
-	reviewModel := flags.String("review-model", "", "pinned Codex review model configuration")
-	reviewReasoningEffort := flags.String("review-reasoning-effort", "", "Codex review reasoning effort")
-	reviewWorkspaceSize := flags.Int64("review-workspace-size-mb", 8192, "Codex review workspace volume size")
-	shadowReviewImage := flags.String("shadow-review-image", "", "digest-pinned Claude shadow review image (enables the shadow arm)")
-	shadowReviewAuthSnapshot := flags.String("shadow-review-auth-snapshot", "", "Claude setup-token snapshot under review-input-root")
-	shadowReviewModel := flags.String("shadow-review-model", "", "pinned Claude shadow review model")
-	shadowReviewReasoningEffort := flags.String("shadow-review-reasoning-effort", "", "Claude shadow review reasoning effort")
-	shadowReviewWorkspaceSize := flags.Int64("shadow-review-workspace-size-mb", 8192, "Claude shadow review workspace volume size")
-	shadowReviewRate := flags.Float64("shadow-review-rate", 0.2, "fallback Claude shadow review sampling rate in [0,1]")
 	runConformance := flags.Bool("run-conformance", false,
 		"run and durably record the full ward suite for this exact Claude configuration before admission")
 	operatingMode := flags.String(
@@ -310,7 +324,7 @@ func main() {
 		StateDir:                  *stateDir,
 		PublicationStateDir:       *publicationStateDir,
 		PublicationCredentialsDir: *publicationCredentialsDir,
-		ReviewInputRoot:           *reviewInputRoot,
+		ReviewInputRoot:           review.InputRoot,
 		ProdAppAuthority:          *prodAppAuthority,
 	}
 	if *prodDaemon != "" && !*prodAppAuthority {
@@ -426,13 +440,13 @@ func main() {
 		}
 		var codexAuthMode ward.CodexAuthMode
 		if mode == domain.ModeUnattended {
-			switch *reviewAuthMode {
+			switch review.AuthMode {
 			case string(ward.CodexAuthSubscription):
 				codexAuthMode = ward.CodexAuthSubscription
 			case string(ward.CodexAuthAPIKey):
 				codexAuthMode = ward.CodexAuthAPIKey
 			default:
-				fmt.Fprintf(os.Stderr, "freesided: -review-auth-mode %q is not subscription or api_key\n", *reviewAuthMode)
+				fmt.Fprintf(os.Stderr, "freesided: -review-auth-mode %q is not subscription or api_key\n", review.AuthMode)
 				os.Exit(2)
 			}
 		}
@@ -456,17 +470,14 @@ func main() {
 			RunConformance: *runConformance,
 			StateRoot:      *publicationStateDir, CredentialsDir: *publicationCredentialsDir,
 			OperatingMode: mode,
-			ReviewImage:   *reviewImage, ReviewInputRoot: *reviewInputRoot,
+			ReviewImage:   review.Image, ReviewInputRoot: review.InputRoot,
 			ReviewAuthMode:     codexAuthMode,
-			ReviewAuthSnapshot: *reviewAuthSnapshot, ReviewInstructions: *reviewInstructions,
-			ReviewModel: *reviewModel, ReviewReasoningEffort: *reviewReasoningEffort,
-			ReviewWorkspaceSizeMB:       *reviewWorkspaceSize,
-			ShadowReviewImage:           *shadowReviewImage,
-			ShadowReviewAuthSnapshot:    *shadowReviewAuthSnapshot,
-			ShadowReviewModel:           *shadowReviewModel,
-			ShadowReviewReasoningEffort: *shadowReviewReasoningEffort,
-			ShadowReviewWorkspaceSizeMB: *shadowReviewWorkspaceSize,
-			ShadowReviewRate:            *shadowReviewRate,
+			ReviewAuthSnapshot: review.AuthSnapshot, ReviewInstructions: review.Instructions,
+			ReviewWorkspaceSizeMB:       review.WorkspaceSizeMB,
+			ShadowReviewImage:           review.ShadowImage,
+			ShadowReviewAuthSnapshot:    review.ShadowAuthSnapshot,
+			ShadowReviewWorkspaceSizeMB: review.ShadowWorkspaceSizeMB,
+			ShadowReviewRate:            review.ShadowRate,
 		}
 	default:
 		fmt.Fprintf(os.Stderr, "freesided: -driver %q is not disabled, fake, or claude\n", *driverMode)

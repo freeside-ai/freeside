@@ -219,9 +219,8 @@ func TestClaudeDriverConfigRequiresExplicitBindings(t *testing.T) {
 		StateRoot:    "/var/freeside/app", CredentialsDir: "/var/freeside/creds",
 		ReviewImage:     "ghcr.io/x/codex@sha256:" + strings.Repeat("c", 64),
 		ReviewInputRoot: "/var/freeside/review-inputs", ReviewAuthMode: ward.CodexAuthSubscription,
-		ReviewAuthSnapshot: "/var/freeside/review-inputs/auth.json",
-		ReviewInstructions: "/var/freeside/review-inputs/AGENTS.md", ReviewModel: "gpt-codex",
-		ReviewReasoningEffort: "high",
+		ReviewAuthSnapshot:    "/var/freeside/review-inputs/auth.json",
+		ReviewInstructions:    "/var/freeside/review-inputs/AGENTS.md",
 		ReviewWorkspaceSizeMB: 8192,
 		OperatingMode:         domain.ModeUnattended,
 	}
@@ -265,8 +264,6 @@ func TestClaudeDriverConfigRequiresExplicitBindings(t *testing.T) {
 		"review auth mode":        func(c *claudeDriverConfig) { c.ReviewAuthMode = "" },
 		"review auth snapshot":    func(c *claudeDriverConfig) { c.ReviewAuthSnapshot = "" },
 		"review instructions":     func(c *claudeDriverConfig) { c.ReviewInstructions = "" },
-		"review model":            func(c *claudeDriverConfig) { c.ReviewModel = "" },
-		"review reasoning":        func(c *claudeDriverConfig) { c.ReviewReasoningEffort = "" },
 		"review workspace size":   func(c *claudeDriverConfig) { c.ReviewWorkspaceSizeMB = 0 },
 		"credentials dir":         func(c *claudeDriverConfig) { c.CredentialsDir = "" },
 		"allowed paths":           func(c *claudeDriverConfig) { c.AllowedPaths = nil },
@@ -407,8 +404,6 @@ func TestClaudeShadowReviewConfigurationIsExplicitAndDigestBound(t *testing.T) {
 	for name, mutate := range map[string]func(*claudeDriverConfig){
 		"image":     func(c *claudeDriverConfig) { c.ShadowReviewImage = "" },
 		"snapshot":  func(c *claudeDriverConfig) { c.ShadowReviewAuthSnapshot = "" },
-		"model":     func(c *claudeDriverConfig) { c.ShadowReviewModel = "" },
-		"reasoning": func(c *claudeDriverConfig) { c.ShadowReviewReasoningEffort = "" },
 		"workspace": func(c *claudeDriverConfig) { c.ShadowReviewWorkspaceSizeMB = 0 },
 		"rate":      func(c *claudeDriverConfig) { c.ShadowReviewRate = 1.1 },
 	} {

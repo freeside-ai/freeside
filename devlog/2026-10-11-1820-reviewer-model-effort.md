@@ -92,20 +92,25 @@ derivation were compared over 360 generated inputs: they agree on every
 Claude input and differ on exactly the 45 Codex inputs that pin a model,
 which is the intended change.
 
-**Adoption applies both launch-shape rules to a review model.** The review
-launch's own rule (`ward.ValidateCodexReviewModelConfiguration`) refuses a
-comma and control characters; `inference.ValidLaunchValue`, which the
-judgment model already gets, refuses whitespace and a leading `-`. Adoption
-refuses a value that fails either, for `-review-model` and
-`-shadow-review-model`. It does not check that the model exists.
+**A review model is held to both launch-shape rules.** The review launch's
+own rule (`ward.ValidateCodexReviewModelConfiguration`) refuses a comma and
+control characters; `inference.ValidLaunchValue`, which the judgment model
+already gets, refuses whitespace and a leading `-`. Adoption refuses a value
+that fails either, for `-review-model` and `-shadow-review-model`, and the
+daemon refuses a review role whose offer names one. The flags the daemon
+lost were held to the first rule only; the model now comes from a committed
+offer anyone can author, so the daemon applies the rule adoption does.
+Neither checks that the model exists.
 
 ## What an Upgrade Costs
 
 A tree adopted before this unit cannot run a review on this build: its
 reviewer asks `harness_default`, and its shadow reviewer's agent names no
-model. The daemon holds admission and preflight fails, each naming the role,
-until the operator commits the review agents from a fresh
-`freesided auth adopt`. The new tree is a new lineup revision, so preflight
+model. The daemon stops at startup and preflight fails, each naming the
+role, until the operator commits the review agents from a fresh
+`freesided auth adopt`. The issue says the daemon holds admission; a review
+role that does not resolve has always stopped startup instead, because no
+review source can be composed without it, and this unit keeps that. The new tree is a new lineup revision, so preflight
 runs again and a retained real-work session adopted on the old tree cannot
 resume. The approved review configuration digests do not move when the
 agents name the values the flags named. The owner accepted this with the
