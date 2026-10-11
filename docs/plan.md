@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 83
+revision: 84
 status: active
-updated: 2026-10-07
+updated: 2026-10-11
 ---
 
 # Freeside
@@ -425,7 +425,6 @@ Approval is not a universal action.
 | `task_proposal` | Start, **start with changes**, decline, or snooze. Start begins the task workflow from the exact accepted proposal artifact digest. “Start with changes” creates a revised proposal artifact, supersedes the original item, creates a new item version, and starts the task workflow from the exact revised digest. Either may carry operator-authored task lines, bound to the item version (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted Agents; revision 73). It never uses unversioned ad hoc parameters. Proposals are grouped under `proposal_batch_id` with per-candidate decisions. |
 | `effect_proposal` | Approve, **approve with changes**, decline, or snooze a proposed effect from the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) registry (added in 1B with the registry; first instance: the source-issue closure proposal in 1B.1 (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)), which reaches this card only when project policy keeps the human gate on or as a fallback item (non-blocking under the default policy; a gate-on project still holds the PR until the closure question resolves), the policy actor otherwise recording the approval at publication; follow-up issue filings reuse the same card, and proposed watches follow once their schedule kind lands, Section [5.16](#516-the-durable-scheduler)). Approval binds to the proposal artifact digest; “approve with changes” creates a revised proposal artifact and supersedes the item, exactly as `task_proposal`'s start-with-changes. `task_proposal` remains its own type. |
 | `system_health` | Acknowledge, run doctor, stop unattended operation, or, on the notice a stop raises, resume unattended operation; the rules follow the table. |
-| `blocked` | Consolidates external waits that exceed Section [5.12](#512-workflow-definition-initiators-and-artifacts) thresholds. It is read-only. |
 
 **`system_health` rules.** A revoked Codex identity marker also offers resolve
 re-enrollment (`resolve_reenrollment`), but only once the marker carries the
@@ -661,7 +660,7 @@ GitHub  <── reconciliation and publication ──>  freesided
 | --- | --- |
 | **GitHub** | Owns source, issues, PRs, reviews, checks, and merge. Native Codex review, when observed, is recorded as best-effort extra evidence (Section [7](#7-review-policy)). Freeside reconciles each active resource independently; there is no global cursor. |
 | **Event inbox** | Accepts reconciled GitHub state, intake scans, cron events, and manual events idempotently. |
-| **Workflow engine** | Runs code-defined state machines using policy from configuration. It records the resolved rein-policy digest and separate active, elapsed, and waiting clocks for each run. |
+| **Workflow engine** | Runs code-defined state machines using policy from configuration. It records the resolved rein-policy digest and separate active and elapsed clocks for each run. |
 | **Scheduler** | Owns the closed union of durable schedule kinds, fire-time validation, and transactional redelivery (Section [5.16](#516-the-durable-scheduler)). |
 | **signet** | Owns AttentionItems, deliveries, conversations, synchronization, device pairing, and ntfy integration. |
 | **Research fetcher** | Retrieves immutable, digest-addressed research artifacts for agents. |
@@ -2978,17 +2977,16 @@ attempt, and records its new run and start in one write; a refusal persists
 none of them. A retry that still holds a slot keeps it. Administrative
 `freesided abandon` remains a slot release, not a provider-stop operation.
 
-Budgeting uses three clocks:
+Budgeting uses two clocks:
 
 1. **Active compute:** `stage_active_time` applies to each stage attempt;
    `run_active_compute_time` applies to the whole run.
 2. **Elapsed deadline:** ends an abandoned workflow.
-3. **Waiting thresholds:** create one consolidated `blocked` item instead of
-   terminating the run.
 
 A run waiting overnight for a reviewer does not consume compute budget.
 `review.hard_active_time` counts active review and remediation, not calendar
-waiting.
+waiting. Waiting has no threshold of its own (revision 84): a long wait for an
+approval, PR checks, or an external review raises no attention item.
 
 ```yaml
 project:        {repository: freeasinbird/gh-imgup, rein: tight}
@@ -3020,7 +3018,6 @@ budgets:        {stage_active_time: 45m,
                  run_active_compute_time: 4h,
                  run_elapsed_deadline: 7d,
                  max_diff_files: 40}    # cumulative vs base
-waiting:        {checks_attention_after: 2h, review_attention_after: 4h}
 security:       {credential_mode: subscription_contained}
 telemetry:      {shadow_review_rate: 0.2}
 ```
@@ -5051,7 +5048,7 @@ below governs which layers each type carries:
 2. **The summary**: what happened, why, and what remains open, with uncertainty
    preserved. It is absorbable in seconds. It is a labeled agent claim and is
    present only where the card concerns agent work. A purely mechanical card
-   (`system_health`, `blocked`) carries daemon facts alone.
+   (`system_health`) carries daemon facts alone.
 3. **Evidence**: the `evidence_snapshot` packet (Section [5.15](#515-evidence-and-images)). Evidence
    precedes any long-form agent text.
 4. **Drill-down**: full artifacts, full specifications and diffs, and
@@ -5146,7 +5143,6 @@ Actions and lifecycle live in Section [4](#4-the-attention-model); presentation 
 | `task_proposal` | One line per candidate: intent plus expected cost and scope facts. | Full proposal artifact; “start with changes” shows the revised-digest diff. |
 | `effect_proposal` | The requested effect as a daemon fact from the validated artifact (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)): kind, daemon-resolved target, and bounded parameters. Agent cost, safety, and scope assertions are labeled claims, never merged into the fact line. | Full proposal artifact; “approve with changes” shows the revised-digest diff. |
 | `system_health` | The diagnostic fact and the unattended capability it impairs. | Doctor output. |
-| `blocked` | What is waited on and since when. Daemon facts only; no agent prose. | The waiting run's context. |
 
 ### Summary Provenance
 
@@ -6160,20 +6156,32 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 83 ("Clean-Machine Proof Leaves Wave 8"):
+Revision 84 ("The Blocked Attention Type Is Retired"):
 
-1. **Wave 8 no longer requires the clean-machine proof.** Remove #428 and
-   its owner-run prerequisite #1621 from the wave's scope and exit proof.
-   The remaining operational alert checks, unattended real-run evidence,
-   and fresh-context adversarial review still gate wave closure.
-2. **Future placement stays undecided.** Both issues remain open and
-   unscheduled. This decision neither makes the proof a 1B.1 exit requirement
-   nor grants a permanent exemption from it. Section [10](#10-operations-and-onboarding)'s timing
-   targets still govern the proof when it runs; the earlier 1A deferral
-   remains part of the record.
+1. **No `blocked` attention item.** The type consolidated external waits that
+   passed a waiting threshold, and its one producer raised a second card beside
+   a specification approval that was already the operator's signal. Nothing
+   raises the type now, and no item of the type is ever open; Sections
+   [4](#4-the-attention-model) and [9](#9-comprehension) lose its rows. Rejected: keeping the type and
+   removing only the duplicate beside the approval, which leaves a card kind
+   with no producer.
+2. **History is kept; nothing is deleted.** A migration closes each open
+   `blocked` item as superseded. The API schema and the domain keep the type
+   name, its wait kinds, and `blocked_on`, marked retired, so a closed item
+   from before the change still loads and shows as resolved. Rejected:
+   deleting the rows and removing the name, because sync cannot tell a client
+   that an item was deleted and a stored row must still validate when read.
+3. **Budgeting keeps two clocks.** Section [5.12](#512-workflow-definition-initiators-and-artifacts) drops the waiting
+   thresholds and the example workflow's `waiting:` line. A long wait for an
+   approval, PR checks, or an external review raises no attention item.
+   Rejected: keeping the thresholds and naming a different signal for a later
+   unit; nothing implemented the PR-check or review thresholds.
+4. **The approval card gains no waiting text.** Its row keeps the age it
+   shows today. Notification and escalation for a long wait are separate
+   work (#1924).
 
-(Owner decision of 2026-10-07, #1826;
-[decision note](../devlog/2026-10-07-1050-clean-machine-wave-placement.md).)
+(Owner decisions of 2026-10-11, #1925;
+[decision note](../devlog/2026-10-11-1145-retire-blocked-items.md).)
 
 ## 14. Risks
 
