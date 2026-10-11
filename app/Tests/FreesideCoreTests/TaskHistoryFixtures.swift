@@ -122,11 +122,30 @@ enum TaskHistoryFixtures {
                 }
             }
         }
-        events.sort { $0.recorded_at > $1.recorded_at }
+        // The daemon's order: newest first, and at one instant by kind, so
+        // a run's submission sits above the approval that started it.
+        events.sort {
+            $0.recorded_at != $1.recorded_at
+                ? $0.recorded_at > $1.recorded_at : $0.kind.rawValue < $1.kind.rawValue
+        }
         return .init(
             as_of_revision: 12, as_of: instant, task_id: "history-task", project_id: "freeside",
             name: .init(text: "Explain release changes", source: ._operator),
             events: events, sections: sections)
+    }
+
+    /// Folds for a capture of what a campaign holds: every campaign starts
+    /// collapsed, so a surface that is about the current campaign's runs
+    /// opens it.
+    @MainActor
+    static func currentCampaignOpen(
+        _ history: Components.Schemas.TaskTimeline
+    ) -> TaskTimelineDisclosurePreferences {
+        let disclosures = TaskTimelineDisclosurePreferences(defaults: nil)
+        if let current = history.sections.first {
+            disclosures.setExpanded(true, .campaign(current.campaign_id), taskID: history.task_id)
+        }
+        return disclosures
     }
 
     static func snapshot(_ history: Components.Schemas.TaskTimeline) -> Components.Schemas.TaskSnapshot {

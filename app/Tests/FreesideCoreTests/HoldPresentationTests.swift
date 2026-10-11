@@ -132,7 +132,7 @@ import Testing
         #expect(fixture.position?.guidance == "Open task details.")
     }
 
-    @Test func calloutStatesTheRowsRoundAndHoldAndNothingElse() {
+    @Test func calloutStatesTheRowsHoldAndNoRound() {
         for name in HoldPresentationFixtures.groups.joined() {
             for loaded in [true, false] {
                 var fixture = HoldPresentationFixtures.make(name)
@@ -144,9 +144,12 @@ import Testing
                 }
                 #expect(rowHolds == [callout?.hold].compactMap { $0 }, "\(name), loaded: \(loaded)")
                 if let callout {
-                    // The callout repeats the row's facts and adds none.
-                    let calloutLines = [callout.round, callout.hold].compactMap { $0 }
-                    #expect(calloutLines == lines.facts, "\(name), loaded: \(loaded)")
+                    // The callout repeats the row's hold and leaves the
+                    // round to the row; its stage line is the detail page's
+                    // to supply (`TaskDetailStageTests`).
+                    let round = fixture.position?.heading?.round
+                    #expect(lines.facts == [round, callout.hold].compactMap { $0 }, "\(name), loaded: \(loaded)")
+                    #expect(callout.stage == nil, "\(name), loaded: \(loaded)")
                 }
             }
         }
@@ -174,9 +177,6 @@ import Testing
             let fixture = HoldPresentationFixtures.make(name)
             let callout = TaskDisplay.holdCallout(fixture.task, position: fixture.position)
             #expect(callout?.hold == hold, "\(name)")
-            if let callout {
-                #expect(callout.round == fixture.position?.heading?.round, "\(name)")
-            }
         }
         // The callout is the same for a capacity wait and a hold the operator
         // must clear; the guidance beside it is what says no action is needed.

@@ -92,10 +92,12 @@ enum FreesidePalette {
     // lightest dusk fill that keeps it at the 4.5:1 text floor.
     static let hover = FreesideColorCuts(day: ground3.day, dusk: ground3.dusk)
 
-    // Diff counts and diff lines only (R28). The day cuts are darker than
-    // the handoff's #3B7A47 and #B0412F, which are 4.46:1 on ground-2 and
-    // 4.08:1 and 4.27:1 on their own washes; these are the nearest that
-    // clear the 4.5:1 text floor on both.
+    // Diff counts and diff lines (R28), and one use beyond them: diffAdd
+    // fills the marker on a stage start in the task timeline
+    // (devlog/2026-10-11-1140-task-stage-timeline.md). The day cuts are
+    // darker than the handoff's #3B7A47 and #B0412F, which are 4.46:1 on
+    // ground-2 and 4.08:1 and 4.27:1 on their own washes; these are the
+    // nearest that clear the 4.5:1 text floor on both.
     static let diffAdd = FreesideColorCuts(day: 0x377142, dusk: 0x7FB38A)
     static let diffRemove = FreesideColorCuts(day: 0xA93E2D, dusk: 0xE07A62)
     static let diffAddWash = FreesideColorCuts(day: 0xDCE8D9, dusk: 0x16261A)
@@ -1209,16 +1211,32 @@ private struct ChoiceOptionStyle<Value: Hashable>: ButtonStyle {
 /// The one chronology marker: every newest-first list (milestones, review
 /// rounds, task events) marks entry 0 with a filled ink dot and every later
 /// entry with a hollow ring. The stage rail draws the same two markers.
+/// The task timeline draws two more: the start of a stage in the diff
+/// green, and an entry that records a failure in wax. Neither color is the
+/// only signal, since the entry's words say the same.
 struct ChronologyMarker: View {
+    enum Kind: Equatable {
+        case current, prior, stageStart, failure
+    }
+
     static let diameter: CGFloat = 10
-    let isCurrent: Bool
+    let kind: Kind
+
+    init(isCurrent: Bool) {
+        kind = isCurrent ? .current : .prior
+    }
+
+    init(kind: Kind) {
+        self.kind = kind
+    }
 
     var body: some View {
         Group {
-            if isCurrent {
-                Circle().fill(Color.ink)
-            } else {
-                Circle().strokeBorder(Color.milestonePrior, lineWidth: 1.5)
+            switch kind {
+            case .current: Circle().fill(Color.ink)
+            case .prior: Circle().strokeBorder(Color.milestonePrior, lineWidth: 1.5)
+            case .stageStart: Circle().fill(Color.diffAdd)
+            case .failure: Circle().fill(Color.waxText)
             }
         }
         .frame(width: Self.diameter, height: Self.diameter)

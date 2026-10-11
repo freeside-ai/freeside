@@ -1946,13 +1946,11 @@
                                 ).screenshotContent(history))))
                 }
             }
-            // The two-campaign history with folds open: Task events alone,
-            // then every fold (the earlier campaign, each prior run, and each
+            // The two-campaign history with folds open: the current campaign
+            // alone, then every fold (each campaign, each prior run, and each
             // run's details), so the folded content is covered too.
-            let eventsOpen = TaskTimelineDisclosurePreferences(defaults: nil)
-            eventsOpen.setExpanded(true, .taskEvents, taskID: revisedHistory.task_id)
+            let currentOpen = TaskHistoryFixtures.currentCampaignOpen(revisedHistory)
             let everythingOpen = TaskTimelineDisclosurePreferences(defaults: nil)
-            everythingOpen.setExpanded(true, .taskEvents, taskID: revisedHistory.task_id)
             for section in revisedHistory.sections {
                 everythingOpen.setExpanded(true, .campaign(section.campaign_id), taskID: revisedHistory.task_id)
                 for run in section.runs {
@@ -1976,7 +1974,7 @@
                                 snapshot: TaskHistoryFixtures.snapshot(revisedHistory), onOpenRun: { _ in }
                             ).screenshotContent(revisedHistory))))
             }
-            for (name, disclosures) in [("events-open", eventsOpen), ("all-open", everythingOpen)] {
+            for (name, disclosures) in [("current-open", currentOpen), ("all-open", everythingOpen)] {
                 surfaces.append(
                     Surface(
                         name: "task-history-revised-\(name)-820-light", width: 820, nativeAppearance: true,
@@ -1985,6 +1983,47 @@
                                 coordinator: revisedCoordinator,
                                 snapshot: TaskHistoryFixtures.snapshot(revisedHistory), onOpenRun: { _ in }
                             ).screenshotContent(revisedHistory, disclosures: disclosures))))
+            }
+            // A task in each stage the page names (#1923): the stage on the
+            // chip, on the hold callout at Verification, and at the newest
+            // start point of the rail.
+            for (name, scenario) in [
+                ("specification", TaskStageFixtures.Scenario.specification), ("implementation", .implementation),
+                ("review", .review), ("verification-held", .verification),
+            ] {
+                let page = TaskStageFixtures.page(scenario)
+                let history = try #require(page.history)
+                let stage = try TaskStageFixtures.coordinator(page)
+                for width in [CGFloat(820), CGFloat(390)] {
+                    for scheme in [ColorScheme.light, .dark] {
+                        surfaces.append(
+                            Surface(
+                                name: "task-stage-\(name)-\(Int(width))-\(scheme)", width: width,
+                                colorScheme: scheme, nativeAppearance: true,
+                                view: AnyView(
+                                    TaskTimelineView(
+                                        coordinator: stage.coordinator, snapshot: stage.task, onOpenRun: { _ in }
+                                    ).screenshotContent(history))))
+                    }
+                }
+            }
+            // The rail's stage-start and failure markers in each scheme and
+            // contrast, on a history with a failed review round. Every
+            // surface draws at every text size, the largest included.
+            let markersPage = TaskStageFixtures.page(.returned)
+            let markersHistory = try #require(markersPage.history)
+            let markers = try TaskStageFixtures.coordinator(markersPage)
+            for scheme in [ColorScheme.light, .dark] {
+                for contrast in [LaunchInputs.Contrast.standard, .increased] {
+                    surfaces.append(
+                        Surface(
+                            name: "task-stage-markers-\(scheme)-\(contrast)", width: 390, colorScheme: scheme,
+                            contrast: contrast, nativeAppearance: true,
+                            view: AnyView(
+                                TaskTimelineView(
+                                    coordinator: markers.coordinator, snapshot: markers.task, onOpenRun: { _ in }
+                                ).screenshotContent(markersHistory))))
+                }
             }
             let publishedTask = try #require(tasks.first { $0.task.id == publishedRun.run.task_id })
             var publishedTimeline = try #require(
@@ -2009,7 +2048,9 @@
                                 TaskTimelineView(
                                     coordinator: publishedCoordinator, snapshot: publishedTask, onOpenRun: { _ in }
                                 )
-                                .screenshotContent(publishedHistory))))
+                                .screenshotContent(
+                                    publishedHistory,
+                                    disclosures: TaskHistoryFixtures.currentCampaignOpen(publishedHistory)))))
                 }
             }
             let legacyTask = try #require(tasks.first { $0.task.id == TaskFixtures.legacyTaskID })
@@ -2032,7 +2073,8 @@
                             TaskTimelineView(
                                 coordinator: legacyCoordinator, snapshot: legacyTask, onOpenRun: { _ in }
                             )
-                            .screenshotContent(legacyHistory))))
+                            .screenshotContent(
+                                legacyHistory, disclosures: TaskHistoryFixtures.currentCampaignOpen(legacyHistory)))))
             }
             surfaces.append(
                 Surface(
@@ -2050,13 +2092,16 @@
                             .screenshotContent(retryTimeline)
                     )))
             // The technical-details disclosures expanded (#1379): the exact
-            // task, campaign, and run ids and their copy controls.
+            // task, campaign, and run ids and their copy controls, with the
+            // current campaign open to show them.
             surfaces.append(
                 Surface(
                     name: "task-timeline-details",
                     view: AnyView(
                         TaskTimelineView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
-                            .screenshotContent(retryTimeline, expandsTechnicalDetails: true)
+                            .screenshotContent(
+                                retryTimeline, expandsTechnicalDetails: true,
+                                disclosures: TaskHistoryFixtures.currentCampaignOpen(retryTimeline))
                     )))
             surfaces.append(
                 Surface(
@@ -2064,7 +2109,9 @@
                     width: 390,
                     view: AnyView(
                         TaskTimelineView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
-                            .screenshotContent(retryTimeline, expandsTechnicalDetails: true)
+                            .screenshotContent(
+                                retryTimeline, expandsTechnicalDetails: true,
+                                disclosures: TaskHistoryFixtures.currentCampaignOpen(retryTimeline))
                     )))
             surfaces.append(
                 Surface(
@@ -3277,7 +3324,7 @@
                                 label: "Failed to Stop · Execution May Continue · Inspect the Recorded Outcome",
                                 cut: .ink)
                             SentenceDisclosure(
-                                label: "Task Events", summary: "6 recorded · newest Sep 12, 9:41 AM",
+                                label: "Campaign", summary: "current · 2 attempts · from Sep 11",
                                 isExpanded: .constant(false)
                             ) { EmptyView() }
                             SentenceDisclosure(

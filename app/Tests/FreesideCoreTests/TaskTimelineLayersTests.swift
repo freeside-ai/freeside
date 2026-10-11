@@ -47,17 +47,6 @@ import Testing
             TaskTimelinePresentation.sectionSummary(empty, isCurrent: true, now: .now) == "current · 0 attempts")
     }
 
-    @Test func eventsSummaryCountsAndNamesTheNewest() throws {
-        let events = TaskTimelinePresentation.events(TaskHistoryFixtures.history(.published))
-        let newest = try #require(events.first)
-        let now = newest.recorded_at.addingTimeInterval(3_600)
-        let time = FreesideFormat.shortTime(newest.recorded_at, now: now, locale: enUS, timeZone: utc)
-        #expect(
-            TaskTimelinePresentation.eventsSummary(events, now: now, locale: enUS, timeZone: utc)
-                == "\(events.count) recorded · newest \(time)")
-        #expect(TaskTimelinePresentation.eventsSummary([], now: now) == "none recorded")
-    }
-
     @Test func runDetailsSummaryJoinsRoleReasonAndHold() throws {
         let runs = TaskHistoryFixtures.history(.retry).sections.flatMap(\.runs)
         let retried = try #require(runs.first { $0.attempt_reason != nil })
@@ -127,33 +116,23 @@ import Testing
         #expect(TaskTimelinePresentation.headerMetaLine(legacy).hasSuffix("Source: none recorded"))
     }
 
-    @Test func taskEventDetailUsesTheEightCharacterBindingLine() throws {
-        let history = TaskHistoryFixtures.history(.published)
-        let details = TaskTimelinePresentation.events(history).compactMap {
-            TaskTimelinePresentation.detail($0, in: history)
-        }
-        let bound = try #require(details.first { $0.contains("Head ") })
-        let head = try #require(bound.components(separatedBy: " · ").first { $0.hasPrefix("Head ") })
-        #expect(head.count == "Head ".count + 8)
-    }
-
     @Test func foldsPersistPerTaskAndStartCollapsed() throws {
         let suite = "TaskTimelineLayersTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
 
         let first = TaskTimelineDisclosurePreferences(defaults: defaults)
-        #expect(!first.isExpanded(.taskEvents, taskID: "task-a"))
-        first.setExpanded(true, .taskEvents, taskID: "task-a")
+        #expect(!first.isExpanded(.campaign("campaign-1"), taskID: "task-a"))
+        first.setExpanded(true, .campaign("campaign-1"), taskID: "task-a")
         first.binding(.run("run-1"), taskID: "task-a").wrappedValue = true
         first.setExpanded(true, .roundFacts("review-1"), taskID: "task-b")
 
         let reloaded = TaskTimelineDisclosurePreferences(defaults: defaults)
-        #expect(reloaded.isExpanded(.taskEvents, taskID: "task-a"))
+        #expect(reloaded.isExpanded(.campaign("campaign-1"), taskID: "task-a"))
         #expect(reloaded.isExpanded(.run("run-1"), taskID: "task-a"))
         // One task's folds never open another's, and a run's fold is not
         // its details fold.
-        #expect(!reloaded.isExpanded(.taskEvents, taskID: "task-b"))
+        #expect(!reloaded.isExpanded(.campaign("campaign-1"), taskID: "task-b"))
         #expect(!reloaded.isExpanded(.runDetails("run-1"), taskID: "task-a"))
         #expect(reloaded.isExpanded(.roundFacts("review-1"), taskID: "task-b"))
 
@@ -162,6 +141,23 @@ import Testing
         let stored = defaults.dictionary(forKey: "FreesideTaskTimelineExpandedSections")
         #expect(stored?["task-b"] == nil)
         #expect(stored?["task-a"] != nil)
+    }
+
+    /// The Task Events fold is gone: a device that stored it open keeps the
+    /// value, and it opens nothing.
+    @Test func aStoredFoldForTheOldEventsDisclosureOpensNothing() throws {
+        let suite = "TaskTimelineLayersTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(["task-a": ["events"]], forKey: "FreesideTaskTimelineExpandedSections")
+
+        let store = TaskTimelineDisclosurePreferences(defaults: defaults)
+        for section in [
+            TaskTimelineDisclosurePreferences.Section.campaign(nil), .campaign("events"), .run("events"),
+            .runDetails("events"), .roundFacts("events"), .priorRounds("events"),
+        ] {
+            #expect(!store.isExpanded(section, taskID: "task-a"))
+        }
     }
 
     @Test func aMemoryOnlyStoreWritesNothing() {
