@@ -550,12 +550,14 @@ type config struct {
 	// AttentionDeliveryInterval is how often the daemon sends the
 	// notifications it owes paired devices (#1924). Zero leaves the sender
 	// off, so a test that pairs a device neither publishes to the hosted
-	// default server nor has its items' versions move under it.
+	// default server nor has its items' entity versions move under the
+	// commands it prepares.
 	//
-	// The freesided command leaves it zero too, until #1946: an accepted
-	// notification raises its item's version, and engine work bound to the
-	// exact version (a pending discuss intent, for one) then fails its
-	// binding check and stops the daemon durably.
+	// The freesided command leaves it zero too: starting the sender there
+	// is #1924's. A delivery changes an item's timing and entity_version
+	// and leaves its item_version alone, so the sender no longer unbinds
+	// engine work from the item
+	// (devlog/2026-10-11-1750-timing-keeps-item-version.md).
 	AttentionDeliveryInterval time.Duration
 	// Logger is the process logger the long-running loops report through.
 	// Nil discards their records, which keeps every test composition quiet

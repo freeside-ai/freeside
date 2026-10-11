@@ -3949,8 +3949,8 @@ func TestProductionReviewContradictionStaysParkedAfterDeliveryTiming(t *testing.
 		if err != nil {
 			return err
 		}
-		item.ItemVersion++
-		return tx.PutAttentionItem(p.ctx, item)
+		// The write a delivery makes: timing alone, at the item's version.
+		return tx.PutAttentionItemTiming(p.ctx, itemID, item.Timing)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -3962,7 +3962,7 @@ func TestProductionReviewContradictionStaysParkedAfterDeliveryTiming(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if item.Item.Status != domain.StatusOpen || item.Item.ItemVersion != 2 ||
+	if item.Item.Status != domain.StatusOpen || item.Item.ItemVersion != 1 ||
 		item.Item.Timing.DeliveryCount != 1 {
 		t.Fatalf("timed parked contradiction = %#v", item.Item)
 	}

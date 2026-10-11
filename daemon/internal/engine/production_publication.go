@@ -4216,10 +4216,11 @@ func (w *productionPublicationWorkflow) putReviewContradictionAttention(
 		if item.Subject.TaskID == nil {
 			item.Subject.TaskID = existing.Subject.TaskID
 		}
-		// Delivery receipts legitimately advance the item's version and derived
-		// timing while it remains parked. Ignore only those two mutable telemetry
-		// fields; every identity, presentation, action, and recovery coordinate
-		// must still match the persisted contradiction exactly.
+		// Delivery receipts legitimately advance the item's derived timing
+		// while it remains parked, and before #1946 advanced its version too.
+		// Ignore only those two mutable telemetry fields; every identity,
+		// presentation, action, and recovery coordinate must still match the
+		// persisted contradiction exactly.
 		comparable := *existing
 		comparable.ItemVersion = item.ItemVersion
 		comparable.Timing = item.Timing
@@ -4491,11 +4492,11 @@ func (w *productionPublicationWorkflow) putReviewConfigurationAttention(
 		if item.Subject.TaskID == nil {
 			item.Subject.TaskID = existing.Subject.TaskID
 		}
-		// Delivery receipts advance the item's version and derived timing, and
-		// a discuss decision attaches its conversation, all while the item
-		// remains parked. Ignore only those mutable fields; every identity,
-		// presentation, action, and recovery coordinate must still match the
-		// persisted failure exactly.
+		// Delivery receipts advance the item's derived timing, and a discuss
+		// decision advances its version and attaches its conversation, all
+		// while the item remains parked. Ignore only those mutable fields;
+		// every identity, presentation, action, and recovery coordinate must
+		// still match the persisted failure exactly.
 		comparable := *existing
 		comparable.ItemVersion = item.ItemVersion
 		comparable.Timing = item.Timing

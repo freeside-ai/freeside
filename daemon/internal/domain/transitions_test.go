@@ -254,6 +254,49 @@ func TestValidateAttentionItemStaleWrite(t *testing.T) {
 	})
 }
 
+// TestValidateAttentionItemTimingUpdate covers the one body change that keeps
+// its version (#1946): timing alone may change under an unchanged
+// item_version, and nothing else may ride along.
+func TestValidateAttentionItemTimingUpdate(t *testing.T) {
+	old := mustItem(t, validItemInput(domain.AttentionSpecApproval))
+	submitted := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	timing := domain.TimingSummary{DeliveryCount: 1, FirstSubmittedAt: &submitted}
+
+	t.Run("timing alone", func(t *testing.T) {
+		updated := old
+		updated.Timing = timing
+		if err := domain.ValidateAttentionItemTimingUpdate(old, updated); err != nil {
+			t.Fatalf("timing-only update: %v", err)
+		}
+		// The transition rule still refuses the same pair: only the timing
+		// rule admits a changed body at an unchanged version.
+		if err := domain.ValidateAttentionItemTransition(old, updated); !errors.Is(err, domain.ErrStaleTransition) {
+			t.Fatalf("timing-only update as a transition = %v, want ErrStaleTransition", err)
+		}
+	})
+	t.Run("unchanged item", func(t *testing.T) {
+		if err := domain.ValidateAttentionItemTimingUpdate(old, old); err != nil {
+			t.Fatalf("unchanged item: %v", err)
+		}
+	})
+	t.Run("moved version", func(t *testing.T) {
+		updated := old
+		updated.Timing = timing
+		updated.ItemVersion++
+		if err := domain.ValidateAttentionItemTimingUpdate(old, updated); !errors.Is(err, domain.ErrStaleTransition) {
+			t.Fatalf("timing update with a moved version = %v, want ErrStaleTransition", err)
+		}
+	})
+	t.Run("another field changed", func(t *testing.T) {
+		updated := old
+		updated.Timing = timing
+		updated.Status = domain.StatusResolved
+		if err := domain.ValidateAttentionItemTimingUpdate(old, updated); !errors.Is(err, domain.ErrImmutableTransition) {
+			t.Fatalf("timing update that also resolves = %v, want ErrImmutableTransition", err)
+		}
+	})
+}
+
 // TestValidateAttentionItemStatusTerminality covers the status lifecycle: open
 // may move to any terminal status, a same-status update may still advance the
 // version, and no terminal status admits a successor (issue #55: resolved→open

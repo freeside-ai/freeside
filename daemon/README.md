@@ -302,8 +302,10 @@ changes no item.
 The sender that notifies each active device once for each open item lives in
 `internal/signet` (`RunDeliveries`), with up to six attempts per item and
 device on waits of 1, 2, 4, 8, and 16 minutes. The `freesided` command does
-not start it yet: an accepted notification raises its item's version, which
-stops engine work bound to the exact version (#1946).
+not start it yet; that is #1924's. A delivery or an opened receipt changes its
+item's `timing` and raises the row's `entity_version`, and leaves
+`item_version` alone, so engine work bound to an item's exact version is
+unaffected by it.
 
 ## Testing conventions
 

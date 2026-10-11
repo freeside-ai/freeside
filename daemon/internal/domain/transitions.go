@@ -92,6 +92,9 @@ func itemStatusSuccessors(status ItemStatus) []ItemStatus {
 // §4, §5.14). A changed body must move the version forward, or a stale copy could
 // roll back a later transition (a resolved v2 overwritten by an open v1). Status
 // moves follow itemStatusSuccessors: a terminal status is final.
+//
+// The one body change that keeps its version is a change to timing alone, which
+// ValidateAttentionItemTimingUpdate checks instead.
 func ValidateAttentionItemTransition(old, updated AttentionItem) error {
 	if updated.ID != old.ID {
 		return fmt.Errorf("attention item %s: identity would change from %s: %w", updated.ID, old.ID, ErrImmutableTransition)
@@ -283,6 +286,30 @@ func ValidateAttentionItemTransition(old, updated AttentionItem) error {
 	} else if updated.PRReference != nil &&
 		(old.Type != AttentionPublishBlocked || old.Status != StatusOpen || updated.Status != StatusOpen) {
 		return fmt.Errorf("attention item %s: pr reference cannot be attached in this transition: %w",
+			updated.ID, ErrImmutableTransition)
+	}
+	return nil
+}
+
+// ValidateAttentionItemTimingUpdate reports whether updated is the stored item
+// old with only its timing changed. Timing is delivery telemetry, not part of
+// what the operator decides on, so it is the one body change that keeps
+// item_version: engine, store, and signet records bind work to an item's exact
+// version, and a notification delivered or opened in between must not unbind
+// them. Any other difference, a moved version included, is refused; that
+// change is a transition and goes through ValidateAttentionItemTransition.
+func ValidateAttentionItemTimingUpdate(old, updated AttentionItem) error {
+	if updated.ItemVersion != old.ItemVersion {
+		return fmt.Errorf("attention item %s: timing update would move item_version %d to %d: %w",
+			updated.ID, old.ItemVersion, updated.ItemVersion, ErrStaleTransition)
+	}
+	updated.Timing = old.Timing
+	same, err := jsonEqual(old, updated)
+	if err != nil {
+		return fmt.Errorf("attention item %s: %w", updated.ID, err)
+	}
+	if !same {
+		return fmt.Errorf("attention item %s: timing update would change more than timing: %w",
 			updated.ID, ErrImmutableTransition)
 	}
 	return nil

@@ -455,7 +455,35 @@ ON CONFLICT (id) DO UPDATE SET
     as_of_revision  = excluded.as_of_revision,
     body            = excluded.body`
 
+// PutAttentionItem creates an item or records its next transition. On an
+// existing item it never changes timing: the stored summary stands whatever
+// the caller passed, and PutAttentionItemTiming is the one way to change it.
 func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionItem) error {
+	return tx.putAttentionItem(ctx, item, false)
+}
+
+// PutAttentionItemTiming replaces the stored item's timing summary and
+// nothing else: the derived task name and recommendation keep their stored
+// values. It raises entity_version, because sync invalidation and
+// command acceptance key on it and one entity_version must mean one body, and
+// it leaves item_version alone, so work bound to the item's exact version
+// stays bound across a delivery or an opened receipt (#1946). An unchanged
+// summary writes nothing, and a missing item is ErrNotFound. The write
+// re-persists a stored row, so it passes the same gates as any other put.
+func (tx *WriteTx) PutAttentionItemTiming(ctx context.Context, id domain.ItemID, timing domain.TimingSummary) error {
+	item, _, err := tx.GetAttentionItemSnapshot(ctx, id)
+	if err != nil {
+		return fmt.Errorf("put attention item %q timing: %w", id, err)
+	}
+	item.Timing = timing
+	return tx.putAttentionItem(ctx, item, true)
+}
+
+// putAttentionItem is the one item writer. timingUpdate selects the rule an
+// existing item's changed body must pass: a transition, which advances
+// item_version and keeps the stored timing, or a timing update, which changes
+// timing alone and keeps the version.
+func (tx *WriteTx) putAttentionItem(ctx context.Context, item domain.AttentionItem, timingUpdate bool) error {
 	// Recommendation and DecisionSurface are daemon-derived fields. Normalize
 	// them before the caller boundary validation so a caller-supplied source,
 	// payload, epoch, or digest grants no authority and is overwritten below.
@@ -523,6 +551,13 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 		// with the stored values normalized back in.
 		item.Recommendation = decoded.Recommendation
 		item.DecisionSurface = decoded.DecisionSurface
+		// Timing moves without the version, so the version check below cannot
+		// tell a stale summary from the stored one. A transition therefore
+		// never carries timing: a copy read before a delivery landed, or a
+		// constructor-built one with none, keeps what the store holds.
+		if !timingUpdate {
+			item.Timing = decoded.Timing
+		}
 		// Read-modify-write paths created before display names existed must not
 		// erase producer-derived labels already attached to the item.
 		if item.DisplayNames == nil && decoded.DisplayNames != nil {
@@ -636,7 +671,11 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 			}
 			return tx.putAttentionItemPRReference(ctx, item)
 		}
-		if err := domain.ValidateAttentionItemTransition(decoded, item); err != nil {
+		validate := domain.ValidateAttentionItemTransition
+		if timingUpdate {
+			validate = domain.ValidateAttentionItemTimingUpdate
+		}
+		if err := validate(decoded, item); err != nil {
 			return fmt.Errorf("put attention item %q: %w", item.ID, mapTransition(err))
 		}
 	}
@@ -658,19 +697,28 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 	if err := tx.bindSubjectTask(ctx, item.ProjectID, &item.Subject); err != nil {
 		return err
 	}
-	if err := tx.projectTaskName(ctx, &item); err != nil {
-		return err
+	// A timing update persists the stored body with its new timing and
+	// nothing else. The task name and the recommendation derive from state
+	// that moves without the item (a rename, a later judgment); a transition
+	// refreshes them, and the timing update keeps the stored values restored
+	// above, because only timing may change under an unchanged item_version.
+	if !timingUpdate {
+		if err := tx.projectTaskName(ctx, &item); err != nil {
+			return err
+		}
 	}
 	surface, createdSurface, changedSurface, err := tx.prepareDecisionSurface(ctx, item, old)
 	if err != nil {
 		return fmt.Errorf("put attention item %q decision surface: %w", item.ID, err)
 	}
 	item.DecisionSurface = domain.DecisionSurfaceRef{Epoch: surface.Epoch, Digest: surface.Digest}
-	recommendation, err := tx.deriveRecommendation(ctx, item, surface)
-	if err != nil {
-		return fmt.Errorf("put attention item %q recommendation: %w", item.ID, err)
+	if !timingUpdate {
+		recommendation, err := tx.deriveRecommendation(ctx, item, surface)
+		if err != nil {
+			return fmt.Errorf("put attention item %q recommendation: %w", item.ID, err)
+		}
+		item.Recommendation = recommendation
 	}
-	item.Recommendation = recommendation
 	body, err := encode(item)
 	if err != nil {
 		return fmt.Errorf("put attention item %q: %w", item.ID, err)
