@@ -1984,6 +1984,47 @@
                                 snapshot: TaskHistoryFixtures.snapshot(revisedHistory), onOpenRun: { _ in }
                             ).screenshotContent(revisedHistory, disclosures: disclosures))))
             }
+            // A task in each stage the page names (#1923): the stage on the
+            // chip, on the hold callout at Verification, and at the newest
+            // start point of the rail.
+            for (name, scenario) in [
+                ("specification", TaskStageFixtures.Scenario.specification), ("implementation", .implementation),
+                ("review", .review), ("verification-held", .verification),
+            ] {
+                let page = TaskStageFixtures.page(scenario)
+                let history = try #require(page.history)
+                let stage = try TaskStageFixtures.coordinator(page)
+                for width in [CGFloat(820), CGFloat(390)] {
+                    for scheme in [ColorScheme.light, .dark] {
+                        surfaces.append(
+                            Surface(
+                                name: "task-stage-\(name)-\(Int(width))-\(scheme)", width: width,
+                                colorScheme: scheme, nativeAppearance: true,
+                                view: AnyView(
+                                    TaskTimelineView(
+                                        coordinator: stage.coordinator, snapshot: stage.task, onOpenRun: { _ in }
+                                    ).screenshotContent(history))))
+                    }
+                }
+            }
+            // The rail's stage-start and failure markers in each scheme and
+            // contrast, on a history with a failed review round. Every
+            // surface draws at every text size, the largest included.
+            let markersPage = TaskStageFixtures.page(.returned)
+            let markersHistory = try #require(markersPage.history)
+            let markers = try TaskStageFixtures.coordinator(markersPage)
+            for scheme in [ColorScheme.light, .dark] {
+                for contrast in [LaunchInputs.Contrast.standard, .increased] {
+                    surfaces.append(
+                        Surface(
+                            name: "task-stage-markers-\(scheme)-\(contrast)", width: 390, colorScheme: scheme,
+                            contrast: contrast, nativeAppearance: true,
+                            view: AnyView(
+                                TaskTimelineView(
+                                    coordinator: markers.coordinator, snapshot: markers.task, onOpenRun: { _ in }
+                                ).screenshotContent(markersHistory))))
+                }
+            }
             let publishedTask = try #require(tasks.first { $0.task.id == publishedRun.run.task_id })
             var publishedTimeline = try #require(
                 RunFixtures.defaultTimelines().first { $0.run_id == publishedRun.run.id })

@@ -155,12 +155,15 @@ struct TaskTimelineView: View {
         let position = TaskDisplay.position(
             task, runs: coordinator.runs, attentionItems: coordinator.store.orderedSnapshots, history: timeline)
         let lines = TaskDisplay.rowLines(task, position: position)
+        let stage = TaskDisplay.detailStage(task, runs: coordinator.runs, history: timeline)
         return VStack(alignment: .leading, spacing: 12) {
             // The task id lives in Technical Details; the copy menu keeps a
             // quick path to it.
             CardEyebrow(
                 keyword: "Task timeline",
-                chip: StateChip(label: lines.status, cut: TaskDisplay.statusCut(task, position: position))
+                chip: StateChip(
+                    label: TaskDisplay.detailStatus(lines.status, stage: stage),
+                    cut: TaskDisplay.statusCut(task, position: position))
             )
             .contextMenu {
                 Button("Copy task ID") { Clipboard.copy(snapshot.task.id) }
@@ -170,7 +173,7 @@ struct TaskTimelineView: View {
                 font: FreesideFont.ask,
                 monoFont: FreesideFont.mono(.title2),
                 lineLimit: 3)
-            if let hold = TaskDisplay.holdCallout(task, position: position) {
+            if let hold = TaskDisplay.holdCallout(task, position: position, stage: stage) {
                 holdCallout(hold)
             }
             switch lines.visibleGuidance(attention: position?.attention == true) {
@@ -204,11 +207,12 @@ struct TaskTimelineView: View {
     /// waits is read before its history (visual audit D02). Every hold kind
     /// takes this one treatment: the hold's own words, the status chip, and
     /// the guidance sentence are what tell a capacity wait from a hold that
-    /// needs the operator. VoiceOver reads the round, then the hold.
+    /// needs the operator. The stage the task waits in leads, when one is
+    /// known, and no round appears. VoiceOver reads the stage, then the hold.
     private func holdCallout(_ hold: TaskDisplay.HoldCallout) -> some View {
         SystemCallout {
-            if let round = hold.round {
-                Text(round)
+            if let stage = hold.stage {
+                Text(stage)
                     .font(FreesideFont.cardBody)
             }
             Text(hold.hold)

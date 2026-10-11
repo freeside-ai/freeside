@@ -278,7 +278,50 @@ enum TaskDisplay {
         if run?.outcome == .unobserved { return "Execution Status Unavailable" }
         if run?.outcome == .published { return "Published · See Review Status" }
         guard task.current_position != nil else { return "No Execution Position Recorded" }
-        return run == nil ? "Run Details Unavailable" : "In Progress"
+        return run == nil ? "Run Details Unavailable" : inProgress
+    }
+
+    /// The status of a working task with nothing more to report. The task
+    /// row shows these words; the task detail page names the stage in their
+    /// place (`detailStatus`).
+    static let inProgress = "In Progress"
+
+    /// The stage the task detail page names on its chip and its hold callout
+    /// (#1923), from the first of these that says one:
+    ///
+    /// 1. Verification, when the current run's publication position says so
+    ///    (`RunDisplay.workflowPhase`). The daemon records no instant for
+    ///    the start of verification, so the event rail has no start point
+    ///    to read it from.
+    /// 2. The newest start point on the task's event rail, so the header and
+    ///    the rail under it name the same stage.
+    /// 3. The stage in the task's position, which is all there is until the
+    ///    timeline loads.
+    ///
+    /// Nil when none does: the page does not guess a stage.
+    static func detailStage(
+        _ task: Components.Schemas.Task, runs: [Components.Schemas.RunSnapshot],
+        history: Components.Schemas.TaskTimeline?
+    ) -> Components.Schemas.StageName? {
+        guard let current = task.current_position?.value1 else { return nil }
+        if let run = runs.first(where: { $0.run.id == current.run_id })?.run,
+            RunDisplay.workflowPhase(run)?.stage == .verification
+        {
+            return .verification
+        }
+        if let history, let stage = TaskTimelinePresentation.newestStage(TaskTimelinePresentation.rows(history)) {
+            return stage
+        }
+        return current.stage.flatMap { Components.Schemas.StageName(rawValue: RunDisplay.canonicalStageName($0)) }
+    }
+
+    /// The status chip on the task detail page: the row's status, except
+    /// that a working task names its stage ("In Review") where the row says
+    /// only that it is in progress. Every other status keeps its words, and
+    /// so does a working task whose stage is not known.
+    static func detailStatus(_ status: String, stage: Components.Schemas.StageName?) -> String {
+        guard status == inProgress, let stage else { return status }
+        return "In \(AttentionDisplay.label(stage))"
     }
 
     /// The row's progress strings. The row draws `status` as its keyword
@@ -353,10 +396,13 @@ enum TaskDisplay {
             ? "Stop Confirmation Recorded" : nil
     }
 
-    /// The task's current hold as VoiceOver's row and the task timeline's
-    /// callout both state it, so the two cannot drift apart.
+    /// The task's current hold. VoiceOver's row and the task timeline's
+    /// callout both state `hold`, so the two cannot drift apart.
     struct HoldCallout: Equatable {
-        let round: String?
+        /// The stage the task waits in, on the task detail page
+        /// (`detailStage`). Nil for the row, which states its phases on a
+        /// line of their own, and where no stage is known.
+        let stage: String?
         /// "Hold: …", or "Last recorded hold: …" under a cancellation fence.
         let hold: String
     }
@@ -364,10 +410,12 @@ enum TaskDisplay {
     /// Nil when the row shows no hold: no position, no recorded hold, or a
     /// historical position, whose hold is a past fact and not where the
     /// task stands.
-    static func holdCallout(_ task: Components.Schemas.Task, position: Position?) -> HoldCallout? {
+    static func holdCallout(
+        _ task: Components.Schemas.Task, position: Position?, stage: Components.Schemas.StageName? = nil
+    ) -> HoldCallout? {
         guard let position, let hold = position.hold, !position.historical else { return nil }
         let prefix = suppressesGuidanceForCancellation(task) ? "Last recorded hold" : "Hold"
-        return HoldCallout(round: position.heading?.round, hold: "\(prefix): \(hold)")
+        return HoldCallout(stage: stage.map(AttentionDisplay.label), hold: "\(prefix): \(hold)")
     }
 
     private static func phasePosition(

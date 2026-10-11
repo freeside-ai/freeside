@@ -153,6 +153,55 @@ enum TaskStageFixtures {
     static let secondImplementationRun = "stage-implementation-2"
     static let campaign = "stage-campaign-1"
 
+    /// The task and its current run as a client holds them beside
+    /// `history(scenario)`: the run is working, with no hold, except that a
+    /// task at Verification is held on its findings.
+    static func page(_ scenario: Scenario) -> TaskProgressFixtures.Case {
+        let history = history(scenario)
+        guard let current = history.sections.first?.runs.first else {
+            preconditionFailure("A stage fixture's history names its current run")
+        }
+        var page = TaskProgressFixtures.make("Implementation")
+        var run = page.runs[current.role?.value1 == .specification ? 1 : 0]
+        run.run.id = current.run_id
+        run.run.task_id = taskID
+        run.run.campaign_id = history.sections[0].campaign_id
+        run.run.lifecycle = .active
+        run.run.superseded_by = nil
+        run.run.outcome = .pending
+        if scenario == .verification { run.run.hold_reason = .init(value1: .verification_findings) }
+        page.runs = [run]
+        page.history = history
+        page.task.id = taskID
+        page.task.display_names.task = history.name
+        page.task.campaign_ids = history.sections.compactMap(\.campaign_id).reversed()
+        page.task.run_ids = history.sections.flatMap(\.runs).map(\.run_id).reversed()
+        page.task.current_position?.value1.run_id = current.run_id
+        page.task.current_position?.value1.stage = run.run.stages.last?.name
+        return page
+    }
+
+    /// A coordinator holding `page` as a confirmed-fresh sync would, and the
+    /// task's snapshot, for drawing the whole task page.
+    @MainActor
+    static func coordinator(
+        _ page: TaskProgressFixtures.Case
+    ) throws -> (coordinator: SyncCoordinator, task: Components.Schemas.TaskSnapshot) {
+        var task = TaskFixtures.approvedCampaign().task
+        task.task = page.task
+        let cache = InMemoryCacheStore()
+        try cache.save(
+            .init(
+                cursors: .init(
+                    syncEpoch: "stage-epoch", lastFullSnapshotRevision: task.as_of_revision,
+                    highestObservedServerRevision: task.as_of_revision),
+                attentionItems: page.items, runs: page.runs, tasks: [task],
+                taskTimelines: [page.history].compactMap { $0 }))
+        let coordinator = SyncCoordinator(client: APIClientFactory.mock(server: MockServer()), cache: cache)
+        coordinator.store.freshness = .fresh
+        return (coordinator, task)
+    }
+
     static func history(_ scenario: Scenario) -> Components.Schemas.TaskTimeline {
         var script = Script()
         script.event(.task_created)
