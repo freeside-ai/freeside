@@ -14,7 +14,8 @@ import (
 // workspace's own .git), so evidence never enters the repo-change channel (plan
 // §5.6: the two channels never mix); the trusted helper reaches its contents
 // only through the declared descriptor. The subtree is per-run claim material,
-// not durable repo content, and is expected to be gitignored in the agent image.
+// not durable repo content. No image or target repository ignores it; the
+// launcher that creates it lists it in the checkout's own .git/info/exclude.
 //
 // It is deliberately distinct from the trusted control-plane directory
 // (.freeside/, home of verify recipes): evidence is untrusted agent output and

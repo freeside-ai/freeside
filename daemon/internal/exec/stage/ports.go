@@ -24,22 +24,42 @@ type Provider interface {
 
 // PromptDelivery selects a durable launch protocol. Missing legacy intent
 // fields are translated to PromptArgument only at reconstruction.
+//
+// A member names a whole launch command, not only how the prompt travels:
+// recovery rebuilds a running launch's command from its stored member and
+// ward refuses a rebuilt spec whose digest differs. So a provider changes its
+// command by adding a member, never by changing what an existing one builds.
+// PromptFileV2 carries the prompt as PromptFileV1 does and differs only in
+// the provider's launch command.
 type PromptDelivery string
 
 const (
 	PromptArgument PromptDelivery = "argument"
 	PromptFileV1   PromptDelivery = "file_v1"
+	PromptFileV2   PromptDelivery = "file_v2"
 )
 
-var AllPromptDeliveries = []PromptDelivery{PromptArgument, PromptFileV1}
+var AllPromptDeliveries = []PromptDelivery{PromptArgument, PromptFileV1, PromptFileV2}
 
 func (d PromptDelivery) valid() bool {
 	switch d {
-	case PromptArgument, PromptFileV1:
+	case PromptArgument, PromptFileV1, PromptFileV2:
 		return true
 	default:
 		return false
 	}
+}
+
+// usesPromptFile reports whether the protocol delivers the prompt through
+// ward's protected prompt file instead of the launch argv.
+func (d PromptDelivery) usesPromptFile() bool {
+	switch d {
+	case PromptFileV1, PromptFileV2:
+		return true
+	case PromptArgument:
+		return false
+	}
+	return false
 }
 
 // UsageExtractor is the optional provider hook for numbers-only telemetry in

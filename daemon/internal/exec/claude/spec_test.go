@@ -182,16 +182,27 @@ func TestHandoffSpecRefusesUnsupportedContainment(t *testing.T) {
 }
 
 // handoffCommandCases are the launch shapes one HandoffSpec path produces:
-// both prompt deliveries, each with and without the preparation command.
+// every launch protocol, each with and without the preparation command.
+// redirect is where that protocol streams the transcript while the agent runs.
 var handoffCommandCases = []struct {
 	name     string
 	delivery stage.PromptDelivery
 	prepare  []string
+	redirect string
 }{
-	{"argument", stage.PromptArgument, nil},
-	{"argument-prepare", stage.PromptArgument, []string{"/usr/local/bin/freeside-project-prepare"}},
-	{"prompt-file", stage.PromptFileV1, nil},
-	{"prompt-file-prepare", stage.PromptFileV1, []string{"/usr/local/bin/freeside-project-prepare"}},
+	{"argument", stage.PromptArgument, nil, transcriptPath},
+	{"argument-prepare", stage.PromptArgument, []string{"/usr/local/bin/freeside-project-prepare"}, transcriptPath},
+	{"prompt-file", stage.PromptFileV1, nil, transcriptPath},
+	{"prompt-file-prepare", stage.PromptFileV1, []string{"/usr/local/bin/freeside-project-prepare"}, transcriptPath},
+	{"file-v2", stage.PromptFileV2, nil, launchTranscriptPath},
+	{"file-v2-prepare", stage.PromptFileV2, []string{"/usr/local/bin/freeside-project-prepare"}, launchTranscriptPath},
+}
+
+// deferredCommand is the launch script new launches run: the prompt file on
+// stdin and the launcher's own files kept out of the workspace.
+func deferredCommand(prepare []string) string {
+	return agentCommandWithInput(
+		"< "+shellQuote(ward.PromptFilePath), "session-1", "inv-1", prepare, "", "", launcherFilesDeferred)[2]
 }
 
 // TestHandoffSpecCommandGolden pins the whole launch command of a start that
@@ -227,7 +238,6 @@ func TestHandoffSpecPassesModelAndEffort(t *testing.T) {
 	t.Parallel()
 	provider := claudeProvider{volumes: testAuthStoreVolumes{volume: "provider-volume"}}
 	const model, effort = "claude-opus-5-5", "xhigh"
-	redirect := "> " + shellQuote(transcriptPath)
 	selections := []struct {
 		name, model, effort, flags string
 	}{
@@ -239,6 +249,7 @@ func TestHandoffSpecPassesModelAndEffort(t *testing.T) {
 		for _, sel := range selections {
 			t.Run(tc.name+"/"+sel.name, func(t *testing.T) {
 				t.Parallel()
+				redirect := "> " + shellQuote(tc.redirect)
 				in := testProviderHandoffInput()
 				in.PromptDelivery, in.Preparation = tc.delivery, tc.prepare
 				bare, err := provider.HandoffSpec(context.Background(), in)
@@ -618,20 +629,21 @@ func TestOversizedPromptIsRejected(t *testing.T) {
 // filesystem topology, not on the nonce. An adversarial probe against the
 // pinned image under Apple container confirmed both halves: pid 1's cmdline is
 // readable at UID 1001, so the writer can always learn the nonce, while the
-// forge itself fails at every step (writing, listing, removing, or renaming
-// the root-owned 0700 control directory inside the sticky evidence directory;
-// truncating the root-owned transcript; signalling pid 1; regaining privilege
-// through a setuid copy). The nonce proves the marker is this run's, never
-// that the writer did not author it.
+// forge itself fails at every step (writing into, removing, or renaming the
+// root-owned control directory inside the sticky evidence directory;
+// signalling pid 1; regaining privilege through a setuid copy). The nonce
+// proves the marker is this run's, never that the writer did not author it.
 //
-// So this command string is a security control, and until this test it had
-// none: an edit that reorders the chown sweep past the control directory's
-// creation, or relaxes either mode, silently hands the writer the ability to
-// report its own success. Ordering is asserted by position rather than by
-// matching the whole script, so ordinary edits stay cheap.
+// So this command string is a security control: an edit that reorders the
+// chown sweep past the control directory's creation, lets others write to
+// that directory, or writes into it before closing it, silently hands the
+// writer the ability to report its own success. Ordering is asserted by
+// position rather than by matching the whole script, so ordinary edits stay
+// cheap. The command checked is the one new launches run; the golden files
+// pin the two older ones byte for byte.
 func TestAgentCommandKeepsTheOutcomeMarkerOutOfWriterReach(t *testing.T) {
 	t.Parallel()
-	script := strings.Join(agentCommand("do the work", "session-1", "inv-1", nil, "", ""), " ")
+	script := deferredCommand(nil)
 	evidenceDir := path.Dir(transcriptPath)
 	controlDir := path.Dir(writerOutcomePath)
 
@@ -641,6 +653,17 @@ func TestAgentCommandKeepsTheOutcomeMarkerOutOfWriterReach(t *testing.T) {
 	if path.Dir(controlDir) != evidenceDir {
 		t.Fatalf("control directory %q is not inside the exported evidence directory %q",
 			controlDir, evidenceDir)
+	}
+	// The in-flight transcript must sit on the container's own filesystem: a
+	// path under a mount would either show it to the agent's tools or keep it
+	// on a volume that outlives the launcher.
+	for _, mount := range []string{
+		workspaceDir, credentialMountTarget, ward.ClaudeConfigRootTarget,
+		ward.PromptFileTarget, path.Dir(instructionBundlePath),
+	} {
+		if launchDir == mount || strings.HasPrefix(launchDir, mount+"/") || strings.HasPrefix(mount, launchDir+"/") {
+			t.Errorf("launch directory %q overlaps the mount at %q", launchDir, mount)
+		}
 	}
 
 	at := func(needle string) int {
@@ -654,12 +677,15 @@ func TestAgentCommandKeepsTheOutcomeMarkerOutOfWriterReach(t *testing.T) {
 
 	// Root owns both directories the writer must not control, and the sticky
 	// bit is what stops an unprivileged writer unlinking or renaming a
-	// root-owned entry out of a world-writable directory.
+	// root-owned entry out of a world-writable directory. While the writer
+	// runs the control directory is empty and readable, never writable.
 	stickyEvidence := at("mkdir -p '" + evidenceDir + "'; chown 0:0 '" + evidenceDir +
 		"'; chmod 1777 '" + evidenceDir + "'")
-	privateControl := at("mkdir -p '" + controlDir + "'; chown 0:0 '" + controlDir +
-		"'; chmod 0700 '" + controlDir + "'")
+	openControl := at("mkdir -p '" + controlDir + "'; chown 0:0 '" + controlDir +
+		"'; chmod 0755 '" + controlDir + "'")
 	stickyWorkspace := at("chown 0:0 '" + workspaceDir + "'; chmod 1777 '" + workspaceDir + "'")
+	privateLaunch := at("rm -rf '" + launchDir + "'; mkdir '" + launchDir + "'; chown 0:0 '" + launchDir +
+		"'; chmod 0700 '" + launchDir + "'")
 
 	// The writer owns the repository it edits and nothing else.
 	dropWorkspace := at("chown -hR " + agentUID + ":" + agentGID)
@@ -683,8 +709,8 @@ func TestAgentCommandKeepsTheOutcomeMarkerOutOfWriterReach(t *testing.T) {
 	// must be written after it: a control directory created after the drop, or
 	// a chown sweep that runs after it, would leave a window the writer owns.
 	if stickyWorkspace > drop || stickyEvidence > drop ||
-		privateControl > drop || dropWorkspace > drop {
-		t.Error("the workspace, evidence, and control boundaries are not all established before the privilege drop")
+		openControl > drop || privateLaunch > drop || dropWorkspace > drop {
+		t.Error("the workspace, evidence, control, and launch boundaries are not all established before the privilege drop")
 	}
 	if marker < drop {
 		t.Error("the outcome marker is written before the writer runs")
@@ -692,13 +718,43 @@ func TestAgentCommandKeepsTheOutcomeMarkerOutOfWriterReach(t *testing.T) {
 	if dependencyCleanup < drop || dependencyCleanup > marker {
 		t.Error("the runtime dependency tree is not removed after the writer and before its outcome marker")
 	}
-	if privateControl < stickyEvidence {
+	if openControl < stickyEvidence {
 		t.Error("the control directory is created before its sticky parent, so its mode is not the one that survives")
 	}
-	descriptor := at("> '" + transcriptDescriptorPath + "'")
-	if descriptor > drop {
-		t.Error("the transcript evidence descriptor is not fixed before the writer runs")
+
+	// Before the writer exits the launcher puts none of its own files in the
+	// workspace (#1929): the transcript streams to the launch directory and
+	// nothing names the descriptor, the final transcript, or a control file.
+	redirect := at("> '" + launchTranscriptPath + "' 2>&1")
+	if redirect < drop {
+		t.Error("the transcript redirect does not belong to the dropped invocation")
 	}
+	for _, launcherPath := range []string{transcriptDescriptorPath, transcriptPath, controlDir + "/"} {
+		if i := strings.Index(script, launcherPath); i >= 0 && i < redirect {
+			t.Errorf("the launcher names %q before the writer has exited", launcherPath)
+		}
+	}
+
+	// Once the writer has exited, the launcher takes away its write access
+	// to the evidence directory and closes the control directory in one step,
+	// before anything is written into either. Both files are then renamed out
+	// of the control directory onto their final paths before the marker says
+	// the run is over.
+	closeControl := at("chmod 0755 '" + evidenceDir + "'; chmod 0700 '" + controlDir + "'")
+	if closeControl < redirect {
+		t.Error("the evidence and control directories are closed before the writer has exited")
+	}
+	if firstWrite := at(controlDir + "/"); firstWrite < closeControl {
+		t.Error("the launcher writes into the control directory before closing it")
+	}
+	for _, final := range []string{transcriptDescriptorPath, transcriptPath} {
+		staged := controlDir + "/" + path.Base(final)
+		move := at("rm -rf -- '" + final + "'; mv -T '" + staged + "' '" + final + "'")
+		if move < closeControl || move > marker {
+			t.Errorf("%q is not moved into place after the control directory closes and before the marker", final)
+		}
+	}
+
 	for _, field := range []string{
 		export.EvidenceSourceVersion, `"label":"agent-transcript"`,
 		`"path":"` + transcriptEvidencePath + `"`,
@@ -742,6 +798,12 @@ func TestAgentCommandKeepsTheOutcomeMarkerOutOfWriterReach(t *testing.T) {
 		if !strings.Contains(script[blockedGuard:], field) {
 			t.Errorf("blocked descriptor omits %q", field)
 		}
+	}
+
+	// The git exclude is written as root into a tree the writer will own, so
+	// it must run while that tree is still only the daemon's seed.
+	if exclude := at(">> '" + workspaceDir + "/.git/info/exclude'"); exclude > dropWorkspace {
+		t.Error("the git exclude is written after the workspace is handed to the writer")
 	}
 }
 
@@ -800,7 +862,7 @@ func TestFixedSourceDescriptorComposes(t *testing.T) {
 }
 
 func TestPublicMetadataLauncherAndPromptContract(t *testing.T) {
-	script := strings.Join(agentCommand("work", "session-1", "inv-1", nil, "", ""), " ")
+	script := deferredCommand(nil)
 	guard := "if [ -f '" + export.PublicationEvidencePath + "' ] && [ ! -L '" + export.PublicationEvidencePath + "' ]"
 	fragment := evidenceSourceFragment("publication", export.EvidenceSource{
 		Label: export.PublicationEvidenceLabel, MediaType: "text/markdown", Path: export.PublicationEvidencePath,
@@ -839,7 +901,7 @@ func TestPublicMetadataLauncherAndPromptContract(t *testing.T) {
 func TestAgentCommandHydratesBeforeTheOwnershipDrop(t *testing.T) {
 	t.Parallel()
 	prepare := []string{"/usr/local/bin/freeside-project-prepare"}
-	script := strings.Join(agentCommand("do the work", "session-1", "inv-1", prepare, "", ""), " ")
+	script := deferredCommand(prepare)
 
 	at := func(needle string) int {
 		t.Helper()
@@ -862,6 +924,11 @@ func TestAgentCommandHydratesBeforeTheOwnershipDrop(t *testing.T) {
 
 	if hydrate > sweep {
 		t.Error("hydration runs after the ownership sweep, so the hydrated tree is not dropped to the agent")
+	}
+	// Hydration runs project code as root. The git exclude must already be
+	// written, while the tree is still only the daemon's seed.
+	if exclude := at(">> '" + workspaceDir + "/.git/info/exclude'"); exclude > hydrate {
+		t.Error("the git exclude is written after project code has run in the workspace")
 	}
 	if prepareStatus > sweep {
 		t.Error("the preparation exit status is captured after the ownership sweep")
@@ -932,5 +999,330 @@ func TestRuntimeDependencyCleanupDoesNotFollowReplacementSymlink(t *testing.T) {
 	body, err := os.ReadFile(sentinel) //nolint:gosec // G304: test-owned path under t.TempDir
 	if err != nil || string(body) != "keep" {
 		t.Fatalf("cleanup followed replacement symlink: body=%q err=%v", body, err)
+	}
+}
+
+// launchRig is a relocated copy of the writer container's filesystem: the
+// generated launch script runs against it with every absolute path moved
+// under one temporary root, and stand-ins on PATH for the three commands an
+// unprivileged test cannot run.
+type launchRig struct {
+	root, workspace, bin, probe, sentinel string
+}
+
+const launchRigNonce = "nonce-1"
+
+// The stand-in agent records what a tool walking the repository root meets,
+// then leaves the entries a hostile writer would: a symlink where the
+// launcher's descriptor goes and a directory where its transcript goes.
+const launchRigAgent = `#!/bin/sh
+set -eu
+find . -mindepth 1 | LC_ALL=C sort > "$FREESIDE_RIG_PROBE/entries"
+find . -mindepth 1 \( ! -perm -004 -o \( -type d ! -perm -001 \) \) > "$FREESIDE_RIG_PROBE/unreadable"
+printf 'summary\n' > .freeside-evidence/summary.md
+ln -s "$FREESIDE_RIG_SENTINEL" .freeside-evidence/evidence.json
+mkdir .freeside-evidence/agent-transcript.jsonl
+printf 'planted\n' > .freeside-evidence/agent-transcript.jsonl/inner
+printf 'stand-in transcript\n'
+`
+
+func newLaunchRig(t *testing.T) launchRig {
+	t.Helper()
+	root := t.TempDir()
+	rig := launchRig{
+		root: root, workspace: filepath.Join(root, "workspace"), bin: filepath.Join(root, "bin"),
+		probe: filepath.Join(root, "probe"), sentinel: filepath.Join(root, "outside", "sentinel"),
+	}
+	files := []struct {
+		path, body string
+		mode       os.FileMode
+	}{
+		// The seed is world-readable, as a checkout is, so every unreadable
+		// entry the walk finds is one the launcher added.
+		{filepath.Join(rig.workspace, "README.md"), "seed\n", 0o644},
+		{filepath.Join(rig.workspace, "src", "main.js"), "seed\n", 0o644},
+		{filepath.Join(rig.workspace, ".git", "HEAD"), "ref: refs/heads/main\n", 0o644},
+		{filepath.Join(root, credentialTokenPath), "token\n", 0o600},
+		{filepath.Join(root, ward.PromptFilePath), "prompt\n", 0o600},
+		{rig.sentinel, "keep\n", 0o600},
+		{filepath.Join(rig.bin, "chown"), "#!/bin/sh\nexit 0\n", 0o755},
+		{filepath.Join(rig.bin, "setpriv"), "#!/bin/sh\nwhile [ \"${1#--}\" != \"$1\" ]; do shift; done\nexec \"$@\"\n", 0o755},
+		{filepath.Join(rig.bin, "claude"), launchRigAgent, 0o755},
+		{
+			filepath.Join(rig.bin, "prepare"),
+			"#!/bin/sh\nmkdir -p node_modules/dep && printf 'dep\\n' > node_modules/dep/index.js\n", 0o755,
+		},
+	}
+	for _, dir := range []string{
+		rig.probe, filepath.Join(root, "root"),
+		filepath.Join(root, ward.ClaudeContinuityTarget), filepath.Join(root, ward.ClaudeSessionScratchTarget),
+	} {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, file := range files {
+		dirMode := os.FileMode(0o750)
+		if strings.HasPrefix(file.path, rig.workspace) {
+			dirMode = 0o755
+		}
+		if err := os.MkdirAll(filepath.Dir(file.path), dirMode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file.path, []byte(file.body), file.mode); err != nil {
+			t.Fatal(err)
+		}
+		// WriteFile and MkdirAll apply the umask; the walk reads exact bits.
+		if err := os.Chmod(file.path, file.mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, dir := range []string{rig.workspace, filepath.Join(rig.workspace, "src"), filepath.Join(rig.workspace, ".git")} {
+		if err := os.Chmod(dir, 0o755); err != nil { //nolint:gosec // G302: test fixture modes are the subject
+			t.Fatal(err)
+		}
+	}
+	return rig
+}
+
+// script is the real launch command, relocated under the rig's root. Every
+// absolute path the command names is single-quoted, so a path the relocation
+// missed is found here and not by a write outside the rig.
+func (rig launchRig) script(t *testing.T) string {
+	t.Helper()
+	script := deferredCommand([]string{filepath.Join(rig.bin, "prepare")})
+	script = strings.NewReplacer(
+		"'"+workspaceDir, "'"+rig.workspace,
+		"'/var/lib/freeside", "'"+filepath.Join(rig.root, "var/lib/freeside"),
+		"'"+prepareHome, "'"+filepath.Join(rig.root, prepareHome),
+		"'"+path.Dir(instructionBundlePath), "'"+filepath.Join(rig.root, path.Dir(instructionBundlePath)),
+		"chmod 0711 /root;", "chmod 0711 "+shellQuote(filepath.Join(rig.root, "root"))+";",
+		ward.WriterNoncePlaceholder, launchRigNonce,
+	).Replace(script)
+	gitPatterns := []string{"'/" + export.EvidenceWorkspaceDir + "/'", "'/" + export.CommitPlanFilename + "'"}
+	for rest := script; ; {
+		i := strings.Index(rest, "'/")
+		if i < 0 {
+			break
+		}
+		rest = rest[i:]
+		if !strings.HasPrefix(rest, "'"+rig.root+"/") &&
+			!slices.ContainsFunc(gitPatterns, func(p string) bool { return strings.HasPrefix(rest, p) }) {
+			t.Fatalf("launch command names an absolute path outside the rig: %.80s", rest)
+		}
+		rest = rest[2:]
+	}
+	return script
+}
+
+func (rig launchRig) run(t *testing.T, pathPrefix ...string) ([]byte, error) {
+	t.Helper()
+	// The writer container runs the launcher under umask 022. The command's
+	// own files do not depend on it; the seed and hydration stand-ins do.
+	cmd := osexec.Command("sh", "-c", "umask 022; "+rig.script(t)) //nolint:gosec // G204: the generated launch command is the subject
+	cmd.Dir = rig.root
+	cmd.Env = append(os.Environ(),
+		"PATH="+strings.Join(append(pathPrefix, rig.bin, os.Getenv("PATH")), string(os.PathListSeparator)),
+		"FREESIDE_RIG_PROBE="+rig.probe, "FREESIDE_RIG_SENTINEL="+rig.sentinel)
+	return cmd.CombinedOutput()
+}
+
+func (rig launchRig) read(t *testing.T, elem ...string) string {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join(elem...)) //nolint:gosec // G304: test-owned path under t.TempDir
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
+}
+
+// requireRenameOnlyMove skips where mv cannot refuse a directory destination.
+// The launch command needs GNU mv -T, which the pinned agent image and every
+// Linux CI runner have, and macOS does not.
+func requireRenameOnlyMove(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	from, to := filepath.Join(dir, "from"), filepath.Join(dir, "to")
+	if err := os.WriteFile(from, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := osexec.Command("mv", "-T", from, to).Run(); err != nil { //nolint:gosec // G204: fixed argv over test-owned paths
+		if runtime.GOOS == "linux" {
+			t.Fatalf("mv -T failed on Linux, where the launch command depends on it: %v", err)
+		}
+		t.Skipf("mv -T is unavailable on %s: %v", runtime.GOOS, err)
+	}
+}
+
+// TestLaunchCommandLeavesTheWorkspaceWalkable runs the generated launch
+// command, not a copy of it, and walks the workspace from the point where the
+// agent runs (#1929). A lint that walks the repository root failed there on an
+// unreadable control directory and on the launcher's one-line descriptor,
+// neither of which the verifier's workspace contains.
+//
+// The test user owns every file, so it reads mode bits where the real writer
+// would get an access error, and a stand-in chown means it cannot see
+// ownership. TestAgentCommandKeepsTheOutcomeMarkerOutOfWriterReach holds the
+// ownership and ordering half of the control.
+func TestLaunchCommandLeavesTheWorkspaceWalkable(t *testing.T) {
+	t.Parallel()
+	requireRenameOnlyMove(t)
+	rig := newLaunchRig(t)
+	if output, err := rig.run(t); err != nil {
+		t.Fatalf("launch command: %v: %s", err, output)
+	}
+
+	// While the agent ran, the launcher had added two empty directories and
+	// the git exclude to the seed and its hydrated dependencies: no file of
+	// its own, and nothing the agent's user could not read or enter.
+	if unreadable := rig.read(t, rig.probe, "unreadable"); unreadable != "" {
+		t.Errorf("the agent's walk met entries its user cannot read or enter:\n%s", unreadable)
+	}
+	wantEntries := []string{
+		"./.freeside-evidence", "./.freeside-evidence/.control",
+		"./.git", "./.git/HEAD", "./.git/info", "./.git/info/exclude",
+		"./README.md",
+		"./node_modules", "./node_modules/dep", "./node_modules/dep/index.js",
+		"./src", "./src/main.js",
+	}
+	if got := strings.Fields(rig.read(t, rig.probe, "entries")); !slices.Equal(got, wantEntries) {
+		t.Errorf("workspace while the agent ran:\n got %q\nwant %q", got, wantEntries)
+	}
+	exclude := rig.read(t, rig.workspace, ".git", "info", "exclude")
+	if exclude != "\n/"+export.EvidenceWorkspaceDir+"/\n/"+export.CommitPlanFilename+"\n" {
+		t.Errorf("git exclude = %q", exclude)
+	}
+
+	// Afterwards the launcher's two files hold its own content, whatever the
+	// agent left at their paths, and the symlink's target is untouched.
+	if sentinel := rig.read(t, rig.sentinel); sentinel != "keep\n" {
+		t.Errorf("the launcher wrote through the agent's symlink: sentinel = %q", sentinel)
+	}
+	evidence := filepath.Join(rig.workspace, export.EvidenceWorkspaceDir)
+	for _, name := range []string{path.Base(transcriptDescriptorPath), path.Base(transcriptPath)} {
+		info, err := os.Lstat(filepath.Join(evidence, name))
+		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o644 {
+			t.Fatalf("%s is not the launcher's regular 0644 file: %v, %v", name, info, err)
+		}
+	}
+	if transcript := rig.read(t, evidence, path.Base(transcriptPath)); transcript != "stand-in transcript\n" {
+		t.Errorf("transcript = %q", transcript)
+	}
+	manifest, err := export.DecodeEvidenceSourceManifest([]byte(rig.read(t, evidence, path.Base(transcriptDescriptorPath))))
+	if err != nil {
+		t.Fatalf("descriptor does not decode: %v", err)
+	}
+	wantSources := []export.EvidenceSource{
+		{
+			Label: "agent-transcript", MediaType: "application/jsonl", Path: transcriptEvidencePath,
+			HeadBinding: export.EvidenceHeadIndependent, SensitivityClass: export.EvidenceSensitivitySensitive,
+			ProducerInvocationID: "inv-1",
+		},
+		{
+			Label: export.SummaryEvidenceLabel, MediaType: "text/markdown", Path: export.SummaryEvidencePath,
+			HeadBinding: export.EvidenceHeadIndependent, SensitivityClass: export.EvidenceSensitivitySensitive,
+			ProducerInvocationID: "inv-1",
+		},
+	}
+	if !slices.Equal(manifest.Sources, wantSources) {
+		t.Errorf("descriptor sources = %+v, want %+v", manifest.Sources, wantSources)
+	}
+
+	// Both directories are closed to the agent, the control directory holds
+	// only the marker, and the hydrated tree is gone before the export walk
+	// could see it.
+	if info, err := os.Stat(evidence); err != nil || info.Mode() != os.ModeDir|0o755 {
+		t.Errorf("evidence directory is not a plain 0755 directory after the launcher: %v, %v", info, err)
+	}
+	control := filepath.Join(evidence, path.Base(path.Dir(writerOutcomePath)))
+	if info, err := os.Stat(control); err != nil || info.Mode().Perm() != 0o700 {
+		t.Errorf("control directory is not 0700 after the launcher: %v, %v", info, err)
+	}
+	if entries, err := os.ReadDir(control); err != nil || len(entries) != 1 {
+		t.Errorf("control directory holds %v, want only the marker: %v", entries, err)
+	}
+	if marker := rig.read(t, control, path.Base(writerOutcomePath)); marker != launchRigNonce+" 0\n" {
+		t.Errorf("outcome marker = %q", marker)
+	}
+	if _, err := os.Lstat(filepath.Join(rig.workspace, "node_modules")); !os.IsNotExist(err) {
+		t.Errorf("hydrated dependencies survived the launcher: %v", err)
+	}
+}
+
+// The rename is what keeps the launcher's two files its own, whether or not
+// the removal before it worked. With that removal defeated, as if the entries
+// the agent left had reappeared, the symlink at the descriptor path is
+// replaced and never followed, and the directory at the transcript path fails
+// the move. A launcher that cannot move a file into place must not report an
+// outcome: ward reads a missing marker as a run that never finished, where a
+// marker beside the agent's own entry would hand the agent the evidence
+// channel's provenance.
+func TestLaunchCommandRenamesOverWhatTheAgentLeft(t *testing.T) {
+	t.Parallel()
+	requireRenameOnlyMove(t)
+	rig := newLaunchRig(t)
+	rm, err := osexec.LookPath("rm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := filepath.Join(rig.workspace, export.EvidenceWorkspaceDir)
+	descriptor := filepath.Join(evidence, path.Base(transcriptDescriptorPath))
+	keeping := filepath.Join(rig.root, "keeping")
+	if err := os.MkdirAll(keeping, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	stub := "#!/bin/sh\nfor arg; do case \"$arg\" in " +
+		shellQuote(descriptor) + "|" + shellQuote(filepath.Join(evidence, path.Base(transcriptPath))) +
+		") exit 0 ;; esac; done\nexec " + shellQuote(rm) + " \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(keeping, "rm"), []byte(stub), 0o700); err != nil { //nolint:gosec // G306: an executable stand-in
+		t.Fatal(err)
+	}
+	output, err := rig.run(t, keeping)
+	if err == nil || !strings.Contains(string(output), path.Base(transcriptPath)) {
+		t.Fatalf("launch command did not fail on the directory at the transcript path: %v: %s", err, output)
+	}
+	if _, err := os.Lstat(filepath.Join(rig.root, writerOutcomePath)); !os.IsNotExist(err) {
+		t.Errorf("the launcher wrote an outcome marker after a failed move: %v", err)
+	}
+	if sentinel := rig.read(t, rig.sentinel); sentinel != "keep\n" {
+		t.Errorf("the launcher wrote through the agent's symlink: sentinel = %q", sentinel)
+	}
+	if info, err := os.Lstat(descriptor); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("the descriptor did not replace the agent's symlink: %v, %v", info, err)
+	}
+	if _, err := export.DecodeEvidenceSourceManifest([]byte(rig.read(t, descriptor))); err != nil {
+		t.Errorf("descriptor does not decode: %v", err)
+	}
+}
+
+// An agent that never launched still gets its outcome reported: the launcher
+// has no transcript to place, writes the descriptor, and records the status
+// that names the missing credential.
+func TestLaunchCommandReportsAnAgentThatNeverLaunched(t *testing.T) {
+	t.Parallel()
+	requireRenameOnlyMove(t)
+	rig := newLaunchRig(t)
+	if err := os.Remove(filepath.Join(rig.root, credentialTokenPath)); err != nil {
+		t.Fatal(err)
+	}
+	output, err := rig.run(t)
+	var exit *osexec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 86 {
+		t.Fatalf("launch command: %v, want exit status 86: %s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(rig.probe, "entries")); !os.IsNotExist(err) {
+		t.Fatalf("the agent ran without a credential: %v", err)
+	}
+	evidence := filepath.Join(rig.workspace, export.EvidenceWorkspaceDir)
+	if marker := rig.read(t, rig.root, writerOutcomePath); marker != launchRigNonce+" 86\n" {
+		t.Errorf("outcome marker = %q", marker)
+	}
+	if _, err := export.DecodeEvidenceSourceManifest(
+		[]byte(rig.read(t, evidence, path.Base(transcriptDescriptorPath))),
+	); err != nil {
+		t.Errorf("descriptor does not decode: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(evidence, path.Base(transcriptPath))); !os.IsNotExist(err) {
+		t.Errorf("a transcript was placed for an agent that never ran: %v", err)
 	}
 }
