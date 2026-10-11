@@ -186,13 +186,16 @@ expected_args=(
 )
 [[ "$(cat "$tmp/args")" == "$(printf '%s\n' "${expected_args[@]}")" ]] || fail "auth adopt got unexpected arguments: $(tr '\n' ' ' <"$tmp/args")"
 
-# With subscription judgments on, adoption also gets the publication author's
-# prompt file, the one the harness gives preflight and the daemon: the role is
-# on for both, so the adopted lineup needs its line. Any one of the four
-# variables counts, as it does where the harness builds judgment_args.
-author_prompt_args=(-judgment-publication-author-prompt "$root/prompts/publication-author.md")
+# With subscription judgments on, adoption also gets the model every judgment
+# call launches with, which the daemon has no flag for, and the publication
+# author's prompt file, the one the harness gives preflight and the daemon:
+# the roles are on for both, so the adopted lineup needs their lines. Any one
+# of the three variables counts, as it does where the harness builds
+# judgment_args.
+judgment_line_args=(-judgment-model judgment-model
+	-judgment-publication-author-prompt "$root/prompts/publication-author.md")
 patch_at=$((${#expected_args[@]} - 2))
-judgment_expected_args=("${expected_args[@]:0:patch_at}" "${author_prompt_args[@]}"
+judgment_expected_args=("${expected_args[@]:0:patch_at}" "${judgment_line_args[@]}"
 	-patch "$tmp/judgment-session/agent-tree.patch")
 FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN=/opt/claude FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256=sha256:11 \
 	FREESIDE_REAL_RUN_JUDGMENT_MODEL=judgment-model \
@@ -200,7 +203,7 @@ FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN=/opt/claude FREESIDE_REAL_RUN_JUDGMENT_CLA
 [[ "$rc" == 0 ]] || fail "adoption with judgments on returned $rc"
 [[ "$(cat "$tmp/args")" == "$(printf '%s\n' "${judgment_expected_args[@]}")" ]] || fail "auth adopt with judgments on got unexpected arguments: $(tr '\n' ' ' <"$tmp/args")"
 FREESIDE_REAL_RUN_JUDGMENT_MODEL=judgment-model adopt judgment-session root-a "$matching"
-[[ "$(cat "$tmp/args")" == "$(printf '%s\n' "${judgment_expected_args[@]}")" ]] || fail 'one judgment variable did not give adoption the author prompt'
+[[ "$(cat "$tmp/args")" == "$(printf '%s\n' "${judgment_expected_args[@]}")" ]] || fail 'one judgment variable did not give adoption the model and the author prompt'
 [[ -s "$root/prompts/publication-author.md" ]] || fail 'the publication author prompt the harness names is missing'
 
 # A second run on the same root reports both identities reused and proceeds.
@@ -293,6 +296,7 @@ for value, status in (("token", 2), ("", 0)):
     assert ran.returncode == status, f"judgment token variable {value!r}: exit {ran.returncode}"
     assert ("no longer read" in ran.stderr) == bool(value), ran.stderr
 assert '-judgment-publication-author-prompt "$real_work_agent_tree_repo_root/prompts/publication-author.md")' in helper, "adoption names another author prompt"
+assert 'judgment_lines=(-judgment-model "${FREESIDE_REAL_RUN_JUDGMENT_MODEL:-}"' in helper, "adoption does not take the harness's judgment model"
 PY
 
 echo 'test-real-work-agent-tree: ok'

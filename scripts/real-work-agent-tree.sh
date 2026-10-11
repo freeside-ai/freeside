@@ -62,12 +62,14 @@ real_work_agent_tree_matches() {
 # environment because auth adopt defaults each to the current date, and a tree
 # committed on one day would stop matching on the next.
 #
-# When the harness runs subscription judgments it gives preflight and the
-# daemon the publication author's prompt file, which switches that role on,
-# and the role then needs a lineup line naming the same file. Adoption writes
-# that line only when it is given the file, so it gets the file under the
-# condition and at the path run-real-work.sh uses for judgment_args. Without
-# it preflight reports the role unbound and stops every such run.
+# When the harness runs subscription judgments, every judgment role needs a
+# lineup line, and adoption writes those lines only when it is given the
+# model their calls launch with: the daemon has no flag for it. The harness
+# also gives preflight and the daemon the publication author's prompt file,
+# which switches that role on, and its line has to name the same file. So
+# adoption gets the model and the file under the condition, and the file at
+# the path, run-real-work.sh uses for judgment_args. Without them preflight
+# reports the roles unbound and stops every such run.
 #
 # Adoption's own output, and git's while comparing, goes to files in the
 # session and is never echoed: the report and the patch name the identities
@@ -77,9 +79,10 @@ real_work_adopt_agent_tree() {
 	local freesided=$1 db_path=$2 session=$3
 	local patch="$session/agent-tree.patch" report="$session/auth-adopt.json"
 	local log="$session/auth-adopt.log" rc=0
-	local author_prompt=()
+	local judgment_lines=()
 	if [[ -n "${FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN:-}${FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256:-}${FREESIDE_REAL_RUN_JUDGMENT_MODEL:-}" ]]; then
-		author_prompt=(-judgment-publication-author-prompt "$real_work_agent_tree_repo_root/prompts/publication-author.md")
+		judgment_lines=(-judgment-model "${FREESIDE_REAL_RUN_JUDGMENT_MODEL:-}"
+			-judgment-publication-author-prompt "$real_work_agent_tree_repo_root/prompts/publication-author.md")
 	fi
 	rm -f "$patch"
 	"$freesided" auth adopt \
@@ -99,7 +102,7 @@ real_work_adopt_agent_tree() {
 		-prompt-package "$FREESIDE_REAL_RUN_PROMPT_PACKAGE" \
 		-specification-prompt-package "$FREESIDE_REAL_RUN_SPECIFICATION_PROMPT_PACKAGE" \
 		-remediation-prompt-package "$FREESIDE_REAL_RUN_REMEDIATION_PROMPT_PACKAGE" \
-		${author_prompt[@]+"${author_prompt[@]}"} \
+		${judgment_lines[@]+"${judgment_lines[@]}"} \
 		-patch "$patch" >"$report" 2>"$log" || rc=$?
 	if [[ "$rc" != 0 || ! -s "$patch" ]]; then
 		echo "run-real-work: freesided auth adopt failed or emitted no tree patch; its report is $report and its log is $log" >&2

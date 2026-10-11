@@ -57,6 +57,10 @@ type authAdoptConfig struct {
 	// The daemon's three prompt-package files; the lineup lines record their
 	// digests. The review prompt is code-owned and needs no file.
 	PromptPackage, SpecificationPromptPackage, RemediationPromptPackage string
+	// JudgmentModel is the exact Claude model id the call offer names. The
+	// daemon has no flag for it: a judgment call launches with the model its
+	// lineup line's offer names. Empty means no judgment lines.
+	JudgmentModel string
 	// JudgmentPublicationAuthorPrompt is the daemon's flag of the same name.
 	// The other judgment roles' prompts are code-owned and need no file.
 	JudgmentPublicationAuthorPrompt string
@@ -223,7 +227,7 @@ func runAuthAdoptCommand(
 
 	tree, err := agentbaseline.Tree(agentbaseline.TreeInput{
 		ClaudeEnrollment: claude.Enrollment, CodexEnrollment: codexEnrollment,
-		ReviewModel: cfg.ReviewModel, TermsBasisDate: cfg.TermsBasisDate,
+		ReviewModel: cfg.ReviewModel, JudgmentModel: cfg.JudgmentModel, TermsBasisDate: cfg.TermsBasisDate,
 		PricingRevision: cfg.PricingRevision, OfferNotAfter: notAfter, Prompts: prompts,
 	})
 	if err != nil {
@@ -345,10 +349,11 @@ func adoptReportEntry(
 
 // readAdoptPrompts digests the daemon's prompt packages into the writer
 // roles' lineup prompts: the role name, with the digest admission records for
-// the package (the content address of its bytes). Each judgment role gets
-// its code-owned prompt; the publication author gets a prompt, and so a
-// line, only when its prompt file is named, because without the file the
-// daemon leaves that role off.
+// the package (the content address of its bytes). With a judgment model,
+// each judgment role gets its code-owned prompt; the publication author gets
+// a prompt, and so a line, only when its prompt file is named, because
+// without the file the daemon leaves that role off. Without a judgment model
+// the tree has no call agent, so no judgment role gets a prompt or a line.
 func readAdoptPrompts(cfg authAdoptConfig) (map[domain.RoleName]agentbaseline.Prompt, error) {
 	prompts := map[domain.RoleName]agentbaseline.Prompt{}
 	for _, entry := range []struct {
@@ -369,6 +374,9 @@ func readAdoptPrompts(cfg authAdoptConfig) (map[domain.RoleName]agentbaseline.Pr
 	}
 	if cfg.ShadowReviewCostOwner != "" {
 		prompts[domain.RoleShadowReviewer] = reviewPrompt()
+	}
+	if cfg.JudgmentModel == "" {
+		return prompts, nil
 	}
 	for _, role := range agentbaseline.JudgmentRoles() {
 		prompt, ok := inference.CodeOwnedRolePrompt(role)
@@ -444,8 +452,12 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 		"the daemon's -specification-prompt-package (required)")
 	flags.StringVar(&cfg.RemediationPromptPackage, "remediation-prompt-package", "",
 		"the daemon's -remediation-prompt-package (required)")
+	flags.StringVar(&cfg.JudgmentModel, "judgment-model", "",
+		"exact Claude model id the call offer names, which every judgment call launches with "+
+			"(optional; without it the patch has no judgment lines)")
 	flags.StringVar(&cfg.JudgmentPublicationAuthorPrompt, "judgment-publication-author-prompt", "",
-		"the daemon's -judgment-publication-author-prompt (optional; without it the publication author gets no line)")
+		"the daemon's -judgment-publication-author-prompt (optional, and needs -judgment-model; "+
+			"without it the publication author gets no line)")
 	flags.StringVar(&cfg.RetireUnadoptable, "retire-unadoptable", "",
 		"identity to retire if this run reports it unadoptable: disable it and stop the open tasks it owns")
 	flags.StringVar(&cfg.PatchPath, "patch", "-", "file to write the tree patch to, outside any checkout; - is stdout")
@@ -481,6 +493,21 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 	}
 	if !oneIdentity && (cfg.AuthStoreRoot == "" || cfg.ReviewModel == "") {
 		return authAdoptConfig{}, errors.New("-auth-store-root and -review-model are required to adopt the review identity")
+	}
+	// The call launch passes the model as one option value and always passes
+	// one, so a value it could not pass, or the id that names no model, would
+	// write judgment lines that never admit.
+	if !inference.ValidLaunchValue(cfg.JudgmentModel) {
+		return authAdoptConfig{}, errors.New(
+			"-judgment-model cannot be passed to a launch as one option value")
+	}
+	if cfg.JudgmentModel == domain.ClaudeCodeNativeDefaultRouteModelID {
+		return authAdoptConfig{}, fmt.Errorf(
+			"-judgment-model %s names no model: give the exact Claude model id", cfg.JudgmentModel)
+	}
+	if cfg.JudgmentPublicationAuthorPrompt != "" && cfg.JudgmentModel == "" {
+		return authAdoptConfig{}, errors.New(
+			"-judgment-publication-author-prompt needs -judgment-model: without a model the patch has no judgment lines")
 	}
 	if cfg.RetireUnadoptable != "" && cfg.RetireUnadoptable != cfg.AuthIdentityID &&
 		cfg.RetireUnadoptable != cfg.ReviewAuthIdentityID {

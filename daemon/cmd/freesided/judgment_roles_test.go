@@ -175,6 +175,22 @@ func TestJudgmentSitesReadTheAdoptedLineup(t *testing.T) {
 		if len(requests) != len(sites) {
 			t.Fatalf("driver saw %d calls, want %d", len(requests), len(sites))
 		}
+		// Every judgment role launches with the model the lineup decides: the
+		// one adoption wrote onto the call offer.
+		launched := map[domain.RoleName]bool{}
+		for _, request := range requests {
+			role, _ := domain.RoleForSite(request.SiteID)
+			if request.Model != adoptJudgmentModel || request.NativeEffort != "" {
+				t.Fatalf("%s launched with model %q effort %q, want the adopted %q and no effort",
+					request.SiteID, request.Model, request.NativeEffort, adoptJudgmentModel)
+			}
+			launched[role] = true
+		}
+		for _, role := range agentbaseline.JudgmentRoles() {
+			if !launched[role] {
+				t.Fatalf("judgment role %s made no call on the adopted lineup", role)
+			}
+		}
 		for _, request := range requests {
 			role, _ := domain.RoleForSite(request.SiteID)
 			want := ""
@@ -416,9 +432,9 @@ func TestJudgmentLinesAdmitOnEachAuditedCallAdapter(t *testing.T) {
 		}
 		type launch struct{ model, effort string }
 		want := map[domain.RoleName]launch{
-			domain.RoleFindingClassifier:  {},
+			domain.RoleFindingClassifier:  {adoptJudgmentModel, ""},
 			domain.RoleFindingAdjudicator: {explicitModel, "high"},
-			domain.RoleDriftAuditor:       {},
+			domain.RoleDriftAuditor:       {adoptJudgmentModel, ""},
 		}
 		for _, site := range sites {
 			role, _ := domain.RoleForSite(site.ID)

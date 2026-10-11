@@ -185,6 +185,9 @@ func (f *authAdoptFixture) deps() authAdoptDeps {
 	}
 }
 
+// adoptJudgmentModel is the model the fixture's adoption gives the call offer.
+const adoptJudgmentModel = "claude-judgment-fixture-1"
+
 // args is the adoption of both identities with the shadow arm off; extra
 // flags append, and a later flag overrides an earlier one.
 func (f *authAdoptFixture) args(extra ...string) []string {
@@ -193,7 +196,7 @@ func (f *authAdoptFixture) args(extra ...string) []string {
 		"-cost-owner", "operator", "-review-cost-owner", "review-operator",
 		"-claude-account", adoptClaudeAccount, "-auth-store-root", f.storeRoot,
 		"-exporter-image", "example.test/exporter@sha256:" + strings.Repeat("0", 64),
-		"-review-model", "gpt-fixture-1",
+		"-review-model", "gpt-fixture-1", "-judgment-model", adoptJudgmentModel,
 		"-prompt-package", filepath.Join(f.promptDir, "implementer"),
 		"-specification-prompt-package", filepath.Join(f.promptDir, "specifier"),
 		"-remediation-prompt-package", filepath.Join(f.promptDir, "remediator"),
@@ -401,6 +404,7 @@ func TestAuthAdoptOneIdentityIsOneAdoption(t *testing.T) {
 		"-db", f.dbPath, "-auth-identity", "claude-main", "-review-auth-identity", "claude-main",
 		"-cost-owner", "operator", "-review-cost-owner", "operator", "-claude-account", adoptClaudeAccount,
 		"-exporter-image", "example.test/exporter@sha256:" + strings.Repeat("0", 64),
+		"-judgment-model", adoptJudgmentModel,
 		"-prompt-package", filepath.Join(f.promptDir, "implementer"),
 		"-specification-prompt-package", filepath.Join(f.promptDir, "specifier"),
 		"-remediation-prompt-package", filepath.Join(f.promptDir, "remediator"),
@@ -501,6 +505,8 @@ func TestAuthAdoptShadowArm(t *testing.T) {
 // TestAuthAdoptJudgmentLines covers the judgment roles' lines: every role
 // with a built site gets one on the call agent, the publication author only
 // when its prompt file is named, and that line records the file's digest.
+// The call agent is on its own offer, which names the model adoption was
+// given, and the ward agent stays on the native-default offer.
 func TestAuthAdoptJudgmentLines(t *testing.T) {
 	f := newAuthAdoptFixture(t)
 	if _, _, err := f.run(t, f.args("-judgment-publication-author-prompt",
@@ -520,7 +526,27 @@ func TestAuthAdoptJudgmentLines(t *testing.T) {
 	if err != nil {
 		t.Fatalf("auth adopt: %v", err)
 	}
-	lineup, err := loadAdoptedPatch(t, patch).ResolveLineup()
+	tree := loadAdoptedPatch(t, patch)
+	call, ok := tree.Agent(agentbaseline.ClaudeCallAgentName)
+	if !ok || call.Offer != agentbaseline.ClaudeCallOfferName || call.Effort != domain.EffortHarnessDefault {
+		t.Fatalf("call agent = %+v, %v", call, ok)
+	}
+	if ward, ok := tree.Agent(agentbaseline.ClaudeAgentName); !ok || ward.Offer != agentbaseline.ClaudeOfferName {
+		t.Fatalf("ward agent = %+v, %v", ward, ok)
+	}
+	models := map[string]string{}
+	for _, offer := range tree.Offers {
+		if offer.Route == call.Route {
+			models[offer.Name] = offer.Fragment.RouteModelID
+		}
+	}
+	if want := map[string]string{
+		agentbaseline.ClaudeCallOfferName: adoptJudgmentModel,
+		agentbaseline.ClaudeOfferName:     domain.ClaudeCodeNativeDefaultRouteModelID,
+	}; !reflect.DeepEqual(models, want) {
+		t.Fatalf("Claude offers name models %v, want %v", models, want)
+	}
+	lineup, err := tree.ResolveLineup()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -537,6 +563,73 @@ func TestAuthAdoptJudgmentLines(t *testing.T) {
 			t.Fatalf("line for %s names prompt %s %s, want %s %s",
 				role, line.PromptName, line.PromptDigest, want.Name, want.Digest)
 		}
+	}
+}
+
+// TestAuthAdoptWithoutAJudgmentModelWritesNoJudgmentLines covers adoption
+// with no -judgment-model: the tree has no call agent, no call offer, and no
+// judgment line, so nothing in it could launch a call with no model.
+func TestAuthAdoptWithoutAJudgmentModelWritesNoJudgmentLines(t *testing.T) {
+	f := newAuthAdoptFixture(t)
+	_, patch, err := f.run(t, f.args("-judgment-model", ""))
+	if err != nil {
+		t.Fatalf("auth adopt: %v", err)
+	}
+	tree := loadAdoptedPatch(t, patch)
+	if _, ok := tree.Agent(agentbaseline.ClaudeCallAgentName); ok {
+		t.Fatal("call agent without -judgment-model")
+	}
+	for _, offer := range tree.Offers {
+		if offer.Name == agentbaseline.ClaudeCallOfferName {
+			t.Fatalf("call offer without -judgment-model: %+v", offer)
+		}
+	}
+	want := []string{
+		"specifier=" + agentbaseline.ClaudeAgentName, "implementer=" + agentbaseline.ClaudeAgentName,
+		"remediator=" + agentbaseline.ClaudeAgentName, "reviewer=" + agentbaseline.CodexReviewAgentName,
+	}
+	if got := lineupRoles(tree); !reflect.DeepEqual(got, want) {
+		t.Fatalf("lineup = %v, want %v", got, want)
+	}
+}
+
+// TestAuthAdoptRefusesAJudgmentModelItCannotWrite covers the three refusals
+// that keep adoption from writing judgment lines that could never admit.
+// Each is refused before anything is recorded.
+func TestAuthAdoptRefusesAJudgmentModelItCannotWrite(t *testing.T) {
+	f := newAuthAdoptFixture(t)
+	authorPrompt := filepath.Join(f.promptDir, "author")
+	if err := os.WriteFile(authorPrompt, []byte("write the pull request\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		extra []string
+		want  string
+	}{
+		"a value the launch would read as an option": {
+			[]string{"-judgment-model", "--dangerously-skip-permissions"}, "one option value",
+		},
+		"a value with whitespace": {[]string{"-judgment-model", "claude model"}, "one option value"},
+		"the native-default id": {
+			[]string{"-judgment-model", domain.ClaudeCodeNativeDefaultRouteModelID}, "names no model",
+		},
+		"the author prompt with no model": {
+			[]string{"-judgment-model", "", "-judgment-publication-author-prompt", authorPrompt},
+			"needs -judgment-model",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, patch, err := f.run(t, f.args(tc.extra...))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("auth adopt = %v, want an error containing %q", err, tc.want)
+			}
+			if len(patch) != 0 {
+				t.Fatalf("a refused adoption emitted a patch:\n%s", patch)
+			}
+			if snap := f.snapshot(t); len(snap.Enrollments) != 0 {
+				t.Fatalf("a refused adoption recorded %+v", snap.Enrollments)
+			}
+		})
 	}
 }
 

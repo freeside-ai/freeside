@@ -58,6 +58,9 @@ func prompt(name string) agentbaseline.Prompt {
 	return agentbaseline.Prompt{Name: name, Digest: domain.Digest(contentaddr.Sum([]byte(name)))}
 }
 
+// judgmentModel is the model the tests hand adoption for the call offer.
+const judgmentModel = "claude-judgment-test"
+
 func input(shadow bool) agentbaseline.TreeInput {
 	claude, _ := claudeRecords()
 	codex, _ := codexRecords()
@@ -134,9 +137,41 @@ func TestBaselineTreeWithoutShadowArmOrReviewAgent(t *testing.T) {
 	}
 	delete(in.Prompts, domain.RoleReviewer)
 	tree = must(agentbaseline.Tree(in))
-	if len(tree.Agents) != 2 || tree.Agents[0].Name != agentbaseline.ClaudeCallAgentName ||
-		tree.Agents[1].Name != agentbaseline.ClaudeAgentName {
+	if len(tree.Agents) != 1 || tree.Agents[0].Name != agentbaseline.ClaudeAgentName {
 		t.Fatalf("agents = %+v", tree.Agents)
+	}
+}
+
+// Without a judgment model the tree has nothing a judgment line could name:
+// no call agent, no call offer, and no call adapter. A judgment prompt is
+// then refused, not dropped, and so is the native-default id as the model,
+// which would build a second offer that names no model.
+func TestBaselineTreeWithoutAJudgmentModelHasNoCallAgent(t *testing.T) {
+	tree := must(agentbaseline.Tree(input(true)))
+	for _, agent := range tree.Agents {
+		if agent.Name == agentbaseline.ClaudeCallAgentName {
+			t.Fatalf("call agent without a judgment model: %+v", agent)
+		}
+	}
+	for _, offer := range tree.Offers {
+		if offer.Name == agentbaseline.ClaudeCallOfferName {
+			t.Fatalf("call offer without a judgment model: %+v", offer)
+		}
+	}
+	for _, adapter := range tree.Adapters {
+		if adapter.Name == agentbaseline.ClaudeCallAdapterName {
+			t.Fatalf("call adapter without a judgment model: %+v", adapter)
+		}
+	}
+
+	in := input(false)
+	in.Prompts[domain.RoleTaskNamer] = prompt("task_namer")
+	if _, err := agentbaseline.Tree(in); err == nil {
+		t.Fatal("judgment line built with no judgment model")
+	}
+	in.JudgmentModel = domain.ClaudeCodeNativeDefaultRouteModelID
+	if _, err := agentbaseline.Tree(in); err == nil {
+		t.Fatal("call offer built on the native-default id")
 	}
 }
 
@@ -169,11 +204,13 @@ func TestCallAdapterV2AddsOnlyTheEffortsItCanSend(t *testing.T) {
 	}
 }
 
-// Every judgment role with a prompt gets a line on the call agent, and that
-// agent is the ward agent with the call adapter in the adapter's place: the
-// same enrollment, route, and offer under a launch with no tools.
+// Every judgment role with a prompt gets a line on the call agent. That
+// agent shares the ward agent's enrollment and route under a launch with no
+// tools, and has its own offer, which names the model adoption was given:
+// a call launch always passes a model, and the ward's offer names none.
 func TestBaselineTreeNamesTheCallAgentForJudgmentRoles(t *testing.T) {
 	in := input(false)
+	in.JudgmentModel = judgmentModel
 	roles := agentbaseline.JudgmentRoles()
 	want := []domain.RoleName{
 		domain.RoleDiagnostic, domain.RoleTaskNamer, domain.RolePublicationAuthor,
@@ -196,12 +233,26 @@ func TestBaselineTreeNamesTheCallAgentForJudgmentRoles(t *testing.T) {
 	if call.Adapter.Digest != adapter.Digest || call.Adapter.HarnessBuild != agentbaseline.ClaudeCallHarnessBuild {
 		t.Fatalf("call agent adapter = %+v", call.Adapter)
 	}
-	if call.Route.Digest != ward.Route.Digest || call.Offer.Digest != ward.Offer.Digest ||
-		call.Definition.EnrollmentID != ward.Definition.EnrollmentID {
-		t.Fatal("the call agent does not share the ward agent's enrollment, route, and offer")
+	if call.Route.Digest != ward.Route.Digest || call.Definition.EnrollmentID != ward.Definition.EnrollmentID {
+		t.Fatal("the call agent does not share the ward agent's enrollment and route")
 	}
-	if call.Definition.Digest == ward.Definition.Digest {
-		t.Fatal("the call agent and the ward agent share a digest")
+	if call.Offer.RouteModelID != judgmentModel || call.Offer.IdentityStability != domain.IdentityPinned ||
+		!slices.Equal(call.Offer.AllowedEfforts, []domain.EffortLevel{domain.EffortHarnessDefault}) ||
+		call.Definition.Effort != domain.EffortHarnessDefault {
+		t.Fatalf("call offer = %+v at effort %s", call.Offer, call.Definition.Effort)
+	}
+	if ward.Offer.RouteModelID != domain.ClaudeCodeNativeDefaultRouteModelID {
+		t.Fatalf("ward offer model %q, want the native default", ward.Offer.RouteModelID)
+	}
+	// The call launch passes the offer's model and no effort; the ward launch
+	// still passes neither.
+	callLaunch := must(domain.DeriveAgentLaunchSelection(call.Definition, call.Adapter, call.Offer))
+	if callLaunch != (domain.AgentLaunchSelection{RouteModelID: judgmentModel}) {
+		t.Fatalf("call agent passes %+v, want the model alone", callLaunch)
+	}
+	wardLaunch := must(domain.DeriveAgentLaunchSelection(ward.Definition, ward.Adapter, ward.Offer))
+	if wardLaunch != (domain.AgentLaunchSelection{}) {
+		t.Fatalf("ward agent passes %+v, want nothing", wardLaunch)
 	}
 	for _, capability := range []domain.LaunchCapability{
 		domain.LaunchCapReadTools, domain.LaunchCapMutationTools, domain.LaunchCapRouteStoreContract,
@@ -253,6 +304,7 @@ var rolesOff = map[domain.RoleName]string{
 // fails here until its author decides which.
 func TestBaselineLineupCoversEveryRole(t *testing.T) {
 	in := input(true)
+	in.JudgmentModel = judgmentModel
 	for _, role := range agentbaseline.JudgmentRoles() {
 		in.Prompts[role] = prompt(string(role))
 	}
