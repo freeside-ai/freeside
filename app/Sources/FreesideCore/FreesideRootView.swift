@@ -20,6 +20,7 @@ public struct FreesideRootView: View {
     @State private var navigation: NavigationModel
     @State private var feedback: DecisionFeedbackModel
     @State private var flowPreferences: DecisionFlowPreferences
+    private let notificationOpens: NotificationOpenLog
     @State private var technicalDetailsRequest: TechnicalDetailsRevealRequest?
     @State private var showsInboxClearResult: Bool
     @State private var connectionAddress = ""
@@ -44,6 +45,7 @@ public struct FreesideRootView: View {
         launchInputs: LaunchInputs = .standard(),
         navigation: NavigationModel? = nil,
         flowPreferences: DecisionFlowPreferences? = nil,
+        notificationOpens: NotificationOpenLog? = nil,
         environment: FreesideEnvironment = .prod
     ) {
         FreesideFont.registration
@@ -54,6 +56,7 @@ public struct FreesideRootView: View {
         _feedback = State(initialValue: DecisionFeedbackModel())
         _flowPreferences = State(
             initialValue: flowPreferences ?? DecisionFlowPreferences())
+        self.notificationOpens = notificationOpens ?? NotificationOpenLog()
         _technicalDetailsRequest = State(initialValue: nil)
         _showsInboxClearResult = State(initialValue: false)
         launchColorScheme = launchInputs.colorScheme
@@ -234,6 +237,7 @@ public struct FreesideRootView: View {
                 model: DevicesModel(
                     coordinator: coordinator,
                     notificationSubscription: phoneNotificationSubscription,
+                    notificationOpens: notificationOpens,
                     signOut: {
                         try session.rePair(endingPairingOf: coordinator)
                         // The sheet leaves with the synced surface, but the
@@ -244,6 +248,20 @@ public struct FreesideRootView: View {
                 unresolvedActionCount: pendingUnderOldPairing
             )
             .dynamicTypeSize(launchDynamicTypeSize ?? systemDynamicTypeSize)
+        }
+        // Offered once after a pairing, on the iPhone only.
+        .sheet(
+            isPresented: Binding(
+                get: { session.offersNotificationSetup && phoneNotificationSubscription != nil },
+                set: { session.offersNotificationSetup = $0 })
+        ) {
+            if let subscription = phoneNotificationSubscription {
+                PhoneNotificationSetupSheet(
+                    subscription: subscription, opens: notificationOpens,
+                    deviceID: coordinator.store.device.deviceID
+                )
+                .dynamicTypeSize(launchDynamicTypeSize ?? systemDynamicTypeSize)
+            }
         }
         // Deleting the credential cannot be undone, so the revoked banner's
         // "Pair Again" confirms first (#1458). A 401 can be the wrong daemon

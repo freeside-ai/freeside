@@ -26,6 +26,14 @@ public struct DeviceNtfySubscription: Equatable, Sendable {
         self.topic = topic
     }
 
+    /// Whether the server is ntfy's own hosted one. The ntfy app subscribes
+    /// there unless told otherwise, so setup then needs only the topic.
+    public var usesHostedServer: Bool {
+        guard let components = URLComponents(string: serverURL) else { return false }
+        return components.scheme?.lowercased() == "https" && components.host?.lowercased() == "ntfy.sh"
+            && (components.port ?? 443) == 443 && (components.path.isEmpty || components.path == "/")
+    }
+
     /// Valid non-secret fixture material for previews and tests.
     // swift-format-ignore: NeverForceUnwrap
     public static let mock = DeviceNtfySubscription(

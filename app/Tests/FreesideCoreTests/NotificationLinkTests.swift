@@ -233,6 +233,22 @@ import Testing
         #expect(navigation.inboxPath.isEmpty)
     }
 
+    /// Either link form came from a notification's tap, so each is logged
+    /// for the paired device, which is how its setup shows one arrived.
+    @Test(arguments: [
+        NotificationLink.inbox,
+        .attentionItem(itemID: "item-spec_approval", channel: "ntfy", attempt: 1),
+    ])
+    func anOpenedLinkIsLoggedForThisDevice(_ link: NotificationLink) async throws {
+        let session = try session(server())
+        let opens = NotificationOpenLog(defaults: nil)
+        #expect(opens.openedAt(deviceID: "device-7") == nil)
+
+        await session.open(link, in: NavigationModel(launchInputs: .standard()), recording: opens)
+
+        #expect(opens.openedAt(deviceID: "device-7") != nil)
+    }
+
     @Test func aRefusedReceiptStillShowsTheCard() async throws {
         let server = server()
         let session = try session(server)
@@ -281,5 +297,14 @@ import Testing
 
         #expect(navigation.inboxPath.isEmpty)
         #expect(try await openedAttempts(server).isEmpty)
+    }
+
+    @Test func anUnpairedSessionLogsNothing() async throws {
+        let session = try session(server(), paired: false)
+        let opens = NotificationOpenLog(defaults: nil)
+
+        await session.open(.inbox, in: NavigationModel(launchInputs: .standard()), recording: opens)
+
+        #expect(opens.openedAt(deviceID: "device-7") == nil)
     }
 }

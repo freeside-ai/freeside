@@ -7,6 +7,7 @@ struct FreesideIOSApp: App {
     @State private var session: AppSession
     @State private var navigation: NavigationModel
     @State private var flowPreferences = DecisionFlowPreferences()
+    @State private var notificationOpens = NotificationOpenLog()
     private let launchInputs: LaunchInputs
 
     init() {
@@ -20,7 +21,7 @@ struct FreesideIOSApp: App {
         WindowGroup {
             FreesideRootView(
                 session: session, launchInputs: launchInputs, navigation: navigation,
-                flowPreferences: flowPreferences
+                flowPreferences: flowPreferences, notificationOpens: notificationOpens
             )
             .background(
                 AccessibilityContrastOverride(contrast: launchInputs.contrast)
@@ -31,7 +32,7 @@ struct FreesideIOSApp: App {
             // it sets waits in the navigation model until the list arrives.
             .onOpenURL { url in
                 guard let link = NotificationLink(url) else { return }
-                Task { await session.open(link, in: navigation) }
+                Task { await session.open(link, in: navigation, recording: notificationOpens) }
             }
         }
     }

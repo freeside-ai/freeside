@@ -56,15 +56,21 @@ final class DevicesModel {
     /// platform that takes no notification link (the Mac). The topic is a
     /// secret: whoever holds it reads this device's notifications.
     let notificationSubscription: DeviceNtfySubscription?
+    /// Where this device's card reads when a notification was last opened
+    /// here. Read when the card draws, so a test notification tapped while
+    /// the sheet is open shows at once.
+    let notificationOpens: NotificationOpenLog?
 
     /// `signOut` deletes this device's credential and returns to pairing. It
     /// runs only after the daemon confirms this device's own revocation.
     init(
         coordinator: SyncCoordinator, notificationSubscription: DeviceNtfySubscription? = nil,
+        notificationOpens: NotificationOpenLog? = nil,
         signOut: @escaping @MainActor () throws -> Void
     ) {
         self.coordinator = coordinator
         self.notificationSubscription = notificationSubscription
+        self.notificationOpens = notificationOpens
         self.signOut = signOut
     }
 
