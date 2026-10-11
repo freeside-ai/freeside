@@ -17,7 +17,7 @@ func attentionItemForRun(t *testing.T, id domain.ItemID, runID domain.RunID) dom
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: id, ProjectID: "proj-1",
 		Subject:           domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
-		Type:              domain.AttentionBlocked,
+		Type:              domain.AttentionExecutionFailure,
 		Priority:          domain.PriorityNormal,
 		Reason:            "waiting on an external dependency",
 		RequestedDecision: []domain.Action{},
@@ -55,7 +55,7 @@ func attentionItemWithEvidence(
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: id, ProjectID: "proj-1",
 		Subject:           domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
-		Type:              domain.AttentionBlocked,
+		Type:              domain.AttentionExecutionFailure,
 		Priority:          domain.PriorityNormal,
 		Reason:            "waiting with evidence",
 		RequestedDecision: []domain.Action{},
@@ -102,7 +102,7 @@ func TestAttentionSubjectRunBindingMigrationAppliesFromHead(t *testing.T) {
 INSERT INTO attention_items
     (id, project_id, conversation_id, item_type, status, health_posture,
      entity_version, as_of_revision, body)
-VALUES (?, 'proj-1', NULL, 'blocked', 'open', NULL, 1, 1, ?)`, row.id, row.body); err != nil {
+VALUES (?, 'proj-1', NULL, 'execution_failure', 'open', NULL, 1, 1, ?)`, row.id, row.body); err != nil {
 			t.Fatalf("seed %s: %v", row.id, err)
 		}
 	}
@@ -472,7 +472,7 @@ func TestListOpenAttentionItemsChecksSubjectRunBinding(t *testing.T) {
 		t.Fatalf("retarget column: %v", err)
 	}
 	err := st.Read(ctx, func(tx *ReadTx) error {
-		_, err := tx.ListOpenAttentionItems(ctx, domain.AttentionBlocked)
+		_, err := tx.ListOpenAttentionItems(ctx, domain.AttentionExecutionFailure)
 		return err
 	})
 	if !errors.Is(err, errRowInconsistent) {

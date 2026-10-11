@@ -40,7 +40,7 @@ func TestRecommendationMismatchSuppressesOnlyDerivedProjection(t *testing.T) {
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "item-recommendation-mismatch", ProjectID: "project-1",
 		Subject: domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
-		Type:    domain.AttentionBlocked, Priority: domain.PriorityNormal,
+		Type:    domain.AttentionExecutionFailure, Priority: domain.PriorityNormal,
 		Reason:            "policy needs operator judgment",
 		RequestedDecision: []domain.Action{domain.ActionDiscuss, domain.ActionStop},
 		ItemVersion:       1, InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,

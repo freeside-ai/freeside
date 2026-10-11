@@ -285,7 +285,7 @@ func TestAttentionItemDerivedFieldReplayDoesNotAdvanceVersion(t *testing.T) {
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "item-derived-replay", ProjectID: "proj-1",
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
-		Type:    domain.AttentionBlocked, Priority: domain.PriorityNormal,
+		Type:    domain.AttentionExecutionFailure, Priority: domain.PriorityNormal,
 		Reason: "waiting", RequestedDecision: []domain.Action{}, ItemVersion: 1,
 		InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
 	}, nil)
@@ -344,7 +344,7 @@ func TestDaemonRecommendationAuthorityCanDisappearAndReappear(t *testing.T) {
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "item-rule-recommendation", ProjectID: "project-1",
 		Subject: domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
-		Type:    domain.AttentionBlocked, Priority: domain.PriorityNormal,
+		Type:    domain.AttentionExecutionFailure, Priority: domain.PriorityNormal,
 		Reason:            "policy needs operator judgment",
 		RequestedDecision: []domain.Action{domain.ActionDiscuss, domain.ActionStop},
 		ItemVersion:       1, InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
