@@ -1,0 +1,231 @@
+import Foundation
+import FreesideAPI
+
+@testable import FreesideCore
+
+/// Task histories in the daemon's order, for the event rail. Each one is
+/// written oldest first, as it happened, and handed over newest first, as
+/// the daemon sends it. Where two events share an instant the daemon puts
+/// the one whose kind sorts first on top, and the script is written to
+/// match: a specification's approval sits under the submission of the run
+/// it starts.
+enum TaskStageFixtures {
+    enum Scenario: CaseIterable {
+        /// A specification run that has started and nothing more.
+        case specification
+        /// An approved specification and a first implementation attempt.
+        case implementation
+        /// The first attempt's work under review.
+        case review
+        /// One campaign through a clean review to a blocked publication.
+        case verification
+        /// A failed attempt and a second one, with no review between.
+        case retry
+        /// A second attempt after a review found something.
+        case returned
+        /// A second campaign whose specification run has started.
+        case secondCampaign
+        /// A run the daemon recorded without a role or an attempt number.
+        case noRole
+    }
+
+    static let taskID = "stage-task"
+
+    struct Script {
+        private(set) var sections: [Components.Schemas.TaskTimelineSection] = []
+        private var oldestFirst: [Components.Schemas.TaskEvent] = []
+        private var minute = -240
+
+        private var now: Date { RunFixtures.screenshotInstant.addingTimeInterval(TimeInterval(minute * 60)) }
+
+        /// Moves the clock on. Events written without a wait between them
+        /// share an instant.
+        mutating func wait(_ minutes: Int = 7) { minute += minutes }
+
+        mutating func event(_ kind: Components.Schemas.TaskEventKind, run: String? = nil, pr: Int? = nil) {
+            oldestFirst.append(.init(kind: kind, recorded_at: now, run_id: run, pr_number: pr))
+        }
+
+        mutating func campaign(_ id: String, specification run: String) {
+            sections.insert(.init(campaign_id: id, events: [], runs: []), at: 0)
+            section(
+                id,
+                .init(kind: .campaign_allocated, recorded_at: now, campaign_id: id, specification_run_id: run))
+        }
+
+        mutating func approve(_ campaign: String, specification: String, implementation: String) {
+            section(
+                campaign,
+                .init(
+                    kind: .specification_approved, recorded_at: now, campaign_id: campaign,
+                    run_id: implementation,
+                    approved_spec_digest: .init(value1: "sha256:" + String(repeating: "c", count: 64)),
+                    specification_run_id: specification))
+        }
+
+        /// A run's submission and, a minute on, the start of its first
+        /// invocation.
+        mutating func submit(
+            _ run: String, role: Components.Schemas.TaskRunRole?, attempt: Int?, campaign: String?
+        ) {
+            if !sections.contains(where: { $0.campaign_id == campaign }) {
+                sections.insert(.init(campaign_id: campaign, events: [], runs: []), at: 0)
+            }
+            let member = Components.Schemas.TaskTimelineRun(
+                run_id: run, role: role.map { .init(value1: $0) }, attempt_number: attempt, milestones: [],
+                events: [])
+            for index in sections.indices where sections[index].campaign_id == campaign {
+                sections[index].runs.insert(member, at: 0)
+            }
+            milestone(run, .run_submitted)
+            wait(1)
+            milestone(run, .invocation_started, invocation: "\(run)-invocation-1")
+        }
+
+        mutating func milestone(
+            _ run: String, _ kind: Components.Schemas.RunMilestoneKind, invocation: String? = nil,
+            terminal: Components.Schemas.ObservedInvocationStatus? = nil,
+            hold: Components.Schemas.RunHoldReason? = nil
+        ) {
+            let milestone = Components.Schemas.RunMilestone(
+                run_id: run, kind: kind, invocation_id: invocation,
+                terminal: terminal.map { .init(value1: $0) }, reason: hold.map { .init(value1: $0) },
+                recorded_at: now)
+            for index in sections.indices {
+                guard let member = sections[index].runs.firstIndex(where: { $0.run_id == run }) else { continue }
+                sections[index].runs[member].milestones.insert(milestone, at: 0)
+            }
+            oldestFirst.append(
+                .init(milestone: .init(value1: milestone), kind: .run_milestone, recorded_at: now, run_id: run))
+        }
+
+        /// A work result: the run's `pass`th invocation ending.
+        mutating func result(
+            _ run: String, _ terminal: Components.Schemas.ObservedInvocationStatus, pass: Int = 1
+        ) {
+            milestone(run, .terminal_recorded, invocation: "\(run)-invocation-\(pass)", terminal: terminal)
+        }
+
+        mutating func review(
+            _ run: String, round: Int, _ kind: Components.Schemas.TaskEventKind,
+            outcome: Components.Schemas.ReviewOutcome? = nil
+        ) {
+            oldestFirst.append(
+                .init(
+                    review: .init(
+                        value1: .init(
+                            invocation_id: "\(run)-review-\(round)", round: round,
+                            head_sha: String(repeating: "b", count: 40), base_sha: String(repeating: "a", count: 40),
+                            outcome: outcome.map { .init(value1: $0) },
+                            failure: kind == .review_failed ? "reviewer_unavailable" : nil)),
+                    kind: kind, recorded_at: now, run_id: run))
+        }
+
+        mutating func verify(_ run: String, clean: Bool) {
+            oldestFirst.append(
+                .init(
+                    verification: .init(
+                        value1: .init(
+                            item_id: "\(run)-ready", _class: clean ? .ready_clean : .ready_degraded,
+                            head_sha: String(repeating: "b", count: 40),
+                            base_sha: String(repeating: "a", count: 40))),
+                    kind: .verification_recorded, recorded_at: now, run_id: run))
+        }
+
+        private mutating func section(_ campaign: String, _ event: Components.Schemas.TaskEvent) {
+            if let index = sections.firstIndex(where: { $0.campaign_id == campaign }) {
+                sections[index].events.insert(event, at: 0)
+            }
+            oldestFirst.append(event)
+        }
+
+        var timeline: Components.Schemas.TaskTimeline {
+            .init(
+                as_of_revision: 12, as_of: RunFixtures.screenshotInstant, task_id: TaskStageFixtures.taskID,
+                project_id: "freeside",
+                name: .init(text: "Update session handling across desktop and mobile clients", source: ._operator),
+                events: oldestFirst.reversed(), sections: sections)
+        }
+    }
+
+    static let specificationRun = "stage-spec-1"
+    static let implementationRun = "stage-implementation-1"
+    static let secondImplementationRun = "stage-implementation-2"
+    static let campaign = "stage-campaign-1"
+
+    static func history(_ scenario: Scenario) -> Components.Schemas.TaskTimeline {
+        var script = Script()
+        script.event(.task_created)
+        script.wait(2)
+        if scenario == .noRole {
+            script.event(.task_started, run: "stage-legacy-1")
+            script.submit("stage-legacy-1", role: nil, attempt: nil, campaign: nil)
+            script.wait()
+            script.result("stage-legacy-1", .completed)
+            script.wait()
+            script.review("stage-legacy-1", round: 1, .review_requested)
+            return script.timeline
+        }
+        script.event(.task_started, run: specificationRun)
+        script.campaign(campaign, specification: specificationRun)
+        script.wait(1)
+        script.submit(specificationRun, role: .specification, attempt: 1, campaign: campaign)
+        if scenario == .specification { return script.timeline }
+        script.wait(18)
+        script.result(specificationRun, .completed)
+        script.wait(25)
+        script.approve(campaign, specification: specificationRun, implementation: implementationRun)
+        script.submit(implementationRun, role: .implementation, attempt: 1, campaign: campaign)
+        if scenario == .implementation { return script.timeline }
+        script.wait(31)
+        switch scenario {
+        case .retry:
+            script.result(implementationRun, .failed)
+            script.wait()
+            script.submit(secondImplementationRun, role: .implementation, attempt: 2, campaign: campaign)
+            return script.timeline
+        case .secondCampaign:
+            script.campaign("stage-campaign-2", specification: "stage-spec-2")
+            script.wait(1)
+            script.submit("stage-spec-2", role: .specification, attempt: 1, campaign: "stage-campaign-2")
+            return script.timeline
+        default:
+            break
+        }
+        script.review(implementationRun, round: 1, .review_requested)
+        if scenario == .review { return script.timeline }
+        script.wait(9)
+        if scenario == .returned {
+            script.review(implementationRun, round: 1, .review_failed)
+            script.wait(2)
+            script.review(implementationRun, round: 2, .review_requested)
+            script.wait(9)
+            // The round's own invocation ends, which the round's entry
+            // already says.
+            script.milestone(
+                implementationRun, .terminal_recorded, invocation: "\(implementationRun)-review-2",
+                terminal: .completed)
+            script.review(implementationRun, round: 2, .review_completed, outcome: .findings)
+            script.wait(4)
+            // The daemon records the first pass's result after the review of
+            // its work was requested, and a fix-up pass in the same attempt
+            // records a second one.
+            script.result(implementationRun, .completed)
+            script.milestone(implementationRun, .invocation_started, invocation: "\(implementationRun)-invocation-2")
+            script.wait(12)
+            script.result(implementationRun, .completed, pass: 2)
+            script.wait(3)
+            script.submit(secondImplementationRun, role: .implementation, attempt: 2, campaign: campaign)
+            return script.timeline
+        }
+        script.review(implementationRun, round: 1, .review_completed, outcome: .clean)
+        script.wait(6)
+        script.verify(implementationRun, clean: false)
+        script.wait(2)
+        // The daemon records the attempt's result when the publication
+        // cycle closes, after the review of its work.
+        script.milestone(implementationRun, .publication_blocked, hold: .verification_findings)
+        script.result(implementationRun, .completed)
+        return script.timeline
+    }
+}

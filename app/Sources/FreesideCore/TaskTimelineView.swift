@@ -657,6 +657,173 @@ enum TaskTimelinePresentation {
         return entries + events(timeline).map { .event($0.kind) }
     }
 
+    /// One line on the task's event rail: a daemon event, or the start of a
+    /// stage drawn from one.
+    struct Row: Equatable {
+        enum Kind: Equatable {
+            case event
+            /// An event that records a failure. The rail marks it in wax.
+            case failure
+            case stageStart(Components.Schemas.StageName)
+        }
+
+        let kind: Kind
+        let label: String
+        let recordedAt: Date
+        /// The newest event, and the stage start drawn from it: the two
+        /// share one instant, so both read as the head of the rail.
+        var isNewest = false
+    }
+
+    /// Where the walk in `rows(_:)` stands: a stage within one campaign. A
+    /// new campaign is a new position even when its first stage repeats the
+    /// last one, so a revised specification gets its own start point.
+    private struct StagePosition: Equatable {
+        let stage: Components.Schemas.StageName
+        let campaignID: String?
+    }
+
+    /// The event rail's rows, newest first in the order `events(_:)` gives.
+    /// Nothing here sorts, so events at one instant keep the daemon's order.
+    ///
+    /// The daemon records no stage starts, so they are read off its events
+    /// (devlog/2026-10-11-1140-task-stage-timeline.md). Walking oldest to
+    /// newest, a run's submission enters its role's stage and a review
+    /// request enters Review; each draws a start point directly under
+    /// itself when that changes where the task stands. A verification
+    /// result or a publication milestone enters Verification, which has no
+    /// start point because the daemon does not record when it began. No
+    /// other event moves the stage: an attempt's result can be recorded
+    /// after the review of its work was requested, and must not read as a
+    /// return to implementation.
+    ///
+    /// Three kinds of event are machinery and leave the rail: a campaign's
+    /// allocation, an invocation's start, and the result of a review
+    /// round's own invocation, which the round's entry already states.
+    static func rows(_ timeline: Components.Schemas.TaskTimeline) -> [Row] {
+        let events = events(timeline)
+        var runs: [String: (run: Components.Schemas.TaskTimelineRun, campaignID: String?)] = [:]
+        for section in timeline.sections {
+            for run in section.runs where runs[run.run_id] == nil {
+                runs[run.run_id] = (run, section.campaign_id)
+            }
+        }
+        let reviewInvocations = Set(events.compactMap { $0.review?.value1.invocation_id })
+        var position: StagePosition?
+        var results: [String: Int] = [:]
+        var oldestFirst: [Row] = []
+        for event in events.reversed() {
+            let milestone = event.milestone?.value1
+            let source = (event.run_id ?? milestone?.run_id).flatMap { runs[$0] }
+            var pass = 1
+            var start: Components.Schemas.StageName?
+            switch (event.kind, milestone?.kind) {
+            case (.campaign_allocated, _), (_, .invocation_started):
+                continue
+            case (_, .run_submitted):
+                let next = source?.run.role.map {
+                    StagePosition(stage: stage($0.value1), campaignID: source?.campaignID)
+                }
+                if let next, next != position { start = next.stage }
+                // A run with no role has no stage to enter, and leaves the
+                // one before it: what follows is not known to continue it.
+                position = next
+            case (_, .terminal_recorded):
+                if let invocation = milestone?.invocation_id, reviewInvocations.contains(invocation) { continue }
+                if let runID = milestone?.run_id {
+                    pass = results[runID, default: 0] + 1
+                    results[runID] = pass
+                }
+            case (.review_requested, _):
+                let next = StagePosition(stage: .review, campaignID: source?.campaignID)
+                if next != position { start = .review }
+                position = next
+            case (.verification_recorded, _), (_, .publication_ready), (_, .publication_blocked):
+                position = StagePosition(stage: .verification, campaignID: source?.campaignID)
+            default:
+                break
+            }
+            if let start {
+                oldestFirst.append(
+                    Row(
+                        kind: .stageStart(start), label: "\(AttentionDisplay.label(start)) started",
+                        recordedAt: event.recorded_at))
+            }
+            oldestFirst.append(
+                Row(
+                    kind: recordsFailure(event) ? .failure : .event,
+                    label: rowLabel(event, run: source?.run, pass: pass), recordedAt: event.recorded_at))
+        }
+        var rows = Array(oldestFirst.reversed())
+        if !rows.isEmpty { rows[0].isNewest = true }
+        if rows.count > 1, case .stageStart = rows[1].kind { rows[1].isNewest = true }
+        return rows
+    }
+
+    /// The stage the rail's newest start point names, which the header's
+    /// chip and hold callout repeat.
+    static func newestStage(_ rows: [Row]) -> Components.Schemas.StageName? {
+        for row in rows {
+            if case .stageStart(let stage) = row.kind { return stage }
+        }
+        return nil
+    }
+
+    private static func stage(_ role: Components.Schemas.TaskRunRole) -> Components.Schemas.StageName {
+        switch role {
+        case .specification: .specification
+        case .implementation: .implementation
+        }
+    }
+
+    /// A failed review round, a failed stop, or a work result the daemon
+    /// recorded as failed: the entries whose own words say so.
+    private static func recordsFailure(_ event: Components.Schemas.TaskEvent) -> Bool {
+        if event.kind == .review_failed || event.kind == .stop_failed { return true }
+        guard let milestone = event.milestone?.value1, milestone.kind == .terminal_recorded else { return false }
+        return terminalWord(milestone) == Components.Schemas.ObservedInvocationStatus.failed.rawValue
+    }
+
+    /// A work result in the word the run rail's detail uses for it,
+    /// lowercased to follow the attempt it ends.
+    private static func terminalWord(_ milestone: Components.Schemas.RunMilestone) -> String? {
+        (milestone.terminal?.value1.rawValue ?? milestone.outcome?.value1.rawValue)?
+            .replacingOccurrences(of: "_", with: " ")
+    }
+
+    /// An event's words on the rail. A run is named by its attempt and a
+    /// review round by its number, never by an id; a run with no role or
+    /// no attempt number keeps the label it had, since there is nothing to
+    /// name it by. `pass` counts the run's work results, oldest first: a
+    /// fix-up pass records a second one for the same attempt.
+    private static func rowLabel(
+        _ event: Components.Schemas.TaskEvent, run: Components.Schemas.TaskTimelineRun?, pass: Int
+    ) -> String {
+        let attempt = run?.role == nil ? nil : run?.attempt_number
+        if let milestone = event.milestone?.value1, let attempt {
+            if milestone.kind == .run_submitted { return "Attempt \(attempt) started" }
+            if milestone.kind == .terminal_recorded, let word = terminalWord(milestone) {
+                return "Attempt \(attempt)" + (pass > 1 ? ", pass \(pass)" : "") + " \(word)"
+            }
+        }
+        if let review = event.review?.value1 {
+            switch event.kind {
+            case .review_requested: return "Round \(review.round) requested"
+            case .review_failed: return "Round \(review.round) failed"
+            case .review_completed:
+                let outcome = review.outcome?.value1.rawValue.replacingOccurrences(of: "_", with: " ").capitalized
+                return "Round \(review.round) completed" + (outcome.map { " · \($0)" } ?? "")
+            default: break
+            }
+        }
+        // The PR number is the one identifier the rail keeps: it names the
+        // pull request to a reader, where a run id names nothing.
+        if let number = event.pr_number, event.kind == .pr_opened || event.kind == .pr_merged {
+            return "\(label(event.kind)) · #\(number)"
+        }
+        return label(event)
+    }
+
     /// The header's name: the fetched timeline carries the task's current
     /// name at a newer revision than the bootstrap snapshot (a rename can
     /// land between the two), so it wins once loaded; the snapshot's name
