@@ -890,10 +890,8 @@ enum AttentionDisplay {
             }
             return "overdue \(relativeDuration(-remaining))"
         }
-        let created = rowTimeOrigin(item)
-        guard let created else { return nil }
-        let duration = relativeDuration(max(0, now.timeIntervalSince(created)))
-        return item.status == .open && item._type == .blocked ? "waiting \(duration)" : duration
+        guard let created = item.created_at else { return nil }
+        return relativeDuration(max(0, now.timeIntervalSince(created)))
     }
 
     static func relativeRowTime(_ date: Date, now: Date) -> String {
@@ -907,7 +905,7 @@ enum AttentionDisplay {
         if item.status == .open, let due = item.expires_when {
             return due.formatted(.iso8601)
         }
-        return rowTimeOrigin(item)?.formatted(.iso8601)
+        return item.created_at?.formatted(.iso8601)
     }
 
     static func showsPriorityBadge(_ priority: Components.Schemas.Priority) -> Bool {
@@ -1044,14 +1042,6 @@ enum AttentionDisplay {
     private static func nonempty(_ value: String?) -> String? {
         guard let value, !value.isEmpty else { return nil }
         return value
-    }
-
-    /// A blocked row counts from the daemon's recorded wait start, not the
-    /// item's creation: the wait predates the card. The operational summary
-    /// picks and times its waiting-longest row by the same origin.
-    static func rowTimeOrigin(_ item: Components.Schemas.AttentionItem) -> Date? {
-        guard item.status == .open, item._type == .blocked else { return item.created_at }
-        return item.blocked_on?.value1.since ?? item.created_at
     }
 
     private static func relativeDuration(_ interval: TimeInterval) -> String {

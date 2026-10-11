@@ -77,25 +77,6 @@ import Testing
         #expect(summary.daemonState == .contractMismatch)
     }
 
-    @Test func waitingLongestFollowsTheDisplayedWaitNotCreation() {
-        var older = AttentionFixtures.fixture(type: .spec_approval)
-        older.item.created_at = Date(timeIntervalSince1970: 10)
-        var blocked = AttentionFixtures.fixture(type: .blocked)
-        blocked.item.created_at = Date(timeIntervalSince1970: 100)
-        blocked.item.blocked_on = .init(
-            value1: .init(
-                kind: .spec_approval, since: Date(timeIntervalSince1970: 5),
-                item_id: older.item.id))
-        let summary = OperationalSummary(
-            openSnapshots: [older, blocked], tasks: [], freshness: .fresh)
-
-        #expect(summary.waitingLongestID == blocked.item.id)
-        let now = Date(timeIntervalSince1970: 3_605)
-        #expect(
-            summary.waitingLongestValue(now: now)
-                == "\(AttentionDisplay.title(blocked.item)) · waiting 1h")
-    }
-
     @Test func waitingLongestShowsTheInboxRowTimeDeadlineFirst() {
         var due = AttentionFixtures.fixture(type: .spec_approval)
         due.item.created_at = Date(timeIntervalSince1970: 10)

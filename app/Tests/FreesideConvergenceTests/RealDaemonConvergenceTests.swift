@@ -689,19 +689,6 @@ struct RealDaemonConvergenceTests {
         _ type: Components.Schemas.AttentionType
     ) async throws {
         let control = try ConvergenceHarness.control()
-        if type == .blocked {
-            // blocked is retired (plan revision 84): the daemon refuses an
-            // open item of the type before any action policy runs, so the
-            // matrix has no cell to compare.
-            let refused = try await control.seedItemOutcome(
-                id: ConvergenceHarness.uniqueItemID("pol-blocked-retired"),
-                type: type, actions: [])
-            #expect(refused.statusCode == 400)
-            #expect(
-                refused.message?.contains("retired attention type cannot be open") == true,
-                "expected the retirement refusal, got: \(refused.message ?? "")")
-            return
-        }
         if type == .agent_question {
             // Terminal-backed questions have a narrower producer contract than
             // the type-level Signet policy exercised by the generic matrix.
@@ -789,7 +776,23 @@ struct RealDaemonConvergenceTests {
             "expected ErrNoActions for \(type.rawValue), got: \(empty.message ?? "")")
     }
 
-    /// The invalid/unknown arm: an unrecognized attention type or action string
+    /// blocked is retired (plan revision 84) and has no cell in the matrix
+    /// above: the daemon refuses an open item of the type before any action
+    /// policy runs. The mock's validity check returns the same message
+    /// (`MockContractValidationTests.retiredBlockedItemIsValidOnlyClosed`).
+    @Test func daemonRefusesAnOpenBlockedItem() async throws {
+        let control = try ConvergenceHarness.control()
+        #expect(!AttentionFixtures.phase1Types.contains(.blocked))
+
+        let refused = try await control.seedItemOutcome(
+            id: ConvergenceHarness.uniqueItemID("pol-blocked-retired"),
+            type: .blocked, actions: [])
+        #expect(refused.statusCode == 400)
+        #expect(
+            refused.message?.contains("retired attention type cannot be open") == true,
+            "expected the retirement refusal, got: \(refused.message ?? "")")
+    }
+
     /// is rejected with a client-visible 400 without either enum's validation
     /// being weakened — the values are sent as raw strings the typed Swift enums
     /// cannot hold, and the daemon's domain gate rejects them.

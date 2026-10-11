@@ -525,7 +525,7 @@ import Testing
         // replacement before the list caught up): rows would hide it
         // while its snapshot stayed cached.
         let store = await makeStore(server: MockServer())
-        var extra = AttentionFixtures.fixture(type: .blocked)
+        var extra = AttentionFixtures.fixture(type: .execution_failure)
         extra.item.id = "item-new"
         store.apply(extra)
         #expect(store.rows.contains { $0.item.id == "item-new" })

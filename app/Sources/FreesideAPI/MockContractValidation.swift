@@ -290,6 +290,11 @@ enum MockContractValidation {
         if let conversation = item.conversation_id, conversation.isEmpty {
             return "empty conversation_id"
         }
+        // Mirrors domain.AttentionItem.Validate: blocked is retired (plan
+        // revision 84), and only a closed item of the type is valid.
+        if item._type == .blocked, item.status == .open {
+            return "retired attention type cannot be open"
+        }
         if let created = item.created_at, created.timeIntervalSince1970 < -62_000_000_000 {
             return "zero created_at"
         }

@@ -362,9 +362,10 @@
         /// held, and an inline text claim renders in-band (no load needed).
         private func preloadReferences(
             _ item: Components.Schemas.AttentionItem,
-            into store: InboxStore
+            into store: InboxStore,
+            withoutBytesFor absent: Set<String> = []
         ) async {
-            let attachments = AttentionFixtures.defaultAttachments()
+            let attachments = AttentionFixtures.defaultAttachments().filter { !absent.contains($0.key) }
             func reference(
                 _ metadata: Components.Schemas.EvidenceMetadata,
                 digest: String
@@ -2793,7 +2794,6 @@
 
             var due = AttentionFixtures.degradedReady().item
             due.expires_when = screenshotNow.addingTimeInterval(2 * 3_600)
-            let waiting = AttentionFixtures.fixture(type: .blocked).item
             let age = AttentionFixtures.fixture(type: .spec_approval).item
             for colorScheme in [ColorScheme.light, .dark] {
                 surfaces.append(
@@ -2804,7 +2804,6 @@
                         view: AnyView(
                             VStack(spacing: 8) {
                                 InboxRowView(item: due, now: screenshotNow)
-                                InboxRowView(item: waiting, now: screenshotNow)
                                 InboxRowView(item: age, now: screenshotNow)
                             }.padding().background(Color.ground))))
             }
@@ -3622,23 +3621,24 @@
         ) async throws -> Surface {
             let server = MockServer()
             let client = APIClientFactory.mock(server: server)
-            let blocked = AttentionFixtures.fixture(type: .blocked)
+            let health = AttentionFixtures.fixture(type: .system_health)
             let store = InboxStore(client: client)
-            store.replaceAll(with: [blocked])
-            // blocked's screenshot claim digest is deliberately unseeded, so
-            // the daemon projects bytes_absent; the card shows the no-bytes
-            // state, decided from metadata with no fetch.
-            await preloadReferences(blocked.item, into: store)
-            #expect(store.attachments.phase(for: "sha256:img-blocked") == .unavailable)
+            store.replaceAll(with: [health])
+            // With the screenshot claim's bytes not held, the daemon projects
+            // bytes_absent; the card shows the no-bytes state, decided from
+            // metadata with no fetch.
+            let unheld = "sha256:img-system_health"
+            await preloadReferences(health.item, into: store, withoutBytesFor: [unheld])
+            #expect(store.attachments.phase(for: unheld) == .unavailable)
             let detail = DecisionDetailView(
                 store: store,
-                itemID: blocked.item.id,
+                itemID: health.item.id,
                 loadsAttachments: false,
                 showsValidationProgress: false,
                 now: screenshotNow)
             return Surface(
-                name: "decision-blocked-unavailable",
-                view: AnyView(detail.screenshotCard(blocked.item, at: dynamicTypeSize)))
+                name: "decision-system_health-unavailable",
+                view: AnyView(detail.screenshotCard(health.item, at: dynamicTypeSize)))
         }
 
         private func makeImageAttachmentSurface(

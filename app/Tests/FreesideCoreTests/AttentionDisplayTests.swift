@@ -6,17 +6,18 @@ import Testing
 
 @Suite struct AttentionDisplayTests {
     /// Every card that asks for a decision asks it in one sentence. A
-    /// blocked item is read-only (plan §4), so where its typed wait says what
-    /// it waits on, it leads with that as a statement (survey frame 5.5);
-    /// without one it keeps the question.
+    /// retired blocked item, which only a closed row still carries, never
+    /// asked for one: where its typed wait says what it waited on, it leads
+    /// with that as a statement (survey frame 5.5); without one it keeps the
+    /// question.
     @Test func everyAttentionTypeHasAOneSentenceQuestionAsk() {
-        for type in AttentionFixtures.phase1Types {
-            var item = AttentionFixtures.fixture(type: type).item
-            if type == .blocked {
-                #expect(item.requested_decision.isEmpty)
-                #expect(AttentionDisplay.ask(item) == "Waiting on specification approval.")
-                item.blocked_on = nil
-            }
+        var blocked = AttentionFixtures.fixture(type: .blocked).item
+        #expect(blocked.requested_decision.isEmpty)
+        #expect(AttentionDisplay.ask(blocked) == "Waiting on specification approval.")
+        blocked.blocked_on = nil
+        for item in AttentionFixtures.phase1Types.map({ AttentionFixtures.fixture(type: $0).item })
+            + [blocked]
+        {
             let ask = AttentionDisplay.ask(item)
             #expect(!ask.isEmpty)
             #expect(ask.hasSuffix("?"))
@@ -103,20 +104,10 @@ import Testing
             AttentionDisplay.rowSummary(systemHealth)
                 == "A system-health condition needs attention.")
 
-        var blocked = AttentionFixtures.fixture(type: .blocked).item
-        blocked.reason = "the run has waited 18h on an external reviewer"
-        #expect(AttentionDisplay.rowSummary(blocked) == "Waiting on specification approval.")
-
-        blocked.blocked_on = .init(
-            value1: .init(
-                kind: .pr_checks,
-                since: AttentionFixtures.createdInstant,
-                item_id: nil,
-                pr_reference: .init(value1: .init(repo: "owner/repo", number: 7))))
-        #expect(AttentionDisplay.rowSummary(blocked) == "Waiting on PR checks.")
-
-        blocked.blocked_on = nil
-        #expect(AttentionDisplay.rowSummary(blocked) == "A run is waiting on a blocker.")
+        // blocked is retired: only a closed item exists, and its row says so
+        // instead of naming a wait nothing is on any more.
+        let blocked = AttentionFixtures.fixture(type: .blocked).item
+        #expect(AttentionDisplay.rowSummary(blocked) == "This blocked item is superseded.")
     }
 
     @Test func concludedRowSummariesAreNeutralAcrossEveryTypeAndStatus() {
@@ -136,7 +127,7 @@ import Testing
         }
     }
 
-    @Test func relativeRowTimesUseCoarseUnitsBlockedWordingAndDeadlinePrecedence() {
+    @Test func relativeRowTimesUseCoarseUnitsAndDeadlinePrecedence() {
         let now = Date(timeIntervalSince1970: 2_000_000_000)
         var ordinary = AttentionFixtures.fixture(type: .spec_approval).item
         ordinary.created_at = now.addingTimeInterval(-59 * 60)
@@ -148,54 +139,44 @@ import Testing
         ordinary.created_at = now.addingTimeInterval(-3 * 86_400)
         #expect(AttentionDisplay.relativeRowTime(ordinary, now: now) == "3d")
 
+        var due = AttentionFixtures.fixture(type: .spec_approval).item
+        due.created_at = now.addingTimeInterval(-60)
+        due.expires_when = now.addingTimeInterval(2 * 3_600)
+        #expect(AttentionDisplay.relativeRowTime(due, now: now) == "due 2h")
+        #expect(
+            AttentionDisplay.exactRowTimestamp(due, now: now)
+                == due.expires_when?.formatted(.iso8601))
+
+        due.expires_when = now.addingTimeInterval(30)
+        #expect(AttentionDisplay.relativeRowTime(due, now: now) == "due now")
+
+        due.expires_when = now.addingTimeInterval(-30)
+        #expect(AttentionDisplay.relativeRowTime(due, now: now) == "due now")
+
+        due.expires_when = now.addingTimeInterval(-2 * 3_600)
+        #expect(AttentionDisplay.relativeRowTime(due, now: now) == "overdue 2h")
+        #expect(
+            AttentionDisplay.exactRowTimestamp(due, now: now)
+                == due.expires_when?.formatted(.iso8601))
+
+        // A closed row shows its age and ignores a deadline it no longer has.
+        due.created_at = now.addingTimeInterval(-18 * 3_600)
+        due.status = .resolved
+        #expect(AttentionDisplay.relativeRowTime(due, now: now) == "18h")
+        #expect(
+            AttentionDisplay.exactRowTimestamp(due, now: now)
+                == due.created_at?.formatted(.iso8601))
+
+        // A retired blocked item is only ever closed. Its row counts from
+        // creation like any other, not from the wait it once recorded.
         var blocked = AttentionFixtures.fixture(type: .blocked).item
         blocked.created_at = now.addingTimeInterval(-18 * 3_600)
         blocked.blocked_on = .init(
             value1: .init(
                 kind: .spec_approval,
-                since: now.addingTimeInterval(-18 * 3_600),
+                since: now.addingTimeInterval(-2 * 86_400),
                 item_id: "item-spec_approval",
                 pr_reference: nil))
-        #expect(AttentionDisplay.relativeRowTime(blocked, now: now) == "waiting 18h")
-
-        // Without the typed wait the row falls back to the item's creation.
-        var untypedBlocked = blocked
-        untypedBlocked.blocked_on = nil
-        #expect(AttentionDisplay.relativeRowTime(untypedBlocked, now: now) == "waiting 18h")
-
-        let actualWaitStart = now.addingTimeInterval(-2 * 86_400)
-        blocked.created_at = now.addingTimeInterval(-60)
-        blocked.blocked_on = .init(
-            value1: .init(
-                kind: .spec_approval,
-                since: actualWaitStart,
-                item_id: "item-spec_approval",
-                pr_reference: nil))
-        #expect(AttentionDisplay.relativeRowTime(blocked, now: now) == "waiting 2d")
-        #expect(
-            AttentionDisplay.exactRowTimestamp(blocked, now: now)
-                == actualWaitStart.formatted(.iso8601))
-
-        blocked.expires_when = now.addingTimeInterval(2 * 3_600)
-        #expect(AttentionDisplay.relativeRowTime(blocked, now: now) == "due 2h")
-        #expect(
-            AttentionDisplay.exactRowTimestamp(blocked, now: now)
-                == blocked.expires_when?.formatted(.iso8601))
-
-        blocked.expires_when = now.addingTimeInterval(30)
-        #expect(AttentionDisplay.relativeRowTime(blocked, now: now) == "due now")
-
-        blocked.expires_when = now.addingTimeInterval(-30)
-        #expect(AttentionDisplay.relativeRowTime(blocked, now: now) == "due now")
-
-        blocked.expires_when = now.addingTimeInterval(-2 * 3_600)
-        #expect(AttentionDisplay.relativeRowTime(blocked, now: now) == "overdue 2h")
-        #expect(
-            AttentionDisplay.exactRowTimestamp(blocked, now: now)
-                == blocked.expires_when?.formatted(.iso8601))
-
-        blocked.created_at = now.addingTimeInterval(-18 * 3_600)
-        blocked.status = .resolved
         #expect(AttentionDisplay.relativeRowTime(blocked, now: now) == "18h")
         #expect(
             AttentionDisplay.exactRowTimestamp(blocked, now: now)

@@ -186,7 +186,7 @@ import Testing
         let composition = DecisionCardComposition.forType(type)
         let summaries = composition.summaries(from: AttentionFixtures.fixture(type: type).item.agent_claims)
 
-        if type == .system_health || type == .blocked {
+        if type == .system_health {
             #expect(!composition.modules.contains(.summary))
             #expect(summaries.isEmpty)
         } else {

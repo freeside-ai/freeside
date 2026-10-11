@@ -466,7 +466,7 @@ import Testing
         let logBytes = try await Data(collecting: log, upTo: 1 << 20)
         #expect(String(data: logBytes, encoding: .utf8)?.contains("verify log") == true)
 
-        let missing = try await client.getAttachment(path: .init(digest: "sha256:img-blocked"))
+        let missing = try await client.getAttachment(path: .init(digest: "sha256:img-unseeded"))
         _ = try missing.notFound
     }
 
@@ -485,13 +485,16 @@ import Testing
         let textClaim = try #require(approval.item.agent_claims.first { $0.text != nil })
         #expect(textClaim.metadata.availability == .available)
 
-        // blocked's screenshot claim digest is deliberately unseeded: no bytes
-        // are held, so the referenced (no-text) claim projects bytes_absent.
-        let blocked =
-            try await client
-            .getAttentionItem(path: .init(item_id: "item-blocked")).ok.body.json
-        let referencedClaim = try #require(blocked.item.agent_claims.first { $0.text == nil })
-        #expect(referencedClaim.digest == "sha256:img-blocked")
+        // With a screenshot claim's digest unseeded no bytes are held, so the
+        // referenced (no-text) claim projects bytes_absent.
+        var attachments = AttentionFixtures.defaultAttachments()
+        attachments["sha256:img-ready_for_final_review"] = nil
+        let sparse = APIClientFactory.mock(server: MockServer(attachments: attachments))
+        let unseeded =
+            try await sparse
+            .getAttentionItem(path: .init(item_id: "item-ready_for_final_review")).ok.body.json
+        let referencedClaim = try #require(unseeded.item.agent_claims.first { $0.text == nil })
+        #expect(referencedClaim.digest == "sha256:img-ready_for_final_review")
         #expect(referencedClaim.metadata.availability == .bytes_absent)
     }
 
@@ -1112,46 +1115,6 @@ import Testing
             try await client
             .getAttentionItem(path: .init(item_id: invalid.item.id)).ok.body.json
         #expect(after == invalid)
-    }
-
-    @Test func blockedItemAcceptsNoActionEvenWhenOffered() async throws {
-        // Signet policy pins blocked read-only (#97): since #96 the
-        // canonical fixture offers the empty set, so any command's
-        // action is rejected as not offered, without effect.
-        let server = MockServer()
-        let client = APIClientFactory.mock(server: server)
-        let before =
-            try await client
-            .getAttentionItem(path: .init(item_id: "item-blocked")).ok.body.json
-        #expect(before.item.requested_decision.isEmpty)
-
-        let output = try await client.submitCommand(
-            body: .json(Self.command(id: "cmd-blocked", against: before, action: .acknowledge)))
-        guard case .undocumented(let statusCode, _) = output else {
-            Issue.record("expected an authoritative rejection, got \(output)")
-            return
-        }
-        #expect(statusCode == 422)
-
-        let after =
-            try await client
-            .getAttentionItem(path: .init(item_id: "item-blocked")).ok.body.json
-        #expect(after == before)
-
-        // "Even when offered": a seeded blocked row that forges an
-        // offered action fails the per-type policy re-gate for that very
-        // action — blocked's allowed set is empty, as on the daemon.
-        var forged = AttentionFixtures.fixture(type: .blocked)
-        forged.item.requested_decision = [.acknowledge]
-        let forgedServer = MockServer(items: [forged])
-        let forgedClient = APIClientFactory.mock(server: forgedServer)
-        let rejected = try await forgedClient.submitCommand(
-            body: .json(Self.command(id: "cmd-blocked-forged", against: forged)))
-        guard case .undocumented(let forgedStatus, _) = rejected else {
-            Issue.record("expected an authoritative rejection, got \(rejected)")
-            return
-        }
-        #expect(forgedStatus == 422)
     }
 
     @Test func actionTheItemDidNotOfferIsRejectedWithoutSideEffect() async throws {
