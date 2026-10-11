@@ -337,6 +337,34 @@ func TestAttentionDiscussionRepliesPreserveEveryDecisionSetAndReplay(t *testing.
 	}
 }
 
+// TestAttentionDiscussionReplySurvivesDeliveryBeforeReply: the discussion is
+// bound to the item's exact version when the operator asked. A notification
+// accepted and opened before the engine replies changes the item's timing and
+// must leave that binding intact, or the discussion is skipped on every pass
+// and never answered (#1946).
+func TestAttentionDiscussionReplySurvivesDeliveryBeforeReply(t *testing.T) {
+	driver := inferencefake.New()
+	driver.Script(inference.AttentionDiscussionSiteID, inferencefake.Script{Response: inference.Response{
+		Output: []byte(`{"reply":"The decision set is unchanged."}`), ComputeUnits: 1,
+	}})
+	f := newAttentionDiscussionFixture(t, domain.AttentionExecutionFailure, driver)
+	f.submit(t)
+	notifier := newDeliveryNotifier(t, f.store)
+	notifier.open(t, notifier.deliver(t, f.item.ID))
+
+	engine := f.engine(t, true)
+	if result, err := engine.Reconcile(t.Context()); err != nil || result.ResultsAccepted != 1 {
+		t.Fatalf("Reconcile = %#v, %v", result, err)
+	}
+	f.assertReply(t, "The decision set is unchanged.", []domain.Action{domain.ActionDiscuss, domain.ActionStop})
+	if timing := notifier.item(t, f.item.ID).Timing; timing.FirstOpenedAt == nil {
+		t.Fatalf("the reply's transition dropped the item's timing: %+v", timing)
+	}
+	if result, err := engine.Reconcile(t.Context()); err != nil || result.ResultsAccepted != 0 {
+		t.Fatalf("replay Reconcile = %#v, %v", result, err)
+	}
+}
+
 func TestAttentionDiscussionFallbackReturnsConversationToIdle(t *testing.T) {
 	f := newAttentionDiscussionFixture(t, domain.AttentionExecutionFailure, nil)
 	f.submit(t)

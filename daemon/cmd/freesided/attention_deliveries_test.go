@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -24,12 +25,19 @@ type ntfySink struct {
 	status int
 	topics []string
 	clicks []string
+	// onPublish, when set before the daemon starts, runs for each publish
+	// before the sink answers: the moment between a delivery's submission
+	// and its acceptance.
+	onPublish func(click string)
 }
 
 func newNtfySink(t *testing.T, status int) *ntfySink {
 	t.Helper()
 	sink := &ntfySink{status: status}
 	sink.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if sink.onPublish != nil {
+			sink.onPublish(r.Header.Get("Click"))
+		}
 		sink.mu.Lock()
 		defer sink.mu.Unlock()
 		sink.topics = append(sink.topics, strings.TrimPrefix(r.URL.Path, "/"))
@@ -183,6 +191,116 @@ func TestDaemonNotifiesAPhoneOncePerItem(t *testing.T) {
 	}
 }
 
+// TestDaemonAnswersADiscussAskedWhileItsNotificationIsInFlight is #1946's
+// reproduced failure, in one daemon: the operator discusses the feedback item
+// after its notification is submitted and before the provider accepts it, so
+// the acceptance lands on an item with a pending invocation intent. That
+// intent is bound to the item's exact version. An acceptance that moved the
+// version ended the engine loop in a durable stop; it now changes only the
+// item's timing, and the discuss is dispatched and answered.
+func TestDaemonAnswersADiscussAskedWhileItsNotificationIsInFlight(t *testing.T) {
+	ctx := t.Context()
+	approvalID := "approval-" + domain.ItemID(defaultFakeRunID)
+	feedbackID := "feedback-" + domain.ItemID(defaultFakeRunID)
+	sink := newNtfySink(t, http.StatusOK)
+
+	// The publish handler runs on the sink's goroutine, so it takes the
+	// daemon from a channel instead of sharing the test's variable.
+	started := make(chan *daemon, 1)
+	var once sync.Once
+	asked := make(chan signet.AttentionItemSnapshot, 1)
+	failed := make(chan error, 1)
+	sink.onPublish = func(click string) {
+		if !strings.HasPrefix(click, "freeside://attention/items/"+string(feedbackID)+"?") {
+			return
+		}
+		once.Do(func() {
+			attention := (<-started).attention
+			feedback, err := attention.GetAttentionItem(ctx, feedbackID)
+			if err == nil {
+				_, err = attention.Submit(ctx, signet.ClientCommand{
+					CommandID: "discuss-in-flight", DeviceID: "phone", ExpectedEntityVersion: feedback.EntityVersion,
+					Payload: signet.DecisionPayload{
+						ItemID: feedbackID, Action: domain.ActionDiscuss,
+						ItemVersion: feedback.Item.ItemVersion, Message: "advance the workflow",
+					},
+				})
+			}
+			if err != nil {
+				failed <- err
+				return
+			}
+			asked <- feedback
+		})
+	}
+
+	h := startNotifyingDaemon(t, t.TempDir(), sink.URL, nil)
+	started <- h
+	t.Cleanup(func() {
+		if err := h.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	waitForItem(t, h.attention, approvalID)
+	pairDevice(t, h, "phone")
+	// The approval's own notification moves its entity_version, so read it
+	// for the command only once that delivery has settled.
+	eventually(t, "the approval's accepted notification", func() bool {
+		rows := deliveriesFor(t, h, approvalID, "phone")
+		return len(rows) == 1 && rows[0].Status == domain.DeliveryChannelAccepted
+	})
+	approval, err := h.attention.GetAttentionItem(ctx, approvalID)
+	if err != nil {
+		t.Fatalf("get approval: %v", err)
+	}
+	if _, err := h.attention.Submit(ctx, signet.ClientCommand{
+		CommandID: "approve-in-flight", DeviceID: "phone", ExpectedEntityVersion: approval.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: approvalID, Action: domain.ActionApprove, ItemVersion: approval.Item.ItemVersion,
+		},
+	}); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+
+	var before signet.AttentionItemSnapshot
+	select {
+	case before = <-asked:
+	case err := <-failed:
+		t.Fatalf("discuss during the feedback item's publish: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the feedback item's notification was not published within 5s")
+	}
+	if before.Item.Timing.DeliveryCount != 1 || before.Item.Timing.FirstAcceptedAt != nil {
+		t.Fatalf("timing when the discuss was asked = %+v, want one submitted delivery, not yet accepted", before.Item.Timing)
+	}
+
+	eventually(t, "the discuss's accepted reply", func() bool {
+		item, err := h.attention.GetAttentionItem(ctx, feedbackID)
+		if err != nil {
+			t.Fatalf("get feedback: %v", err)
+		}
+		if item.Item.ConversationID == nil || item.Item.Timing.FirstAcceptedAt == nil {
+			return false
+		}
+		conversation, err := h.attention.GetConversation(ctx, *item.Item.ConversationID)
+		if err != nil {
+			t.Fatalf("get conversation: %v", err)
+		}
+		return len(conversation.Conversation.Messages) == 2 &&
+			conversation.Conversation.Status == domain.ConversationIdle
+	})
+	after, err := h.attention.GetAttentionItem(ctx, feedbackID)
+	if err != nil {
+		t.Fatalf("get feedback after the reply: %v", err)
+	}
+	// The discuss and its reply each moved the version; the acceptance that
+	// landed between them did not.
+	if got, want := after.Item.ItemVersion, before.Item.ItemVersion+2; got != want {
+		t.Errorf("feedback item version = %d, want %d: only the discuss and its reply move it", got, want)
+	}
+	assertDaemonHealthy(t, h)
+}
+
 // TestDaemonSurvivesANotificationOutage: a provider that rejects every send,
 // or cannot be reached at all, costs a logged warning per attempt and nothing
 // else. The daemon keeps serving, the failed attempt is recorded as submitted
@@ -252,7 +370,7 @@ func TestDaemonSurvivesANotificationOutage(t *testing.T) {
 // TestDaemonWithoutTheSenderSendsNothing: a composition that does not ask for
 // the sender never notifies. That keeps every other whole-daemon test from
 // publishing to the default hosted server, and it is how the freesided
-// command runs until #1946.
+// command runs until #1924 starts the sender there.
 func TestDaemonWithoutTheSenderSendsNothing(t *testing.T) {
 	sink := newNtfySink(t, http.StatusOK)
 	root := t.TempDir()
