@@ -205,7 +205,8 @@ Prepare these pieces in order, using the linked instructions:
 
    ```sh
    bash scripts/run-real-work.sh \
-     /path/to/task.md /path/to/resolved-policy-keys.json /path/to/publication.json
+     /path/to/task.md /path/to/resolved-policy-keys.json /path/to/publication.json \
+     /path/to/work-unit.json
    ```
 
 Keep a paired client open to approve or revise the specification. This path

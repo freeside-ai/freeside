@@ -560,12 +560,27 @@ client-composed task saves:
 
 Composition preflight refuses a publication file that omits `source_issue` for
 such a task or names anything but the task's issue. What the pull request then
-carries depends on the optional work-unit file:
+carries depends on where the issue lives:
 
-- **With a work-unit file and an issue in the managed repository:**
-  `Closes #<number>`, or `Refs #<number>` when the closure is declined.
-- **With no work-unit file, or an issue in another repository:**
-  `Source issue: <url>`, which closes nothing.
+- **An issue in the managed repository:** `Closes #<number>`, or
+  `Refs #<number>` when the closure is declined.
+- **An issue in another repository:** `Source issue: <url>`, which closes
+  nothing.
+
+The fourth argument, the work-unit declaration, is required in both modes. It
+says when the task is finished, and the smallest one finishes the task when
+its pull request merges:
+
+```json
+{"completion_criterion": "bound_pr_merged"}
+```
+
+The harness, composition preflight, and `freesided submit` each refuse a new
+submission without it, because the daemon records completion against the
+declaration: a task accepted without one never finishes when its pull request
+merges, and it keeps its work-in-progress slot. A task the daemon accepted
+before this rule is left as it is and stays "Ready" after its merge. Release
+it with `freesided abandon -db <database> -task <task-id>`.
 
 A publication file with a literal `title` and `body` is still accepted for any
 other spec file. Its text is published as written, with no publisher-written
@@ -578,15 +593,16 @@ so run the harness in client-target mode:
 ```sh
 bash scripts/run-real-work.sh --client-target \
   /absolute/spec.json /absolute/policy.json /absolute/publication.json \
-  [/absolute/work-unit.json]
+  /absolute/work-unit.json
 ```
 
 Client-target mode requires `FREESIDE_REAL_RUN_MANUAL_SUBMISSION_CONFIG`,
 because a client cannot create a task without it. It cannot combine with
 `--resume-session` or `--recover-codex-credentials`. The harness does
 everything the ordinary mode does up to the daemon launch, including submitting
-the three files as a visibility seed, and then waits instead of following that
-seed. The harness never follows, verifies, or records a result for the seed;
+the four files as a visibility seed, and then waits instead of following that
+seed. The seed is a CLI submission, which is why this mode needs the work-unit
+declaration too; the daemon records one for the task the client composes. The harness never follows, verifies, or records a result for the seed;
 the seed only exists to make the project visible in sync until #1332 lands.
 
 The daemon, however, executes the seed's specification run like any other
@@ -697,7 +713,8 @@ suspended:
 
 ```sh
 bash scripts/run-real-work.sh --client-target \
-  /absolute/spec.json /absolute/policy.json /absolute/publication.json
+  /absolute/spec.json /absolute/policy.json /absolute/publication.json \
+  /absolute/work-unit.json
 # then, once the harness prints its awaiting-target line and the client task exists:
 bash /absolute/session/real-work-session.sh select-target /absolute/session <task-id>
 ```
