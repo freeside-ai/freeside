@@ -614,6 +614,25 @@
                         view: AnyView(DevicesView(model: model, rendersInteractiveControls: false))))
             }
 
+            // The notification setup the iPhone offers after pairing: on
+            // ntfy's own server, so only the topic is asked for, before any
+            // notification was opened. The Devices card above draws the same
+            // steps for another server, after one was.
+            let hostedSubscription = try #require(
+                DeviceNtfySubscription(serverURL: "https://ntfy.sh", topic: DeviceNtfySubscription.mock.topic))
+            for (name, scheme) in [
+                ("notification-setup-phone", ColorScheme.light),
+                ("notification-setup-phone-dark", ColorScheme.dark),
+            ] {
+                surfaces.append(
+                    Surface(
+                        name: name, width: 390, colorScheme: scheme,
+                        view: AnyView(
+                            PhoneNotificationSetupSheet(
+                                subscription: hostedSubscription, opens: NotificationOpenLog(defaults: nil),
+                                deviceID: DeviceIdentity.mock.deviceID, rendersInteractiveControls: false))))
+            }
+
             // The Answer-and-retry composer with the route picker (#1083): the
             // operator answers and chooses whether to retry the implementer or
             // revise the specification. Captured on Mac and phone, light and dark.

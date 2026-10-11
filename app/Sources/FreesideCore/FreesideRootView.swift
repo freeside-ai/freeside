@@ -249,6 +249,20 @@ public struct FreesideRootView: View {
             )
             .dynamicTypeSize(launchDynamicTypeSize ?? systemDynamicTypeSize)
         }
+        // Offered once after a pairing, on the iPhone only.
+        .sheet(
+            isPresented: Binding(
+                get: { session.offersNotificationSetup && phoneNotificationSubscription != nil },
+                set: { session.offersNotificationSetup = $0 })
+        ) {
+            if let subscription = phoneNotificationSubscription {
+                PhoneNotificationSetupSheet(
+                    subscription: subscription, opens: notificationOpens,
+                    deviceID: coordinator.store.device.deviceID
+                )
+                .dynamicTypeSize(launchDynamicTypeSize ?? systemDynamicTypeSize)
+            }
+        }
         // Deleting the credential cannot be undone, so the revoked banner's
         // "Pair Again" confirms first (#1458). A 401 can be the wrong daemon
         // answering, so the operator, not the app, decides.

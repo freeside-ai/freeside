@@ -23,12 +23,16 @@ struct PhoneNotificationSetup: View {
     @Environment(\.locale) private var locale
     @Environment(\.timeZone) private var timeZone
     @Environment(\.pinnedNow) private var pinnedNow
+    /// False where a sheet's own header already names the steps.
+    var showsHeading = true
     @State private var copiedTopic = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            KeywordLabel(text: "Phone notifications")
-                .accessibilityAddTraits(.isHeader)
+            if showsHeading {
+                KeywordLabel(text: "Phone notifications")
+                    .accessibilityAddTraits(.isHeader)
+            }
             step(Self.installStep) {
                 Link("Get ntfy on the App Store", destination: Self.ntfyAppStoreURL)
                     .buttonStyle(FreesideActionButtonStyle(tone: .tertiary))
@@ -84,6 +88,50 @@ struct PhoneNotificationSetup: View {
                 .foregroundStyle(Color.inkDim)
                 .fixedSize(horizontal: false, vertical: true)
             control()
+        }
+    }
+}
+
+/// The setup steps as their own sheet, which the iPhone offers once after a
+/// pairing (`AppSession.offersNotificationSetup`): the operator has just
+/// been given a topic, and nothing else would lead them to the Devices card
+/// that holds it.
+struct PhoneNotificationSetupSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let subscription: DeviceNtfySubscription
+    let opens: NotificationOpenLog
+    let deviceID: String
+    var rendersInteractiveControls = true
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if rendersInteractiveControls {
+                ScrollView { content }
+            } else {
+                content
+            }
+            FreesideSheetActionRow.done { dismiss() }
+        }
+        .background(Color.ground2)
+        .freesideSheetPresentation()
+    }
+
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            FreesideSheetHeader(
+                eyebrow: "Notifications",
+                ask: "Get notified on this phone",
+                consequence:
+                    "Freeside notifies this phone through the ntfy app when an item needs you. These steps stay on this device's card in Devices.",
+                askLineLimit: nil)
+            // Read here, when the sheet draws, so a test notification tapped
+            // while it is open shows at once.
+            PhoneNotificationSetup(
+                subscription: subscription, openedAt: opens.openedAt(deviceID: deviceID), showsHeading: false
+            )
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }

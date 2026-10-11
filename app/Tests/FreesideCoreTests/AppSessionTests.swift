@@ -1007,6 +1007,39 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
         #expect(persisted.isEmpty)
     }
 
+    /// Setup is offered when a pairing mints the device's topic, and never
+    /// again by a launch that only finds the stored credential.
+    @Test func notificationSetupIsOfferedByAPairingAndNotByALaunch() async throws {
+        let server = MockServer(authMode: .enforcing, pairingCodes: ["483911": .valid])
+        let credentials = InMemoryCredentialStore()
+        let session = AppSession(
+            client: APIClientFactory.mock(server: server) { (try? credentials.load())?.token },
+            credentials: credentials,
+            cache: InMemoryCacheStore()
+        )
+        guard case .needsPairing(let model) = session.phase else {
+            Issue.record("expected the pairing gate, got \(session.phase)")
+            return
+        }
+        #expect(!session.offersNotificationSetup)
+        model.pairingCode = "483911"
+        model.displayName = "Ben's iPhone"
+        await model.refreshFacts()
+        session.completePairing(try #require(await model.pair()))
+        #expect(session.offersNotificationSetup)
+
+        let relaunched = AppSession(
+            client: APIClientFactory.mock(server: server) { (try? credentials.load())?.token },
+            credentials: credentials,
+            cache: InMemoryCacheStore()
+        )
+        guard case .ready = relaunched.phase else {
+            Issue.record("expected a ready session, got \(relaunched.phase)")
+            return
+        }
+        #expect(!relaunched.offersNotificationSetup)
+    }
+
     @Test func aSessionWithACredentialIsReadyImmediately() async throws {
         let credentials = InMemoryCredentialStore(
             credential: DeviceCredential(

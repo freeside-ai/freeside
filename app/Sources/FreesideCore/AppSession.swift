@@ -30,6 +30,12 @@ public final class AppSession {
         let displayName: String?
     }
 
+    /// True from a pairing until the operator dismisses the notification
+    /// setup it offers. A launch that finds a stored credential leaves it
+    /// false: setup is offered once, when the device's topic is minted, and
+    /// stays reachable from the Devices sheet. Only the iPhone shows it.
+    public var offersNotificationSetup = false
+
     private var connection: Connection?
     /// The selected deployment, from the pairing screen on; nil before a
     /// connection and for mock and pairing-demo sessions.
@@ -135,6 +141,7 @@ public final class AppSession {
             Self.coordinator(
                 client: connection.client, cache: connection.cache, credential: credential,
                 deploymentURL: connection.deploymentURL, cacheRoot: cacheRoot))
+        offersNotificationSetup = true
     }
 
     /// The operator's in-app recovery from a rejected credential (the
