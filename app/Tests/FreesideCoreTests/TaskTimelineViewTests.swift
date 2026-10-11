@@ -171,6 +171,52 @@ import Testing
         #expect(relaunched.taskTimelinesByTaskID.isEmpty)
     }
 
+    /// While a daemon keeps writing, the detail's own reads run ahead of the
+    /// last full snapshot. That is not stale data, so a loaded section says
+    /// nothing. A daemon that stops answering is, and every section says so
+    /// beside the freshness banner.
+    @Test func loadedSectionsStayQuietUntilSyncFails() async throws {
+        let server = server()
+        let coordinator = SyncCoordinator(client: APIClientFactory.mock(server: server), cache: InMemoryCacheStore())
+        let taskID = TaskFixtures.retryTaskID
+        let runID = RunFixtures.activeRunID
+        await coordinator.refresh()
+        await coordinator.refreshTaskTimeline(for: taskID)
+        await coordinator.refreshTaskReviews(for: taskID, revision: 12)
+        func history() -> String? {
+            TaskTimelinePresentation.availabilityMessage(
+                state: coordinator.taskTimelineLoadStates[taskID], freshness: coordinator.store.freshness)
+        }
+        func review() -> String? {
+            RunReviewSection.availabilityMessage(
+                hasTimeline: coordinator.timelinesByRunID[runID] != nil,
+                state: coordinator.timelineLoadStates[runID], freshness: coordinator.store.freshness)
+        }
+        func banner() -> Bool {
+            FreshnessBanner.isShowing(
+                freshness: coordinator.store.freshness, lastUpdatedAt: coordinator.lastUpdatedAt, at: .now)
+        }
+
+        // The daemon writes, and the review read sees the newer revision.
+        await server.advanceRun(id: runID)
+        await coordinator.refreshTimeline(for: runID)
+        #expect(coordinator.store.freshness == .unvalidated)
+        #expect(history() == nil)
+        #expect(review() == nil)
+        #expect(!RunReviewSection.showsRetry(state: coordinator.timelineLoadStates[runID]))
+        #expect(coordinator.taskStop.unavailableReason == nil)
+        #expect(coordinator.taskStop.prepare(taskID: taskID) != nil)
+        #expect(!banner())
+
+        await server.setBeforeRespond { _ in throw InjectedFailure() }
+        await coordinator.refresh()
+        #expect(coordinator.store.freshness == .unreachable)
+        #expect(history() == "Saved task history. Freshness unconfirmed.")
+        #expect(review() == "Saved review details. Freshness unconfirmed.")
+        #expect(coordinator.taskStop.unavailableReason == "Offline. Connect to the daemon before sending Stop.")
+        #expect(banner())
+    }
+
     @Test func overlappingRequestsCoalesceAndCancelledNavigationDoesNotAdopt() async throws {
         let server = server()
         let coordinator = SyncCoordinator(client: APIClientFactory.mock(server: server), cache: InMemoryCacheStore())
@@ -382,6 +428,16 @@ import Testing
                     == true)
         }
         #expect(TaskTimelinePresentation.availabilityMessage(state: nil, freshness: .fresh) != nil)
+        // A read that ran ahead of the snapshot leaves a loaded history
+        // current, and vouches for nothing that has not loaded.
+        #expect(TaskTimelinePresentation.availabilityMessage(state: .loaded, freshness: .unvalidated) == nil)
+        #expect(TaskTimelinePresentation.availabilityMessage(state: nil, freshness: .unvalidated) != nil)
+        let failing: [InboxStore.Freshness] = [
+            .unreachable, .syncFailing, .contractMismatch(daemonContract: "other"), .unauthenticated,
+        ]
+        for freshness in failing {
+            #expect(TaskTimelinePresentation.availabilityMessage(state: .loaded, freshness: freshness) != nil)
+        }
     }
 
     @Test func milestoneDatesUseTheSameTimeZoneAsReviewAndEvents() throws {

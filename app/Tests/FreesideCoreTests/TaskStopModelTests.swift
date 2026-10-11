@@ -257,12 +257,17 @@ import Testing
             Issue.record("Wrong payload")
             return
         }
-        // The daemon's sync epoch rotates after the client prepared but before it
-        // confirms. The local check passes on the client's cached epoch, so the
-        // Stop sends and the daemon returns a stale-epoch 409 (a too-great version
-        // is unreachable from a well-behaved client, which never over-sends).
-        await server.rotateEpoch()
+        // The daemon's sync epoch rotates after confirm's validating round but
+        // before the command arrives. The local check passed on the epoch that
+        // round left, so the Stop sends and the daemon returns a stale-epoch 409
+        // (a too-great version is unreachable from a well-behaved client, which
+        // never over-sends).
+        let rotated = Counter()
+        await server.setBeforeRespond { operation in
+            if operation == "submitCommand", await rotated.incrementAndGet() == 1 { await server.rotateEpoch() }
+        }
         await coordinator.taskStop.confirm(prepared)
+        #expect(await rotated.count == 1)
         #expect(coordinator.pendingTaskStops.isEmpty)
         #expect(coordinator.taskStop.messages[prepared.entry.taskID]?.contains("confirm Stop again") == true)
         #expect(coordinator.tasks.first { $0.task.id == prepared.entry.taskID }?.task.cancellation == nil)
@@ -435,10 +440,195 @@ import Testing
         #expect(coordinator.taskStop.prepare(taskID: stopped.task.id) == nil)
     }
 
-    @Test func nonFreshStatesCannotPrepare() async throws {
-        let coordinator = await coordinator()
+    @Test func cancellationCaveatNeedsFailingSyncOrNoRoundThisSession() async throws {
+        let cache = InMemoryCacheStore()
+        let coordinator = await coordinator(cache: cache)
         let taskID = try preparation(coordinator).entry.taskID
-        for freshness: InboxStore.Freshness in [.unvalidated, .unreachable, .syncFailing, .unauthenticated] {
+        #expect(!TaskStopView(coordinator: coordinator, taskID: taskID).cancellationMayBeOutdated)
+        // A read ran ahead of the snapshot after a round succeeded: no caveat.
+        coordinator.store.freshness = .unvalidated
+        #expect(!TaskStopView(coordinator: coordinator, taskID: taskID).cancellationMayBeOutdated)
+        let failing: [InboxStore.Freshness] = [
+            .unreachable, .syncFailing, .contractMismatch(daemonContract: "other"), .unauthenticated,
+        ]
+        for freshness in failing {
+            coordinator.store.freshness = freshness
+            #expect(TaskStopView(coordinator: coordinator, taskID: taskID).cancellationMayBeOutdated)
+        }
+        // Relaunched from the cache: no round has succeeded in this session.
+        let relaunched = SyncCoordinator(client: coordinator.store.client, cache: cache)
+        #expect(relaunched.store.freshness == .unvalidated)
+        #expect(relaunched.lastUpdatedAt == nil)
+        #expect(TaskStopView(coordinator: relaunched, taskID: taskID).cancellationMayBeOutdated)
+    }
+
+    /// Makes the cache unvalidated the way a live client gets there: the
+    /// daemon writes, and a partial read sees the newer revision.
+    private func runAheadOfSnapshot(_ coordinator: SyncCoordinator, _ server: MockServer) async {
+        await server.advanceRun(id: RunFixtures.activeRunID)
+        await coordinator.refreshRuns()
+        #expect(coordinator.store.freshness == .unvalidated)
+    }
+
+    @Test func confirmValidatesAnUnvalidatedCacheThenSendsThePreparedCommand() async throws {
+        let server = MockServer()
+        let coordinator = await coordinator(server)
+        await runAheadOfSnapshot(coordinator, server)
+        let prepared = try preparation(coordinator)
+        let taskID = prepared.entry.taskID
+        #expect(TaskStopView(coordinator: coordinator, taskID: taskID).showsOnlyTheStopButton)
+        let order = OperationLog()
+        await server.setBeforeRespond { await order.record($0) }
+        await coordinator.taskStop.confirm(prepared)
+        // A sync round whose first read follows the confirm, then one send.
+        let operations = await order.operations
+        let send = try #require(operations.firstIndex(of: "submitCommand"))
+        #expect(operations.first == "getSyncRevision")
+        #expect(operations.filter { $0 == "submitCommand" }.count == 1)
+        #expect(operations[..<send].contains("getSyncBootstrap"))
+        #expect(coordinator.tasks.first { $0.task.id == taskID }?.task.cancellation?.value1.state == .requested)
+        #expect(coordinator.taskStop.messages[taskID] == nil)
+        #expect(coordinator.taskStop.confirming.isEmpty)
+        // The round validates; it never rebinds the command.
+        let replay = try await coordinator.store.client.submitCommand(body: .json(prepared.entry.command)).ok.body.json
+        guard case .stop_task(let record) = replay.record else {
+            Issue.record("Wrong record")
+            return
+        }
+        #expect(record.expected_entity_version == prepared.entry.command.expected_entity_version)
+    }
+
+    @Test func confirmSendsAndSavesNothingWhenTheRoundDoesNotEndFresh() async throws {
+        let server = MockServer()
+        let coordinator = await coordinator(server)
+        await runAheadOfSnapshot(coordinator, server)
+        let prepared = try preparation(coordinator)
+        let taskID = prepared.entry.taskID
+        let sent = Counter()
+        await server.setBeforeRespond { operation in
+            if operation == "submitCommand" {
+                await sent.increment()
+            } else {
+                throw InjectedFailure()
+            }
+        }
+        await coordinator.taskStop.confirm(prepared)
+        #expect(await sent.count == 0)
+        #expect(coordinator.pendingTaskStops.isEmpty)
+        #expect(coordinator.taskStop.messages[taskID]?.contains("Nothing was sent") == true)
+        #expect(coordinator.taskStop.confirming.isEmpty)
+        #expect(!TaskStopView(coordinator: coordinator, taskID: taskID).showsOnlyTheStopButton)
+        await server.setBeforeRespond(nil)
+        #expect(coordinator.tasks.first { $0.task.id == taskID }?.task.cancellation == nil)
+    }
+
+    /// The Bool the round returns is the only guard here: the read leaves
+    /// the cache unvalidated, which no longer withholds Stop by itself.
+    @Test func confirmSendsNothingWhenAReadOvertakesTheRoundsLastStep() async throws {
+        let server = MockServer()
+        let coordinator = await coordinator(server)
+        await runAheadOfSnapshot(coordinator, server)
+        let prepared = try preparation(coordinator)
+        let taskID = prepared.entry.taskID
+        let sent = Counter()
+        await server.setBeforeRespond { operation in
+            if operation == "submitCommand" { await sent.increment() }
+            // Each bootstrap's housekeeping is overtaken by a daemon write
+            // and a partial read that sees it.
+            if operation == "registerCapabilityContract" {
+                await server.advanceRun(id: RunFixtures.activeRunID)
+                await coordinator.refreshTimeline(for: RunFixtures.activeRunID)
+            }
+        }
+        await coordinator.taskStop.confirm(prepared)
+        #expect(coordinator.store.freshness == .unvalidated)
+        #expect(coordinator.taskStop.unavailableReason == nil)
+        #expect(await sent.count == 0)
+        #expect(coordinator.pendingTaskStops.isEmpty)
+        #expect(coordinator.taskStop.messages[taskID]?.contains("Nothing was sent") == true)
+    }
+
+    @Test func stopFoundByTheRoundSendsNothingAndAsksForNoSecondConfirm() async throws {
+        let server = MockServer()
+        let first = await coordinator(server)
+        let second = await coordinator(server, device: "another-device")
+        let prepared = try preparation(first)
+        let taskID = prepared.entry.taskID
+        await second.taskStop.confirm(try #require(second.taskStop.prepare(taskID: taskID)))
+        // The first device has not synced the other device's Stop yet.
+        #expect(first.tasks.first { $0.task.id == taskID }?.task.cancellation == nil)
+        let sent = Counter()
+        await server.setBeforeRespond { operation in
+            if operation == "submitCommand" { await sent.increment() }
+        }
+        await first.taskStop.confirm(prepared)
+        #expect(await sent.count == 0)
+        #expect(first.pendingTaskStops.isEmpty)
+        #expect(first.tasks.first { $0.task.id == taskID }?.task.cancellation?.value1.state == .requested)
+        #expect(first.taskStop.messages[taskID] == nil)
+    }
+
+    @Test func epochRotatedBeforeConfirmSendsNothing() async throws {
+        let server = MockServer()
+        let coordinator = await coordinator(server)
+        let prepared = try preparation(coordinator)
+        await server.rotateEpoch()
+        let sent = Counter()
+        await server.setBeforeRespond { operation in
+            if operation == "submitCommand" { await sent.increment() }
+        }
+        // The validating round adopts the new epoch, which the prepared
+        // command does not carry.
+        await coordinator.taskStop.confirm(prepared)
+        #expect(await sent.count == 0)
+        #expect(coordinator.pendingTaskStops.isEmpty)
+        #expect(coordinator.taskStop.messages[prepared.entry.taskID]?.contains("confirm Stop again") == true)
+    }
+
+    @Test func secondStopCannotStartWhileTheValidatingRoundRuns() async throws {
+        let server = MockServer()
+        let coordinator = await coordinator(server)
+        let prepared = try preparation(coordinator)
+        let taskID = prepared.entry.taskID
+        let entered = AsyncGate()
+        let release = AsyncGate()
+        let sent = Counter()
+        await server.setBeforeRespond { operation in
+            if operation == "getSyncRevision" {
+                await entered.open()
+                await release.wait()
+            }
+            if operation == "submitCommand" { await sent.increment() }
+        }
+        let confirming = Task { await coordinator.taskStop.confirm(prepared) }
+        await entered.wait()
+        // Checking: nothing is saved yet, and the control is not the bare button.
+        #expect(coordinator.taskStop.confirming == [taskID])
+        #expect(coordinator.pendingTaskStops.isEmpty)
+        #expect(!TaskStopView(coordinator: coordinator, taskID: taskID).showsOnlyTheStopButton)
+        #expect(coordinator.taskStop.prepare(taskID: taskID) == nil)
+        await coordinator.taskStop.confirm(prepared)
+        #expect(await sent.count == 0)
+        await release.open()
+        await confirming.value
+        #expect(await sent.count == 1)
+        #expect(coordinator.taskStop.confirming.isEmpty)
+        #expect(coordinator.tasks.first { $0.task.id == taskID }?.task.cancellation?.value1.state == .requested)
+    }
+
+    @Test func onlyFailingSyncWithholdsStop() async throws {
+        let server = MockServer()
+        let coordinator = await coordinator(server)
+        let taskID = try preparation(coordinator).entry.taskID
+        // A read that ran ahead of the snapshot leaves Stop on offer; confirm
+        // validates.
+        await runAheadOfSnapshot(coordinator, server)
+        #expect(coordinator.taskStop.unavailableReason == nil)
+        #expect(coordinator.taskStop.prepare(taskID: taskID) != nil)
+        let failing: [InboxStore.Freshness] = [
+            .unreachable, .syncFailing, .contractMismatch(daemonContract: "other"), .unauthenticated,
+        ]
+        for freshness in failing {
             coordinator.store.freshness = freshness
             #expect(coordinator.taskStop.prepare(taskID: taskID) == nil)
             #expect(coordinator.taskStop.unavailableReason != nil)
@@ -446,6 +636,11 @@ import Testing
         #expect(TaskStopView.cancellationText(.failed_to_stop).contains("Execution may continue"))
         #expect(TaskStopView.cancellationText(.confirmed).contains("confirmed by the daemon"))
     }
+}
+
+private actor OperationLog {
+    private(set) var operations: [String] = []
+    func record(_ operation: String) { operations.append(operation) }
 }
 
 private struct RefusingStopCache: CacheStore {

@@ -632,7 +632,7 @@ enum TaskTimelinePresentation {
     ) -> String? {
         if state == .loading { return "Showing saved task history while refreshing…" }
         if state == .unavailable { return "Task history refresh failed. Showing saved history." }
-        if state != .loaded || freshness != .fresh { return "Saved task history. Freshness unconfirmed." }
+        if state != .loaded || freshness.isFailing { return "Saved task history. Freshness unconfirmed." }
         return nil
     }
 

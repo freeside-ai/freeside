@@ -1879,8 +1879,8 @@
                     everythingOpen.setExpanded(true, .runDetails(run.run_id), taskID: revisedHistory.task_id)
                 }
             }
-            // A current task state: Stop is the bare button, so it shares the
-            // header row with Technical details at 820 and stacks at 390.
+            // A current task state with a round behind it: Stop is the bare
+            // button, as on the cache-restored surfaces above.
             let freshCoordinator = try TaskHistoryFixtures.coordinator(revisedHistory)
             freshCoordinator.store.freshness = .fresh
             #expect(freshCoordinator.taskStop.unavailableReason == nil)

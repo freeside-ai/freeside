@@ -69,6 +69,19 @@ public final class InboxStore {
         /// The daemon answered 401: this device's credential no longer
         /// authenticates (revoked, or not yet paired).
         case unauthenticated
+
+        /// Whether sync is failing: the daemon is unreachable, its reads
+        /// fail, its contract differs, or this device no longer
+        /// authenticates. `.unvalidated` is not a failure: a read ran ahead
+        /// of the last full snapshot and the next round settles it, so what
+        /// a loaded section shows is no older for it. Every case is named
+        /// so that a new one has to choose.
+        public var isFailing: Bool {
+            switch self {
+            case .fresh, .unvalidated: false
+            case .unreachable, .syncFailing, .contractMismatch, .unauthenticated: true
+            }
+        }
     }
 
     public let client: any APIProtocol

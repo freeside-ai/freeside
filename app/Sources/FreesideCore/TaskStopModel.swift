@@ -33,6 +33,9 @@ final class TaskStopModel {
 
     private unowned let coordinator: SyncCoordinator
     private(set) var sending: Set<String> = []
+    /// Tasks whose confirmed Stop is in flight, from the start of its
+    /// validating sync round until the command is sent or refused.
+    private(set) var confirming: Set<String> = []
     private(set) var messages: [String: String] = [:]
 
     init(coordinator: SyncCoordinator) { self.coordinator = coordinator }
@@ -45,17 +48,21 @@ final class TaskStopModel {
         pending.first { $0.taskID == taskID }
     }
 
+    /// Why Stop is not offered, or nil when it is. An unvalidated cache
+    /// still offers it: `confirm` validates current state before sending
+    /// (`devlog/2026-10-10-1726-validate-stop-on-confirm.md`).
     var unavailableReason: String? {
         switch coordinator.store.freshness {
-        case .fresh: return coordinator.cursors == nil ? "Refresh task state before sending Stop." : nil
+        case .fresh, .unvalidated:
+            return coordinator.cursors == nil ? "Refresh task state before sending Stop." : nil
         case .unauthenticated: return "Pair this device again before sending Stop."
         case .unreachable: return "Offline. Connect to the daemon before sending Stop."
-        default: return "Task state is not current. Refresh before sending Stop."
+        case .syncFailing, .contractMismatch: return "Task state is not current. Refresh before sending Stop."
         }
     }
 
     func prepare(taskID: String) -> Confirmation? {
-        guard unavailableReason == nil, pending(for: taskID) == nil,
+        guard unavailableReason == nil, pending(for: taskID) == nil, !confirming.contains(taskID),
             let snapshot = coordinator.tasks.first(where: { $0.task.id == taskID }),
             snapshot.task.cancellation == nil, snapshot.entity_version > 0,
             let epoch = coordinator.cursors?.syncEpoch
@@ -73,14 +80,29 @@ final class TaskStopModel {
                 taskName: snapshot.task.display_names.task.text, projectName: TaskDisplay.projectName(snapshot.task)))
     }
 
+    /// Sends the prepared command, unchanged, once a sync round whose first
+    /// read follows this call ended `.fresh` and the command's epoch, task,
+    /// and project still match what that round left. Otherwise nothing is
+    /// sent or saved.
     func confirm(_ confirmation: Confirmation) async {
         let entry = confirmation.entry
+        guard !confirming.contains(entry.taskID) else { return }
+        confirming.insert(entry.taskID)
+        defer { confirming.remove(entry.taskID) }
+        messages[entry.taskID] = nil
+        guard await coordinator.refreshAfterCommit() else {
+            messages[entry.taskID] =
+                "Freeside couldn't confirm the task's current state. Nothing was sent. Try again."
+            return
+        }
+        let task = coordinator.tasks.first { $0.task.id == entry.taskID }?.task
+        // The round found the task already stopping. The control shows that
+        // synced cancellation, and there is no Stop left to confirm again.
+        if task?.cancellation != nil { return }
         guard case .stop_task(let payload) = entry.command.payload,
             unavailableReason == nil, pending(for: entry.taskID) == nil,
             coordinator.cursors?.syncEpoch == payload.expected_sync_epoch,
-            let snapshot = coordinator.tasks.first(where: { $0.task.id == entry.taskID }),
-            snapshot.task.project_id == payload.project_id,
-            snapshot.task.cancellation == nil
+            task?.project_id == payload.project_id
         else {
             messages[entry.taskID] = "Task state changed. Refresh and confirm Stop again."
             return
