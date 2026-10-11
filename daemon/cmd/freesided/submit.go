@@ -40,7 +40,8 @@ const maxSubmissionFileBytes = 4 << 20
 
 const submitResultHelp = `
 Result JSON fields by lane:
-  source submission: source_digest, source_artifact_id, publication_digest
+  source submission: source_digest, source_artifact_id, publication_digest,
+    and one of source_issue or source_reference_omitted
   specification: specification_run_id, specification_invocation_id, specification_stage_id,
     specification_policy_digest, specification_policy_artifact_id
   reserved implementation: implementation_run_id, implementation_invocation_id,
@@ -55,6 +56,11 @@ specification_policy_digest and specification_policy_artifact_id. No deprecated
 digest or artifact aliases are emitted. A legacy production-only replay leaves
 the specification fields empty because its source is already the implementation
 specification.
+
+source_issue is the issue the pull request will reference: the publication
+file's source_issue, which must equal a task source that is exactly one GitHub
+issue URL. source_reference_omitted gives the reason when the pull request
+will carry no publisher-written issue reference.
 
 The approved implementation specification digest is available before start on
 the specification-approval AttentionItem claim, and after the run exists from
@@ -109,7 +115,8 @@ func runSubmitMain(args []string) {
 	dbPath := flags.String("db", "", "SQLite database path (required)")
 	taskPath := flags.String("task", "", "task source file (required)")
 	policyPath := flags.String("policy", "", "resolved per-run policy-key JSON array (required)")
-	publicationPath := flags.String("publication", "", "reviewer-facing pull-request metadata JSON file (required)")
+	publicationPath := flags.String("publication", "", "reviewer-facing pull-request metadata JSON file (required); "+
+		"a task that is exactly one GitHub issue URL needs source_issue set to that URL")
 	compositionPath := flags.String("composition-manifest", "", "passing production-composition manifest bound to the submitted inputs")
 	requireComposition := flags.Bool("require-composition", false, "require trusted production-composition evidence (unattended submission)")
 	workUnitPath := flags.String("work-unit", "", "work-unit declaration JSON file (optional; §5.18 capture)")
@@ -237,6 +244,61 @@ type submitResult struct {
 	AttemptReason                 string              `json:"attempt_reason,omitempty"`
 	ParentRunID                   domain.RunID        `json:"parent_run_id,omitempty"`
 	ApprovedSpecDigest            domain.Digest       `json:"approved_spec_digest,omitempty"`
+	// A submit result sets exactly one of the two; a reattempt result sets
+	// neither. SourceIssue is the issue the publisher's source-reference
+	// section will name; SourceReferenceOmitted says why the stored
+	// publication names none.
+	SourceIssue            string `json:"source_issue,omitempty"`
+	SourceReferenceOmitted string `json:"source_reference_omitted,omitempty"`
+}
+
+// The reasons a submission's stored publication names no source issue.
+const (
+	sourceOmittedNotAnIssue = "the task source is not exactly one canonical GitHub issue URL"
+	sourceOmittedBeforeRule = "accepted before a source reference was required"
+)
+
+// sourceReference is what a submission result reports about the issue its
+// pull request will reference: the issue, or the reason there is none.
+type sourceReference struct{ issue, omitted string }
+
+// sourceReferenceError refuses a publication file that disagrees with its
+// task source. Its text repeats no submitted bytes, so preflight can print it
+// where other input errors stay generic.
+type sourceReferenceError string
+
+func (e sourceReferenceError) Error() string { return string(e) }
+
+// submittedSourceReference checks a publication file against the task source
+// (#1928). A task that is exactly one issue URL must name that issue in
+// source_issue, and a declared source_issue must be the task's whole source,
+// so a pull request can neither lose nor misstate the issue it answers. The
+// operator declares the source and nothing is derived for them: the
+// publication digest joins the run identity, so a field the operator did not
+// write would change the identity a saved submission recomputes on retry.
+func submittedSourceReference(task []byte, publication engine.ProductionPublication) (sourceReference, error) {
+	issue := engine.TaskSourceIssue(task)
+	switch {
+	case publication.SourceIssue != "" && publication.SourceIssue != issue:
+		return sourceReference{}, sourceReferenceError(
+			"publication source_issue is not the task source: the task file must hold that issue URL and nothing else")
+	case issue != "" && publication.SourceIssue == "":
+		return sourceReference{}, sourceReferenceError(
+			`the task source is one GitHub issue URL, so the publication file must name it: set "source_issue" to that URL under "recipe": "freeside.client-publication/v2" and remove "title" and "body"`)
+	case issue == "":
+		return sourceReference{omitted: sourceOmittedNotAnIssue}, nil
+	}
+	return sourceReference{issue: issue}, nil
+}
+
+// acceptedSourceReference reports a submission that submittedSourceReference
+// would refuse as new and that was accepted before the rule existed. Its
+// stored publication is unchanged, so the result says what that record does.
+func acceptedSourceReference(publication engine.ProductionPublication) sourceReference {
+	if publication.SourceIssue != "" {
+		return sourceReference{issue: publication.SourceIssue}
+	}
+	return sourceReference{omitted: sourceOmittedBeforeRule}
 }
 
 type submissionFile struct {
@@ -360,6 +422,15 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 	}
 	if err := publication.Validate(); err != nil {
 		return submitResult{}, fmt.Errorf("submit: decode publication metadata: %w", err)
+	}
+	if _, err := submittedSourceReference(spec.body, publication); err != nil && cfg.RunID == "" {
+		// Refused here, before retainSubmission, so a new submission saves
+		// nothing. A journal that already exists may belong to a submission
+		// the database accepted before the rule; applySubmission tells that
+		// replay from a journal that never reached the database.
+		if _, retainedErr := matchingRetainedSubmission(cfg); retainedErr != nil {
+			return submitResult{}, fmt.Errorf("submit: %w", err)
+		}
 	}
 	publicationBody, err := json.Marshal(publication)
 	if err != nil {
@@ -558,6 +629,14 @@ func applySubmission(ctx context.Context, st *store.Store, blobs *signet.BlobSto
 	specificationRunID := req.SpecificationRunID
 	campaignID := req.CampaignID
 	composition := submissionFile{digest: req.CompositionDigest}
+	// Checked again on this side of the control socket, so a CLI that
+	// predates the rule cannot submit past it.
+	reference, sourceErr := submittedSourceReference(spec.body, publication)
+	if sourceErr != nil {
+		// Only a lookup or a replay of an accepted submission returns a
+		// result from here on; a new submission is refused below.
+		reference = acceptedSourceReference(publication)
+	}
 	var err error
 	// A database written before the rename holds this task's intake
 	// state under the legacy specification identity; converge on it instead
@@ -593,6 +672,7 @@ func applySubmission(ctx context.Context, st *store.Store, blobs *signet.BlobSto
 			return submitResult{}, fmt.Errorf("submit: inspect legacy production replay: %w", err)
 		}
 		if found {
+			legacy.SourceIssue, legacy.SourceReferenceOmitted = reference.issue, reference.omitted
 			return legacy, nil
 		}
 		return submitResult{}, fmt.Errorf("submit: legacy run was not recorded: %w", store.ErrNotFound)
@@ -635,7 +715,7 @@ func applySubmission(ctx context.Context, st *store.Store, blobs *signet.BlobSto
 			return submitResult{}, fmt.Errorf("submit: inspect legacy policy: %w", err)
 		}
 	}
-	if egressErr != nil && manual != nil {
+	if (egressErr != nil || sourceErr != nil) && manual != nil {
 		if err := st.Read(ctx, func(tx *store.ReadTx) error {
 			original, err := tx.GetManualSubmission(ctx, manual.Identity)
 			if errors.Is(err, store.ErrNotFound) {
@@ -655,6 +735,11 @@ func applySubmission(ctx context.Context, st *store.Store, blobs *signet.BlobSto
 	}
 	if egressErr != nil && !acceptedManual && !acceptedLegacy {
 		return submitResult{}, fmt.Errorf("submit: %w", egressErr)
+	}
+	// A legacy run id only looks a run up and never creates one, so the rule
+	// has nothing to refuse there.
+	if sourceErr != nil && manual != nil && !acceptedManual {
+		return submitResult{}, fmt.Errorf("submit: %w", sourceErr)
 	}
 	// Bytes land before metadata: an artifact row must never name a digest
 	// the blob store cannot serve, since admission materializes stage inputs
@@ -731,6 +816,8 @@ func applySubmission(ctx context.Context, st *store.Store, blobs *signet.BlobSto
 		CompositionDigest:             composition.digest,
 		CampaignID:                    submitted.Run.CampaignID,
 		AttemptNumber:                 submitted.Run.AttemptNumber,
+		SourceIssue:                   reference.issue,
+		SourceReferenceOmitted:        reference.omitted,
 	}
 	if workUnit != nil {
 		result.WorkUnitID = domain.WorkUnitIDForRun(submitted.ImplementationRunID)

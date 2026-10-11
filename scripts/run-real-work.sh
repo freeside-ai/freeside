@@ -238,15 +238,29 @@
 # approve or revise the generated specification. The harness runs and durably
 # records the exact production configuration's ward conformance suite before
 # the daemon can admit the submitted work.
-# The publication JSON is durable operator input with this shape:
+# The publication JSON is durable operator input. Use the client record, the
+# form a task composed in a Freeside client saves:
+#   {"recipe":"freeside.client-publication/v2",
+#    "source_issue":"https://github.com/<owner>/<repo>/issues/<number>",
+#    "branch":"feat/meaningful-task-slug",
+#    "commit_author":{"app_slug":"canonical-app-slug","bot_user_id":123}}
+# Freeside writes the title and body from the reviewed change, and the
+# publisher writes the issue reference. When the spec file is exactly one
+# GitHub issue URL, source_issue is required and must be that URL: composition
+# preflight refuses a file that omits it or names another issue, before this
+# harness starts the daemon. Omit source_issue for any other spec file; the
+# pull request then carries no publisher-written issue reference.
+# The older literal form still works, and its title and body are published as
+# written, with no publisher-written issue reference:
 #   {"title":"Imperative PR title","body":"Why and What prose",
 #    "branch":"feat/meaningful-task-slug",
 #    "commit_author":{"app_slug":"canonical-app-slug","bot_user_id":123}}
-# The optional branch is an exact operator-declared head name. Omit it for
-# freeside/publish/<identity-hex16>; refs/ and freeside/ names are reserved.
-# Freeside writes Verification from the executed recipe and labels agent evidence
-# as claims. A Verification heading or section marker in body is refused at
-# submit. Publisher-owned sections reserve space, leaving 23,432 bytes for body.
+# A Verification heading or section marker in body is refused at submit.
+# Publisher-owned sections reserve space, leaving 23,432 bytes for body.
+# In both forms the optional branch is an exact operator-declared head name.
+# Omit it for freeside/publish/<identity-hex16>; refs/ and freeside/ names are
+# reserved. Freeside writes Verification from the executed recipe and labels
+# agent evidence as claims.
 # The slug and bot user ID claim the selected GitHub App bot's public canonical
 # attribution fields. Before execution, the daemon resolves that account from
 # the App registration selected by its installation token and requires an
@@ -257,6 +271,9 @@
 # digest joins the run-identity derivation, so a declared submission is a
 # distinct implementation run from an undeclared submission of the same spec,
 # policy, and publication bytes.
+# A declared source_issue becomes a closing reference only with this
+# declaration: without it the pull request carries "Source issue: <url>" and
+# does not close the issue.
 set -euo pipefail
 umask 077
 
@@ -306,6 +323,30 @@ if [[ "$recover_codex_credentials" == false ]]; then
       exit 2
     fi
   done
+  # The daemon's preflight owns the refusals; these only name what an accepted
+  # file will publish. A resumed session's files were accepted already, and a
+  # file that is not a JSON object is submit's to refuse. Each test reads the
+  # field's value: the daemon's own encoding of a client record carries empty
+  # "title" and "body" keys, and submit accepts that file.
+  if [[ -z "$retained_session" ]]; then
+    python3 - "$publication_file" "$work_unit_file" <<'PY' >&2
+import json, sys
+try:
+    publication = json.load(open(sys.argv[1], encoding='utf-8'))
+except (OSError, ValueError):
+    sys.exit(0)
+if not isinstance(publication, dict):
+    sys.exit(0)
+if publication.get('title') or publication.get('body'):
+    print('run-real-work: warning: the publication file gives a literal "title" or "body", so the pull request '
+          'is published as written with no publisher-written issue reference; for an issue source use '
+          '"recipe": "freeside.client-publication/v2" with "source_issue"')
+if publication.get('source_issue') and not sys.argv[2]:
+    print('run-real-work: warning: the publication file names "source_issue" but no work-unit file was given, '
+          'so the pull request will link the issue ("Source issue: <url>") and will not close it; pass a '
+          'work-unit declaration as the fourth argument for a closing reference')
+PY
+  fi
 fi
 
 required=(

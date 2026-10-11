@@ -43,6 +43,14 @@ func canonicalSourceIssue(source string) string {
 	return source
 }
 
+// TaskSourceIssue returns the issue a task source names when, with surrounding
+// whitespace trimmed, the source is exactly one canonical GitHub issue URL, and
+// "" otherwise. Client submission and `freesided submit` both call it, so the
+// two doors cannot disagree about which task answers an issue.
+func TaskSourceIssue(source []byte) string {
+	return canonicalSourceIssue(strings.TrimSpace(string(source)))
+}
+
 // publicationMetadata consumes claims only after the caller authenticates the
 // current export/import, specification, candidate and authorization. The recipe
 // and those immutable inputs fix the bytes for retry, restart and drift repair.

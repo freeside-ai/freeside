@@ -16,6 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	inferencefake "github.com/freeside-ai/freeside/daemon/internal/inference/fake"
+	"github.com/freeside-ai/freeside/daemon/internal/publicationtext"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -282,6 +283,171 @@ func TestClientSubmissionPublishesPolicyApprovedClose(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// cliPublicationSubmission is the operator's side of a `freesided submit`
+// task: a manual submission whose identity starts with "cli:" and whose
+// publication record is the operator's own file. Set on a publicationHarness,
+// it makes a fixture that submits a task do it that way instead of through the
+// client command.
+type cliPublicationSubmission struct {
+	// workUnit says whether the operator passed a work-unit file.
+	workUnit bool
+}
+
+// submitCLIForPublication records the task the way `freesided submit` applies
+// one: the publication record is the client record an operator writes for an
+// issue source, and a declaration exists only when a work-unit file was given.
+func submitCLIForPublication(t *testing.T, h *publicationHarness, project domain.ProjectID, source string, keys []domain.PolicyKey, submissionID string) domain.RunID {
+	t.Helper()
+	publication := engine.ProductionPublication{
+		Recipe: "freeside.client-publication/v2", SourceIssue: source,
+		CommitAuthor: productionPublicationMetadata().CommitAuthor,
+	}
+	publicationBytes, err := json.Marshal(publication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceDigest := productionDigest([]byte(source))
+	putProductionBlob(t, h, sourceDigest, []byte(source))
+	keysDigest, err := (domain.ResolvedPolicy{Keys: keys}).ComputeDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var (
+		workUnit       *domain.WorkUnitDeclarationInput
+		workUnitDigest domain.Digest
+	)
+	if h.cliSubmission.workUnit {
+		workUnit = &domain.WorkUnitDeclarationInput{
+			CompletionCriterion: domain.CompletionBoundPRMerged, DeclaredPaths: engine.DeclaredPathScope(keys),
+		}
+		workUnitDigest = productionDigest([]byte(`{"completion_criterion":"` + string(domain.CompletionBoundPRMerged) + `"}`))
+	}
+	identity := "cli:" + submissionID
+	implementationRunID := engine.ManualSubmissionRunID(
+		identity, project, sourceDigest, keysDigest, productionDigest(publicationBytes), workUnitDigest)
+	specificationRunID, err := engine.SpecificationRunIDForImplementation(implementationRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	campaignID, err := engine.ProductionCampaignIDForImplementation(implementationRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := domain.NewResolvedPolicy(specificationRunID, keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyBytes, err := json.Marshal(resolved.Keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	putProductionBlob(t, h, resolved.Digest, policyBytes)
+	sourceArtifact, err := engine.SubmissionArtifact(
+		domain.ArtifactKindSpecification, sourceDigest, domain.EvidenceMediaTextMarkdown, int64(len(source)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyArtifact, err := engine.SubmissionArtifact(
+		domain.ArtifactKindPolicy, resolved.Digest, domain.EvidenceMediaApplicationJSON, int64(len(policyBytes)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.store.Write(h.ctx, func(tx *store.WriteTx) error {
+		if err := engine.RegisterSubmissionArtifact(h.ctx, tx, sourceArtifact); err != nil {
+			return err
+		}
+		if err := engine.RegisterSubmissionArtifact(h.ctx, tx, policyArtifact); err != nil {
+			return err
+		}
+		_, err := engine.SubmitSpecificationRunTx(h.ctx, tx, engine.SpecificationRunSpec{
+			ManualSubmission: &domain.ManualSubmission{
+				Identity: identity, ProjectID: project, SourceArtifactID: sourceArtifact.ID, SourceDigest: sourceDigest,
+				RequestDigest: productionDigest([]byte(identity)), ImplementationRunID: implementationRunID,
+			},
+			SpecificationRunID: specificationRunID, ImplementationRunID: implementationRunID,
+			ProjectID: project, SourceArtifactID: sourceArtifact.ID, SourceBytes: []byte(source),
+			PolicyArtifactID: policyArtifact.ID, ResolvedPolicy: resolved, Publication: publication,
+			PublicationDigest: productionDigest(publicationBytes),
+			WorkUnit:          workUnit, CampaignID: campaignID, AttemptNumber: 1,
+		})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return specificationRunID
+}
+
+// TestCLISubmissionPublishesDeclaredSourceIssue is the #1928 end-to-end proof:
+// a `freesided submit` task whose publication record names its source issue
+// publishes the reference a client task would. With a work-unit declaration
+// the pull request closes the issue; without one the closure gate has no
+// subject, so the pull request carries the plain link and nothing waits.
+func TestCLISubmissionPublishesDeclaredSourceIssue(t *testing.T) {
+	const issue = "https://github.com/" + fakePublicationRepo + "/issues/82"
+	for _, tc := range []struct {
+		name     string
+		workUnit bool
+		lead     string
+	}{
+		{"work-unit declaration", true, "Closes #82."},
+		{"no declaration", false, "Source issue: " + issue + "\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newPublicationHarness(t)
+			h.cliSubmission = &cliPublicationSubmission{workUnit: tc.workUnit}
+			p := newProductionPublicationHarnessWithMetadata(t, h, "", nil, nil, nil,
+				engine.ProductionPublication{SourceIssue: issue}, nil, "", "publication")
+			p.replay = withPublicAccount(t, p, p.replay, publicAccount)
+			scriptPublicationSites(t, p,
+				inferencefake.Script{Response: inference.Response{Output: []byte(authoredExplainOutput), ComputeUnits: 5}},
+				&inferencefake.Script{Response: inference.Response{Output: []byte(`{"resolves":true}`), ComputeUnits: 1}},
+			)
+			p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+			p.startAndRecordExport(t)
+			if _, err := p.reconcileLanes(); err != nil {
+				t.Fatal(err)
+			}
+			prs := p.forge.pullRequests()
+			lead := "<!-- " + publicationtext.SourceReferenceMarkerName + " -->\n\n" + tc.lead
+			if len(prs) != 1 || prs[0].Draft || !strings.HasPrefix(prs[0].Body, lead) {
+				t.Fatalf("CLI submission PRs = %+v, want one ready PR led by %q", prs, tc.lead)
+			}
+			if !tc.workUnit && (strings.Contains(prs[0].Body, "Closes #82") || strings.Contains(prs[0].Body, "Refs #82")) {
+				t.Fatal("undeclared CLI submission published a closing or tracking reference")
+			}
+			if waits := pendingClosureWaits(t, p); len(waits) != 0 {
+				t.Fatalf("pending closure waits = %d, want 0", len(waits))
+			}
+			key := "production-closure/" + string(p.runID) + "/publish-production-" + string(p.runID)
+			if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+				submission, err := tx.GetManualSubmission(p.ctx, "cli:publication")
+				if err != nil {
+					return err
+				}
+				if submission.ImplementationRunID != p.runID {
+					t.Fatalf("published run %q is not the CLI submission's %q", p.runID, submission.ImplementationRunID)
+				}
+				entry, err := tx.GetInbox(p.ctx, key)
+				if err != nil {
+					return err
+				}
+				var checkpoint struct {
+					HasProposal bool `json:"has_proposal"`
+				}
+				if err := json.Unmarshal(entry.Payload, &checkpoint); err != nil {
+					return err
+				}
+				if checkpoint.HasProposal != tc.workUnit {
+					t.Fatalf("closure proposal recorded = %t, want %t", checkpoint.HasProposal, tc.workUnit)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

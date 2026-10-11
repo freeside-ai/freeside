@@ -56,12 +56,18 @@ func submitClientForPublication(t *testing.T, h *publicationHarness, image domai
 	}); err != nil {
 		t.Fatal(err)
 	}
-	result, err := service.Submit(h.ctx, signet.ClientCommand{
-		CommandID: commandID, DeviceID: "client-device", Kind: domain.CommandKindSubmitTask,
-		SubmitTask: signet.SubmitTaskPayload{ProjectID: project, Source: source, Name: name},
-	})
-	if err != nil {
-		t.Fatal(err)
+	var specificationRunID domain.RunID
+	if h.cliSubmission != nil {
+		specificationRunID = submitCLIForPublication(t, h, project, source, keys, commandID)
+	} else {
+		result, err := service.Submit(h.ctx, signet.ClientCommand{
+			CommandID: commandID, DeviceID: "client-device", Kind: domain.CommandKindSubmitTask,
+			SubmitTask: signet.SubmitTaskPayload{ProjectID: project, Source: source, Name: name},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		specificationRunID = result.Submission.SpecificationRunID
 	}
 	if prior == nil {
 		assertProjectAuthority(t, h, project, false)
@@ -70,7 +76,7 @@ func submitClientForPublication(t *testing.T, h *publicationHarness, image domai
 		ImplementationRunID domain.RunID `json:"implementation_run_id"`
 	}
 	if err := h.store.Read(h.ctx, func(tx *store.ReadTx) error {
-		entry, err := tx.GetOutbox(h.ctx, engine.SpecificationDispatchMarkerKey(result.Submission.SpecificationRunID))
+		entry, err := tx.GetOutbox(h.ctx, engine.SpecificationDispatchMarkerKey(specificationRunID))
 		if err != nil {
 			return err
 		}
@@ -83,7 +89,7 @@ func submitClientForPublication(t *testing.T, h *publicationHarness, image domai
 		t.Fatal(err)
 	}
 	title := "Refined task name"
-	if err := specifyfake.Script(driver, domain.SpecificationInvocationID(result.Submission.SpecificationRunID, 1), 0, 0, specify.Output{
+	if err := specifyfake.Script(driver, domain.SpecificationInvocationID(specificationRunID, 1), 0, 0, specify.Output{
 		Specification: &specify.Specification{Title: &title, Summary: "Approved change", Body: "# Approved Specification\n\nPreserve recorded results after restart.", Addressals: []specify.Addressal{}},
 	}); err != nil {
 		t.Fatal(err)

@@ -413,6 +413,11 @@ func newProductionPublicationHarnessWithMetadata(
 	if len(clientName) > 0 {
 		if err := h.store.Read(h.ctx, func(tx *store.ReadTx) error {
 			stored, err := tx.GetWorkUnitDeclarationByRun(h.ctx, runID)
+			// `freesided submit` records a declaration only when the
+			// operator passes a work-unit file.
+			if errors.Is(err, store.ErrNotFound) && h.cliSubmission != nil && !h.cliSubmission.workUnit {
+				return nil
+			}
 			declaration = &stored
 			return err
 		}); err != nil {

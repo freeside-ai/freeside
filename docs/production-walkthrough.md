@@ -548,8 +548,32 @@ normal authenticated App, policy, admission, and specification-approval gates.
 Hermetic HTTP tests do not replace this evidence.
 
 The ordinary harness invocation submits its own task from the CLI and follows
-that CLI seed to publication. For this exercise the target must instead arrive
-through the client composer, so run the harness in client-target mode:
+that CLI seed to publication. When that task's spec file is exactly one GitHub
+issue URL, its publication file names the issue with the record a
+client-composed task saves:
+
+```json
+{"recipe": "freeside.client-publication/v2",
+ "source_issue": "https://github.com/<owner>/<repo>/issues/<number>",
+ "commit_author": {"app_slug": "canonical-app-slug", "bot_user_id": 123}}
+```
+
+Composition preflight refuses a publication file that omits `source_issue` for
+such a task or names anything but the task's issue. What the pull request then
+carries depends on the optional work-unit file:
+
+- **With a work-unit file and an issue in the managed repository:**
+  `Closes #<number>`, or `Refs #<number>` when the closure is declined.
+- **With no work-unit file, or an issue in another repository:**
+  `Source issue: <url>`, which closes nothing.
+
+A publication file with a literal `title` and `body` is still accepted for any
+other spec file. Its text is published as written, with no publisher-written
+issue reference. The `scripts/run-real-work.sh` header is the authority for
+both forms.
+
+For this exercise the target must instead arrive through the client composer,
+so run the harness in client-target mode:
 
 ```sh
 bash scripts/run-real-work.sh --client-target \
@@ -583,8 +607,10 @@ implementation.
    exit condition requires source-issue closure, the agent must give the
    operator the exact bare canonical URL before submission, with no prose or
    trailing punctuation. Prose-wrapped URLs remain valid task input but do not
-   save a publication source reference. Never pre-create that source through
-   the CLI.
+   save a publication source reference. Never pre-create this exercise's
+   target through the CLI: the target must be the task the client composer
+   creates. That limit is this exercise's alone; an ordinary CLI run may
+   submit an issue URL with the publication file shown above.
 2. When the harness prints `awaiting a client target`, enter that source in the
    client composer and submit. Record the command result, the new task ID, its
    specification-run ID, and the returned sync state. Verify the task name and
