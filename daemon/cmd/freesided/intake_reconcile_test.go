@@ -102,7 +102,6 @@ func intakePolicyKeys(t *testing.T, mode domain.InitiatorMode, modeSource domain
 		{Key: specify.PolicySpecApproval, Value: "true", Provenance: prov(domain.ProvenancePreset)},
 		{Key: specify.PolicyMaxIterations, Value: "4", Provenance: prov(domain.ProvenancePreset)},
 		{Key: specify.PolicyStageActiveTime, Value: "45m", Provenance: prov(domain.ProvenancePreset)},
-		{Key: specify.PolicyApprovalWait, Value: "4h", Provenance: prov(domain.ProvenancePreset)},
 		{Key: specify.PolicyResearchAllowlist, Value: "https://docs.example,https://api.github.com", Provenance: prov(domain.ProvenancePreset)},
 		{Key: specify.PolicyResearchMaxBytes, Value: "1048576", Provenance: prov(domain.ProvenancePreset)},
 		{Key: "paths", Value: "src/,docs/", Provenance: prov(domain.ProvenancePreset)},

@@ -1,6 +1,7 @@
 package specify_test
 
 import (
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,7 +16,6 @@ func TestParsePolicy(t *testing.T) {
 		policyKey(specify.PolicySpecApproval, "true"),
 		policyKey(specify.PolicyMaxIterations, "3"),
 		policyKey(specify.PolicyStageActiveTime, "45m"),
-		policyKey(specify.PolicyApprovalWait, "4h"),
 		policyKey(specify.PolicyResearchAllowlist, "https://docs.example, https://api.example:8443"),
 		policyKey(specify.PolicyResearchMaxBytes, "1048576"),
 	}
@@ -28,9 +28,19 @@ func TestParsePolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !got.SpecApproval || got.MaxIterations != 3 || got.StageActiveTime != 45*time.Minute ||
-		got.ApprovalWait != 4*time.Hour || got.ResearchMaxBytes != 1<<20 ||
-		len(got.ResearchAllowlist) != 2 {
+		got.ResearchMaxBytes != 1<<20 || len(got.ResearchAllowlist) != 2 {
 		t.Fatalf("policy = %+v", got)
+	}
+
+	// Policies resolved before the blocked attention type was retired still
+	// carry its waiting threshold, and a stored one must keep parsing.
+	withRetired, err := domain.NewResolvedPolicy("run-spec", append(keys,
+		policyKey("waiting.spec_approval_attention_after", "4h")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kept, err := specify.ParsePolicy(withRetired); err != nil || !reflect.DeepEqual(kept, got) {
+		t.Fatalf("policy with the retired waiting key = %+v, %v; want %+v", kept, err, got)
 	}
 }
 
@@ -39,7 +49,6 @@ func TestParsePolicyRejectsResearchResourceOverflow(t *testing.T) {
 		policyKey(specify.PolicySpecApproval, "true"),
 		policyKey(specify.PolicyMaxIterations, "3"),
 		policyKey(specify.PolicyStageActiveTime, "45m"),
-		policyKey(specify.PolicyApprovalWait, "4h"),
 		policyKey(specify.PolicyResearchAllowlist, "https://docs.example"),
 		policyKey(specify.PolicyResearchMaxBytes, "1048576"),
 	}

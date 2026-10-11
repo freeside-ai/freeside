@@ -59,9 +59,10 @@ var allowedActionsByType = map[domain.AttentionType]map[domain.Action]struct{}{
 		domain.ActionAcknowledge, domain.ActionRunDoctor, domain.ActionStopUnattended,
 		domain.ActionResumeUnattended, domain.ActionResolveReenrollment,
 	),
-	// blocked is a read-only consolidation of external waits (§5.12). The plan
-	// assigns it no action; the shared domain/API contracts permit the empty
-	// set (#96), and this table keeps the per-type cardinality rule here.
+	// blocked is retired (plan revision 84) and exists only closed. It was a
+	// read-only notice with no action; the shared domain/API contracts permit
+	// the empty set (#96), and this table keeps the per-type cardinality rule
+	// here.
 	domain.AttentionBlocked: actionSet(),
 }
 

@@ -53,10 +53,13 @@ import Testing
         for (type, actions) in Self.planSection4 {
             #expect(AttentionFixtures.phase1ActionSets[type] == actions)
         }
-        // blocked is pinned read-only by signet policy: it offers the
-        // empty set, which the contract permits since #96.
+        // The retired blocked type keeps its entry for closed items: signet
+        // policy pins it to the empty set, which the contract permits since
+        // #96. It is not a type the default inbox can hold open.
         #expect(AttentionFixtures.phase1ActionSets[.blocked] == [])
         #expect(AttentionFixtures.phase1ActionSets.count == 14)
+        #expect(!AttentionFixtures.phase1Types.contains(.blocked))
+        #expect(AttentionFixtures.fixture(type: .blocked).item.status == .superseded)
     }
 
     /// phase1Actions is the enumeration universe the cross-language policy
@@ -252,7 +255,6 @@ import Testing
                 "item-task_proposal",
                 "item-effect_proposal",
                 "item-system_health",
-                "item-blocked",
             ])
         #expect(
             AttentionFixtures.defaultInboxItemIDs()

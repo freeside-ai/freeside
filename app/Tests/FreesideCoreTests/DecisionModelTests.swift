@@ -1852,25 +1852,6 @@ import Testing
         #expect(model.actionsEnabled)
     }
 
-    @Test func blockedItemOffersNoActionableDecision() async {
-        // Signet policy pins blocked read-only: since #96 it offers the
-        // empty set, so the card renders no action button, and even a
-        // stray action stays unsubmittable.
-        let server = MockServer()
-        let store = await makeStore(server: server)
-        let model = DecisionModel(store: store, itemID: "item-blocked")
-        await model.validate()
-
-        #expect(model.offeredActions.isEmpty)
-        #expect(!model.isSubmittable(.acknowledge))
-
-        await model.submit(.acknowledge)
-        #expect(model.phase == .idle)
-        #expect(model.appliedRecord == nil)
-        #expect(model.pendingCommand == nil)
-        #expect(model.snapshot?.item.status == .open)
-    }
-
     @Test func lostResponseAfterANonTerminalCommitIsRecoveredByReplay() async throws {
         // The daemon committed acknowledge but the response was lost. The
         // retry resends the original command verbatim so the recorded

@@ -29,6 +29,10 @@ func validItemInput(typ domain.AttentionType) domain.AttentionItemInput {
 		InterruptionClass: domain.InterruptionPlannedGate,
 		Status:            domain.StatusOpen,
 	}
+	if typ == domain.AttentionBlocked {
+		// The type is retired: an item of it is valid only once closed.
+		in.Status = domain.StatusSuperseded
+	}
 	if typ == domain.AttentionReviewContradiction {
 		runID := domain.RunID("run-1")
 		in.Subject.RunID = &runID
@@ -486,6 +490,34 @@ func TestNewAttentionItemActionless(t *testing.T) {
 	in.RequestedDecision = nil
 	if _, err := domain.NewAttentionItem(in, nil); err != nil {
 		t.Fatalf("NewAttentionItem(blocked, nil actions): %v", err)
+	}
+}
+
+// TestRetiredBlockedItemIsValidOnlyClosed pins the retirement (plan revision
+// 84, #1925): no producer or decoded row can hold an open blocked item, and
+// every closed status still validates so stored history keeps loading.
+func TestRetiredBlockedItemIsValidOnlyClosed(t *testing.T) {
+	for _, status := range domain.AllItemStatuses {
+		t.Run(string(status), func(t *testing.T) {
+			in := validItemInput(domain.AttentionBlocked)
+			in.Status = status
+			item, err := domain.NewAttentionItem(in, nil)
+			if status == domain.StatusOpen {
+				if !errors.Is(err, domain.ErrRetiredItemTypeOpen) {
+					t.Fatalf("NewAttentionItem(open blocked) = %v, want ErrRetiredItemTypeOpen", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("NewAttentionItem(%s blocked): %v", status, err)
+			}
+			// A closed row reopened outside the constructor fails the same
+			// way when it is decoded and validated.
+			item.Status = domain.StatusOpen
+			if err := item.Validate(); !errors.Is(err, domain.ErrRetiredItemTypeOpen) {
+				t.Fatalf("Validate(reopened blocked) = %v, want ErrRetiredItemTypeOpen", err)
+			}
+		})
 	}
 }
 

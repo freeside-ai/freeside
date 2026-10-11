@@ -54,7 +54,7 @@ func putItem(s seeder, in domain.AttentionItemInput) error {
 // spec_approval and ready_for_final_review come from the runs that own them;
 // task_proposal and effect_proposal need their dedicated openers and are not
 // seeded (#1503 follow-up).
-func seedItems(s seeder, failed, active, verification, awaiting domain.Run, approval domain.AttentionItem) error {
+func seedItems(s seeder, failed, active, verification domain.Run) error {
 	p := freesideProject
 	at := base.Add(2 * time.Hour)
 	var inputs []domain.AttentionItemInput
@@ -152,22 +152,6 @@ func seedItems(s seeder, failed, active, verification, awaiting domain.Run, appr
 	}
 	if err := seedAgentQuestion(s, at.Add(8*time.Minute)); err != nil {
 		return err
-	}
-
-	// blocked names the spec_approval it waits on, so it is written last; its
-	// wait starts when that approval was created.
-	waiting := itemSpec{
-		id: "blocked-" + domain.ItemID(awaiting.ID), project: p, runID: awaiting.ID,
-		itemType: domain.AttentionBlocked, priority: domain.PriorityLow,
-		reason: "Waiting on specification approval.", createdAt: at.Add(9 * time.Minute),
-	}.input()
-	waiting.PRHeadSHA = ""
-	waiting.RequestedDecision = nil
-	waiting.BlockedOn = &domain.BlockedWait{
-		Kind: domain.BlockedWaitSpecApproval, Since: *approval.CreatedAt, ItemID: &approval.ID,
-	}
-	if err := putItem(s, waiting); err != nil {
-		return fmt.Errorf("item %s: %w", waiting.ID, err)
 	}
 	return nil
 }

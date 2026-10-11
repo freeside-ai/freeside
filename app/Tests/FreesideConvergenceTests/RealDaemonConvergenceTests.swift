@@ -717,8 +717,8 @@ struct RealDaemonConvergenceTests {
         }
         let constructibleAllowed = allowed.filter(constructible)
 
-        // The whole allowed set reaches the post-policy boundary (blocked: the
-        // empty set). Task proposals then fail with the specialized-admission
+        // The whole allowed set reaches the post-policy boundary. Task
+        // proposals then fail with the specialized-admission
         // sentinel because this generic fixture route cannot atomically create
         // their instance, carrier, and binding. Any disallowed action would fail
         // earlier with the distinct policy error.
@@ -765,21 +765,34 @@ struct RealDaemonConvergenceTests {
             }
         }
 
-        // Every actionable type must offer at least one decision; the empty set
-        // is the client-visible ErrNoActions 400. blocked is the read-only
-        // exception, proven accepted by the whole-set seed above.
-        if type != .blocked {
-            let empty = try await control.seedItemOutcome(
-                id: ConvergenceHarness.uniqueItemID("pol-\(type.rawValue)-empty"),
-                type: type, actions: [])
-            #expect(empty.statusCode == 400)
-            #expect(
-                empty.message?.contains("offers no requested decision") == true,
-                "expected ErrNoActions for \(type.rawValue), got: \(empty.message ?? "")")
-        }
+        // Every type must offer at least one decision; the empty set is the
+        // client-visible ErrNoActions 400.
+        let empty = try await control.seedItemOutcome(
+            id: ConvergenceHarness.uniqueItemID("pol-\(type.rawValue)-empty"),
+            type: type, actions: [])
+        #expect(empty.statusCode == 400)
+        #expect(
+            empty.message?.contains("offers no requested decision") == true,
+            "expected ErrNoActions for \(type.rawValue), got: \(empty.message ?? "")")
     }
 
-    /// The invalid/unknown arm: an unrecognized attention type or action string
+    /// blocked is retired (plan revision 84) and has no cell in the matrix
+    /// above: the daemon refuses an open item of the type before any action
+    /// policy runs. The mock's validity check returns the same message
+    /// (`MockContractValidationTests.retiredBlockedItemIsValidOnlyClosed`).
+    @Test func daemonRefusesAnOpenBlockedItem() async throws {
+        let control = try ConvergenceHarness.control()
+        #expect(!AttentionFixtures.phase1Types.contains(.blocked))
+
+        let refused = try await control.seedItemOutcome(
+            id: ConvergenceHarness.uniqueItemID("pol-blocked-retired"),
+            type: .blocked, actions: [])
+        #expect(refused.statusCode == 400)
+        #expect(
+            refused.message?.contains("retired attention type cannot be open") == true,
+            "expected the retirement refusal, got: \(refused.message ?? "")")
+    }
+
     /// is rejected with a client-visible 400 without either enum's validation
     /// being weakened — the values are sent as raw strings the typed Swift enums
     /// cannot hold, and the daemon's domain gate rejects them.

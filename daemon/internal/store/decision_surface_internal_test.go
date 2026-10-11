@@ -430,14 +430,14 @@ func TestAttentionDecisionSurfacesMigrationAppliesFromHead(t *testing.T) {
 	} {
 		if _, err := db.ExecContext(ctx, `INSERT INTO attention_items
 			(id, project_id, conversation_id, item_type, status, subject_run_id, entity_version, as_of_revision, body)
-			VALUES (?, 'proj-1', NULL, 'blocked', 'open', NULL, 1, 1, ?)`, row.id, row.body); err != nil {
+			VALUES (?, 'proj-1', NULL, 'execution_failure', 'open', NULL, 1, 1, ?)`, row.id, row.body); err != nil {
 			t.Fatalf("seed %s: %v", row.id, err)
 		}
 	}
 	// Decodes with matching ids but fails validation: no identity is derivable.
 	if _, err := db.ExecContext(ctx, `INSERT INTO attention_items
 		(id, project_id, conversation_id, item_type, status, subject_run_id, entity_version, as_of_revision, body)
-		VALUES ('item-bad-subject', 'proj-1', NULL, 'blocked', 'open', 'run-1', 1, 1,
+		VALUES ('item-bad-subject', 'proj-1', NULL, 'execution_failure', 'open', 'run-1', 1, 1,
 		        json_set(?, '$.id', 'item-bad-subject', '$.subject.subject_id', ''))`, body); err != nil {
 		t.Fatalf("seed item-bad-subject: %v", err)
 	}

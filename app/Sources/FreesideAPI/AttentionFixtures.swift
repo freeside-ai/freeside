@@ -14,7 +14,9 @@ public enum AttentionFixtures {
     /// cache tests never depend on the host clock.
     public static let createdInstant = Date(timeIntervalSince1970: 1_767_323_045)
 
-    /// The Phase 1 attention types, in the schema's enum order.
+    /// The Phase 1 attention types an item can be open as, in the schema's
+    /// enum order. `blocked` is retired (plan revision 84) and is not one:
+    /// the daemon raises none and refuses an open one.
     public static let phase1Types: [Components.Schemas.AttentionType] = [
         .spec_approval,
         .execution_failure,
@@ -29,13 +31,13 @@ public enum AttentionFixtures {
         .task_proposal,
         .effect_proposal,
         .system_health,
-        .blocked,
     ]
 
     /// Plan §4's per-type action sets (docs/plan.md §4 "Actions"; approve
     /// is not universal), matching signet's authoritative
-    /// allowedActionsByType policy. `blocked` is read-only: the policy pins
-    /// it to no actions, and the schema permits the empty set (#96).
+    /// allowedActionsByType policy. The retired `blocked` type keeps its
+    /// entry for the closed items stored before its retirement: the policy
+    /// pins it to no actions, and the schema permits the empty set (#96).
     public static let phase1ActionSets: [Components.Schemas.AttentionType: [Components.Schemas.Action]] = [
         .spec_approval: [.approve, .request_changes, .discuss, .stop],
         .execution_failure: [.retry, .retry_with_capabilities, .discuss, .stop],
@@ -702,16 +704,14 @@ public enum AttentionFixtures {
     /// attachments directly from the artifact store by digest). Every
     /// `log-` evidence digest resolves to text (a non-image attachment
     /// keeps its plain digest row) and every `img-` claim digest to the
-    /// fixture PNG — except `blocked`'s, deliberately unseeded so one
-    /// default card exercises the missing-attachment placeholder.
+    /// fixture PNG. The closed `blocked` fixture's digests are never seeded,
+    /// so that item exercises the missing-attachment placeholder.
     public static func defaultAttachments() -> [String: Data] {
         var bytes: [String: Data] = [:]
         for type in phase1Types {
             let key = type.rawValue
             bytes["sha256:log-\(key)"] = Data("verify log for \(key)\n".utf8)
-            if type != .blocked {
-                bytes["sha256:img-\(key)"] = fixtureImagePNG
-            }
+            bytes["sha256:img-\(key)"] = fixtureImagePNG
         }
         return bytes
     }
@@ -735,7 +735,9 @@ public enum AttentionFixtures {
 
     /// One valid open item of the given type. The artifact_digests set is
     /// the sorted, deduplicated union of the evidence and claim digests,
-    /// as the daemon derives it.
+    /// as the daemon derives it. The retired `blocked` type is the one
+    /// exception: its fixture is superseded, the only state the daemon
+    /// still stores one in.
     public static func fixture(
         type: Components.Schemas.AttentionType
     ) -> Components.Schemas.AttentionItemSnapshot {
@@ -814,9 +816,8 @@ public enum AttentionFixtures {
         // carries §9's summary layer also get an inline text claim, whose
         // digest is computed over the content so the mock's binding check and
         // the fixture can never disagree. The purely mechanical types
-        // (system_health, blocked) carry daemon facts alone (§9), so they
-        // stay text-free — blocked's unseeded screenshot digest keeps
-        // exercising the missing-attachment placeholder.
+        // (system_health, and the retired blocked) carry daemon facts alone
+        // (§9), so they stay text-free.
         var agentClaims: [Components.Schemas.AgentClaim] = [
             agentClaim(
                 label: "screenshot",
@@ -1281,7 +1282,7 @@ public enum AttentionFixtures {
             expires_when: nil,
             decided_at: nil,
             posture: type == .system_health ? .init(value1: .advisory) : nil,
-            status: .open
+            status: type == .blocked ? .superseded : .open
         )
         return .init(as_of_revision: 1, entity_version: 1, item: item)
     }

@@ -210,7 +210,6 @@ func submissionInitiator(pathsValue string) engine.ManualInitiator {
 			{Key: specify.PolicySpecApproval, Value: "true", Provenance: prov},
 			{Key: specify.PolicyMaxIterations, Value: "4", Provenance: prov},
 			{Key: specify.PolicyStageActiveTime, Value: "1m", Provenance: prov},
-			{Key: specify.PolicyApprovalWait, Value: "1m", Provenance: prov},
 			{Key: specify.PolicyResearchAllowlist, Value: "https://docs.example", Provenance: prov},
 			{Key: specify.PolicyResearchMaxBytes, Value: "1024", Provenance: prov},
 			{Key: "paths", Value: pathsValue, Provenance: prov},

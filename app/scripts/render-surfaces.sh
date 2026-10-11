@@ -6,7 +6,7 @@
 # (app/README.md, Iterating on a Visible Change).
 # Usage: render-surfaces.sh OUTPUT_DIR SURFACE...
 # SURFACE is a primary-surface name without its text-size suffix, such as
-# decision-blocked; supplemental fixtures are not probe inputs.
+# decision-system_health; supplemental fixtures are not probe inputs.
 # FREESIDE_RENDER_SIZES is a comma-separated list of the suite's text sizes
 # (xsmall, large, xxxlarge, ax1, ax3, ax5) and defaults to large.
 set -euo pipefail

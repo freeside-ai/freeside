@@ -31,10 +31,19 @@ func applyDataMigration(
 	case version == 40 && name == codexReenrollmentMigration:
 		return rewriteLegacyCodexReenrollmentMarkers(ctx, tx)
 	case version == 58 && name == attentionDecisionSurfacesMigration:
+		if err := retireOpenBlockedItems(ctx, tx); err != nil {
+			return err
+		}
 		return backfillAttentionDecisionSurfaces(ctx, tx)
 	case version == 59 && name == attentionDecisionSurfaceBodiesMigration:
+		if err := retireOpenBlockedItems(ctx, tx); err != nil {
+			return err
+		}
 		return backfillAttentionDecisionSurfaceBodies(ctx, tx)
 	case version == 70 && name == "0070_tasks.sql":
+		if err := retireOpenBlockedItems(ctx, tx); err != nil {
+			return err
+		}
 		return backfillTasks(ctx, tx)
 	case version == 72 && name == "0072_task_lifecycle_facts.sql":
 		return backfillTaskLifecycleFacts(ctx, tx)

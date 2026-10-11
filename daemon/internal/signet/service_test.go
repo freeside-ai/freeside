@@ -228,9 +228,10 @@ func TestSubmitContinueUnderPolicyConcludesReviewDiminishingItem(t *testing.T) {
 }
 
 // TestPutItemActionlessBlocked is #96's acceptance: an actionless blocked
-// item crosses the storage boundary (the plan assigns blocked no action),
-// while an empty set on any other type is still rejected by signet policy
-// before a Write begins — the cardinality rule lives here, not in domain.
+// item crosses the storage boundary (the retired type offered no action, and
+// is valid only closed), while an empty set on any other type is still
+// rejected by signet policy before a Write begins — the cardinality rule
+// lives here, not in domain.
 func TestPutItemActionlessBlocked(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t)
@@ -238,6 +239,7 @@ func TestPutItemActionlessBlocked(t *testing.T) {
 	blocked := f.item
 	blocked.ID = "item-blocked"
 	blocked.Type = domain.AttentionBlocked
+	blocked.Status = domain.StatusSuperseded
 	blocked.RequestedDecision = nil
 	blocked.PRReference = nil
 	if err := f.service.PutItem(ctx, blocked); err != nil {

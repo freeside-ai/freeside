@@ -4816,13 +4816,19 @@ components:
 
     BlockedWaitKind:
       type: string
-      description: The authority or event a blocked work unit is waiting on.
+      description: >-
+        The authority or event a blocked item was waiting on. Retired with
+        the `blocked` attention type (plan revision 84); it stays so closed
+        items stored before the retirement still decode.
       enum: [spec_approval, pr_checks, external_review]
 
     BlockedWait:
       type: object
       additionalProperties: false
-      description: The reference variant must match kind.
+      description: >-
+        What a `blocked` item was waiting on. The reference variant must
+        match kind. Retired with the `blocked` attention type (plan revision
+        84); only a closed item carries one.
       required: [kind, since, item_id, pr_reference]
       properties:
         kind:
@@ -4947,9 +4953,10 @@ components:
         reason:
           type: string
         requested_decision:
-          # May be empty: the read-only `blocked` type offers no action
-          # (plan §4). Which types must offer at least one action is signet
-          # policy, enforced server-side, not schema structure.
+          # May be empty: the retired `blocked` type offered no action, and
+          # its closed items keep the empty set. Which types must offer at
+          # least one action is signet policy, enforced server-side, not
+          # schema structure.
           type: array
           items:
             $ref: "#/components/schemas/Action"
@@ -5142,6 +5149,10 @@ components:
             - $ref: "#/components/schemas/DiffStats"
         blocked_on:
           nullable: true
+          description: >-
+            Retired with the `blocked` attention type (plan revision 84).
+            Non-null only on a closed `blocked` item stored before the
+            retirement.
           allOf:
             - $ref: "#/components/schemas/BlockedWait"
         health_diagnostic:
@@ -6338,7 +6349,11 @@ components:
 
     AttentionType:
       type: string
-      description: The kind of decision an attention item asks for (plan §4).
+      description: >-
+        The kind of decision an attention item asks for (plan §4). `blocked`
+        is retired (plan revision 84): nothing raises it and no item of the
+        type is ever open. The member stays so closed items stored before the
+        retirement still decode.
       enum:
         - spec_approval
         - execution_failure

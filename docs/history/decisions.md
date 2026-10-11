@@ -2656,3 +2656,20 @@ The client work is #1732 and #1033.)
 and decision on its rule R7, both of 2026-10-06;
 [decision note](../../devlog/2026-10-06-2147-reason-and-claim-marker-rules.md).
 The client work is #1798 to #1803.)
+
+---
+
+## Revision 83 ("Clean-Machine Proof Leaves Wave 8"):
+
+1. **Wave 8 no longer requires the clean-machine proof.** Remove #428 and
+   its owner-run prerequisite #1621 from the wave's scope and exit proof.
+   The remaining operational alert checks, unattended real-run evidence,
+   and fresh-context adversarial review still gate wave closure.
+2. **Future placement stays undecided.** Both issues remain open and
+   unscheduled. This decision neither makes the proof a 1B.1 exit requirement
+   nor grants a permanent exemption from it. Section [10](../plan.md#10-operations-and-onboarding)'s timing
+   targets still govern the proof when it runs; the earlier 1A deferral
+   remains part of the record.
+
+(Owner decision of 2026-10-07, #1826;
+[decision note](../../devlog/2026-10-07-1050-clean-machine-wave-placement.md).)

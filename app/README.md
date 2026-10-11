@@ -34,7 +34,7 @@ Launch arguments also pin the presentation per launch (`LaunchInputs`), so scree
 - `-FreesideContrast standard|increased`: force accessibility contrast without touching the system setting; unset follows the system.
 - `-FreesideDynamicType x-small|small|medium|large|x-large|xx-large|xxx-large|ax1|ax2|ax3|ax4|ax5`: force a Dynamic Type size without touching the system setting; unset follows the system.
 - `-FreesideScreen inbox|tasks`: open the given screen at launch; unset opens the inbox.
-- `-FreesideSelect <id>`: select the given inbox item at launch, or on the tasks screen open the given task or run. `AttentionFixtures.defaultInboxItemIDs()` is the source of truth for the inbox values, today the default mock inbox's ids: `item-spec_approval`, `item-execution_failure`, `item-agent_question`, `item-review_diminishing_returns`, `item-review_dispute`, `item-review_contradiction`, `item-review_configuration`, `item-finding_adjudication`, `item-ready_for_final_review`, `item-publish_blocked`, `item-task_proposal`, `item-effect_proposal`, `item-system_health`, `item-blocked`. With `-FreesideScreen tasks`, `TaskFixtures.defaultTaskIDs()` and `RunFixtures.defaultRunIDs()` are the accepted values: a task id opens the task's timeline, and a run id (for example `run-freeside-657`) opens the run's task with the run timeline pushed. An unknown id is ignored with a note on stderr.
+- `-FreesideSelect <id>`: select the given inbox item at launch, or on the tasks screen open the given task or run. `AttentionFixtures.defaultInboxItemIDs()` is the source of truth for the inbox values, today the default mock inbox's ids: `item-spec_approval`, `item-execution_failure`, `item-agent_question`, `item-review_diminishing_returns`, `item-review_dispute`, `item-review_contradiction`, `item-review_configuration`, `item-finding_adjudication`, `item-ready_for_final_review`, `item-publish_blocked`, `item-task_proposal`, `item-effect_proposal`, `item-system_health`. With `-FreesideScreen tasks`, `TaskFixtures.defaultTaskIDs()` and `RunFixtures.defaultRunIDs()` are the accepted values: a task id opens the task's timeline, and a run id (for example `run-freeside-657`) opens the run's task with the run timeline pushed. An unknown id is ignored with a note on stderr.
 - `-FreesideInboxScope open|resolved|all`: select the inbox scope for a screenshot or automation launch.
 - `-FreesideProject <project-id>`: select the inbox project filter for a screenshot or automation launch.
 - `-FreesideDetailsExpanded YES`: open the selected decision card's Details disclosure at launch.
@@ -215,7 +215,7 @@ APP=/tmp/freeside-dd/Build/Products/Debug/FreesideMac.app
 # name (the Debug app's name is "Freeside Ephemeral"), capture it by id, quit.
 open -n "$APP" --args -ApplePersistenceIgnoreState YES \
   -FreesideMock YES -FreesideColorScheme light -FreesideContrast standard \
-  -FreesideSelect item-blocked
+  -FreesideSelect item-system_health
 sleep 3
 WID=$(swift -e 'import CoreGraphics
 let windows = CGWindowListCopyWindowInfo(
@@ -265,9 +265,9 @@ nothing to rebuild.
 
    ```sh
    # From the repository root. Prints the path of each PNG it wrote.
-   bash app/scripts/render-surfaces.sh /tmp/renders decision-blocked
+   bash app/scripts/render-surfaces.sh /tmp/renders decision-system_health
    FREESIDE_RENDER_SIZES=large,ax5 \
-     bash app/scripts/render-surfaces.sh /tmp/renders decision-blocked message-composer
+     bash app/scripts/render-surfaces.sh /tmp/renders decision-system_health message-composer
    ```
 
    A surface is a primary-surface key from

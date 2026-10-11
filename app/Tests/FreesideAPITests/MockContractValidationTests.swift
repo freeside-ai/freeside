@@ -1067,8 +1067,8 @@ import Testing
     // Every fixture passes the full validity check, each text claim's digest
     // recomputes from its content, and the summary claim appears exactly on
     // the types that carry §9's summary layer (the purely mechanical
-    // system_health and blocked, and the exact one-carrier task and effect
-    // proposals, carry no agent claims and so stay text-free).
+    // system_health, and the exact one-carrier task and effect proposals,
+    // carry no agent claims and so stay text-free).
     @Test(arguments: AttentionFixtures.phase1Types)
     func fixtureTextClaimsBindTheirContent(type: Components.Schemas.AttentionType) {
         let item = AttentionFixtures.fixture(type: type).item
@@ -1080,8 +1080,22 @@ import Testing
         let hasText = item.agent_claims.contains { $0.text != nil }
         #expect(
             hasText
-                == (type != .system_health && type != .blocked
+                == (type != .system_health
                     && type != .task_proposal && type != .effect_proposal))
+    }
+
+    // blocked is retired (plan revision 84): the mock refuses an open item
+    // of the type as the daemon's domain validation does, and a closed one
+    // stays valid so history from before the retirement still loads.
+    @Test func retiredBlockedItemIsValidOnlyClosed() {
+        var blocked = AttentionFixtures.fixture(type: .blocked).item
+        #expect(!blocked.agent_claims.contains { $0.text != nil })
+        for status in Components.Schemas.ItemStatus.allCases {
+            blocked.status = status
+            #expect(
+                MockContractValidation.itemValidityBreach(blocked)
+                    == (status == .open ? "retired attention type cannot be open" : nil))
+        }
     }
 
     // MARK: - itemPolicyBreach

@@ -38,12 +38,9 @@ struct OperationalSummary: Equatable {
             if lhsCreated != rhsCreated { return lhsCreated < rhsCreated }
             return lhs.id < rhs.id
         }
-        // Ordered by the displayed wait, not creation: a blocked item's
-        // wait predates its card, and the pick must be the row whose
-        // duration reads longest.
         let waitingLongest = openItems.min { lhs, rhs in
-            let lhsSince = AttentionDisplay.rowTimeOrigin(lhs) ?? .distantFuture
-            let rhsSince = AttentionDisplay.rowTimeOrigin(rhs) ?? .distantFuture
+            let lhsSince = lhs.created_at ?? .distantFuture
+            let rhsSince = rhs.created_at ?? .distantFuture
             if lhsSince != rhsSince { return lhsSince < rhsSince }
             return lhs.id < rhs.id
         }

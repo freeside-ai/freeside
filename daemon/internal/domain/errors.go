@@ -32,6 +32,7 @@ var (
 	ErrInvalidCommandKind               = errors.New("invalid command kind")
 	ErrInvalidPriority                  = errors.New("invalid priority")
 	ErrInvalidItemStatus                = errors.New("invalid item status")
+	ErrRetiredItemTypeOpen              = errors.New("retired attention type cannot be open")
 	ErrInvalidSensitivityClass          = errors.New("invalid sensitivity class")
 	ErrInvalidHeadBinding               = errors.New("invalid head binding")
 	ErrInvalidAuthor                    = errors.New("invalid author")

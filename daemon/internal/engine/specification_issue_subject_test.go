@@ -55,7 +55,6 @@ func newIssueSubjectReservation(t *testing.T, stageAttempts ...domain.Attempt) i
 		{Key: specify.PolicySpecApproval, Value: "true", Provenance: provenance},
 		{Key: specify.PolicyMaxIterations, Value: "4", Provenance: provenance},
 		{Key: specify.PolicyStageActiveTime, Value: "1m", Provenance: provenance},
-		{Key: specify.PolicyApprovalWait, Value: "1m", Provenance: provenance},
 		{Key: specify.PolicyResearchAllowlist, Value: "https://api.github.com", Provenance: provenance},
 		{Key: specify.PolicyResearchMaxBytes, Value: "131072", Provenance: provenance},
 		{Key: "paths", Value: "src/", Provenance: provenance},

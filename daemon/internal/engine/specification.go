@@ -3647,21 +3647,21 @@ func encodeSpecificationTerminal(terminal specificationTerminal) ([]byte, error)
 	return body, nil
 }
 
-func (e *Engine) reconcileSpecificationGates(ctx context.Context) (int, int, error) {
+func (e *Engine) reconcileSpecificationGates(ctx context.Context) (int, error) {
 	var runs []store.Snapshotted[domain.Run]
 	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		runs, err = tx.ListRuns(ctx)
 		return err
 	}); err != nil {
-		return 0, 0, err
+		return 0, err
 	}
-	started, blocked := 0, 0
+	started := 0
 	for _, snapshot := range runs {
 		run := snapshot.Value
 		owned, err := e.ownsSpecificationRun(ctx, run)
 		if err != nil {
-			return started, blocked, err
+			return started, err
 		}
 		if !owned {
 			continue
@@ -3713,12 +3713,12 @@ func (e *Engine) reconcileSpecificationGates(ctx context.Context) (int, int, err
 			}
 			quarantined, quarantineErr := e.quarantinePendingSpecificationMarker(ctx, requestEntry, err)
 			if quarantineErr != nil {
-				return started, blocked, quarantineErr
+				return started, quarantineErr
 			}
 			if quarantined {
 				continue
 			}
-			return started, blocked, err
+			return started, err
 		}
 		terminal := verified.terminal
 		if terminal.SpecArtifactID == nil {
@@ -3727,12 +3727,11 @@ func (e *Engine) reconcileSpecificationGates(ctx context.Context) (int, int, err
 		request := verified.binding.request
 		run = verified.binding.binding.run
 		settings := verified.binding.settings
-		terminalEntry := verified.entry
 		specArtifact := *verified.specification
 		if terminal.ApprovalItemID == nil {
 			created, err := e.startApprovedImplementation(ctx, request, specArtifact.ID)
 			if err != nil {
-				return started, blocked, err
+				return started, err
 			}
 			started += boolCount(created)
 			continue
@@ -3740,47 +3739,32 @@ func (e *Engine) reconcileSpecificationGates(ctx context.Context) (int, int, err
 		item := *verified.approval
 		commands := verified.commands
 		if _, err := e.enqueuePendingSpecDiscussion(ctx, verified); err != nil {
-			return started, blocked, err
-		}
-		if item.Status != domain.StatusOpen {
-			if err := e.supersedeSpecificationBlockedItem(ctx, *terminal.ApprovalItemID); err != nil {
-				return started, blocked, err
-			}
+			return started, err
 		}
 		switch item.Status {
 		case domain.StatusOpen:
-			waitingSince := terminalEntry.CreatedAt
-			if item.CreatedAt != nil {
-				waitingSince = *item.CreatedAt
-			}
-			if e.specification.now().Sub(waitingSince) >= settings.ApprovalWait {
-				created, err := e.ensureSpecificationBlockedItem(
-					ctx, run, *terminal.ApprovalItemID, waitingSince)
-				if err != nil {
-					return started, blocked, err
-				}
-				blocked += boolCount(created)
-			}
+			// An open approval is the operator's whole signal for this wait;
+			// reconcile raises nothing beside it however long it stays open.
 		case domain.StatusResolved:
 			if len(commands) == 1 && commands[0].Action == domain.ActionStop {
 				continue
 			}
 			if len(commands) != 1 || commands[0].Action != domain.ActionApprove ||
 				!slices.Equal(commands[0].ArtifactDigests, item.ArtifactDigests) {
-				return started, blocked, fmt.Errorf("implementation run %q: %w", request.ImplementationRunID, ErrSpecApprovalRequired)
+				return started, fmt.Errorf("implementation run %q: %w", request.ImplementationRunID, ErrSpecApprovalRequired)
 			}
 			created, err := e.startApprovedImplementation(ctx, request, *terminal.SpecArtifactID)
 			if err != nil {
-				return started, blocked, err
+				return started, err
 			}
 			started += boolCount(created)
 		case domain.StatusSuperseded:
 			if len(commands) != 1 || commands[0].Action != domain.ActionRequestChanges {
-				return started, blocked, fmt.Errorf("superseded spec lacks request-changes command: %w", ErrSpecApprovalRequired)
+				return started, fmt.Errorf("superseded spec lacks request-changes command: %w", ErrSpecApprovalRequired)
 			}
 			revisionFailed, err := e.specificationRevisionFailed(ctx, run, request)
 			if err != nil {
-				return started, blocked, err
+				return started, err
 			}
 			if revisionFailed {
 				continue
@@ -3790,13 +3774,13 @@ func (e *Engine) reconcileSpecificationGates(ctx context.Context) (int, int, err
 					Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &run.ID,
 				})
 				if err != nil {
-					return started, blocked, err
+					return started, err
 				}
 				failure, itemErr := specificationFailureItem(run,
 					domain.ItemID("execution-failure-spec-revision-"+string(request.ImplementationRunID)),
 					exec.StatusFailed, ErrSpecificationIterationsExhausted.Error(), e.specification.now().UTC(), nil, nil, names, nil)
 				if itemErr != nil {
-					return started, blocked, itemErr
+					return started, itemErr
 				}
 				if err := e.store.Write(ctx, func(tx *store.WriteTx) error {
 					if _, err := tx.GetAttentionItem(ctx, failure.ID); err == nil {
@@ -3806,20 +3790,20 @@ func (e *Engine) reconcileSpecificationGates(ctx context.Context) (int, int, err
 					}
 					return tx.PutAttentionItem(ctx, failure)
 				}); err != nil && !errors.Is(err, errReplay) {
-					return started, blocked, err
+					return started, err
 				}
 				continue
 			}
 			if err := e.enqueueSpecRevision(ctx, run, request, *terminal.SpecArtifactID, commands[0]); err != nil {
 				if errors.Is(err, ErrSpecificationInputUndeliverable) {
-					return started, blocked, e.recordSpecificationRevisionFailure(ctx, run, request, exec.StatusFailed, err.Error())
+					return started, e.recordSpecificationRevisionFailure(ctx, run, request, exec.StatusFailed, err.Error())
 				}
-				return started, blocked, err
+				return started, err
 			}
 		case domain.StatusDismissed, domain.StatusExpired:
 		}
 	}
-	return started, blocked, nil
+	return started, nil
 }
 
 func latestSpecificationAttempt(stage domain.Stage) (domain.Attempt, bool) {
@@ -4020,69 +4004,6 @@ func (e *Engine) enqueueSpecRevision(ctx context.Context, run domain.Run, reques
 		return nil
 	})
 	if errors.Is(err, store.ErrTaskCancellationFenced) {
-		return nil
-	}
-	return err
-}
-
-func (e *Engine) ensureSpecificationBlockedItem(
-	ctx context.Context, run domain.Run, approvalItemID domain.ItemID, waitingSince time.Time,
-) (bool, error) {
-	createdAt := e.specification.now().UTC()
-	waitingSince = waitingSince.UTC()
-	subject := domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &run.ID}
-	names, err := displayNames(ctx, e.store, run.ProjectID, subject)
-	if err != nil {
-		return false, err
-	}
-	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
-		ID: domain.ItemID("blocked-" + string(approvalItemID)), ProjectID: run.ProjectID,
-		Subject: subject,
-		Type:    domain.AttentionBlocked, Priority: domain.PriorityNormal,
-		Reason:            fmt.Sprintf("Specification approval has been waiting since %s.", waitingSince.UTC().Format(time.RFC3339)),
-		RequestedDecision: []domain.Action{}, ItemVersion: 1,
-		InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
-		BlockedOn: &domain.BlockedWait{
-			Kind: domain.BlockedWaitSpecApproval, Since: waitingSince, ItemID: &approvalItemID,
-		},
-		CreatedAt: &createdAt, DisplayNames: names,
-	}, nil)
-	if err != nil {
-		return false, err
-	}
-	created := false
-	err = e.store.Write(ctx, func(tx *store.WriteTx) error {
-		if _, err := tx.GetAttentionItem(ctx, item.ID); err == nil {
-			return errReplay
-		} else if !errors.Is(err, store.ErrNotFound) {
-			return err
-		}
-		created = true
-		return tx.PutAttentionItem(ctx, item)
-	})
-	if errors.Is(err, errReplay) {
-		return false, nil
-	}
-	return created, err
-}
-
-func (e *Engine) supersedeSpecificationBlockedItem(ctx context.Context, approvalItemID domain.ItemID) error {
-	err := e.store.Write(ctx, func(tx *store.WriteTx) error {
-		item, err := tx.GetAttentionItem(ctx, domain.ItemID("blocked-"+string(approvalItemID)))
-		if errors.Is(err, store.ErrNotFound) {
-			return errReplay
-		}
-		if err != nil {
-			return err
-		}
-		if item.Status != domain.StatusOpen {
-			return errReplay
-		}
-		item.Status = domain.StatusSuperseded
-		item.ItemVersion++
-		return tx.PutAttentionItem(ctx, item)
-	})
-	if errors.Is(err, errReplay) {
 		return nil
 	}
 	return err

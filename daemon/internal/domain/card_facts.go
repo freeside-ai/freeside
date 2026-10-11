@@ -200,7 +200,8 @@ func (s DiffStats) Validate() error {
 	return nil
 }
 
-// BlockedWait identifies what a blocked item awaits and when the wait began.
+// BlockedWait identifies what a blocked item awaited and when the wait began.
+// It is retired with AttentionBlocked and stays for closed items.
 type BlockedWait struct {
 	Kind        BlockedWaitKind `json:"kind"`
 	Since       time.Time       `json:"since"`

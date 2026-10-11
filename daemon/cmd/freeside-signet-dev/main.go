@@ -471,7 +471,7 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 	// (ready_for_final_review offering open_pr/stop/dismiss), so the sync tests'
 	// seedItem(id, version) calls are unchanged. An explicit empty action set is
 	// deliberately distinct from an omitted one (nil): the parity suite sends
-	// [] to drive the blocked accept and the non-blocked ErrNoActions rejection.
+	// [] to drive the ErrNoActions rejection.
 	itemType := domain.AttentionReadyForFinalReview
 	if req.Type != "" {
 		itemType = domain.AttentionType(req.Type)
@@ -659,7 +659,7 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 		// else (store contention, I/O) is the harness's fault, not the
 		// request's, and must not read as a scripted 400 in a test log.
 		// ErrActionNotAllowedForType (a valid action wrong for the type) and
-		// ErrNoActions (a non-blocked type offering nothing) are per-type policy
+		// ErrNoActions (a type offering nothing) are per-type policy
 		// rejections. A valid task proposal reaches the later specialized-admission
 		// rejection because this generic test route cannot create its authority
 		// records atomically. All three are definitive client-visible 400s.

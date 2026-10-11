@@ -337,9 +337,10 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The read-only blocked type offers no action (plan §4; relaxed by #96):
-	// this fixture pins the actionless shape, with every collection rendering
-	// as the required non-null empty array the wire contract declares.
+	// The retired blocked type offered no action (relaxed by #96) and is
+	// valid only closed: this fixture pins that actionless shape, with every
+	// collection rendering as the required non-null empty array the wire
+	// contract declares.
 	blockedOnItemID := domain.ItemID("item-spec-approval")
 	blockedItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "item-2", ProjectID: "proj-1",
@@ -355,7 +356,7 @@ func TestGolden(t *testing.T) {
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionPlannedGate,
 		CreatedAt:         &ts,
-		Status:            domain.StatusOpen,
+		Status:            domain.StatusSuperseded,
 	}, approved)
 	if err != nil {
 		t.Fatal(err)
