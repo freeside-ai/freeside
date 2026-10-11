@@ -264,6 +264,22 @@ func testSubmitCommandSpecificationDigest(
 		initialAttempt.ApprovedSpecDigest != implementationRun.SpecDigest {
 		t.Fatalf("initial production attempt = %+v, want submitted/approved lineage", initialAttempt)
 	}
+	// Approval carries the submitted declaration onto the implementation run.
+	// It is the record a merge completes: the completion tests start from a
+	// run holding this criterion (capturedRunWithCriterion).
+	var declaration domain.WorkUnitDeclaration
+	if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		declaration, err = tx.GetWorkUnitDeclarationByRun(t.Context(), implementationRun.ID)
+		return err
+	}); err != nil {
+		t.Fatalf("implementation run's work-unit declaration: %v", err)
+	}
+	if declaration.ID != submitted.WorkUnitID || declaration.CompletionCriterion != domain.CompletionBoundPRMerged ||
+		declaration.BoundIssue != nil {
+		t.Fatalf("implementation declaration = %+v, want %s completing when its pull request merges",
+			declaration, submitted.WorkUnitID)
+	}
 	if replay, err := workflow.Reconcile(t.Context()); err != nil || replay.RunTransitions != 0 {
 		t.Fatalf("approval replay = %+v, %v", replay, err)
 	}

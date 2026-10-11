@@ -148,20 +148,35 @@ func matchingRetainedSubmission(cfg submitCommandConfig) (submitCommandConfig, e
 // refuse as new. It exempts nothing at submission: submit still decides
 // against the database whether that identity was accepted.
 func retainedSubmissionHolds(db, id string, task, publication []byte) bool {
+	saved := retainedSubmissionInputs(db, id)
+	return saved != nil && sameSubmissionInputs(
+		map[string][]byte{"task": saved["task"], "publication": saved["publication"]},
+		map[string][]byte{"task": task, "publication": publication})
+}
+
+// retainedUndeclaredSubmissionHolds is retainedSubmissionHolds for a journal
+// that also saved no work-unit declaration: the session it lets resume
+// submitted before a declaration was required.
+func retainedUndeclaredSubmissionHolds(db, id string, task, publication []byte) bool {
+	_, declared := retainedSubmissionInputs(db, id)["work-unit"]
+	return !declared && retainedSubmissionHolds(db, id, task, publication)
+}
+
+// retainedSubmissionInputs returns the inputs the recovery journal saved
+// under a submission identity, or nil when there is no such journal.
+func retainedSubmissionInputs(db, id string) map[string][]byte {
 	if db == "" || !validSubmissionID(id) {
-		return false
+		return nil
 	}
 	body, err := os.ReadFile(submissionJournalPath(db, id))
 	if err != nil {
-		return false
+		return nil
 	}
 	var saved submitCommandConfig
 	if err := json.Unmarshal(body, &saved); err != nil || saved.SubmissionID != id {
-		return false
+		return nil
 	}
-	return sameSubmissionInputs(
-		map[string][]byte{"task": saved.SavedInputs["task"], "publication": saved.SavedInputs["publication"]},
-		map[string][]byte{"task": task, "publication": publication})
+	return saved.SavedInputs
 }
 
 func sameSubmissionInputs(a, b map[string][]byte) bool {

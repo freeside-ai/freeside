@@ -1262,8 +1262,7 @@ func TestSubmissionArtifactIdentityRetainsFullDigest(t *testing.T) {
 // --work-unit submission reserves the declaration with its path scope
 // derived from the resolved policy's paths key, joins the declaration into
 // the default run-id derivation (a different declaration is a different
-// run; an undeclared submission keeps the pre-capture derivation), and
-// refuses a declaration file with unknown fields.
+// run), and refuses a declaration file with unknown fields.
 func TestSubmitCommandCapturesWorkUnitDeclaration(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -1343,21 +1342,6 @@ func TestSubmitCommandCapturesWorkUnitDeclaration(t *testing.T) {
 	if want := engine.ManualSubmissionRunID("cli:"+declared.SubmissionID, cfg.ProjectID, declared.SourceDigest,
 		declared.SpecificationPolicyDigest, declared.PublicationDigest, submissionBytes(canonical).digest); declared.RunID != want {
 		t.Fatalf("declared run id = %q, want %q", declared.RunID, want)
-	}
-
-	// The same inputs without it converge on a different (pre-capture) run id.
-	undeclared := cfg
-	undeclared.WorkUnitPath = ""
-	undeclared.DBPath = filepath.Join(root, "undeclared.db")
-	plain, err := runSubmitCommand(ctx, undeclared)
-	if err != nil {
-		t.Fatalf("undeclared submit: %v", err)
-	}
-	if plain.RunID == declared.RunID {
-		t.Fatal("declared and undeclared submissions converged on one run id")
-	}
-	if plain.WorkUnitID != "" {
-		t.Fatalf("undeclared submission reports work unit %q", plain.WorkUnitID)
 	}
 
 	// Unknown declaration fields are refused, not silently dropped.
