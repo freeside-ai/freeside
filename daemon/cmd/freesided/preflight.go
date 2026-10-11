@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net/http"
 	"net/url"
@@ -257,7 +258,9 @@ type repositoryAuthorityInspection struct {
 type preflightEnvironment interface {
 	AuthenticateRig(string, string) (daemonlock.RigManifest, error)
 	ResolveAgentSelection(context.Context, preflightConfig, time.Time) (preflightAgentSelection, error)
-	CheckJudgmentRoles(context.Context, preflightConfig, judgmentRuntime, time.Time) ([]inference.RoleCheck, error)
+	CheckJudgmentRoles(
+		context.Context, preflightConfig, judgmentRuntime, ward.RuntimeResourceAuthorizer, time.Time,
+	) ([]inference.RoleCheck, error)
 	InspectDatabase(context.Context, preflightConfig, domain.Digest) databaseInspection
 	InspectImage(context.Context, string, string, []string, string) imageInspection
 	InspectCodexCredential(context.Context, preflightConfig, time.Time, bool) codexCredentialInspection
@@ -347,22 +350,31 @@ func runPreflightCommandWithEnvironment(
 	if shadowReviewDigestErr == nil {
 		manifest.ShadowReviewConfigurationDigest = shadowReviewDigest
 	}
-	evaluateComposition(ctx, &manifest, cfg, environment, now, rigErr, identityErr,
+	protectedAccessBlocked := evaluateComposition(ctx, &manifest, cfg, environment, now, rigErr, identityErr,
 		agentsErr, reviewDigestErr, shadowReviewDigestErr)
 	if cfg.Judgments != (judgmentConfig{}) {
-		runtime, digest, err := composeJudgments(cfg.Judgments, cfg.ReviewInputRoot)
+		runtime, digest, err := composeJudgments(cfg.Judgments)
 		if err != nil {
-			failCheck(&manifest, "judgment_configuration", "subscription judgment binding is unavailable or unsafe", "verify the existing setup-token snapshot and exact native CLI pin")
+			failCheck(&manifest, "judgment_configuration", "subscription judgment binding is unavailable or unsafe", "verify the exact native CLI pin and the publication-author prompt file")
 			notRunCheck(&manifest, "judgment_roles", "the judgment configuration must pass first")
 		} else {
 			manifest.JudgmentConfigurationDigest = digest
-			passCheck(&manifest, "judgment_configuration", "existing Claude subscription and pinned CLI configured; provider call not attempted")
+			passCheck(&manifest, "judgment_configuration", "pinned CLI configured; judgment_roles reads each role's stored credential; provider call not attempted")
 			if agentsErr != nil {
 				notRunCheck(&manifest, "judgment_roles", "the lineup must resolve first")
+			} else if protectedAccessBlocked {
+				// The check reads each role's stored credential, so it waits
+				// for the approval every other credential probe waits for.
+				notRunCheck(&manifest, "judgment_roles", "approved shadow review configuration is required before credential probing")
 			} else {
 				rolesCfg := cfg
 				rolesCfg.DBPath = manifest.Rig.Resources.DatabasePath
-				checks, err := environment.CheckJudgmentRoles(ctx, rolesCfg, runtime, now)
+				// Reached only after the lineup resolved against the rig's
+				// database, so the manifest resources and token file
+				// authorize each credential observer into the held rig
+				// manifest before it is created.
+				checks, err := environment.CheckJudgmentRoles(ctx, rolesCfg, runtime,
+					productionRigRuntimeAuthorizer(manifest.Rig.Resources.StateRoot, cfg.RigTokenFile), now)
 				evaluateJudgmentRoles(&manifest, checks, err)
 			}
 		}
@@ -517,7 +529,7 @@ func evaluateComposition(
 	environment preflightEnvironment,
 	now time.Time,
 	rigErr, identityErr, agentsErr, reviewDigestErr, shadowReviewDigestErr error,
-) {
+) (protectedAccessBlocked bool) {
 	var database databaseInspection
 	daemonIdle := false
 	shadowReviewAuthorityApproved := cfg.ShadowReviewImage == ""
@@ -823,6 +835,7 @@ func evaluateComposition(
 		passCheck(manifest, "build_egress_configuration", "supported host-only HTTP build proxy is configured")
 	}
 	notRunCheck(manifest, "build_egress_reachability", "live build-egress reachability is intentionally not exercised by this read-only preflight")
+	return shadowReviewProtectedAccessBlocked
 }
 
 func validateCompositionRepositoryBase(cfg preflightConfig) error {
@@ -1367,8 +1380,16 @@ func (productionPreflightEnvironment) ResolveAgentSelection(
 // will, against the same tree commit and store. Unlike a writer role, a
 // judgment role's whole admission runs here: its prompt is code-owned or the
 // operator's file, and a call takes no operating mode or attempt budget.
+//
+// Each role's stored credential is read as the daemon will read it, with one
+// difference: no read hold. The store is open read-only, where a hold cannot
+// be recorded, and the daemon lock held below already excludes every command
+// that enrolls, adopts, or renews. The token is dropped with this check; the
+// daemon reads its own. A failed read's cause goes to standard error and the
+// manifest carries the fixed reason.
 func (productionPreflightEnvironment) CheckJudgmentRoles(
-	ctx context.Context, cfg preflightConfig, runtime judgmentRuntime, now time.Time,
+	ctx context.Context, cfg preflightConfig, runtime judgmentRuntime,
+	authorize ward.RuntimeResourceAuthorizer, now time.Time,
 ) ([]inference.RoleCheck, error) {
 	agents, err := loadAgentSelection(ctx, claudeDriverConfig{
 		AgentTreeCheckout: cfg.AgentTreeCheckout, AgentTreeCommit: cfg.AgentTreeCommit,
@@ -1388,8 +1409,13 @@ func (productionPreflightEnvironment) CheckJudgmentRoles(
 		return nil, err
 	}
 	defer st.Close() //nolint:errcheck // the check result is reported independently
+	reader := wardstore.CredentialReader{
+		Store:          st,
+		ReadSetupToken: productionSetupTokenReader(ward.NewCLIRuntime(cfg.ContainerBin), cfg.ExporterImage, authorize),
+	}
 	return inference.CheckRoles(ctx, judgmentRoles{
 		st: st, tree: agents.Tree, revision: agents.LineupRevision, runtime: runtime,
+		credentials: newJudgmentCredentials(reader.ReadUnheld, slog.New(slog.NewTextHandler(os.Stderr, nil))),
 	}, judgmentSites(inference.Budget{}), now)
 }
 
@@ -1422,7 +1448,7 @@ func evaluateJudgmentRoles(manifest *compositionManifest, checks []inference.Rol
 	if len(unbound) > 0 {
 		failCheck(manifest, "judgment_roles",
 			fmt.Sprintf("judgment roles with no admissible lineup line: %s", strings.Join(unbound, ", ")),
-			"add each role's line to the lineup (freesided auth adopt emits the baseline lines), commit, and pass that commit as -agent-tree-commit")
+			"each role's reason says which: add its line to the lineup (freesided auth adopt emits the baseline lines), commit, and pass that commit as -agent-tree-commit; or restore the credential volume of the enrollment its line names")
 		return
 	}
 	evidence := fmt.Sprintf("the lineup admits %d judgment roles", admitted)

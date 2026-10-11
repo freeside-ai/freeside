@@ -78,7 +78,7 @@ real_work_adopt_agent_tree() {
 	local patch="$session/agent-tree.patch" report="$session/auth-adopt.json"
 	local log="$session/auth-adopt.log" rc=0
 	local author_prompt=()
-	if [[ -n "${FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN:-}${FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256:-}${FREESIDE_REAL_RUN_JUDGMENT_MODEL:-}${FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT:-}" ]]; then
+	if [[ -n "${FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN:-}${FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256:-}${FREESIDE_REAL_RUN_JUDGMENT_MODEL:-}" ]]; then
 		author_prompt=(-judgment-publication-author-prompt "$real_work_agent_tree_repo_root/prompts/publication-author.md")
 	fi
 	rm -f "$patch"

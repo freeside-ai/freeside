@@ -499,20 +499,25 @@ type Driver interface {
 type CredentialSource string
 
 const (
-	// CredentialSourceInterimFlag is the setup-token snapshot the
-	// -judgment-auth-snapshot flag names. The admitted enrollment generation
-	// is the line's; the bytes are the flag's (#1426 closes the gap).
+	// CredentialSourceInterimFlag is the setup-token snapshot the removed
+	// -judgment-auth-snapshot flag named. The admitted enrollment generation
+	// was the line's; the bytes were the flag's. No call records it since
+	// #1426; it stays valid for the records written before.
 	CredentialSourceInterimFlag CredentialSource = "interim_flag"
+	// CredentialSourceEnrollment is the token read from the credential
+	// volume of the admitted enrollment generation, so the record's
+	// generation is also where its bytes came from.
+	CredentialSourceEnrollment CredentialSource = "enrollment"
 )
 
 // AllCredentialSources lists every valid CredentialSource. A value stays
 // listed for as long as a retained call record can carry it: the ledger
 // refuses a record whose source it does not know.
-var AllCredentialSources = []CredentialSource{CredentialSourceInterimFlag}
+var AllCredentialSources = []CredentialSource{CredentialSourceInterimFlag, CredentialSourceEnrollment}
 
 func (s CredentialSource) valid() bool {
 	switch s {
-	case CredentialSourceInterimFlag:
+	case CredentialSourceInterimFlag, CredentialSourceEnrollment:
 		return true
 	default:
 		return false

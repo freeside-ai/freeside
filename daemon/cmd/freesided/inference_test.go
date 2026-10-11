@@ -6,8 +6,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"flag"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -30,20 +32,16 @@ func judgmentFixture(t *testing.T) (judgmentConfig, string) {
 	if err := os.WriteFile(bin, b, 0o700); err != nil { //nolint:gosec // G306: executable fixture in an owner-only test directory.
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "token"), []byte("synthetic-subscription-token\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return judgmentConfig{CLI: claudeinference.Config{Binary: bin, SHA256: hex.EncodeToString(h[:]), Model: "test-model"}, AuthSnapshot: "token"}, root
+	return judgmentConfig{CLI: claudeinference.Config{Binary: bin, SHA256: hex.EncodeToString(h[:]), Model: "test-model"}}, root
 }
 
 func TestPublicationAuthorPromptBindingAndFailsafe(t *testing.T) {
 	// With no prompt file the publication author is off: the role source says
 	// so before it reads a line, both sites return their fail-safe with
 	// nothing blocking, and the runtime carries no driver.
-	unavailable, digest, err := composeJudgments(judgmentConfig{}, t.TempDir())
-	if err != nil || digest != "" || unavailable.Driver != nil || unavailable.AuthorPrompt != nil ||
-		unavailable.Credential.Reveal() != "" {
-		t.Fatalf("unconfigured runtime carries a driver, prompt, or credential; digest=%q, err=%v", digest, err)
+	unavailable, digest, err := composeJudgments(judgmentConfig{})
+	if err != nil || digest != "" || unavailable.Driver != nil || unavailable.AuthorPrompt != nil {
+		t.Fatalf("unconfigured runtime carries a driver or prompt; digest=%q, err=%v", digest, err)
 	}
 	budget := inference.Budget{
 		Window: time.Hour,
@@ -82,7 +80,7 @@ func TestPublicationAuthorPromptBindingAndFailsafe(t *testing.T) {
 	// A configured prompt changes the configuration digest, and a different
 	// prompt file changes it again; the driver is bound.
 	cfg, root := judgmentFixture(t)
-	_, base, err := composeJudgments(cfg, root)
+	_, base, err := composeJudgments(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,14 +89,14 @@ func TestPublicationAuthorPromptBindingAndFailsafe(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.PublicationAuthorPrompt = promptPath
-	bound, withPrompt, err := composeJudgments(cfg, root)
+	bound, withPrompt, err := composeJudgments(cfg)
 	if err != nil || bound.Driver == nil || withPrompt == base || string(bound.AuthorPrompt) != "role prompt one" {
 		t.Fatalf("prompt digest = %q (base %q), err = %v", withPrompt, base, err)
 	}
 	if err := os.WriteFile(promptPath, []byte("role prompt two, different"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, changed, err := composeJudgments(cfg, root)
+	_, changed, err := composeJudgments(cfg)
 	if err != nil || changed == withPrompt {
 		t.Fatalf("different prompt did not change the digest: %q vs %q, err %v", changed, withPrompt, err)
 	}
@@ -107,64 +105,46 @@ func TestPublicationAuthorPromptBindingAndFailsafe(t *testing.T) {
 	if err := os.WriteFile(promptPath, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := composeJudgments(cfg, root); err == nil {
+	if _, _, err := composeJudgments(cfg); err == nil {
 		t.Fatal("empty prompt file accepted")
 	}
 	if err := os.WriteFile(promptPath, bytes.Repeat([]byte("x"), (32<<10)+1), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := composeJudgments(cfg, root); err == nil {
+	if _, _, err := composeJudgments(cfg); err == nil {
 		t.Fatal("oversized prompt file accepted")
 	}
 }
 
+// The receipt commits to the configuration and to no credential: nothing the
+// judgment flags compose reads one.
 func TestJudgmentBindingAndReceipt(t *testing.T) {
-	cfg, root := judgmentFixture(t)
-	b, digest, err := composeJudgments(cfg, root)
-	if err != nil || b.Driver == nil || digest == "" || b.Credential.Reveal() != "synthetic-subscription-token" {
+	cfg, _ := judgmentFixture(t)
+	b, digest, err := composeJudgments(cfg)
+	if err != nil || b.Driver == nil || digest == "" {
 		t.Fatalf("binding failed: %v", err)
 	}
-	_, again, err := composeJudgments(cfg, root)
+	_, again, err := composeJudgments(cfg)
 	if err != nil || again != digest {
 		t.Fatal("unstable binding")
 	}
 	cfg.CLI.Model = "changed-model"
-	_, changed, err := composeJudgments(cfg, root)
+	_, changed, err := composeJudgments(cfg)
 	if err != nil || changed == digest {
 		t.Fatal("model absent from receipt")
-	}
-	cfg.CLI.Model = "test-model"
-	if err := os.WriteFile(filepath.Join(root, "token"), []byte("rotated-subscription-token"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	_, changed, err = composeJudgments(cfg, root)
-	if err != nil || changed == digest {
-		t.Fatal("credential absent from receipt")
-	}
-	encoded, _ := json.Marshal(struct {
-		Config     judgmentConfig
-		Receipt    string
-		Credential any
-	}{cfg, digest, b.Credential})
-	if strings.Contains(string(encoded), "synthetic-subscription-token") {
-		t.Fatal("credential leaked")
 	}
 }
 
 func TestJudgmentStartupRequiresPreflightBinding(t *testing.T) {
-	for _, change := range []string{"unchanged", "rotated token", "changed model", "missing digest", "invalid digest"} {
+	for _, change := range []string{"unchanged", "changed model", "missing digest", "invalid digest"} {
 		t.Run(change, func(t *testing.T) {
-			cfg, root := judgmentFixture(t)
-			_, digest, err := composeJudgments(cfg, root)
+			cfg, _ := judgmentFixture(t)
+			_, digest, err := composeJudgments(cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
 			cfg.ExpectedDigest = digest
 			switch change {
-			case "rotated token":
-				if err := os.WriteFile(filepath.Join(root, "token"), []byte("rotated-subscription-token"), 0o600); err != nil {
-					t.Fatal(err)
-				}
 			case "changed model":
 				cfg.CLI.Model = "changed-model"
 			case "missing digest":
@@ -172,112 +152,97 @@ func TestJudgmentStartupRequiresPreflightBinding(t *testing.T) {
 			case "invalid digest":
 				cfg.ExpectedDigest = "invalid"
 			}
-			binding, err := composeRuntimeJudgments(cfg, root)
+			binding, err := composeRuntimeJudgments(cfg)
 			if change == "unchanged" {
-				if err != nil || binding.Driver == nil || binding.Credential.Reveal() != "synthetic-subscription-token" {
+				if err != nil || binding.Driver == nil {
 					t.Fatalf("unchanged preflight binding rejected: %v", err)
 				}
-			} else if err == nil || binding.Driver != nil || binding.Credential.Reveal() != "" {
+			} else if err == nil || binding.Driver != nil {
 				t.Fatal("startup accepted an unattested binding")
 			}
 		})
 	}
-	binding, err := composeRuntimeJudgments(judgmentConfig{}, "")
-	if err != nil || binding.Driver != nil || binding.Credential.Reveal() != "" {
+	binding, err := composeRuntimeJudgments(judgmentConfig{})
+	if err != nil || binding.Driver != nil {
 		t.Fatal("unconfigured startup fallback changed")
 	}
 }
 
-func TestJudgmentConfigRefusesUnsafeSnapshots(t *testing.T) {
-	for _, name := range []string{"missing", "public file", "public root", "symlink", "outside", "partial"} {
-		t.Run(name, func(t *testing.T) {
-			cfg, root := judgmentFixture(t)
-			token := filepath.Join(root, "token")
-			switch name {
-			case "missing":
-				cfg.AuthSnapshot = "absent"
-			case "public file":
-				if err := os.Chmod(token, 0o644); err != nil { //nolint:gosec // G302: deliberately unsafe fixture must be rejected.
-					t.Fatal(err)
-				}
-			case "public root":
-				if err := os.Chmod(root, 0o755); err != nil { //nolint:gosec // G302: deliberately unsafe root must fail credential admission.
-					t.Fatal(err)
-				}
-			case "symlink":
-				if err := os.Symlink(token, filepath.Join(root, "link")); err != nil {
-					t.Fatal(err)
-				}
-				cfg.AuthSnapshot = "link"
-			case "outside":
-				cfg.AuthSnapshot = "../token"
-			case "partial":
-				cfg.CLI.Model = ""
-			}
-			if _, _, err := composeJudgments(cfg, root); err == nil {
-				t.Fatal("unsafe snapshot accepted")
-			}
-		})
+func TestJudgmentConfigRefusesAPartialPin(t *testing.T) {
+	cfg, _ := judgmentFixture(t)
+	cfg.CLI.Model = ""
+	if _, _, err := composeJudgments(cfg); err == nil {
+		t.Fatal("partial configuration accepted")
 	}
-	b, digest, err := composeJudgments(judgmentConfig{}, "")
-	if err != nil || b.Driver != nil || digest != "" || b.Credential.Reveal() != "" {
+	b, digest, err := composeJudgments(judgmentConfig{})
+	if err != nil || b.Driver != nil || digest != "" {
 		t.Fatal("unconfigured fallback changed")
 	}
 }
 
+// The judgment flags name the CLI pin and the model. -judgment-auth-snapshot
+// is gone with the host token file it named (#1426): a command line that
+// still passes it is refused, not silently ignored.
 func TestJudgmentFlags(t *testing.T) {
-	cfg, root := judgmentFixture(t)
-	var parsed judgmentConfig
-	flags := flag.NewFlagSet("test", flag.ContinueOnError)
-	judgmentFlags(flags, &parsed)
-	if err := flags.Parse([]string{"-judgment-claude-bin", cfg.CLI.Binary, "-judgment-claude-sha256", cfg.CLI.SHA256, "-judgment-model", cfg.CLI.Model, "-judgment-auth-snapshot", cfg.AuthSnapshot}); err != nil {
+	cfg, _ := judgmentFixture(t)
+	args := []string{"-judgment-claude-bin", cfg.CLI.Binary, "-judgment-claude-sha256", cfg.CLI.SHA256, "-judgment-model", cfg.CLI.Model}
+	parse := func(args []string) (judgmentConfig, error) {
+		var parsed judgmentConfig
+		flags := flag.NewFlagSet("test", flag.ContinueOnError)
+		flags.SetOutput(io.Discard)
+		judgmentFlags(flags, &parsed)
+		return parsed, flags.Parse(args)
+	}
+	parsed, err := parse(args)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if parsed != cfg {
 		t.Fatal("flag binding mismatch")
 	}
-	if _, _, err := composeJudgments(parsed, root); err != nil {
+	if _, _, err := composeJudgments(parsed); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := parse(append(args, "-judgment-auth-snapshot", "token")); err == nil ||
+		!strings.Contains(err.Error(), "flag provided but not defined") {
+		t.Fatalf("removed flag: err = %v, want it unknown", err)
 	}
 }
 
-func TestJudgmentPreflightBindsAndRejectsCredential(t *testing.T) {
-	args, environment := preflightFixture(t)
+// Preflight binds the judgment configuration and refuses one whose CLI pin
+// does not hold. It reads no host token file: the removed flag is unknown to
+// it too.
+func TestJudgmentPreflightBindsAndRejectsConfiguration(t *testing.T) {
+	base, environment := preflightFixture(t)
 	cfg, _ := judgmentFixture(t)
-	var root string
-	for i, arg := range args {
-		if arg == "-review-input-root" {
-			root = args[i+1]
-		}
-	}
-	if root == "" {
-		t.Fatal("fixture input root missing")
-	}
-	tokenPath := filepath.Join(root, "judgment-token")
-	if err := os.WriteFile(tokenPath, []byte("synthetic-subscription-token"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	args = append(args, "-judgment-claude-bin", cfg.CLI.Binary, "-judgment-claude-sha256", cfg.CLI.SHA256, "-judgment-model", cfg.CLI.Model, "-judgment-auth-snapshot", "judgment-token")
-	for _, valid := range []bool{true, false} {
-		if !valid {
-			if err := os.WriteFile(tokenPath, []byte("invalid\ntoken"), 0o600); err != nil {
-				t.Fatal(err)
+	run := func(extra ...string) (compositionManifest, error) {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		err := runPreflightCommandWithEnvironment(t.Context(), append(slices.Clone(base), extra...),
+			&stdout, &stderr, environment, time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC), "test-build")
+		var manifest compositionManifest
+		if stdout.Len() != 0 {
+			if decodeErr := json.Unmarshal(stdout.Bytes(), &manifest); decodeErr != nil {
+				t.Fatal(decodeErr)
 			}
 		}
-		var stdout, stderr bytes.Buffer
-		err := runPreflightCommandWithEnvironment(t.Context(), args, &stdout, &stderr, environment, time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC), "test-build")
-		var manifest compositionManifest
-		if decodeErr := json.Unmarshal(stdout.Bytes(), &manifest); decodeErr != nil {
-			t.Fatal(decodeErr)
-		}
-		if valid && (err != nil || manifest.JudgmentConfigurationDigest == "" || checkStatus(manifest, "judgment_configuration") != compositionPassed) {
-			t.Fatalf("valid judgment preflight failed: %v", err)
-		}
-		if !valid && (err == nil || manifest.JudgmentConfigurationDigest != "" || checkStatus(manifest, "judgment_configuration") != compositionFailed) {
-			t.Fatal("invalid judgment preflight passed")
-		}
-		if strings.Contains(stdout.String(), "synthetic-subscription-token") || strings.Contains(stdout.String(), tokenPath) {
-			t.Fatal("preflight exposed credential input")
-		}
+		return manifest, err
+	}
+	manifest, err := run("-judgment-claude-bin", cfg.CLI.Binary, "-judgment-claude-sha256", cfg.CLI.SHA256,
+		"-judgment-model", cfg.CLI.Model)
+	if err != nil || manifest.JudgmentConfigurationDigest == "" ||
+		checkStatus(manifest, "judgment_configuration") != compositionPassed {
+		t.Fatalf("valid judgment preflight failed: %v", err)
+	}
+	manifest, err = run("-judgment-claude-bin", cfg.CLI.Binary, "-judgment-claude-sha256", strings.Repeat("0", 64),
+		"-judgment-model", cfg.CLI.Model)
+	if err == nil || manifest.JudgmentConfigurationDigest != "" ||
+		checkStatus(manifest, "judgment_configuration") != compositionFailed {
+		t.Fatal("judgment preflight passed a CLI that does not match its pin")
+	}
+	manifest, err = run("-judgment-claude-bin", cfg.CLI.Binary, "-judgment-claude-sha256", cfg.CLI.SHA256,
+		"-judgment-model", cfg.CLI.Model, "-judgment-auth-snapshot", "judgment-token")
+	if err == nil || len(manifest.Checks) != 0 {
+		t.Fatalf("preflight accepted the removed -judgment-auth-snapshot flag: %v", err)
 	}
 }

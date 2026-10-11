@@ -139,7 +139,7 @@ export FREESIDE_REAL_RUN_AGENT_TREE=$tree
 # Judgments are off unless a case switches them on, whatever the caller's
 # environment holds.
 unset FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256 \
-	FREESIDE_REAL_RUN_JUDGMENT_MODEL FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT
+	FREESIDE_REAL_RUN_JUDGMENT_MODEL
 
 # adopt <session> <state-root> <commit> runs the step and leaves its status in
 # $rc and its stderr in <session>/stderr.
@@ -195,7 +195,7 @@ patch_at=$((${#expected_args[@]} - 2))
 judgment_expected_args=("${expected_args[@]:0:patch_at}" "${author_prompt_args[@]}"
 	-patch "$tmp/judgment-session/agent-tree.patch")
 FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN=/opt/claude FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256=sha256:11 \
-	FREESIDE_REAL_RUN_JUDGMENT_MODEL=judgment-model FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT=token \
+	FREESIDE_REAL_RUN_JUDGMENT_MODEL=judgment-model \
 	adopt judgment-session root-a "$matching"
 [[ "$rc" == 0 ]] || fail "adoption with judgments on returned $rc"
 [[ "$(cat "$tmp/args")" == "$(printf '%s\n' "${judgment_expected_args[@]}")" ]] || fail "auth adopt with judgments on got unexpected arguments: $(tr '\n' ' ' <"$tmp/args")"
@@ -260,7 +260,9 @@ GIT_CONFIG_GLOBAL=$tmp/gitconfig adopt config-session root-config "$matching"
 # the composition preflight, and its inputs are required but never written to
 # the session's verification environment.
 python3 - "$root/scripts/run-real-work.sh" "$root/scripts/real-work-agent-tree.sh" <<'PY'
+import os
 import re
+import subprocess
 import sys
 
 text = open(sys.argv[1], encoding="utf-8").read()
@@ -276,9 +278,20 @@ assert "missing_adoption_inputs=$(real_work_missing_adoption_inputs)" in text, "
 # author is on and on its prompt file, so the helper's condition and path are
 # the harness's own.
 helper = open(sys.argv[2], encoding="utf-8").read()
-condition = 'if [[ -n "${FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN:-}${FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256:-}${FREESIDE_REAL_RUN_JUDGMENT_MODEL:-}${FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT:-}" ]]; then'
+condition = 'if [[ -n "${FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN:-}${FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256:-}${FREESIDE_REAL_RUN_JUDGMENT_MODEL:-}" ]]; then'
 assert condition in text and condition in helper, "adoption and the harness switch judgments on differently"
 assert '-judgment-publication-author-prompt "$repo_root/prompts/publication-author.md")' in text, "the harness names another author prompt"
+# The judgment credential comes from the enrollment's volume. The harness
+# passes no token file and stops on the variable that used to name one.
+assert "-judgment-auth-snapshot" not in text, "the harness still passes the removed judgment token flag"
+refusal = re.search(r'^if \[\[ -n "\$\{FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT:-\}" \]\]; then\n.*?^fi\n', text, re.S | re.M)
+assert refusal, "the harness does not refuse the removed judgment token variable"
+assert text.index(refusal.group(0)) < text.index("judgment_names=("), "the refusal runs after the judgment inputs are read"
+for value, status in (("token", 2), ("", 0)):
+    ran = subprocess.run(["bash", "-c", "set -euo pipefail\n" + refusal.group(0)], capture_output=True, text=True,
+                         env={"PATH": os.environ["PATH"], "FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT": value})
+    assert ran.returncode == status, f"judgment token variable {value!r}: exit {ran.returncode}"
+    assert ("no longer read" in ran.stderr) == bool(value), ran.stderr
 assert '-judgment-publication-author-prompt "$real_work_agent_tree_repo_root/prompts/publication-author.md")' in helper, "adoption names another author prompt"
 PY
 

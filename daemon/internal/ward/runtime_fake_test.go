@@ -134,6 +134,10 @@ type fakeRuntime struct {
 	// observerProof rewrites the synthesized proof bytes before they are
 	// archived, so a test can corrupt, truncate, or replay one.
 	observerProof func(id string, proof []byte) []byte
+	// credTokenCopy is, per credential volume, the bytes a token-read
+	// observer leaves beside its proof. Only an observer whose command names
+	// the copy path archives them, as only that script writes the file.
+	credTokenCopy map[string][]byte
 	// copySeedsNothing models the reference runtime's most dangerous
 	// behaviour: a copy whose destination lies inside a mounted volume writes
 	// nothing and still reports success. The call is recorded and returns nil;
@@ -425,17 +429,28 @@ func snapshotProofFor(nonce string, files map[string][]byte) []byte {
 // writeProofTar streams a one-entry archive carrying proof at absolutePath,
 // the shape the gate extracts from an observer's exported rootfs.
 func writeProofTar(w io.Writer, absolutePath string, proof []byte) error {
+	return writeFilesTar(w, tarFile{absolutePath, proof})
+}
+
+type tarFile struct {
+	absolutePath string
+	body         []byte
+}
+
+func writeFilesTar(w io.Writer, files ...tarFile) error {
 	tw := tar.NewWriter(w)
-	if err := tw.WriteHeader(&tar.Header{
-		Name:     strings.TrimPrefix(absolutePath, "/"),
-		Typeflag: tar.TypeReg,
-		Mode:     0o600,
-		Size:     int64(len(proof)),
-	}); err != nil {
-		return err
-	}
-	if _, err := tw.Write(proof); err != nil {
-		return err
+	for _, file := range files {
+		if err := tw.WriteHeader(&tar.Header{
+			Name:     strings.TrimPrefix(file.absolutePath, "/"),
+			Typeflag: tar.TypeReg,
+			Mode:     0o600,
+			Size:     int64(len(file.body)),
+		}); err != nil {
+			return err
+		}
+		if _, err := tw.Write(file.body); err != nil {
+			return err
+		}
 	}
 	return tw.Close()
 }
@@ -1025,6 +1040,10 @@ func (f *fakeRuntime) ExportRootFS(ctx context.Context, id string, dest io.Write
 		proof := credProofFor(c.ownershipToken(), credStateDigest(f.credState[vol]))
 		if f.observerProof != nil {
 			proof = f.observerProof(id, proof)
+		}
+		copyPath := f.credProofPath + ".token"
+		if body, ok := f.credTokenCopy[vol]; ok && strings.Contains(strings.Join(c.spec.Command, " "), copyPath) {
+			return writeFilesTar(dest, tarFile{f.credProofPath, proof}, tarFile{copyPath, body})
 		}
 		return writeProofTar(dest, f.credProofPath, proof)
 	}

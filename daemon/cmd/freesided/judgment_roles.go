@@ -20,11 +20,11 @@ import (
 
 // Each judgment site looks its role up in the lineup at every call (plan
 // §5.4, issue #1425). The lineup decides which agent a role is, which prompt
-// it runs, and the model and effort its call launches with; the judgment
-// flags still decide the pinned CLI, the model a line on the native-default
-// offer launches with, and which credential the call carries. The record
-// says so: credential_source is interim_flag until #1426 reads the credential
-// from the line's enrollment.
+// it runs, and the model and effort its call launches with, and the call
+// authenticates with the token stored in the credential volume of the line's
+// enrollment generation (#1426), which the record names as credential_source
+// enrollment. The judgment flags still decide the pinned CLI and the model a
+// line on the native-default offer launches with.
 
 // judgmentCallAudits are the hand audits that prove the judgment call launch,
 // one per call adapter, each naming its adapter by the digest that adapter
@@ -75,11 +75,10 @@ func judgmentSites(budget inference.Budget) []inference.Site {
 }
 
 // judgmentRuntime is what the judgment flags compose: the driver that makes
-// every call, the credential it carries, and the publication author's prompt
-// file. The zero value is judgments switched off.
+// every call and the publication author's prompt file. The zero value is
+// judgments switched off.
 type judgmentRuntime struct {
 	Driver       inference.Driver
-	Credential   inference.Secret
 	AuthorPrompt []byte
 }
 
@@ -90,6 +89,9 @@ type judgmentRoles struct {
 	tree     agenttree.Tree
 	revision domain.Digest
 	runtime  judgmentRuntime
+	// credentials reads the token a call authenticates with. A role whose
+	// token cannot be read is unbound, like a role with no line.
+	credentials *judgmentCredentials
 }
 
 // judgmentRolePrompt returns the prompt this daemon runs a judgment role
@@ -116,14 +118,18 @@ func (j judgmentRoles) ResolveRole(ctx context.Context, role domain.RoleName) (i
 	if err != nil {
 		return inference.RoleCall{}, err
 	}
+	credential, err := j.credentials.token(ctx, agent.Enrollment.ID, agent.Generation.Ordinal)
+	if err != nil {
+		return inference.RoleCall{}, fmt.Errorf("role %s: %w", role, err)
+	}
 	call := inference.RoleCall{
 		Line: agent.Line, LineupRevision: j.revision,
 		Agent: agent.Resolved.Definition, Route: agent.Resolved.Route,
 		Adapter: agent.Resolved.Adapter, Offer: agent.Resolved.Offer,
 		Enrollment: agent.Enrollment, Generation: agent.Generation, ExpiryMargin: agentExpiryMargin,
 		LaunchProof: judgmentCallAuditFor(agent.Resolved.Adapter.Digest), Prompt: prompt,
-		Driver: j.runtime.Driver, Credential: j.runtime.Credential,
-		CredentialSource: inference.CredentialSourceInterimFlag,
+		Driver: j.runtime.Driver, Credential: credential,
+		CredentialSource: inference.CredentialSourceEnrollment,
 	}
 	if role.JudgesWrittenWork() {
 		call.WriterLineage = map[domain.RoleName]string{}
@@ -187,8 +193,11 @@ func judgmentRoleCause(role domain.RoleName, reason string) healthCause {
 	cause := healthCause{
 		Reason: fmt.Sprintf(
 			"Judgment role %s has no admissible lineup line (%s). Its sites return their fail-safe until "+
-				"it does: add or fix the %s line in the lineup (auth adopt writes the baseline lines) and "+
-				"restart.", role, reason, role),
+				"it does. For a missing or inadmissible line, add or fix the %s line in the lineup (auth "+
+				"adopt writes the baseline lines) and restart. For a stored credential that could not be "+
+				"read, restore the credential volume of the line's enrollment; the role binds at its next "+
+				"call, or at a restart when nothing calls it.",
+			role, reason, role),
 		Posture: domain.HealthPostureAdvisory, Impairs: domain.ImpairedCapabilityNone,
 	}
 	if role == domain.RoleDriftAuditor {

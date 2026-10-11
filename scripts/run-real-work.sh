@@ -163,12 +163,14 @@
 #                                    explicit reviewed replacement is supplied.
 #   FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN absolute native Claude CLI path
 #   FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256 exact executable content pin
-#   FREESIDE_REAL_RUN_JUDGMENT_MODEL explicit Claude model for daemon judgments
-#   FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT existing setup-token file relative
-#                                    to REVIEW_INPUT_ROOT; all four go together
-#   When all four are set, bind the publication-author role prompt from this
+#   FREESIDE_REAL_RUN_JUDGMENT_MODEL explicit Claude model for daemon judgments;
+#                                    all three go together
+#   When all three are set, bind the publication-author role prompt from this
 #   checkout's prompts/publication-author.md. Preflight includes its content
-#   digest in judgment_configuration_digest.
+#   digest in judgment_configuration_digest. Each judgment call authenticates
+#   with the credential stored for the enrollment its role's lineup line
+#   names, so no variable names a token file;
+#   FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT is refused.
 #   FREESIDE_REAL_RUN_TIMEOUT_SECONDS global supervision deadline in seconds;
 #                                    a positive integer (default 3600). Bounds
 #                                    the whole supervised workflow (spec-approval
@@ -850,10 +852,17 @@ fi
 if [[ -n "$work_unit_file" ]]; then
 	preflight_args+=(-work-unit "$work_unit_file")
 fi
+# The daemon reads each judgment credential from its enrollment's volume
+# (#1426). A token file left in the environment would be silently unused, so
+# say so instead of running on an account the operator did not expect.
+if [[ -n "${FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT:-}" ]]; then
+  echo 'run-real-work: FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT is no longer read: judgment calls authenticate with the credential stored for each role'"'"'s enrollment; unset it' >&2
+  exit 2
+fi
 judgment_names=(FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256
-  FREESIDE_REAL_RUN_JUDGMENT_MODEL FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT)
+  FREESIDE_REAL_RUN_JUDGMENT_MODEL)
 judgment_args=()
-if [[ -n "${FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN:-}${FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256:-}${FREESIDE_REAL_RUN_JUDGMENT_MODEL:-}${FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT:-}" ]]; then
+if [[ -n "${FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN:-}${FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256:-}${FREESIDE_REAL_RUN_JUDGMENT_MODEL:-}" ]]; then
   for name in "${judgment_names[@]}"; do
     if [[ -z "${!name:-}" ]]; then
       echo "run-real-work: $name is required for subscription judgments" >&2
@@ -865,7 +874,6 @@ if [[ -n "${FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN:-}${FREESIDE_REAL_RUN_JUDGMENT
   judgment_args=(-judgment-claude-bin "$FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN"
     -judgment-claude-sha256 "$FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256"
     -judgment-model "$FREESIDE_REAL_RUN_JUDGMENT_MODEL"
-    -judgment-auth-snapshot "$FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT"
     -judgment-publication-author-prompt "$repo_root/prompts/publication-author.md")
   preflight_args+=("${judgment_args[@]}")
 fi

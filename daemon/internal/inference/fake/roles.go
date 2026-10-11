@@ -141,7 +141,7 @@ func (r Roles) ResolveRole(_ context.Context, role domain.RoleName) (inference.R
 		Prompt:        prompt,
 		WriterLineage: r.WriterLineage,
 		Driver:        r.Driver, Credential: r.Credential,
-		CredentialSource: inference.CredentialSourceInterimFlag,
+		CredentialSource: inference.CredentialSourceEnrollment,
 	}
 	if r.Edit != nil {
 		if err := r.Edit(role, &call); err != nil {

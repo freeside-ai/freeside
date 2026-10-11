@@ -5,11 +5,9 @@ import (
 	"errors"
 	"flag"
 	"os"
-	"path/filepath"
 
 	"github.com/freeside-ai/freeside/daemon/internal/claudeinference"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
-	"github.com/freeside-ai/freeside/daemon/internal/inference"
 )
 
 // maxJudgmentPromptBytes bounds a judgment-role prompt file. The composed
@@ -18,8 +16,7 @@ import (
 const maxJudgmentPromptBytes = 32 << 10
 
 type judgmentConfig struct {
-	CLI          claudeinference.Config `json:"cli"`
-	AuthSnapshot string                 `json:"auth_snapshot"`
+	CLI claudeinference.Config `json:"cli"`
 	// PublicationAuthorPrompt is the path to the publication-author role prompt
 	// file. The daemon reads it at startup and folds the file's content digest
 	// into the judgment configuration digest preflight records. The path stays
@@ -32,7 +29,6 @@ func judgmentFlags(flags *flag.FlagSet, cfg *judgmentConfig) {
 	flags.StringVar(&cfg.CLI.Binary, "judgment-claude-bin", "", "absolute native Claude CLI path for subscription judgments (optional)")
 	flags.StringVar(&cfg.CLI.SHA256, "judgment-claude-sha256", "", "exact Claude CLI executable digest")
 	flags.StringVar(&cfg.CLI.Model, "judgment-model", "", "Claude model for a judgment line on the native-default offer")
-	flags.StringVar(&cfg.AuthSnapshot, "judgment-auth-snapshot", "", "existing Claude setup-token snapshot relative to review-input-root")
 	flags.StringVar(&cfg.PublicationAuthorPrompt, "judgment-publication-author-prompt", "", "publication-author role prompt file (optional; both sites fail safe when unset)")
 }
 
@@ -53,13 +49,13 @@ func readJudgmentPrompt(path string) ([]byte, error) {
 }
 
 // composeRuntimeJudgments binds startup to the successful preflight evidence.
-func composeRuntimeJudgments(cfg judgmentConfig, inputRoot string) (judgmentRuntime, error) {
+func composeRuntimeJudgments(cfg judgmentConfig) (judgmentRuntime, error) {
 	expected := cfg.ExpectedDigest
 	cfg.ExpectedDigest = ""
 	if cfg != (judgmentConfig{}) && !contentaddr.Valid(expected) {
 		return judgmentRuntime{}, errors.New("judgment startup requires a preflight configuration digest")
 	}
-	runtime, actual, err := composeJudgments(cfg, inputRoot)
+	runtime, actual, err := composeJudgments(cfg)
 	if err != nil {
 		return judgmentRuntime{}, err
 	}
@@ -69,15 +65,14 @@ func composeRuntimeJudgments(cfg judgmentConfig, inputRoot string) (judgmentRunt
 	return runtime, nil
 }
 
-// composeJudgments reuses the private setup-token reader used by shadow review.
-// No new credential enrollment, refresh mechanism, or provider API is involved.
-// An empty configuration composes the zero runtime: judgments switched off.
-func composeJudgments(cfg judgmentConfig, inputRoot string) (judgmentRuntime, string, error) {
+// composeJudgments composes what the judgment flags name: the pinned CLI
+// driver and the publication author's prompt. It reads no credential: each
+// call takes its token from the enrollment its lineup line names
+// (judgmentCredentials). An empty configuration composes the zero runtime:
+// judgments switched off.
+func composeJudgments(cfg judgmentConfig) (judgmentRuntime, string, error) {
 	if cfg == (judgmentConfig{}) {
 		return judgmentRuntime{}, "", nil
-	}
-	if cfg.AuthSnapshot == "" || filepath.IsAbs(cfg.AuthSnapshot) || filepath.Clean(cfg.AuthSnapshot) != cfg.AuthSnapshot {
-		return judgmentRuntime{}, "", errors.New("judgment auth snapshot must be relative to the private review input root")
 	}
 	var authorPrompt []byte
 	authorPromptDigest := ""
@@ -93,22 +88,16 @@ func composeJudgments(cfg judgmentConfig, inputRoot string) (judgmentRuntime, st
 	if err != nil {
 		return judgmentRuntime{}, "", err
 	}
-	token, err := readSetupTokenSnapshot(inputRoot, filepath.Join(inputRoot, cfg.AuthSnapshot))
-	if err != nil {
-		return judgmentRuntime{}, "", errors.New("judgment setup-token snapshot is unavailable or unsafe")
-	}
-	// The outer digest commits to configuration and credential content without
-	// storing either the credential or its separately usable content digest. The
-	// prompt's content digest pins the exact role prompt bytes, so a different
-	// prompt file yields a different judgment configuration digest even though
-	// only its path rides on the comparable config.
+	// The digest commits to the configuration and to no credential: the
+	// token a call carries is the enrollment generation's, which the call
+	// record names. The prompt's content digest pins the exact role prompt
+	// bytes, so a different prompt file yields a different judgment
+	// configuration digest even though only its path rides on the comparable
+	// config.
 	receipt, _ := json.Marshal(struct {
 		Protocol                      string
 		Config                        judgmentConfig
-		TokenDigest                   string
 		PublicationAuthorPromptDigest string
-	}{claudeinference.Protocol, cfg, contentaddr.Sum(token), authorPromptDigest})
-	return judgmentRuntime{
-		Driver: driver, Credential: inference.Secret(token), AuthorPrompt: authorPrompt,
-	}, contentaddr.Sum(receipt), nil
+	}{claudeinference.Protocol, cfg, authorPromptDigest})
+	return judgmentRuntime{Driver: driver, AuthorPrompt: authorPrompt}, contentaddr.Sum(receipt), nil
 }

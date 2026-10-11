@@ -233,7 +233,7 @@ func TestClientAdmitsWhatTheSourceReturns(t *testing.T) {
 		{"generation never persisted", func(call *inference.RoleCall) { call.Generation.Ordinal = 0 }},
 		{"generation of another enrollment", func(call *inference.RoleCall) { call.Generation.EnrollmentID = "another" }},
 		{"lineup revision malformed", func(call *inference.RoleCall) { call.LineupRevision = "sha256:short" }},
-		{"unknown credential source", func(call *inference.RoleCall) { call.CredentialSource = "enrollment" }},
+		{"unknown credential source", func(call *inference.RoleCall) { call.CredentialSource = "operator_file" }},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -479,6 +479,38 @@ func TestLedgerOlderVersionsLoadAndNewerFieldsUnderOlderLabelsAreRefused(t *test
 			t.Fatalf("a record with a partial identity was accepted: %+v", result)
 		}
 	})
+	// No call records interim_flag since #1426, and the records written
+	// before it still say so. They load; a source this binary never knew is
+	// refused.
+	setSource := func(t *testing.T, statePath, source string) {
+		t.Helper()
+		rewriteLedger(t, statePath, func(state map[string]any) {
+			identity := state["calls"].([]any)[0].(map[string]any)["identity"].(map[string]any)
+			if identity["credential_source"] != "enrollment" {
+				t.Fatalf("seed record credential_source = %v", identity["credential_source"])
+			}
+			identity["credential_source"] = source
+		})
+	}
+	t.Run("an interim_flag record still loads", func(t *testing.T) {
+		statePath := seed(t)
+		setSource(t, statePath, "interim_flag")
+		if result := call(t, statePath, "run-2"); result.Identity == nil {
+			t.Fatalf("a ledger holding an interim_flag record refused a call: %+v", result)
+		}
+		calls := ledgerCalls(t, statePath)
+		if len(calls) != 2 || !bytes.Contains(calls[0], []byte(`"credential_source":"interim_flag"`)) ||
+			!bytes.Contains(calls[1], []byte(`"credential_source":"enrollment"`)) {
+			t.Fatalf("records after the later call = %s", calls)
+		}
+	})
+	t.Run("an unknown credential source is refused", func(t *testing.T) {
+		statePath := seed(t)
+		setSource(t, statePath, "operator_file")
+		if result := call(t, statePath, "run-2"); !result.Fallback || result.Identity != nil {
+			t.Fatalf("a record with an unknown credential source was accepted: %+v", result)
+		}
+	})
 	// A stored record is history. One that today's registries would not
 	// write (a site since retired, another set of writing roles) still loads:
 	// refusing it would disable the ledger, and a disabled ledger cannot
@@ -664,7 +696,7 @@ func TestIndependenceIsRecordedAndNeverGates(t *testing.T) {
 		if got := lineages(same); got != "implementer=matched,remediator=differed" {
 			t.Fatalf("%s independence = %q", site.ID, got)
 		}
-		if same.CredentialSource != "interim_flag" {
+		if same.CredentialSource != "enrollment" {
 			t.Fatalf("%s credential_source = %q", site.ID, same.CredentialSource)
 		}
 		// A writing role the lineup does not name, or whose offer has no

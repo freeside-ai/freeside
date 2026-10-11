@@ -1642,6 +1642,76 @@ func credIntegrityObserverScript(cfg Config, nonce, target string) string {
 		"\"$ts\" \"$tb\" >> " + proof + "; sync"
 }
 
+// credObserver selects the script a credential observer runs. The zero value
+// "" is invalid by design.
+type credObserver string
+
+const (
+	// credObserverGate runs credObserverScript under the handoff's manifest
+	// policy: the tree digest the lease gate compares.
+	credObserverGate credObserver = "gate"
+	// credObserverIntegrity adds the two token facts the integrity probe
+	// reports.
+	credObserverIntegrity credObserver = "integrity"
+	// credObserverTokenRead adds a copy of the token file for the daemon to
+	// read out of the observer's exported root filesystem.
+	credObserverTokenRead credObserver = "token_read"
+)
+
+// allCredObservers is the single registration point for the observers.
+var allCredObservers = []credObserver{credObserverGate, credObserverIntegrity, credObserverTokenRead}
+
+func (o credObserver) valid() bool {
+	switch o {
+	case credObserverGate, credObserverIntegrity, credObserverTokenRead:
+		return true
+	default:
+		return false
+	}
+}
+
+// credTokenExportTimeout bounds a token-read observer's root filesystem
+// export, which the caller's cancellation does not reach (readCredProof says
+// why). The observer's filesystem is the exporter image and two small files,
+// so an export that runs this long is wedged.
+const credTokenExportTimeout = time.Minute
+
+// credTokenCopyPath is where the token-read observer leaves its copy of the
+// token file: beside the proof, in the observer's own root filesystem, and
+// never in the proof, so the proof parser and its errors cannot see a token
+// byte.
+func credTokenCopyPath(cfg Config) string { return cfg.CredProofPath + ".token" }
+
+// maxStoredSetupTokenBytes bounds the token file the daemon reads back: a
+// token of MaxSetupTokenBytes and the one line ending a hand-written file
+// may carry.
+const maxStoredSetupTokenBytes = MaxSetupTokenBytes + 1
+
+func credTokenReadObserverCommand(cfg Config, nonce, target string) []string {
+	return []string{"sh", "-c", credTokenReadObserverScript(cfg, nonce, target)}
+}
+
+// credTokenReadObserverScript is the integrity script followed by a copy of
+// the token file into the observer's root filesystem, which is how the token
+// reaches the daemon: the volume is mounted read-only and the observer has no
+// network, so the exported filesystem is its only way out. The prefix is
+// credIntegrityObserverScript's output unchanged, so the proof carries the
+// same digests as every other observation.
+//
+// The copy is taken under the same regular-file test as the digest and is
+// capped one byte past what the daemon accepts, so an oversized file fails
+// the read instead of being truncated into something shorter. The daemon
+// hashes the copy and requires the proof's token digest, which is what makes
+// a cut-off or substituted copy fail. The script's text carries no token:
+// only paths, the nonce, and fixed commands.
+func credTokenReadObserverScript(cfg Config, nonce, target string) string {
+	token := shellQuote(target + "/token")
+	return credIntegrityObserverScript(cfg, nonce, target) + "; " +
+		"if [ -f " + token + " ] && [ ! -L " + token + " ]; then " +
+		"(umask 077; head -c " + strconv.Itoa(maxStoredSetupTokenBytes+1) + " " + token +
+		" > " + shellQuote(credTokenCopyPath(cfg)) + "); fi; sync"
+}
+
 // cloneContainerSpec detaches every reference field before a spec crosses the
 // Runtime boundary. Runtime implementations may normalize or retain their
 // input; neither may rewrite the immutable expected spec used by the gate's

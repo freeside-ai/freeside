@@ -49,11 +49,13 @@ type fakePreflightEnvironment struct {
 	agentsError          error
 	judgmentRoles        []inference.RoleCheck
 	judgmentRolesError   error
+	judgmentRolesCalls   int
 }
 
 func (e *fakePreflightEnvironment) CheckJudgmentRoles(
-	context.Context, preflightConfig, judgmentRuntime, time.Time,
+	context.Context, preflightConfig, judgmentRuntime, ward.RuntimeResourceAuthorizer, time.Time,
 ) ([]inference.RoleCheck, error) {
+	e.judgmentRolesCalls++
 	return e.judgmentRoles, e.judgmentRolesError
 }
 
@@ -275,6 +277,9 @@ func TestPreflightRejectsMalformedShadowReviewCredential(t *testing.T) {
 func TestPreflightShadowApprovalPrecedesProtectedAccess(t *testing.T) {
 	args, environment := preflightFixture(t)
 	enableShadowReviewFixture(t, &args)
+	judgments, _ := judgmentFixture(t)
+	args = append(args, "-judgment-claude-bin", judgments.CLI.Binary,
+		"-judgment-claude-sha256", judgments.CLI.SHA256, "-judgment-model", judgments.CLI.Model)
 	environment.database.ShadowReviewError = domain.ErrShadowReviewConfigUnapproved
 	var stdout, stderr bytes.Buffer
 	err := runPreflightCommandWithEnvironment(
@@ -299,6 +304,12 @@ func TestPreflightShadowApprovalPrecedesProtectedAccess(t *testing.T) {
 		environment.codexCalls != 0 {
 		t.Fatalf("protected access calls: repository=%d auth-volume=%d codex=%d",
 			environment.repositoryCalls, environment.authVolumeCalls, environment.codexCalls)
+	}
+	// The judgment role check reads a stored credential too.
+	if checkStatus(manifest, "judgment_configuration") != compositionPassed ||
+		checkStatus(manifest, "judgment_roles") != compositionNotRun || environment.judgmentRolesCalls != 0 {
+		t.Fatalf("judgment roles before shadow approval: calls=%d checks=%+v",
+			environment.judgmentRolesCalls, manifest.Checks)
 	}
 	for role, calls := range environment.imageCalls {
 		if calls != 0 {

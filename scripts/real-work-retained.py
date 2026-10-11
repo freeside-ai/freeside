@@ -139,14 +139,11 @@ def upgrade_receipt(version, inputs, names, manual_config=""):
                  "FREESIDE_REAL_RUN_REVIEW_INSTRUCTIONS"):
         paths.append(Path(values["FREESIDE_REAL_RUN_REVIEW_INPUT_ROOT"]) / values[name])
     content = [hashlib.sha256(path.read_bytes()).hexdigest() for path in paths]
+    # The judgment credential is no input here: the daemon reads it from the
+    # enrollment's volume, and preflight's judgment_roles check covers it.
     if values.get("FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN"):
-        paths_for_judgment = (
-            Path(values["FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN"]),
-            Path(values["FREESIDE_REAL_RUN_REVIEW_INPUT_ROOT"]) /
-            values["FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT"],
-        )
-        content.extend(hashlib.sha256(path.read_bytes()).hexdigest()
-                       for path in paths_for_judgment)
+        judgment_bin = Path(values["FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN"])
+        content.append(hashlib.sha256(judgment_bin.read_bytes()).hexdigest())
     canonical = json.dumps({"values": values, "content": content}, sort_keys=True).encode()
     receipt = {"version": version, "inputs_digest": hashlib.sha256(canonical).hexdigest()}
     # Preserve compatibility with an older receipt when this input is absent.

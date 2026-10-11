@@ -1792,18 +1792,18 @@ the simplification round. The drift replay
 (`internal/integration/drift_replay_test.go`) re-runs recorded audits of real
 over-hardened pull requests through this site and the route gate, and
 `FREESIDE_DRIFT_REPLAY_LIVE_TEST=1` audits them again with the live provider.
-Configure all four flags together:
+Configure all three flags together:
 
 ```text
 -judgment-claude-bin /absolute/path/to/claude
 -judgment-claude-sha256 <sha256-of-that-native-executable>
 -judgment-model <Claude-model-for-native-default-lines>
--judgment-auth-snapshot <existing-token-file-relative-to-review-input-root>
 ```
 
-Use the existing private setup-token snapshot, with the same ownership and
-permissions required for Claude shadow review. No new API key or login is
-needed. The default, with all four flags absent, keeps inference unavailable
+No flag names a credential. Each call authenticates with the setup token
+stored for the enrollment its role's lineup line names, so no new API key or
+login is needed and judgment usage is billed to that enrollment's account.
+The default, with all three flags absent, keeps inference unavailable
 and preserves the existing conservative fallback behavior. The task namer keeps
 the identifier name when judgments are unbound or naming fails. Naming uses a
 separate serial worker after durable dispatch, so a slow provider does not
@@ -1922,11 +1922,35 @@ driver:
   non-empty model, so admission checks this and the role gets its health
   item; the driver checks it again before it starts any process.
 
-The judgment flags below still decide the executable and which credential the
-call carries, and the call record says so instead of claiming agreement: its
-`credential_source` is `interim_flag` until #1426 reads the credential from
-the line's enrollment. Nothing compares the `-judgment-claude-sha256` pin with
-the audited build; the operator keeps them the same.
+The lineup also decides which credential the call carries. It is the setup
+token of the agent's enrollment: the daemon reads it from the credential
+volume that enrollment's current generation names, the one `auth add` or
+`auth adopt` recorded, and the call record's `credential_source` is
+`enrollment`. A record written before #1426 says `interim_flag`, for a token
+file a flag named then, and still loads. The judgment flags below still
+decide the executable. Nothing compares the `-judgment-claude-sha256` pin
+with the audited build; the operator keeps them the same.
+
+The daemon reads a stored credential the way the credential-integrity probe
+observes one: the digest-pinned exporter image with no network and the volume
+mounted read-only, under the identity's shared read hold, and the container
+is removed afterwards. It reads once for each enrollment generation, keeps
+the token in memory, and reads again after a re-enrollment. A read hands back
+no token when the volume or its token file is absent, when the bytes are not
+a setup token, when the store matches neither digest the generation could
+have recorded, when another generation became current, or while a refresh or
+enrollment holds the identity. The role is then unbound, as it is with no
+line: its `judgment_role_unbound` item says the stored credential could not
+be read, and the daemon log line `judgment credential not read` names the
+enrollment, the generation, and the cause. A failed read is not remembered.
+The role's next call reads again, so a repaired store binds a role that is
+still called without a restart. The drift auditor's item holds unattended
+admission, so nothing may call that role again: restart the daemon after
+repairing its store. A role is also unbound while its enrollment's identity
+is disabled, which admission refuses before any read. While a read runs the
+token is in a private archive under the daemon user's temporary directory;
+`devlog/2026-10-11-0954-judgment-enrollment-credential.md` records how long
+it stays there and what a killed daemon leaves behind.
 
 A role with no admissible line does not run. Each of its sites returns its
 declared fail-safe with the fixed reason `judgment role has no admissible
@@ -1968,17 +1992,23 @@ Preflight reports `judgment_configuration` and a secret-free
 judgment role as the daemon's startup check will and lists each role in the
 manifest as `admitted`, `off`, or `unbound`. An unbound role fails preflight
 and is named in the check, so a run finds a missing line before it starts
-instead of running every site of that role on its fail-safe. The real-run harness accepts the corresponding
+instead of running every site of that role on its fail-safe. The check reads
+each role's stored credential as the daemon will, so a missing or damaged
+credential volume fails preflight too. The real-run harness accepts the corresponding
 `FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN`,
-`FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256`,
-`FREESIDE_REAL_RUN_JUDGMENT_MODEL`, and
-`FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT` environment variables. Retained
-restoration requires the same binding, including its credential content;
+`FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256`, and
+`FREESIDE_REAL_RUN_JUDGMENT_MODEL` environment variables, and stops when an
+environment still sets the token-file variable it read before #1426. Retained
+restoration requires the same binding;
 adding a judgment backend to an unbound retained session is a configuration
 change and is refused. A separately configured challenge can enable it.
 At startup, enabled judgments also require `-judgment-configuration-digest`
 from successful preflight. The harness supplies it from the immutable manifest;
-a token rotation or configuration change between preflight and startup is refused.
+a configuration change between preflight and startup is refused. The digest
+no longer covers a token, so one recorded before #1426 does not match: run
+preflight again after the upgrade. A retained session that had judgments on
+before the upgrade cannot be resumed across it, because its recorded
+composition names the old digest.
 
 Before deploying a different native CLI pin, run the protocol probe from
 `daemon/` with `FREESIDE_JUDGMENT_CLI` and

@@ -1038,7 +1038,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			// mix of sites.
 			MaxCallsPerRoot: 20, MaxStarvationPerRoot: 40 * time.Minute,
 		}
-		judgmentRuntime, err := composeRuntimeJudgments(cfg.Claude.Judgments, cfg.Claude.ReviewInputRoot)
+		judgmentRuntime, err := composeRuntimeJudgments(cfg.Claude.Judgments)
 		if err != nil {
 			return nil, fmt.Errorf("compose subscription judgments: %w", err)
 		}
@@ -1054,6 +1054,8 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			Roles: judgmentRoles{
 				st: st, tree: claudeWiring.env.Agents.Tree, revision: claudeWiring.env.Agents.LineupRevision,
 				runtime: judgmentRuntime,
+				credentials: productionJudgmentCredentials(
+					st, *cfg.Claude, ward.NewCLIRuntime(claudeWiring.containerBin), cfg.Logger),
 			},
 			Health:   judgmentHealth,
 			Sites:    judgmentSites(judgmentBudget),

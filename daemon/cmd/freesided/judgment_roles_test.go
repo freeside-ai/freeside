@@ -130,14 +130,17 @@ func TestJudgmentSitesReadTheAdoptedLineup(t *testing.T) {
 	f.withStore(t, func(st *store.Store) {
 		now := func() time.Time { return time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC) }
 		driver := inferencefake.New()
-		runtime := judgmentRuntime{Driver: driver, Credential: "synthetic-token", AuthorPrompt: authorBody}
+		runtime := judgmentRuntime{Driver: driver, AuthorPrompt: authorBody}
+		credentials := fixedJudgmentCredentials(t)
 		health := newJudgmentRoleHealth(st, now, nil)
 		newClient := func(tree agenttree.Tree, runtime judgmentRuntime, health inference.HealthReporter) *inference.Client {
 			t.Helper()
 			client, err := inference.New(inference.Config{
 				StatePath: filepath.Join(t.TempDir(), "ledger.json"),
-				Roles:     judgmentRoles{st: st, tree: tree, revision: revision, runtime: runtime},
-				Health:    health, Sites: sites,
+				Roles: judgmentRoles{
+					st: st, tree: tree, revision: revision, runtime: runtime, credentials: credentials,
+				},
+				Health: health, Sites: sites,
 				Advisory: advisory.Unavailable(errors.New("unused")), Now: now,
 			})
 			if err != nil {
@@ -250,7 +253,7 @@ func TestJudgmentSitesReadTheAdoptedLineup(t *testing.T) {
 		// The publication author with no prompt file is off: both sites fail
 		// safe as inference being down, and nothing is raised.
 		authorSites := []inference.Site{sites[6], sites[7]}
-		off := newClient(adopted, judgmentRuntime{Driver: driver, Credential: runtime.Credential}, health)
+		off := newClient(adopted, judgmentRuntime{Driver: driver}, health)
 		for _, site := range authorSites {
 			if result := call(off, site); !result.Fallback || result.Reason != inference.ErrUnavailable.Error() {
 				t.Fatalf("%s with no prompt file = %+v", site.ID, result)
@@ -393,7 +396,7 @@ func TestJudgmentLinesAdmitOnEachAuditedCallAdapter(t *testing.T) {
 			StatePath: filepath.Join(t.TempDir(), "ledger.json"),
 			Roles: judgmentRoles{
 				st: st, tree: tree, revision: domain.Digest("sha256:" + strings.Repeat("4", 64)),
-				runtime: judgmentRuntime{Driver: driver, Credential: "synthetic-token"},
+				runtime: judgmentRuntime{Driver: driver}, credentials: fixedJudgmentCredentials(t),
 			},
 			Health: newJudgmentRoleHealth(st, now, nil), Sites: sites,
 			Advisory: advisory.Unavailable(errors.New("unused")), Now: now,
@@ -507,7 +510,7 @@ func TestJudgmentRoleStartupCheckStopsWhenItsItemsAreNotWritten(t *testing.T) {
 		return domain.RoleName(line.Key) == domain.RoleDriftAuditor
 	})
 	now := func() time.Time { return time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC) }
-	const credential = "synthetic-token"
+	credentials := fixedJudgmentCredentials(t)
 	check := func(ctx context.Context, st *store.Store) error {
 		t.Helper()
 		health := newJudgmentRoleHealth(st, now, nil)
@@ -515,7 +518,7 @@ func TestJudgmentRoleStartupCheckStopsWhenItsItemsAreNotWritten(t *testing.T) {
 			StatePath: filepath.Join(t.TempDir(), "ledger.json"),
 			Roles: judgmentRoles{
 				st: st, tree: tree, revision: domain.Digest("sha256:" + strings.Repeat("4", 64)),
-				runtime: judgmentRuntime{Driver: inferencefake.New(), Credential: credential},
+				runtime: judgmentRuntime{Driver: inferencefake.New()}, credentials: credentials,
 			},
 			Health: health, Sites: judgmentTestSites(),
 			Advisory: advisory.Unavailable(errors.New("unused")), Now: now,
@@ -574,9 +577,6 @@ func TestJudgmentRoleStartupCheckStopsWhenItsItemsAreNotWritten(t *testing.T) {
 	if err == nil || errors.Is(err, context.Canceled) ||
 		!strings.Contains(err.Error(), string(domain.RoleDriftAuditor)) {
 		t.Fatalf("a start that could not write its items returned %v", err)
-	}
-	if strings.Contains(err.Error(), credential) {
-		t.Fatalf("the startup error carries the credential: %v", err)
 	}
 }
 
