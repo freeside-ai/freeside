@@ -45,7 +45,7 @@ func flagEraReviewConfig() claudeDriverConfig {
 func TestLineupResolvedReviewDigestsEqualTheFlagEraDigests(t *testing.T) {
 	ctx := context.Background()
 	f := newAuthAdoptFixture(t)
-	_, patch, err := f.run(t, f.args("-shadow-review-cost-owner", "operator"))
+	_, patch, err := f.run(t, f.shadowArgs())
 	if err != nil {
 		t.Fatalf("auth adopt: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestReviewSelectionFailsClosed(t *testing.T) {
 
 	t.Run("offer past its not_after", func(t *testing.T) {
 		f := newAuthAdoptFixture(t)
-		_, patch, err := f.run(t, f.args("-shadow-review-cost-owner", "operator"))
+		_, patch, err := f.run(t, f.shadowArgs())
 		if err != nil {
 			t.Fatalf("auth adopt: %v", err)
 		}
@@ -202,7 +202,7 @@ func TestReviewSelectionFailsClosed(t *testing.T) {
 
 	t.Run("no attended mark", func(t *testing.T) {
 		f := newAuthAdoptFixture(t)
-		_, patch, err := f.run(t, f.args("-shadow-review-cost-owner", "operator"))
+		_, patch, err := f.run(t, f.shadowArgs())
 		if err != nil {
 			t.Fatalf("auth adopt: %v", err)
 		}
@@ -333,7 +333,7 @@ func setReviewedRunLine(
 func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 	ctx := context.Background()
 	f := newAuthAdoptFixture(t)
-	_, patch, err := f.run(t, f.args("-shadow-review-cost-owner", "operator"))
+	_, patch, err := f.run(t, f.shadowArgs())
 	if err != nil {
 		t.Fatalf("auth adopt: %v", err)
 	}

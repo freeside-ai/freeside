@@ -74,7 +74,9 @@
 #                                    trusted-base repository AGENTS.md files are
 #                                    discovered and composed separately
 #   FREESIDE_REAL_RUN_REVIEW_MODEL   explicit Codex reviewer model
-#   FREESIDE_REAL_RUN_REVIEW_REASONING explicit reviewer reasoning effort
+#   FREESIDE_REAL_RUN_REVIEW_REASONING reviewer effort as a Freeside level (low,
+#                                    medium, high, or max), which auth adopt
+#                                    writes into the review agent
 #   FREESIDE_REAL_RUN_SEED_ROOT      daemon-owned exact-base checkout root
 #   FREESIDE_REAL_RUN_AUTH_IDENTITY  writer auth identity id, recorded on a
 #                                    fresh state root for auth adopt to enroll
@@ -414,6 +416,16 @@ if [[ ! "$FREESIDE_REAL_RUN_APPROVED_RECIPE" =~ ^sha256:[0-9a-f]{64}$ ]]; then
   echo "run-real-work: FREESIDE_REAL_RUN_APPROVED_RECIPE is not a canonical digest" >&2
   exit 2
 fi
+# auth adopt refuses the effort too, but only after the build and the rig.
+# The variable once held Codex's own word, so a retained environment can
+# still say xhigh.
+case "$FREESIDE_REAL_RUN_REVIEW_REASONING" in
+low | medium | high | max) ;;
+*)
+  echo 'run-real-work: FREESIDE_REAL_RUN_REVIEW_REASONING must be a Freeside effort level: low, medium, high, or max (Codex xhigh is max)' >&2
+  exit 2
+  ;;
+esac
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/real-work-rebuild.sh

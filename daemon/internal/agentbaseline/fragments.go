@@ -30,25 +30,30 @@ const ClaudeCallHarnessBuild = "claude-code 2.1.267"
 // Bump one when the launch it describes changes what it honours. The call
 // launch has two: v1 sends no effort, and v2 sends each effort the
 // claude_code table can. v1 stays so a line a deployment adopted on it keeps
-// its digest and its audit record.
+// its digest and its audit record. The review launch has two for the same
+// reason: v1 sends no effort, and v2 sends each effort the codex_cli table
+// can.
 const (
-	ClaudeWardAdapterBuild   = "claude_code_ward_v1"
-	ClaudeCallAdapterBuild   = "claude_code_call_v2"
-	ClaudeCallAdapterV1Build = "claude_code_call_v1"
-	CodexReviewAdapterBuild  = "codex_review_v1"
+	ClaudeWardAdapterBuild    = "claude_code_ward_v1"
+	ClaudeCallAdapterBuild    = "claude_code_call_v2"
+	ClaudeCallAdapterV1Build  = "claude_code_call_v1"
+	CodexReviewAdapterBuild   = "codex_review_v2"
+	CodexReviewAdapterV1Build = "codex_review_v1"
 )
 
 // Tree names of the baseline documents. Names enter no digest.
 const (
-	ClaudeAgentName       = "claude-code-default"
-	ClaudeCallAgentName   = "claude-code-call-default"
-	CodexReviewAgentName  = "codex-review-default"
-	ClaudeAdapterName     = ClaudeWardAdapterBuild
-	ClaudeCallAdapterName = ClaudeCallAdapterBuild
-	CodexAdapterName      = CodexReviewAdapterBuild
-	ClaudeOfferName       = domain.ClaudeCodeNativeDefaultRouteModelID
-	ClaudeCallOfferName   = "claude-code-call-default"
-	CodexOfferName        = "codex-review-default"
+	ClaudeAgentName             = "claude-code-default"
+	ClaudeCallAgentName         = "claude-code-call-default"
+	ClaudeShadowReviewAgentName = "claude-shadow-review-default"
+	CodexReviewAgentName        = "codex-review-default"
+	ClaudeAdapterName           = ClaudeWardAdapterBuild
+	ClaudeCallAdapterName       = ClaudeCallAdapterBuild
+	CodexAdapterName            = CodexReviewAdapterBuild
+	ClaudeOfferName             = domain.ClaudeCodeNativeDefaultRouteModelID
+	ClaudeCallOfferName         = "claude-code-call-default"
+	ClaudeShadowReviewOfferName = "claude-shadow-review-default"
+	CodexOfferName              = "codex-review-default"
 	// DefaultClaudeRoute and DefaultCodexRoute name the route of an identity
 	// adoption enrolls. An identity `auth add` already enrolled keeps the
 	// route name its enrollment carries.
@@ -126,19 +131,33 @@ func claudeCallAdapter(build string, sendable []domain.EffortLevel) (domain.Adap
 // schema, and the sanitized auth snapshot. It has no mutation tools and, like
 // the Claude adapter, no auxiliary-inference control, so the review launch's
 // `forbidden` policy is not covered until an adapter proves that control
-// (#898). The review launch still takes its model and effort from the review
-// flags, so the adapter sends no effort of its own.
+// (#898). The launch always passes a model and an effort, so the adapter
+// sends every effort the codex_cli table can.
 func CodexReviewAdapter() (domain.AdapterFragment, error) {
+	return codexReviewAdapter(CodexReviewAdapterBuild, domain.CodexCLISendableEfforts())
+}
+
+// CodexReviewAdapterV1 is the review adapter the baseline carried while the
+// review launch took its model and effort from daemon flags: the same
+// launch, declaring harness_default as its only sendable effort. The
+// baseline tree no longer names it. It stays defined because a deployment
+// that adopted it holds its digest in a committed tree, and the conformance
+// record for that digest is held to this definition.
+func CodexReviewAdapterV1() (domain.AdapterFragment, error) {
+	return codexReviewAdapter(CodexReviewAdapterV1Build, []domain.EffortLevel{domain.EffortHarnessDefault})
+}
+
+func codexReviewAdapter(build string, sendable []domain.EffortLevel) (domain.AdapterFragment, error) {
 	return sealAdapter(domain.AdapterFragment{
 		EncodingVersion: domain.AgentFragmentEncodingVersion,
-		AdapterBuild:    CodexReviewAdapterBuild, HarnessBuild: CodexHarnessBuild,
+		AdapterBuild:    build, HarnessBuild: CodexHarnessBuild,
 		ClientKind: domain.HarnessClientCodexCLI, Vendor: domain.AgentVendorCodex,
 		LaunchCapabilities: domain.NewLaunchCapabilitySet(
 			domain.LaunchCapReadTools, domain.LaunchCapInstructionDelivery,
 			domain.LaunchCapStructuredOutput, domain.LaunchCapContextSeverance,
 			domain.LaunchCapRouteStoreContract,
 		),
-		SendableEfforts: []domain.EffortLevel{domain.EffortHarnessDefault},
+		SendableEfforts: sendable,
 	})
 }
 
@@ -152,7 +171,8 @@ func sealAdapter(adapter domain.AdapterFragment) (domain.AdapterFragment, error)
 }
 
 // Adapters returns the baseline ward adapters, the builds whose capability
-// sets a conformance record proves. The call adapter is not among them.
+// sets a conformance record proves. Both review builds are among them, so a
+// tree adopted on v1 keeps its record. The call adapter is not.
 func Adapters() ([]domain.AdapterFragment, error) {
 	claude, err := ClaudeWardAdapter()
 	if err != nil {
@@ -162,7 +182,11 @@ func Adapters() ([]domain.AdapterFragment, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []domain.AdapterFragment{claude, codex}, nil
+	codexV1, err := CodexReviewAdapterV1()
+	if err != nil {
+		return nil, err
+	}
+	return []domain.AdapterFragment{claude, codex, codexV1}, nil
 }
 
 // ConformanceRecords returns one passed adapter conformance record for each

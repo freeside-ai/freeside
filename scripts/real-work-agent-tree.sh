@@ -62,6 +62,10 @@ real_work_agent_tree_matches() {
 # environment because auth adopt defaults each to the current date, and a tree
 # committed on one day would stop matching on the next.
 #
+# The review agent names the model and the effort its launch passes, so
+# adoption gets FREESIDE_REAL_RUN_REVIEW_MODEL and
+# FREESIDE_REAL_RUN_REVIEW_REASONING, the latter as a Freeside effort level.
+#
 # When the harness runs subscription judgments, every judgment role needs a
 # lineup line, and adoption writes those lines only when it is given the
 # model their calls launch with: the daemon has no flag for it. The harness
@@ -96,6 +100,7 @@ real_work_adopt_agent_tree() {
 		-exporter-image "$FREESIDE_WARD_EXPORTER_IMAGE" \
 		-auth-store-root "$FREESIDE_REAL_RUN_REVIEW_INPUT_ROOT" \
 		-review-model "$FREESIDE_REAL_RUN_REVIEW_MODEL" \
+		-review-effort "$FREESIDE_REAL_RUN_REVIEW_REASONING" \
 		-terms-basis-date "$FREESIDE_REAL_RUN_TERMS_BASIS_DATE" \
 		-pricing-revision "$FREESIDE_REAL_RUN_PRICING_REVISION" \
 		-offer-not-after "$FREESIDE_REAL_RUN_OFFER_NOT_AFTER" \

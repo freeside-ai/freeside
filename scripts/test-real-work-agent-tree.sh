@@ -129,6 +129,7 @@ export FREESIDE_REAL_RUN_CLAUDE_ACCOUNT=account-sentinel@example.test
 export FREESIDE_WARD_EXPORTER_IMAGE=example.test/exporter@sha256:00
 export FREESIDE_REAL_RUN_REVIEW_INPUT_ROOT=$tmp/review-inputs
 export FREESIDE_REAL_RUN_REVIEW_MODEL=review-model
+export FREESIDE_REAL_RUN_REVIEW_REASONING=high
 export FREESIDE_REAL_RUN_TERMS_BASIS_DATE=2026-01-02
 export FREESIDE_REAL_RUN_PRICING_REVISION=2026-01
 export FREESIDE_REAL_RUN_OFFER_NOT_AFTER=2027-01-02T00:00:00Z
@@ -177,6 +178,7 @@ expected_args=(
 	-claude-account account-sentinel@example.test
 	-exporter-image example.test/exporter@sha256:00
 	-auth-store-root "$tmp/review-inputs" -review-model review-model
+	-review-effort high
 	-terms-basis-date 2026-01-02 -pricing-revision 2026-01
 	-offer-not-after 2027-01-02T00:00:00Z
 	-prompt-package "$tmp/implementer"

@@ -1044,7 +1044,8 @@ freesided auth adopt \
   -db /path/to/freeside.db \
   -auth-identity claude-main -cost-owner <cost-owner> -claude-account <subscription-account> \
   -review-auth-identity codex-primary -review-cost-owner <review-cost-owner> \
-  -auth-store-root /path/to/freeside/review-inputs -review-model <review-model> \
+  -auth-store-root /path/to/freeside/review-inputs \
+  -review-model <review-model> -review-effort <effort> \
   -judgment-model <exact-Claude-model-id> \
   -exporter-image <digest-pinned-exporter-image> \
   -prompt-package <file> -specification-prompt-package <file> \
@@ -1054,13 +1055,38 @@ freesided auth adopt \
 ```
 
 It enrolls each identity over the store it already holds, writes no
-credential, and emits a patch that adds the baseline tree: both agents, a
-lineup line for `specifier`, `implementer`, `remediator`, and `reviewer`, and
-a `shadow_reviewer` line when `-shadow-review-cost-owner` is given. Review the
-patch, commit it in the checkout, and start the daemon with that commit. The
-report lists each identity as `adopted`, `reused`, or `unadoptable`; running
-the command again changes nothing. The review and shadow review configuration
+credential, and emits a patch that adds the baseline tree: the writer agent
+and the review agent, a lineup line for `specifier`, `implementer`,
+`remediator`, and `reviewer`, and, when `-shadow-review-cost-owner` is given,
+the shadow reviewer's agent and its `shadow_reviewer` line. Review the patch,
+commit it in the checkout, and start the daemon with that commit. The report
+lists each identity as `adopted`, `reused`, or `unadoptable`; running the
+command again changes nothing. The review and shadow review configuration
 digests are the ones the flags produced, so existing approvals stand.
+
+Each review agent names the model and the effort its launch passes:
+
+- **`-review-model` and `-review-effort`** are required with the review
+  identity. The review agent `codex-review-default` is on an offer whose
+  `route_model_id` is the model, and asks the effort.
+- **`-shadow-review-model` and `-shadow-review-effort`** are required with
+  `-shadow-review-cost-owner` and refused without it. The shadow reviewer's
+  agent `claude-shadow-review-default` runs under the implementation
+  identity, on an offer of its own for the model. The writer agent
+  `claude-code-default` stays on the offer that names no model, and its
+  digest does not change.
+- **An effort is a Freeside level:** `low`, `medium`, `high`, or `max`.
+  Adoption refuses `harness_default`, because a review launch always passes
+  an effort. Codex has no `max`, so the review launch sends it as `xhigh`.
+  The pinned Codex build passes the value on unchecked, so a model that does
+  not accept `xhigh` fails at its first review, not at adoption.
+- **A model is written as given.** Adoption refuses a value the launch
+  cannot pass as one argument, and for the shadow reviewer the id
+  `claude-code-native-default`, but it does not check that the model exists.
+
+The review agent runs through the adapter `codex_review_v2`, which can send
+every effort above. `codex_review_v1` sends `harness_default` only; it stays
+defined and conformance still records it, so a tree committed on it parses.
 
 `-judgment-model` is where the judgment roles get their model. With it, the
 patch also has the call agent `claude-code-call-default`, on an offer of the

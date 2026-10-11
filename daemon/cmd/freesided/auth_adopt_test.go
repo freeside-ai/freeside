@@ -196,12 +196,21 @@ func (f *authAdoptFixture) args(extra ...string) []string {
 		"-cost-owner", "operator", "-review-cost-owner", "review-operator",
 		"-claude-account", adoptClaudeAccount, "-auth-store-root", f.storeRoot,
 		"-exporter-image", "example.test/exporter@sha256:" + strings.Repeat("0", 64),
-		"-review-model", "gpt-fixture-1", "-judgment-model", adoptJudgmentModel,
+		"-review-model", "gpt-fixture-1", "-review-effort", "high", "-judgment-model", adoptJudgmentModel,
 		"-prompt-package", filepath.Join(f.promptDir, "implementer"),
 		"-specification-prompt-package", filepath.Join(f.promptDir, "specifier"),
 		"-remediation-prompt-package", filepath.Join(f.promptDir, "remediator"),
 	}
 	return append(args, extra...)
+}
+
+// shadowArgs is args with the shadow arm on: the cost owner that turns it on
+// and the model and effort its reviewer agent then needs.
+func (f *authAdoptFixture) shadowArgs(extra ...string) []string {
+	return f.args(append([]string{
+		"-shadow-review-cost-owner", "operator",
+		"-shadow-review-model", "claude-opus", "-shadow-review-effort", "high",
+	}, extra...)...)
 }
 
 // run runs the command with the patch on stdout and the report on stderr.
@@ -492,13 +501,102 @@ func TestAuthAdoptShadowArm(t *testing.T) {
 	if snap := f.snapshot(t); len(snap.Enrollments) != 0 {
 		t.Fatalf("a refused adoption recorded %+v", snap.Enrollments)
 	}
-	_, patch, err := f.run(t, f.args("-shadow-review-cost-owner", "operator"))
+	_, patch, err := f.run(t, f.shadowArgs())
 	if err != nil {
 		t.Fatalf("auth adopt: %v", err)
 	}
-	roles := lineupRoles(loadAdoptedPatch(t, patch))
-	if len(roles) != 5+len(judgmentLines()) || roles[4] != "shadow_reviewer="+agentbaseline.ClaudeAgentName {
+	tree := loadAdoptedPatch(t, patch)
+	roles := lineupRoles(tree)
+	if len(roles) != 5+len(judgmentLines()) ||
+		roles[4] != "shadow_reviewer="+agentbaseline.ClaudeShadowReviewAgentName {
 		t.Fatalf("lineup = %v", roles)
+	}
+	// The shadow reviewer's agent names the model and effort adoption was
+	// given, on an offer of its own; the writer agent stays on the
+	// native-default offer.
+	agent, ok := tree.Agent(agentbaseline.ClaudeShadowReviewAgentName)
+	if !ok || agent.Offer != agentbaseline.ClaudeShadowReviewOfferName ||
+		agent.Effort != domain.EffortHigh || agent.Adapter != agentbaseline.ClaudeAdapterName {
+		t.Fatalf("shadow reviewer agent = %+v", agent)
+	}
+	offer := slices.IndexFunc(tree.Offers, func(o agenttree.Offer) bool {
+		return o.Name == agentbaseline.ClaudeShadowReviewOfferName
+	})
+	if offer < 0 || tree.Offers[offer].Fragment.RouteModelID != "claude-opus" {
+		t.Fatalf("offers = %+v", tree.Offers)
+	}
+	if writer, ok := tree.Agent(agentbaseline.ClaudeAgentName); !ok || writer.Offer != agentbaseline.ClaudeOfferName {
+		t.Fatalf("writer agent = %+v", writer)
+	}
+}
+
+// TestAuthAdoptRefusesAReviewSelectionItCannotWrite covers the refusals that
+// keep adoption from writing a review agent the daemon would refuse to
+// launch: a review launch always passes a model and an effort. Each is
+// refused before anything is recorded.
+func TestAuthAdoptRefusesAReviewSelectionItCannotWrite(t *testing.T) {
+	f := newAuthAdoptFixture(t)
+	shadow := func(extra ...string) []string { return f.shadowArgs(extra...) }
+	for name, tc := range map[string]struct {
+		args []string
+		want string
+	}{
+		"no review effort": {
+			f.args("-review-effort", ""), "-review-model, and -review-effort are required",
+		},
+		"a review effort that is no level": {
+			f.args("-review-effort", "xhigh"), `-review-effort "xhigh" is not an effort`,
+		},
+		"review effort harness_default": {
+			f.args("-review-effort", "harness_default"), `-review-effort "harness_default" is not an effort`,
+		},
+		"a review model the launch cannot pass": {
+			f.args("-review-model", "gpt,fixture"), "-review-model cannot be passed",
+		},
+		"a shadow model with the shadow arm off": {
+			f.args("-shadow-review-model", "claude-opus"), "need -shadow-review-cost-owner",
+		},
+		"a shadow effort with the shadow arm off": {
+			f.args("-shadow-review-effort", "high"), "need -shadow-review-cost-owner",
+		},
+		"the shadow arm with no model": {
+			shadow("-shadow-review-model", ""), "are required with -shadow-review-cost-owner",
+		},
+		"the shadow arm with no effort": {
+			shadow("-shadow-review-effort", ""), "are required with -shadow-review-cost-owner",
+		},
+		"a shadow effort that is no level": {
+			shadow("-shadow-review-effort", "xhigh"), `-shadow-review-effort "xhigh" is not an effort`,
+		},
+		"shadow effort harness_default": {
+			shadow("-shadow-review-effort", "harness_default"),
+			`-shadow-review-effort "harness_default" is not an effort`,
+		},
+		"the native-default id as the shadow model": {
+			shadow("-shadow-review-model", domain.ClaudeCodeNativeDefaultRouteModelID), "names no model",
+		},
+		"a shadow model the launch would read as an option": {
+			shadow("-shadow-review-model", "--dangerously-skip-permissions"), "as one argument",
+		},
+		"a shadow model with whitespace": {
+			shadow("-shadow-review-model", "claude model"), "as one argument",
+		},
+		"a shadow model with a comma": {
+			shadow("-shadow-review-model", "claude,opus"), "as one argument",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, patch, err := f.run(t, tc.args)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("auth adopt = %v, want an error containing %q", err, tc.want)
+			}
+			if len(patch) != 0 {
+				t.Fatalf("a refused adoption emitted a patch:\n%s", patch)
+			}
+			if snap := f.snapshot(t); len(snap.Enrollments) != 0 {
+				t.Fatalf("a refused adoption recorded %+v", snap.Enrollments)
+			}
+		})
 	}
 }
 
@@ -862,7 +960,7 @@ func TestAdoptedPatchResolvesAndAdmitsEveryRole(t *testing.T) {
 					setIdentityEnabled(t, st, "codex-review", false)
 				})
 			}
-			report, patch, err := f.run(t, f.args("-shadow-review-cost-owner", "operator"))
+			report, patch, err := f.run(t, f.shadowArgs())
 			if err != nil || len(report.Identities) != 2 {
 				t.Fatalf("auth adopt = %+v, %v", report, err)
 			}
