@@ -2,9 +2,10 @@ import FreesideAPI
 import SwiftUI
 
 /// A task's history as the daemon computes it (`GET /tasks/{id}/timeline`):
-/// task-wide events lead the page, then campaign sections list their runs
-/// and detailed milestones. Every list keeps the daemon's newest-first order;
-/// unlike the run rail, nothing here is reversed or sorted by timestamp.
+/// the task's events lead the page as one open rail that marks where each
+/// stage began, then every campaign folds its runs and detailed milestones.
+/// Every list keeps the daemon's newest-first order; unlike the run rail,
+/// nothing here is reversed or sorted by timestamp.
 struct TaskTimelineView: View {
     /// Keys the timeline refetch task, as `RunTimelineView.TimelineRequestKey`
     /// does: the task's own revision plus the epoch and full-snapshot
@@ -52,11 +53,6 @@ struct TaskTimelineView: View {
     /// Which folds are open, per task id on this device. A screenshot
     /// passes its own instance over throwaway defaults.
     @State private var disclosures: TaskTimelineDisclosurePreferences
-    /// The task whose current campaign the reader folded. The current
-    /// campaign opens by default and the stored folds record only what is
-    /// open, so its fold lives with the view and a different task starts
-    /// open again.
-    @State private var foldedCurrentCampaignOf: String?
 
     init(
         coordinator: SyncCoordinator, snapshot: Components.Schemas.TaskSnapshot,
@@ -255,18 +251,29 @@ struct TaskTimelineView: View {
         }
     }
 
-    /// Layer 1 is the current campaign, open; layer 3 is history, folded:
-    /// every earlier campaign as one disclosure row, then Task Events.
+    /// Layer 1 is the task's events, always open: the rail that says which
+    /// stage the task is in and how it got there. Under it every campaign,
+    /// the current one included, is one folded disclosure row.
     private func content(_ timeline: Components.Schemas.TaskTimeline) -> some View {
-        let events = TaskTimelinePresentation.events(timeline)
+        let rows = TaskTimelinePresentation.rows(timeline)
         let disambiguate = TaskTimelinePresentation.campaignCount(timeline) > 1
         return VStack(alignment: .leading, spacing: 22) {
-            if let message = TaskTimelinePresentation.availabilityMessage(
-                state: coordinator.taskTimelineLoadStates[snapshot.task.id], freshness: coordinator.store.freshness)
-            {
-                Text(message)
-                    .font(FreesideFont.cardBody)
-                    .foregroundStyle(Color.inkDim)
+            VStack(alignment: .leading, spacing: 11) {
+                KeywordLabel(text: "Task Events")
+                if let message = TaskTimelinePresentation.availabilityMessage(
+                    state: coordinator.taskTimelineLoadStates[snapshot.task.id], freshness: coordinator.store.freshness)
+                {
+                    Text(message)
+                        .font(FreesideFont.cardBody)
+                        .foregroundStyle(Color.inkDim)
+                }
+                if rows.isEmpty {
+                    Text("No recorded events in this history.")
+                        .font(FreesideFont.cardBody)
+                        .foregroundStyle(Color.inkDim)
+                } else {
+                    eventRail(rows)
+                }
             }
             if timeline.sections.isEmpty {
                 Text("No campaigns or runs in this history.")
@@ -278,36 +285,13 @@ struct TaskTimelineView: View {
                     label: TaskTimelinePresentation.sectionTitle(section, disambiguate: disambiguate),
                     summary: TaskTimelinePresentation.sectionSummary(
                         section, isCurrent: index == 0, now: now, locale: locale, timeZone: timeZone),
-                    isExpanded: index == 0 ? currentCampaignFold : fold(.campaign(section.campaign_id))
+                    isExpanded: fold(.campaign(section.campaign_id))
                 ) {
                     sectionBody(section, in: timeline, leadsWithFullCard: index == 0)
                         .padding(.top, 3)
                 }
             }
-            SentenceDisclosure(
-                label: "Task Events",
-                summary: TaskTimelinePresentation.eventsSummary(
-                    events, now: now, locale: locale, timeZone: timeZone),
-                isExpanded: fold(.taskEvents)
-            ) {
-                Group {
-                    if events.isEmpty {
-                        Text("No recorded events in this history.")
-                            .font(FreesideFont.cardBody)
-                            .foregroundStyle(Color.inkDim)
-                    } else {
-                        eventRows(events, in: timeline)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
         }
-    }
-
-    private var currentCampaignFold: Binding<Bool> {
-        Binding(
-            get: { foldedCurrentCampaignOf != snapshot.task.id },
-            set: { foldedCurrentCampaignOf = $0 ? nil : snapshot.task.id })
     }
 
     /// A section's technical details and runs. The current section leads
@@ -552,55 +536,86 @@ struct TaskTimelineView: View {
         }
     }
 
-    /// Newest first, as the daemon sends them: the first event carries the
-    /// filled marker, every later one the hollow ring.
-    private func eventRows(
-        _ events: [Components.Schemas.TaskEvent], in timeline: Components.Schemas.TaskTimeline
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(events.enumerated()), id: \.offset) { index, event in
+    /// The gap under a row, and the wider one under a stage start, which
+    /// sets the start apart from the older entry beneath it.
+    private static let railGap: CGFloat = 10
+    private static let railGapUnderStageStart: CGFloat = 18
+    /// How far a connector is drawn from its marker before the row cuts it
+    /// off: longer than any row at any text size.
+    private static let connectorReach: CGFloat = 2000
+
+    /// The task's events as one rail, newest first: the newest entry leads
+    /// in ink, a stage start is marked in the diff green and a failure in
+    /// wax, and a connector joins every marker to the next. Rows touch, each
+    /// carrying its own gap, so the connector runs through the gap unbroken.
+    private func eventRail(_ rows: [TaskTimelinePresentation.Row]) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                let isLast = index == rows.count - 1
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    ChronologyMarker(isCurrent: index == 0)
+                    ChronologyMarker(kind: TaskTimelinePresentation.marker(row))
+                        .background { connector(above: index > 0, below: !isLast) }
                         .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
-                    VStack(alignment: .leading, spacing: 4) {
-                        ViewThatFits(in: .horizontal) {
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                eventLabel(event, isCurrent: index == 0)
-                                Spacer(minLength: 8)
-                                eventTime(event)
-                            }
-                            VStack(alignment: .leading, spacing: 4) {
-                                eventLabel(event, isCurrent: index == 0)
-                                eventTime(event)
-                            }
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            railLabel(row)
+                            Spacer(minLength: 8)
+                            railTime(row)
                         }
-                        if let detail = TaskTimelinePresentation.detail(event, in: timeline) {
-                            Text(detail)
-                                .font(FreesideFont.trailingSummary)
-                                .foregroundStyle(Color.inkDim)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .textSelection(.enabled)
+                        VStack(alignment: .leading, spacing: 4) {
+                            railLabel(row)
+                            railTime(row)
                         }
                     }
                 }
+                .padding(.bottom, isLast ? 0 : row.isStageStart ? Self.railGapUnderStageStart : Self.railGap)
+                // Cuts the connector off at the row's edges, where the next
+                // row's connector takes over.
+                .clipped()
+                .accessibilityElement(children: .combine)
             }
         }
     }
 
-    private func eventLabel(_ event: Components.Schemas.TaskEvent, isCurrent: Bool) -> some View {
-        Text(TaskTimelinePresentation.label(event))
-            .font(FreesideFont.sans(.callout, weight: isCurrent ? .semibold : .regular))
-            .foregroundStyle(isCurrent ? Color.ink : Color.inkDim)
+    /// The connector's two halves, each drawn from the marker's edge out
+    /// past the row. The marker sits on the label's baseline, so its place
+    /// in the row is not known here; the row's bounds end each half instead.
+    /// Clipping hides the overflow without removing it from hit testing, so
+    /// the connector takes no hits: it would otherwise cover a strip of the
+    /// controls above and below the rail.
+    private func connector(above: Bool, below: Bool) -> some View {
+        let offset = (Self.connectorReach + ChronologyMarker.diameter) / 2
+        return ZStack {
+            if above { connectorHalf.offset(y: -offset) }
+            if below { connectorHalf.offset(y: offset) }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
-    private func eventTime(_ event: Components.Schemas.TaskEvent) -> some View {
+    private var connectorHalf: some View {
+        Rectangle()
+            .fill(Color.milestoneConnector)
+            .frame(width: 2, height: Self.connectorReach)
+    }
+
+    /// The newest entry and the stage start drawn from it are semibold. A
+    /// stage start is full ink wherever it sits; an older event is dimmed.
+    private func railLabel(_ row: TaskTimelinePresentation.Row) -> some View {
+        Text(row.label)
+            .font(FreesideFont.sans(.callout, weight: row.isNewest ? .semibold : .regular))
+            .foregroundStyle(row.isNewest || row.isStageStart ? Color.ink : Color.inkDim)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func railTime(_ row: TaskTimelinePresentation.Row) -> some View {
         Text(
             FreesideFormat.shortTime(
-                event.recorded_at, now: now, locale: locale, timeZone: timeZone)
+                row.recordedAt, now: now, locale: locale, timeZone: timeZone)
         )
         .font(FreesideFont.trailingSummary)
         .foregroundStyle(Color.inkDim)
-        .exactInstant(event.recorded_at)
+        .exactInstant(row.recordedAt)
     }
 }
 
@@ -637,16 +652,17 @@ enum TaskTimelinePresentation {
     }
 
     /// The page's elements flattened in render order, so a test can pin the
-    /// order without a view.
+    /// order without a view: the event rail's rows by their words, then
+    /// each campaign's runs and milestones.
     enum Entry: Equatable {
+        case row(String)
         case section(campaignID: String?)
         case run(String)
         case milestone(runID: String, kind: Components.Schemas.RunMilestoneKind)
-        case event(Components.Schemas.TaskEventKind)
     }
 
     static func entries(_ timeline: Components.Schemas.TaskTimeline) -> [Entry] {
-        var entries: [Entry] = []
+        var entries: [Entry] = rows(timeline).map { .row($0.label) }
         for section in timeline.sections {
             entries.append(.section(campaignID: section.campaign_id))
             for run in section.runs {
@@ -654,7 +670,7 @@ enum TaskTimelinePresentation {
                 entries += run.milestones.map { .milestone(runID: run.run_id, kind: $0.kind) }
             }
         }
-        return entries + events(timeline).map { .event($0.kind) }
+        return entries
     }
 
     /// One line on the task's event rail: a daemon event, or the start of a
@@ -673,6 +689,10 @@ enum TaskTimelinePresentation {
         /// The newest event, and the stage start drawn from it: the two
         /// share one instant, so both read as the head of the rail.
         var isNewest = false
+
+        var isStageStart: Bool {
+            if case .stageStart = kind { true } else { false }
+        }
     }
 
     /// Where the walk in `rows(_:)` stands: a stage within one campaign. A
@@ -767,6 +787,16 @@ enum TaskTimelinePresentation {
             if case .stageStart(let stage) = row.kind { return stage }
         }
         return nil
+    }
+
+    /// A row's marker. A stage start keeps its green and a failure its wax
+    /// at the head of the rail, where any other entry takes the ink dot.
+    static func marker(_ row: Row) -> ChronologyMarker.Kind {
+        switch row.kind {
+        case .stageStart: .stageStart
+        case .failure: .failure
+        case .event: row.isNewest ? .current : .prior
+        }
     }
 
     private static func stage(_ role: Components.Schemas.TaskRunRole) -> Components.Schemas.StageName {
@@ -883,7 +913,7 @@ enum TaskTimelinePresentation {
         "\(runTitle(run))|\(run.role?.value1.rawValue ?? "")"
     }
 
-    /// The number of campaign sections, so a title or event line shows a
+    /// The number of campaign sections, so a section's title shows a
     /// disambiguating short campaign id only when more than one campaign is on
     /// screen.
     static func campaignCount(_ timeline: Components.Schemas.TaskTimeline) -> Int {
@@ -941,9 +971,11 @@ enum TaskTimelinePresentation {
     }
 
     /// A run card's technical details: the exact run, parent, and superseding
-    /// ids, and every verification Inbox item id a verification event records
-    /// for this run. A run that returned to the agent or remediated can record
-    /// several, each its own ready item, so all are kept, not just the first.
+    /// ids, and for every verification a verification event records for this
+    /// run, its Inbox item id and the head and base it was run against. A
+    /// run that returned to the agent or remediated can record several, each
+    /// its own ready item, so all are kept, not just the first. The event
+    /// rail names a verification in words only, so its commits live here.
     static func technicalRows(
         run: Components.Schemas.TaskTimelineRun, in timeline: Components.Schemas.TaskTimeline
     ) -> [AttentionDisplay.BindingRow] {
@@ -956,30 +988,33 @@ enum TaskTimelinePresentation {
         }
         // Number the rows when a remediated run recorded more than one, so each
         // row's copy control has a distinct accessibility label.
-        let itemIDs = verificationItemIDs(for: run.run_id, in: timeline)
-        for (index, itemID) in itemIDs.enumerated() {
-            let label =
-                itemIDs.count > 1
-                ? "Verification Inbox Item ID \(index + 1)" : "Verification Inbox Item ID"
-            rows.append(.init(label: label, value: itemID))
+        let verifications = verifications(for: run.run_id, in: timeline)
+        for (index, verification) in verifications.enumerated() {
+            let number = verifications.count > 1 ? " \(index + 1)" : ""
+            rows += [
+                .init(label: "Verification Inbox Item ID\(number)", value: verification.item_id),
+                .init(label: "Verified Head\(number)", value: verification.head_sha),
+                .init(label: "Verified Base\(number)", value: verification.base_sha),
+            ]
         }
         return rows
     }
 
-    /// Every distinct verification Inbox item id a verification event records
-    /// for the run, in event order. The daemon emits one verification event per
-    /// ready item, so a remediated run has more than one.
-    private static func verificationItemIDs(
+    /// The verification each verification event records for the run, one per
+    /// distinct Inbox item id, in event order. The daemon emits one
+    /// verification event per ready item, so a remediated run has more than
+    /// one.
+    private static func verifications(
         for runID: String, in timeline: Components.Schemas.TaskTimeline
-    ) -> [String] {
+    ) -> [Components.Schemas.TaskEventVerification] {
         var seen: Set<String> = []
-        var ids: [String] = []
+        var verifications: [Components.Schemas.TaskEventVerification] = []
         for event in events(timeline) where event.run_id == runID {
-            if let itemID = event.verification?.value1.item_id, seen.insert(itemID).inserted {
-                ids.append(itemID)
+            if let verification = event.verification?.value1, seen.insert(verification.item_id).inserted {
+                verifications.append(verification)
             }
         }
-        return ids
+        return verifications
     }
 
     /// The campaign a run belongs to, taken from its section. A daemon
@@ -993,25 +1028,6 @@ enum TaskTimelinePresentation {
             return section.campaign_id
         }
         return nil
-    }
-
-    /// A task event's run named by its role and attempt when the run is in the
-    /// timeline, so an event line stays legible without the opaque run id.
-    private static func runContext(
-        _ runID: String, in timeline: Components.Schemas.TaskTimeline
-    ) -> String {
-        for section in timeline.sections {
-            guard let run = section.runs.first(where: { $0.run_id == runID }) else { continue }
-            switch run.role?.value1 {
-            case .specification:
-                return "Specification run"
-            case .implementation:
-                return run.attempt_number.map { "Implementation attempt \($0)" } ?? "Implementation run"
-            case nil:
-                return run.attempt_number.map { "Attempt \($0)" } ?? "Run \(ShortIdentifier.short(runID))"
-            }
-        }
-        return "Run \(ShortIdentifier.short(runID))"
     }
 
     /// The daemon's milestones as rail entries in the order received (newest
@@ -1083,17 +1099,6 @@ enum TaskTimelinePresentation {
         return (["\(count) \(count == 1 ? "run" : "runs")"] + [start].compactMap { $0 }).joined(separator: " · ")
     }
 
-    /// `6 recorded · newest Sep 12, 9:41 AM`. The events arrive newest
-    /// first, so the newest is the first.
-    static func eventsSummary(
-        _ events: [Components.Schemas.TaskEvent], now: Date, locale: Locale = .current,
-        timeZone: TimeZone = .current
-    ) -> String {
-        guard let newest = events.first else { return "none recorded" }
-        let time = FreesideFormat.shortTime(newest.recorded_at, now: now, locale: locale, timeZone: timeZone)
-        return "\(events.count) recorded · newest \(time)"
-    }
-
     /// The closed summary of a run's details: role, attempt reason, and the
     /// recorded hold. Nil when the run carries none of them, and then the
     /// disclosure has nothing to fold.
@@ -1126,7 +1131,7 @@ enum TaskTimelinePresentation {
         var parts = ["run"]
         if run.parent_run_id != nil { parts.append("parent") }
         if run.superseded_by != nil { parts.append("superseding") }
-        if !verificationItemIDs(for: run.run_id, in: timeline).isEmpty { parts.append("verification item") }
+        if !verifications(for: run.run_id, in: timeline).isEmpty { parts.append("verification") }
         return parts.joined(separator: " · ")
     }
 
@@ -1190,56 +1195,10 @@ enum TaskTimelinePresentation {
             let detail = RunHistoryPresentation.detail(milestone)
             return RunDisplay.label(milestone.kind) + (detail.map { " · \($0)" } ?? "")
         }
-        if let outcome = event.review?.value1.outcome?.value1 {
-            return "Review completed · \(outcome.rawValue.replacingOccurrences(of: "_", with: " ").capitalized)"
-        }
         if let verification = event.verification?.value1 {
             return verification._class == .ready_clean
                 ? "Verification recorded · Clean" : "Verification recorded · Degraded"
         }
         return label(event.kind)
-    }
-
-    /// Keep the source beside the summary so old campaigns and review rounds
-    /// cannot read as a result for the task's current run or candidate: the
-    /// run is named by its role and attempt, and a second campaign is named by
-    /// its short id. The exact ids and digests live in each section's and
-    /// run's technical details; this line carries meaning, not opaque values.
-    static func detail(
-        _ event: Components.Schemas.TaskEvent, in timeline: Components.Schemas.TaskTimeline
-    ) -> String? {
-        var parts: [String] = []
-        if let number = event.pr_number { parts.append("PR #\(number)") }
-        let eventRunID = event.run_id ?? event.specification_run_id
-        // A run-scoped event carries no campaign id of its own, so recover the
-        // campaign from the run's section; otherwise two campaigns' events
-        // (same role, same restarted attempt) read alike and an old campaign's
-        // result can pass for the current one.
-        if campaignCount(timeline) > 1,
-            let campaign = event.campaign_id
-                ?? eventRunID.flatMap({ campaignID(forRun: $0, in: timeline) })
-        {
-            parts.append(ShortIdentifier.short(campaign))
-        }
-        if let run = eventRunID {
-            parts.append(runContext(run, in: timeline))
-        }
-        if let review = event.review?.value1 {
-            parts += [
-                "Round \(review.round)",
-                ReviewRoundPresentation.bindingLine(head: review.head_sha, base: review.base_sha),
-            ]
-            if let failure = review.failure { parts.append(failure.replacingOccurrences(of: "_", with: " ")) }
-        }
-        if let verification = event.verification?.value1 {
-            parts += [
-                ReviewRoundPresentation.bindingLine(head: verification.head_sha, base: verification.base_sha),
-                "Checklist in Inbox",
-            ]
-        }
-        if let digest = event.approved_spec_digest?.value1 {
-            parts.append(ShortIdentifier.short(digest))
-        }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }

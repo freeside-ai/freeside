@@ -13,10 +13,10 @@ final class TaskTimelineDisclosurePreferences {
     /// The sections a timeline folds. Raw ids keep a run's or campaign's
     /// own state apart from its neighbours'.
     enum Section: Hashable {
-        /// A non-current campaign, by its campaign id. Never by position:
-        /// a new campaign is prepended, so every index shifts and a stored
-        /// index would reopen a different campaign. Nil is the one legacy
-        /// section outside any campaign.
+        /// A campaign, by its campaign id. Never by position: a new
+        /// campaign is prepended, so every index shifts and a stored index
+        /// would reopen a different campaign. Nil is the one legacy section
+        /// outside any campaign.
         case campaign(String?)
         /// A prior run's one-line card.
         case run(String)
@@ -25,7 +25,6 @@ final class TaskTimelineDisclosurePreferences {
         case roundFacts(String)
         /// A run's folded earlier review rounds.
         case priorRounds(String)
-        case taskEvents
 
         var id: String {
             switch self {
@@ -34,7 +33,6 @@ final class TaskTimelineDisclosurePreferences {
             case .runDetails(let runID): "details:\(runID)"
             case .roundFacts(let invocationID): "facts:\(invocationID)"
             case .priorRounds(let runID): "rounds:\(runID)"
-            case .taskEvents: "events"
             }
         }
     }

@@ -375,7 +375,12 @@ import Testing
         let history = TaskHistoryFixtures.history(scenario)
         let entries = TaskTimelinePresentation.entries(history)
         #expect(history.events.last?.kind == .task_created)
-        #expect(Array(entries.suffix(history.events.count)) == history.events.map { .event($0.kind) })
+        // The event rail leads the page and ends at the task's creation;
+        // every campaign follows it.
+        let rows = TaskTimelinePresentation.rows(history)
+        #expect(Array(entries.prefix(rows.count)) == rows.map { .row($0.label) })
+        #expect(rows.last?.label == "Task created")
+        #expect(entries.dropFirst(rows.count).allSatisfy { if case .row = $0 { false } else { true } })
         let runs = history.sections.flatMap(\.runs)
         #expect(entries.compactMap { if case .run(let id) = $0 { id } else { nil } } == runs.map(\.run_id))
         #expect(TaskHistoryFixtures.snapshot(history).task.run_ids.count == runs.count)
@@ -393,13 +398,13 @@ import Testing
         switch scenario {
         case .creation:
             #expect(history.sections.isEmpty)
-            #expect(entries == [.event(.task_created)])
+            #expect(entries == [.row("Task created")])
         case .approved:
             #expect(runs.count == 2)
-            #expect(!entries.contains(.event(.pr_opened)))
+            #expect(!entries.contains(.row("PR opened · #110")))
         case .published:
-            #expect(entries.contains(.event(.pr_opened)))
-            #expect(!entries.contains(.event(.pr_merged)))
+            #expect(entries.contains(.row("PR opened · #110")))
+            #expect(!entries.contains(.row("PR merged · #110")))
         case .retry:
             #expect(runs[1].superseded_by == runs[0].run_id)
             #expect(runs[0].parent_run_id == runs[1].run_id)
@@ -556,11 +561,13 @@ import Testing
             name: .init(text: "Named", source: ._operator), events: [], sections: [])
     }
 
-    @Test func entriesShowWorkBeforeEventsAndKeepTheDaemonsOrder() {
+    @Test func entriesLeadWithEventsAndKeepTheDaemonsOrder() {
         let timeline = Self.timeline()
 
         #expect(
             TaskTimelinePresentation.entries(timeline) == [
+                .row("Task created"),
+                .row("Specification approved"),
                 .section(campaignID: "campaign-a"),
                 .run("run-1"),
                 .milestone(runID: "run-1", kind: .run_submitted),
@@ -568,8 +575,6 @@ import Testing
                 .run("run-2"),
                 .section(campaignID: nil),
                 .run("run-0"),
-                .event(.task_created),
-                .event(.specification_approved),
             ])
 
         // Reversing every list the daemon sent reverses the render order of
@@ -581,6 +586,8 @@ import Testing
         reversed.sections[1].runs[1].milestones.reverse()
         #expect(
             TaskTimelinePresentation.entries(reversed) == [
+                .row("Specification approved"),
+                .row("Task created"),
                 .section(campaignID: nil),
                 .run("run-0"),
                 .section(campaignID: "campaign-a"),
@@ -588,8 +595,6 @@ import Testing
                 .run("run-1"),
                 .milestone(runID: "run-1", kind: .invocation_started),
                 .milestone(runID: "run-1", kind: .run_submitted),
-                .event(.specification_approved),
-                .event(.task_created),
             ])
     }
 
@@ -645,24 +650,9 @@ import Testing
     }
 
     @Test func labelsReadAsProse() {
-        let timeline = Self.emptyTimeline()
         #expect(TaskTimelinePresentation.label(Components.Schemas.TaskEventKind.pr_merged) == "PR merged")
         #expect(TaskTimelinePresentation.label(Components.Schemas.TaskEventKind.task_created) == "Task created")
         #expect(TaskTimelinePresentation.label(Components.Schemas.TaskRunRole.specification) == "Specification")
-        #expect(
-            TaskTimelinePresentation.detail(
-                .init(kind: .pr_merged, recorded_at: Self.instants[0], pr_number: 105, merge_commit_sha: "abc"),
-                in: timeline) == "PR #105")
-        // A run not in the timeline reads by its short id, not the raw value.
-        #expect(
-            TaskTimelinePresentation.detail(
-                .init(
-                    kind: .specification_approved, recorded_at: Self.instants[0],
-                    approved_spec_digest: .init(value1: "sha256:abc"), specification_run_id: "run-spec"),
-                in: timeline) == "Run run-spec · sha256:abc")
-        #expect(
-            TaskTimelinePresentation.detail(.init(kind: .task_created, recorded_at: Self.instants[0]), in: timeline)
-                == nil)
         #expect(
             TaskTimelinePresentation.runTitle(.init(run_id: "run-legacy", milestones: [], events: []))
                 == "Run run-legacy")
@@ -672,61 +662,38 @@ import Testing
         #expect(TaskTimelinePresentation.sectionTitle(.init(campaign_id: "c", events: [], runs: [])) == "Campaign")
     }
 
-    @Test func historicalResultsRetainTheirSourceAndDoNotImplyCurrentReadiness() {
-        let timeline = Self.emptyTimeline()
+    @Test func historicalResultsReadInWordsAndKeepTheirCommitsInTechnicalDetails() {
         let failed = Components.Schemas.TaskEvent(
             review: .init(
                 value1: .init(
                     invocation_id: "review-old", round: 2, head_sha: "old-head", base_sha: "old-base",
                     failure: "provider_error")),
-            kind: .review_failed, recorded_at: Self.instants[0], run_id: "run-old")
-        #expect(TaskTimelinePresentation.label(failed) == "Review failed")
-        #expect(
-            TaskTimelinePresentation.detail(failed, in: timeline)
-                == "Run run-old · Round 2 · Head old-head · Base old-base · provider error")
-        // The verification's Inbox item id moves to the run's technical
-        // details; the line names the checklist without it.
+            kind: .review_failed, recorded_at: Self.instants[1], run_id: "run-old")
         let verification = Components.Schemas.TaskEvent(
             verification: .init(
                 value1: .init(item_id: "ready-old", _class: .ready_degraded, head_sha: "old-head", base_sha: "old-base")
             ),
             kind: .verification_recorded, recorded_at: Self.instants[0], run_id: "run-old")
-        #expect(TaskTimelinePresentation.label(verification) == "Verification recorded · Degraded")
+        var timeline = Self.emptyTimeline()
+        timeline.events = [failed, verification]
+        timeline.sections = [
+            .init(campaign_id: "campaign-old", events: [], runs: [.init(run_id: "run-old", milestones: [], events: [])])
+        ]
+        // The rail names a result in words: no run or campaign id, no commit.
+        let rows = TaskTimelinePresentation.rows(timeline)
+        #expect(rows.map(\.label) == ["Round 2 failed", "Verification recorded · Degraded"])
+        #expect(rows.map(\.kind) == [.failure, .event])
+        for value in ["run-old", "campaign-old", "old-head", "old-base", "ready-old", "review-old"] {
+            #expect(!rows.contains { $0.label.contains(value) })
+        }
+        // What left the line is in the run's technical details; the review
+        // round's head and base are in the run's Review section.
+        let technical = TaskTimelinePresentation.technicalRows(run: timeline.sections[0].runs[0], in: timeline)
         #expect(
-            TaskTimelinePresentation.detail(verification, in: timeline)
-                == "Run run-old · Head old-head · Base old-base · Checklist in Inbox")
+            technical.map(\.label) == ["Run ID", "Verification Inbox Item ID", "Verified Head", "Verified Base"])
+        #expect(technical.map(\.value) == ["run-old", "ready-old", "old-head", "old-base"])
         #expect(TaskTimelinePresentation.label(Components.Schemas.TaskEventKind.stop_failed) == "Stop failed")
         #expect(TaskTimelinePresentation.label(Components.Schemas.TaskEventKind.task_stopped) == "Task stopped")
-    }
-
-    @Test func eventDetailNamesRunsByRoleAndAttemptAndGatesCampaignOnCount() {
-        let t = Self.instants
-        let single = Components.Schemas.TaskTimeline(
-            as_of_revision: 1, as_of: t[3], task_id: "task-1", project_id: "freeside",
-            name: .init(text: "n", source: ._operator), events: [],
-            sections: [
-                .init(
-                    campaign_id: "campaign-a", events: [],
-                    runs: [
-                        .init(run_id: "run-spec", role: .init(value1: .specification), milestones: [], events: []),
-                        .init(
-                            run_id: "run-impl", role: .init(value1: .implementation), attempt_number: 2,
-                            milestones: [], events: []),
-                    ])
-            ])
-        let specEvent = Components.Schemas.TaskEvent(
-            kind: .pr_opened, recorded_at: t[0], campaign_id: "campaign-a", run_id: "run-spec")
-        #expect(TaskTimelinePresentation.detail(specEvent, in: single) == "Specification run")
-        let implEvent = Components.Schemas.TaskEvent(
-            kind: .pr_opened, recorded_at: t[0], campaign_id: "campaign-a", run_id: "run-impl", pr_number: 7)
-        // One campaign: the campaign id is omitted from the line.
-        #expect(TaskTimelinePresentation.detail(implEvent, in: single) == "PR #7 · Implementation attempt 2")
-        // Two campaigns: the short campaign id disambiguates.
-        var double = single
-        double.sections.append(.init(campaign_id: "campaign-b", events: [], runs: []))
-        #expect(
-            TaskTimelinePresentation.detail(implEvent, in: double)
-                == "PR #7 · campaign-a · Implementation attempt 2")
     }
 
     @Test func runReferenceNamesAttemptWithinTheTimelineElseShortId() {
@@ -859,14 +826,16 @@ import Testing
         let run = timeline.sections[0].runs[0]
         let runRows = TaskTimelinePresentation.technicalRows(run: run, in: timeline)
         #expect(
-            runRows.map(\.label)
-                == ["Run ID", "Parent Run ID", "Superseded by Run ID", "Verification Inbox Item ID"])
-        #expect(runRows.map(\.value) == [runID, parentID, successorID, "item-ready"])
+            runRows.map(\.label) == [
+                "Run ID", "Parent Run ID", "Superseded by Run ID", "Verification Inbox Item ID", "Verified Head",
+                "Verified Base",
+            ])
+        #expect(runRows.map(\.value) == [runID, parentID, successorID, "item-ready", "h", "b"])
         #expect(TaskTimelinePresentation.technicalRows(taskID: "task-x").map(\.value) == ["task-x"])
         // The closed disclosure names one word per kind of row it holds.
         #expect(
             TaskTimelinePresentation.technicalSummary(run: run, in: timeline)
-                == "run · parent · superseding · verification item")
+                == "run · parent · superseding · verification")
     }
 
     @Test func runTechnicalRowsKeepEveryVerificationItemID() {
@@ -878,7 +847,7 @@ import Testing
                 kind: .verification_recorded, recorded_at: instant, run_id: runID)
         }
         // A remediated run records one verification event per ready item; every
-        // item id is kept, not just the first.
+        // item id is kept, not just the first, with the commits it was run on.
         let timeline = Components.Schemas.TaskTimeline(
             as_of_revision: 1, as_of: t[0], task_id: "task-x", project_id: "p",
             name: .init(text: "n", source: ._operator),
@@ -889,38 +858,12 @@ import Testing
         let rows = TaskTimelinePresentation.technicalRows(run: timeline.sections[0].runs[0], in: timeline)
         // Numbered when there is more than one, so each copy control's
         // accessibility label ("Copy Verification Inbox item ID 1") is distinct.
-        #expect(rows.map(\.label) == ["Run ID", "Verification Inbox Item ID 1", "Verification Inbox Item ID 2"])
-        #expect(rows.map(\.value) == [runID, "item-1", "item-2"])
-    }
-
-    @Test func eventDetailRecoversTheCampaignFromTheRunSection() {
-        let t = Self.instants
-        // Two campaigns, each an Attempt 1 implementation run. Run-scoped events
-        // carry only run_id, so the campaign is recovered from the run's section
-        // and the two campaigns' events do not read alike.
-        let timeline = Components.Schemas.TaskTimeline(
-            as_of_revision: 1, as_of: t[3], task_id: "task-1", project_id: "freeside",
-            name: .init(text: "n", source: ._operator), events: [],
-            sections: [
-                .init(
-                    campaign_id: "campaign-a", events: [],
-                    runs: [
-                        .init(
-                            run_id: "run-a", role: .init(value1: .implementation), attempt_number: 1,
-                            milestones: [], events: [])
-                    ]),
-                .init(
-                    campaign_id: "campaign-b", events: [],
-                    runs: [
-                        .init(
-                            run_id: "run-b", role: .init(value1: .implementation), attempt_number: 1,
-                            milestones: [], events: [])
-                    ]),
+        #expect(
+            rows.map(\.label) == [
+                "Run ID", "Verification Inbox Item ID 1", "Verified Head 1", "Verified Base 1",
+                "Verification Inbox Item ID 2", "Verified Head 2", "Verified Base 2",
             ])
-        let eventA = Components.Schemas.TaskEvent(kind: .run_milestone, recorded_at: t[0], run_id: "run-a")
-        let eventB = Components.Schemas.TaskEvent(kind: .run_milestone, recorded_at: t[0], run_id: "run-b")
-        #expect(TaskTimelinePresentation.detail(eventA, in: timeline) == "campaign-a · Implementation attempt 1")
-        #expect(TaskTimelinePresentation.detail(eventB, in: timeline) == "campaign-b · Implementation attempt 1")
+        #expect(rows.map(\.value) == [runID, "item-1", "h", "b", "item-2", "h", "b"])
     }
 
     @Test func headerNamePrefersTheFetchedTimelineOverTheSnapshot() throws {
