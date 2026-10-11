@@ -93,15 +93,14 @@ func TestBaselineTreeRoundTripsAndResolves(t *testing.T) {
 	codex := must(parsed.ResolveAgent(agentbaseline.CodexReviewAgentName, codexEnrollment, codexIdentity))
 
 	// "The baseline is honest": the Claude launch passes neither a model nor
-	// an effort, and a Codex agent derives no selection at all.
-	for _, agent := range []agenttree.ResolvedAgent{claude, codex} {
-		selection := must(domain.DeriveAgentLaunchSelection(agent.Definition, agent.Adapter, agent.Offer))
-		if selection != (domain.AgentLaunchSelection{}) {
-			t.Fatalf("agent %s passes %+v, want nothing", agent.Definition.Name, selection)
-		}
+	// an effort, and the review agent names the review model and no effort.
+	selection := must(domain.DeriveAgentLaunchSelection(claude.Definition, claude.Adapter, claude.Offer))
+	if selection != (domain.AgentLaunchSelection{}) {
+		t.Fatalf("agent %s passes %+v, want nothing", claude.Definition.Name, selection)
 	}
-	if codex.Offer.RouteModelID != "gpt-5.6-sol" {
-		t.Fatalf("review offer model %q", codex.Offer.RouteModelID)
+	selection = must(domain.DeriveAgentLaunchSelection(codex.Definition, codex.Adapter, codex.Offer))
+	if selection != (domain.AgentLaunchSelection{RouteModelID: "gpt-5.6-sol"}) {
+		t.Fatalf("agent %s passes %+v, want the review model alone", codex.Definition.Name, selection)
 	}
 
 	lineup := must(parsed.ResolveLineup())
