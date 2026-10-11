@@ -1448,7 +1448,7 @@ func evaluateJudgmentRoles(manifest *compositionManifest, checks []inference.Rol
 	if len(unbound) > 0 {
 		failCheck(manifest, "judgment_roles",
 			fmt.Sprintf("judgment roles with no admissible lineup line: %s", strings.Join(unbound, ", ")),
-			"each role's reason says which: add its line to the lineup (freesided auth adopt emits the baseline lines), commit, and pass that commit as -agent-tree-commit; or restore the credential volume of the enrollment its line names")
+			"each role's reason says which: add or fix its line in the lineup (freesided auth adopt -judgment-model emits the baseline lines), commit, and pass that commit as -agent-tree-commit; or restore the credential volume of the enrollment its line names")
 		return
 	}
 	evidence := fmt.Sprintf("the lineup admits %d judgment roles", admitted)

@@ -194,7 +194,7 @@ func judgmentRoleCause(role domain.RoleName, reason string) healthCause {
 		Reason: fmt.Sprintf(
 			"Judgment role %s has no admissible lineup line (%s). Its sites return their fail-safe until "+
 				"it does. For a missing or inadmissible line, add or fix the %s line in the lineup (auth "+
-				"adopt writes the baseline lines) and restart. For a stored credential that could not be "+
+				"adopt -judgment-model writes the baseline lines) and restart. For a stored credential that could not be "+
 				"read, restore the credential volume of the line's enrollment; the role binds at its next "+
 				"call, or at a restart when nothing calls it.",
 			role, reason, role),
