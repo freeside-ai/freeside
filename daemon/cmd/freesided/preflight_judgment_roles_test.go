@@ -25,8 +25,7 @@ import (
 func TestPreflightReportsJudgmentRoles(t *testing.T) {
 	args, environment := preflightFixture(t)
 	cfg, _ := judgmentFixture(t)
-	args = append(args, "-judgment-claude-bin", cfg.CLI.Binary, "-judgment-claude-sha256", cfg.CLI.SHA256,
-		"-judgment-model", cfg.CLI.Model)
+	args = append(args, "-judgment-claude-bin", cfg.CLI.Binary, "-judgment-claude-sha256", cfg.CLI.SHA256)
 	run := func() (compositionManifest, error) {
 		t.Helper()
 		var stdout, stderr bytes.Buffer
@@ -161,6 +160,21 @@ func TestPreflightJudgmentRoleCheckReadsTheAdoptedLineup(t *testing.T) {
 			!strings.Contains(manifest.Checks[0].Evidence, "drift_auditor") ||
 			strings.Contains(manifest.Checks[0].Evidence, "publication_author") {
 			t.Fatalf("unlined drift auditor: manifest = %+v", manifest)
+		}
+
+		// A deployment adopted before the call offer has every judgment line
+		// on an offer that names no model. Each such role is unbound, and
+		// the check fails naming it.
+		manifest = evaluate(adoptedBeforeTheCallOffer(t, adopted), judgmentRuntime{AuthorPrompt: authorBody})
+		if manifest.Status != compositionFailed || manifest.Checks[0].Status != compositionFailed ||
+			len(manifest.JudgmentRoles) != 7 {
+			t.Fatalf("lines on an offer that names no model: manifest = %+v", manifest)
+		}
+		for _, role := range manifest.JudgmentRoles {
+			if role.Status != judgmentRoleUnbound || !strings.Contains(role.Reason, "offer names no model") ||
+				!strings.Contains(manifest.Checks[0].Evidence, string(role.Role)) {
+				t.Fatalf("role on an offer that names no model = %+v", role)
+			}
 		}
 
 		// A role whose enrollment's stored credential cannot be read is

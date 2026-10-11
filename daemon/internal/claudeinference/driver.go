@@ -32,13 +32,11 @@ const Protocol = "claude-subscription-inference-v1"
 var errCompletion = errors.New("claude inference completion unavailable")
 
 // Config is deployment-owned. The request cannot change the executable.
-// SHA256 pins the installed native CLI, not an alias. Model is what a launch
-// passes when the request names none, which is a judgment line on the
-// native-default offer; any other line's request carries its offer's model.
+// SHA256 pins the installed native CLI, not an alias. The config names no
+// model: every request carries the model of its line's offer.
 type Config struct {
 	Binary string `json:"binary"`
 	SHA256 string `json:"sha256"`
-	Model  string `json:"model"`
 }
 
 type Driver struct {
@@ -96,7 +94,7 @@ func (d *Driver) release(call *nativeCall) {
 // New validates the exact native CLI before any credential is delivered.
 func New(config Config) (*Driver, error) {
 	if !filepath.IsAbs(config.Binary) || filepath.Clean(config.Binary) != config.Binary ||
-		len(config.SHA256) != 64 || strings.TrimSpace(config.Model) != config.Model || config.Model == "" {
+		len(config.SHA256) != 64 {
 		return nil, errors.New("invalid Claude inference binding")
 	}
 	if _, err := hex.DecodeString(config.SHA256); err != nil {
@@ -150,14 +148,12 @@ func (d *Driver) CompleteAndConfirm(ctx context.Context, req inference.Request, 
 	}
 	// The request's model and effort come from a stored offer and agent, and
 	// an offer only has to name a non-empty model. Refuse a value the CLI
-	// could read as anything but one option value before any process starts.
-	// The client refuses the same at admission; this is the exec boundary.
-	if !inference.ValidLaunchValue(req.Model) || !inference.ValidLaunchValue(req.NativeEffort) {
+	// could read as anything but one option value before any process starts,
+	// and a request with no model, since the driver has none of its own to
+	// launch with. The client refuses the same at admission; this is the
+	// exec boundary.
+	if req.Model == "" || !inference.ValidLaunchValue(req.Model) || !inference.ValidLaunchValue(req.NativeEffort) {
 		return inference.Response{}, true, errCompletion
-	}
-	model := d.config.Model
-	if req.Model != "" {
-		model = req.Model
 	}
 	callCtx, cancel := context.WithTimeout(ctx, site.Timeout)
 	defer cancel()
@@ -188,7 +184,7 @@ func (d *Driver) CompleteAndConfirm(ctx context.Context, req inference.Request, 
 	if copyErr != nil || closeErr != nil {
 		return inference.Response{}, true, errCompletion
 	}
-	cmd := exec.CommandContext(callCtx, binary, commandArgs(model, req.NativeEffort, prompt)...) //nolint:gosec // G204: private content-pinned CLI copy; arguments are daemon-owned but for the model and effort checked above; no shell.
+	cmd := exec.CommandContext(callCtx, binary, commandArgs(req.Model, req.NativeEffort, prompt)...) //nolint:gosec // G204: private content-pinned CLI copy; arguments are daemon-owned but for the model and effort checked above; no shell.
 	cmd.Dir = root
 	// Do not inherit API keys, alternative endpoints, plugins, debug paths,
 	// proxy settings, or host CLI configuration. The existing setup token is
@@ -203,7 +199,7 @@ func (d *Driver) CompleteAndConfirm(ctx context.Context, req inference.Request, 
 	if err != nil || callCtx.Err() != nil || !quiescent {
 		return inference.Response{}, quiescent, errCompletion
 	}
-	result, err = decodeCompletion(output.Bytes(), model, req, site)
+	result, err = decodeCompletion(output.Bytes(), req, site)
 	return result, quiescent, err
 }
 
@@ -246,7 +242,7 @@ func (b *boundedOutput) Write(p []byte) (int, error) {
 	return b.Buffer.Write(p)
 }
 
-func decodeCompletion(body []byte, model string, req inference.Request, site inference.Site) (inference.Response, error) {
+func decodeCompletion(body []byte, req inference.Request, site inference.Site) (inference.Response, error) {
 	var result struct {
 		Type    string            `json:"type"`
 		Subtype string            `json:"subtype"`
@@ -270,7 +266,7 @@ func decodeCompletion(body []byte, model string, req inference.Request, site inf
 		*result.Usage.Output < 1 || *result.Usage.Output > req.MaxComputeUnits || len(result.Models) != 1 || len(result.Result) > req.MaxOutput {
 		return inference.Response{}, errCompletion
 	}
-	usage, ok := result.Models[model]
+	usage, ok := result.Models[req.Model]
 	if !ok || usage.Output == nil || *usage.Output != *result.Usage.Output || usage.WebSearch == nil || *usage.WebSearch != 0 {
 		return inference.Response{}, errCompletion
 	}
@@ -290,7 +286,7 @@ func decodeCompletion(body []byte, model string, req inference.Request, site inf
 	// reports no serving operator.
 	return inference.Response{
 		Output: output, ComputeUnits: *result.Usage.Output,
-		Observed: inference.Observed{ModelID: model, OutputTokens: *result.Usage.Output},
+		Observed: inference.Observed{ModelID: req.Model, OutputTokens: *result.Usage.Output},
 	}, nil
 }
 

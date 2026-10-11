@@ -1031,7 +1031,8 @@ require the tree as a checkout and an exact commit:
 The tree is read from that commit through git, never from the working tree,
 so an uncommitted edit selects nothing. The flags `-auth-identity`,
 `-review-auth-identity`, `-review-cost-owner`, and `-shadow-review-cost-owner`
-are gone from the daemon and from `preflight`; the model and effort flags stay.
+are gone from the daemon and from `preflight`, and so is `-judgment-model`;
+the review and shadow review model and effort flags stay.
 
 `freesided auth adopt` moves an instance that ran on those flags. Stop the
 daemon, then name the identities and cost owners the flags carried:
@@ -1042,6 +1043,7 @@ freesided auth adopt \
   -auth-identity claude-main -cost-owner <cost-owner> -claude-account <subscription-account> \
   -review-auth-identity codex-primary -review-cost-owner <review-cost-owner> \
   -auth-store-root /path/to/freeside/review-inputs -review-model <review-model> \
+  -judgment-model <exact-Claude-model-id> \
   -exporter-image <digest-pinned-exporter-image> \
   -prompt-package <file> -specification-prompt-package <file> \
   -remediation-prompt-package <file> \
@@ -1057,6 +1059,56 @@ patch, commit it in the checkout, and start the daemon with that commit. The
 report lists each identity as `adopted`, `reused`, or `unadoptable`; running
 the command again changes nothing. The review and shadow review configuration
 digests are the ones the flags produced, so existing approvals stand.
+
+`-judgment-model` is where the judgment roles get their model. With it, the
+patch also has the call agent `claude-code-call-default`, on an offer of the
+same name whose `route_model_id` is the flag's value, and a lineup line for
+each judgment role on that agent
+([Subscription-Backed Daemon Judgments](#subscription-backed-daemon-judgments)).
+Give the exact model id
+the Claude CLI reports for the model. Adoption refuses a value a launch
+cannot pass as one option value and refuses `claude-code-native-default`,
+but it does not check that the id is a real one: an alias or a short name is
+written as given and then fails every judgment call. Without the flag the
+patch has no call agent, no call offer, and no judgment line, and
+`-judgment-publication-author-prompt` is refused, because it asks for a line
+adoption cannot write.
+
+**Upgrade a deployment adopted before the call offer.** The daemon and
+`preflight` no longer take `-judgment-model`, and a judgment line on the
+offer `claude-code-native-default` is refused, because that offer names no
+model. A tree adopted earlier has every judgment line on that offer, so on
+the new build each judgment role is unbound until the tree changes: its
+sites return their fail-safe, the daemon raises a `system_health` item that
+says the offer names no model, and preflight's `judgment_roles` check fails.
+Before starting the new build:
+
+1. Stop the daemon. Remove `-judgment-model` from the `freesided` and
+   `freesided preflight` command lines; both now refuse it as an unknown
+   flag.
+2. Run `freesided auth adopt` again with the original adoption's flags plus
+   `-judgment-model <exact-Claude-model-id>`. Pass `-terms-basis-date` with
+   the date the committed route carries (`terms_basis_date` in
+   `policy/fragments/routes/<claude-route>`). The flag defaults to today, and
+   an agent's digest covers its route, so a call agent adopted under another
+   date does not match the committed tree. The command reports each identity
+   `reused` and prints the whole baseline tree as a patch of new files, so
+   the patch does not apply over the tree already committed.
+3. Copy the call agent's parts from that patch into the checkout:
+   - The new offer `policy/fragments/offers/<claude-route>/claude-code-call-default`.
+   - The agent `policy/agents/claude-code-call-default`, whose `asking` line
+     now names that offer.
+   - Each judgment role's line in `policy/lineup`, which carries the agent's
+     new digest.
+   - The `policy/agents.lock` entries for that offer and that agent.
+   - On a tree still on the call adapter `claude_code_call_v1`, the adapter
+     `policy/fragments/adapters/claude_code_call_v2` and its lock entry too.
+4. Commit, pass the commit as `-agent-tree-commit`, and run preflight. Its
+   `judgment_roles` check lists no role `unbound` when the copy is complete
+   (the publication author is `off` without its prompt file), and a tree
+   whose lock disagrees with its content is refused.
+   The judgment configuration digest no longer covers a model, so start the
+   daemon with the digest this preflight records.
 
 The real-run harness runs this command on every start and checks the emitted
 tree against the configured commit; its sequence, and where to keep the
@@ -1792,18 +1844,19 @@ the simplification round. The drift replay
 (`internal/integration/drift_replay_test.go`) re-runs recorded audits of real
 over-hardened pull requests through this site and the route gate, and
 `FREESIDE_DRIFT_REPLAY_LIVE_TEST=1` audits them again with the live provider.
-Configure all three flags together:
+Configure both flags together:
 
 ```text
 -judgment-claude-bin /absolute/path/to/claude
 -judgment-claude-sha256 <sha256-of-that-native-executable>
--judgment-model <Claude-model-for-native-default-lines>
 ```
 
-No flag names a credential. Each call authenticates with the setup token
-stored for the enrollment its role's lineup line names, so no new API key or
-login is needed and judgment usage is billed to that enrollment's account.
-The default, with all three flags absent, keeps inference unavailable
+No flag names a model or a credential. Each call launches with the model of
+the offer its role's lineup line names, which `freesided auth adopt
+-judgment-model` writes for the baseline lines. Each call authenticates with
+the setup token stored for the enrollment that line names, so no new API key
+or login is needed and judgment usage is billed to that enrollment's account.
+The default, with both flags absent, keeps inference unavailable
 and preserves the existing conservative fallback behavior. The task namer keeps
 the identifier name when judgments are unbound or naming fails. Naming uses a
 separate serial worker after durable dispatch, so a slow provider does not
@@ -1889,11 +1942,15 @@ The role source hands admission the record that names the resolved adapter's
 digest, and none for any other call adapter, which admission then refuses for
 want of a launch proof. The client admits what the source returns and
 never takes its word, so a test or a later source cannot hand it an admitted
-call. `freesided auth adopt` writes the lines: one per judgment role with a
-built site, on the baseline call agent `claude-code-call-default`, whose call
-adapter pins the audited build. The publication author gets its line only when
-adopt is given `-judgment-publication-author-prompt`. A deployment adopted
-before these lines existed adds them by patch (`policy/README.md`).
+call. `freesided auth adopt -judgment-model <id>` writes the lines: one per
+judgment role with a built site, on the baseline call agent
+`claude-code-call-default`, whose call adapter pins the audited build and
+whose offer, also `claude-code-call-default`, names `<id>`. Without
+`-judgment-model` adoption writes no judgment line. The publication author
+gets its line only when adopt is also given
+`-judgment-publication-author-prompt`. A deployment adopted before these
+lines existed, or before the call offer, adds them by patch
+([Select Agents Through The Lineup](#select-agents-through-the-lineup)).
 
 The lineup decides which agent a role is, which prompt it runs, and which
 model and effort its call launches with. Each call passes its own agent's
@@ -1906,10 +1963,13 @@ driver:
   in `modelUsage`. An alias or a short name never matches, and every call on
   that line then returns `inference unavailable` with no health item, because
   the role is admitted.
-- **The native-default offer launches with `-judgment-model`.** A line on
-  `claude-code-native-default` names no model, so the launch passes the
-  flag's value, as every call did before. That holds until the flag is
-  retired.
+- **A line on the native-default offer is refused.** The offer
+  `claude-code-native-default` names no model, and no flag supplies one, so
+  admission leaves the role unbound: its sites return their fail-safe, the
+  role's `system_health` item says the offer names no model, and preflight
+  fails. A ward role on that offer is unaffected. The baseline call agent is
+  on `claude-code-call-default`, which names the model `auth adopt
+  -judgment-model` was given.
 - **An effort other than `harness_default` is sent as `--effort <native
   value>`,** translated by the `claude_code` table
   (`domain.TranslateEffort`). `harness_default` sends no `--effort`. The
@@ -1994,10 +2054,12 @@ manifest as `admitted`, `off`, or `unbound`. An unbound role fails preflight
 and is named in the check, so a run finds a missing line before it starts
 instead of running every site of that role on its fail-safe. The check reads
 each role's stored credential as the daemon will, so a missing or damaged
-credential volume fails preflight too. The real-run harness accepts the corresponding
+credential volume fails preflight too. The real-run harness takes
 `FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN`,
 `FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256`, and
-`FREESIDE_REAL_RUN_JUDGMENT_MODEL` environment variables, and stops when an
+`FREESIDE_REAL_RUN_JUDGMENT_MODEL` together: the first two become the
+daemon's and preflight's flags, and the model goes to `auth adopt
+-judgment-model`. It stops when an
 environment still sets the token-file variable it read before #1426. Retained
 restoration requires the same binding;
 adding a judgment backend to an unbound retained session is a configuration
@@ -2005,10 +2067,14 @@ change and is refused. A separately configured challenge can enable it.
 At startup, enabled judgments also require `-judgment-configuration-digest`
 from successful preflight. The harness supplies it from the immutable manifest;
 a configuration change between preflight and startup is refused. The digest
-no longer covers a token, so one recorded before #1426 does not match: run
-preflight again after the upgrade. A retained session that had judgments on
-before the upgrade cannot be resumed across it, because its recorded
-composition names the old digest.
+no longer covers a token (#1426) or a model (#1964), so one recorded before
+either change does not match: run preflight again after the upgrade. A
+retained session that had judgments on before either upgrade cannot be
+resumed across it, because its recorded composition names the old digest.
+The harness gives a retained session's saved binary the flags it gives the
+new one, so a binary saved before #1964 fails its `judgment_configuration`
+check for want of `-judgment-model`, and the resume stops there, before the
+runtime upgrade starts.
 
 Before deploying a different native CLI pin, run the protocol probe from
 `daemon/` with `FREESIDE_JUDGMENT_CLI` and

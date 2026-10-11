@@ -46,7 +46,7 @@ func TestCompletionSelectsTheSiteValidObject(t *testing.T) {
 			c := completion()
 			c["result"] = tc.result
 			body, _ := json.Marshal(c)
-			resp, err := decodeCompletion(body, "test-model", req, site)
+			resp, err := decodeCompletion(body, req, site)
 			if (err == nil) != (tc.want != "") {
 				t.Fatalf("decodeCompletion err=%v, want accepted=%v", err, tc.want != "")
 			}

@@ -193,8 +193,9 @@ The first start always stops this way, because no commit holds the tree yet:
 
 Later fresh state roots reuse that commit. The emitted tree depends on the
 identity ids, the route names, the review model, the three prompt packages,
-and the three dated inputs. It doesn't depend on the state root, the cost
-owners, or the account.
+the three dated inputs, and, when the run has subscription judgments on,
+`FREESIDE_REAL_RUN_JUDGMENT_MODEL` and this checkout's publication-author
+prompt. It doesn't depend on the state root, the cost owners, or the account.
 
 Keep `FREESIDE_REAL_RUN_TERMS_BASIS_DATE`, `FREESIDE_REAL_RUN_PRICING_REVISION`,
 and `FREESIDE_REAL_RUN_OFFER_NOT_AFTER` at the values the commit was adopted

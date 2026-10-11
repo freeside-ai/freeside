@@ -17,8 +17,9 @@ type Prompt struct {
 }
 
 // TreeInput is what adoption knows that the code does not: the enrollments
-// the two agents run under, the operator's dated attestations, the review
-// model the review flags pin, and each role's prompt.
+// the agents run under, the operator's dated attestations, the review model
+// the review flags pin, the model judgment calls launch with, and each role's
+// prompt.
 type TreeInput struct {
 	// ClaudeEnrollment and CodexEnrollment are the adopted enrollments. An
 	// agent's route name is its enrollment's route.
@@ -28,9 +29,14 @@ type TreeInput struct {
 	CodexEnrollment *domain.ClientEnrollment
 	// ReviewModel is the route model id of the Codex review offer.
 	ReviewModel string
+	// JudgmentModel is the route model id of the call offer: the exact model
+	// every baseline judgment line launches with. Empty leaves the call agent,
+	// its offer, and its adapter out of the tree, so no judgment role can have
+	// a line.
+	JudgmentModel string
 	// TermsBasisDate dates the operator's basis for both routes (YYYY-MM-DD).
 	TermsBasisDate string
-	// PricingRevision and OfferNotAfter are authored onto both offers.
+	// PricingRevision and OfferNotAfter are authored onto every offer.
 	PricingRevision string
 	OfferNotAfter   time.Time
 	// Prompts maps each role that gets a line to its prompt. A role absent
@@ -82,10 +88,6 @@ func Tree(in TreeInput) (agenttree.Tree, error) {
 	if err != nil {
 		return agenttree.Tree{}, err
 	}
-	claudeCallAdapter, err := ClaudeCallAdapter()
-	if err != nil {
-		return agenttree.Tree{}, err
-	}
 	claudeRoute, err := sealRoute(domain.RouteFragment{
 		EncodingVersion: domain.AgentFragmentEncodingVersion,
 		ServiceOperator: "anthropic", Protocol: "anthropic_messages",
@@ -96,7 +98,7 @@ func Tree(in TreeInput) (agenttree.Tree, error) {
 	if err != nil {
 		return agenttree.Tree{}, err
 	}
-	// Today's launch passes neither a model nor an effort, so the offer is
+	// The ward launch passes neither a model nor an effort, so its offer is
 	// the native default at harness_default, and what model answers is
 	// opaque to the daemon.
 	claudeOffer, err := sealOffer(domain.OfferFragment{
@@ -110,26 +112,21 @@ func Tree(in TreeInput) (agenttree.Tree, error) {
 		return agenttree.Tree{}, err
 	}
 	tree := agenttree.Tree{
-		// The call agent shares the ward agent's enrollment, route, and offer
-		// and differs by adapter alone: the same subscription answers a call
-		// through a launch with no tools.
 		Agents: []domain.AgentSource{{
 			Name: ClaudeAgentName, Enrollment: string(in.ClaudeEnrollment.ID),
 			Route: in.ClaudeEnrollment.Route, Adapter: ClaudeAdapterName,
 			Offer: ClaudeOfferName, Effort: domain.EffortHarnessDefault,
-		}, {
-			Name: ClaudeCallAgentName, Enrollment: string(in.ClaudeEnrollment.ID),
-			Route: in.ClaudeEnrollment.Route, Adapter: ClaudeCallAdapterName,
-			Offer: ClaudeOfferName, Effort: domain.EffortHarnessDefault,
 		}},
-		Routes: []agenttree.Route{{Name: in.ClaudeEnrollment.Route, Fragment: claudeRoute}},
-		Adapters: []agenttree.Adapter{
-			{Name: ClaudeAdapterName, Fragment: claudeAdapter},
-			{Name: ClaudeCallAdapterName, Fragment: claudeCallAdapter},
-		},
+		Routes:   []agenttree.Route{{Name: in.ClaudeEnrollment.Route, Fragment: claudeRoute}},
+		Adapters: []agenttree.Adapter{{Name: ClaudeAdapterName, Fragment: claudeAdapter}},
 		Offers: []agenttree.Offer{{
 			Route: in.ClaudeEnrollment.Route, Name: ClaudeOfferName, Fragment: claudeOffer,
 		}},
+	}
+	if in.JudgmentModel != "" {
+		if err := addClaudeCall(&tree, in); err != nil {
+			return agenttree.Tree{}, err
+		}
 	}
 	if in.CodexEnrollment != nil {
 		if err := addCodexReview(&tree, in); err != nil {
@@ -179,10 +176,16 @@ func Tree(in TreeInput) (agenttree.Tree, error) {
 		if !ok {
 			continue
 		}
+		digest, ok := digests[ClaudeCallAgentName]
+		if !ok {
+			return agenttree.Tree{}, fmt.Errorf(
+				"baseline tree: role %s has a prompt but agent %s was not adopted: it needs a judgment model",
+				role, ClaudeCallAgentName)
+		}
 		tree.Lineup = append(tree.Lineup, agenttree.LineupLine{
 			Key: string(role),
 			Selection: domain.LineupSelection{
-				AgentName: ClaudeCallAgentName, AgentDigest: digests[ClaudeCallAgentName],
+				AgentName: ClaudeCallAgentName, AgentDigest: digest,
 				PromptName: prompt.Name, PromptDigest: prompt.Digest,
 			},
 		})
@@ -193,6 +196,44 @@ func Tree(in TreeInput) (agenttree.Tree, error) {
 		return agenttree.Tree{}, fmt.Errorf("baseline tree: %w", err)
 	}
 	return tree, nil
+}
+
+// addClaudeCall adds the call agent with the offer and adapter only it
+// names. The call agent shares the ward agent's enrollment and route: the
+// same subscription answers a call through a launch with no tools. Its offer
+// is its own because a call launch always passes a model, and the
+// native-default offer names none. The operator's model is taken as exact,
+// like the review model, so the offer is pinned; the driver refuses an
+// answer that reports another model.
+func addClaudeCall(tree *agenttree.Tree, in TreeInput) error {
+	if in.JudgmentModel == domain.ClaudeCodeNativeDefaultRouteModelID {
+		return fmt.Errorf("baseline tree: judgment model %q is the native-default id, which names no model",
+			in.JudgmentModel)
+	}
+	adapter, err := ClaudeCallAdapter()
+	if err != nil {
+		return err
+	}
+	offer, err := sealOffer(domain.OfferFragment{
+		EncodingVersion: domain.AgentFragmentEncodingVersion,
+		RouteModelID:    in.JudgmentModel, LineageGroup: "anthropic",
+		IdentityStability: domain.IdentityPinned,
+		AllowedEfforts:    []domain.EffortLevel{domain.EffortHarnessDefault},
+		PricingRevision:   in.PricingRevision, NotAfter: in.OfferNotAfter.UTC(),
+	})
+	if err != nil {
+		return err
+	}
+	tree.Agents = append(tree.Agents, domain.AgentSource{
+		Name: ClaudeCallAgentName, Enrollment: string(in.ClaudeEnrollment.ID),
+		Route: in.ClaudeEnrollment.Route, Adapter: ClaudeCallAdapterName,
+		Offer: ClaudeCallOfferName, Effort: domain.EffortHarnessDefault,
+	})
+	tree.Adapters = append(tree.Adapters, agenttree.Adapter{Name: ClaudeCallAdapterName, Fragment: adapter})
+	tree.Offers = append(tree.Offers, agenttree.Offer{
+		Route: in.ClaudeEnrollment.Route, Name: ClaudeCallOfferName, Fragment: offer,
+	})
+	return nil
 }
 
 func addCodexReview(tree *agenttree.Tree, in TreeInput) error {

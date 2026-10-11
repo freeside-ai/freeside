@@ -543,38 +543,54 @@ func TestLedgerOlderVersionsLoadAndNewerFieldsUnderOlderLabelsAreRefused(t *test
 	})
 }
 
-// The request carries what the admitted agent's launch passes. An explicit
-// offer names its model. The native-default offer names none, so the driver
-// launches with its configured model, and harness_default sends no effort.
+// The request carries what the admitted agent's launch passes: the model its
+// offer names, and no effort at harness_default. The record's requested
+// model is that same model.
 func TestCallCarriesTheAgentsLaunchSelection(t *testing.T) {
 	site := inference.ClassifierSite(testBudget(10))
-	for _, tc := range []struct{ name, offerModel, wantModel string }{
-		{"explicit offer", "claude-explicit-1", "claude-explicit-1"},
-		{"native-default offer", domain.ClaudeCodeNativeDefaultRouteModelID, ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			driver := fake.New()
-			client, statePath := lookupClient(t, fake.Roles{
-				Provider: "fake", Model: tc.offerModel, Driver: driver,
-			}, nil, []inference.Site{site})
-			result, err := client.Call(context.Background(), site.ID, "project-1", "run-1", siteFields(site))
-			if err != nil || result.Identity == nil {
-				t.Fatalf("result = %+v, %v", result, err)
-			}
-			requests := driver.Requests()
-			if len(requests) != 1 || requests[0].Model != tc.wantModel || requests[0].NativeEffort != "" {
-				t.Fatalf("driver requests = %+v, want model %q and no effort", requests, tc.wantModel)
-			}
-			serialized, err := json.Marshal(requests[0])
-			if err != nil || bytes.Contains(serialized, []byte("claude-explicit-1")) {
-				t.Fatalf("the launch selection is serialized with the task data: %s, %v", serialized, err)
-			}
-			if calls := ledgerCalls(t, statePath); len(calls) != 1 ||
-				!bytes.Contains(calls[0], []byte(`"requested_model_id":"`+tc.offerModel+`"`)) ||
-				!bytes.Contains(calls[0], []byte(`"requested_effort":"harness_default","effective_effort":"harness_default"`)) {
-				t.Fatalf("call records = %s", calls)
-			}
-		})
+	const model = "claude-explicit-1"
+	driver := fake.New()
+	client, statePath := lookupClient(t, fake.Roles{Provider: "fake", Model: model, Driver: driver},
+		nil, []inference.Site{site})
+	result, err := client.Call(context.Background(), site.ID, "project-1", "run-1", siteFields(site))
+	if err != nil || result.Identity == nil {
+		t.Fatalf("result = %+v, %v", result, err)
+	}
+	requests := driver.Requests()
+	if len(requests) != 1 || requests[0].Model != model || requests[0].NativeEffort != "" {
+		t.Fatalf("driver requests = %+v, want model %q and no effort", requests, model)
+	}
+	serialized, err := json.Marshal(requests[0])
+	if err != nil || bytes.Contains(serialized, []byte(model)) {
+		t.Fatalf("the launch selection is serialized with the task data: %s, %v", serialized, err)
+	}
+	if calls := ledgerCalls(t, statePath); len(calls) != 1 ||
+		!bytes.Contains(calls[0], []byte(`"requested_model_id":"`+model+`"`)) ||
+		!bytes.Contains(calls[0], []byte(`"requested_effort":"harness_default","effective_effort":"harness_default"`)) {
+		t.Fatalf("call records = %s", calls)
+	}
+}
+
+// A call launch always passes a model, and nothing in the daemon supplies one
+// for an offer that names none. A judgment line on the native-default offer
+// admits nowhere: the role is unbound and its report says why, the site
+// returns its fail-safe, and no call reserves budget or reaches the driver.
+func TestAnOfferThatNamesNoModelLeavesTheRoleUnbound(t *testing.T) {
+	site := inference.ClassifierSite(testBudget(10))
+	driver := fake.New()
+	health := newRoleHealth()
+	client, statePath := lookupClient(t, fake.Roles{
+		Provider: "fake", Model: domain.ClaudeCodeNativeDefaultRouteModelID, Driver: driver,
+	}, health, []inference.Site{site})
+	result, err := client.Call(context.Background(), site.ID, "project-1", "run-1", siteFields(site))
+	if err != nil || !result.Fallback || result.Identity != nil || string(result.Output) != site.FailSafe {
+		t.Fatalf("result = %+v, %v", result, err)
+	}
+	if len(driver.Requests()) != 0 || len(ledgerCalls(t, statePath)) != 0 {
+		t.Fatal("a line on the native-default offer reached the driver or the ledger")
+	}
+	if reason := health.unbound[domain.RoleFindingClassifier]; !strings.Contains(reason, "offer names no model") {
+		t.Fatalf("reported reason = %q, want it to say the offer names no model", reason)
 	}
 }
 

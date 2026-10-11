@@ -23,8 +23,8 @@ import (
 // it runs, and the model and effort its call launches with, and the call
 // authenticates with the token stored in the credential volume of the line's
 // enrollment generation (#1426), which the record names as credential_source
-// enrollment. The judgment flags still decide the pinned CLI and the model a
-// line on the native-default offer launches with.
+// enrollment. The judgment flags decide only the pinned CLI and the
+// publication-author prompt file; no flag names a model.
 
 // judgmentCallAudits are the hand audits that prove the judgment call launch,
 // one per call adapter, each naming its adapter by the digest that adapter
@@ -194,7 +194,7 @@ func judgmentRoleCause(role domain.RoleName, reason string) healthCause {
 		Reason: fmt.Sprintf(
 			"Judgment role %s has no admissible lineup line (%s). Its sites return their fail-safe until "+
 				"it does. For a missing or inadmissible line, add or fix the %s line in the lineup (auth "+
-				"adopt writes the baseline lines) and restart. For a stored credential that could not be "+
+				"adopt -judgment-model writes the baseline lines) and restart. For a stored credential that could not be "+
 				"read, restore the credential volume of the line's enrollment; the role binds at its next "+
 				"call, or at a restart when nothing calls it.",
 			role, reason, role),

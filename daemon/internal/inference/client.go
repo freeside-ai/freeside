@@ -245,6 +245,13 @@ func admitRole(
 	if err != nil {
 		return admittedCall{}, fmt.Errorf("role %s: %w", role, err)
 	}
+	// A call launch always passes a model, and nothing in the daemon supplies
+	// one for an offer that names none, which is the native-default offer. A
+	// ward launch on that offer passes no model; a call has no such launch.
+	if selection.RouteModelID == "" {
+		return admittedCall{}, fmt.Errorf(
+			"role %s: the line's offer names no model, and a judgment call needs an offer that names one", role)
+	}
 	// An offer only has to name a non-empty model. One the launch could not
 	// pass leaves the role unbound here, where it is reported, instead of
 	// failing every call at the driver with nothing said.

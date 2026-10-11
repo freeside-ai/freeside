@@ -14,13 +14,17 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 )
 
+// classifierRequest names "test-model", as every request names the model of
+// its line's offer.
 func classifierRequest() inference.Request {
 	s := inference.ClassifierSite(inference.Budget{})
 	f := map[string]string{}
 	for _, field := range s.Fields {
 		f[field.Name] = "synthetic"
 	}
-	return inference.Request{SiteID: s.ID, Fields: f, MaxOutput: s.MaxOutputBytes, MaxComputeUnits: s.MaxComputeUnits}
+	return inference.Request{
+		SiteID: s.ID, Fields: f, MaxOutput: s.MaxOutputBytes, MaxComputeUnits: s.MaxComputeUnits, Model: "test-model",
+	}
 }
 
 func completion() map[string]any {
@@ -59,13 +63,13 @@ func TestCompletionRefusesUnavailableOrContradictoryEvidence(t *testing.T) {
 			m := completion()
 			tc.change(m)
 			b, _ := json.Marshal(m)
-			if _, err := decodeCompletion(b, "test-model", classifierRequest(), inference.ClassifierSite(inference.Budget{})); err == nil {
+			if _, err := decodeCompletion(b, classifierRequest(), inference.ClassifierSite(inference.Budget{})); err == nil {
 				t.Fatal("accepted invalid completion")
 			}
 		})
 	}
 	b, _ := json.Marshal(completion())
-	got, err := decodeCompletion(b, "test-model", classifierRequest(), inference.ClassifierSite(inference.Budget{}))
+	got, err := decodeCompletion(b, classifierRequest(), inference.ClassifierSite(inference.Budget{}))
 	if err != nil || got.ComputeUnits != 12 {
 		t.Fatalf("valid completion: %v, %v", got, err)
 	}
@@ -74,7 +78,7 @@ func TestCompletionRefusesUnavailableOrContradictoryEvidence(t *testing.T) {
 	if want := (inference.Observed{ModelID: "test-model", OutputTokens: 12}); got.Observed != want {
 		t.Fatalf("observed = %+v, want %+v", got.Observed, want)
 	}
-	if _, err := decodeCompletion(append(b, []byte(` {}`)...), "test-model", classifierRequest(), inference.ClassifierSite(inference.Budget{})); err == nil {
+	if _, err := decodeCompletion(append(b, []byte(` {}`)...), classifierRequest(), inference.ClassifierSite(inference.Budget{})); err == nil {
 		t.Fatal("accepted trailing object")
 	}
 }
@@ -87,7 +91,7 @@ func testDriver(t *testing.T, script string) *Driver {
 		t.Fatal(err)
 	}
 	h := sha256.Sum256(body)
-	d, err := New(Config{Binary: p, SHA256: hex.EncodeToString(h[:]), Model: "test-model"})
+	d, err := New(Config{Binary: p, SHA256: hex.EncodeToString(h[:])})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +331,9 @@ func TestCompleteSerializesDifferentSites(t *testing.T) {
 	for _, f := range site.Fields {
 		fields[f.Name] = "synthetic"
 	}
-	req := inference.Request{SiteID: site.ID, Fields: fields, MaxOutput: site.MaxOutputBytes, MaxComputeUnits: site.MaxComputeUnits}
+	req := inference.Request{
+		SiteID: site.ID, Fields: fields, MaxOutput: site.MaxOutputBytes, MaxComputeUnits: site.MaxComputeUnits, Model: "test-model",
+	}
 	if _, err := d.Complete(t.Context(), req, "token"); err == nil {
 		t.Error("concurrent site was accepted")
 	}

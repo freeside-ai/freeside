@@ -30,7 +30,7 @@ func TestPinnedClaudeCLIProtocol(t *testing.T) {
 	if bin == "" {
 		t.Skip("set FREESIDE_JUDGMENT_CLI and FREESIDE_JUDGMENT_CLI_SHA256 for the local mock-provider probe")
 	}
-	driver, err := New(Config{Binary: bin, SHA256: os.Getenv("FREESIDE_JUDGMENT_CLI_SHA256"), Model: probeModel})
+	driver, err := New(Config{Binary: bin, SHA256: os.Getenv("FREESIDE_JUDGMENT_CLI_SHA256")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,6 +58,7 @@ const probeModel = "claude-sonnet-4-6"
 func probePinnedCLI(t *testing.T, driver *Driver, effort string) {
 	const model = probeModel
 	req := classifierRequest()
+	req.Model = model
 	req.MaxComputeUnits = 1024
 	prompt, site, err := promptFor(req)
 	if err != nil {
@@ -159,7 +160,7 @@ func probePinnedCLI(t *testing.T, driver *Driver, effort string) {
 	if err != nil {
 		t.Fatalf("pinned CLI protocol failed: %v", err)
 	}
-	if _, err := decodeCompletion(output, model, req, site); err != nil {
+	if _, err := decodeCompletion(output, req, site); err != nil {
 		t.Fatal(err)
 	}
 	mu.Lock()

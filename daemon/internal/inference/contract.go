@@ -431,10 +431,10 @@ type Request struct {
 	RolePrompt       []byte        `json:"-"`
 	RolePromptDigest domain.Digest `json:"-"`
 	// Model and NativeEffort are what the admitted agent's launch passes
-	// (domain.DeriveAgentLaunchSelection). An empty Model means the driver's
-	// configured model, which is the native-default offer's case; an empty
-	// NativeEffort means the launch sends no effort. Like the role prompt,
-	// they come from the admission and are no part of the task data.
+	// (domain.DeriveAgentLaunchSelection). Model is never empty: admission
+	// refuses a line whose offer names no model. An empty NativeEffort means
+	// the launch sends no effort. Like the role prompt, they come from the
+	// admission and are no part of the task data.
 	Model        string `json:"-"`
 	NativeEffort string `json:"-"`
 }
@@ -443,7 +443,8 @@ type Request struct {
 // effort as one option value: graphic characters with no whitespace, no
 // leading dash a CLI would parse as another option, and no more bytes than
 // an observed identifier may have, since the model comes back as one. Empty
-// is valid: it selects the driver's configured model, or no effort. The
+// is valid, because an empty effort is a launch that sends none; a model
+// must also be non-empty, which its callers check themselves. The
 // client holds an admitted agent to this so a bad offer is an unbound role
 // with a health item, and a driver holds its request to it before it starts
 // a process.

@@ -66,7 +66,7 @@ func TestDriftReplayLive(t *testing.T) {
 		t.Fatal(driftReplayTokenEnv + " and " + driftReplayModelEnv + " are required when " + driftReplayLiveEnv + "=1")
 	}
 	driver, err := claudeinference.New(claudeinference.Config{
-		Binary: os.Getenv(driftReplayCLIEnv), SHA256: os.Getenv(driftReplayCLIPinEnv), Model: model,
+		Binary: os.Getenv(driftReplayCLIEnv), SHA256: os.Getenv(driftReplayCLIPinEnv),
 	})
 	if err != nil {
 		t.Fatal(err)

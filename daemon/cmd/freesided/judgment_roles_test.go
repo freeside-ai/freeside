@@ -175,6 +175,22 @@ func TestJudgmentSitesReadTheAdoptedLineup(t *testing.T) {
 		if len(requests) != len(sites) {
 			t.Fatalf("driver saw %d calls, want %d", len(requests), len(sites))
 		}
+		// Every judgment role launches with the model the lineup decides: the
+		// one adoption wrote onto the call offer.
+		launched := map[domain.RoleName]bool{}
+		for _, request := range requests {
+			role, _ := domain.RoleForSite(request.SiteID)
+			if request.Model != adoptJudgmentModel || request.NativeEffort != "" {
+				t.Fatalf("%s launched with model %q effort %q, want the adopted %q and no effort",
+					request.SiteID, request.Model, request.NativeEffort, adoptJudgmentModel)
+			}
+			launched[role] = true
+		}
+		for _, role := range agentbaseline.JudgmentRoles() {
+			if !launched[role] {
+				t.Fatalf("judgment role %s made no call on the adopted lineup", role)
+			}
+		}
 		for _, request := range requests {
 			role, _ := domain.RoleForSite(request.SiteID)
 			want := ""
@@ -313,6 +329,98 @@ func TestJudgmentSitesReadTheAdoptedLineup(t *testing.T) {
 	})
 }
 
+// adoptedBeforeTheCallOffer returns the tree as a deployment adopted before
+// the call offer existed holds it: the call agent on the native-default
+// offer, which names no model, and every judgment line naming that agent.
+func adoptedBeforeTheCallOffer(t *testing.T, tree agenttree.Tree) agenttree.Tree {
+	t.Helper()
+	tree.Agents = slices.Clone(tree.Agents)
+	for i, agent := range tree.Agents {
+		if agent.Name == agentbaseline.ClaudeCallAgentName {
+			tree.Agents[i].Offer = agentbaseline.ClaudeOfferName
+		}
+	}
+	digest, err := tree.AgentDigest(agentbaseline.ClaudeCallAgentName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree.Lineup = slices.Clone(tree.Lineup)
+	for i, line := range tree.Lineup {
+		if line.Selection.AgentName == agentbaseline.ClaudeCallAgentName {
+			tree.Lineup[i].Selection.AgentDigest = digest
+		}
+	}
+	if _, err := agenttree.Render(tree); err != nil {
+		t.Fatalf("the earlier tree does not render: %v", err)
+	}
+	return tree
+}
+
+// A judgment line whose offer names no model leaves its role unbound: the
+// site returns its fail-safe, nothing reaches the driver, and the role's item
+// says the offer names no model. That is every judgment role of a deployment
+// adopted before the call offer, until the operator applies a fresh patch,
+// and the drift auditor's item blocks unattended admission meanwhile.
+func TestJudgmentLineOnAnOfferThatNamesNoModelIsUnbound(t *testing.T) {
+	ctx := context.Background()
+	f := newAuthAdoptFixture(t)
+	_, patch, err := f.run(t, f.args())
+	if err != nil {
+		t.Fatalf("auth adopt: %v", err)
+	}
+	tree := adoptedBeforeTheCallOffer(t, loadAdoptedPatch(t, patch))
+	f.withStore(t, func(st *store.Store) {
+		now := func() time.Time { return time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC) }
+		driver := inferencefake.New()
+		sites := judgmentTestSites()
+		client, err := inference.New(inference.Config{
+			StatePath: filepath.Join(t.TempDir(), "ledger.json"),
+			Roles: judgmentRoles{
+				st: st, tree: tree, revision: domain.Digest("sha256:" + strings.Repeat("4", 64)),
+				runtime: judgmentRuntime{Driver: driver}, credentials: fixedJudgmentCredentials(t),
+			},
+			Health: newJudgmentRoleHealth(st, now, nil), Sites: sites,
+			Advisory: advisory.Unavailable(errors.New("unused")), Now: now,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The fixture configures no publication author prompt, so that role
+		// is off and every other judgment role is asked.
+		asked := map[domain.RoleName]bool{}
+		for _, site := range sites {
+			role, _ := domain.RoleForSite(site.ID)
+			if role == domain.RolePublicationAuthor {
+				continue
+			}
+			asked[role] = true
+			fields := map[string]inference.InputField{}
+			for _, policy := range site.Fields {
+				fields[policy.Name] = inference.InputField{Value: "data", Sensitivity: policy.Sensitivity}
+			}
+			result, err := client.Call(ctx, site.ID, "project-1", "run-1", fields)
+			if err != nil || !result.Fallback || result.Identity != nil || string(result.Output) != site.FailSafe {
+				t.Fatalf("%s on an offer that names no model = %+v, %v", site.ID, result, err)
+			}
+		}
+		if requests := driver.Requests(); len(requests) != 0 {
+			t.Fatalf("a line on an offer that names no model reached the driver: %+v", requests)
+		}
+		items := judgmentRoleItems(t, st)
+		if len(items) != len(asked) {
+			t.Fatalf("items = %+v, want one for each of %v", items, asked)
+		}
+		for role, item := range items {
+			if !asked[role] || !strings.Contains(item.Reason, "offer names no model") {
+				t.Fatalf("item for %s = %+v", role, item)
+			}
+			if blocking := *item.Posture == domain.HealthPostureBlocking; blocking != (role == domain.RoleDriftAuditor) {
+				t.Fatalf("item for %s has posture %s", role, *item.Posture)
+			}
+		}
+	})
+}
+
 // One daemon admits a line on each audited call adapter and hands each call
 // its own agent's model and effort. A line on the earlier adapter keeps
 // admitting under the earlier audit; a call adapter no record names is
@@ -416,9 +524,9 @@ func TestJudgmentLinesAdmitOnEachAuditedCallAdapter(t *testing.T) {
 		}
 		type launch struct{ model, effort string }
 		want := map[domain.RoleName]launch{
-			domain.RoleFindingClassifier:  {},
+			domain.RoleFindingClassifier:  {adoptJudgmentModel, ""},
 			domain.RoleFindingAdjudicator: {explicitModel, "high"},
-			domain.RoleDriftAuditor:       {},
+			domain.RoleDriftAuditor:       {adoptJudgmentModel, ""},
 		}
 		for _, site := range sites {
 			role, _ := domain.RoleForSite(site.ID)

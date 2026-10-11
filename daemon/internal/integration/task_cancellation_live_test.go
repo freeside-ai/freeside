@@ -85,7 +85,7 @@ func TestTaskCancellationPinnedNativeCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	shimHash := sha256.Sum256(shim)
-	driver, err := claudeinference.New(claudeinference.Config{Binary: shimPath, SHA256: hex.EncodeToString(shimHash[:]), Model: "claude-sonnet-4-6"})
+	driver, err := claudeinference.New(claudeinference.Config{Binary: shimPath, SHA256: hex.EncodeToString(shimHash[:])})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,9 @@ func TestTaskCancellationPinnedNativeCLI(t *testing.T) {
 	for _, field := range site.Fields {
 		fields[field.Name] = "synthetic"
 	}
-	request := inference.Request{SiteID: site.ID, Fields: fields, MaxOutput: site.MaxOutputBytes, MaxComputeUnits: 1024}
+	request := inference.Request{
+		SiteID: site.ID, Fields: fields, MaxOutput: site.MaxOutputBytes, MaxComputeUnits: 1024, Model: "claude-sonnet-4-6",
+	}
 	ctx, cancel := context.WithCancel(ward.WithTaskOwner(t.Context(), "live-task", "live-run"))
 	defer cancel()
 	finished := make(chan error, 1)
