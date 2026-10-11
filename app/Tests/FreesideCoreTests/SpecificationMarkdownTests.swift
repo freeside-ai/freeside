@@ -27,6 +27,45 @@ import Testing
         #expect(blocks.filter { if case .listItem(ordinal: nil, _, _) = $0 { true } else { false } }.count == 2)
     }
 
+    /// Foundation shifts a lazy continuation line's columns by its
+    /// container's prefix. When that line ends the text, the shifted
+    /// position lies past the end, and Foundation trapped converting it.
+    /// Each shape draws its blocks with every word.
+    @Test func lazyContinuationEndingTheTextDrawsEveryWord() throws {
+        let list = try #require(SpecificationMarkdown.blocks(from: "- item one\n- item two wraps\nonto here\n"))
+        guard list.count == 2, case .listItem(nil, 0, let first) = list[0], case .listItem(nil, 0, let second) = list[1]
+        else {
+            Issue.record("Expected two list items, got \(list)")
+            return
+        }
+        #expect(String(first.characters) == "item one")
+        #expect(String(second.characters) == "item two wraps onto here")
+
+        let quote = try #require(SpecificationMarkdown.blocks(from: ">quoted\nlazy"))
+        guard quote.count == 1, case .quote(.paragraph(let quoted)) = quote[0] else {
+            Issue.record("Expected one quoted paragraph, got \(quote)")
+            return
+        }
+        #expect(String(quoted.characters) == "quoted lazy")
+
+        let indented = try #require(SpecificationMarkdown.blocks(from: " Summary line one\nline two"))
+        guard indented.count == 1, case .paragraph(let paragraph) = indented[0] else {
+            Issue.record("Expected one paragraph, got \(indented)")
+            return
+        }
+        #expect(String(paragraph.characters) == "Summary line one line two")
+    }
+
+    /// A link on such a line can have a label Foundation places past the
+    /// end of the text, so the label cannot be checked against its source.
+    /// The block keeps its source, destination included, as it does when
+    /// the shift misplaces the label inside the text.
+    @Test(arguments: ["", "\n\nafter"])
+    func linkOnALazyContinuationKeepsItsSource(rest: String) {
+        let item = "- item\nsee <https://example.invalid>"
+        #expect(SpecificationMarkdown.blocks(from: item + rest)?.first == .raw(item))
+    }
+
     @Test func siblingItemsNeverMerge() {
         #expect(
             SpecificationMarkdown.blocks(from: "1. Alpha\n2. Beta\n3. Gamma") == [

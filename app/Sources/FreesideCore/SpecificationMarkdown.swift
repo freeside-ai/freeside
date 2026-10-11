@@ -27,8 +27,10 @@ enum SpecificationMarkdown {
         let sourceLines = text.split(omittingEmptySubsequences: false) {
             $0 == "\n" || $0 == "\r" || $0 == "\r\n"
         }
-        if hasUnrepresentedEmptyLink(in: text, parsed: parsed)
-            || hasUnrepresentedEmptyList(in: text, lines: sourceLines, parsed: parsed, options: options)
+        let ranges = SourceRanges(text)
+        if hasUnrepresentedEmptyLink(in: text, ranges: ranges, parsed: parsed)
+            || hasUnrepresentedEmptyList(
+                in: text, lines: sourceLines, ranges: ranges, parsed: parsed, options: options)
         {
             return [.raw(text)]
         }
@@ -109,7 +111,7 @@ enum SpecificationMarkdown {
                     // instead of guessing missing label characters or formatting.
                     return .raw(source(of: group, in: text, lines: sourceLines))
                 }
-                guard let content = neutralized(group, source: text) else {
+                guard let content = neutralized(group, source: text, ranges: ranges) else {
                     return .raw(source(of: group, in: text, lines: sourceLines))
                 }
                 var block: SpecificationBlock
@@ -156,7 +158,7 @@ enum SpecificationMarkdown {
     }
 
     private static func hasUnrepresentedEmptyList(
-        in source: String, lines: [Substring], parsed: AttributedString,
+        in source: String, lines: [Substring], ranges: SourceRanges, parsed: AttributedString,
         options: AttributedString.MarkdownParsingOptions
     ) -> Bool {
         // Empty leaves have no runs, while empty ancestors still occur in a
@@ -170,7 +172,7 @@ enum SpecificationMarkdown {
                 case .header(2) = header.kind, let position = run.markdownSourcePosition
             else { continue }
             if seenHeaders.insert(header.identity).inserted,
-                let range = Range(position, in: source)
+                let range = ranges.range(position)
             {
                 let prefix = source[lines[position.startLine - 1].startIndex..<range.lowerBound]
                 if !prefix.trimmingCharacters(in: .whitespaces).hasSuffix("#") {
@@ -213,14 +215,16 @@ enum SpecificationMarkdown {
         ).count
     }
 
-    private static func hasUnrepresentedEmptyLink(in source: String, parsed: AttributedString) -> Bool {
+    private static func hasUnrepresentedEmptyLink(
+        in source: String, ranges: SourceRanges, parsed: AttributedString
+    ) -> Bool {
         // Empty labels, including an empty image used as a link label, can
         // disappear without a run. Inspect only their source prefixes: never
         // reconstruct targets. Covered prefixes are literal code/text or
         // represented whitespace labels and need no fallback.
         let pattern = #"(?<!!)\[[ \t\r\n]*\](?:\(|\[)|\[[ \t\r\n]*!\[[ \t\r\n]*\]"#
         let represented = parsed.runs.compactMap { run in
-            run.markdownSourcePosition.flatMap { Range($0, in: source) }
+            run.markdownSourcePosition.flatMap(ranges.range)
         }
         var remaining = source.startIndex..<source.endIndex
         while let prefix = source.range(of: pattern, options: .regularExpression, range: remaining) {
@@ -245,7 +249,9 @@ enum SpecificationMarkdown {
         return String(text[lines[start - 1].startIndex..<lines[last - 1].endIndex])
     }
 
-    private static func neutralized(_ text: AttributedString, source: String) -> AttributedString? {
+    private static func neutralized(
+        _ text: AttributedString, source: String, ranges: SourceRanges
+    ) -> AttributedString? {
         var result = AttributedString()
         var pendingLink: URL?
         var pendingSource: AttributedString.MarkdownSourcePosition?
@@ -257,8 +263,14 @@ enum SpecificationMarkdown {
             }
             pendingLink = run.link
             pendingSource = run.markdownSourcePosition
+            // A label placed past the end of the text cannot be checked
+            // against its source; preserve the whole block, as for a label
+            // the shift misplaces inside the text.
+            if run.link != nil, let position = run.markdownSourcePosition, ranges.isPastEnd(position) {
+                return nil
+            }
             if run.link != nil, let position = run.markdownSourcePosition,
-                let range = Range(position, in: source)
+                let range = ranges.range(position)
             {
                 // The full parser flattens inline styles in link labels.
                 // Reparse only the label, then retain typography alone.
@@ -294,5 +306,43 @@ enum SpecificationMarkdown {
             result.append(literal)
         }
         return result
+    }
+}
+
+/// Converts a run's source position to a range of the source. Foundation's
+/// own conversion traps, where it should return nil, on a position past the
+/// end of the text, and it reports such a position for a lazy continuation
+/// line that ends the text: it shifts that line's columns by its container's
+/// prefix. The conversion runs here in a copy with room past the end, so a
+/// position inside the source converts exactly as Foundation converts it.
+private struct SourceRanges {
+    private let source: String
+    private let padded: String
+
+    init(_ source: String) {
+        self.source = source
+        // The shift is the width of a prefix the source holds, so a copy
+        // twice the source's length has room for it.
+        padded = source + String(repeating: "\n", count: source.utf8.count)
+    }
+
+    /// Nil when Foundation gives the position no range, or one that runs
+    /// past the end of the source.
+    func range(_ position: AttributedString.MarkdownSourcePosition) -> Range<String.Index>? {
+        let utf8 = source.utf8
+        guard let offsets = offsets(position), offsets.upperBound <= utf8.count else { return nil }
+        let lower = utf8.index(utf8.startIndex, offsetBy: offsets.lowerBound)
+        return lower..<utf8.index(utf8.startIndex, offsetBy: offsets.upperBound)
+    }
+
+    func isPastEnd(_ position: AttributedString.MarkdownSourcePosition) -> Bool {
+        offsets(position).map { $0.upperBound > source.utf8.count } ?? false
+    }
+
+    private func offsets(_ position: AttributedString.MarkdownSourcePosition) -> Range<Int>? {
+        guard let range = Range(position, in: padded) else { return nil }
+        let utf8 = padded.utf8
+        let lower = utf8.distance(from: utf8.startIndex, to: range.lowerBound)
+        return lower..<utf8.distance(from: utf8.startIndex, to: range.upperBound)
     }
 }

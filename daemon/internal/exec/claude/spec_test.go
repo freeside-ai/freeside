@@ -387,7 +387,11 @@ func TestPhase1ASummaryPromptContracts(t *testing.T) {
 		t.Error("implementer prompt still carries the interim untyped stop protocol")
 	}
 	for _, required := range []string{
-		"intent, key questions, open decisions, uncertainty, and dissent",
+		// The summary's advisory shape (#1461): the writer's headings, the
+		// word target, and every concern listed whatever the length.
+		"Under `## Change`, the proposal and why", "80–120 words",
+		"under `## Remaining concerns`, list every key question, open decision, uncertainty, and dissent",
+		"drop none for length",
 		"Never claim verification",
 		// The needs_decision form (#990) and the limits the decoder pins.
 		`{"decisions":[{"question"`,
@@ -421,6 +425,7 @@ func TestPhase1ASummaryPromptContracts(t *testing.T) {
 			"`## Change`", "`## Remaining concerns`", "`## Details`",
 			"80–120 words", "never omit a concern to meet that target",
 			"uncertainty, unresolved questions, dissent, and unfinished obligations",
+			"a flat list, one concern per item, most important first",
 			"advisory writing guidance, not a required format",
 			"retained artifacts and the full Result report",
 		} {
