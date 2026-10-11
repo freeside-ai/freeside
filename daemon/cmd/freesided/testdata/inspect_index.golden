@@ -1,0 +1,54 @@
+{
+  "version": "freeside-inspect-index-v1",
+  "as_of_revision": 22,
+  "reads": [
+    {
+      "name": "inspect",
+      "command": "freesided inspect -db PATH",
+      "ids": [],
+      "version": "freeside-inspect-index-v1"
+    },
+    {
+      "name": "inspect task",
+      "command": "freesided inspect task -db PATH -task TASK_ID",
+      "ids": [
+        "task_id"
+      ],
+      "version": "freeside-task-record-v1"
+    },
+    {
+      "name": "follow -snapshot",
+      "command": "freesided follow -db PATH -run RUN_ID -snapshot",
+      "ids": [
+        "run_id"
+      ],
+      "version": null
+    },
+    {
+      "name": "comprehension",
+      "command": "freesided comprehension -db PATH",
+      "ids": [],
+      "version": null
+    },
+    {
+      "name": "auth list",
+      "command": "freesided auth list -db PATH",
+      "ids": [],
+      "version": null
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "task-with-runs",
+      "project_id": "freeside",
+      "created_at": "2026-09-01T12:00:00Z",
+      "latest_run_id": "run-freeside-656"
+    },
+    {
+      "task_id": "task-without-runs",
+      "project_id": "freeside",
+      "created_at": "2026-09-02T12:00:00Z",
+      "latest_run_id": null
+    }
+  ]
+}

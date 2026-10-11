@@ -724,6 +724,108 @@ Every state directory is owner-only, including the corrected
 The static binary and supervisor may be installed through a one-time narrow
 elevation step, but the stateful daemon always runs as the non-root operator.
 
+### Read A Task's Record
+
+Two commands print what the daemon has recorded, as JSON for an agent to
+read. Both are reads: they write nothing to the database, never migrate it,
+and work the same on every tier. While a daemon holds the database they read
+through the [control socket](#control-socket-and-pairing-codes); with no
+daemon they take the daemon lock (`<db>.daemon.lock`) and open the file
+themselves. Each prints one JSON document on one line.
+
+```sh
+freesided inspect -db <db>
+freesided inspect task -db <db> -task <task-id>
+```
+
+`freesided inspect` prints the index, `freeside-inspect-index-v1`:
+
+- `reads`: every `freesided` command that prints what the store holds as JSON
+  and writes nothing. Each entry has its `name`, its `command` line, the
+  `ids` it takes, and its `version`, which is `null` when the read's JSON
+  carries no version.
+- `tasks`: every task the store holds, with `task_id`, `project_id`,
+  `created_at`, and `latest_run_id` (`null` before the first run).
+
+`freesided inspect task` prints one task's record, `freeside-task-record-v1`.
+Every section is read in one transaction, at the store revision
+`as_of_revision`; `as_of` is the read time. To wait for a change, read again
+and compare `as_of_revision`. A revision that hasn't moved means no recorded
+state changed, with one exception: cost rows are written without advancing
+the revision, so `billable_cost` can differ between two records at the same
+revision.
+
+| Section | Holds |
+| --- | --- |
+| `task` | Project, creation time, lifecycle facts, and the current cancellation with its acknowledgement state. |
+| `timeline` | The timeline a paired client gets, unchanged: runs and attempts, milestones, the current hold, review rounds, verification, pull request, completion, and stop events. |
+| `runs` | For each run: `conclusion` (outcome, hold reason, terminal invocation status), the current `hold`, each invocation's last observed status, the governing digests of each recorded admission, the resolved policy digest, and `billable_cost` (`null` when none was recorded). |
+| `items` | Every attention item of the task or one of its runs, open or closed, and the stall notices for the task's invocations: type, status, `created_at`, `decided_at`, the typed cause (`health_diagnostic`, `execution_failure`, `publish_block`, `blocked_on`), the commands applied (command id, action, device id), and the deliveries. |
+| `counts` | Items by type, with every type listed; health notices by code; runs held now; and failed stops. |
+
+Only an unknown task id or a failed read fails the command (exit status 1; a
+usage error exits 2). A section that fails a store check stays in the record
+as `null`, with an error that says why. An empty list was read and holds
+nothing.
+
+- **`task_error`, `timeline_error`, and `items_error`** sit beside `task`,
+  `timeline`, and `items`. One item that fails the store's evidence check
+  fails the whole item list, for every task. The item counts are `null` when
+  the items are, and `failed_stops` when the task is.
+- **`errors` on a run** lists each of the run's reads that failed, by
+  `section`: `admissions`, `resolved_policy_digest`, `billable_cost`,
+  `observation` (the hold and the invocations), or `conclusion`. A null run
+  field was not read exactly when `errors` names its section; otherwise the
+  run has none. The admissions read scans every run's rows, so one
+  unreadable admission fails that section for every run. `runs_held` counts
+  the holds that were read.
+
+Each error has a `kind` and the check's `message`. The kinds are `integrity`
+(a stored row contradicts its history or a row it is bound to),
+`unapproved_recipe` (the reading store does not approve a recipe the stored
+evidence names), and `other` (a failure the store does not classify, a
+database error included). A message is the store's own text: it names ids
+and fields, and a few checks quote the stored value they refuse.
+
+The store answers "not found" both for an unknown task and for a task whose
+own rows are incomplete, so the command fails the same way for both.
+
+Reading the record:
+
+- **`conclusion` is the authenticated one,** the same classification
+  `freesided follow` prints. A run that recorded completion without
+  authenticated publication authority has a `null` conclusion and an
+  `integrity` error in the `conclusion` section, where `follow` fails.
+- **An item gives its typed cause, not its reason line.** The line a card
+  shows is often written from a claim, an agent's question, a reviewer's
+  finding, or a driver error that names host paths, so the record leaves it
+  out with the evidence and claims.
+- **`invocations` are the driver's last observations.** A finished
+  invocation can still read as the status last seen. The authoritative
+  outcome is `conclusion.terminal_status` and the timeline.
+- **`failed_stops` is 0 or 1.** The store keeps the latest cancellation only.
+  A failed stop is a cancellation whose acknowledgement `state` is
+  `failed_to_stop`; the store holds no typed reason for it, so the record
+  gives the acknowledgement's `evidence_digest` and no reason field.
+- **`-approved-recipe` applies only with no daemon.** A running daemon reads
+  with its own approved set. A direct read approves only the digests the
+  flag names, and the store refuses evidence that names any other recipe;
+  the record reports that section as `unapproved_recipe`.
+- **The timeline's shape is part of the record's version.** A change to the
+  task timeline or its events changes `freeside-task-record-v1`.
+
+The record never holds evidence, claims, conversation messages (a command's
+message and attachments included), transcripts, prompt text, credentials, or
+workspace and auth identity. The timeline is the exception a client already
+has: it carries the task's display name, which an agent may have written,
+and an operator's reattempt reason. The record also leaves out four facts no
+store read returns today:
+
+- Which device sent a Stop.
+- Cancellations before the latest one, and hold history.
+- Check proofs listed by run. Verification still appears as timeline events.
+- Token counts.
+
 ### Inspect A Live Database
 
 A `prod` or `dev` daemon holds its database in SQLite exclusive locking mode
