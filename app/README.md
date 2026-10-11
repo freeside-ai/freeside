@@ -160,21 +160,30 @@ closed.
 not yet send a notification when an item needs you: the sender is built, and
 the `freesided` command leaves it off until #1946 is fixed.
 
-Set a phone up once:
+Set a phone up once. Freeside on the iPhone offers these steps right after it
+pairs, and keeps them on this device's card under **Devices**:
 
-1. Install the ntfy app on the iPhone and allow its notifications.
-2. In Freeside on the iPhone, open **Devices**. This device's card shows
-   **Phone notifications** with a **Server** and a **Topic**, each with a copy
-   control.
-3. In the ntfy app, subscribe to that topic. Enter the server too when it is
-   not ntfy's own `https://ntfy.sh`.
-4. On the daemon's host, send a test notification:
+1. Install the ntfy app on the iPhone and allow its notifications. The steps
+   link its App Store page.
+2. In the ntfy app, add a subscription and paste the topic that **Copy Topic**
+   copies. When the daemon publishes to a server other than ntfy's own
+   `https://ntfy.sh`, the steps show that server: turn on **Use another
+   server** in the ntfy app and enter it.
+3. On the daemon's host, send a test notification:
    `freesided notify-test -state-dir /path/to/daemon-state`.
-5. Tap the notification on the phone. Freeside opens on the inbox. If the
-   Devices sheet is still open, the inbox is under it.
+4. Tap the notification on the phone. Freeside opens on the inbox, under the
+   setup or Devices sheet if one is still open, and the steps' **Notification
+   opened** row changes from "Never" to the time.
 
+- **Notification opened is an observation.** The phone records when it opens
+  a notification's link, per pairing, in its own preferences. Any app on the
+  phone can open such a link, and so can a notification sent before the phone
+  paired again, so the row says one was opened here, not that ntfy delivered
+  it under this pairing.
+- **ntfy cannot be subscribed for you.** The ntfy iPhone app takes no link
+  that would add a subscription, so the topic is pasted by hand.
 - **The topic is a secret.** Whoever has it can read this phone's
-  notifications. It is shown only on the paired phone's own card, and the
+  notifications. The paired phone copies it and never draws it, and the
   daemon never logs or prints it. A notification carries no task content: a
   generic title, the item's type, and a link that names the item.
 - **Server.** The daemon publishes to `https://ntfy.sh` unless it is started
