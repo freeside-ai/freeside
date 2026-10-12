@@ -2606,6 +2606,7 @@
                         view: AnyView(
                             bannerDetail.screenshotRetryableReceipt(expanded: false))))
             }
+            surfaces += try await makeRecordedAcknowledgeSurfaces(at: dynamicTypeSize)
             surfaces.append(
                 Surface(
                     name: "unavailable-state",
@@ -3694,6 +3695,61 @@
                 value1: .init(kind: .remediation, invocation_id: remediatorID, remediates_round: 1))
             timeline.review = .init(value1: .init(rounds: [findings, reReview]))
             return timeline
+        }
+
+        /// A stall notice's card after an accepted Acknowledge, and after a
+        /// second one (#1978). The item is shaped like the daemon's
+        /// `invocation_stalled` notice, and each model reaches its state by
+        /// submitting to the mock server, so the receipt drawn is the one an
+        /// accepted command leaves.
+        private func makeRecordedAcknowledgeSurfaces(
+            at dynamicTypeSize: DynamicTypeSize
+        ) async throws -> [Surface] {
+            var stall = AttentionFixtures.fixture(type: .system_health)
+            stall.item.requested_decision = [.acknowledge]
+            stall.item.posture = .init(value1: .advisory)
+            stall.item.health_diagnostic = .init(
+                value1: .init(code: "invocation_stalled", impairs: .none))
+            stall.item.codex_reenrollment_recovery_binding = nil
+            stall.item.reason =
+                "Invocation inv-7 has had no provider response for 5m0s. The writer is still running, "
+                + "possibly a long tool command, and its hard budget is unchanged. This notice resolves "
+                + "itself when provider responses resume or the writer stops."
+            let server = MockServer(items: [stall])
+            let store = InboxStore(client: APIClientFactory.mock(server: server), now: { screenshotNow })
+            store.replaceAll(with: [stall])
+            await preloadReferences(stall.item, into: store)
+
+            var surfaces: [Surface] = []
+            for (name, presses) in [("decision-stall-acknowledged", 1), ("decision-stall-acknowledged-twice", 2)] {
+                let model = DecisionModel(store: store, itemID: stall.item.id)
+                await model.validate()
+                for _ in 0..<presses {
+                    await model.submit(.acknowledge)
+                }
+                #expect(model.appliedRecordRepeat == presses)
+                #expect(model.phase == .idle)
+                let item = try #require(model.snapshot?.item)
+                #expect(item.status == .open && item.requested_decision == [.acknowledge])
+                let detail = DecisionDetailView(
+                    store: store,
+                    itemID: item.id,
+                    loadsAttachments: false,
+                    showsValidationProgress: false,
+                    now: screenshotNow,
+                    model: model)
+                surfaces.append(
+                    Surface(
+                        name: name,
+                        view: AnyView(detail.screenshotCard(item, at: dynamicTypeSize))))
+                surfaces.append(
+                    Surface(
+                        name: "\(name)-phone",
+                        width: 390,
+                        view: AnyView(
+                            detail.screenshotCard(item, at: dynamicTypeSize, compactLayout: true))))
+            }
+            return surfaces
         }
 
         private func makeUnavailableAttachmentSurface(

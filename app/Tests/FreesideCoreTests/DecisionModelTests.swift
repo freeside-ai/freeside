@@ -1939,6 +1939,114 @@ import Testing
         #expect(model.pendingCommand == nil)
     }
 
+    @Test func repeatedRecordOnlyCommandIsCountedWhileTheItemStaysOpen() async {
+        // An accepted acknowledge changes nothing on its item, so the count
+        // is all that tells a second accepted press from the first (#1978).
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-system_health")
+        await model.validate()
+        #expect(model.appliedRecordRepeat == 0)
+
+        await model.submit(.acknowledge)
+        #expect(model.appliedRecord?.action == .acknowledge)
+        #expect(model.appliedRecordRepeat == 1)
+        let first = model.appliedRecord?.command_id
+
+        await model.submit(.acknowledge)
+        #expect(model.appliedRecord?.action == .acknowledge)
+        #expect(model.appliedRecord?.command_id != first)
+        #expect(model.appliedRecordRepeat == 2)
+        #expect(model.snapshot?.item.status == .open)
+        #expect(model.phase == .idle)
+        #expect(model.actionsEnabled && model.isSubmittable(.acknowledge))
+
+        // The count is per action: another action's record starts its own.
+        await model.submit(.stop_unattended)
+        #expect(model.appliedRecord?.action == .stop_unattended)
+        #expect(model.appliedRecordRepeat == 1)
+    }
+
+    @Test func replayedRecordOnlyCommandCountsOnce() async throws {
+        // A lost response and its replay are one command: the retry returns
+        // the original result, so the receipt must not read as a repeat.
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-system_health")
+        await model.validate()
+
+        await server.setBeforeRespond { operationID in
+            if operationID == "submitCommand" { throw InjectedFailure() }
+        }
+        await model.submit(.acknowledge)
+        #expect(model.appliedRecordRepeat == 0)
+        let original = try #require(model.pendingCommand)
+        await server.setBeforeRespond(nil)
+        let client = APIClientFactory.mock(server: server)
+        _ = try await client.submitCommand(body: .json(original)).ok.body.json
+
+        await model.retryLostResponse()
+        #expect(model.appliedRecord?.command_id == original.command_id)
+        #expect(model.appliedRecordRepeat == 1)
+        #expect(model.phase == .idle)
+    }
+
+    @Test func failedRepeatKeepsTheEarlierRecordAndItsCount() async {
+        // A ledger write failure stops the second command before it is sent
+        // and before the first record clears. The card then shows the failure
+        // at its head and the earlier receipt by the button; both are true.
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-system_health")
+        await model.validate()
+        await model.submit(.acknowledge)
+        let recorded = model.appliedRecord?.command_id
+
+        store.pendingCommandsObserver = { false }
+        await model.submit(.acknowledge)
+        #expect(model.submissionError != nil)
+        #expect(model.appliedRecord?.command_id == recorded)
+        #expect(model.appliedRecordRepeat == 1)
+    }
+
+    /// The other record-only actions take acknowledge's path: an accepted
+    /// command leaves the item open and decidable, and the card has the
+    /// same counted receipt to draw by the button (#1978).
+    @Test(arguments: [
+        (Components.Schemas.Action.mark_seen, "item-ready_for_final_review"),
+        (.open_pr, "item-ready_for_final_review"),
+        (.inspect_trust_failure, "item-publish_blocked"),
+        (.run_doctor, "item-system_health"),
+    ])
+    func everyRecordOnlyActionLeavesItsItemOpenWithACountedReceipt(
+        action: Components.Schemas.Action, itemID: String
+    ) async throws {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: itemID, openURL: { _ in true })
+        await model.validate()
+
+        for press in 1...2 {
+            if action == .inspect_trust_failure {
+                // The button only reveals the details; the reveal records.
+                await model.recordTrustFailureInspection()
+            } else {
+                await model.submit(action)
+            }
+            let item = try #require(model.snapshot?.item)
+            #expect(model.appliedRecord?.action == action)
+            #expect(model.appliedRecordRepeat == press)
+            #expect(item.status == .open)
+            #expect(model.actionsEnabled && model.isSubmittable(action))
+            #expect(DecisionDetailView.drawsControlGroup(item))
+            let receipt = try #require(
+                DecisionCardComposition.recordOnlyReceipt(
+                    action: action, item: item, repeatCount: model.appliedRecordRepeat))
+            #expect(receipt.contains(AttentionDisplay.label(action, for: item)))
+            #expect(receipt.contains("2 times") == (press == 2))
+        }
+    }
+
     @Test func nonResolvingDecisionKeepsTheItemOpenAndDecidable() async {
         // Plan §4: acknowledge means seen, never resolved; a system_health
         // item stays blocking, so further actions remain available.

@@ -326,6 +326,25 @@ struct DecisionCardComposition: Equatable {
         return question.decisions.isEmpty
     }
 
+    /// The receipt sentence for an accepted command that only records
+    /// (`ActionOutcome.records`) on an item that stays open, or nil for any
+    /// other command. Such a command changes nothing else on the card, so its
+    /// receipt draws with the control group, beside the button the operator
+    /// used, and counts a repeat so a second accepted press reads differently
+    /// from the first (#1978). A concluding action, `discuss`, and a
+    /// record-only action whose item has since closed keep the head receipt.
+    static func recordOnlyReceipt(
+        action: Components.Schemas.Action,
+        item: Components.Schemas.AttentionItem,
+        repeatCount: Int
+    ) -> String? {
+        guard ActionOutcome.of(action) == .records, item.status == .open else { return nil }
+        let label = AttentionDisplay.label(action, for: item)
+        return repeatCount > 1
+            ? "\(label) recorded \(repeatCount) times. This item stays open."
+            : "\(label) recorded. This item stays open."
+    }
+
     /// The type eyebrow every card opens with (R27).
     struct Eyebrow: Equatable {
         /// The type's name, which the inbox row carries too.
