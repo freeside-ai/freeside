@@ -156,9 +156,12 @@ notification, and tapping it opens Freeside. Freeside has no Apple push channel
 of its own in Phase 1, so the ntfy app is what listens while Freeside is
 closed.
 
-**Status.** The setup and the test notification below work. The daemon does
-not yet send a notification when an item needs you: the sender is built, and
-the `freesided` command leaves it off until #1946 is fixed.
+**What notifies.** The daemon notifies each paired device once for each open
+item, within a few seconds of the item appearing. It sends nothing for an item
+created before the device paired, nothing for a snoozed proposal until its
+snooze ends, and no reminder for an item that stays open. A send that fails is
+retried up to six times over about half an hour; the inbox shows the item
+either way.
 
 Set a phone up once. Freeside on the iPhone offers these steps right after it
 pairs, and keeps them on this device's card under **Devices**:

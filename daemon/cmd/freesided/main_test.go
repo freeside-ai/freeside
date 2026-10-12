@@ -829,6 +829,13 @@ func TestRunValidatesConfiguration(t *testing.T) {
 	}); err == nil {
 		t.Fatal("run accepted a negative reconcile interval")
 	}
+	if _, err := run(ctx, nil, config{
+		Environment: environmentEphemeral,
+		DBPath:      filepath.Join(t.TempDir(), "freeside.db"),
+		ListenAddr:  "127.0.0.1:0", AttentionDeliveryInterval: -time.Second,
+	}); err == nil {
+		t.Fatal("run accepted a negative attention delivery interval")
+	}
 }
 
 func TestConfigStoreOptions(t *testing.T) {

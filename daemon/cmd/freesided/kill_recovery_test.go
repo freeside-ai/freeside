@@ -9,11 +9,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -53,12 +53,14 @@ type processFixture struct {
 // in-process engine tests prove the same durable states; this fixture proves
 // those states survive abrupt OS process death with the real freesided binary,
 // one SQLite store, and one file-backed permanent fake.
+//
+// It is also the proof that the freesided command starts the notification
+// sender (#1924): every other sender test composes the daemon in process and
+// sets the interval itself. The discuss is submitted once the feedback item's
+// notification has reached the provider, so the recovery matrix runs with a
+// delivery recorded on the item the engine binds its intent to.
 func TestDaemonRecoversAcrossSIGKILL(t *testing.T) {
 	binary := buildKillTestDaemon(t)
-	ntfy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(ntfy.Close)
 
 	tests := []struct {
 		name               string
@@ -73,6 +75,7 @@ func TestDaemonRecoversAcrossSIGKILL(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
+			ntfy := newNtfySink(t, http.StatusOK)
 			marker := filepath.Join(root, "kill-checkpoint")
 			seedKillRecoveryReadiness(t, filepath.Join(root, "freeside.db"))
 			first := startProcessFixture(t, binary, root, ntfy.URL, tc.checkpoint, marker)
@@ -80,6 +83,7 @@ func TestDaemonRecoversAcrossSIGKILL(t *testing.T) {
 			approval := client.waitForItem(t, domain.ItemID("approval-"+string(defaultFakeRunID)))
 			client.submit(t, "approve-kill-recovery", approval, domain.ActionApprove, "")
 			feedback := client.waitForItem(t, domain.ItemID("feedback-"+string(defaultFakeRunID)))
+			waitForNotification(t, ntfy, feedback.Item.ID)
 			client.submit(t, killTestCommandID, feedback, domain.ActionDiscuss, "exercise restart recovery")
 
 			waitForMarker(t, marker, tc.checkpoint)
@@ -265,6 +269,9 @@ func startProcessFixture(
 		"-listen", "127.0.0.1:0",
 		"-ntfy-url", ntfyURL,
 		"-reconcile-interval", "5ms",
+		// Far shorter than the command's default, so a notification for each
+		// item this device is owed lands while the test decides on it.
+		"-attention-delivery-interval", "5ms",
 		"-seed-walking-skeleton",
 	}
 	p := &processFixture{
@@ -520,6 +527,22 @@ func (c *processClient) getJSON(t *testing.T, deadline time.Time, path string, t
 		}
 	}
 	return response.StatusCode
+}
+
+// waitForNotification waits until the daemon has published a notification
+// whose tap link names the item.
+func waitForNotification(t *testing.T, sink *ntfySink, id domain.ItemID) {
+	t.Helper()
+	link := "freeside://attention/items/" + string(id) + "?"
+	deadline := time.Now().Add(processWaitBound)
+	for time.Now().Before(deadline) {
+		_, clicks := sink.published()
+		if slices.ContainsFunc(clicks, func(click string) bool { return strings.HasPrefix(click, link) }) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("no notification for item %q reached the provider within %s", id, processWaitBound)
 }
 
 func waitForMarker(t *testing.T, path, want string) {
