@@ -1340,6 +1340,7 @@ type claudeComposition struct {
 	reviewReplier                   *publish.ExternalReviewReplier
 	reviewSource                    exec.ReviewSource
 	shadowReviewSource              exec.ReviewSource
+	reviewAdmission                 engine.ReviewAdmitter
 	reviewRecovery                  func(context.Context) error
 	reviewConfigurationDigest       domain.Digest
 	shadowReviewConfigurationDigest domain.Digest
@@ -1676,6 +1677,15 @@ func composeClaudeDriver(
 	}
 	var shadowReviewRecovery func(context.Context) error
 	var shadowReviewSource exec.ReviewSource
+	// The allowlist each review proxy admits, which a review admission
+	// snapshot records for its role.
+	reviewEgress := map[domain.RoleName][]string{
+		domain.RoleReviewer:       {"chatgpt.com:443"},
+		domain.RoleShadowReviewer: {"api.anthropic.com:443"},
+	}
+	if cfg.ReviewAuthMode == ward.CodexAuthAPIKey {
+		reviewEgress[domain.RoleReviewer] = []string{"api.openai.com:443"}
+	}
 	if cfg.ShadowReviewImage != "" {
 		shadowLifecycle, lifecycleErr := ward.NewClaudeReviewLifecycle(
 			runtime, wardConfig, productionRigRuntimeAuthorizer(cfg.StateDir, cfg.RigTokenFile),
@@ -1692,7 +1702,7 @@ func composeClaudeDriver(
 		shadowReviewRecovery = shadowRecovery.Reconcile
 		shadowConfig := ward.CodexReviewConfig{
 			InputRoot: cfg.ReviewInputRoot, WorkspaceTarget: "/workspace/project",
-			ProviderEndpoints: []string{"api.anthropic.com:443"},
+			ProviderEndpoints: reviewEgress[domain.RoleShadowReviewer],
 			ApprovedImage:     cfg.ShadowReviewImage, ObserverImage: cfg.ExporterImage,
 			Model: cfg.ShadowReviewModel, ReasoningEffort: cfg.ShadowReviewReasoningEffort,
 			AuthStoreLeaser: adapters.Leaser, AuthState: adapters.AuthState,
@@ -1724,13 +1734,9 @@ func composeClaudeDriver(
 		if err != nil {
 			return nil, fmt.Errorf("snapshot Codex review host instructions: %w", err)
 		}
-		reviewEndpoints := []string{"chatgpt.com:443"}
-		if cfg.ReviewAuthMode == ward.CodexAuthAPIKey {
-			reviewEndpoints = []string{"api.openai.com:443"}
-		}
 		reviewConfig := ward.CodexReviewConfig{
 			InputRoot: cfg.ReviewInputRoot, WorkspaceTarget: "/workspace/project",
-			ProviderEndpoints: reviewEndpoints, ApprovedImage: cfg.ReviewImage,
+			ProviderEndpoints: reviewEgress[domain.RoleReviewer], ApprovedImage: cfg.ReviewImage,
 			ObserverImage: cfg.ExporterImage, Model: cfg.ReviewModel,
 			ReasoningEffort: cfg.ReviewReasoningEffort, AccessTokenLifetimeFloor: time.Hour,
 			AccessTokenRefreshThreshold: 2 * time.Hour,
@@ -1876,6 +1882,7 @@ func composeClaudeDriver(
 		},
 		publicationTransport: publicationTransport,
 		publisher:            publisher, reviewSource: reviewSource, shadowReviewSource: shadowReviewSource,
+		reviewAdmission: reviewAdmitter(st, *agents, reviewEgress),
 		reviewRecovery: func(recoveryCtx context.Context) error {
 			err := reviewRecovery.Reconcile(recoveryCtx)
 			if shadowReviewRecovery != nil {

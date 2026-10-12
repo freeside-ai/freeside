@@ -59,11 +59,15 @@ type CodexReviewSourceConfig struct {
 	ConfigurationDigest  domain.Digest
 	CostOwner            string
 	Now                  func() time.Time
-	// Admit, when set, runs before a new review request is recorded. The
-	// daemon uses it to recheck that the review role's lineup line still
-	// resolves to this source's identity, and that the request's task has no
-	// line asking for another agent (plan §5.4); a refusal fails the request
-	// as a configuration failure and nothing is recorded or started.
+	// Admit, when set, runs before a new review request is recorded, and
+	// again before a recorded request whose launch never started is launched.
+	// The daemon uses it to recheck that the review role's lineup line still
+	// resolves to this source's identity, that the request's task has no line
+	// asking for another agent, and that the request's admission snapshot
+	// names what this source launches (plan §5.4). It is a recheck: the
+	// engine admitted the invocation and the request carries that snapshot.
+	// A refusal fails the request as a configuration failure and nothing is
+	// recorded or started.
 	Admit func(context.Context, exec.ReviewRequest) error
 
 	// provider supplies the vendor-varying labels, version tags, and review

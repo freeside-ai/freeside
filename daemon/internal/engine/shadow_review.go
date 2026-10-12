@@ -119,8 +119,19 @@ func (w *productionPublicationWorkflow) reconcileShadowReview(
 		return true, nil
 	}
 
+	// The shadow arm has no request row; its admission snapshot is the one
+	// durable fact written before the source is asked. A refusal abandons the
+	// observation as a source failure and never touches the routed gate.
+	admission, err := w.ensureReviewAdmission(ctx, domain.RoleShadowReviewer, task.RunID, id)
+	if err != nil {
+		var refusal *exec.ReviewSourceFailure
+		if errors.As(err, &refusal) {
+			return w.abandonShadowReview(task, routed.Round, id, err)
+		}
+		return false, err
+	}
 	req, authority, err := w.productionReviewRequest(
-		task, binding, checkpoint, id, routed.Round, instructions,
+		task, binding, checkpoint, id, routed.Round, instructions, admission,
 	)
 	if err != nil {
 		return false, err

@@ -25,6 +25,7 @@ func reviewRequest(head string) exec.ReviewRequest {
 			RecipeDigest:           domain.Digest("sha256:" + strings.Repeat("c", 64)),
 			EvidenceSnapshotDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
 		}, Instructions: instructions, RequestedAt: fixedTime,
+		Admission: fake.ReviewAdmission(domain.RoleReviewer, "run-1", "review-run-1-1"),
 	}
 }
 

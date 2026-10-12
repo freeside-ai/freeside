@@ -32,9 +32,10 @@ var (
 	ErrInputLimitInvalid = errors.New("stage input byte limit is invalid")
 	// ErrStageInputsMissing: a legacy admission has no materializable snapshot.
 	ErrStageInputsMissing = errors.New("stage input snapshot is missing")
-	// ErrLegacyReviewRequest: an authenticated request predates explicit review
-	// instruction authority. It may be torn down and superseded, never accepted.
-	ErrLegacyReviewRequest = errors.New("legacy review request has no instruction authority")
+	// ErrLegacyReviewRequest: an authenticated request a previous daemon wrote,
+	// before requests carried their review instruction authority or their
+	// review admission. It may be torn down and superseded, never accepted.
+	ErrLegacyReviewRequest = errors.New("legacy review request predates its current authority")
 	// ErrSupersededReviewRequest reports an otherwise valid persisted request
 	// whose instruction authority was replaced by the current trusted snapshot.
 	// It is torn down before a fresh review round is scheduled.

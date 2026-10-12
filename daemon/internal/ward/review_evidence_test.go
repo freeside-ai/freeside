@@ -14,7 +14,8 @@ func TestDecodeRetainedCodexReviewPreservesInvalidUTF8(t *testing.T) {
 	events := []byte{'e', 0xff, 0x00}
 	outcome := codexGoldenReviewOutcome(string(events))
 	request := exec.ReviewRequest{
-		RunID: "run-golden", Round: 1, Repo: "owner/repo", RepositoryID: 1, BaseRef: "main",
+		Admission: testReviewAdmission("run-golden"),
+		RunID:     "run-golden", Round: 1, Repo: "owner/repo", RepositoryID: 1, BaseRef: "main",
 		BaseSHA: outcome.Result.BaseSHA, HeadSHA: outcome.Result.HeadSHA, Workspace: "/workspace",
 		Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(), RequestedAt: codexReviewEpoch,
 	}
@@ -37,11 +38,12 @@ func TestDecodeRetainedCodexReviewPreservesInvalidUTF8(t *testing.T) {
 }
 
 func TestDecodeRetainedCodexReview(t *testing.T) {
-	for _, corruption := range []string{"none", "request legacy", "request run", "request round", "request head", "request digest", "outcome digest", "outcome invocation", "collection", "provider", "state"} {
+	for _, corruption := range []string{"none", "request before admission", "request admission", "request legacy", "request run", "request round", "request head", "request digest", "outcome digest", "outcome invocation", "collection", "provider", "state"} {
 		t.Run(corruption, func(t *testing.T) {
 			outcome := codexGoldenReviewOutcome("{}")
 			request := exec.ReviewRequest{
-				RunID: "run-golden", Round: 1, Repo: "owner/repo", RepositoryID: 1, BaseRef: "main",
+				Admission: testReviewAdmission("run-golden"),
+				RunID:     "run-golden", Round: 1, Repo: "owner/repo", RepositoryID: 1, BaseRef: "main",
 				BaseSHA: outcome.Result.BaseSHA, HeadSHA: outcome.Result.HeadSHA, Workspace: "/workspace",
 				Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(), RequestedAt: codexReviewEpoch,
 			}
@@ -65,9 +67,24 @@ func TestDecodeRetainedCodexReview(t *testing.T) {
 			case "state":
 				state = "unknown"
 			}
+			if corruption == "request admission" {
+				request.Admission.Role = domain.RoleImplementer
+			}
 			requestBody, err := json.Marshal(request)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if corruption == "request before admission" {
+				// A round reviewed before requests carried an admission: its
+				// retained evidence still reads.
+				var fields map[string]json.RawMessage
+				if err := json.Unmarshal(requestBody, &fields); err != nil {
+					t.Fatal(err)
+				}
+				delete(fields, "admission")
+				if requestBody, err = json.Marshal(fields); err != nil {
+					t.Fatal(err)
+				}
 			}
 			body, err := json.Marshal(outcome)
 			if err != nil {
@@ -82,7 +99,7 @@ func TestDecodeRetainedCodexReview(t *testing.T) {
 				bodyDigest = "wrong"
 			}
 			got, err := DecodeRetainedCodexReview(binding, requestBody, requestDigest, state, body, bodyDigest)
-			if corruption == "none" {
+			if corruption == "none" || corruption == "request before admission" {
 				if err != nil {
 					t.Fatal(err)
 				}

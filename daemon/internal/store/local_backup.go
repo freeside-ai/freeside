@@ -622,10 +622,14 @@ func checkpointArtifactDigests(
 			_ = reviewRows.Close()
 			return artifactClosure{}, errors.New("codex review request instruction closure is null")
 		}
+		// A request written before review admission carries its instruction
+		// artifacts and no snapshot. It is held to what it had to satisfy
+		// then, so a retained one neither fails the backup nor drops its
+		// artifacts from it.
 		var request exec.ReviewRequest
 		if err := strictjson.Decode(
 			body, &request, strictjson.TolerateInvalidUTF8, strictjson.NoLimit,
-		); err != nil || request.Validate() != nil {
+		); err != nil || exec.ValidateRetainedReviewRequest(body, request) != nil {
 			_ = reviewRows.Close()
 			return artifactClosure{}, errors.New("codex review request instruction closure is invalid")
 		}

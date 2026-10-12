@@ -98,7 +98,8 @@ func TestCodexReviewJournalClassifiesRejectedPersistedRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := exec.ReviewRequest{
-		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42,
+		Admission: testReviewAdmission("run-1"),
+		RunID:     "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42,
 		BaseRef: "main", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
 		Workspace: "/seed/candidate", Verification: exec.ReviewVerificationEvidence{
 			Outcome:                domain.VerificationPassed,
@@ -145,6 +146,45 @@ func TestCodexReviewJournalClassifiesRejectedPersistedRows(t *testing.T) {
 	}
 	if _, err := adapters.Journal.GetCodexReviewRequest(ctx, "review-run-1"); !errors.Is(err, exec.ErrLegacyReviewRequest) {
 		t.Fatalf("legacy persisted request = %v, want ErrLegacyReviewRequest", err)
+	}
+	// The second legacy shape: a request persisted before review admission
+	// carries its instructions and no snapshot. A snapshot that is present
+	// and invalid is damage, not a previous daemon's request.
+	for name, tc := range map[string]struct {
+		admission  func(map[string]json.RawMessage)
+		wantLegacy bool
+	}{
+		"no admission": {func(fields map[string]json.RawMessage) { delete(fields, "admission") }, true},
+		"an invalid admission": {func(fields map[string]json.RawMessage) {
+			fields["admission"] = json.RawMessage(`{"invocation_id":"review-run-1"}`)
+		}, false},
+	} {
+		fields := make(map[string]json.RawMessage)
+		if err := json.Unmarshal(requestBody, &fields); err != nil {
+			t.Fatal(err)
+		}
+		tc.admission(fields)
+		body, err := json.Marshal(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx,
+			`UPDATE codex_review_requests SET body = ?, body_digest = ? WHERE invocation_id = ?`,
+			string(body), fmt.Sprintf("sha256:%x", sha256.Sum256(body)), "review-run-1"); err != nil {
+			t.Fatal(err)
+		}
+		_, err = adapters.Journal.GetCodexReviewRequest(ctx, "review-run-1")
+		if !errors.Is(err, ward.ErrCodexReviewRequestRejected) {
+			t.Fatalf("persisted request with %s = %v, want ErrCodexReviewRequestRejected", name, err)
+		}
+		if got := errors.Is(err, exec.ErrLegacyReviewRequest); got != tc.wantLegacy {
+			t.Fatalf("persisted request with %s: legacy = %t, want %t (%v)", name, got, tc.wantLegacy, err)
+		}
+	}
+	if _, err := db.ExecContext(ctx,
+		`UPDATE codex_review_requests SET body = ?, body_digest = ? WHERE invocation_id = ?`,
+		string(legacyBody), legacyDigest, "review-run-1"); err != nil {
+		t.Fatal(err)
 	}
 	outcome := ward.CodexReviewSourceOutcome{
 		InvocationID: "review-run-1", FailureClass: domain.ReviewFailureContradiction,
@@ -310,7 +350,8 @@ func TestCodexReviewJournalRejectsRewrittenOutcomeAuthority(t *testing.T) {
 			id = "review-outcome-ready"
 		}
 		request := exec.ReviewRequest{
-			RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42,
+			Admission: testReviewAdmission("run-1"),
+			RunID:     "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42,
 			BaseRef: "main", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
 			Workspace: "/seed/candidate", Verification: exec.ReviewVerificationEvidence{
 				Outcome:                domain.VerificationPassed,

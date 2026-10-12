@@ -110,6 +110,7 @@ type faultReviewSource struct {
 	failRequestWith       error
 	requestedWorkspace    string
 	requestedInstructions exec.ReviewInstructionBinding
+	requestedAdmission    domain.ReviewAdmission
 }
 
 func (s *faultReviewSource) RequestReview(
@@ -131,6 +132,7 @@ func (s *faultReviewSource) RequestReview(
 	}
 	s.requestedWorkspace = req.Workspace
 	s.requestedInstructions = req.Instructions
+	s.requestedAdmission = req.Admission
 	if s.failRequestAfterStart {
 		s.failRequestAfterStart = false
 		return &exec.ReviewSourceFailure{
@@ -223,6 +225,7 @@ type productionPublicationHarness struct {
 	reviewer                  *fake.ReviewSource
 	reviewerDir               string
 	reviewSource              exec.ReviewSource
+	reviewAdmission           engine.ReviewAdmitter
 	reviewConfigurationDigest domain.Digest
 	remediationPromptPackage  domain.Digest
 	productionDelivery        func(context.Context, exec.StartSpec) error
@@ -474,6 +477,7 @@ func newProductionPublicationHarnessWithMetadata(
 	p.remediationPromptPackage = productionDigest(remediationPromptBody)
 	putProductionBlob(t, h, p.remediationPromptPackage, remediationPromptBody)
 	p.reviewSource = p.reviewer
+	p.reviewAdmission = fake.AdmitReview
 	// Mirror production: the signet decision-time adoption gate reads the
 	// engine's effective reviewer configuration. The closure reads the
 	// harness field so tests that drift the digest after construction stay
@@ -912,6 +916,7 @@ func (p *productionPublicationHarness) newEngineForMode(
 			HoldRetryInterval:              time.Minute,
 			Now:                            func() time.Time { return p.now },
 			ReviewSource:                   p.reviewSource,
+			ReviewAdmission:                p.reviewAdmission,
 			ReviewRecovery:                 reviewRecovery,
 			ReviewConfigurationDigest:      p.reviewConfigurationDigest,
 			NewRoom: func(image domain.ProjectImage, size ward.ContainerSize) (engine.ProductionVerificationRoom, error) {
@@ -1735,7 +1740,13 @@ func TestProductionPersistedCleanReviewRegatesRequestAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The record is current only with the admission its invocation ran under:
+	// one without is a previous daemon's, which the next round supersedes.
 	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutReviewAdmission(p.ctx, fake.ReviewAdmission(
+			domain.RoleReviewer, record.RunID, record.InvocationID)); err != nil {
+			return err
+		}
 		return tx.PutReviewRecord(p.ctx, record, nil)
 	}); err != nil {
 		t.Fatal(err)

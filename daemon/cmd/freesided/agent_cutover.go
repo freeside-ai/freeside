@@ -47,87 +47,33 @@ func (e *roleAdmissionError) Error() string {
 
 func (e *roleAdmissionError) Unwrap() error { return e.Err }
 
-// reviewAgent is a review role's resolved agent with what its launch passes:
-// the offer's model and the effort as the harness names it.
-type reviewAgent struct {
-	engine.RoleAgent
-	Model, NativeEffort string
-}
-
-// reviewRoleAgent resolves a review role's line and checks what the daemon
-// can check without a review launch record (#898 adds launch coverage): the
-// line runs the code-owned review prompt, the agent's harness is the one this
-// role's review source drives, the offer is still on sale, the enrollment
-// holds a current credential, the agent carries the attended mark for the
-// review launch, and the agent names a model and an effort the launch can
-// pass. Review sources run only in an unattended daemon, so the mark is
-// always required. A review has no attempt budget until #898, so the offer
-// and the credential are held to the instant of the check.
-func reviewRoleAgent(
-	ctx context.Context, st *store.Store, tree agenttree.Tree, role domain.RoleName, now time.Time,
-) (reviewAgent, error) {
+// reviewRole is what this daemon's composition fixes about a review role's
+// source: the code-owned review prompt, the harness client the source drives
+// (Codex for the routed reviewer, Claude for the shadow), the model shape the
+// review launch can pass, and the allowlist the source's proxy admits.
+func reviewRole(role domain.RoleName, egress []string) engine.ReviewRole {
 	client := domain.HarnessClientCodexCLI
 	if role == domain.RoleShadowReviewer {
 		client = domain.HarnessClientClaudeCode
 	}
-	agent, err := engine.ResolveRole(ctx, st, tree, role)
-	if err != nil {
-		return reviewAgent{}, &roleAdmissionError{Role: role, Err: err}
-	}
-	refuse := func(format string, args ...any) (reviewAgent, error) {
-		return reviewAgent{}, &roleAdmissionError{
-			Role: role, Err: fmt.Errorf("%s: %w", fmt.Sprintf(format, args...), engine.ErrAgentNotAdmissible),
-		}
-	}
 	name, digest := ward.ProductionReviewPromptIdentity()
-	if agent.Line.PromptName != name || agent.Line.PromptDigest != digest {
-		return refuse("the lineup selects prompt %s %s, this daemon reviews with %s %s",
-			agent.Line.PromptName, agent.Line.PromptDigest, name, digest)
+	return engine.ReviewRole{
+		Role: role, PromptName: name, PromptDigest: digest, HarnessClient: client,
+		EffectiveEgress: egress, ValidModel: validReviewLaunchModel,
 	}
-	if agent.Enrollment.HarnessClient != client {
-		return refuse("agent %s runs harness client %s, the %s source drives %s",
-			agent.Line.AgentName, agent.Enrollment.HarnessClient, role, client)
-	}
-	if err := domain.ValidateOfferCoversDeadline(agent.Resolved.Offer, now); err != nil {
-		return refuse("%v", err)
-	}
-	// A store the review source refreshes under its lease has no expiry to
-	// hold it to here; any other observable expiry must not have passed.
-	if agent.Enrollment.RefreshStrategy != domain.RefreshOnDemand {
-		if err := domain.ValidateGenerationExpiryMargin(agent.Enrollment, agent.Generation, now, 0); err != nil {
-			return refuse("%v", err)
-		}
-	}
-	launch, err := agentbaseline.RoleLaunch(role)
+}
+
+// reviewRoleAgent resolves a review role's line and runs the review admission
+// checks (engine.CheckReviewRole) with no task in view: the startup and
+// preflight checks, and the values the review sources are composed with.
+func reviewRoleAgent(
+	ctx context.Context, st *store.Store, tree agenttree.Tree, role domain.RoleName, now time.Time,
+) (engine.ReviewRoleAgent, error) {
+	agent, err := engine.CheckReviewRole(ctx, st, tree, agentbaseline.RoleLaunch, reviewRole(role, nil), "", now)
 	if err != nil {
-		return refuse("launch: %v", err)
+		return engine.ReviewRoleAgent{}, &roleAdmissionError{Role: role, Err: err}
 	}
-	if tree.Attended(agent.Line.AgentName, agent.Resolved.Definition.Digest, launch.Digest) {
-		return refuse("agent %s has no attended mark for launch %s, so it cannot review unattended",
-			agent.Line.AgentName, launch.Digest)
-	}
-	// Every review launch passes a model and an effort, and the approved
-	// review configuration digest covers both. An agent that names neither
-	// would be a launch nobody approved, so it is refused, not run on the
-	// harness's own defaults.
-	selection, err := domain.DeriveAgentLaunchSelection(
-		agent.Resolved.Definition, agent.Resolved.Adapter, agent.Resolved.Offer)
-	if err != nil {
-		return refuse("%v", err)
-	}
-	if selection.RouteModelID == "" {
-		return refuse("agent %s is on an offer that names no model, and a review launch always passes one",
-			agent.Line.AgentName)
-	}
-	if selection.NativeEffort == "" {
-		return refuse("agent %s asks effort %s, which sends none, and a review launch always passes one",
-			agent.Line.AgentName, agent.Resolved.Definition.Effort)
-	}
-	if !validReviewLaunchModel(selection.RouteModelID) {
-		return refuse("agent %s is on an offer whose model the review launch cannot pass as one argument",
-			agent.Line.AgentName)
-	}
-	return reviewAgent{RoleAgent: agent, Model: selection.RouteModelID, NativeEffort: selection.NativeEffort}, nil
+	return agent, nil
 }
 
 // resolveReviewSelection fills the review identities, cost owners, models,
@@ -159,58 +105,66 @@ func resolveReviewSelection(
 	return cfg, nil
 }
 
-// reviewAdmission is the check a review source runs before each review: the
+// reviewAdmission is the check a review source runs before each launch: the
 // role's line still resolves, still holds a current credential, and still
-// selects the identity the source was composed with. The tree is fixed for
-// the daemon's run, so what can change is the store (a disabled identity, a
-// credential that expired) and the clock (an offer past its not_after). The
-// model and effort the source was composed with come from the tree alone, so
-// they cannot move under a running source and are not compared here.
+// selects the identity the source was composed with, and the request's task
+// has no line asking for another agent (engine.CheckReviewRole). The tree is
+// fixed for the daemon's run, so what can change is the store (a disabled
+// identity, a credential that expired, a task line) and the clock (an offer
+// past its not_after).
 //
-// A task line cannot move a review to another agent: the source runs one
-// identity and one agent, fixed when the daemon composed it, until the review
-// admission record exists (#898). So a line is never silently ignored, a
-// request for a task whose reviewer line names any other agent is refused,
-// and so is one whose line does not hold against the command that set it.
-// The shadow reviewer takes no task line and is not checked for one.
+// The engine admitted the request's invocation once, before it asked the
+// source, and the request carries that snapshot. This check is not that
+// admission and never replaces the snapshot: it is the recheck at the instant
+// a launch starts, which may be a restart and a lineup later. The source
+// launches under the identity, model, and effort it was composed with, so a
+// snapshot that names another of the three is refused: the launch would run
+// one agent and the review record would name another.
 func reviewAdmission(
 	st *store.Store, tree agenttree.Tree, role domain.RoleName, identity domain.AuthIdentityID,
 	now func() time.Time,
 ) func(context.Context, exec.ReviewRequest) error {
 	return func(ctx context.Context, req exec.ReviewRequest) error {
-		agent, err := reviewRoleAgent(ctx, st, tree, role, now())
+		agent, err := engine.CheckReviewRole(
+			ctx, st, tree, agentbaseline.RoleLaunch, reviewRole(role, nil), req.RunID, now())
 		if err != nil {
-			return err
+			return &roleAdmissionError{Role: role, Err: err}
 		}
 		if agent.Identity.ID != identity {
 			return &roleAdmissionError{Role: role, Err: fmt.Errorf(
 				"the line now resolves identity %s, the review source runs under %s: %w",
 				agent.Identity.ID, identity, engine.ErrAgentNotAdmissible)}
 		}
-		if !role.TaskLineEligible() {
-			return nil
-		}
-		var (
-			line  domain.TaskLine
-			found bool
-		)
-		if err := st.Read(ctx, func(tx *store.ReadTx) error {
-			var err error
-			line, found, err = engine.RunTaskLine(ctx, tx, req.RunID, role)
-			return err
-		}); err != nil {
-			return &roleAdmissionError{Role: role, Err: errors.Join(engine.ErrAgentNotAdmissible, err)}
-		}
-		// The refusal names the line by its id and never by its agent. That
-		// name is text an operator typed, and a credential pasted there can
-		// pass the name grammar; this error becomes the review failure's
-		// recorded reason.
-		if found && line.Agent != agent.Line.AgentName {
+		admitted := req.Admission
+		if admitted.Role != role || admitted.AuthIdentityID != identity ||
+			admitted.AgentBinding.RouteModelID != agent.Model ||
+			admitted.AgentBinding.NativeEffort != agent.NativeEffort {
 			return &roleAdmissionError{Role: role, Err: fmt.Errorf(
-				"task line %s names an agent other than %q, the one the review source runs; it cannot run another agent for one task: %w",
-				line.ID, agent.Line.AgentName, engine.ErrAgentNotAdmissible)}
+				"the invocation was admitted as %s under identity %s with %s, the review source runs %s under %s with %s/%s: %w",
+				admitted.Role, admitted.AuthIdentityID, admitted.ModelConfiguration(),
+				role, identity, agent.Model, agent.NativeEffort, engine.ErrAgentNotAdmissible)}
 		}
 		return nil
+	}
+}
+
+// reviewAdmitter admits a review invocation through the lineup the daemon
+// loaded (engine.AgentSelection.AdmitReview). Each role's snapshot records
+// the allowlist that role's review proxy admits, which is the source's own
+// and not the writer stages' egress the selection carries.
+func reviewAdmitter(
+	st *store.Store, agents engine.AgentSelection, egress map[domain.RoleName][]string,
+) engine.ReviewAdmitter {
+	return func(
+		ctx context.Context, role domain.RoleName, runID domain.RunID,
+		invocationID domain.InvocationID, admittedAt time.Time,
+	) (domain.ReviewAdmission, error) {
+		admission, err := agents.AdmitReview(
+			ctx, st, reviewRole(role, egress[role]), runID, invocationID, admittedAt)
+		if err != nil {
+			return domain.ReviewAdmission{}, &roleAdmissionError{Role: role, Err: err}
+		}
+		return admission, nil
 	}
 }
 

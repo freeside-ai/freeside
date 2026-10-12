@@ -251,7 +251,8 @@ func TestReviewSourcesSeedTheEvaluatedCommit(t *testing.T) {
 				}
 				id := domain.InvocationID("review-" + strings.Repeat("e", 24))
 				request := exec.ReviewRequest{
-					RunID: "run-1", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+					Admission: testReviewAdmission("run-1"),
+					RunID:     "run-1", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 					RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 					BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
 					EvaluatedSHA: tc.evaluated(seedSpec.Seed.Base.BaseSHA),

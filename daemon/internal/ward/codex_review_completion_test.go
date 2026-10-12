@@ -84,7 +84,8 @@ func TestCodexReviewTruncatedCollectionRetriesWithoutCleanup(t *testing.T) {
 	}
 	id := domain.InvocationID("review-retry-collection")
 	req := exec.ReviewRequest{
-		RunID: "run-1", Round: 1, Repo: seed.Seed.Base.Repo, RepositoryID: seed.Seed.Base.RepositoryID,
+		Admission: testReviewAdmission("run-1"),
+		RunID:     "run-1", Round: 1, Repo: seed.Seed.Base.Repo, RepositoryID: seed.Seed.Base.RepositoryID,
 		BaseRef: seed.Seed.Base.BaseRef, BaseSHA: strings.Repeat("a", 40), HeadSHA: seed.Seed.Base.BaseSHA,
 		Workspace: seed.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
 		Instructions: testReviewInstructionBinding(), RequestedAt: codexReviewEpoch,
@@ -244,7 +245,8 @@ func TestCodexReviewFailedCollectionSurvivesCleanupAndRestart(t *testing.T) {
 			}
 			id := domain.InvocationID("review-failed-collection")
 			req := exec.ReviewRequest{
-				RunID: "run-1", Round: 1, Repo: seed.Seed.Base.Repo, RepositoryID: seed.Seed.Base.RepositoryID,
+				Admission: testReviewAdmission("run-1"),
+				RunID:     "run-1", Round: 1, Repo: seed.Seed.Base.Repo, RepositoryID: seed.Seed.Base.RepositoryID,
 				BaseRef: seed.Seed.Base.BaseRef, BaseSHA: strings.Repeat("a", 40), HeadSHA: seed.Seed.Base.BaseSHA,
 				Workspace: seed.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
 				Instructions: testReviewInstructionBinding(), RequestedAt: codexReviewEpoch,

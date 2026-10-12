@@ -265,7 +265,8 @@ func TestCodexReviewKilledAtItsMemoryLimitFailsAsConfiguration(t *testing.T) {
 			}
 			id := domain.InvocationID("review-memory-limit")
 			req := exec.ReviewRequest{
-				RunID: "run-1", Round: 1, Repo: seed.Seed.Base.Repo, RepositoryID: seed.Seed.Base.RepositoryID,
+				Admission: testReviewAdmission("run-1"),
+				RunID:     "run-1", Round: 1, Repo: seed.Seed.Base.Repo, RepositoryID: seed.Seed.Base.RepositoryID,
 				BaseRef: seed.Seed.Base.BaseRef, BaseSHA: strings.Repeat("a", 40), HeadSHA: seed.Seed.Base.BaseSHA,
 				Workspace: seed.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
 				Instructions: testReviewInstructionBinding(), RequestedAt: codexReviewEpoch,
@@ -457,7 +458,8 @@ func TestReviewLaunchFailsWhenAHelperIsKilledAtItsMemoryLimit(t *testing.T) {
 			}
 			fx.rt.bootLogs = map[string][]byte{helper: bootLogKilling(t, helper)}
 			err = source.RequestReview(t.Context(), id, exec.ReviewRequest{
-				RunID: "run-1", Round: 1, Repo: seed.Seed.Base.Repo, RepositoryID: seed.Seed.Base.RepositoryID,
+				Admission: testReviewAdmission("run-1"),
+				RunID:     "run-1", Round: 1, Repo: seed.Seed.Base.Repo, RepositoryID: seed.Seed.Base.RepositoryID,
 				BaseRef: seed.Seed.Base.BaseRef, BaseSHA: strings.Repeat("a", 40), HeadSHA: seed.Seed.Base.BaseSHA,
 				Workspace: seed.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
 				Instructions: testReviewInstructionBinding(), RequestedAt: codexReviewEpoch,

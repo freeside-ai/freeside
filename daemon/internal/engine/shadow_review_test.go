@@ -13,6 +13,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
@@ -227,6 +228,7 @@ func TestShadowReviewRecordsClassifiesSamplesAndBlocksReady(t *testing.T) {
 		store: st, attention: attention, workDir: dir,
 		transport: retainingShadowTransport{}, now: func() time.Time { return now.Add(2 * time.Minute) },
 		shadowReviewSource: source, shadowReviewConfigurationDigest: shadowDigest,
+		reviewAdmitter:        fake.AdmitReview,
 		shadowReviewCostOwner: "shadow-budget", shadowReviewDefaultRate: 0.2,
 		shadowReviewFailure: func(domain.RunID, int, domain.ReviewFailureClass, error) { failures++ },
 	}
@@ -575,6 +577,7 @@ func TestShadowReviewFailureIsClassifiedAndDoesNotBlockRoutedGate(t *testing.T) 
 	w := &productionPublicationWorkflow{
 		store: st, attention: signet.NewService(st), workDir: t.TempDir(),
 		transport: retainingShadowTransport{}, shadowReviewSource: source,
+		reviewAdmitter:                  fake.AdmitReview,
 		shadowReviewConfigurationDigest: shadowTestDigest("f"),
 		shadowReviewCostOwner:           "shadow", shadowReviewDefaultRate: 1,
 		now: func() time.Time { return time.Unix(2, 0).UTC() },
@@ -681,6 +684,7 @@ func TestLateCompletedShadowReviewExpiresWithoutBlockingRoutedGate(t *testing.T)
 	w := &productionPublicationWorkflow{
 		store: st, attention: signet.NewService(st), workDir: t.TempDir(),
 		transport: retainingShadowTransport{}, shadowReviewSource: source,
+		reviewAdmitter:                  fake.AdmitReview,
 		shadowReviewConfigurationDigest: shadowDigest,
 		shadowReviewCostOwner:           "shadow", shadowReviewDefaultRate: 1,
 		now: func() time.Time { return current },

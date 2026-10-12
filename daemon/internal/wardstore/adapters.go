@@ -39,23 +39,30 @@ func decodeCodexReview[T any](body []byte) (T, error) {
 	return value, nil
 }
 
+// legacyCodexReviewRequest reports whether a persisted request that no longer
+// validates is one a previous daemon wrote, not a damaged one. There are two
+// legacy shapes, each a field the request did not have yet: no instruction
+// binding, and no review admission snapshot. The body must lack the field
+// itself; a present but invalid one is damage, and so is a request without
+// an admission that was not valid before requests carried one.
 func legacyCodexReviewRequest(body []byte, request exec.ReviewRequest) bool {
-	if request.Instructions.CompositionVersion != "" ||
-		request.Instructions.HostDigest != nil ||
-		len(request.Instructions.RepositorySources) != 0 ||
-		request.Instructions.ResultDigest != "" {
-		return false
-	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(body, &fields); err != nil {
 		return false
 	}
-	for field := range fields {
-		if strings.EqualFold(field, "instructions") {
-			return false
+	has := func(name string) bool {
+		for field := range fields {
+			if strings.EqualFold(field, name) {
+				return true
+			}
 		}
+		return false
 	}
-	return true
+	instructions := request.Instructions
+	noInstructions := !has("instructions") && instructions.CompositionVersion == "" &&
+		instructions.HostDigest == nil && len(instructions.RepositorySources) == 0 &&
+		instructions.ResultDigest == ""
+	return noInstructions || (!has("admission") && request.ValidateBeforeAdmission() == nil)
 }
 
 func classifyCodexReviewMutation(err error) error {

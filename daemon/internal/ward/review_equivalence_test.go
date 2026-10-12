@@ -294,7 +294,7 @@ func FuzzReviewNormalizeCollectionEquivalence(f *testing.F) {
 		collection := CodexReviewCollection{
 			ExitStatus: exit, Result: []byte(result), Events: []byte(events),
 		}
-		req := exec.ReviewRequest{RunID: domain.RunID(runID), BaseSHA: baseSHA, HeadSHA: headSHA}
+		req := exec.ReviewRequest{Admission: testReviewAdmission(domain.RunID(runID)), RunID: domain.RunID(runID), BaseSHA: baseSHA, HeadSHA: headSHA}
 		id := domain.InvocationID("review-" + runID)
 		got := source.normalizeCollection(id, req, collection)
 		want := oldNormalizeCollection(source, id, req, collection)

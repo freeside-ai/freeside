@@ -47,5 +47,6 @@ func cloneReviewRequest(r exec.ReviewRequest) exec.ReviewRequest {
 		digest := *r.Instructions.HostDigest
 		r.Instructions.HostDigest = &digest
 	}
+	r.Admission.AgentBinding.EffectiveEgress = slices.Clone(r.Admission.AgentBinding.EffectiveEgress)
 	return r
 }

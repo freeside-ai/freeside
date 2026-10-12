@@ -120,6 +120,20 @@ func TestGolden(t *testing.T) {
 		RunID: "run-1", Round: 2, Repo: "owner/repo", RepositoryID: 42,
 		BaseRef: "main", BaseSHA: "base-sha-2", HeadSHA: "head-sha-1",
 		Workspace: "/candidate", Instructions: instructions,
+		Admission: domain.ReviewAdmission{
+			InvocationID: "review-run-1-2", RunID: "run-1", Role: domain.RoleReviewer,
+			AuthIdentityID: "auth-openai-A", LineageGroup: "openai",
+			AgentBinding: domain.AdmissionAgentBinding{
+				AgentDigest: execStageDigest("a"), LaunchDigest: execStageDigest("b"),
+				TreatmentDigest: execStageDigest("d"), PricingRevision: "2026-08",
+				LineupRevision: execStageDigest("c"), EnrollmentID: "enroll-openai-A-codex",
+				EnrollmentGeneration: 2, StoreManifestDigest: execStageDigest("6"),
+				EffectiveEgress: []string{"chatgpt.com:443"},
+				RouteModelID:    "gpt-5.2-codex", RequestedEffort: domain.EffortHigh, NativeEffort: "high",
+				SelectionSource: domain.AgentSelectionSourceLineup,
+			},
+			AdmittedAt: ts,
+		},
 		Verification: exec.ReviewVerificationEvidence{
 			Outcome:                domain.VerificationPassed,
 			RecipeDigest:           execStageDigest("7"),

@@ -134,7 +134,8 @@ func TestCodexReviewPreparedTransitionRejectsDurableOutcome(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := exec.ReviewRequest{
-		RunID: "source-run", Round: 1, Repo: "owner/repo", RepositoryID: 42,
+		Admission: testReviewAdmission("source-run"),
+		RunID:     "source-run", Round: 1, Repo: "owner/repo", RepositoryID: 42,
 		BaseRef: "main", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
 		Workspace: "/seed/candidate", Verification: exec.ReviewVerificationEvidence{
 			Outcome:                domain.VerificationPassed,
