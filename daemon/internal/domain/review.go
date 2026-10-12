@@ -56,6 +56,24 @@ func (r ReviewRecord) Provider() string { return r.attribution().providerLabel()
 // admitted agent's model and effort, or the string a legacy record stored.
 func (r ReviewRecord) ModelConfiguration() string { return r.attribution().modelConfigurationLabel() }
 
+// SharesSegment reports whether two review records belong to one convergence
+// segment: the same review configuration and the same reviewer agent. The
+// configuration digest does not cover the reviewer, so a routing change on an
+// unchanged configuration would otherwise count a new reviewer's first pass as
+// the prior reviewer's next round. Two legacy records are told apart by
+// configuration alone, as they were when written. A legacy record and one with
+// a snapshot never share a segment, because nothing says whether the reviewer
+// is the same.
+func (r ReviewRecord) SharesSegment(other ReviewRecord) bool {
+	if r.ConfigurationDigest != other.ConfigurationDigest {
+		return false
+	}
+	if r.Admission == nil || other.Admission == nil {
+		return r.Admission == nil && other.Admission == nil
+	}
+	return r.Admission.AgentBinding.AgentDigest == other.Admission.AgentBinding.AgentDigest
+}
+
 // ReviewDispositionRecord is the immutable per-round outcome for one raw
 // review finding (plan §7). A later round writes another record; it never
 // rewrites the finding or an earlier disposition.

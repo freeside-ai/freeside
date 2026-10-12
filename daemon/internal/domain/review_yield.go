@@ -41,9 +41,9 @@ func (m ReviewRoundDiffMetrics) Validate() error {
 }
 
 // ReviewYieldRound summarizes one persisted routed-review pass. Finding
-// identity is evaluated against prior rounds in the same reviewer-configuration
-// segment, while dispositions remain attributed to the round that produced the
-// finding.
+// identity is evaluated against prior rounds in the same segment (one reviewer
+// under one review configuration; see ReviewRecord.SharesSegment), while
+// dispositions remain attributed to the round that produced the finding.
 //
 // DiffMetrics is absent when nothing was recorded for the round; that is how a
 // gap shows. It is omitted rather than rendered as an explicit null because the

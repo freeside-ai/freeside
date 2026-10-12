@@ -188,3 +188,65 @@ func TestLegacyReviewRecordEncodesToItsStoredShape(t *testing.T) {
 		t.Fatalf("legacy record round trip = %#v, want %#v", decoded, record)
 	}
 }
+
+// TestReviewRecordSharesSegment pins which records convergence reads as one
+// reviewer's consecutive passes: the same review configuration and the same
+// reviewer agent. Two legacy records are told apart by configuration alone, and
+// a legacy record never shares a segment with one that carries a snapshot.
+func TestReviewRecordSharesSegment(t *testing.T) {
+	t.Parallel()
+	configuration := domain.Digest("sha256:" + strings.Repeat("c", 64))
+	otherConfiguration := domain.Digest("sha256:" + strings.Repeat("d", 64))
+	admitted := func(configuration domain.Digest, agent string, mutate func(*domain.ReviewAdmission)) domain.ReviewRecord {
+		admission := fake.RecordAdmission(domain.RoleReviewer, "run-1", "review-run-1-1")
+		admission.AgentBinding.AgentDigest = domain.Digest("sha256:" + strings.Repeat(agent, 64))
+		if mutate != nil {
+			mutate(admission)
+		}
+		return domain.ReviewRecord{ConfigurationDigest: configuration, Admission: admission}
+	}
+	legacy := func(configuration domain.Digest, provider string) domain.ReviewRecord {
+		return domain.ReviewRecord{
+			ConfigurationDigest: configuration, LegacyProvider: provider,
+			LegacyModelConfiguration: "gpt-codex/high", LegacyCostOwner: "owner",
+		}
+	}
+	for _, tc := range []struct {
+		name        string
+		left, right domain.ReviewRecord
+		want        bool
+	}{
+		{name: "same reviewer", left: admitted(configuration, "a", nil), right: admitted(configuration, "a", nil), want: true},
+		{
+			name: "same reviewer admitted again", left: admitted(configuration, "a", nil),
+			right: admitted(configuration, "a", func(a *domain.ReviewAdmission) {
+				a.InvocationID, a.AuthIdentityID = "review-run-1-2", "another-identity"
+				a.AgentBinding.LaunchDigest = domain.Digest("sha256:" + strings.Repeat("f", 64))
+				a.AgentBinding.EnrollmentGeneration++
+			}),
+			want: true,
+		},
+		{name: "another reviewer", left: admitted(configuration, "a", nil), right: admitted(configuration, "b", nil)},
+		{
+			name: "another configuration", left: admitted(configuration, "a", nil),
+			right: admitted(otherConfiguration, "a", nil),
+		},
+		{name: "two legacy records", left: legacy(configuration, "openai"), right: legacy(configuration, "openai"), want: true},
+		{
+			name: "two legacy records under other labels", left: legacy(configuration, "openai"),
+			right: legacy(configuration, "anthropic"), want: true,
+		},
+		{
+			name: "two legacy records under another configuration", left: legacy(configuration, "openai"),
+			right: legacy(otherConfiguration, "openai"),
+		},
+		{name: "legacy then snapshot", left: legacy(configuration, "openai"), right: admitted(configuration, "a", nil)},
+	} {
+		if got := tc.left.SharesSegment(tc.right); got != tc.want {
+			t.Errorf("%s: SharesSegment = %v, want %v", tc.name, got, tc.want)
+		}
+		if got := tc.right.SharesSegment(tc.left); got != tc.want {
+			t.Errorf("%s reversed: SharesSegment = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

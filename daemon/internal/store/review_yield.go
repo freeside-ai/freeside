@@ -58,11 +58,9 @@ func DeriveReviewYieldHistory(
 
 	seen := map[domain.FindingFingerprint]struct{}{}
 	rounds := make([]domain.ReviewYieldRound, 0, len(records))
-	var segmentConfiguration domain.Digest
 	for index, record := range records {
-		if len(rounds) == 0 || record.ConfigurationDigest != segmentConfiguration {
+		if index > 0 && !record.SharesSegment(records[index-1]) {
 			clear(seen)
-			segmentConfiguration = record.ConfigurationDigest
 		}
 		round := domain.ReviewYieldRound{
 			Round: record.Round, FindingsIngested: len(record.FindingIDs), Outcome: record.Outcome,
