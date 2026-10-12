@@ -59,20 +59,23 @@ private func submittedDelivery(
     @Test func reportsOpenedAndReplaysIdempotently() async throws {
         // A real inbox item, so the receipt's same-revision item-timing
         // recompute (the daemon's recomputeItemTiming) is observable.
-        let itemID = AttentionFixtures.defaultInboxItemIDs()[0]
+        let fixture = AttentionFixtures.defaultInbox()[0]
+        let itemID = fixture.item.id
         let server = MockServer(
             deliveries: [submittedDelivery(itemID: itemID, deviceID: "device-1")])
         let api = client(server: server)
 
-        // Seeding already derived the item's timing from the rows and
-        // bumped the item's versions (the daemon recomputes both in the
-        // write that records a delivery), so the pre-receipt state is one
-        // the daemon could actually serve.
+        // Seeding already derived the item's timing from the rows (the
+        // daemon recomputes it in the write that records a delivery), so
+        // the pre-receipt state is one the daemon could actually serve.
+        // A timing change raises entity_version and keeps item_version,
+        // which names what the operator decides on.
         let seeded = try await api.getAttentionItem(path: .init(item_id: itemID)).ok.body.json
         #expect(seeded.item.timing.delivery_count == 1)
         #expect(seeded.item.timing.first_submitted_at != nil)
         #expect(seeded.item.timing.first_opened_at == nil)
-        #expect(seeded.item.item_version == 2)
+        #expect(seeded.item.item_version == fixture.item.item_version)
+        #expect(seeded.entity_version == fixture.entity_version + 1)
 
         let opened = try await api.reportDeliveryOpened(
             path: .init(item_id: itemID, channel: "ntfy", attempt: 1)
@@ -86,7 +89,8 @@ private func submittedDelivery(
         let item = try await api.getAttentionItem(path: .init(item_id: itemID)).ok.body.json
         #expect(item.item.timing.first_opened_at == row.opened_at)
         #expect(item.item.timing.delivery_count == 1)
-        #expect(item.item.item_version == 3)
+        #expect(item.item.item_version == fixture.item.item_version)
+        #expect(item.entity_version == seeded.entity_version + 1)
         #expect(item.as_of_revision == opened.as_of_revision)
 
         let heartbeat = try await api.getSyncRevision().ok.body.json
@@ -97,7 +101,8 @@ private func submittedDelivery(
         let after = try await api.getSyncRevision().ok.body.json
         #expect(after.revision == heartbeat.revision)
         let untouched = try await api.getAttentionItem(path: .init(item_id: itemID)).ok.body.json
-        #expect(untouched.item.item_version == 3)
+        #expect(untouched.item.item_version == fixture.item.item_version)
+        #expect(untouched.entity_version == item.entity_version)
 
         // The read surface serves the recorded row, and a missing parent
         // item is a loud not-found, never an empty history.
@@ -256,7 +261,8 @@ private func submittedDelivery(
         // Enforcing mode: the receipt's device is the credential identity
         // (never a path or payload field), so another device's attempt is
         // indistinguishable from absent.
-        let itemID = AttentionFixtures.defaultInboxItemIDs()[0]
+        let fixture = AttentionFixtures.defaultInbox()[0]
+        let itemID = fixture.item.id
         let server = MockServer(
             deliveries: [
                 submittedDelivery(itemID: itemID, deviceID: "device-9"),
@@ -270,9 +276,11 @@ private func submittedDelivery(
         ).created.body.json
         let api = client(server: server, token: grant.device_token)
 
-        // Two seeded rows replay as two daemon writes: two version bumps.
+        // Two seeded rows replay as two daemon writes: entity_version
+        // rises twice and item_version stays where the fixture put it.
         let seeded = try await api.getAttentionItem(path: .init(item_id: itemID)).ok.body.json
-        #expect(seeded.item.item_version == 3)
+        #expect(seeded.item.item_version == fixture.item.item_version)
+        #expect(seeded.entity_version == fixture.entity_version + 2)
 
         let foreign = try await api.reportDeliveryOpened(
             path: .init(item_id: itemID, channel: "ntfy", attempt: 1))
