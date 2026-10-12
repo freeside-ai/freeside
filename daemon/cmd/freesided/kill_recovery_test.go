@@ -399,6 +399,12 @@ func (c *processClient) waitForItem(t *testing.T, id domain.ItemID) signet.Atten
 	return signet.AttentionItemSnapshot{}
 }
 
+// submit decides on item and converges on a stale entity version. The
+// daemon's notification sender raises an item's entity_version between this
+// client's read and its submit, which is the designed stale-command path: the
+// 409 carries the current item and the client resubmits against it. Only
+// entity_version may have moved. item_version is what the operator decides
+// on, so a replacement that changed it fails the test.
 func (c *processClient) submit(
 	t *testing.T,
 	commandID string,
@@ -406,6 +412,33 @@ func (c *processClient) submit(
 	action domain.Action,
 	message string,
 ) {
+	t.Helper()
+	deadline := time.Now().Add(processWaitBound)
+	for {
+		status, responseBody := c.postCommand(t, commandID, item, action, message)
+		if status == http.StatusOK {
+			return
+		}
+		var stale struct {
+			ReplacementItem signet.AttentionItemSnapshot `json:"replacement_item"`
+		}
+		current := &stale.ReplacementItem
+		if status != http.StatusConflict || json.Unmarshal(responseBody, &stale) != nil ||
+			current.Item.ID != item.Item.ID || current.Item.ItemVersion != item.Item.ItemVersion ||
+			current.EntityVersion == item.EntityVersion || time.Now().After(deadline) {
+			t.Fatalf("submit %s status = %d body=%s", action, status, responseBody)
+		}
+		item = *current
+	}
+}
+
+func (c *processClient) postCommand(
+	t *testing.T,
+	commandID string,
+	item signet.AttentionItemSnapshot,
+	action domain.Action,
+	message string,
+) (int, []byte) {
 	t.Helper()
 	digests := item.Item.ArtifactDigests
 	if digests == nil {
@@ -438,10 +471,11 @@ func (c *processClient) submit(
 		t.Fatalf("submit %s command: %v", action, err)
 	}
 	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != http.StatusOK {
-		responseBody, _ := io.ReadAll(response.Body)
-		t.Fatalf("submit %s status = %d body=%s", action, response.StatusCode, responseBody)
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read %s command response: %v", action, err)
 	}
+	return response.StatusCode, responseBody
 }
 
 func (c *processClient) waitForAcceptedResult(t *testing.T) {
