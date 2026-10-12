@@ -2009,6 +2009,44 @@ import Testing
         #expect(model.appliedRecordRepeat == 1)
     }
 
+    /// The other record-only actions take acknowledge's path: an accepted
+    /// command leaves the item open and decidable, and the card has the
+    /// same counted receipt to draw by the button (#1978).
+    @Test(arguments: [
+        (Components.Schemas.Action.mark_seen, "item-ready_for_final_review"),
+        (.open_pr, "item-ready_for_final_review"),
+        (.inspect_trust_failure, "item-publish_blocked"),
+        (.run_doctor, "item-system_health"),
+    ])
+    func everyRecordOnlyActionLeavesItsItemOpenWithACountedReceipt(
+        action: Components.Schemas.Action, itemID: String
+    ) async throws {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: itemID, openURL: { _ in true })
+        await model.validate()
+
+        for press in 1...2 {
+            if action == .inspect_trust_failure {
+                // The button only reveals the details; the reveal records.
+                await model.recordTrustFailureInspection()
+            } else {
+                await model.submit(action)
+            }
+            let item = try #require(model.snapshot?.item)
+            #expect(model.appliedRecord?.action == action)
+            #expect(model.appliedRecordRepeat == press)
+            #expect(item.status == .open)
+            #expect(model.actionsEnabled && model.isSubmittable(action))
+            #expect(DecisionDetailView.drawsControlGroup(item))
+            let receipt = try #require(
+                DecisionCardComposition.recordOnlyReceipt(
+                    action: action, item: item, repeatCount: model.appliedRecordRepeat))
+            #expect(receipt.contains(AttentionDisplay.label(action, for: item)))
+            #expect(receipt.contains("2 times") == (press == 2))
+        }
+    }
+
     @Test func nonResolvingDecisionKeepsTheItemOpenAndDecidable() async {
         // Plan §4: acknowledge means seen, never resolved; a system_health
         // item stays blocking, so further actions remain available.

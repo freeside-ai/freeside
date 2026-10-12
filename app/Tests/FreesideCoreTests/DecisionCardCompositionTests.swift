@@ -1771,4 +1771,72 @@ import Testing
         #expect(scopeRow.value.contains(longPath))
         #expect(longPath.count > FactRow.stackThreshold)
     }
+
+    /// An accepted record-only command leaves its item open and unchanged,
+    /// so its receipt names the action and says the item stays open (#1978).
+    @Test(arguments: [
+        (Components.Schemas.Action.acknowledge, "Acknowledge"),
+        (.mark_seen, "Mark Seen"),
+        (.open_pr, "View PR"),
+        (.inspect_trust_failure, "Inspect Trust Failure"),
+        (.run_doctor, "Run Doctor"),
+    ])
+    func recordOnlyReceiptNamesItsAction(
+        action: Components.Schemas.Action, label: String
+    ) {
+        let item = AttentionFixtures.fixture(type: .system_health).item
+        #expect(item.status == .open)
+        #expect(
+            DecisionCardComposition.recordOnlyReceipt(action: action, item: item, repeatCount: 1)
+                == "\(label) recorded. This item stays open.")
+    }
+
+    /// The item looks the same after every accepted press, so the receipt
+    /// has to change for a second one to be told from the first.
+    @Test func recordOnlyReceiptCountsARepeat() {
+        let item = AttentionFixtures.fixture(type: .system_health).item
+        let first = DecisionCardComposition.recordOnlyReceipt(
+            action: .acknowledge, item: item, repeatCount: 1)
+        let second = DecisionCardComposition.recordOnlyReceipt(
+            action: .acknowledge, item: item, repeatCount: 2)
+        let third = DecisionCardComposition.recordOnlyReceipt(
+            action: .acknowledge, item: item, repeatCount: 3)
+        #expect(second == "Acknowledge recorded 2 times. This item stays open.")
+        #expect(third == "Acknowledge recorded 3 times. This item stays open.")
+        #expect(Set([first, second, third]).count == 3)
+    }
+
+    /// Every other accepted command keeps the head receipt: one that
+    /// concludes or revises its item, `discuss`, and a record-only command
+    /// whose item has closed since.
+    @Test func recordOnlyReceiptIsOnlyForARecordOnlyCommandOnAnOpenItem() {
+        let open = AttentionFixtures.fixture(type: .system_health).item
+        for action in Components.Schemas.Action.allCases
+        where ActionOutcome.of(action) != .records {
+            #expect(
+                DecisionCardComposition.recordOnlyReceipt(
+                    action: action, item: open, repeatCount: 1) == nil,
+                "\(action.rawValue) is not record-only")
+        }
+        for status in Components.Schemas.ItemStatus.allCases where status != .open {
+            var closed = open
+            closed.status = status
+            #expect(
+                DecisionCardComposition.recordOnlyReceipt(
+                    action: .acknowledge, item: closed, repeatCount: 1) == nil,
+                "a \(status.rawValue) item keeps the head receipt")
+        }
+    }
+
+    /// The receipt draws in the control group, so a card that shows one must
+    /// have a group: a record-only command is always one its item requested.
+    @Test func everyItemRequestingARecordOnlyActionDrawsAControlGroup() {
+        for snapshot in AttentionFixtures.defaultInbox() {
+            let recordOnly = snapshot.item.requested_decision.filter {
+                ActionOutcome.of($0) == .records
+            }
+            guard !recordOnly.isEmpty else { continue }
+            #expect(DecisionDetailView.drawsControlGroup(snapshot.item), "\(snapshot.item.id)")
+        }
+    }
 }

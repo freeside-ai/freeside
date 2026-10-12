@@ -139,11 +139,16 @@ struct DecisionDetailView: View {
         inspectorPresented: Binding<Bool>? = nil,
         standingNotices: StandingNotices? = nil,
         onSelectItem: @escaping (String) -> Void = { _ in },
-        onConclusion: @escaping @MainActor (DecisionConclusion) -> Void = { _ in }
+        onConclusion: @escaping @MainActor (DecisionConclusion) -> Void = { _ in },
+        model: DecisionModel? = nil
     ) {
+        // `model` is for a test or screenshot that needs the card after a
+        // command: it passes the model it already drove, which keeps its own
+        // `onConclusion`. The app passes none and the card builds its own.
         _model = State(
-            initialValue: DecisionModel(
-                store: store, itemID: itemID, onConclusion: onConclusion))
+            initialValue: model
+                ?? DecisionModel(
+                    store: store, itemID: itemID, onConclusion: onConclusion))
         let revealsTechnicalDetails =
             detailsExpanded || detailsRevealRequest?.itemID == itemID
         _sectionPreferences = State(
@@ -560,7 +565,7 @@ struct DecisionDetailView: View {
         VStack(alignment: .leading, spacing: CardScale.sectionGap) {
             VStack(alignment: .leading, spacing: CardScale.headGap) {
                 eyebrow(item, register: register, accessibilityLayout: accessibilityLayout)
-                banner()
+                banner(item)
                 if DecisionCardComposition.rendersAsk(for: item) {
                     Text(AttentionDisplay.ask(item))
                         .font(FreesideFont.ask)
@@ -696,6 +701,9 @@ struct DecisionDetailView: View {
         let reviewingLeads = !DecisionCardComposition.isStale(item)
         if Self.drawsControlGroup(item) {
             VStack(alignment: .leading, spacing: CardScale.controlGap) {
+                if let sentence = controlGroupReceipt(item) {
+                    receipt(.neutral, "Recorded", sentence)
+                }
                 if offersLostResponseRetry {
                     lostResponseRetry
                 }
@@ -2584,21 +2592,21 @@ struct DecisionDetailView: View {
     }
 
     @ViewBuilder
-    private func banner() -> some View {
+    private func banner(_ item: Components.Schemas.AttentionItem) -> some View {
         if model.phase == .superseded {
             receipt(
                 .accent, "Superseded",
                 "This item changed before your decision applied. Nothing was committed; re-review the replacement below."
             )
         } else {
-            // An applied record persists even when the item stays open
-            // (a non-resolving action such as acknowledge or open_pr).
-            if let record = model.appliedRecord {
+            // A record-only command's receipt draws with the control group
+            // instead, so the card never shows two receipts for one command.
+            if let record = model.appliedRecord, controlGroupReceipt(item) == nil {
                 // Success is quiet: a neutral wash, never green and never
                 // the accent.
                 receipt(
                     .neutral, "Recorded",
-                    "Decision applied: \(AttentionDisplay.label(record.action, for: model.snapshot?.item))")
+                    "Decision applied: \(AttentionDisplay.label(record.action, for: item))")
             }
             // The uncertain receipt outranks a failure: when a preserved
             // command may hold a recorded result, resending it is the
@@ -2613,6 +2621,16 @@ struct DecisionDetailView: View {
                 receipt(.wax, "Failed", "Submission failed: \(message)")
             }
         }
+    }
+
+    /// The receipt the control group leads with: an accepted record-only
+    /// command's, on an item that stays open (#1978). Nil leaves the record
+    /// to the head receipt, which also keeps it when the item requests
+    /// nothing and so draws no group.
+    private func controlGroupReceipt(_ item: Components.Schemas.AttentionItem) -> String? {
+        guard Self.drawsControlGroup(item), let record = model.appliedRecord else { return nil }
+        return DecisionCardComposition.recordOnlyReceipt(
+            action: record.action, item: item, repeatCount: model.appliedRecordRepeat)
     }
 
     /// Whether a command's answer was lost and the card offers to resend
