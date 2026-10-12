@@ -39,6 +39,13 @@ public final class DecisionModel {
     public private(set) var validation: ValidationState = .pending
     public private(set) var phase: SubmissionPhase = .idle
     public private(set) var appliedRecord: Components.Schemas.CommandRecord?
+    /// How many commands for `appliedRecord`'s action this card has had
+    /// accepted while open, the displayed one included: 1 for the first, 0
+    /// with no record. An accepted record-only command leaves its item as it
+    /// was, so the count is what tells a repeat from the first (#1978).
+    public var appliedRecordRepeat: Int {
+        appliedRecord.map { acceptedCommandIDs[$0.action]?.count ?? 0 } ?? 0
+    }
     public private(set) var submissionError: String?
     public private(set) var proposalFacts: Components.Schemas.TaskProposalFactsSnapshot?
     public private(set) var effectProposalFacts: Components.Schemas.EffectProposalFactsSnapshot?
@@ -58,6 +65,12 @@ public final class DecisionModel {
     /// proves that its item left the active queue. Revalidation and replay
     /// share this gate so recovery cannot duplicate the receipt.
     private var concludedCommandID: String?
+    /// The commands this model has had accepted, by action. Ids and not a
+    /// tally, because a lost-response replay returns the result of a command
+    /// that may already be counted. Never reset: `appliedRecord` clears when
+    /// the next submission starts, and a repeat has to outlive that to count
+    /// as one. It goes with the model when the card closes.
+    private var acceptedCommandIDs: [Components.Schemas.Action: Set<String>] = [:]
     /// The store's cache generation at the moment this card last
     /// certified current state. An epoch eviction bumps that generation
     /// (`InboxStore.discardSnapshots`), so a validation that predates the
@@ -1018,7 +1031,7 @@ public final class DecisionModel {
                         submissionError =
                             "the snooze was recorded but current state could not be confirmed"
                     } else {
-                        appliedRecord = result.decisionRecord
+                        showAccepted(result.decisionRecord)
                         store.clearPendingCommand(
                             itemID: itemID, commandID: command.command_id)
                         phase = .applied
@@ -1036,7 +1049,7 @@ public final class DecisionModel {
                     return
                 }
                 store.revisionObserver?(result.revision)
-                appliedRecord = result.decisionRecord
+                showAccepted(result.decisionRecord)
                 store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
                 guard store.apply(refetched) else {
                     // A higher rendered version refuses the refetch within
@@ -1290,6 +1303,16 @@ public final class DecisionModel {
         }
     }
 
+    /// Displays an accepted command's record and counts it. Every write of an
+    /// accepted result goes through here, so the count cannot drift from the
+    /// record it describes.
+    private func showAccepted(_ record: Components.Schemas.CommandRecord?) {
+        appliedRecord = record
+        if let record {
+            acceptedCommandIDs[record.action, default: []].insert(record.command_id)
+        }
+    }
+
     /// Emits only after a recorded command and canonical evidence agree that
     /// the item left the active queue. A visible `.open` item is record-only
     /// (or a proposal whose snooze has already expired), so it never advances.
@@ -1494,7 +1517,7 @@ public final class DecisionModel {
                     return .lost
                 }
                 store.revisionObserver?(result.revision)
-                appliedRecord = result.decisionRecord
+                showAccepted(result.decisionRecord)
                 submissionError = nil
                 phase = .applied
                 // The original submit lost its response before it could emit, so

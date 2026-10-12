@@ -1939,6 +1939,76 @@ import Testing
         #expect(model.pendingCommand == nil)
     }
 
+    @Test func repeatedRecordOnlyCommandIsCountedWhileTheItemStaysOpen() async {
+        // An accepted acknowledge changes nothing on its item, so the count
+        // is all that tells a second accepted press from the first (#1978).
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-system_health")
+        await model.validate()
+        #expect(model.appliedRecordRepeat == 0)
+
+        await model.submit(.acknowledge)
+        #expect(model.appliedRecord?.action == .acknowledge)
+        #expect(model.appliedRecordRepeat == 1)
+        let first = model.appliedRecord?.command_id
+
+        await model.submit(.acknowledge)
+        #expect(model.appliedRecord?.action == .acknowledge)
+        #expect(model.appliedRecord?.command_id != first)
+        #expect(model.appliedRecordRepeat == 2)
+        #expect(model.snapshot?.item.status == .open)
+        #expect(model.phase == .idle)
+        #expect(model.actionsEnabled && model.isSubmittable(.acknowledge))
+
+        // The count is per action: another action's record starts its own.
+        await model.submit(.stop_unattended)
+        #expect(model.appliedRecord?.action == .stop_unattended)
+        #expect(model.appliedRecordRepeat == 1)
+    }
+
+    @Test func replayedRecordOnlyCommandCountsOnce() async throws {
+        // A lost response and its replay are one command: the retry returns
+        // the original result, so the receipt must not read as a repeat.
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-system_health")
+        await model.validate()
+
+        await server.setBeforeRespond { operationID in
+            if operationID == "submitCommand" { throw InjectedFailure() }
+        }
+        await model.submit(.acknowledge)
+        #expect(model.appliedRecordRepeat == 0)
+        let original = try #require(model.pendingCommand)
+        await server.setBeforeRespond(nil)
+        let client = APIClientFactory.mock(server: server)
+        _ = try await client.submitCommand(body: .json(original)).ok.body.json
+
+        await model.retryLostResponse()
+        #expect(model.appliedRecord?.command_id == original.command_id)
+        #expect(model.appliedRecordRepeat == 1)
+        #expect(model.phase == .idle)
+    }
+
+    @Test func failedRepeatKeepsTheEarlierRecordAndItsCount() async {
+        // A ledger write failure stops the second command before it is sent
+        // and before the first record clears. The card then shows the failure
+        // at its head and the earlier receipt by the button; both are true.
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-system_health")
+        await model.validate()
+        await model.submit(.acknowledge)
+        let recorded = model.appliedRecord?.command_id
+
+        store.pendingCommandsObserver = { false }
+        await model.submit(.acknowledge)
+        #expect(model.submissionError != nil)
+        #expect(model.appliedRecord?.command_id == recorded)
+        #expect(model.appliedRecordRepeat == 1)
+    }
+
     @Test func nonResolvingDecisionKeepsTheItemOpenAndDecidable() async {
         // Plan §4: acknowledge means seen, never resolved; a system_health
         // item stays blocking, so further actions remain available.
