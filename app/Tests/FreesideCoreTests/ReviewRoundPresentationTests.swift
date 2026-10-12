@@ -5,22 +5,138 @@ import Testing
 @testable import FreesideCore
 
 @Suite struct ReviewRoundPresentationTests {
+    /// A clock to place a round's request against.
+    private static let now = Date(timeIntervalSince1970: 1_790_000_000)
+
+    private static func requested(
+        _ state: Components.Schemas.ReviewProgressState, minutesAgo: Double
+    ) -> Components.Schemas.RunReviewRound {
+        RunFixtures.reviewRound(state, requestedAt: now.addingTimeInterval(-minutesAgo * 60))
+    }
+
     @Test func verdictReadsStateThenOutcomeThenTheOpenCount() {
-        #expect(ReviewRoundPresentation.verdict(RunFixtures.reviewRound(.pending)) == "Pending")
-        #expect(ReviewRoundPresentation.verdict(RunFixtures.reviewRound(.running)) == "Running")
-        #expect(ReviewRoundPresentation.verdict(RunFixtures.reviewRound(.failed)) == "Failed")
-        #expect(ReviewRoundPresentation.verdict(RunFixtures.reviewRound(.completed)) == "Clean")
+        let now = Self.now
+        #expect(ReviewRoundPresentation.verdict(Self.requested(.pending, minutesAgo: 12), now: now) == "Pending")
+        #expect(ReviewRoundPresentation.verdict(Self.requested(.running, minutesAgo: 12), now: now) == "Running")
+        #expect(ReviewRoundPresentation.verdict(RunFixtures.reviewRound(.failed), now: now) == "Failed")
+        #expect(ReviewRoundPresentation.verdict(RunFixtures.reviewRound(.completed), now: now) == "Clean")
 
         var findings = RunFixtures.reviewRound(.completed, findings: true)
-        #expect(ReviewRoundPresentation.verdict(findings) == "Findings · 1 open")
+        #expect(ReviewRoundPresentation.verdict(findings, now: now) == "Findings · 1 open")
         // Without dispositions the chip falls back to the findings count,
         // and without that to the word alone; it never invents a number.
         findings.dispositions = nil
-        #expect(ReviewRoundPresentation.verdict(findings) == "Findings · 3")
+        #expect(ReviewRoundPresentation.verdict(findings, now: now) == "Findings · 3")
         findings.findings_count = nil
-        #expect(ReviewRoundPresentation.verdict(findings) == "Findings")
+        #expect(ReviewRoundPresentation.verdict(findings, now: now) == "Findings")
         findings.outcome = nil
-        #expect(ReviewRoundPresentation.verdict(findings) == "Completed")
+        #expect(ReviewRoundPresentation.verdict(findings, now: now) == "Completed")
+    }
+
+    @Test func onlyAPendingOrRunningRoundIsInProgress() {
+        #expect(ReviewRoundPresentation.isInProgress(RunFixtures.reviewRound(.pending)))
+        #expect(ReviewRoundPresentation.isInProgress(RunFixtures.reviewRound(.running)))
+        #expect(!ReviewRoundPresentation.isInProgress(RunFixtures.reviewRound(.completed)))
+        #expect(!ReviewRoundPresentation.isInProgress(RunFixtures.reviewRound(.failed)))
+    }
+
+    @Test func aRoundInProgressShowsTheTimeSinceItsRequest() {
+        let now = Self.now
+        for state in [Components.Schemas.ReviewProgressState.pending, .running] {
+            let round = Self.requested(state, minutesAgo: 12)
+            #expect(ReviewRoundPresentation.elapsed(round, now: now) == "12m")
+            // The text moves with the clock, which is what a minute's tick
+            // redraws.
+            #expect(ReviewRoundPresentation.elapsed(round, now: now.addingTimeInterval(60)) == "13m")
+            #expect(ReviewRoundPresentation.elapsed(Self.requested(state, minutesAgo: 125), now: now) == "2h")
+            // A request time the daemon did not record leaves nothing to
+            // count from.
+            var unrequested = round
+            unrequested.requested_at = nil
+            #expect(ReviewRoundPresentation.elapsed(unrequested, now: now) == nil)
+            #expect(!ReviewRoundPresentation.isRunningLong(unrequested, now: now))
+        }
+        // A round with a result keeps its recorded instant.
+        for state in [Components.Schemas.ReviewProgressState.completed, .failed] {
+            #expect(ReviewRoundPresentation.elapsed(Self.requested(state, minutesAgo: 12), now: now) == nil)
+        }
+    }
+
+    @Test func aRoundInProgressPastThirtyMinutesSaysSoWithoutChangingItsCut() {
+        let now = Self.now
+        #expect(ReviewRoundPresentation.longRunningAfter == 30 * 60)
+        for (state, word) in [(Components.Schemas.ReviewProgressState.pending, "Pending"), (.running, "Running")] {
+            let fresh = Self.requested(state, minutesAgo: 12)
+            let atTheBound = Self.requested(state, minutesAgo: 30)
+            let long = Self.requested(state, minutesAgo: 47)
+            #expect(!ReviewRoundPresentation.isRunningLong(fresh, now: now))
+            #expect(!ReviewRoundPresentation.isRunningLong(atTheBound, now: now))
+            #expect(ReviewRoundPresentation.isRunningLong(atTheBound, now: now.addingTimeInterval(1)))
+            #expect(ReviewRoundPresentation.isRunningLong(long, now: now))
+            #expect(ReviewRoundPresentation.verdict(fresh, now: now) == word)
+            #expect(ReviewRoundPresentation.verdict(atTheBound, now: now) == word)
+            #expect(ReviewRoundPresentation.verdict(long, now: now) == "\(word) · over 30m")
+            // A long round raises no Inbox item, so the chip keeps the ink
+            // cut even while another item is open for the run.
+            for round in [fresh, long] {
+                #expect(ReviewRoundPresentation.cut(round, isCurrent: true, hasOpenAdjudication: false) == .ink)
+                #expect(ReviewRoundPresentation.cut(round, isCurrent: true, hasOpenAdjudication: true) == .ink)
+            }
+        }
+        // Only a round in progress runs long, however old its request.
+        for state in [Components.Schemas.ReviewProgressState.completed, .failed] {
+            #expect(!ReviewRoundPresentation.isRunningLong(Self.requested(state, minutesAgo: 47), now: now))
+        }
+    }
+
+    @Test func aRoundInProgressNamesOnlyTheIdentityTheDaemonSent() {
+        for state in [Components.Schemas.ReviewProgressState.pending, .running] {
+            #expect(ReviewRoundPresentation.identity(RunFixtures.reviewRound(state)) == nil)
+            #expect(
+                ReviewRoundPresentation.identity(
+                    RunFixtures.reviewRound(state, provider: "openai", modelConfiguration: "codex/high"))
+                    == "openai · codex/high")
+            #expect(ReviewRoundPresentation.identity(RunFixtures.reviewRound(state, provider: "openai")) == "openai")
+            #expect(
+                ReviewRoundPresentation.identity(RunFixtures.reviewRound(state, modelConfiguration: "codex/high"))
+                    == "codex/high")
+        }
+        // A round with a result keeps the line, where a missing identity is
+        // unknown.
+        #expect(ReviewRoundPresentation.identity(RunFixtures.reviewRound(.completed)) == "openai · codex/high")
+        #expect(
+            ReviewRoundPresentation.identity(RunFixtures.reviewRound(.failed)) == "Reviewer unknown · Model unknown")
+        var unidentified = RunFixtures.reviewRound(.completed)
+        unidentified.provider = nil
+        unidentified.model_configuration = nil
+        #expect(ReviewRoundPresentation.identity(unidentified) == "Reviewer unknown · Model unknown")
+        unidentified.provider = "openai"
+        #expect(ReviewRoundPresentation.identity(unidentified) == "openai · Model unknown")
+    }
+
+    @Test func aRoundInProgressListsNoResultLines() {
+        for state in [Components.Schemas.ReviewProgressState.pending, .running] {
+            let round = RunFixtures.reviewRound(state)
+            #expect(ReviewRoundPresentation.resultLines(round).isEmpty)
+            #expect(ReviewRoundPresentation.missingCompletionLine(round) == nil)
+        }
+        // A round with a result keeps both lines, and says which value is
+        // missing.
+        #expect(
+            ReviewRoundPresentation.resultLines(RunFixtures.reviewRound(.completed)) == [
+                "Outcome: Clean", "0 findings",
+            ])
+        #expect(
+            ReviewRoundPresentation.resultLines(RunFixtures.reviewRound(.completed, findings: true))
+                == ["Outcome: Findings", "3 findings"])
+        #expect(
+            ReviewRoundPresentation.resultLines(RunFixtures.reviewRound(.failed))
+                == ["Outcome unavailable", "Findings count unavailable"])
+        for state in [Components.Schemas.ReviewProgressState.completed, .failed] {
+            #expect(
+                ReviewRoundPresentation.missingCompletionLine(RunFixtures.reviewRound(state))
+                    == "Completion time unavailable")
+        }
     }
 
     @Test func cutIsFaintForPriorRoundsAndAttentionOnlyForOpenAdjudication() {
@@ -129,13 +245,11 @@ import Testing
         #expect(ReviewRoundPresentation.remediationLine(RemediationFixtures.reReview(.running)) == nil)
     }
 
-    @Test func evidenceNoteSaysNotProducedYetUntilTheRoundEnds() {
-        #expect(
-            ReviewRoundPresentation.evidenceNote(RunFixtures.reviewRound(.pending))
-                == "Reviewer output not produced yet")
-        #expect(
-            ReviewRoundPresentation.evidenceNote(RunFixtures.reviewRound(.running))
-                == "Reviewer output not produced yet")
+    @Test func evidenceNoteExplainsMissingOutputOnlyOnceTheRoundEnds() {
+        // A round in progress has produced no output yet, so nothing is
+        // missing and there is nothing to explain.
+        #expect(ReviewRoundPresentation.evidenceNote(RunFixtures.reviewRound(.pending)) == nil)
+        #expect(ReviewRoundPresentation.evidenceNote(RunFixtures.reviewRound(.running)) == nil)
         #expect(ReviewRoundPresentation.evidenceNote(RunFixtures.reviewRound(.completed)) == "Evidence unavailable")
         #expect(ReviewRoundPresentation.evidenceNote(RunFixtures.reviewRound(.failed)) == "Evidence unavailable")
         #expect(
