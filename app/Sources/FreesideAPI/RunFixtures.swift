@@ -214,20 +214,27 @@ public enum RunFixtures {
         ]
     }
 
+    /// A round as the daemon reports it in `state`. The request time and the
+    /// reviewer identity default to what the daemon sends today: a fixed
+    /// instant, and an identity only once the round has completed. A caller
+    /// passes them to place a round relative to its own clock, or to model a
+    /// daemon that names the reviewer while the round still runs.
     public static func reviewRound(
         _ state: Components.Schemas.ReviewProgressState,
         round: Int = 1, findings: Bool = false,
-        availability: Components.Schemas.ReviewEvidenceAvailability = .unavailable
+        availability: Components.Schemas.ReviewEvidenceAvailability = .unavailable,
+        requestedAt: Date? = nil, provider: String? = nil, modelConfiguration: String? = nil
     ) -> Components.Schemas.RunReviewRound {
-        .init(
+        let requested = requestedAt ?? date(1_800)
+        return .init(
             round: round, invocation_id: "review-\(activeRunID)-\(round)",
             state: state, source: .init(kind: "freeside_invoked"),
             base_sha: String(repeating: "a", count: 40),
             head_sha: String(repeating: round == 1 ? "b" : "c", count: 40),
-            requested_at: date(1_800),
-            completed_at: state == .completed || state == .failed ? date(1_920) : nil,
-            provider: state == .completed ? "openai" : nil,
-            model_configuration: state == .completed ? "codex/high" : nil,
+            requested_at: requested,
+            completed_at: state == .completed || state == .failed ? requested.addingTimeInterval(120) : nil,
+            provider: provider ?? (state == .completed ? "openai" : nil),
+            model_configuration: modelConfiguration ?? (state == .completed ? "codex/high" : nil),
             outcome: state == .completed ? .init(value1: findings ? .findings : .clean) : nil,
             findings_count: state == .completed ? (findings ? 3 : 0) : nil,
             dispositions: state == .completed
