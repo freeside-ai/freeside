@@ -1,0 +1,26 @@
+{
+  "invocation_id": "review-run-1-1",
+  "run_id": "run-1",
+  "role": "reviewer",
+  "auth_identity_id": "auth-openai-A",
+  "lineage_group": "openai",
+  "agent_binding": {
+    "agent_digest": "sha256:fba2e91b81488102b4193bb2a7730f4ec9e5198a98b9baa6c0f2fc6ee60c3b8a",
+    "launch_digest": "sha256:a3c077d3202e7218f405162176b564d5c5853628a0bf06b38b342db18174a1cc",
+    "treatment_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "pricing_revision": "2026-08",
+    "lineup_revision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "enrollment_id": "enroll-openai-A-codex",
+    "enrollment_generation": 2,
+    "store_manifest_digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+    "effective_egress": [
+      "chatgpt.com:443"
+    ],
+    "attended": false,
+    "route_model_id": "gpt-5.2-codex",
+    "requested_effort": "high",
+    "native_effort": "high",
+    "selection_source": "lineup"
+  },
+  "admitted_at": "2026-01-02T03:04:05Z"
+}

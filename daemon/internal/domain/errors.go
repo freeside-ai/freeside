@@ -407,6 +407,8 @@ var (
 		"lineage relation is not matched, differed, or unknown")
 	ErrAdmissionDerivationMismatch = errors.New(
 		"admission's derived fields disagree with its admitted agent closure")
+	ErrReviewAdmissionInvalid = errors.New(
+		"review admission records a binding no review launch could have run")
 
 	// Backend-conformance failures (issues #327, #320).
 	ErrConformanceOverclaim = errors.New(

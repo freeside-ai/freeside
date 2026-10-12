@@ -1100,6 +1100,47 @@ func ValidateAdmissionAgentDerivations(
 	if binding == nil {
 		return fail("no agent binding to recheck")
 	}
+	if err := validateBindingClosure(
+		fail, *binding, agent, adapter, route, offer, launch, role, enrollment, generation,
+	); err != nil {
+		return err
+	}
+	if missing := MissingLaunchCapabilities(adapter.LaunchCapabilities, launch.RequiredCapabilities()); len(missing) > 0 {
+		return fail("launch requires %v beyond the adapter's declared capabilities", missing)
+	}
+	if a.AuthIdentityID == nil || *a.AuthIdentityID != enrollment.AuthIdentityID {
+		return fail("admitted identity disagrees with enrollment identity %s", enrollment.AuthIdentityID)
+	}
+	if a.CredentialMode != enrollment.CredentialMode {
+		return fail("credential mode %q, enrollment carries %q", a.CredentialMode, enrollment.CredentialMode)
+	}
+	for _, authority := range binding.EffectiveEgress {
+		if !slices.Contains(route.InferenceAuthorities, authority) {
+			return fail("effective egress authority %q is outside the route's authorities", authority)
+		}
+	}
+	// Validate already required the explicit snapshot on every agent-bound
+	// admission, so absence cannot reach this comparison.
+	if a.StageInputs.VendorInstructions.Vendor != adapter.Vendor {
+		return fail("instruction delivery vendor %q, adapter derives %q",
+			a.StageInputs.VendorInstructions.Vendor, adapter.Vendor)
+	}
+	return nil
+}
+
+// validateBindingClosure re-runs the joins an admitted-agent binding shares
+// between an execution admission and a review admission: the fragments are
+// well-formed and authentic, the agent pins them, the launch is the one the
+// binding names and is for the role's stage, the effort is one the offer
+// allows and the adapter sends, the model and effort are the ones the closure
+// derives, and the enrollment and generation are the ones the binding names.
+// What only one of the two records holds (launch capabilities, the egress
+// join, the credential mode, instruction delivery) stays with its caller.
+func validateBindingClosure(
+	fail func(format string, args ...any) error, binding AdmissionAgentBinding,
+	agent AgentDefinition, adapter AdapterFragment, route RouteFragment, offer OfferFragment,
+	launch LaunchSpec, role StageName, enrollment ClientEnrollment, generation EnrollmentGeneration,
+) error {
 	if err := agent.Validate(); err != nil {
 		return err
 	}
@@ -1116,8 +1157,7 @@ func ValidateAdmissionAgentDerivations(
 		return err
 	}
 	if !role.valid() {
-		return fmt.Errorf("execution admission %s stage role %q: %w",
-			a.InvocationID, role, ErrInvalidStageName)
+		return fmt.Errorf("admitted agent binding stage role %q: %w", role, ErrInvalidStageName)
 	}
 	if err := enrollment.Validate(); err != nil {
 		return err
@@ -1164,17 +1204,8 @@ func ValidateAdmissionAgentDerivations(
 			binding.RouteModelID, binding.RequestedEffort, binding.NativeEffort,
 			selection.RouteModelID, selection.RequestedEffort, selection.NativeEffort)
 	}
-	if missing := MissingLaunchCapabilities(adapter.LaunchCapabilities, launch.RequiredCapabilities()); len(missing) > 0 {
-		return fail("launch requires %v beyond the adapter's declared capabilities", missing)
-	}
 	if agent.EnrollmentID != binding.EnrollmentID || enrollment.ID != binding.EnrollmentID {
 		return fail("enrollment %s disagrees with binding %s", enrollment.ID, binding.EnrollmentID)
-	}
-	if a.AuthIdentityID == nil || *a.AuthIdentityID != enrollment.AuthIdentityID {
-		return fail("admitted identity disagrees with enrollment identity %s", enrollment.AuthIdentityID)
-	}
-	if a.CredentialMode != enrollment.CredentialMode {
-		return fail("credential mode %q, enrollment carries %q", a.CredentialMode, enrollment.CredentialMode)
 	}
 	if generation.Ordinal != binding.EnrollmentGeneration {
 		return fail("generation ordinal %d, binding names %d", generation.Ordinal, binding.EnrollmentGeneration)
@@ -1182,17 +1213,6 @@ func ValidateAdmissionAgentDerivations(
 	if generation.StoreManifestDigest != binding.StoreManifestDigest {
 		return fail("store manifest %s, binding names %s",
 			generation.StoreManifestDigest, binding.StoreManifestDigest)
-	}
-	for _, authority := range binding.EffectiveEgress {
-		if !slices.Contains(route.InferenceAuthorities, authority) {
-			return fail("effective egress authority %q is outside the route's authorities", authority)
-		}
-	}
-	// Validate already required the explicit snapshot on every agent-bound
-	// admission, so absence cannot reach this comparison.
-	if a.StageInputs.VendorInstructions.Vendor != adapter.Vendor {
-		return fail("instruction delivery vendor %q, adapter derives %q",
-			a.StageInputs.VendorInstructions.Vendor, adapter.Vendor)
 	}
 	return nil
 }

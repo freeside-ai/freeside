@@ -1257,6 +1257,32 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The review snapshot: the agent binding a routed review was admitted
+	// under, unattended and lineup-chosen, with the model and effort the
+	// review launch passed.
+	reviewAdmission, err := domain.NewReviewAdmission(domain.ReviewAdmission{
+		InvocationID: "review-run-1-1", RunID: "run-1", Role: domain.RoleReviewer,
+		AuthIdentityID: agentIdentityID, LineageGroup: "openai",
+		AgentBinding: domain.AdmissionAgentBinding{
+			AgentDigest:          goldenAgent.Digest,
+			LaunchDigest:         goldenLaunch.Digest,
+			TreatmentDigest:      stageDigest("d"),
+			PricingRevision:      goldenOffer.PricingRevision,
+			LineupRevision:       stageDigest("c"),
+			EnrollmentID:         agentEnrollment.ID,
+			EnrollmentGeneration: 2,
+			StoreManifestDigest:  stageDigest("9"),
+			EffectiveEgress:      []string{"chatgpt.com:443"},
+			RouteModelID:         "gpt-5.2-codex",
+			RequestedEffort:      domain.EffortHigh,
+			NativeEffort:         "high",
+			SelectionSource:      domain.AgentSelectionSourceLineup,
+		},
+		AdmittedAt: ts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	adapterConformance := adapterConformanceRecord(t)
 
 	waivedProfileDigest := domain.Digest("sha256:trust-profile-v1")
@@ -1897,6 +1923,7 @@ func TestGolden(t *testing.T) {
 		{"execution_admission_waived", waivedAdmission},
 		{"execution_admission_agent", agentAdmission},
 		{"execution_admission_agent_explicit_model", claudeAdmission},
+		{"review_admission", reviewAdmission},
 		{"execution_admission_task_line", taskLineAdmission},
 		{"adapter_conformance", adapterConformance},
 		{"execution_export", export},
