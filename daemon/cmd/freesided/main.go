@@ -61,6 +61,11 @@ const defaultDoctorInterval = 24 * time.Hour
 // durable schedules are checked for due fires, not any schedule's cadence.
 const defaultSchedulerInterval = time.Second
 
+// defaultAttentionDeliveryInterval is how often the freesided command looks
+// for notifications it owes paired devices: the longest a new item waits
+// before its first send. It is not the retry wait, which the sender owns.
+const defaultAttentionDeliveryInterval = 5 * time.Second
+
 const (
 	defaultFakeRunID     domain.RunID     = "run-walking-skeleton"
 	defaultFakeProjectID domain.ProjectID = "project-walking-skeleton"
@@ -293,6 +298,9 @@ func main() {
 	schedulerInterval := flags.Duration(
 		"scheduler-interval", defaultSchedulerInterval,
 		"durable-scheduler due-scan tick in production driver mode")
+	attentionDeliveryInterval := flags.Duration(
+		"attention-delivery-interval", defaultAttentionDeliveryInterval,
+		"how often to send the notifications owed to paired devices (0 turns the sender off)")
 	approvedRecipes := digestSetFlag{}
 	flags.Var(&approvedRecipes, "approved-recipe",
 		"approved verification-recipe digest for persistence and doctor (repeatable)")
@@ -418,6 +426,7 @@ func main() {
 		ListenAddr: *listenAddr, NtfyURL: *ntfyURL, ReconcileInterval: *interval,
 		DoctorInterval:                     *doctorInterval,
 		SchedulerInterval:                  *schedulerInterval,
+		AttentionDeliveryInterval:          *attentionDeliveryInterval,
 		ApprovedRecipes:                    approvedRecipes,
 		BackupEncryptionWaiverRepositoryID: backupEncryptionWaiverRepositoryID.Value(),
 		SeedWalkingSkeleton:                *seedWalkingSkeleton,
@@ -564,10 +573,10 @@ type config struct {
 	// default server nor has its items' entity versions move under the
 	// commands it prepares.
 	//
-	// The freesided command leaves it zero too: starting the sender there
-	// is #1924's. A delivery changes an item's timing and entity_version
-	// and leaves its item_version alone, so the sender no longer unbinds
-	// engine work from the item
+	// The freesided command sets it from -attention-delivery-interval, so
+	// the sender runs there unless the operator passes 0. A delivery changes
+	// an item's timing and entity_version and leaves its item_version alone,
+	// so engine work bound to the item stays bound
 	// (devlog/2026-10-11-1750-timing-keeps-item-version.md).
 	AttentionDeliveryInterval time.Duration
 	// Logger is the process logger the long-running loops report through.
@@ -794,6 +803,9 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	}
 	if cfg.SchedulerInterval < 0 {
 		return nil, fmt.Errorf("negative scheduler interval %s", cfg.SchedulerInterval)
+	}
+	if cfg.AttentionDeliveryInterval < 0 {
+		return nil, fmt.Errorf("negative attention delivery interval %s", cfg.AttentionDeliveryInterval)
 	}
 	if cfg.now == nil {
 		cfg.now = time.Now

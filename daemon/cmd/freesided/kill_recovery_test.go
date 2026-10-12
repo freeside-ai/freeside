@@ -9,11 +9,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -53,12 +53,14 @@ type processFixture struct {
 // in-process engine tests prove the same durable states; this fixture proves
 // those states survive abrupt OS process death with the real freesided binary,
 // one SQLite store, and one file-backed permanent fake.
+//
+// It is also the proof that the freesided command starts the notification
+// sender (#1924): every other sender test composes the daemon in process and
+// sets the interval itself. The discuss is submitted once the feedback item's
+// notification has reached the provider, so the recovery matrix runs with a
+// delivery recorded on the item the engine binds its intent to.
 func TestDaemonRecoversAcrossSIGKILL(t *testing.T) {
 	binary := buildKillTestDaemon(t)
-	ntfy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(ntfy.Close)
 
 	tests := []struct {
 		name               string
@@ -73,6 +75,7 @@ func TestDaemonRecoversAcrossSIGKILL(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
+			ntfy := newNtfySink(t, http.StatusOK)
 			marker := filepath.Join(root, "kill-checkpoint")
 			seedKillRecoveryReadiness(t, filepath.Join(root, "freeside.db"))
 			first := startProcessFixture(t, binary, root, ntfy.URL, tc.checkpoint, marker)
@@ -80,6 +83,7 @@ func TestDaemonRecoversAcrossSIGKILL(t *testing.T) {
 			approval := client.waitForItem(t, domain.ItemID("approval-"+string(defaultFakeRunID)))
 			client.submit(t, "approve-kill-recovery", approval, domain.ActionApprove, "")
 			feedback := client.waitForItem(t, domain.ItemID("feedback-"+string(defaultFakeRunID)))
+			waitForNotification(t, ntfy, feedback.Item.ID)
 			client.submit(t, killTestCommandID, feedback, domain.ActionDiscuss, "exercise restart recovery")
 
 			waitForMarker(t, marker, tc.checkpoint)
@@ -265,6 +269,9 @@ func startProcessFixture(
 		"-listen", "127.0.0.1:0",
 		"-ntfy-url", ntfyURL,
 		"-reconcile-interval", "5ms",
+		// Far shorter than the command's default, so a notification for each
+		// item this device is owed lands while the test decides on it.
+		"-attention-delivery-interval", "5ms",
 		"-seed-walking-skeleton",
 	}
 	p := &processFixture{
@@ -399,6 +406,12 @@ func (c *processClient) waitForItem(t *testing.T, id domain.ItemID) signet.Atten
 	return signet.AttentionItemSnapshot{}
 }
 
+// submit decides on item and converges on a stale entity version. The
+// daemon's notification sender raises an item's entity_version between this
+// client's read and its submit, which is the designed stale-command path: the
+// 409 carries the current item and the client resubmits against it. Only
+// entity_version may have moved. item_version is what the operator decides
+// on, so a replacement that changed it fails the test.
 func (c *processClient) submit(
 	t *testing.T,
 	commandID string,
@@ -406,6 +419,33 @@ func (c *processClient) submit(
 	action domain.Action,
 	message string,
 ) {
+	t.Helper()
+	deadline := time.Now().Add(processWaitBound)
+	for {
+		status, responseBody := c.postCommand(t, commandID, item, action, message)
+		if status == http.StatusOK {
+			return
+		}
+		var stale struct {
+			ReplacementItem signet.AttentionItemSnapshot `json:"replacement_item"`
+		}
+		current := &stale.ReplacementItem
+		if status != http.StatusConflict || json.Unmarshal(responseBody, &stale) != nil ||
+			current.Item.ID != item.Item.ID || current.Item.ItemVersion != item.Item.ItemVersion ||
+			current.EntityVersion == item.EntityVersion || time.Now().After(deadline) {
+			t.Fatalf("submit %s status = %d body=%s", action, status, responseBody)
+		}
+		item = *current
+	}
+}
+
+func (c *processClient) postCommand(
+	t *testing.T,
+	commandID string,
+	item signet.AttentionItemSnapshot,
+	action domain.Action,
+	message string,
+) (int, []byte) {
 	t.Helper()
 	digests := item.Item.ArtifactDigests
 	if digests == nil {
@@ -438,10 +478,11 @@ func (c *processClient) submit(
 		t.Fatalf("submit %s command: %v", action, err)
 	}
 	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != http.StatusOK {
-		responseBody, _ := io.ReadAll(response.Body)
-		t.Fatalf("submit %s status = %d body=%s", action, response.StatusCode, responseBody)
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read %s command response: %v", action, err)
 	}
+	return response.StatusCode, responseBody
 }
 
 func (c *processClient) waitForAcceptedResult(t *testing.T) {
@@ -486,6 +527,22 @@ func (c *processClient) getJSON(t *testing.T, deadline time.Time, path string, t
 		}
 	}
 	return response.StatusCode
+}
+
+// waitForNotification waits until the daemon has published a notification
+// whose tap link names the item.
+func waitForNotification(t *testing.T, sink *ntfySink, id domain.ItemID) {
+	t.Helper()
+	link := "freeside://attention/items/" + string(id) + "?"
+	deadline := time.Now().Add(processWaitBound)
+	for time.Now().Before(deadline) {
+		_, clicks := sink.published()
+		if slices.ContainsFunc(clicks, func(click string) bool { return strings.HasPrefix(click, link) }) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("no notification for item %q reached the provider within %s", id, processWaitBound)
 }
 
 func waitForMarker(t *testing.T, path, want string) {
