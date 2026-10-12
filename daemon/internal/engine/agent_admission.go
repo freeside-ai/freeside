@@ -70,8 +70,8 @@ type RoleAgent struct {
 // identity join; the line selects that agent's current digest; and the
 // enrollment holds a store generation. Stage admission adds the launch,
 // conformance, and deadline checks; the review roles, whose launch coverage
-// arrives with the review record (#898), add only the offer's not_after and
-// the attended mark, in the daemon's review check.
+// is not enforced yet (#1980), add only the offer's not_after and the
+// attended mark, in the daemon's review check.
 //
 // It reads the lineup only. No task is in view here, so no task line is: the
 // startup and preflight checks, the shadow reviewer, and the review source's

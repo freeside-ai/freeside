@@ -1016,8 +1016,9 @@ func assertAdoptedPatchResolvesAndAdmitsEveryRole(t *testing.T, f *authAdoptFixt
 			}
 			prompt, writer := prompts[role]
 			if !writer {
-				// The review roles' launch coverage arrives with the review
-				// record (#898); they have no ward stage to admit.
+				// The review roles have no ward stage to admit: a review is
+				// admitted by the review check, which records a snapshot and
+				// does not enforce launch coverage yet (#1980).
 				if _, err := selection.CheckRole(
 					ctx, st, role, agent.Line.PromptDigest, domain.ModeAttendedDev, now,
 				); !errors.Is(err, engine.ErrAgentNotAdmissible) {

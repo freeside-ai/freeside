@@ -131,7 +131,7 @@ func claudeCallAdapter(build string, sendable []domain.EffortLevel) (domain.Adap
 // schema, and the sanitized auth snapshot. It has no mutation tools and, like
 // the Claude adapter, no auxiliary-inference control, so the review launch's
 // `forbidden` policy is not covered until an adapter proves that control
-// (#898). The launch always passes a model and an effort, so the adapter
+// (#1980). The launch always passes a model and an effort, so the adapter
 // sends every effort the codex_cli table can.
 func CodexReviewAdapter() (domain.AdapterFragment, error) {
 	return codexReviewAdapter(CodexReviewAdapterBuild, domain.CodexCLISendableEfforts())

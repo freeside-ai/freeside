@@ -58,15 +58,15 @@ type ReviewAdmitter func(
 //
 // Step 3, launch coverage, is not enforced for the review roles: the review
 // launch forbids auxiliary inference and no review adapter declares that
-// control yet. A review has no attempt budget, so the offer and the
+// control yet (#1980). A review has no attempt budget, so the offer and the
 // credential are held to the instant of the check.
 //
 // runID names the run a review is about to be requested for; it is empty at
 // startup and preflight, where no task is in view. A task line cannot move a
 // review to another agent: the source runs one identity and one agent, fixed
-// when the daemon composed it. So a line is never silently ignored, a run
-// whose task's line for the role names any other agent is refused, and so is
-// one whose line does not hold against the command that set it. The shadow
+// when the daemon composed it (#1981). So a line is never silently ignored, a
+// run whose task's line for the role names any other agent is refused, and so
+// is one whose line does not hold against the command that set it. The shadow
 // reviewer takes no task line and is not checked for one.
 //
 // The selection gate is not consulted. It holds new writer work until no

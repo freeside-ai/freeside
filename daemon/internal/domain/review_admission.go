@@ -200,7 +200,7 @@ func detachedReviewAdmission(admission *ReviewAdmission) *ReviewAdmission {
 // not a relaxation of that check:
 //   - Launch capabilities. The review launch forbids auxiliary inference and
 //     no review adapter declares that control, so coverage (§5.4 step 3) is
-//     not enforced for the review roles until an adapter proves it.
+//     not enforced for the review roles until an adapter proves it (#1980).
 //   - Egress against the route's authorities. An API-key review credential
 //     reaches an authority its enrollment's route does not name until that
 //     credential is admitted as an enrollment (#1677). The snapshot records
