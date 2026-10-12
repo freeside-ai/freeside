@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 )
 
 func TestReviewRecordReadRevalidatesCanonicalBody(t *testing.T) {
@@ -22,10 +24,10 @@ func TestReviewRecordReadRevalidatesCanonicalBody(t *testing.T) {
 	when := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-tamper-1", RunID: run.ID, Round: 1,
-		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, run.ID, "review-tamper-1"),
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		CostOwner:           "owner", BaseSHA: "base", HeadSHA: "head", CompletedAt: when,
+		BaseSHA:             "base", HeadSHA: "head", CompletedAt: when,
 		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 		Outcome:            domain.ReviewClean,
 	})
@@ -62,10 +64,10 @@ func TestListReviewRecordsRejectsRunKeyOmissionTamper(t *testing.T) {
 	second := domain.Run{ID: "run-review-list-foreign", ProjectID: "project-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"}
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-list-1", RunID: first.ID, Round: 1,
-		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, first.ID, "review-list-1"),
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		CostOwner:           "owner", BaseSHA: "base", HeadSHA: "head",
+		BaseSHA:             "base", HeadSHA: "head",
 		CompletedAt:        time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC),
 		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)), Outcome: domain.ReviewClean,
 	})
@@ -106,10 +108,12 @@ func TestReviewRecordReadPreservesLegacyMissingInstructionAuthority(t *testing.T
 	}
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-legacy-1", RunID: run.ID, Round: 1,
-		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		// Only a record from before the admission snapshot can also
+		// predate the instruction digest.
+		LegacyProvider: "openai", LegacyModelConfiguration: "gpt-codex/high", LegacyCostOwner: "owner",
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		CostOwner:           "owner", BaseSHA: "base", HeadSHA: "head",
+		BaseSHA:             "base", HeadSHA: "head",
 		CompletedAt:        time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
 		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 		Outcome:            domain.ReviewClean,
@@ -225,5 +229,114 @@ func TestReviewRetryReadRevalidatesCanonicalBody(t *testing.T) {
 	})
 	if !errors.Is(err, errRowInconsistent) {
 		t.Fatalf("partially rewritten review retry read = %v", err)
+	}
+}
+
+// TestReviewRecordAttributionAtWriteAndRead covers the persistence boundary
+// of the attribution rule for both record kinds: a record written before the
+// admission snapshot reads back exactly as stored, and a record carrying both
+// a snapshot and the legacy strings, or neither, is refused at write and,
+// when a row is rewritten into that shape, at read.
+func TestReviewRecordAttributionAtWriteAndRead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openTemplateStoreAt(t, t.TempDir()+"/review-attribution.db", Options{})
+	run := domain.Run{
+		ID: "run-review-attribution", ProjectID: "project-1",
+		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+	}
+	when := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	digest := func(fill string) domain.Digest { return domain.Digest("sha256:" + strings.Repeat(fill, 64)) }
+	routed := domain.ReviewRecord{
+		InvocationID: "review-attribution-1", RunID: run.ID, Round: 1,
+		LegacyProvider: "openai", LegacyModelConfiguration: "gpt-codex/high", LegacyCostOwner: "subscription:owner",
+		ConfigurationDigest: digest("c"), InstructionDigest: digest("d"),
+		BaseSHA: "base", HeadSHA: "head", CompletedAt: when,
+		CompletionEvidence: digest("e"), Outcome: domain.ReviewClean,
+	}
+	shadow := domain.ShadowReviewRecord{
+		InvocationID: "shadow-attribution-1", RunID: run.ID, ShadowedRound: 1,
+		Source:         domain.ShadowReviewClaudeLocal,
+		LegacyProvider: "anthropic", LegacyModelConfiguration: "claude/max", LegacyCostOwner: "subscription:owner",
+		ConfigurationDigest: digest("c"), InstructionDigest: digest("d"),
+		BaseSHA: "base", HeadSHA: "head", CompletedAt: when,
+		CompletionEvidence: digest("e"), Outcome: domain.ReviewClean,
+	}
+	write := func(routed domain.ReviewRecord, shadow domain.ShadowReviewRecord) (routedErr, shadowErr error) {
+		routedErr = st.Write(ctx, func(tx *WriteTx) error { return tx.PutReviewRecord(ctx, routed, nil) })
+		shadowErr = st.Write(ctx, func(tx *WriteTx) error { return tx.PutShadowReviewRecord(ctx, shadow, nil) })
+		return routedErr, shadowErr
+	}
+	read := func() (gotRouted domain.ReviewRecord, gotShadow domain.ShadowReviewRecord, routedErr, shadowErr error) {
+		_ = st.Read(ctx, func(tx *ReadTx) error {
+			gotRouted, routedErr = tx.GetReviewRecord(ctx, routed.InvocationID)
+			gotShadow, shadowErr = tx.GetShadowReviewRecord(ctx, shadow.InvocationID)
+			return nil
+		})
+		return gotRouted, gotShadow, routedErr, shadowErr
+	}
+	if err := st.Write(ctx, func(tx *WriteTx) error { return tx.PutRun(ctx, run) }); err != nil {
+		t.Fatal(err)
+	}
+
+	both, bothShadow := routed, shadow
+	both.Admission = fake.RecordAdmission(domain.RoleReviewer, run.ID, routed.InvocationID)
+	bothShadow.Admission = fake.RecordAdmission(domain.RoleShadowReviewer, run.ID, shadow.InvocationID)
+	neither, neitherShadow := routed, shadow
+	neither.LegacyProvider, neither.LegacyModelConfiguration, neither.LegacyCostOwner = "", "", ""
+	neitherShadow.LegacyProvider, neitherShadow.LegacyModelConfiguration, neitherShadow.LegacyCostOwner = "", "", ""
+	if routedErr, shadowErr := write(both, bothShadow); !errors.Is(routedErr, domain.ErrReviewAttribution) ||
+		!errors.Is(shadowErr, domain.ErrReviewAttribution) {
+		t.Fatalf("write with a snapshot and the legacy strings = %v, %v", routedErr, shadowErr)
+	}
+	if routedErr, shadowErr := write(neither, neitherShadow); !errors.Is(routedErr, domain.ErrEmptyField) ||
+		!errors.Is(shadowErr, domain.ErrEmptyField) {
+		t.Fatalf("write with no attribution = %v, %v", routedErr, shadowErr)
+	}
+
+	if routedErr, shadowErr := write(routed, shadow); routedErr != nil || shadowErr != nil {
+		t.Fatalf("write legacy records = %v, %v", routedErr, shadowErr)
+	}
+	gotRouted, gotShadow, routedErr, shadowErr := read()
+	if routedErr != nil || shadowErr != nil {
+		t.Fatalf("read legacy records = %v, %v", routedErr, shadowErr)
+	}
+	if !reflect.DeepEqual(gotRouted, routed) || !reflect.DeepEqual(gotShadow, shadow) {
+		t.Fatalf("legacy records did not read back as stored:\n%#v\n%#v", gotRouted, gotShadow)
+	}
+
+	// Rewrite each stored row, with a matching body digest, into a shape no
+	// writer produces. The shadow provider column follows the body so the
+	// attribution rule, not the copied-column check, is what refuses it.
+	rewrite := func(routed domain.ReviewRecord, shadow domain.ShadowReviewRecord, provider string) {
+		t.Helper()
+		routedBody, err := json.Marshal(routed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		shadowBody, err := json.Marshal(shadow)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.db.ExecContext(ctx,
+			`UPDATE review_records SET body_digest = ?, body = ? WHERE invocation_id = ?`,
+			reviewBodyDigest(string(routedBody)), string(routedBody), routed.InvocationID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.db.ExecContext(ctx,
+			`UPDATE shadow_review_records SET provider = ?, body_digest = ?, body = ? WHERE invocation_id = ?`,
+			provider, reviewBodyDigest(string(shadowBody)), string(shadowBody), shadow.InvocationID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rewrite(both, bothShadow, bothShadow.Provider())
+	if _, _, routedErr, shadowErr := read(); !errors.Is(routedErr, domain.ErrReviewAttribution) ||
+		!errors.Is(shadowErr, domain.ErrReviewAttribution) {
+		t.Fatalf("read of a row with a snapshot and the legacy strings = %v, %v", routedErr, shadowErr)
+	}
+	rewrite(neither, neitherShadow, shadow.LegacyProvider)
+	if _, _, routedErr, shadowErr := read(); !errors.Is(routedErr, domain.ErrEmptyField) ||
+		!errors.Is(shadowErr, domain.ErrEmptyField) {
+		t.Fatalf("read of a row with no attribution = %v, %v", routedErr, shadowErr)
 	}
 }

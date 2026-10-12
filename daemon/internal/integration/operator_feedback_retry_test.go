@@ -576,7 +576,7 @@ func completeFeedbackSuccessor(t *testing.T, p *productionPublicationHarness, in
 	p.now = p.now.Add(time.Minute)
 	p.reviewer.Script(engine.ProductionReviewInvocationID(p.runID, 2), fake.ReviewScript{
 		Outcome: fake.OutcomeComplete, Result: exec.ReviewResult{
-			BaseSHA: p.baseSHA, HeadSHA: replay.HeadSHA, Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			BaseSHA: p.baseSHA, HeadSHA: replay.HeadSHA,
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("clean successor review")),
 		},
 	})
@@ -921,7 +921,7 @@ func remediateFeedbackSuccessor(t *testing.T, p *productionPublicationHarness, r
 	p.reviewer.Script(engine.ProductionReviewInvocationID(p.runID, 3), fake.ReviewScript{
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
-			BaseSHA: p.baseSHA, HeadSHA: replay.HeadSHA, Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			BaseSHA: p.baseSHA, HeadSHA: replay.HeadSHA,
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("clean successor remediation review")),
 		},
 	})
@@ -939,7 +939,7 @@ func scriptSuccessorFinding(t *testing.T, p *productionPublicationHarness, repla
 	p.reviewer.Script(engine.ProductionReviewInvocationID(p.runID, 2), fake.ReviewScript{
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
-			BaseSHA: p.baseSHA, HeadSHA: replay.HeadSHA, Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			BaseSHA: p.baseSHA, HeadSHA: replay.HeadSHA,
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("successor review findings")), Findings: []domain.Finding{finding},
 		},
 	})

@@ -6,6 +6,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -111,11 +112,12 @@ func approveFollowUpFiling(t testing.TB, st *store.Store, filing FollowUpFiling)
 		Location: &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1},
 		Message:  "unbounded retry", RawText: "unbounded retry", CreatedAt: filingSeedAt,
 	}
+	reviewID := domain.InvocationID("review-" + string(runID) + "-1")
 	review, err := domain.NewReviewRecord(domain.ReviewRecord{
-		InvocationID: domain.InvocationID("review-" + string(runID) + "-1"),
-		RunID:        runID, Round: 1, Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		InvocationID: reviewID,
+		RunID:        runID, Round: 1, Admission: fake.SeededReviewAdmission(runID, reviewID),
 		ConfigurationDigest: filingSeedDigest("configuration"), InstructionDigest: instructionDigest,
-		CostOwner: "owner", BaseSHA: "base", HeadSHA: "head-1", CompletedAt: filingSeedAt,
+		BaseSHA: "base", HeadSHA: "head-1", CompletedAt: filingSeedAt,
 		CompletionEvidence: filingSeedDigest("completion"),
 		Outcome:            domain.ReviewFindings, FindingIDs: []domain.FindingID{finding.ID},
 	})

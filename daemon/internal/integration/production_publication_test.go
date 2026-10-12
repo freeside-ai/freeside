@@ -110,6 +110,7 @@ type faultReviewSource struct {
 	failRequestWith       error
 	requestedWorkspace    string
 	requestedInstructions exec.ReviewInstructionBinding
+	requestedAdmission    domain.ReviewAdmission
 }
 
 func (s *faultReviewSource) RequestReview(
@@ -131,6 +132,7 @@ func (s *faultReviewSource) RequestReview(
 	}
 	s.requestedWorkspace = req.Workspace
 	s.requestedInstructions = req.Instructions
+	s.requestedAdmission = req.Admission
 	if s.failRequestAfterStart {
 		s.failRequestAfterStart = false
 		return &exec.ReviewSourceFailure{
@@ -223,6 +225,7 @@ type productionPublicationHarness struct {
 	reviewer                  *fake.ReviewSource
 	reviewerDir               string
 	reviewSource              exec.ReviewSource
+	reviewAdmission           engine.ReviewAdmitter
 	reviewConfigurationDigest domain.Digest
 	remediationPromptPackage  domain.Digest
 	productionDelivery        func(context.Context, exec.StartSpec) error
@@ -474,6 +477,7 @@ func newProductionPublicationHarnessWithMetadata(
 	p.remediationPromptPackage = productionDigest(remediationPromptBody)
 	putProductionBlob(t, h, p.remediationPromptPackage, remediationPromptBody)
 	p.reviewSource = p.reviewer
+	p.reviewAdmission = fake.AdmitReview
 	// Mirror production: the signet decision-time adoption gate reads the
 	// engine's effective reviewer configuration. The closure reads the
 	// harness field so tests that drift the digest after construction stay
@@ -896,8 +900,7 @@ func (p *productionPublicationHarness) newEngineForMode(
 			Outcome: fake.OutcomeComplete,
 			Result: exec.ReviewResult{
 				BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-				Provider: "openai", ModelConfiguration: "codex/test",
-				CostOwner: "test", CompletedAt: p.now.UTC(),
+				CompletedAt:        p.now.UTC(),
 				CompletionEvidence: productionDigest([]byte("clean review")),
 			},
 		})
@@ -912,6 +915,7 @@ func (p *productionPublicationHarness) newEngineForMode(
 			HoldRetryInterval:              time.Minute,
 			Now:                            func() time.Time { return p.now },
 			ReviewSource:                   p.reviewSource,
+			ReviewAdmission:                p.reviewAdmission,
 			ReviewRecovery:                 reviewRecovery,
 			ReviewConfigurationDigest:      p.reviewConfigurationDigest,
 			NewRoom: func(image domain.ProjectImage, size ward.ContainerSize) (engine.ProductionVerificationRoom, error) {
@@ -1016,7 +1020,8 @@ func (p *productionPublicationHarness) assertReadyWithEvidence(t *testing.T, wan
 		"## Freeside Disposition History",
 		"- Readiness: **ready clean**",
 		"### Review Round ",
-		"- Provider: <code>openai</code>",
+		// The admitted reviewer's lineage group, as the fake admitter names it.
+		"- Provider: <code>fake</code>",
 		"- Findings: none",
 		"<!-- /freeside:disposition-history -->",
 	} {
@@ -1183,8 +1188,9 @@ func TestProductionExecutionPublishesOnlyAfterCleanVerification(t *testing.T) {
 			return err
 		}
 		if review.Outcome != domain.ReviewClean || review.BaseSHA != p.baseSHA ||
-			review.HeadSHA != p.replay.HeadSHA || review.Provider != "openai" ||
-			review.ModelConfiguration == "" || review.CostOwner == "" ||
+			review.HeadSHA != p.replay.HeadSHA || review.Admission == nil ||
+			review.Provider() != "fake" || review.ModelConfiguration() != "fake/review-v1" ||
+			review.LegacyProvider != "" || review.LegacyModelConfiguration != "" || review.LegacyCostOwner != "" ||
 			review.ConfigurationDigest != fake.DefaultReviewConfigurationDigest ||
 			review.InstructionDigest == "" ||
 			review.CompletionEvidence == "" {
@@ -1527,16 +1533,21 @@ func TestProductionCleanReviewDoesNotSurviveInstructionAuthorityChange(t *testin
 	p.startAndRecordExport(t)
 	old, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: engine.ProductionReviewInvocationID(p.runID, 1),
-		RunID:        p.runID, Round: 1, Provider: "openai", ModelConfiguration: "codex/test",
+		RunID:        p.runID, Round: 1, Admission: fake.RecordAdmission(domain.RoleReviewer, p.runID, engine.ProductionReviewInvocationID(p.runID, 1)),
 		ConfigurationDigest: fake.DefaultReviewConfigurationDigest,
-		InstructionDigest:   productionDigest([]byte("superseded instructions")), CostOwner: "test",
-		BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA, CompletedAt: p.now,
+		InstructionDigest:   productionDigest([]byte("superseded instructions")),
+		BaseSHA:             p.baseSHA, HeadSHA: p.replay.HeadSHA, CompletedAt: p.now,
 		CompletionEvidence: productionDigest([]byte("prior clean review")), Outcome: domain.ReviewClean,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		// A real round leaves the admission row its record's snapshot is
+		// held to, so the seeded round does too.
+		if err := tx.PutReviewAdmission(p.ctx, *old.Admission); err != nil {
+			return err
+		}
 		return tx.PutReviewRecord(p.ctx, old, nil)
 	}); err != nil {
 		t.Fatal(err)
@@ -1546,8 +1557,7 @@ func TestProductionCleanReviewDoesNotSurviveInstructionAuthorityChange(t *testin
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test",
-			CostOwner: "test", CompletedAt: p.now,
+			CompletedAt:        p.now,
 			CompletionEvidence: productionDigest([]byte("replacement clean review")),
 		},
 	})
@@ -1582,10 +1592,10 @@ func TestProductionFindingsDoNotSurviveInstructionAuthorityChange(t *testing.T) 
 	p.startAndRecordExport(t)
 	old, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: engine.ProductionReviewInvocationID(p.runID, 1),
-		RunID:        p.runID, Round: 1, Provider: "openai", ModelConfiguration: "codex/test",
+		RunID:        p.runID, Round: 1, Admission: fake.RecordAdmission(domain.RoleReviewer, p.runID, engine.ProductionReviewInvocationID(p.runID, 1)),
 		ConfigurationDigest: fake.DefaultReviewConfigurationDigest,
-		InstructionDigest:   productionDigest([]byte("superseded instructions")), CostOwner: "test",
-		BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA, CompletedAt: p.now,
+		InstructionDigest:   productionDigest([]byte("superseded instructions")),
+		BaseSHA:             p.baseSHA, HeadSHA: p.replay.HeadSHA, CompletedAt: p.now,
 		CompletionEvidence: productionDigest([]byte("prior findings review")), Outcome: domain.ReviewFindings,
 		FindingIDs: []domain.FindingID{"old-finding"},
 	})
@@ -1598,6 +1608,11 @@ func TestProductionFindingsDoNotSurviveInstructionAuthorityChange(t *testing.T) 
 		CreatedAt: p.now,
 	}
 	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		// A real round leaves the admission row its record's snapshot is
+		// held to, so the seeded round does too.
+		if err := tx.PutReviewAdmission(p.ctx, *old.Admission); err != nil {
+			return err
+		}
 		return tx.PutReviewRecord(p.ctx, old, []domain.Finding{oldFinding})
 	}); err != nil {
 		t.Fatal(err)
@@ -1607,7 +1622,6 @@ func TestProductionFindingsDoNotSurviveInstructionAuthorityChange(t *testing.T) 
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("replacement clean review")),
 		},
 	})
@@ -1641,7 +1655,6 @@ func TestProductionLegacyReviewRequestAdvancesToAuthoritativeRound(t *testing.T)
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("authoritative replacement")),
 		},
 	})
@@ -1673,7 +1686,6 @@ func TestProductionLegacyReviewRequestSupersessionPreflightAdvancesRound(t *test
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("legacy preflight replacement")),
 		},
 	})
@@ -1703,12 +1715,202 @@ func TestProductionSupersededInstructionRequestAdvancesToNewRound(t *testing.T) 
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("superseding instruction round")),
 		},
 	})
 	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 1 {
 		t.Fatalf("superseding instruction review = %#v, %v", result, err)
+	}
+}
+
+// TestProductionLegacyReviewRecordIsSupersededNotResolved covers a record
+// written before the admission snapshot: it reads back exactly as stored, no
+// agent is resolved for it from the current lineup, and the next round, which
+// is admitted, supersedes it.
+func TestProductionLegacyReviewRecordIsSupersededNotResolved(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	p.startAndRecordExport(t)
+	_, current, err := exec.ComposeCodexReviewInstructions(exec.ReviewHostInstructionInput{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstID := engine.ProductionReviewInvocationID(p.runID, 1)
+	legacy, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: firstID, RunID: p.runID, Round: 1,
+		LegacyProvider: "openai", LegacyModelConfiguration: "gpt-codex/high", LegacyCostOwner: "subscription:owner",
+		ConfigurationDigest: fake.DefaultReviewConfigurationDigest,
+		InstructionDigest:   current.ResultDigest,
+		BaseSHA:             p.baseSHA, HeadSHA: p.replay.HeadSHA, CompletedAt: p.now,
+		CompletionEvidence: productionDigest([]byte("legacy clean review")), Outcome: domain.ReviewClean,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		return tx.PutReviewRecord(p.ctx, legacy, nil)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p.now = p.now.Add(2 * time.Second)
+	secondID := engine.ProductionReviewInvocationID(p.runID, 2)
+	p.reviewer.Script(secondID, fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("admitted round")),
+		},
+	})
+	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 1 {
+		t.Fatalf("round superseding a legacy record = %#v, %v", result, err)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		records, err := tx.ListReviewRecords(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if len(records) != 2 || !reflect.DeepEqual(records[0], legacy) {
+			t.Fatalf("legacy record did not read back as stored: %#v", records)
+		}
+		if records[0].Provider() != "openai" || records[0].ModelConfiguration() != "gpt-codex/high" {
+			t.Fatalf("legacy attribution = %q, %q", records[0].Provider(), records[0].ModelConfiguration())
+		}
+		if _, err := tx.GetReviewAdmission(p.ctx, firstID); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("an agent was admitted for the legacy round: %v", err)
+		}
+		admitted, err := tx.GetReviewAdmission(p.ctx, secondID)
+		if err != nil {
+			return err
+		}
+		if records[1].Admission == nil || !records[1].Admission.Equal(admitted) || records[1].LegacyProvider != "" {
+			t.Fatalf("superseding round = %#v", records[1])
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestProductionLegacyFindingsRoundIsSupersededOnItsHead covers a daemon
+// upgraded between a legacy round's findings and their dispositions. The
+// legacy record is never current, so its adjudication never finishes: the
+// admitted round reviews the same head again, and the legacy round's unsettled
+// findings must not hold the publication.
+func TestProductionLegacyFindingsRoundIsSupersededOnItsHead(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	p.startAndRecordExport(t)
+	_, current, err := exec.ComposeCodexReviewInstructions(exec.ReviewHostInstructionInput{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: engine.ProductionReviewInvocationID(p.runID, 1), RunID: p.runID, Round: 1,
+		LegacyProvider: "openai", LegacyModelConfiguration: "gpt-codex/high", LegacyCostOwner: "subscription:owner",
+		ConfigurationDigest: fake.DefaultReviewConfigurationDigest,
+		InstructionDigest:   current.ResultDigest,
+		BaseSHA:             p.baseSHA, HeadSHA: p.replay.HeadSHA, CompletedAt: p.now,
+		CompletionEvidence: productionDigest([]byte("legacy findings review")), Outcome: domain.ReviewFindings,
+		FindingIDs: []domain.FindingID{"legacy-finding"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finding := domain.Finding{
+		ID: "legacy-finding", RunID: p.runID, Source: "codex_local", Severity: "P1",
+		Location: &domain.FindingLocation{Path: "daemon/main.go", StartLine: 12, EndLine: 12},
+		Message:  "legacy finding", RawText: "legacy finding", CreatedAt: p.now,
+	}
+	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		return tx.PutReviewRecord(p.ctx, legacy, []domain.Finding{finding})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p.now = p.now.Add(2 * time.Second)
+	p.reviewer.Script(engine.ProductionReviewInvocationID(p.runID, 2), fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("admitted clean round")),
+		},
+	})
+	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 1 {
+		t.Fatalf("round superseding a legacy findings record = %#v, %v", result, err)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		records, err := tx.ListReviewRecords(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if len(records) != 2 || !reflect.DeepEqual(records[0], legacy) || records[1].Admission == nil ||
+			records[1].Outcome != domain.ReviewClean {
+			t.Fatalf("review records = %#v", records)
+		}
+		dispositions, err := tx.ListFindingDispositions(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if len(dispositions) != 0 {
+			t.Fatalf("the legacy round's findings were dispositioned: %#v", dispositions)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestProductionReviewRecordIsHeldToItsStoredAdmission covers the record
+// side of the returned-snapshot rule: a record's snapshot is a decoded field,
+// so a record naming an agent the daemon did not admit for that invocation
+// earns nothing, whether the stored snapshot differs or is absent.
+func TestProductionReviewRecordIsHeldToItsStoredAdmission(t *testing.T) {
+	t.Parallel()
+	for name, stored := range map[string]func(*domain.ReviewAdmission) bool{
+		"no stored admission": func(*domain.ReviewAdmission) bool { return false },
+		"another stored admission": func(admission *domain.ReviewAdmission) bool {
+			admission.AuthIdentityID = "another-identity"
+			return true
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			p := newProductionPublicationHarness(t, "")
+			p.startAndRecordExport(t)
+			_, current, err := exec.ComposeCodexReviewInstructions(exec.ReviewHostInstructionInput{}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := engine.ProductionReviewInvocationID(p.runID, 1)
+			record, err := domain.NewReviewRecord(domain.ReviewRecord{
+				InvocationID: id, RunID: p.runID, Round: 1,
+				Admission:           fake.RecordAdmission(domain.RoleReviewer, p.runID, id),
+				ConfigurationDigest: fake.DefaultReviewConfigurationDigest,
+				InstructionDigest:   current.ResultDigest,
+				BaseSHA:             p.baseSHA, HeadSHA: p.replay.HeadSHA, CompletedAt: p.now,
+				CompletionEvidence: productionDigest([]byte("clean review under another admission")),
+				Outcome:            domain.ReviewClean,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+				admission := fake.ReviewAdmission(domain.RoleReviewer, p.runID, id)
+				if stored(&admission) {
+					if err := tx.PutReviewAdmission(p.ctx, admission); err != nil {
+						return err
+					}
+				}
+				return tx.PutReviewRecord(p.ctx, record, nil)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := p.reconcileLanes(); !errors.Is(err, domain.ErrReviewAdmissionMismatch) {
+				t.Fatalf("record under an unstored admission = %v", err)
+			}
+			if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
+				t.Fatalf("record under an unstored admission published = %d refs, %d prs", refs, prs)
+			}
+		})
 	}
 }
 
@@ -1726,16 +1928,22 @@ func TestProductionPersistedCleanReviewRegatesRequestAuthority(t *testing.T) {
 	}
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: engine.ProductionReviewInvocationID(p.runID, 1),
-		RunID:        p.runID, Round: 1, Provider: "openai", ModelConfiguration: "codex/test",
+		RunID:        p.runID, Round: 1, Admission: fake.RecordAdmission(domain.RoleReviewer, p.runID, engine.ProductionReviewInvocationID(p.runID, 1)),
 		ConfigurationDigest: fake.DefaultReviewConfigurationDigest,
-		InstructionDigest:   current.ResultDigest, CostOwner: "test",
-		BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA, CompletedAt: p.now,
+		InstructionDigest:   current.ResultDigest,
+		BaseSHA:             p.baseSHA, HeadSHA: p.replay.HeadSHA, CompletedAt: p.now,
 		CompletionEvidence: productionDigest([]byte("prior clean review")), Outcome: domain.ReviewClean,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The record is current only with the admission its invocation ran under:
+	// one without is a previous daemon's, which the next round supersedes.
 	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutReviewAdmission(p.ctx, fake.ReviewAdmission(
+			domain.RoleReviewer, record.RunID, record.InvocationID)); err != nil {
+			return err
+		}
 		return tx.PutReviewRecord(p.ctx, record, nil)
 	}); err != nil {
 		t.Fatal(err)
@@ -1765,10 +1973,10 @@ func TestProductionReviewConfigurationMustMatchTrustProfile(t *testing.T) {
 	p.startAndRecordExport(t)
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: engine.ProductionReviewInvocationID(p.runID, 1),
-		RunID:        p.runID, Round: 1, Provider: "openai", ModelConfiguration: "codex/test",
+		RunID:        p.runID, Round: 1, Admission: fake.RecordAdmission(domain.RoleReviewer, p.runID, engine.ProductionReviewInvocationID(p.runID, 1)),
 		ConfigurationDigest: fake.DefaultReviewConfigurationDigest,
-		InstructionDigest:   productionDigest([]byte("prior instructions")), CostOwner: "test",
-		BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA, CompletedAt: p.now,
+		InstructionDigest:   productionDigest([]byte("prior instructions")),
+		BaseSHA:             p.baseSHA, HeadSHA: p.replay.HeadSHA, CompletedAt: p.now,
 		CompletionEvidence: productionDigest([]byte("prior clean review")), Outcome: domain.ReviewClean,
 	})
 	if err != nil {
@@ -1898,6 +2106,46 @@ func TestProductionReviewResultConfigurationMismatchIsContradiction(t *testing.T
 	}
 }
 
+// TestProductionReviewResultUnderAnotherAdmissionIsContradiction covers the
+// routed arm of the returned-snapshot rule: a result naming an agent other
+// than the one the invocation was admitted under is a contradiction, and no
+// review record is written from it.
+func TestProductionReviewResultUnderAnotherAdmissionIsContradiction(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	id := engine.ProductionReviewInvocationID(p.runID, 1)
+	returned := fake.ReviewAdmission(domain.RoleReviewer, p.runID, id)
+	returned.AuthIdentityID = "another-identity"
+	p.reviewer.Script(id, fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result:  exec.ReviewResult{BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA, Admission: returned},
+	})
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatalf("park returned-admission contradiction: %v", err)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		failure, err := tx.LatestReviewFailure(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if failure.InvocationID != id || failure.Class != domain.ReviewFailureContradiction ||
+			!strings.Contains(failure.Reason, domain.ErrReviewAdmissionMismatch.Error()) {
+			t.Fatalf("returned-admission contradiction = %#v", failure)
+		}
+		records, err := tx.ListReviewRecords(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if len(records) != 0 {
+			t.Fatalf("a result under another admission left a review record: %#v", records)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProductionParkedReviewContradictionPrecedesConfigurationDrift(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
@@ -1906,7 +2154,6 @@ func TestProductionParkedReviewContradictionPrecedesConfigurationDrift(t *testin
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: strings.Repeat("e", 40), HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("contradiction")),
 		},
 	})
@@ -1954,7 +2201,6 @@ func TestProductionReviewFindingsParkForAdjudicationWithoutReady(t *testing.T) {
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("review findings")),
 			Findings: []domain.Finding{{
 				ID: "review-finding-1", RunID: p.runID, Source: "codex_local", Severity: "P1",
@@ -2007,7 +2253,6 @@ func TestProductionReviewFindingOffReviewedDiffIsContradiction(t *testing.T) {
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("off-diff finding")),
 			Findings: []domain.Finding{{
 				ID: "review-finding-off-diff", RunID: p.runID, Source: "codex_local", Severity: "P1",
@@ -2075,7 +2320,6 @@ func TestProductionReviewOverlapGateSurvivesCrashBeforeRecord(t *testing.T) {
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("overlap crash")),
 			Findings: []domain.Finding{{
 				ID: "review-finding-overlap", RunID: p.runID, Source: "codex_local", Severity: "P1",
@@ -2183,7 +2427,6 @@ func testProductionAdjudicatedRemediation(t *testing.T, p *productionPublication
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("review findings")),
 			Findings: []domain.Finding{finding},
 		},
@@ -2311,7 +2554,6 @@ func testProductionAdjudicatedRemediation(t *testing.T, p *productionPublication
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: remediated.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("clean remediation review")),
 		},
 	})
@@ -2446,7 +2688,6 @@ func TestProductionUndeliverableRemediationTerminalizesPerRun(t *testing.T) {
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("review findings")),
 			Findings: []domain.Finding{finding},
 		},
@@ -2559,7 +2800,6 @@ func testProductionRemediationNoopPushback(
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("pushback finding")),
 			Findings: []domain.Finding{finding},
 		},
@@ -2704,7 +2944,6 @@ func TestProductionClassifierPersistsAnnotationAndEscalatesLowConfidenceP1(t *te
 	reviewID := engine.ProductionReviewInvocationID(p.runID, 1)
 	p.reviewer.Script(reviewID, fake.ReviewScript{Outcome: fake.OutcomeComplete, Result: exec.ReviewResult{
 		BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-		Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 		CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("classified findings")),
 		Findings: []domain.Finding{{
 			ID: "review-finding-classified", RunID: p.runID, Source: "codex_local", Severity: "P1",
@@ -2791,7 +3030,6 @@ func TestProductionBaseAdvanceAfterReviewBlocksAtPublisher(t *testing.T) {
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt:        p.now.Add(time.Minute),
 			CompletionEvidence: productionDigest([]byte("clean reevaluation review")),
 		},
@@ -2846,7 +3084,6 @@ func TestProductionReevaluationReviewEscalationRemainsBlocked(t *testing.T) {
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt:        p.now.Add(time.Minute),
 			CompletionEvidence: productionDigest([]byte("unused quota review")),
 		},
@@ -3127,10 +3364,10 @@ func TestProductionPublishedWithoutCleanRecordFailsClosed(t *testing.T) {
 	}
 	foreign, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: engine.ProductionReviewInvocationID(p.runID, 2),
-		RunID:        p.runID, Round: 2, Provider: "openai", ModelConfiguration: "codex/test",
+		RunID:        p.runID, Round: 2, Admission: fake.RecordAdmission(domain.RoleReviewer, p.runID, engine.ProductionReviewInvocationID(p.runID, 2)),
 		ConfigurationDigest: fake.DefaultReviewConfigurationDigest,
-		InstructionDigest:   productionDigest([]byte("foreign instructions")), CostOwner: "test",
-		BaseSHA: p.baseSHA, HeadSHA: strings.Repeat("e", 40), CompletedAt: p.now,
+		InstructionDigest:   productionDigest([]byte("foreign instructions")),
+		BaseSHA:             p.baseSHA, HeadSHA: strings.Repeat("e", 40), CompletedAt: p.now,
 		CompletionEvidence: productionDigest([]byte("foreign candidate review")), Outcome: domain.ReviewClean,
 	})
 	if err != nil {
@@ -3209,10 +3446,10 @@ func TestProductionPublishedReviewConfigMustStayProfileApproved(t *testing.T) {
 	}
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: engine.ProductionReviewInvocationID(p.runID, 2),
-		RunID:        p.runID, Round: 2, Provider: "openai", ModelConfiguration: "codex/test",
+		RunID:        p.runID, Round: 2, Admission: fake.RecordAdmission(domain.RoleReviewer, p.runID, engine.ProductionReviewInvocationID(p.runID, 2)),
 		ConfigurationDigest: drifted,
-		InstructionDigest:   instructions.ResultDigest, CostOwner: "test",
-		BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA, CompletedAt: p.now,
+		InstructionDigest:   instructions.ResultDigest,
+		BaseSHA:             p.baseSHA, HeadSHA: p.replay.HeadSHA, CompletedAt: p.now,
 		CompletionEvidence: productionDigest([]byte("clean under drifted config")), Outcome: domain.ReviewClean,
 	})
 	if err != nil {
@@ -3264,7 +3501,6 @@ func TestProductionPendingReviewPublishesNothing(t *testing.T) {
 		PendingInspects: 2, Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("still-running review")),
 		},
 	})
@@ -3310,7 +3546,6 @@ func TestProductionIncompleteReviewCannotPublishAfterRestart(t *testing.T) {
 				Outcome: fake.OutcomeComplete,
 				Result: exec.ReviewResult{
 					BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-					Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 					CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("unusable empty result")),
 				},
 			})
@@ -3328,16 +3563,21 @@ func TestProductionIncompleteReviewCannotPublishAfterRestart(t *testing.T) {
 			if tc.olderClean {
 				old, err := domain.NewReviewRecord(domain.ReviewRecord{
 					InvocationID: engine.ProductionReviewInvocationID(p.runID, 1),
-					RunID:        p.runID, Round: 1, Provider: "openai", ModelConfiguration: "codex/test",
+					RunID:        p.runID, Round: 1, Admission: fake.RecordAdmission(domain.RoleReviewer, p.runID, engine.ProductionReviewInvocationID(p.runID, 1)),
 					ConfigurationDigest: fake.DefaultReviewConfigurationDigest,
-					InstructionDigest:   productionDigest([]byte("superseded instructions")), CostOwner: "test",
-					BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA, CompletedAt: p.now,
+					InstructionDigest:   productionDigest([]byte("superseded instructions")),
+					BaseSHA:             p.baseSHA, HeadSHA: p.replay.HeadSHA, CompletedAt: p.now,
 					CompletionEvidence: productionDigest([]byte("prior clean review")), Outcome: domain.ReviewClean,
 				})
 				if err != nil {
 					t.Fatal(err)
 				}
 				if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+					// A real round leaves the admission row its record's snapshot is
+					// held to, so the seeded round does too.
+					if err := tx.PutReviewAdmission(p.ctx, *old.Admission); err != nil {
+						return err
+					}
 					return tx.PutReviewRecord(p.ctx, old, nil)
 				}); err != nil {
 					t.Fatal(err)
@@ -3402,7 +3642,6 @@ func TestProductionTransientReviewFailureBacksOffAndRetries(t *testing.T) {
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt:        p.now.Add(2 * time.Second),
 			CompletionEvidence: productionDigest([]byte("retry clean")),
 		},
@@ -3452,7 +3691,6 @@ func TestProductionTerminalTransientReviewOutcomeAdvancesRound(t *testing.T) {
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt:        p.now,
 			CompletionEvidence: productionDigest([]byte("unused terminal result")),
 		},
@@ -3461,7 +3699,6 @@ func TestProductionTerminalTransientReviewOutcomeAdvancesRound(t *testing.T) {
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt:        p.now.Add(2 * time.Second),
 			CompletionEvidence: productionDigest([]byte("retry clean")),
 		},
@@ -3861,7 +4098,6 @@ func TestProductionReviewContradictionParksWithOneRecoveryItem(t *testing.T) {
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: strings.Repeat("e", 40), HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("contradiction")),
 		},
 	})
@@ -3923,7 +4159,6 @@ func TestProductionReviewContradictionStaysParkedAfterDeliveryTiming(t *testing.
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: strings.Repeat("e", 40), HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("contradiction")),
 		},
 	})
@@ -4033,7 +4268,6 @@ func TestProductionReviewRecoveryAdvancesAndPreservesFailure(t *testing.T) {
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: strings.Repeat("e", 40), HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("contradiction")),
 		},
 	})
@@ -4088,7 +4322,6 @@ func TestProductionReviewRecoveryAdvancesAndPreservesFailure(t *testing.T) {
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("recovered clean review")),
 		},
 	})
@@ -4136,7 +4369,6 @@ func TestProductionReviewRecoveryAtHardLimitEscalatesUnderDistinctItem(t *testin
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: strings.Repeat("e", 40), HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("contradiction")),
 		},
 	})
@@ -4269,7 +4501,6 @@ func TestProductionReviewRewrittenRequestFailsClosedBeforeRelaunch(t *testing.T)
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("never delivered")),
 		},
 	})
@@ -4454,8 +4685,7 @@ func TestProductionPublicationRestartsAcrossDurableBoundaries(t *testing.T) {
 						Outcome: fake.OutcomeComplete,
 						Result: exec.ReviewResult{
 							BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-							Provider: "openai", ModelConfiguration: "codex/test",
-							CostOwner: "test", CompletedAt: p.now.UTC(),
+							CompletedAt:        p.now.UTC(),
 							CompletionEvidence: productionDigest([]byte("clean review round 2")),
 						},
 					})
@@ -7125,7 +7355,6 @@ func prepareRemediationPublicationLifecycleWithScope(
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("review findings")),
 			Findings: []domain.Finding{finding},
 		},
@@ -7196,7 +7425,6 @@ func prepareRemediationPublicationLifecycleWithScope(
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: remediated.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt:        p.now,
 			CompletionEvidence: productionDigest([]byte("clean remediation review")),
 		},
@@ -7741,7 +7969,6 @@ func TestProductionReviewConfigurationAdoptionResumesRun(t *testing.T) {
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			ConfigurationDigest: effective,
 			CompletedAt:         p.now, CompletionEvidence: productionDigest([]byte("adopted clean review")),
 		},
@@ -7834,7 +8061,6 @@ func TestProductionAdoptedReviewReplayPublishesWithoutReparking(t *testing.T) {
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			ConfigurationDigest: effective,
 			CompletedAt:         p.now, CompletionEvidence: productionDigest([]byte("adopted clean review")),
 		},
@@ -8023,7 +8249,6 @@ func TestProductionReviewConfigurationAdoptionRejectsIneffectiveTarget(t *testin
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			ConfigurationDigest: effective,
 			CompletedAt:         p.now, CompletionEvidence: productionDigest([]byte("retry adopted clean review")),
 		},

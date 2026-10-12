@@ -113,6 +113,10 @@ type ProductionPublicationConfig struct {
 	// leaves every such candidate refused as rebuild_not_configured.
 	RebuildProjectImage *ProjectImageRebuild
 	ReviewSource        exec.ReviewSource
+	// ReviewAdmission admits a routed or shadow review invocation before its
+	// source is asked (plan §5.4). The workflow stores the snapshot it returns
+	// once and puts that stored snapshot on every request for the invocation.
+	ReviewAdmission ReviewAdmitter
 	// RemediationPromptPackageDigest selects the trusted prompt package for
 	// implementation-role follow-up invocations created by finding
 	// adjudication or accepted operator feedback.
@@ -122,7 +126,6 @@ type ProductionPublicationConfig struct {
 	// routed review, advance rounds, or authorize publication.
 	ShadowReviewSource              exec.ReviewSource
 	ShadowReviewConfigurationDigest domain.Digest
-	ShadowReviewCostOwner           string
 	ShadowReviewDefaultRate         float64
 	ShadowReviewFailure             func(domain.RunID, int, domain.ReviewFailureClass, error)
 
@@ -234,6 +237,7 @@ type productionPublicationWorkflow struct {
 	rebuild                         *ProjectImageRebuild
 	beginTaskWork                   func(context.Context, domain.RunID) (context.Context, func(), error)
 	reviewSource                    exec.ReviewSource
+	reviewAdmitter                  ReviewAdmitter
 	remediationPromptPackage        domain.Digest
 	validateDelivery                func(context.Context, exec.StartSpec) error
 	feedbackAdmission               *admitter
@@ -245,7 +249,6 @@ type productionPublicationWorkflow struct {
 	reviewRecoveryPending           bool
 	reviewConfigurationDigest       domain.Digest
 	shadowReviewConfigurationDigest domain.Digest
-	shadowReviewCostOwner           string
 	shadowReviewDefaultRate         float64
 	shadowReviewFailure             func(domain.RunID, int, domain.ReviewFailureClass, error)
 	reviewHostInstructions          ReviewHostInstructions
@@ -301,20 +304,19 @@ func newProductionPublicationWorkflow(
 	if st == nil || attention == nil || cfg.Transport == nil || cfg.Publisher == nil ||
 		cfg.Artifacts == nil || cfg.NewRoom == nil ||
 		cfg.ReviewRecovery == nil ||
-		(!cfg.HoldOnly && (cfg.ReviewSource == nil ||
+		(!cfg.HoldOnly && (cfg.ReviewSource == nil || cfg.ReviewAdmission == nil ||
 			!contentaddr.Valid(string(cfg.ReviewConfigurationDigest)) ||
 			cfg.ReviewHostInstructions.validate() != nil)) {
 		return nil, errors.New("nil dependency")
 	}
 	if shadowEnabled {
 		if !contentaddr.Valid(string(cfg.ShadowReviewConfigurationDigest)) ||
-			strings.TrimSpace(cfg.ShadowReviewCostOwner) == "" ||
 			math.IsNaN(cfg.ShadowReviewDefaultRate) || math.IsInf(cfg.ShadowReviewDefaultRate, 0) ||
 			cfg.ShadowReviewDefaultRate < 0 || cfg.ShadowReviewDefaultRate > 1 ||
 			cfg.ShadowReviewFailure == nil {
 			return nil, errors.New("invalid shadow review configuration")
 		}
-	} else if cfg.ShadowReviewConfigurationDigest != "" || cfg.ShadowReviewCostOwner != "" ||
+	} else if cfg.ShadowReviewConfigurationDigest != "" ||
 		cfg.ShadowReviewDefaultRate != 0 || cfg.ShadowReviewFailure != nil {
 		return nil, errors.New("partial shadow review configuration")
 	}
@@ -362,6 +364,7 @@ func newProductionPublicationWorkflow(
 		transport: cfg.Transport, publisher: cfg.Publisher, artifacts: cfg.Artifacts,
 		approvedRecipes: mapsClone(cfg.ApprovedRecipes),
 		newRoom:         cfg.NewRoom, reviewSource: cfg.ReviewSource,
+		reviewAdmitter:           cfg.ReviewAdmission,
 		newBoundRoom:             cfg.NewBoundRoom,
 		rebuild:                  cfg.RebuildProjectImage,
 		remediationPromptPackage: cfg.RemediationPromptPackageDigest,
@@ -369,7 +372,6 @@ func newProductionPublicationWorkflow(
 		reviewRecovery:           cfg.ReviewRecovery, reviewRecoveryPending: true,
 		reviewConfigurationDigest:       cfg.ReviewConfigurationDigest,
 		shadowReviewConfigurationDigest: cfg.ShadowReviewConfigurationDigest,
-		shadowReviewCostOwner:           cfg.ShadowReviewCostOwner,
 		shadowReviewDefaultRate:         cfg.ShadowReviewDefaultRate,
 		shadowReviewFailure:             cfg.ShadowReviewFailure,
 		reviewHostInstructions: ReviewHostInstructions{
@@ -2947,6 +2949,7 @@ func (w *productionPublicationWorkflow) productionReviewRequest(
 	id domain.InvocationID,
 	round int,
 	instructions exec.ReviewInstructionBinding,
+	admission domain.ReviewAdmission,
 ) (exec.ReviewRequest, domain.Digest, error) {
 	reviewWorkspace, err := w.reviewWorkspacePath(id)
 	if err != nil {
@@ -2974,7 +2977,7 @@ func (w *productionPublicationWorkflow) productionReviewRequest(
 		BaseSHA: binding.admission.Base.BaseSHA, HeadSHA: task.HeadSHA,
 		EvaluatedSHA: binding.evaluatedSHA,
 		Workspace:    reviewWorkspace, Verification: verification,
-		Instructions: instructions, RequestedAt: w.now().UTC(),
+		Instructions: instructions, Admission: admission, RequestedAt: w.now().UTC(),
 	}
 	authority, err := request.AuthorityDigest()
 	return request, authority, err
@@ -3259,6 +3262,35 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		// row is still the parked failure, the round machinery below re-gates
 		// the exact-failure adoption binding before advancing past it.
 	}
+	// A legacy record carries no admission snapshot: it was requested before
+	// review admission was recorded. Its persisted request is a legacy
+	// request the source no longer verifies, so the record cannot be re-gated
+	// and is not current: the next round supersedes it, as it does a record
+	// bound to superseded instructions. Its findings may then never be
+	// dispositioned, so the published disposition lineage leaves out a
+	// legacy round the admitted round reviewed again
+	// (publish.currentDispositionLineage). The record itself stays as
+	// stored, and nothing resolves an agent for it from the current lineup.
+	//
+	// A record's snapshot is a decoded field, so it is held against the
+	// snapshot the daemon stored when it admitted the invocation. A record
+	// that names another agent, or one the daemon never admitted, is a
+	// contradiction, and nothing below acts on it.
+	var latestAdmission domain.ReviewAdmission
+	latestAdmitted := latestRecord != nil && latestRecord.Admission != nil
+	if latestAdmitted {
+		stored, found, err := w.storedReviewAdmission(
+			ctx, domain.RoleReviewer, task.RunID, latestRecord.InvocationID)
+		if err != nil {
+			return productionReviewPending, err
+		}
+		if !found || !latestRecord.Admission.Equal(stored) {
+			return productionReviewPending, fmt.Errorf(
+				"review record %s carries an admission the daemon did not store for it: %w",
+				latestRecord.InvocationID, domain.ErrReviewAdmissionMismatch)
+		}
+		latestAdmission = stored
+	}
 	advanceReview := false
 	if latestRecord != nil && latestRecord.ConfigurationDigest == w.reviewConfigurationDigest &&
 		(latestFailure == nil || latestRecord.Round > latestFailure.Round) {
@@ -3272,7 +3304,7 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 					"latest review record is bound to a different candidate: %w", domain.ErrParentKeyMismatch,
 				)
 			}
-		} else if latestRecord.InstructionDigest == reviewInstructions.ResultDigest {
+		} else if latestAdmitted && latestRecord.InstructionDigest == reviewInstructions.ResultDigest {
 			var remediationOutcome remediationReviewOutcome
 			if _, remediated := remediationRoundForInvocation(
 				task.RunID, task.ProducingInvocationID,
@@ -3360,7 +3392,7 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			if !advanceReview {
 				_, requestAuthority, err := w.productionReviewRequest(
 					task, binding, checkpoint, latestRecord.InvocationID,
-					latestRecord.Round, reviewInstructions,
+					latestRecord.Round, reviewInstructions, latestAdmission,
 				)
 				if err != nil {
 					return productionReviewPending, err
@@ -3484,8 +3516,20 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	}
 
 	id := ProductionReviewInvocationID(task.RunID, round)
+	// Admission comes before the request: the request and its authority
+	// digest carry the snapshot. A refusal fails the invocation as the
+	// source's own admission check does, and nothing is requested.
+	admission, err := w.ensureReviewAdmission(ctx, domain.RoleReviewer, task.RunID, id)
+	if err != nil {
+		var refusal *exec.ReviewSourceFailure
+		if errors.As(err, &refusal) {
+			return w.retryOrRecordReviewFailure(ctx, task, id, round,
+				binding.admission.Base.BaseSHA, task.HeadSHA, err)
+		}
+		return productionReviewPending, err
+	}
 	req, requestAuthority, err := w.productionReviewRequest(
-		task, binding, checkpoint, id, round, reviewInstructions,
+		task, binding, checkpoint, id, round, reviewInstructions, admission,
 	)
 	if err != nil {
 		return productionReviewPending, err
@@ -3628,6 +3672,17 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 				domain.ReviewFailureContradiction, domain.ErrParentKeyMismatch, result.Usage),
 		)
 	}
+	// The result says which agent reviewed by returning the snapshot it was
+	// asked under. One that differs from the stored snapshot names an agent
+	// the daemon did not admit for this invocation, so the pass is a
+	// contradiction and no record is written.
+	if !result.Admission.Equal(admission) {
+		return w.recordReviewSourceFailure(ctx, task, id, round,
+			binding.admission.Base.BaseSHA, task.HeadSHA,
+			reviewSourceFailureWithUsage(domain.ReviewFailureContradiction,
+				fmt.Errorf("review result %s: %w", id, domain.ErrReviewAdmissionMismatch), result.Usage),
+		)
+	}
 	if err := authorityVerifier.VerifyRequestAuthority(ctx, id, requestAuthority); err != nil {
 		return w.retryOrRecordReviewFailure(ctx, task, id, round,
 			binding.admission.Base.BaseSHA, task.HeadSHA,
@@ -3703,10 +3758,12 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	}
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: id, RunID: task.RunID, Round: round,
-		Provider: result.Provider, ModelConfiguration: result.ModelConfiguration,
+		// The stored snapshot, which the result was just held to: the record
+		// never takes its attribution from a returned object.
+		Admission:           &admission,
 		ConfigurationDigest: result.ConfigurationDigest,
 		InstructionDigest:   result.InstructionDigest,
-		CostOwner:           result.CostOwner, BaseSHA: result.BaseSHA, HeadSHA: result.HeadSHA,
+		BaseSHA:             result.BaseSHA, HeadSHA: result.HeadSHA,
 		CompletedAt: result.CompletedAt, CompletionEvidence: result.CompletionEvidence,
 		Outcome: outcome, FindingIDs: findingIDs,
 	})
@@ -7248,6 +7305,74 @@ func (w *productionPublicationWorkflow) finishTask(
 	return w.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.MarkOutboxDispatched(ctx, task.intentKey())
 	})
+}
+
+// storedReviewAdmission reads the snapshot an invocation was admitted under.
+// found is false for an invocation requested before review admission was
+// recorded. It never admits: a caller that needs a snapshot for a new
+// invocation uses ensureReviewAdmission.
+func (w *productionPublicationWorkflow) storedReviewAdmission(
+	ctx context.Context, role domain.RoleName, runID domain.RunID, id domain.InvocationID,
+) (admission domain.ReviewAdmission, found bool, err error) {
+	err = w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		admission, err = tx.GetReviewAdmission(ctx, id)
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return domain.ReviewAdmission{}, false, nil
+	}
+	if err != nil {
+		return domain.ReviewAdmission{}, false, err
+	}
+	if admission.RunID != runID || admission.Role != role {
+		return domain.ReviewAdmission{}, false, fmt.Errorf(
+			"review admission %q is bound to run %q as %s: %w",
+			id, admission.RunID, admission.Role, domain.ErrParentKeyMismatch)
+	}
+	return admission, true, nil
+}
+
+// ensureReviewAdmission returns the one snapshot the invocation is admitted
+// under (plan §5.4 step 5). The first pass over an invocation resolves it and
+// stores it; every later pass reads the stored row, so a restart, a retry, or
+// a lineup change never replaces it. A refusal is a configuration failure of
+// the invocation, returned as a *exec.ReviewSourceFailure, and stores nothing.
+func (w *productionPublicationWorkflow) ensureReviewAdmission(
+	ctx context.Context, role domain.RoleName, runID domain.RunID, id domain.InvocationID,
+) (domain.ReviewAdmission, error) {
+	stored, found, err := w.storedReviewAdmission(ctx, role, runID, id)
+	if err != nil || found {
+		return stored, err
+	}
+	if w.reviewAdmitter == nil {
+		return domain.ReviewAdmission{}, errors.New("review admission is not configured")
+	}
+	admission, err := w.reviewAdmitter(ctx, role, runID, id, w.now().UTC())
+	if err != nil {
+		return domain.ReviewAdmission{}, &exec.ReviewSourceFailure{
+			Class: domain.ReviewFailureConfiguration, Err: err,
+		}
+	}
+	// The resolver is a configured boundary: hold what it returned to the
+	// invocation it was asked about before the row makes it permanent.
+	if admission, err = domain.NewReviewAdmission(admission); err != nil {
+		return domain.ReviewAdmission{}, err
+	}
+	if admission.InvocationID != id || admission.RunID != runID || admission.Role != role {
+		return domain.ReviewAdmission{}, fmt.Errorf(
+			"review admission for %q resolved %q of run %q as %s: %w",
+			id, admission.InvocationID, admission.RunID, admission.Role, domain.ErrParentKeyMismatch)
+	}
+	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
+		if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, runID); err != nil {
+			return err
+		}
+		return tx.PutReviewAdmission(ctx, admission)
+	}); err != nil {
+		return domain.ReviewAdmission{}, err
+	}
+	return admission, nil
 }
 
 // recordReviewRequest preserves the first attempt instant. RequestReview may

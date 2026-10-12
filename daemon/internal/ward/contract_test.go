@@ -64,7 +64,8 @@ func (h *reviewSourceContractHarness) Prepare(
 	h.config = sourceConfig
 	h.source = source
 	reviewRequest := exec.ReviewRequest{
-		RunID: "contract-run", Round: 1, Repo: "freeside-ai/candidate", RepositoryID: 42,
+		Admission: testReviewAdmission("contract-run"),
+		RunID:     "contract-run", Round: 1, Repo: "freeside-ai/candidate", RepositoryID: 42,
 		BaseRef: "refs/heads/main", BaseSHA: strings.Repeat("a", 40),
 		HeadSHA: testCodexReviewHead, Workspace: t.TempDir(),
 		Verification: testReviewVerificationEvidence(), Instructions: launch.InstructionBinding,

@@ -8,15 +8,16 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 )
 
 func validReviewRecord() domain.ReviewRecord {
 	return domain.ReviewRecord{
 		InvocationID: "review-run-1-1", RunID: "run-1", Round: 1,
-		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, "run-1", "review-run-1-1"),
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
-		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)), CostOwner: "owner",
-		BaseSHA: "base", HeadSHA: "head", CompletedAt: time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
+		BaseSHA:             "base", HeadSHA: "head", CompletedAt: time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
 		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)), Outcome: domain.ReviewClean,
 	}
 }

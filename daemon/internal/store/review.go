@@ -26,13 +26,20 @@ func reviewBodyAuthority(body string) string {
 	return reviewBodyDigest(body) + body
 }
 
+// validatePersistedReviewRecord holds a stored record to the rule every write
+// is held to, the attribution rule among them: a record carries its
+// invocation's admission snapshot or its three legacy strings, never both and
+// never neither. A legacy record reads back as stored; nothing here resolves
+// its strings against a lineup.
 func validatePersistedReviewRecord(record domain.ReviewRecord) error {
-	if record.InstructionDigest != "" {
+	if record.InstructionDigest != "" || record.Admission != nil {
 		return record.Validate()
 	}
 	// Historical rows written before instruction authority have exactly this
 	// one missing field. Keep them readable so the engine can invalidate their
 	// clean pass and schedule a current review; every write remains strict.
+	// Such a row predates review admission too, so one that carries a
+	// snapshot is not historical and gets no allowance.
 	legacy := record
 	legacy.InstructionDigest = domain.Digest(
 		"sha256:0000000000000000000000000000000000000000000000000000000000000000")

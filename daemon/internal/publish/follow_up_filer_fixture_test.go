@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -442,9 +443,9 @@ func seedFilingRun(t *testing.T, st *store.Store, project domain.Project, name s
 	}
 	review, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: domain.InvocationID("review-" + name), RunID: runID, Round: 1,
-		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, runID, domain.InvocationID("review-"+name)),
 		ConfigurationDigest: filingDigest("c"), InstructionDigest: filingDigest("d"),
-		CostOwner: "owner", BaseSHA: "base", HeadSHA: "head-1", CompletedAt: filingAt,
+		BaseSHA: "base", HeadSHA: "head-1", CompletedAt: filingAt,
 		CompletionEvidence: filingDigest("e"), Outcome: domain.ReviewFindings, FindingIDs: ids,
 	})
 	if err != nil {

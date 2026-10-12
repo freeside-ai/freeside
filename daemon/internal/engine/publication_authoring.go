@@ -269,7 +269,7 @@ func (w *productionPublicationWorkflow) authoredReviewOutcome(
 	}
 	return fmt.Sprintf(
 		"Round %d %s review by %s/%s completed at %s.",
-		record.Round, record.Outcome, record.Provider, record.ModelConfiguration,
+		record.Round, record.Outcome, record.Provider(), record.ModelConfiguration(),
 		record.CompletedAt.UTC().Format(time.RFC3339),
 	), nil
 }

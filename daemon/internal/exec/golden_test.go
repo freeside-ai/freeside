@@ -32,15 +32,47 @@ func TestGolden(t *testing.T) {
 			Sequence: 1, ObservedAt: ts,
 		}},
 	}
+	_, instructions, err := exec.ComposeCodexReviewInstructions(
+		exec.ReviewHostInstructionInput{},
+		[]exec.ReviewInstructionSourceInput{{Path: "AGENTS.md", Body: []byte("base rules")}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := exec.ReviewRequest{
+		RunID: "run-1", Round: 2, Repo: "owner/repo", RepositoryID: 42,
+		BaseRef: "main", BaseSHA: "base-sha-2", HeadSHA: "head-sha-1",
+		Workspace: "/candidate", Instructions: instructions,
+		Admission: domain.ReviewAdmission{
+			InvocationID: "review-run-1-2", RunID: "run-1", Role: domain.RoleReviewer,
+			AuthIdentityID: "auth-openai-A", LineageGroup: "openai",
+			AgentBinding: domain.AdmissionAgentBinding{
+				AgentDigest: execStageDigest("a"), LaunchDigest: execStageDigest("b"),
+				TreatmentDigest: execStageDigest("d"), PricingRevision: "2026-08",
+				LineupRevision: execStageDigest("c"), EnrollmentID: "enroll-openai-A-codex",
+				EnrollmentGeneration: 2, StoreManifestDigest: execStageDigest("6"),
+				EffectiveEgress: []string{"chatgpt.com:443"},
+				RouteModelID:    "gpt-5.2-codex", RequestedEffort: domain.EffortHigh, NativeEffort: "high",
+				SelectionSource: domain.AgentSelectionSourceLineup,
+			},
+			AdmittedAt: ts,
+		},
+		Verification: exec.ReviewVerificationEvidence{
+			Outcome:                domain.VerificationPassed,
+			RecipeDigest:           execStageDigest("7"),
+			EvidenceSnapshotDigest: execStageDigest("8"),
+			ArtifactDigests:        []domain.Digest{execStageDigest("9")},
+		},
+		RequestedAt: ts,
+	}
+	// The result returns the request's admission snapshot unchanged.
 	review := exec.ReviewResult{
-		InvocationID:        "inv-2",
+		InvocationID:        request.Admission.InvocationID,
 		BaseSHA:             "beefcafe",
 		HeadSHA:             "cafebabe",
-		Provider:            "openai",
-		ModelConfiguration:  "gpt-5.2-codex/high",
+		Admission:           request.Admission,
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		CostOwner:           "subscription:owner",
 		CompletedAt:         ts,
 		CompletionEvidence:  domain.Digest("sha256:" + strings.Repeat("e", 64)),
 		Findings: []domain.Finding{{
@@ -108,25 +140,6 @@ func TestGolden(t *testing.T) {
 		Status:       exec.StatusBlocked,
 		Artifacts:    []domain.Digest{"sha256:blocked"},
 		Summary:      "Which retention period applies to exported logs?",
-	}
-	_, instructions, err := exec.ComposeCodexReviewInstructions(
-		exec.ReviewHostInstructionInput{},
-		[]exec.ReviewInstructionSourceInput{{Path: "AGENTS.md", Body: []byte("base rules")}},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := exec.ReviewRequest{
-		RunID: "run-1", Round: 2, Repo: "owner/repo", RepositoryID: 42,
-		BaseRef: "main", BaseSHA: "base-sha-2", HeadSHA: "head-sha-1",
-		Workspace: "/candidate", Instructions: instructions,
-		Verification: exec.ReviewVerificationEvidence{
-			Outcome:                domain.VerificationPassed,
-			RecipeDigest:           execStageDigest("7"),
-			EvidenceSnapshotDigest: execStageDigest("8"),
-			ArtifactDigests:        []domain.Digest{execStageDigest("9")},
-		},
-		RequestedAt: ts,
 	}
 	// A base-advance re-entry reviews the merge of the unchanged head into the
 	// advanced base; the head stays the one the forge shows.

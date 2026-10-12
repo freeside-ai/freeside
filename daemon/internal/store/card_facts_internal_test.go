@@ -10,6 +10,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
 
@@ -278,10 +279,10 @@ func TestAttentionItemReadAuthenticatesReviewDisputeBinding(t *testing.T) {
 	}
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-card-facts", RunID: run.ID, Round: 2,
-		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, run.ID, "review-card-facts"),
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		CostOwner:           "owner", BaseSHA: "base", HeadSHA: "head", CompletedAt: at,
+		BaseSHA:             "base", HeadSHA: "head", CompletedAt: at,
 		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 		Outcome:            domain.ReviewFindings, FindingIDs: []domain.FindingID{finding.ID},
 	})

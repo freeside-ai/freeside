@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
@@ -32,10 +33,10 @@ func dispositionReviewRecord(
 	}
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: domain.InvocationID("review-" + string(runID) + "-" + strconv.Itoa(round)),
-		RunID:        runID, Round: round, Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		RunID:        runID, Round: round, Admission: fake.RecordAdmission(domain.RoleReviewer, runID, domain.InvocationID("review-"+string(runID)+"-"+strconv.Itoa(round))),
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		CostOwner:           "owner", BaseSHA: "base", HeadSHA: "head-" + strconv.Itoa(round), CompletedAt: completedAt,
+		BaseSHA:             "base", HeadSHA: "head-" + strconv.Itoa(round), CompletedAt: completedAt,
 		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 		Outcome:            outcome, FindingIDs: findingIDs,
 	})

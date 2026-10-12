@@ -32,10 +32,7 @@ func TestRetireBlockedItemsMigrationClosesOpenRows(t *testing.T) {
 	}
 	// 0096 changes no schema, so forgetting it leaves exactly the database an
 	// earlier daemon would hand the migration runner.
-	if _, err := st.db.ExecContext(ctx,
-		`DELETE FROM schema_migrations WHERE name = '0096_retire_blocked_items.sql'`); err != nil {
-		t.Fatal(err)
-	}
+	forgetRetireBlockedItems(t, ctx, st.db)
 
 	beforeOpen := readBlockedRow(t, ctx, st.db, open)
 	beforeClosed := readBlockedRow(t, ctx, st.db, closed)
@@ -101,10 +98,7 @@ func TestRetireBlockedItemsMigrationClosesOpenRows(t *testing.T) {
 
 	// With no open row left the migration is a no-op: a second application
 	// advances neither the cursor nor any row.
-	if _, err := st.db.ExecContext(ctx,
-		`DELETE FROM schema_migrations WHERE name = '0096_retire_blocked_items.sql'`); err != nil {
-		t.Fatal(err)
-	}
+	forgetRetireBlockedItems(t, ctx, st.db)
 	if err := migrate(ctx, st.db, migrations.FS); err != nil {
 		t.Fatal(err)
 	}
@@ -113,6 +107,21 @@ func TestRetireBlockedItemsMigrationClosesOpenRows(t *testing.T) {
 	}
 	if got := serverRevision(t, ctx, st.db); got != afterSync {
 		t.Fatalf("server revision after a second application = %d, want %d", got, afterSync)
+	}
+}
+
+// forgetRetireBlockedItems returns the database to the one a daemon at 0095
+// holds. 0096 changes no schema, so its record is all there is to forget; the
+// one later migration only adds a table, which is dropped with its record so
+// the recorded history stays contiguous.
+func forgetRetireBlockedItems(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	if _, err := db.ExecContext(ctx, `DROP TABLE review_admissions`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE name IN
+		('0096_retire_blocked_items.sql', '0097_review_admissions.sql')`); err != nil {
+		t.Fatal(err)
 	}
 }
 

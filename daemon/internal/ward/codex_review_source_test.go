@@ -461,7 +461,8 @@ func TestCodexReviewSourceRegatesInstructionClosureBeforeReadiness(t *testing.T)
 		t.Fatal(err)
 	}
 	request := exec.ReviewRequest{
-		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42, BaseRef: "main",
+		Admission: testReviewAdmission("run-1"),
+		RunID:     "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42, BaseRef: "main",
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40), Workspace: "/candidate",
 		Verification: testReviewVerificationEvidence(), Instructions: binding, RequestedAt: codexReviewEpoch,
 	}
@@ -583,7 +584,8 @@ func TestCodexReviewSourceCleansPreparedWorkspaceWhenInstructionClosureFails(t *
 			}
 			id := domain.InvocationID(fmt.Sprintf("review-invalid-instructions-%d", i))
 			request := exec.ReviewRequest{
-				RunID: "run-invalid-instructions", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+				Admission: testReviewAdmission("run-invalid-instructions"),
+				RunID:     "run-invalid-instructions", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 				RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 				BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 				Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
@@ -681,7 +683,8 @@ func TestCodexReviewSourceRetriesInstructionMaterializationUnderSameInvocation(t
 			}
 			id := domain.InvocationID(fmt.Sprintf("review-instruction-%d", i))
 			request := exec.ReviewRequest{
-				RunID: "run-instruction-retry", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+				Admission: testReviewAdmission("run-instruction-retry"),
+				RunID:     "run-instruction-retry", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 				RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 				BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 				Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
@@ -755,7 +758,8 @@ func TestCodexReviewInstructionMaterializationRejectsDivergentSnapshotTopology(t
 		t.Fatal(err)
 	}
 	request := exec.ReviewRequest{
-		RunID: "run-instruction-cleanup", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-instruction-cleanup"),
+		RunID:     "run-instruction-cleanup", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
@@ -962,7 +966,8 @@ func TestCodexReviewSourceAuthorizesCompleteNamespaceBeforeRuntime(t *testing.T)
 	}
 	id := domain.InvocationID("review-" + strings.Repeat("b", 24))
 	request := exec.ReviewRequest{
-		RunID: "run-1", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-1"),
+		RunID:     "run-1", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
@@ -1032,7 +1037,8 @@ func TestCodexReviewSourceAuthorizationFailureCreatesNoRuntimeObjects(t *testing
 	}
 	id := domain.InvocationID("review-" + strings.Repeat("c", 24))
 	err = source.RequestReview(t.Context(), id, exec.ReviewRequest{
-		RunID: "run-1", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-1"),
+		RunID:     "run-1", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
@@ -1064,7 +1070,8 @@ func TestCodexReviewSourceRunsWardLifecycleAndCleansBeforePoll(t *testing.T) {
 	}
 	id := domain.InvocationID("review-run-1-1")
 	request := exec.ReviewRequest{
-		RunID: "run-1", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-1"),
+		RunID:     "run-1", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
@@ -1196,7 +1203,8 @@ func TestCodexReviewSourcePersistsInvalidCollectedResultAndCleans(t *testing.T) 
 	}
 	id := domain.InvocationID("review-run-1-1")
 	request := exec.ReviewRequest{
-		RunID: "run-1", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-1"),
+		RunID:     "run-1", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
@@ -1295,7 +1303,8 @@ func TestCodexReviewSourcePersistsMalformedRawOutputAndCleans(t *testing.T) {
 			}
 			id := domain.InvocationID("review-run-raw-1")
 			request := exec.ReviewRequest{
-				RunID: "run-raw", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+				Admission: testReviewAdmission("run-raw"),
+				RunID:     "run-raw", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 				RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 				BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 				Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
@@ -1372,7 +1381,8 @@ func TestCodexReviewSourceRetriesOperationalBindingRead(t *testing.T) {
 	}
 	id := domain.InvocationID("review-run-binding-read-1")
 	request := exec.ReviewRequest{
-		RunID: "run-binding-read", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-binding-read"),
+		RunID:     "run-binding-read", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
@@ -1420,7 +1430,8 @@ func TestCodexReviewSourceCleansBeforeRejectingMalformedOutcome(t *testing.T) {
 	}
 	id := domain.InvocationID("review-run-outcome-row-1")
 	request := exec.ReviewRequest{
-		RunID: "run-outcome-row", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-outcome-row"),
+		RunID:     "run-outcome-row", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
@@ -1489,7 +1500,8 @@ func TestCodexReviewSourceAbortsStartedInvocationForRejectedRequest(t *testing.T
 	}
 	id := domain.InvocationID("review-run-rejected-1")
 	request := exec.ReviewRequest{
-		RunID: "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-rejected"),
+		RunID:     "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
@@ -1572,7 +1584,8 @@ func TestCodexReviewSourceAbortsPreHandoffLaunchForRejectedRequest(t *testing.T)
 	}
 	id := domain.InvocationID("review-run-rejected-3")
 	request := exec.ReviewRequest{
-		RunID: "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-rejected"),
+		RunID:     "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
@@ -1629,7 +1642,8 @@ func TestCodexReviewSourceRejectedRequestFencesAndRecoversBeforeBinding(t *testi
 	}
 	id := domain.InvocationID("review-run-rejected-4")
 	request := exec.ReviewRequest{
-		RunID: "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-rejected"),
+		RunID:     "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
@@ -1685,7 +1699,8 @@ func TestCodexReviewSourceRejectedPreparingRequestAbortsWhenBindingExists(t *tes
 	}
 	id := domain.InvocationID("review-run-rejected-binding")
 	request := exec.ReviewRequest{
-		RunID: "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-rejected"),
+		RunID:     "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
@@ -1799,7 +1814,8 @@ func TestCodexReviewSourceInspectAbortsInvocationForInvalidPersistedRequest(t *t
 			}
 			id := domain.InvocationID("review-run-rejected-5")
 			request := exec.ReviewRequest{
-				RunID: "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+				Admission: testReviewAdmission("run-rejected"),
+				RunID:     "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 				RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 				BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 				Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
@@ -1873,7 +1889,8 @@ func TestCodexReviewSourcePreservesLegacyRequestThroughRejectedOutcome(t *testin
 	}
 	id := domain.InvocationID("review-legacy-rejected-outcome")
 	request := exec.ReviewRequest{
-		RunID: "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-rejected"),
+		RunID:     "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
@@ -1900,7 +1917,8 @@ func TestCodexReviewSourceSupersedesPersistedV1InstructionRequest(t *testing.T) 
 	persisted.CompositionVersion = exec.ReviewInstructionCompositionVersionV1
 	persisted.ResultDigest = domain.Digest("sha256:" + strings.Repeat("e", 64))
 	request := exec.ReviewRequest{
-		RunID: "run-v1-superseded", Round: 1, Repo: "owner/repo", RepositoryID: 42,
+		Admission: testReviewAdmission("run-v1-superseded"),
+		RunID:     "run-v1-superseded", Round: 1, Repo: "owner/repo", RepositoryID: 42,
 		BaseRef: "main", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
 		Workspace: "/candidate", Verification: testReviewVerificationEvidence(),
 		Instructions: persisted, RequestedAt: codexReviewEpoch,
@@ -1941,7 +1959,8 @@ func TestCodexReviewSourceReapsPreparedWorkspaceForRejectedUnstartedRequest(t *t
 	}
 	id := domain.InvocationID("review-run-rejected-2")
 	request := exec.ReviewRequest{
-		RunID: "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-rejected"),
+		RunID:     "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
@@ -2012,7 +2031,8 @@ func TestCodexReviewCleanupRefusesRedirectedWorkspaceBinding(t *testing.T) {
 	}
 	id := domain.InvocationID("review-run-redirect-1")
 	request := exec.ReviewRequest{
-		RunID: "run-redirect", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-redirect"),
+		RunID:     "run-redirect", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
@@ -2063,7 +2083,8 @@ func TestCodexReviewCleanupRefusesSubstitutedIntentResources(t *testing.T) {
 	}
 	id := domain.InvocationID("review-run-redirect-2")
 	request := exec.ReviewRequest{
-		RunID: "run-redirect", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-redirect"),
+		RunID:     "run-redirect", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
@@ -2105,7 +2126,8 @@ func TestCodexReviewCleanupRefusesMissingIntentAuthority(t *testing.T) {
 	}
 	id := domain.InvocationID("review-run-intent-authority-1")
 	request := exec.ReviewRequest{
-		RunID: "run-intent-authority", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-intent-authority"),
+		RunID:     "run-intent-authority", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
@@ -2141,7 +2163,8 @@ func TestCodexReviewCleanupSurfacesForeignLeaseAsContradiction(t *testing.T) {
 	}
 	id := domain.InvocationID("review-run-lease-1")
 	request := exec.ReviewRequest{
-		RunID: "run-lease", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-lease"),
+		RunID:     "run-lease", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
@@ -2189,7 +2212,8 @@ func TestCodexReviewRecoveryAbortsLegacyRunningInvocationWithLostProxy(t *testin
 	}
 	id := domain.InvocationID("review-run-restart-1")
 	request := exec.ReviewRequest{
-		RunID: "run-restart", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-restart"),
+		RunID:     "run-restart", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
@@ -2264,7 +2288,8 @@ func TestCodexReviewSourceRestartAbortsRunningInvocationWithLostProxy(t *testing
 	}
 	id := domain.InvocationID("review-run-restart-source")
 	request := exec.ReviewRequest{
-		RunID: "run-restart-source", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-restart-source"),
+		RunID:     "run-restart-source", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
@@ -2333,7 +2358,8 @@ func TestCodexReviewRecoveryCleansBeforeReportingRejectedOutcome(t *testing.T) {
 	}
 	id := domain.InvocationID("review-run-rejected-outcome")
 	request := exec.ReviewRequest{
-		RunID: "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-rejected"),
+		RunID:     "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
@@ -2423,7 +2449,8 @@ func TestCodexReviewSourceNormalizesStructuredFindings(t *testing.T) {
 		CostOwner:           "subscription:owner", Now: func() time.Time { return now },
 	}}
 	request := exec.ReviewRequest{
-		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42,
+		Admission: testReviewAdmission("run-1"),
+		RunID:     "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42,
 		BaseRef: "main", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
 		Workspace: "/seed/candidate", Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 		RequestedAt: now.Add(-time.Minute),
@@ -2444,7 +2471,7 @@ func TestCodexReviewSourceNormalizesStructuredFindings(t *testing.T) {
 	if finding.ID != second.Result.Findings[0].ID || finding.RunID != request.RunID ||
 		finding.Source != "codex_local" || finding.Severity != "P2" ||
 		first.Result.BaseSHA != request.BaseSHA || first.Result.HeadSHA != request.HeadSHA ||
-		first.Result.Provider != "openai" || first.Result.ModelConfiguration != "gpt-codex/high" ||
+		!first.Result.Admission.Equal(request.Admission) ||
 		first.Result.CompletionEvidence == "" {
 		t.Fatalf("normalized result = %#v", first.Result)
 	}
@@ -2468,7 +2495,8 @@ func TestCodexReviewSourceAcceptsWholeFileLocation(t *testing.T) {
 		CostOwner:           "subscription:owner", Now: func() time.Time { return now },
 	}}
 	request := exec.ReviewRequest{
-		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42,
+		Admission: testReviewAdmission("run-1"),
+		RunID:     "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42,
 		BaseRef: "main", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
 		Workspace: "/seed/candidate", Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 		RequestedAt: now.Add(-time.Minute),
@@ -2523,7 +2551,8 @@ func TestCodexReviewSourceRejectsInvalidFindingsEnvelope(t *testing.T) {
 		CostOwner:           "subscription:owner", Now: func() time.Time { return now },
 	}}
 	request := exec.ReviewRequest{
-		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42,
+		Admission: testReviewAdmission("run-1"),
+		RunID:     "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42,
 		BaseRef: "main", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
 		Workspace: "/seed/candidate", Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 		RequestedAt: now.Add(-time.Minute),
@@ -2634,7 +2663,8 @@ func TestCodexReviewSourceFindingIdentityIsInvocationScoped(t *testing.T) {
 		CostOwner:           "owner", Now: func() time.Time { return now },
 	}}
 	request := exec.ReviewRequest{
-		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42, BaseRef: "main",
+		Admission: testReviewAdmission("run-1"),
+		RunID:     "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42, BaseRef: "main",
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40), Workspace: "/candidate",
 		Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(), RequestedAt: now,
 	}
@@ -2665,7 +2695,8 @@ func TestCodexReviewSourceFindingsAreCrossRoundFingerprintable(t *testing.T) {
 		CostOwner:           "owner", Now: func() time.Time { return now },
 	}}
 	round1Req := exec.ReviewRequest{
-		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42, BaseRef: "main",
+		Admission: testReviewAdmission("run-1"),
+		RunID:     "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42, BaseRef: "main",
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40), Workspace: "/candidate",
 		Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(), RequestedAt: now,
 	}
@@ -2735,7 +2766,8 @@ func TestCodexReviewSourceEmptyExplanationRejectedBySource(t *testing.T) {
 		CostOwner:           "owner", Now: func() time.Time { return now },
 	}}
 	request := exec.ReviewRequest{
-		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42, BaseRef: "main",
+		Admission: testReviewAdmission("run-1"),
+		RunID:     "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42, BaseRef: "main",
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40), Workspace: "/candidate",
 		Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(), RequestedAt: now,
 	}
@@ -2955,7 +2987,8 @@ func TestCodexReviewLaunchCleanupFailureDoesNotTerminalizeUnreapedWorkspace(t *t
 func TestCodexReviewSourceJournalReadsKeepResultPending(t *testing.T) {
 	id := domain.InvocationID("review-journal-read-1")
 	request := exec.ReviewRequest{
-		RunID: "run-journal-read", Round: 1, Repo: "owner/repo", RepositoryID: 42,
+		Admission: testReviewAdmission("run-journal-read"),
+		RunID:     "run-journal-read", Round: 1, Repo: "owner/repo", RepositoryID: 42,
 		BaseRef: "main", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
 		Workspace: "/seed/candidate", Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 		RequestedAt: codexReviewEpoch,
@@ -2987,7 +3020,8 @@ func TestCodexReviewSourceRecoversBeforeLaunchIntent(t *testing.T) {
 			journal := &fakeCodexReviewJournal{}
 			id := domain.InvocationID("review-recover-" + preparation)
 			request := exec.ReviewRequest{
-				RunID: "run-recover", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+				Admission: testReviewAdmission("run-recover"),
+				RunID:     "run-recover", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 				RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 				BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 				Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
@@ -3082,7 +3116,8 @@ func TestCodexReviewSourceRetriesTransientPreparationUnderSameInvocation(t *test
 	}
 	id := domain.InvocationID("review-prep-retry")
 	request := exec.ReviewRequest{
-		RunID: "run-retry", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-retry"),
+		RunID:     "run-retry", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
@@ -3130,7 +3165,8 @@ func TestCodexReviewSourceRetriesTransientLaunchUnderSameInvocation(t *testing.T
 	}
 	id := domain.InvocationID("review-launch-retry")
 	request := exec.ReviewRequest{
-		RunID: "run-retry", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-retry"),
+		RunID:     "run-retry", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
@@ -3184,8 +3220,9 @@ func TestCodexReviewRestartRecoversLegacyRoundAndRelaunchesSameRequest(t *testin
 	}
 	id := domain.InvocationID("review-0dcd5c691adcaec0c353993a")
 	request := exec.ReviewRequest{
-		RunID: "run-bc28d74f7774a86464f1cc823da168d69b9f4b2a2de56d4a0abb6f5171e5c165",
-		Round: 2, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-bc28d74f7774a86464f1cc823da168d69b9f4b2a2de56d4a0abb6f5171e5c165"),
+		RunID:     "run-bc28d74f7774a86464f1cc823da168d69b9f4b2a2de56d4a0abb6f5171e5c165",
+		Round:     2, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: "9595682ebad1610833660ba469e8fc18b5ed8cab",
 		HeadSHA: seedSpec.Seed.Base.BaseSHA, Workspace: seedSpec.Seed.SourceDir,
@@ -3281,15 +3318,15 @@ func TestCodexReviewRestartRecoversLegacyRoundAndRelaunchesSameRequest(t *testin
 func TestCodexReviewSourceVerifyRejectsSwappedInvocation(t *testing.T) {
 	id := domain.InvocationID("review-run-1-1")
 	request := exec.ReviewRequest{
-		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42, BaseRef: "main",
+		Admission: testReviewAdmission("run-1"),
+		RunID:     "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42, BaseRef: "main",
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40), Workspace: "/candidate",
 		Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(), RequestedAt: codexReviewEpoch,
 	}
 	result := exec.ReviewResult{
 		InvocationID: "review-run-1-2", BaseSHA: request.BaseSHA, HeadSHA: request.HeadSHA,
-		Provider: "openai", ModelConfiguration: "gpt-codex/high",
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
-		CostOwner:           "owner", CompletedAt: codexReviewEpoch,
+		CompletedAt:         codexReviewEpoch,
 	}
 	retained := CodexReviewRetainedCollection{Result: []byte(`{"findings":[]}`), Events: []byte("ev\n")}
 	collectionEvidence := collectionEvidence(codexReviewProvider{}, retained)
@@ -3364,7 +3401,8 @@ func TestCodexReviewSourceVerifyRejectsSwappedRequestAuthority(t *testing.T) {
 	review, _ := testCodexReview(t)
 	id := domain.InvocationID("review-run-authority-1")
 	request := exec.ReviewRequest{
-		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42, BaseRef: "main",
+		Admission: testReviewAdmission("run-1"),
+		RunID:     "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42, BaseRef: "main",
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40), Workspace: "/candidate",
 		Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(), RequestedAt: codexReviewEpoch,
 	}
@@ -3423,7 +3461,8 @@ func TestCodexReviewSourceOutcomeRejectsFindingCorruption(t *testing.T) {
 		CostOwner:           "owner", Now: func() time.Time { return now },
 	}}
 	request := exec.ReviewRequest{
-		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42, BaseRef: "main",
+		Admission: testReviewAdmission("run-1"),
+		RunID:     "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42, BaseRef: "main",
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40), Workspace: "/candidate",
 		Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(), RequestedAt: now,
 	}
@@ -3757,7 +3796,8 @@ func TestCodexReviewSourceLaunchConformanceIsContradiction(t *testing.T) {
 		OwnershipToken: "stored-token",
 	}
 	request := exec.ReviewRequest{
-		RunID: "run-1", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-1"),
+		RunID:     "run-1", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
@@ -3863,6 +3903,7 @@ func codexGoldenReviewCollection(events string) CodexReviewCollection {
 func codexGoldenReviewOutcome(events string) CodexReviewSourceOutcome {
 	source := newEquivalenceReviewSource()
 	req := exec.ReviewRequest{
+		Admission:    testReviewAdmission("run-golden"),
 		RunID:        "run-golden",
 		BaseSHA:      strings.Repeat("a", 40),
 		HeadSHA:      strings.Repeat("b", 40),
@@ -4028,7 +4069,8 @@ func TestCodexReviewWorkspaceBindingSurvivesCleanupThenReconcileRemovesIt(t *tes
 	}
 	id := domain.InvocationID("review-workspace-lifetime-1")
 	request := exec.ReviewRequest{
-		RunID: "run-1", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-1"),
+		RunID:     "run-1", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
@@ -4094,7 +4136,8 @@ func TestCodexReviewSourceAdmitRefusalRecordsNothing(t *testing.T) {
 	}
 	id := domain.InvocationID("review-admit-refused")
 	request := exec.ReviewRequest{
-		RunID: "run-admit-refused", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-admit-refused"),
+		RunID:     "run-admit-refused", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),

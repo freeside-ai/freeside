@@ -716,8 +716,7 @@ func EvaluateReviewConvergence(
 	}
 
 	segmentStart := currentIndex
-	for segmentStart > 0 &&
-		state.Records[segmentStart-1].ConfigurationDigest == current.ConfigurationDigest {
+	for segmentStart > 0 && state.Records[segmentStart-1].SharesSegment(current) {
 		segmentStart--
 	}
 	continuedAfter := state.Records[segmentStart].Round - 1

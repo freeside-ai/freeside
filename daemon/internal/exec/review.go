@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
@@ -108,6 +109,12 @@ type ReviewRequestSupersessionVerifier interface {
 // merge of HeadSHA into BaseSHA, and the source then reviews that commit. The
 // workspace holds it, and the reviewed diff runs from BaseSHA to it. Empty
 // means the workspace holds HeadSHA itself.
+//
+// Admission is the snapshot the engine admitted the invocation under before
+// it asked the source (plan §5.4): the agent the lineup selected, the identity
+// it runs under, and its launch values. The source returns it unchanged on
+// the ReviewResult. A persisted request with no snapshot predates review
+// admission and is a legacy request.
 type ReviewRequest struct {
 	RunID        domain.RunID               `json:"run_id"`
 	Round        int                        `json:"round"`
@@ -120,6 +127,7 @@ type ReviewRequest struct {
 	Workspace    string                     `json:"workspace"`
 	Verification ReviewVerificationEvidence `json:"verification"`
 	Instructions ReviewInstructionBinding   `json:"instructions"`
+	Admission    domain.ReviewAdmission     `json:"admission"`
 	RequestedAt  time.Time                  `json:"requested_at"`
 }
 
@@ -175,7 +183,47 @@ func (e ReviewVerificationEvidence) Validate() error {
 	return nil
 }
 
+// Validate reports whether the request binds one candidate, its
+// verification, its instructions, and the admission its invocation runs
+// under.
 func (r ReviewRequest) Validate() error {
+	if err := r.ValidateBeforeAdmission(); err != nil {
+		return err
+	}
+	if err := r.Admission.Validate(); err != nil {
+		return fmt.Errorf("review request admission: %w", err)
+	}
+	if r.Admission.RunID != r.RunID {
+		return fmt.Errorf("review request admission names run %q: %w",
+			r.Admission.RunID, domain.ErrParentKeyMismatch)
+	}
+	return nil
+}
+
+// ValidateRetainedReviewRequest holds a request read back from retained
+// history to the rule it was written under. body is the stored encoding the
+// request was decoded from: one that carries an admission is held to
+// Validate, and one that carries none, which a daemon before review admission
+// wrote, to ValidateBeforeAdmission. It is for readers of history (a backup's
+// artifact closure, the review evidence view) and grants no execution
+// authority: a source runs only a request that passes Validate.
+func ValidateRetainedReviewRequest(body []byte, request ReviewRequest) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return fmt.Errorf("retained review request: %w", err)
+	}
+	for field := range fields {
+		if strings.EqualFold(field, "admission") {
+			return request.Validate()
+		}
+	}
+	return request.ValidateBeforeAdmission()
+}
+
+// ValidateBeforeAdmission is Validate without the admission: what a request
+// had to satisfy before requests carried one. It tells a request a previous
+// daemon wrote from a damaged one. No source runs a request on it.
+func (r ReviewRequest) ValidateBeforeAdmission() error {
 	switch {
 	case r.RunID == "":
 		return fmt.Errorf("review request run_id: %w", domain.ErrEmptyID)
@@ -210,8 +258,9 @@ func (r ReviewRequest) WorkspaceSHA() string {
 }
 
 // AuthorityDigest binds the reviewer to every request field that can change
-// which candidate or verification authority it reviews. Request time is an
-// operational observation, not delegated authority.
+// which candidate or verification authority it reviews, or which admitted
+// agent reviews it. Request time is an operational observation, not delegated
+// authority.
 func (r ReviewRequest) AuthorityDigest() (domain.Digest, error) {
 	if err := r.Validate(); err != nil {
 		return "", err
@@ -229,12 +278,14 @@ func (r ReviewRequest) AuthorityDigest() (domain.Digest, error) {
 		Workspace    string                     `json:"workspace"`
 		Verification ReviewVerificationEvidence `json:"verification"`
 		Instructions ReviewInstructionBinding   `json:"instructions"`
+		Admission    domain.ReviewAdmission     `json:"admission"`
 	}{
-		Version: "review-request-authority-v3", RunID: r.RunID, Round: r.Round,
+		Version: "review-request-authority-v4", RunID: r.RunID, Round: r.Round,
 		Repo: r.Repo, RepositoryID: r.RepositoryID, BaseRef: r.BaseRef,
 		BaseSHA: r.BaseSHA, HeadSHA: r.HeadSHA, EvaluatedSHA: r.EvaluatedSHA,
 		Workspace:    r.Workspace,
 		Verification: r.Verification, Instructions: r.Instructions,
+		Admission: r.Admission,
 	})
 	if err != nil {
 		return "", err
@@ -247,18 +298,20 @@ func (r ReviewRequest) AuthorityDigest() (domain.Digest, error) {
 // once, §5.3). A clean pass is an empty Findings list; there is no separate
 // verdict field to drift from it.
 type ReviewResult struct {
-	InvocationID        domain.InvocationID `json:"invocation_id"`
-	BaseSHA             string              `json:"base_sha"`
-	HeadSHA             string              `json:"head_sha"`
-	Provider            string              `json:"provider"`
-	ModelConfiguration  string              `json:"model_configuration"`
-	ConfigurationDigest domain.Digest       `json:"configuration_digest"`
-	InstructionDigest   domain.Digest       `json:"instruction_digest"`
-	CostOwner           string              `json:"cost_owner"`
-	CompletedAt         time.Time           `json:"completed_at"`
-	CompletionEvidence  domain.Digest       `json:"completion_evidence"`
-	Findings            []domain.Finding    `json:"findings"`
-	Usage               []UsageMeasurement  `json:"usage"`
+	InvocationID domain.InvocationID `json:"invocation_id"`
+	BaseSHA      string              `json:"base_sha"`
+	HeadSHA      string              `json:"head_sha"`
+	// Admission is the request's admission snapshot, returned unchanged. It
+	// says which agent reviewed, under which identity; the engine holds it
+	// against the snapshot it stored for the invocation and writes no record
+	// when they differ, so Validate checks only that it is well-formed.
+	Admission           domain.ReviewAdmission `json:"admission"`
+	ConfigurationDigest domain.Digest          `json:"configuration_digest"`
+	InstructionDigest   domain.Digest          `json:"instruction_digest"`
+	CompletedAt         time.Time              `json:"completed_at"`
+	CompletionEvidence  domain.Digest          `json:"completion_evidence"`
+	Findings            []domain.Finding       `json:"findings"`
+	Usage               []UsageMeasurement     `json:"usage"`
 }
 
 // Validate reports whether the result is well-formed: reconcilable
@@ -272,10 +325,13 @@ func (r ReviewResult) Validate() error {
 	if r.HeadSHA == "" {
 		return fmt.Errorf("review result head_sha: %w", domain.ErrEmptyField)
 	}
-	if r.BaseSHA == "" || r.Provider == "" || r.ModelConfiguration == "" || r.CostOwner == "" ||
+	if r.BaseSHA == "" ||
 		!contentaddr.Valid(string(r.ConfigurationDigest)) ||
 		!contentaddr.Valid(string(r.InstructionDigest)) {
 		return fmt.Errorf("review result provenance: %w", domain.ErrEmptyField)
+	}
+	if err := r.Admission.Validate(); err != nil {
+		return fmt.Errorf("review result: %w", err)
 	}
 	if !contentaddr.Valid(string(r.CompletionEvidence)) {
 		return fmt.Errorf("review result completion evidence %q: %w",

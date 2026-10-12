@@ -13,6 +13,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 )
 
 // externalCycleFixture is a sealed external_review cycle with the
@@ -48,10 +49,10 @@ func putCycleReview(
 	}
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: domain.InvocationID("review-cycle-" + strconv.Itoa(round)), RunID: runID, Round: round,
-		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, runID, domain.InvocationID("review-cycle-"+strconv.Itoa(round))),
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		CostOwner:           "owner", BaseSHA: base, HeadSHA: head,
+		BaseSHA:             base, HeadSHA: head,
 		CompletedAt:        reentryAt.Add(time.Duration(round) * time.Minute),
 		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 		Outcome:            outcome, FindingIDs: ids,

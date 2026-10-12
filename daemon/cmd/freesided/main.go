@@ -1197,10 +1197,10 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			RemediationPromptPackageDigest:  claudeWiring.remediationPromptPackage,
 			ReviewSource:                    claudeWiring.reviewSource,
 			ShadowReviewSource:              claudeWiring.shadowReviewSource,
+			ReviewAdmission:                 claudeWiring.reviewAdmission,
 			ReviewRecovery:                  claudeWiring.reviewRecovery,
 			ReviewConfigurationDigest:       claudeWiring.reviewConfigurationDigest,
 			ShadowReviewConfigurationDigest: claudeWiring.shadowReviewConfigurationDigest,
-			ShadowReviewCostOwner:           claudeWiring.shadowReviewCostOwner,
 			ShadowReviewDefaultRate: enabledShadowReviewRate(
 				claudeWiring.shadowReviewSource, claudeWiring.shadowReviewRate),
 			ShadowReviewFailure:    shadowReviewFailure,

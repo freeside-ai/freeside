@@ -111,6 +111,7 @@ func TestProductionReviewUpgradePreservesRequestTime(t *testing.T) {
 				"ALTER TABLE publish_mint_audits DROP COLUMN requested_issues",
 				"ALTER TABLE publish_mint_audits DROP COLUMN granted_issues",
 				"DROP TABLE device_activity",
+				"DROP TABLE review_admissions",
 				"DELETE FROM schema_migrations WHERE version >= 67",
 			} {
 				if _, err := raw.ExecContext(p.ctx, query); err != nil {
@@ -164,7 +165,7 @@ func TestProductionReviewProgressSurvivesRestart(t *testing.T) {
 	p := newProductionPublicationHarness(t, "")
 	id := engine.ProductionReviewInvocationID(p.runID, 1)
 	script := fake.ReviewScript{PendingInspects: 2, Outcome: fake.OutcomeComplete, Result: exec.ReviewResult{
-		BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA, Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+		BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
 		CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("review timeline clean")),
 	}}
 	p.reviewer.Script(id, script)

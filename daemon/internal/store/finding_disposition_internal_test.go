@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
@@ -42,10 +43,10 @@ func seedFindingDisposition(t *testing.T) (*Store, domain.ReviewDispositionRecor
 	finding := domain.Finding{ID: "finding-tamper", RunID: run.ID, Source: "codex", CreatedAt: at}
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-tamper-1", RunID: run.ID, Round: 1,
-		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, run.ID, "review-tamper-1"),
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		CostOwner:           "owner", BaseSHA: "base", HeadSHA: "head", CompletedAt: at,
+		BaseSHA:             "base", HeadSHA: "head", CompletedAt: at,
 		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 		Outcome:            domain.ReviewFindings, FindingIDs: []domain.FindingID{finding.ID},
 	})
@@ -54,10 +55,10 @@ func seedFindingDisposition(t *testing.T) (*Store, domain.ReviewDispositionRecor
 	}
 	remediation, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-tamper-2", RunID: run.ID, Round: 2,
-		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, run.ID, "review-tamper-2"),
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		CostOwner:           "owner", BaseSHA: "base", HeadSHA: "remediated-head", CompletedAt: at.Add(time.Minute),
+		BaseSHA:             "base", HeadSHA: "remediated-head", CompletedAt: at.Add(time.Minute),
 		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 		Outcome:            domain.ReviewClean,
 	})
@@ -233,10 +234,10 @@ func TestFindingDispositionTriggerRejectsUnboundRemediationBase(t *testing.T) {
 	at := time.Date(2026, 8, 10, 12, 1, 0, 0, time.UTC)
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-base-tamper-3", RunID: finding.RunID, Round: 3,
-		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, finding.RunID, "review-base-tamper-3"),
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		CostOwner:           "owner", BaseSHA: "base", HeadSHA: "head-2", CompletedAt: at,
+		BaseSHA:             "base", HeadSHA: "head-2", CompletedAt: at,
 		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 		Outcome:            domain.ReviewFindings, FindingIDs: []domain.FindingID{finding.ID},
 	})
@@ -245,6 +246,7 @@ func TestFindingDispositionTriggerRejectsUnboundRemediationBase(t *testing.T) {
 	}
 	remediation := record
 	remediation.InvocationID = "review-base-tamper-4"
+	remediation.Admission = fake.RecordAdmission(domain.RoleReviewer, remediation.RunID, remediation.InvocationID)
 	remediation.Round = 4
 	remediation.BaseSHA = "other-base"
 	remediation.HeadSHA = "head-3"
@@ -308,10 +310,10 @@ func TestListFindingDispositionsRejectsRunIDOmissionTamper(t *testing.T) {
 	}
 	otherRecord, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-other-1", RunID: otherRun.ID, Round: 1,
-		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, otherRun.ID, "review-other-1"),
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		CostOwner:           "owner", BaseSHA: "base", HeadSHA: "head", CompletedAt: disposition.CreatedAt,
+		BaseSHA:             "base", HeadSHA: "head", CompletedAt: disposition.CreatedAt,
 		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 		Outcome:            domain.ReviewFindings, FindingIDs: []domain.FindingID{otherFinding.ID},
 	})
@@ -356,10 +358,10 @@ func TestGetFindingDispositionRejectsKeyOmissionTamper(t *testing.T) {
 		"round": func(st *Store, disposition domain.ReviewDispositionRecord, finding domain.Finding) error {
 			record, err := domain.NewReviewRecord(domain.ReviewRecord{
 				InvocationID: "review-round-tamper-3", RunID: disposition.RunID, Round: 3,
-				Provider: "openai", ModelConfiguration: "gpt-codex/high",
+				Admission:           fake.RecordAdmission(domain.RoleReviewer, disposition.RunID, "review-round-tamper-3"),
 				ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 				InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-				CostOwner:           "owner", BaseSHA: "base", HeadSHA: "head", CompletedAt: disposition.CreatedAt,
+				BaseSHA:             "base", HeadSHA: "head", CompletedAt: disposition.CreatedAt,
 				CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 				Outcome:            domain.ReviewFindings, FindingIDs: []domain.FindingID{finding.ID},
 			})

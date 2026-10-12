@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -80,10 +81,13 @@ func TestRunReviewTimelineProgressAndBindings(t *testing.T) {
 			if timeline.Review.Rounds[0].State != domain.ReviewRunning || timeline.AsOfRevision <= before {
 				t.Fatalf("running: %#v", timeline)
 			}
+			// A round recorded before the admission snapshot: the timeline
+			// shows the attribution strings exactly as they were stored.
 			record := domain.ReviewRecord{
-				InvocationID: request.InvocationID, RunID: run.ID, Round: 1, Provider: "openai", ModelConfiguration: "codex/high",
+				InvocationID: request.InvocationID, RunID: run.ID, Round: 1,
+				LegacyProvider: "openai", LegacyModelConfiguration: "codex/high", LegacyCostOwner: "owner",
 				ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)), InstructionDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
-				CostOwner: "owner", BaseSHA: request.BaseSHA, HeadSHA: request.HeadSHA, CompletedAt: f.at.Add(time.Minute),
+				BaseSHA: request.BaseSHA, HeadSHA: request.HeadSHA, CompletedAt: f.at.Add(time.Minute),
 				CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)), Outcome: domain.ReviewClean,
 			}
 			switch mismatch {
@@ -164,9 +168,9 @@ func TestRunReviewFindingsRereviewAndFailure(t *testing.T) {
 	run := corpusRun("review-history")
 	finding := domain.Finding{ID: "finding", RunID: run.ID, Source: "codex_local", Severity: domain.FindingSeverityP2, Message: "Fix the bound implementation", RawText: "Reviewer claim", CreatedAt: f.at}
 	record := domain.ReviewRecord{
-		InvocationID: "review-history-1", RunID: run.ID, Round: 1, Provider: "openai", ModelConfiguration: "codex/high",
+		InvocationID: "review-history-1", RunID: run.ID, Round: 1, Admission: fake.RecordAdmission(domain.RoleReviewer, run.ID, "review-history-1"),
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)), InstructionDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		CostOwner: "owner", BaseSHA: "base", HeadSHA: "head-1", CompletedAt: f.at,
+		BaseSHA: "base", HeadSHA: "head-1", CompletedAt: f.at,
 		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)), Outcome: domain.ReviewFindings, FindingIDs: []domain.FindingID{finding.ID},
 	}
 	request := domain.ReviewRequestRecord{InvocationID: "review-history-2", RunID: run.ID, Round: 2, BaseSHA: "base", HeadSHA: "head-2", RequestedAt: f.at.Add(time.Minute)}
@@ -251,10 +255,12 @@ func newReviewSubjectFixture(t *testing.T) reviewSubjectFixture {
 		},
 	}
 	f.finding = domain.Finding{ID: "finding-note", RunID: runID, Source: "codex_local", Severity: domain.FindingSeverityP2, Message: "Add the decision note", RawText: "Reviewer claim", CreatedAt: f.at}
+	// An admitted round: the timeline's provider is the snapshot's lineage
+	// group and its model configuration the admitted model and effort.
 	f.round1 = domain.ReviewRecord{
-		InvocationID: "review-subject-1", RunID: runID, Round: 1, Provider: "openai", ModelConfiguration: "codex/high",
+		InvocationID: "review-subject-1", RunID: runID, Round: 1, Admission: fake.SeededReviewAdmission(runID, "review-subject-1"),
 		ConfigurationDigest: subjectDigest("c"), InstructionDigest: subjectDigest("d"),
-		CostOwner: "owner", BaseSHA: corpusBaseSHA, HeadSHA: subjectImplHead, CompletedAt: f.at.Add(time.Minute),
+		BaseSHA: corpusBaseSHA, HeadSHA: subjectImplHead, CompletedAt: f.at.Add(time.Minute),
 		CompletionEvidence: subjectDigest("e"), Outcome: domain.ReviewFindings, FindingIDs: []domain.FindingID{f.finding.ID},
 	}
 	compatibility := domain.CompatibilityAllowed

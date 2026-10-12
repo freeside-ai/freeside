@@ -13,6 +13,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
@@ -200,9 +201,9 @@ func TestDriftAuditBindingFailures(t *testing.T) {
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		clean, err := domain.NewReviewRecord(domain.ReviewRecord{
 			InvocationID: "review-clean-3", RunID: runID, Round: 3,
-			Provider: "openai", ModelConfiguration: "gpt-codex/high",
+			Admission:           fake.RecordAdmission(domain.RoleReviewer, runID, "review-clean-3"),
 			ConfigurationDigest: adjudicationDigest("c"), InstructionDigest: adjInstructionDigest,
-			CostOwner: "owner", BaseSHA: "base", HeadSHA: "head-3",
+			BaseSHA: "base", HeadSHA: "head-3",
 			CompletedAt:        driftAuditAt.Add(3 * time.Minute),
 			CompletionEvidence: adjudicationDigest("e"), Outcome: domain.ReviewClean,
 		})

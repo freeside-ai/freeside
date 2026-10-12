@@ -50,13 +50,12 @@ type claudeReviewProvider struct{}
 
 var _ reviewProvider = claudeReviewProvider{}
 
-func (claudeReviewProvider) sourceLabel() string   { return "claude_local" }
-func (claudeReviewProvider) providerLabel() string { return "anthropic" }
+func (claudeReviewProvider) sourceLabel() string { return "claude_local" }
 
 func (claudeReviewProvider) topologyVersion() string { return claudeReviewTopologyVersion }
 
 func (claudeReviewProvider) completionEvidenceVersion() string { return "claude-review-completion-v1" }
-func (claudeReviewProvider) resultEvidenceVersion() string     { return "claude-review-result-v1" }
+func (claudeReviewProvider) resultEvidenceVersion() string     { return "claude-review-result-v2" }
 func (claudeReviewProvider) configurationVersion() string      { return "claude-review-configuration-v1" }
 
 func (claudeReviewProvider) promptProtocol() string { return "claude-production-review-prompt-v4" }

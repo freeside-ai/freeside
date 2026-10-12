@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
@@ -57,6 +58,62 @@ func TestEvaluateReviewConvergencePolicy(t *testing.T) {
 
 	t.Run("configuration change resets streak", func(t *testing.T) {
 		state := convergenceFixture(t, []domain.Digest{firstConfig, firstConfig, secondConfig})
+		cause, stop, err := store.EvaluateReviewConvergence(state, state.Records[2])
+		if err != nil || stop || cause != "" {
+			t.Fatalf("evaluate = %q, %v, %v", cause, stop, err)
+		}
+	})
+
+	// The configuration digest does not cover the reviewer, so these hold it
+	// fixed and move only the admitted agent.
+	t.Run("reviewer switch resets streak", func(t *testing.T) {
+		state := convergenceFixture(t, []domain.Digest{firstConfig, firstConfig, firstConfig})
+		admitConvergenceRounds(&state, "a", "a", "b")
+		cause, stop, err := store.EvaluateReviewConvergence(state, state.Records[2])
+		if err != nil || stop || cause != "" {
+			t.Fatalf("evaluate = %q, %v, %v", cause, stop, err)
+		}
+	})
+
+	t.Run("one reviewer keeps its streak", func(t *testing.T) {
+		state := convergenceFixture(t, []domain.Digest{firstConfig, firstConfig, firstConfig})
+		admitConvergenceRounds(&state, "a", "a", "a")
+		cause, stop, err := store.EvaluateReviewConvergence(state, state.Records[2])
+		if err != nil || !stop || cause != domain.ReviewDiminishingLowValue {
+			t.Fatalf("evaluate = %q, %v, %v", cause, stop, err)
+		}
+	})
+
+	t.Run("a new reviewer's streak counts from its first pass", func(t *testing.T) {
+		state := convergenceFixture(t, []domain.Digest{
+			firstConfig, firstConfig, firstConfig, firstConfig, firstConfig,
+		})
+		admitConvergenceRounds(&state, "a", "a", "a", "b", "b")
+		if cause, stop, err := store.EvaluateReviewConvergence(state, state.Records[3]); err != nil || stop {
+			t.Fatalf("round 4 evaluate = %q, %v, %v", cause, stop, err)
+		}
+		cause, stop, err := store.EvaluateReviewConvergence(state, state.Records[4])
+		if err != nil || !stop || cause != domain.ReviewDiminishingLowValue {
+			t.Fatalf("round 5 evaluate = %q, %v, %v", cause, stop, err)
+		}
+	})
+
+	t.Run("fixed recurrence does not cross a reviewer switch", func(t *testing.T) {
+		state := convergenceFixture(t, []domain.Digest{firstConfig, firstConfig})
+		admitConvergenceRounds(&state, "a", "b")
+		state.Dispositions = []domain.ReviewDispositionRecord{{
+			FindingID: state.Records[0].FindingIDs[0], Round: 1,
+			Disposition: domain.ReviewDispositionFixed,
+		}}
+		cause, stop, err := store.EvaluateReviewConvergence(state, state.Records[1])
+		if err != nil || stop || cause != "" {
+			t.Fatalf("evaluate = %q, %v, %v", cause, stop, err)
+		}
+	})
+
+	t.Run("first snapshot round after legacy rounds resets streak", func(t *testing.T) {
+		state := convergenceFixture(t, []domain.Digest{firstConfig, firstConfig, firstConfig})
+		admitConvergenceRounds(&state, "", "", "a")
 		cause, stop, err := store.EvaluateReviewConvergence(state, state.Records[2])
 		if err != nil || stop || cause != "" {
 			t.Fatalf("evaluate = %q, %v, %v", cause, stop, err)
@@ -188,6 +245,27 @@ func convergenceFixture(t *testing.T, configurations []domain.Digest) store.Revi
 			LowValueStreakBeforeAttention: 2,
 			HardRoundLimit:                25,
 		},
+	}
+}
+
+// admitConvergenceRounds names the reviewer agent of each fixture round in
+// order: a letter fills that round's admitted agent digest, and an empty string
+// leaves the round a legacy record. A round whose reviewer differs from the
+// round before it opens a segment, so its finding is new there, as
+// convergenceFixture records for a configuration change.
+func admitConvergenceRounds(state *store.ReviewConvergenceState, agents ...string) {
+	var previous string
+	for index, agent := range agents {
+		record := &state.Records[index]
+		if agent != "" {
+			record.Admission = fake.RecordAdmission(domain.RoleReviewer, record.RunID, record.InvocationID)
+			record.Admission.AgentBinding.AgentDigest = domain.Digest("sha256:" + strings.Repeat(agent, 64))
+		}
+		if index > 0 && agent != previous {
+			state.History.Rounds[index].NewFindings = 1
+			state.History.Rounds[index].RecurringFindings = 0
+		}
+		previous = agent
 	}
 }
 

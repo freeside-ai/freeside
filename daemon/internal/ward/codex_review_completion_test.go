@@ -84,7 +84,8 @@ func TestCodexReviewTruncatedCollectionRetriesWithoutCleanup(t *testing.T) {
 	}
 	id := domain.InvocationID("review-retry-collection")
 	req := exec.ReviewRequest{
-		RunID: "run-1", Round: 1, Repo: seed.Seed.Base.Repo, RepositoryID: seed.Seed.Base.RepositoryID,
+		Admission: testReviewAdmission("run-1"),
+		RunID:     "run-1", Round: 1, Repo: seed.Seed.Base.Repo, RepositoryID: seed.Seed.Base.RepositoryID,
 		BaseRef: seed.Seed.Base.BaseRef, BaseSHA: strings.Repeat("a", 40), HeadSHA: seed.Seed.Base.BaseSHA,
 		Workspace: seed.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
 		Instructions: testReviewInstructionBinding(), RequestedAt: codexReviewEpoch,
@@ -160,7 +161,10 @@ func TestCodexReviewTerminalFailureOverridesEmptyFindings(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			source := newEquivalenceReviewSource()
-			req := exec.ReviewRequest{BaseSHA: testCodexReviewHead, HeadSHA: testCodexReviewHead, Instructions: testReviewInstructionBinding()}
+			req := exec.ReviewRequest{
+				Admission: testReviewAdmission("run-terminal"), RunID: "run-terminal",
+				BaseSHA: testCodexReviewHead, HeadSHA: testCodexReviewHead, Instructions: testReviewInstructionBinding(),
+			}
 			collection := CodexReviewCollection{ExitStatus: tc.status, Result: []byte(`{"findings":[]}`), Events: []byte(tc.events)}
 			outcome := source.normalizeCollection("review-terminal", req, collection)
 			if outcome.FailureClass != tc.failure || (outcome.Result == nil) != (tc.failure != "") {
@@ -244,7 +248,8 @@ func TestCodexReviewFailedCollectionSurvivesCleanupAndRestart(t *testing.T) {
 			}
 			id := domain.InvocationID("review-failed-collection")
 			req := exec.ReviewRequest{
-				RunID: "run-1", Round: 1, Repo: seed.Seed.Base.Repo, RepositoryID: seed.Seed.Base.RepositoryID,
+				Admission: testReviewAdmission("run-1"),
+				RunID:     "run-1", Round: 1, Repo: seed.Seed.Base.Repo, RepositoryID: seed.Seed.Base.RepositoryID,
 				BaseRef: seed.Seed.Base.BaseRef, BaseSHA: strings.Repeat("a", 40), HeadSHA: seed.Seed.Base.BaseSHA,
 				Workspace: seed.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
 				Instructions: testReviewInstructionBinding(), RequestedAt: codexReviewEpoch,

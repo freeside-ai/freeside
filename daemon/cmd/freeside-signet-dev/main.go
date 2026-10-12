@@ -34,6 +34,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
@@ -795,12 +796,13 @@ func (c controlHandler) seedFindingAdjudicationAuthority(
 		Message:  "the finding contradicts the approved work unit",
 		RawText:  "the finding contradicts the approved work unit", CreatedAt: createdAt,
 	}
+	reviewID := domain.InvocationID("review-" + suffix)
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
-		InvocationID: domain.InvocationID("review-" + suffix), RunID: runID, Round: 1,
-		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		InvocationID: reviewID, RunID: runID, Round: 1,
+		Admission:           fake.SeededReviewAdmission(runID, reviewID),
 		ConfigurationDigest: convergenceDigest("configuration-" + suffix),
-		InstructionDigest:   instructionDigest, CostOwner: "owner",
-		BaseSHA: "beefcafe", HeadSHA: "cafebabe", CompletedAt: createdAt,
+		InstructionDigest:   instructionDigest,
+		BaseSHA:             "beefcafe", HeadSHA: "cafebabe", CompletedAt: createdAt,
 		CompletionEvidence: convergenceDigest("completion-" + suffix),
 		Outcome:            domain.ReviewFindings, FindingIDs: []domain.FindingID{findingID},
 	})

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -52,9 +53,9 @@ func newFilingFixture(t *testing.T) filingFixture {
 	}
 	review, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-filing-1", RunID: policy.RunID, Round: 1,
-		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, policy.RunID, "review-filing-1"),
 		ConfigurationDigest: testDigest("c"), InstructionDigest: testDigest("d"),
-		CostOwner: "owner", BaseSHA: "base", HeadSHA: "head-1", CompletedAt: now,
+		BaseSHA: "base", HeadSHA: "head-1", CompletedAt: now,
 		CompletionEvidence: testDigest("e"),
 		Outcome:            domain.ReviewFindings, FindingIDs: []domain.FindingID{finding.ID},
 	})

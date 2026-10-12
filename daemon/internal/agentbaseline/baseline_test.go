@@ -448,7 +448,7 @@ func TestBaselineLineupCoversEveryRole(t *testing.T) {
 
 // The declared sets cover the two writer launches and nothing more: review's
 // `forbidden` policy needs a control no adapter has, so its coverage fails
-// closed until an adapter proves it (#898). Both review adapters have a
+// closed until an adapter proves it (#1980). Both review adapters have a
 // record, and neither can be admitted to a ward launch: capability coverage
 // refuses them whatever effort they can send.
 func TestConformanceRecordsCoverTheWriterLaunchesOnly(t *testing.T) {

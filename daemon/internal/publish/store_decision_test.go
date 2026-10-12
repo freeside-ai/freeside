@@ -11,6 +11,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -717,10 +718,10 @@ func TestPublishExecutionRejectsForeignReviewInstructionsAtDecision(t *testing.T
 	candidate.DispositionHistory = testDispositionHistory(t, s, candidate)
 	foreign, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-foreign-instructions", RunID: candidate.RunID, Round: 2,
-		Provider: "openai", ModelConfiguration: "codex/high",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, candidate.RunID, "review-foreign-instructions"),
 		ConfigurationDigest: testRecipe,
 		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("9", 64)),
-		CostOwner:           "operator", BaseSHA: testOtherSHA, HeadSHA: candidate.HeadSHA,
+		BaseSHA:             testOtherSHA, HeadSHA: candidate.HeadSHA,
 		CompletedAt:        fixtureTime.Add(time.Minute),
 		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("8", 64)),
 		Outcome:            domain.ReviewClean,
@@ -763,10 +764,10 @@ func TestPublishExecutionReportsReviewConfigurationMismatchAtDecision(t *testing
 	drifted := domain.Digest("sha256:" + strings.Repeat("7", 64))
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-drifted-configuration", RunID: candidate.RunID, Round: 2,
-		Provider: "openai", ModelConfiguration: "codex/high",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, candidate.RunID, "review-drifted-configuration"),
 		ConfigurationDigest: drifted,
 		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		CostOwner:           "operator", BaseSHA: testBaseSHA, HeadSHA: candidate.HeadSHA,
+		BaseSHA:             testBaseSHA, HeadSHA: candidate.HeadSHA,
 		CompletedAt:        fixtureTime.Add(time.Minute),
 		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("8", 64)),
 		Outcome:            domain.ReviewClean,

@@ -9,17 +9,17 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 )
 
 func internalShadowRecord(t *testing.T, runID domain.RunID, findingID domain.FindingID) domain.ShadowReviewRecord {
 	t.Helper()
 	record, err := domain.NewShadowReviewRecord(domain.ShadowReviewRecord{
 		InvocationID: "shadow-internal-1", RunID: runID, ShadowedRound: 1,
-		Source: domain.ShadowReviewClaudeLocal, Provider: "anthropic",
-		ModelConfiguration:  "claude-opus/high",
+		Source: domain.ShadowReviewClaudeLocal, Admission: fake.RecordAdmission(domain.RoleShadowReviewer, runID, "shadow-internal-1"),
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		CostOwner:           "owner", BaseSHA: "base", HeadSHA: "head",
+		BaseSHA:             "base", HeadSHA: "head",
 		CompletedAt:        time.Date(2026, 8, 24, 4, 0, 0, 0, time.UTC),
 		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 		Outcome:            domain.ReviewFindings, FindingIDs: []domain.FindingID{findingID},
@@ -41,10 +41,10 @@ func internalRoutedCandidate(
 	}
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: invocationID, RunID: runID, Round: round,
-		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, runID, invocationID),
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		CostOwner:           "owner", BaseSHA: "base", HeadSHA: "head", CompletedAt: at,
+		BaseSHA:             "base", HeadSHA: "head", CompletedAt: at,
 		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 		Outcome:            outcome, FindingIDs: findingIDs,
 	})
@@ -323,7 +323,7 @@ func TestShadowAndRoutedReviewSchemaRejectsDualLinkedFinding(t *testing.T) {
 			}
 			if _, err := st.db.ExecContext(ctx, putShadowReviewRecordSQL,
 				shadow.InvocationID, shadow.RunID, shadow.ShadowedRound, shadow.Source,
-				shadow.Provider, shadow.BaseSHA, shadow.HeadSHA, shadow.Outcome,
+				shadow.Provider(), shadow.BaseSHA, shadow.HeadSHA, shadow.Outcome,
 				formatTime(shadow.CompletedAt), reviewBodyDigest(body), body); err != nil {
 				t.Fatal(err)
 			}
@@ -361,9 +361,11 @@ func TestShadowReviewSchemaRejectsDuplicateInvocationAndFindingParent(t *testing
 	thirdRouted := internalRoutedCandidate(t, run.ID, "routed-identity-3", 3, nil, at)
 	firstShadow := internalShadowRecord(t, run.ID, firstFinding.ID)
 	firstShadow.InvocationID = "shadow-identity-1"
+	firstShadow.Admission = fake.RecordAdmission(domain.RoleShadowReviewer, firstShadow.RunID, firstShadow.InvocationID)
 	firstShadow.CompletedAt = at
 	secondShadow := internalShadowRecord(t, run.ID, secondFinding.ID)
 	secondShadow.InvocationID = "shadow-identity-2"
+	secondShadow.Admission = fake.RecordAdmission(domain.RoleShadowReviewer, secondShadow.RunID, secondShadow.InvocationID)
 	secondShadow.ShadowedRound = 2
 	secondShadow.CompletedAt = at
 	failure := domain.ReviewFailure{
@@ -393,6 +395,7 @@ func TestShadowReviewSchemaRejectsDuplicateInvocationAndFindingParent(t *testing
 
 	duplicateShadow := secondShadow
 	duplicateShadow.InvocationID = thirdRouted.InvocationID
+	duplicateShadow.Admission = fake.RecordAdmission(domain.RoleShadowReviewer, duplicateShadow.RunID, duplicateShadow.InvocationID)
 	duplicateShadow.ShadowedRound = 3
 	shadowBody, err := encode(duplicateShadow)
 	if err != nil {
@@ -400,7 +403,7 @@ func TestShadowReviewSchemaRejectsDuplicateInvocationAndFindingParent(t *testing
 	}
 	if _, err := st.db.ExecContext(ctx, putShadowReviewRecordSQL,
 		duplicateShadow.InvocationID, duplicateShadow.RunID, duplicateShadow.ShadowedRound,
-		duplicateShadow.Source, duplicateShadow.Provider, duplicateShadow.BaseSHA,
+		duplicateShadow.Source, duplicateShadow.Provider(), duplicateShadow.BaseSHA,
 		duplicateShadow.HeadSHA, duplicateShadow.Outcome, formatTime(duplicateShadow.CompletedAt),
 		reviewBodyDigest(shadowBody), shadowBody); err == nil {
 		t.Fatal("schema accepted routed invocation in shadow records")
@@ -475,6 +478,7 @@ func TestShadowReviewSchemaRejectsRetryInvocationOverlap(t *testing.T) {
 	}
 	shadow := internalShadowRecord(t, shadowRun.ID, "unused-shadow-finding")
 	shadow.InvocationID = "shadow-retry-invocation"
+	shadow.Admission = fake.RecordAdmission(domain.RoleShadowReviewer, shadow.RunID, shadow.InvocationID)
 	shadow.Outcome = domain.ReviewClean
 	shadow.FindingIDs = nil
 	shadow.CompletedAt = at
@@ -499,6 +503,7 @@ func TestShadowReviewSchemaRejectsRetryInvocationOverlap(t *testing.T) {
 
 	duplicateShadow := internalShadowRecord(t, retryRun.ID, "unused-retry-finding")
 	duplicateShadow.InvocationID = retry.InvocationID
+	duplicateShadow.Admission = fake.RecordAdmission(domain.RoleShadowReviewer, duplicateShadow.RunID, duplicateShadow.InvocationID)
 	duplicateShadow.Outcome = domain.ReviewClean
 	duplicateShadow.FindingIDs = nil
 	duplicateShadow.CompletedAt = at
@@ -508,7 +513,7 @@ func TestShadowReviewSchemaRejectsRetryInvocationOverlap(t *testing.T) {
 	}
 	if _, err := st.db.ExecContext(ctx, putShadowReviewRecordSQL,
 		duplicateShadow.InvocationID, duplicateShadow.RunID, duplicateShadow.ShadowedRound,
-		duplicateShadow.Source, duplicateShadow.Provider, duplicateShadow.BaseSHA,
+		duplicateShadow.Source, duplicateShadow.Provider(), duplicateShadow.BaseSHA,
 		duplicateShadow.HeadSHA, duplicateShadow.Outcome, formatTime(duplicateShadow.CompletedAt),
 		reviewBodyDigest(shadowBody), shadowBody); err == nil {
 		t.Fatal("schema accepted retry invocation in shadow records")
@@ -552,6 +557,7 @@ func TestReviewReconstructionRejectsDuplicateShadowRetryInvocation(t *testing.T)
 	candidate := internalRoutedCandidate(t, run.ID, "routed-retry-read-candidate", 1, nil, at)
 	shadow := internalShadowRecord(t, run.ID, "unused-retry-read-finding")
 	shadow.InvocationID = "shared-retry-read-invocation"
+	shadow.Admission = fake.RecordAdmission(domain.RoleShadowReviewer, shadow.RunID, shadow.InvocationID)
 	shadow.Outcome = domain.ReviewClean
 	shadow.FindingIDs = nil
 	shadow.CompletedAt = at
@@ -611,11 +617,10 @@ func TestReviewReconstructionRejectsDuplicateShadowInvocation(t *testing.T) {
 	candidate := internalRoutedCandidate(t, run.ID, "routed-duplicate-candidate", 1, nil, at)
 	shadow, err := domain.NewShadowReviewRecord(domain.ShadowReviewRecord{
 		InvocationID: "shared-damaged-invocation", RunID: run.ID, ShadowedRound: 1,
-		Source: domain.ShadowReviewClaudeLocal, Provider: "anthropic",
-		ModelConfiguration:  "claude-opus/high",
+		Source: domain.ShadowReviewClaudeLocal, Admission: fake.RecordAdmission(domain.RoleShadowReviewer, run.ID, "shared-damaged-invocation"),
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		CostOwner:           "owner", BaseSHA: "base", HeadSHA: "head", CompletedAt: at,
+		BaseSHA:             "base", HeadSHA: "head", CompletedAt: at,
 		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 		Outcome:            domain.ReviewClean,
 	})
@@ -688,9 +693,11 @@ func TestShadowReconstructionRejectsFindingWithMultipleParents(t *testing.T) {
 	secondRouted := internalRoutedCandidate(t, run.ID, "routed-parent-read-2", 2, nil, at)
 	firstShadow := internalShadowRecord(t, run.ID, firstFinding.ID)
 	firstShadow.InvocationID = "shadow-parent-read-1"
+	firstShadow.Admission = fake.RecordAdmission(domain.RoleShadowReviewer, firstShadow.RunID, firstShadow.InvocationID)
 	firstShadow.CompletedAt = at
 	secondShadow := internalShadowRecord(t, run.ID, secondFinding.ID)
 	secondShadow.InvocationID = "shadow-parent-read-2"
+	secondShadow.Admission = fake.RecordAdmission(domain.RoleShadowReviewer, secondShadow.RunID, secondShadow.InvocationID)
 	secondShadow.ShadowedRound = 2
 	secondShadow.CompletedAt = at
 	if err := st.Write(ctx, func(tx *WriteTx) error {

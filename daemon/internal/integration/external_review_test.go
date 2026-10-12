@@ -302,7 +302,6 @@ func TestExternalReviewCycleReportsFreesideFindings(t *testing.T) {
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: head,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("external cycle findings")),
 			Findings: []domain.Finding{{
 				ID: "external-cycle-finding-1", RunID: p.runID, Source: "codex_local", Severity: "P1",
@@ -543,7 +542,6 @@ func TestExternalReviewCycleIsNotReadyWhileItsReviewRuns(t *testing.T) {
 		Outcome: fake.OutcomeComplete, PendingInspects: 1000,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: head,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt: p.now.UTC(), CompletionEvidence: productionDigest([]byte("slow review")),
 		},
 	})

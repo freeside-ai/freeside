@@ -15,6 +15,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/observe/observedb"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/topicstore"
@@ -327,9 +328,9 @@ func TestFollowCommandSnapshotProjectsAdjudications(t *testing.T) {
 	}
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-follow-adjudication", RunID: runID, Round: 1,
-		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, runID, "review-follow-adjudication"),
 		ConfigurationDigest: digest("c"), InstructionDigest: digest("d"),
-		CostOwner: "owner", BaseSHA: "base", HeadSHA: "head", CompletedAt: at,
+		BaseSHA: "base", HeadSHA: "head", CompletedAt: at,
 		CompletionEvidence: digest("e"), Outcome: domain.ReviewFindings,
 		FindingIDs: []domain.FindingID{findingID},
 	})

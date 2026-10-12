@@ -48,7 +48,6 @@ func TestProductionNativeCleanPassNeverSatisfiesReadiness(t *testing.T) {
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("review findings")),
 			Findings: []domain.Finding{{
 				ID: "review-finding-1", RunID: p.runID, Source: "codex_local", Severity: "P1",

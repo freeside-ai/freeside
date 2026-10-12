@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -64,7 +65,7 @@ func TestTaskHistoryPublishedReviewAndVerificationResponse(t *testing.T) {
 	f.appendPublicationReady(t, runID)
 	request := domain.ReviewRequestRecord{InvocationID: "history-review", RunID: runID, Round: 1, BaseSHA: "base", HeadSHA: "cafebabe", RequestedAt: f.at.Add(20 * time.Minute)}
 	completed := request.RequestedAt.Add(time.Minute)
-	record := domain.ReviewRecord{InvocationID: request.InvocationID, RunID: runID, Round: 1, Provider: "openai", ModelConfiguration: "codex/high", ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)), InstructionDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)), CostOwner: "owner", BaseSHA: request.BaseSHA, HeadSHA: request.HeadSHA, CompletedAt: completed, CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)), Outcome: domain.ReviewClean}
+	record := domain.ReviewRecord{InvocationID: request.InvocationID, RunID: runID, Round: 1, Admission: fake.RecordAdmission(domain.RoleReviewer, runID, request.InvocationID), ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)), InstructionDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)), BaseSHA: request.BaseSHA, HeadSHA: request.HeadSHA, CompletedAt: completed, CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)), Outcome: domain.ReviewClean}
 	var taskID domain.TaskID
 	f.mustWrite(t, func(tx *store.WriteTx) error {
 		run, err := tx.GetRun(ctx, runID)

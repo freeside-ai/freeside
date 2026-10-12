@@ -172,10 +172,9 @@ func TestClaudeReviewProviderConstants(t *testing.T) {
 	p := claudeReviewProvider{}
 	strs := []struct{ name, got, want string }{
 		{"sourceLabel", p.sourceLabel(), "claude_local"},
-		{"providerLabel", p.providerLabel(), "anthropic"},
 		{"topologyVersion", p.topologyVersion(), "claude_review_read_only_v1"},
 		{"completionEvidenceVersion", p.completionEvidenceVersion(), "claude-review-completion-v1"},
-		{"resultEvidenceVersion", p.resultEvidenceVersion(), "claude-review-result-v1"},
+		{"resultEvidenceVersion", p.resultEvidenceVersion(), "claude-review-result-v2"},
 		{"configurationVersion", p.configurationVersion(), "claude-review-configuration-v1"},
 		{"promptProtocol", p.promptProtocol(), "claude-production-review-prompt-v4"},
 		{"reviewContainerSuffix", p.reviewContainerSuffix(), "-claude"},
@@ -208,7 +207,7 @@ func TestClaudeReviewProviderConstants(t *testing.T) {
 	// binding or result can never be validated against the wrong provider.
 	c := codexReviewProvider{}
 	if p.topologyVersion() == c.topologyVersion() || p.resultEvidenceVersion() == c.resultEvidenceVersion() ||
-		p.reviewContainerSuffix() == c.reviewContainerSuffix() || p.providerLabel() == c.providerLabel() {
+		p.reviewContainerSuffix() == c.reviewContainerSuffix() || p.sourceLabel() == c.sourceLabel() {
 		t.Error("Claude provider shares a namespace value with Codex")
 	}
 }
@@ -397,7 +396,8 @@ func TestCodexReviewRecoveryDispatchesStartedClaudeIntent(t *testing.T) {
 	}
 	id := domain.InvocationID("review-claude-restart-1")
 	request := exec.ReviewRequest{
-		RunID: "run-claude-restart", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		Admission: testReviewAdmission("run-claude-restart"),
+		RunID:     "run-claude-restart", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
@@ -539,7 +539,7 @@ func testClaudeReviewSourceForCollection() *CodexReviewSource {
 func TestClaudeReviewCollectionEnvelope(t *testing.T) {
 	source := testClaudeReviewSourceForCollection()
 	id := domain.InvocationID("review-run-1-1")
-	req := exec.ReviewRequest{RunID: "run-1", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40)}
+	req := exec.ReviewRequest{Admission: testReviewAdmission("run-1"), RunID: "run-1", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40)}
 
 	valid := source.normalizeCollection(id, req, CodexReviewCollection{
 		Result: []byte(`{"findings":[{"severity":"P1","location":{"path":"a.go","start_line":3,"end_line":5},"explanation":"x"}]}`),
@@ -547,8 +547,8 @@ func TestClaudeReviewCollectionEnvelope(t *testing.T) {
 	if valid.Result == nil {
 		t.Fatalf("valid Claude envelope produced no result: %+v", valid)
 	}
-	if valid.Result.Provider != "anthropic" {
-		t.Errorf("result provider = %q, want anthropic", valid.Result.Provider)
+	if !valid.Result.Admission.Equal(req.Admission) {
+		t.Errorf("result admission = %+v, want the request's", valid.Result.Admission)
 	}
 	if len(valid.Result.Findings) != 1 || valid.Result.Findings[0].Source != "claude_local" ||
 		valid.Result.Findings[0].Severity != domain.FindingSeverity("P1") {
@@ -621,7 +621,8 @@ func TestClaudeReviewCollectionCarriesUsage(t *testing.T) {
 	source := testClaudeReviewSourceForCollection()
 	id := domain.InvocationID("review-run-1-1")
 	req := exec.ReviewRequest{
-		RunID: "run-1", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
+		Admission: testReviewAdmission("run-1"),
+		RunID:     "run-1", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
 	}
 	outcome := source.normalizeCollection(id, req, CodexReviewCollection{
 		Events: []byte(`{"type":"result","total_cost_usd":0.0012345,"usage":{"input_tokens":11,"output_tokens":7}}` + "\n"),
@@ -678,7 +679,8 @@ func TestClaudeReviewOutcomeValidationProviderAware(t *testing.T) {
 	source := testClaudeReviewSourceForCollection()
 	id := domain.InvocationID("review-run-1-1")
 	req := exec.ReviewRequest{
-		RunID: "run-1", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
+		Admission: testReviewAdmission("run-1"),
+		RunID:     "run-1", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
 		Instructions: exec.ReviewInstructionBinding{ResultDigest: domain.Digest(contentaddr.Sum([]byte("instr")))},
 	}
 	outcome := source.normalizeCollection(id, req, CodexReviewCollection{
@@ -692,31 +694,34 @@ func TestClaudeReviewOutcomeValidationProviderAware(t *testing.T) {
 		t.Fatalf("Claude outcome failed shape validation: %v", err)
 	}
 	// The provider-aware gate accepts the Claude result under the trusted Claude
-	// provider (matching label + Claude-version evidence).
+	// provider (Claude-version evidence).
 	if err := outcome.verifyCompletionEvidence(claudeReviewProvider{}); err != nil {
 		t.Fatalf("Claude outcome failed provider-aware validation: %v", err)
 	}
-	// The trusted provider, not the decoded label, selects the validator: the same
-	// Claude row re-gated under the Codex provider is rejected on the label match.
+	// The trusted provider, not the decoded row, selects the validator: the same
+	// Claude row re-gated under the Codex provider does not recompute.
 	if err := outcome.verifyCompletionEvidence(codexReviewProvider{}); !errors.Is(err, domain.ErrInvalidReviewCompletionEvidence) {
 		t.Errorf("Claude result accepted under the Codex trusted provider: %v", err)
 	}
-	// A rewritten row that flips the label to Codex cannot self-validate against
-	// the trusted Claude provider.
-	asCodex := outcome
-	relabeled := *outcome.Result
-	relabeled.Provider = "openai"
-	asCodex.Result = &relabeled
-	if err := asCodex.verifyCompletionEvidence(claudeReviewProvider{}); !errors.Is(err, domain.ErrInvalidReviewCompletionEvidence) {
-		t.Errorf("relabeled row self-validated: %v", err)
+	// A row rewritten to name another agent no longer recomputes, and one
+	// that recomputes its unkeyed evidence too is still held against the
+	// request it answers.
+	renamed := outcome
+	other := *outcome.Result
+	other.Admission.LineageGroup = "openai"
+	renamed.Result = &other
+	if err := renamed.verifyCompletionEvidence(claudeReviewProvider{}); !errors.Is(err, domain.ErrInvalidReviewCompletionEvidence) {
+		t.Errorf("renamed row self-validated: %v", err)
 	}
-	// An unknown provider label fails closed under any trusted provider.
-	asUnknown := outcome
-	unknown := *outcome.Result
-	unknown.Provider = "mystery"
-	asUnknown.Result = &unknown
-	if err := asUnknown.verifyCompletionEvidence(claudeReviewProvider{}); !errors.Is(err, domain.ErrInvalidReviewCompletionEvidence) {
-		t.Errorf("unknown provider label validated: %v", err)
+	other.CompletionEvidence, _ = reviewResultEvidence(claudeReviewProvider{}, other, renamed.CollectionEvidence)
+	if err := renamed.verifyCompletionEvidence(claudeReviewProvider{}); err != nil {
+		t.Fatalf("recomputed evidence: %v", err)
+	}
+	if err := renamed.verifyReturnedAdmission(req); !errors.Is(err, domain.ErrReviewAdmissionMismatch) {
+		t.Errorf("recomputed row named another agent than its request: %v", err)
+	}
+	if err := outcome.verifyReturnedAdmission(req); err != nil {
+		t.Errorf("the request's own admission was refused: %v", err)
 	}
 }
 

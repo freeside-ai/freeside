@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	execfake "github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/publicationtext"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -395,6 +396,7 @@ func TestFollowUpFilingSkipsAStaleSource(t *testing.T) {
 			record.HeadSHA = strings.Repeat("3", 40)
 		}
 		record.InvocationID = domain.InvocationID("review-later-" + strconv.Itoa(round))
+		record.Admission = execfake.RecordAdmission(domain.RoleReviewer, record.RunID, record.InvocationID)
 		record.Round, record.Outcome, record.FindingIDs = round, outcome, ids
 		record.CompletedAt = f.record.CompletedAt.Add(time.Duration(round) * time.Hour)
 		got, err := domain.NewReviewRecord(record)

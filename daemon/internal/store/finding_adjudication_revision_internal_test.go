@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
@@ -43,10 +44,10 @@ func TestFindingAdjudicationPreCommitmentBodyReconstructs(t *testing.T) {
 	}
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-pre-commitment", RunID: artifact.RunID, Round: artifact.Round,
-		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, artifact.RunID, "review-pre-commitment"),
 		ConfigurationDigest: migrationAdjudicationDigest("c"),
 		InstructionDigest:   artifact.InstructionSnapshotDigest,
-		CostOwner:           "owner", BaseSHA: "base", HeadSHA: "head",
+		BaseSHA:             "base", HeadSHA: "head",
 		CompletedAt:        artifact.CreatedAt.Add(-time.Minute),
 		CompletionEvidence: migrationAdjudicationDigest("e"),
 		Outcome:            domain.ReviewFindings,
@@ -112,10 +113,10 @@ func seedMigrationAdjudication(
 	}
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-migrated-adjudication", RunID: run.ID, Round: 1,
-		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, run.ID, "review-migrated-adjudication"),
 		ConfigurationDigest: migrationAdjudicationDigest("c"),
 		InstructionDigest:   migrationAdjudicationDigest("d"),
-		CostOwner:           "owner", BaseSHA: "base", HeadSHA: "head", CompletedAt: at,
+		BaseSHA:             "base", HeadSHA: "head", CompletedAt: at,
 		CompletionEvidence: migrationAdjudicationDigest("e"),
 		Outcome:            domain.ReviewFindings, FindingIDs: []domain.FindingID{finding.ID},
 	})

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
@@ -175,6 +176,59 @@ func TestDeriveReviewYieldHistoryResetsRecurrenceForNewReviewerConfiguration(t *
 	}
 }
 
+// TestDeriveReviewYieldHistoryResetsRecurrenceForNewReviewer holds the review
+// configuration fixed and moves only who reviewed: a finding the prior reviewer
+// already raised is new on another reviewer's first pass, and on the first
+// pass recorded with a snapshot after legacy rounds.
+func TestDeriveReviewYieldHistoryResetsRecurrenceForNewReviewer(t *testing.T) {
+	at := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	configuration := domain.Digest("sha256:" + strings.Repeat("a", 64))
+	findings := map[domain.FindingID]domain.Finding{}
+	// A letter is the round's admitted agent digest; an empty string leaves the
+	// round a legacy record.
+	agents := []string{"", "", "a", "a", "b", "b"}
+	records := make([]domain.ReviewRecord, len(agents))
+	for index, agent := range agents {
+		round := index + 1
+		id := domain.FindingID(fmt.Sprintf("finding-round-%d", round))
+		findings[id] = domain.Finding{
+			ID: id, RunID: "run-1", Source: "codex_local",
+			Location: &domain.FindingLocation{
+				Path: "daemon/review.go", StartLine: round * 10, EndLine: round * 10,
+			},
+			Message: "unchecked review result", RawText: "unchecked review result", CreatedAt: at,
+		}
+		records[index] = domain.ReviewRecord{
+			Round: round, ConfigurationDigest: configuration, Outcome: domain.ReviewFindings,
+			FindingIDs: []domain.FindingID{id},
+		}
+		if agent != "" {
+			admission := fake.RecordAdmission(domain.RoleReviewer, "run-1", "review-run-1-1")
+			admission.AgentBinding.AgentDigest = domain.Digest("sha256:" + strings.Repeat(agent, 64))
+			records[index].Admission = admission
+		}
+	}
+
+	got, err := deriveReviewYieldHistory(records, nil, findings, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := domain.ReviewYieldHistory{
+		Rounds: []domain.ReviewYieldRound{
+			{Round: 1, FindingsIngested: 1, NewFindings: 1, Outcome: domain.ReviewFindings},
+			{Round: 2, FindingsIngested: 1, RecurringFindings: 1, Outcome: domain.ReviewFindings},
+			{Round: 3, FindingsIngested: 1, NewFindings: 1, Outcome: domain.ReviewFindings},
+			{Round: 4, FindingsIngested: 1, RecurringFindings: 1, Outcome: domain.ReviewFindings},
+			{Round: 5, FindingsIngested: 1, NewFindings: 1, Outcome: domain.ReviewFindings},
+			{Round: 6, FindingsIngested: 1, RecurringFindings: 1, Outcome: domain.ReviewFindings},
+		},
+		TerminalOutcome: domain.ReviewFindings,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("history = %#v, want %#v", got, want)
+	}
+}
+
 func TestReviewYieldHistoryDerivesPersistedMultiRoundHistoryAfterRestart(t *testing.T) {
 	ctx := t.Context()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
@@ -205,11 +259,10 @@ func TestReviewYieldHistoryDerivesPersistedMultiRoundHistoryAfterRestart(t *test
 		t.Helper()
 		got, recordErr := domain.NewReviewRecord(domain.ReviewRecord{
 			InvocationID: domain.InvocationID(fmt.Sprintf("review-yield-%d", round)),
-			RunID:        run.ID, Round: round, Provider: "openai",
-			ModelConfiguration:  "gpt-codex/high",
+			RunID:        run.ID, Round: round, Admission: fake.RecordAdmission(domain.RoleReviewer, run.ID, domain.InvocationID(fmt.Sprintf("review-yield-%d", round))),
 			ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 			InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-			CostOwner:           "owner", BaseSHA: "base", HeadSHA: head,
+			BaseSHA:             "base", HeadSHA: head,
 			CompletedAt:        at.Add(time.Duration(round) * time.Minute),
 			CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 			Outcome:            outcome, FindingIDs: ids,

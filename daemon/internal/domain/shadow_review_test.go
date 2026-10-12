@@ -7,16 +7,16 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 )
 
 func validShadowReviewRecord() domain.ShadowReviewRecord {
 	return domain.ShadowReviewRecord{
 		InvocationID: "shadow-run-1-1", RunID: "run-1", ShadowedRound: 1,
-		Source: domain.ShadowReviewClaudeLocal, Provider: "anthropic",
-		ModelConfiguration:  "claude-opus/high",
+		Source: domain.ShadowReviewClaudeLocal, Admission: fake.RecordAdmission(domain.RoleShadowReviewer, "run-1", "shadow-run-1-1"),
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		CostOwner:           "owner", BaseSHA: "base", HeadSHA: "head",
+		BaseSHA:             "base", HeadSHA: "head",
 		CompletedAt:        time.Date(2026, 8, 24, 1, 0, 0, 0, time.UTC),
 		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 		Outcome:            domain.ReviewClean,

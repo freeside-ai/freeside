@@ -26,7 +26,8 @@ func TestTaskCancellationStopsReviewAndRecoversPartialCleanup(t *testing.T) {
 			}
 			id := domain.InvocationID("review-task-cancellation")
 			request := exec.ReviewRequest{
-				RunID: "run-cancelled", Round: 1, Repo: seed.Seed.Base.Repo,
+				Admission: testReviewAdmission("run-cancelled"),
+				RunID:     "run-cancelled", Round: 1, Repo: seed.Seed.Base.Repo,
 				RepositoryID: seed.Seed.Base.RepositoryID, BaseRef: seed.Seed.Base.BaseRef,
 				BaseSHA: strings.Repeat("a", 40), HeadSHA: seed.Seed.Base.BaseSHA,
 				Workspace: seed.Seed.SourceDir, Verification: testReviewVerificationEvidence(),

@@ -18,6 +18,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
@@ -745,10 +746,10 @@ func seedRemediationAuthorityFixture(
 	}
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: reviewID, RunID: runID, Round: 1,
-		Provider: "codex", ModelConfiguration: "test",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, runID, reviewID),
 		ConfigurationDigest: digest("review configuration"),
 		InstructionDigest:   digest("review instructions"),
-		CostOwner:           "test", BaseSHA: baseSHA, HeadSHA: headSHA, CompletedAt: at,
+		BaseSHA:             baseSHA, HeadSHA: headSHA, CompletedAt: at,
 		CompletionEvidence: digest("review completion"), Outcome: domain.ReviewFindings,
 		FindingIDs: []domain.FindingID{finding.ID},
 	})

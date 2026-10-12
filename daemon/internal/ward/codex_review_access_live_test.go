@@ -153,7 +153,8 @@ func liveCodexReviewAccessCollection(t *testing.T, lc *CodexReviewLifecycle, ima
 	}
 	id := domain.InvocationID(fmt.Sprintf("livecollect-%d", time.Now().UnixNano()))
 	req := exec.ReviewRequest{
-		RunID: domain.RunID(id), Round: 1, Repo: head.Repo, RepositoryID: head.RepositoryID,
+		Admission: testReviewAdmission(domain.RunID(id)),
+		RunID:     domain.RunID(id), Round: 1, Repo: head.Repo, RepositoryID: head.RepositoryID,
 		BaseRef: base.BaseRef, BaseSHA: base.BaseSHA, HeadSHA: head.BaseSHA, Workspace: checkout,
 		Verification: testReviewVerificationEvidence(), Instructions: spec.InstructionBinding, RequestedAt: time.Now().UTC(),
 	}

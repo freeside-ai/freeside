@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 )
 
 func oversizedDispositionHistory(t *testing.T, headSHA string) DispositionHistory {
@@ -35,8 +36,8 @@ func oversizedDispositionHistory(t *testing.T, headSHA string) DispositionHistor
 	}
 	first, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-aggregate-findings", RunID: "run-aggregate-findings", Round: 1,
-		Provider: "openai", ModelConfiguration: "codex/high",
-		ConfigurationDigest: digest, InstructionDigest: digest, CostOwner: "operator",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, "run-aggregate-findings", "review-aggregate-findings"),
+		ConfigurationDigest: digest, InstructionDigest: digest,
 		BaseSHA: "base", HeadSHA: headSHA, CompletedAt: time.Date(2026, 8, 11, 13, 0, 0, 0, time.UTC),
 		CompletionEvidence: digest, Outcome: domain.ReviewFindings, FindingIDs: findingIDs,
 	})
@@ -45,8 +46,8 @@ func oversizedDispositionHistory(t *testing.T, headSHA string) DispositionHistor
 	}
 	second, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-aggregate-clean", RunID: "run-aggregate-findings", Round: 2,
-		Provider: "openai", ModelConfiguration: "codex/high",
-		ConfigurationDigest: digest, InstructionDigest: digest, CostOwner: "operator",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, "run-aggregate-findings", "review-aggregate-clean"),
+		ConfigurationDigest: digest, InstructionDigest: digest,
 		BaseSHA: "base", HeadSHA: headSHA, CompletedAt: time.Date(2026, 8, 11, 13, 2, 0, 0, time.UTC),
 		CompletionEvidence: digest, Outcome: domain.ReviewClean,
 	})
@@ -183,8 +184,8 @@ func TestDesiredPRContentBoundsOversizedFindingClaim(t *testing.T) {
 	digest := domain.Digest("sha256:" + strings.Repeat("a", 64))
 	first, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-large-finding", RunID: "run-large-finding", Round: 1,
-		Provider: "openai", ModelConfiguration: "codex/high",
-		ConfigurationDigest: digest, InstructionDigest: digest, CostOwner: "operator",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, "run-large-finding", "review-large-finding"),
+		ConfigurationDigest: digest, InstructionDigest: digest,
 		BaseSHA: "base", HeadSHA: head, CompletedAt: time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC),
 		CompletionEvidence: digest, Outcome: domain.ReviewFindings, FindingIDs: []domain.FindingID{"finding-large"},
 	})
@@ -193,8 +194,8 @@ func TestDesiredPRContentBoundsOversizedFindingClaim(t *testing.T) {
 	}
 	second, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-clean", RunID: "run-large-finding", Round: 2,
-		Provider: "openai", ModelConfiguration: "codex/high",
-		ConfigurationDigest: digest, InstructionDigest: digest, CostOwner: "operator",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, "run-large-finding", "review-clean"),
+		ConfigurationDigest: digest, InstructionDigest: digest,
 		BaseSHA: "base", HeadSHA: head, CompletedAt: time.Date(2026, 8, 11, 12, 1, 0, 0, time.UTC),
 		CompletionEvidence: digest, Outcome: domain.ReviewClean,
 	})
