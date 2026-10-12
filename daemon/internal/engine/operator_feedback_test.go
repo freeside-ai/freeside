@@ -720,6 +720,90 @@ func TestSpecificationAnswerAfterRenameFailsClosedOnDrift(t *testing.T) {
 	}
 }
 
+// TestSpecificationAnswerSurvivesLateDeliveryReceipt: the receipt has no
+// open-item gate, so the operator can open a notification for a question
+// they have already answered. That changes the superseded item's timing and
+// must not unbind the answer, whose command expects the item at exactly its
+// own version plus one (#1946).
+func TestSpecificationAnswerSurvivesLateDeliveryReceipt(t *testing.T) {
+	answer := func(t *testing.T) (
+		specificationFixture, *Engine, domain.Run, domain.AttentionItem, domain.Command, *deliveryNotifier, domain.AttentionDelivery,
+	) {
+		t.Helper()
+		f := newSpecificationFixture(t, false, 4)
+		f.submit(t)
+		engine := f.newEngine(t, f.newDriver(t))
+		run, _, question := seedSpecificationQuestion(t, f, engine)
+		notifier := newDeliveryNotifier(t, f.store)
+		delivery := notifier.deliver(t, question.ID)
+		snapshot, err := f.signet.GetAttentionItem(t.Context(), question.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := f.signet.Submit(t.Context(), signet.ClientCommand{
+			CommandID: "answer-then-open", DeviceID: "device-1",
+			ExpectedEntityVersion: snapshot.EntityVersion,
+			Payload: signet.DecisionPayload{
+				ItemID: question.ID, Action: domain.ActionAnswerAndRetry,
+				ItemVersion: question.ItemVersion, ArtifactDigests: question.ArtifactDigests,
+				Message: "Target the current API version only.",
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f, engine, run, question, result.Record, notifier, delivery
+	}
+
+	// The receipt lands before the engine's pass.
+	t.Run("before the pass", func(t *testing.T) {
+		f, engine, run, question, command, notifier, delivery := answer(t)
+		notifier.open(t, delivery)
+		item := notifier.item(t, question.ID)
+		if item.Status != domain.StatusSuperseded || !operatorFeedbackCommandMatchesItem(command, item) {
+			t.Fatalf("answered item = status %q version %d, want superseded at the command's version %d plus one",
+				item.Status, item.ItemVersion, command.ItemVersion)
+		}
+		if created, err := engine.reconcileOperatorFeedback(t.Context()); err != nil || created != 1 {
+			t.Fatalf("reconcile after the late receipt = %d, %v, want the answer enqueued", created, err)
+		}
+		if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+			_, err := tx.GetOutbox(t.Context(), string(specificationInvocationID(run.ID, 2)))
+			return err
+		}); err != nil {
+			t.Fatalf("the answer's next iteration: %v", err)
+		}
+	})
+
+	// The receipt lands between the pass's read of the item and the
+	// transaction that consumes the answer. A mismatch there is
+	// ErrParentKeyMismatch, which ends the engine loop.
+	t.Run("between the read and the write", func(t *testing.T) {
+		_, engine, run, question, command, notifier, delivery := answer(t)
+		loaded := notifier.item(t, question.ID)
+		notifier.open(t, delivery)
+		if made, err := engine.enqueueSpecificationAnswer(t.Context(), run, loaded, command); err != nil || !made {
+			t.Fatalf("answer with a receipt landing mid-pass = %t, %v, want enqueued", made, err)
+		}
+		if created, err := engine.reconcileOperatorFeedback(t.Context()); err != nil || created != 0 {
+			t.Fatalf("replayed answer = %d, %v", created, err)
+		}
+	})
+
+	// The same receipt after a rename. The stored item keeps the name it
+	// was written with, and the timing write must not refresh it: a derived
+	// field changing under the answered version reads as drift.
+	t.Run("between the read and the write after a rename", func(t *testing.T) {
+		f, engine, run, question, command, notifier, delivery := answer(t)
+		renameRunTask(t, f.store, run.ID)
+		loaded := notifier.item(t, question.ID)
+		notifier.open(t, delivery)
+		if made, err := engine.enqueueSpecificationAnswer(t.Context(), run, loaded, command); err != nil || !made {
+			t.Fatalf("answer with a receipt landing mid-pass after a rename = %t, %v, want enqueued", made, err)
+		}
+	})
+}
+
 func TestAnswerAtSpecificationIterationLimitRecordsFailure(t *testing.T) {
 	f := newSpecificationFixture(t, false, 1)
 	f.submit(t)

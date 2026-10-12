@@ -118,7 +118,8 @@ func seedSubmittedDelivery(t *testing.T, f fixture, deviceID domain.DeviceID, at
 // TestRecordDeliveryOpenedAdvancesTiming: the opened receipt lands on the row
 // and the item's persisted timing aggregates move in the same transaction —
 // FirstOpenedAt and SubmitToFirstOpen appear, and the item's entity_version
-// advances so cached clients invalidate.
+// advances so cached clients invalidate. item_version stays put: timing is
+// not a change to what the operator decides on (#1946).
 func TestRecordDeliveryOpenedAdvancesTiming(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t)
@@ -155,9 +156,147 @@ func TestRecordDeliveryOpenedAdvancesTiming(t *testing.T) {
 	if after.EntityVersion <= before.EntityVersion {
 		t.Errorf("item entity_version %d → %d, want an advance", before.EntityVersion, after.EntityVersion)
 	}
-	if item.ItemVersion <= f.item.ItemVersion {
-		t.Errorf("item_version %d → %d, want an advance", f.item.ItemVersion, item.ItemVersion)
+	if item.ItemVersion != f.item.ItemVersion {
+		t.Errorf("item_version %d → %d, want it unchanged", f.item.ItemVersion, item.ItemVersion)
 	}
+}
+
+// readItem is itemSnapshot for the fake provider's handler goroutine, which
+// must not call t.Fatalf.
+func readItem(f fixture) (domain.AttentionItem, store.Snapshot, error) {
+	var (
+		item domain.AttentionItem
+		snap store.Snapshot
+	)
+	err := f.store.Read(context.Background(), func(tx *store.ReadTx) error {
+		var err error
+		item, snap, err = tx.GetAttentionItemSnapshot(context.Background(), f.item.ID)
+		return err
+	})
+	return item, snap, err
+}
+
+// assertTimingWrite checks one delivery event's effect on the item: its
+// item_version is wantVersion, its entity_version moved past before, and its
+// stored timing is exactly what the delivery rows aggregate to.
+func assertTimingWrite(t *testing.T, f fixture, event string, wantVersion int, before store.Snapshot) store.Snapshot {
+	t.Helper()
+	item, after := f.itemSnapshot(t)
+	if item.ItemVersion != wantVersion {
+		t.Errorf("%s: item_version = %d, want %d unchanged", event, item.ItemVersion, wantVersion)
+	}
+	if after.EntityVersion <= before.EntityVersion {
+		t.Errorf("%s: entity_version %d → %d, want an advance", event, before.EntityVersion, after.EntityVersion)
+	}
+	if got, want := mustMarshal(t, item.Timing), mustMarshal(t, domain.TimingAggregates(f.deliveries(t))); got != want {
+		t.Errorf("%s: stored timing = %s, want the delivery rows' %s", event, got, want)
+	}
+	return after
+}
+
+// TestDeliveryTimingKeepsItemVersion is #1946's signet acceptance: a
+// submission, its acceptance, and its opened receipt each change the item's
+// timing and raise its entity_version, and none of them moves item_version,
+// which engine, store, and signet records compare exactly.
+func TestDeliveryTimingKeepsItemVersion(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("open item", func(t *testing.T) {
+		f := newDeliveryFixture(t)
+		_, created := f.itemSnapshot(t)
+		var (
+			submitted     domain.AttentionItem
+			afterSubmit   store.Snapshot
+			submitReadErr error
+		)
+		f.ntfy.onPublish = func() {
+			// The submission committed before the provider call, so this
+			// reads the item between the two delivery transactions.
+			submitted, afterSubmit, submitReadErr = readItem(f.fixture)
+			*f.now = f.now.Add(30 * time.Second)
+		}
+		if _, err := f.service.SubmitDelivery(ctx, f.item.ID, f.device.ID); err != nil {
+			t.Fatalf("SubmitDelivery: %v", err)
+		}
+		// recorded takes the handler's lock, which orders its writes above
+		// before the reads below.
+		f.ntfy.recorded(t)
+		if submitReadErr != nil {
+			t.Fatalf("read item after submission: %v", submitReadErr)
+		}
+		if submitted.ItemVersion != f.item.ItemVersion {
+			t.Errorf("submission: item_version = %d, want %d unchanged", submitted.ItemVersion, f.item.ItemVersion)
+		}
+		if afterSubmit.EntityVersion <= created.EntityVersion {
+			t.Errorf("submission: entity_version %d → %d, want an advance", created.EntityVersion, afterSubmit.EntityVersion)
+		}
+		if submitted.Timing.DeliveryCount != 1 || submitted.Timing.FirstSubmittedAt == nil || submitted.Timing.FirstAcceptedAt != nil {
+			t.Errorf("submission: timing = %+v, want one submitted, unaccepted delivery", submitted.Timing)
+		}
+		afterAccept := assertTimingWrite(t, f.fixture, "acceptance", f.item.ItemVersion, afterSubmit)
+
+		*f.now = f.now.Add(time.Minute)
+		if _, err := f.service.RecordDeliveryOpened(ctx, f.item.ID, f.device.ID, "ntfy", 1); err != nil {
+			t.Fatalf("RecordDeliveryOpened: %v", err)
+		}
+		assertTimingWrite(t, f.fixture, "opened receipt", f.item.ItemVersion, afterAccept)
+	})
+
+	// Neither the acceptance write nor the receipt has an open-item gate, so
+	// both can land on an item the operator already decided. The decided
+	// item's version is the command's plus one, and records that expect
+	// exactly that must still find it.
+	t.Run("decided item", func(t *testing.T) {
+		f := newDeliveryFixture(t)
+		var (
+			decided     domain.AttentionItem
+			afterDecide store.Snapshot
+			decideErr   error
+		)
+		f.ntfy.onPublish = func() {
+			// Decide between the submission and its acceptance, so the
+			// acceptance is the late write.
+			item, snap, err := readItem(f.fixture)
+			if err != nil {
+				decideErr = err
+				return
+			}
+			cmd := f.command("cmd-decide", domain.ActionStop)
+			cmd.Payload.ItemVersion = item.ItemVersion
+			cmd.ExpectedEntityVersion = snap.EntityVersion
+			if _, decideErr = f.service.Submit(ctx, cmd); decideErr != nil {
+				return
+			}
+			decided, afterDecide, decideErr = readItem(f.fixture)
+			*f.now = f.now.Add(30 * time.Second)
+		}
+		row, err := f.service.SubmitDelivery(ctx, f.item.ID, f.device.ID)
+		if err != nil {
+			t.Fatalf("SubmitDelivery: %v", err)
+		}
+		f.ntfy.recorded(t)
+		if decideErr != nil {
+			t.Fatalf("decide between submission and acceptance: %v", decideErr)
+		}
+		if decided.Status == domain.StatusOpen || decided.ItemVersion != f.item.ItemVersion+1 {
+			t.Fatalf("decided item = status %q version %d, want concluded at version %d",
+				decided.Status, decided.ItemVersion, f.item.ItemVersion+1)
+		}
+		if row.Status != domain.DeliveryChannelAccepted {
+			t.Fatalf("delivery status = %q, want channel_accepted after the decision", row.Status)
+		}
+		afterAccept := assertTimingWrite(t, f.fixture, "late acceptance", decided.ItemVersion, afterDecide)
+
+		*f.now = f.now.Add(time.Minute)
+		if _, err := f.service.RecordDeliveryOpened(ctx, f.item.ID, f.device.ID, "ntfy", 1); err != nil {
+			t.Fatalf("RecordDeliveryOpened: %v", err)
+		}
+		assertTimingWrite(t, f.fixture, "late opened receipt", decided.ItemVersion, afterAccept)
+		if item, _ := f.itemSnapshot(t); item.Status != decided.Status || item.Timing.FirstOpenedAt == nil {
+			t.Errorf("after the late receipt: status %q first_opened_at %v, want %q and an instant",
+				item.Status, item.Timing.FirstOpenedAt, decided.Status)
+		}
+	})
 }
 
 // TestRecordDeliveryOpenedReplayNoNewEffect: opening an already-opened attempt

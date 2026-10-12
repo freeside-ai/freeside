@@ -247,19 +247,22 @@ public actor MockServer {
             timelines.map(\.as_of_revision).max() ?? 1)
         // Seeded delivery rows exist only because the daemon's pipeline
         // would have recorded them, and that pipeline re-derives the
-        // item's timing and bumps the item's versions in the same write
+        // item's timing and raises its entity_version in the same write
         // (SubmitDelivery → recomputeItemTiming), so a fixture item's
         // authored timing is never trusted next to seeded rows: seeding
-        // applies the same derivation, version bump, and
-        // unchanged-summary skip a live write would.
+        // applies the same derivation, entity_version bump, and
+        // unchanged-summary skip a live write would. item_version stays
+        // where the fixture put it, as it does in the daemon: a timing
+        // change is not a change to what the operator decides on.
         // Only rows the daemon's PutAttentionDelivery would have accepted
         // fold into the derivation: an invalid seed never reaches
         // recomputeItemTiming in the daemon, and here it stays out of the
         // served aggregates while every delivery-serving read still fails
         // closed on it. The daemon records one SubmitDelivery transaction
-        // per row and bumps the item on each summary-changing recompute,
-        // so seeding replays the rows one at a time in composite-key
-        // order rather than folding the set in one pretended write.
+        // per row and raises entity_version on each summary-changing
+        // recompute, so seeding replays the rows one at a time in
+        // composite-key order rather than folding the set in one pretended
+        // write.
         let seedRevision = revision
         for itemID in Set(deliveriesByKey.keys.map(\.itemID)) {
             guard var snapshot = itemsByID[itemID] else { continue }
@@ -1232,8 +1235,9 @@ public actor MockServer {
     /// Mirrors the daemon's recomputeItemTiming (signet delivery.go): the
     /// receipt's write re-derives the item's timing aggregates from the
     /// full delivery set in the same "transaction" (same revision), and
-    /// bumps the item's versions only when the summary actually changed —
-    /// an aggregate-neutral receipt must not churn item versions.
+    /// raises entity_version only when the summary actually changed: an
+    /// aggregate-neutral receipt writes nothing. item_version never moves
+    /// on a timing change.
     private func recomputeItemTiming(itemID: String) {
         guard let snapshot = itemsByID[itemID],
             let next = Self.withDerivedTiming(
@@ -1245,9 +1249,9 @@ public actor MockServer {
     }
 
     /// The item snapshot after the daemon's timing write: derived
-    /// aggregates, item/entity versions bumped, snapshot stamped at the
-    /// given revision; nil when the summary is unchanged (no version
-    /// churn for an aggregate-neutral event).
+    /// aggregates, entity_version raised, item_version unchanged, snapshot
+    /// stamped at the given revision; nil when the summary is unchanged
+    /// (no write for an aggregate-neutral event).
     private static func withDerivedTiming(
         _ snapshot: Components.Schemas.AttentionItemSnapshot,
         rows: [Components.Schemas.AttentionDelivery],
@@ -1257,7 +1261,6 @@ public actor MockServer {
         guard snapshot.item.timing != derived else { return nil }
         var next = snapshot
         next.item.timing = derived
-        next.item.item_version += 1
         next.entity_version += 1
         next.as_of_revision = revision
         return next

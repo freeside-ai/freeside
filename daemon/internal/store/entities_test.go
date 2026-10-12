@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -777,6 +778,212 @@ func TestAttentionItemStaleWriteRejected(t *testing.T) {
 	err = s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, sameVersion) })
 	if !errors.Is(err, store.ErrStaleWrite) {
 		t.Fatalf("same-version changed body error = %v, want ErrStaleWrite", err)
+	}
+}
+
+// TestAttentionItemTimingChangesOnlyThroughTimingWrite: timing moves without
+// item_version (#1946), so the version check cannot protect it from a stale
+// copy. The store does instead: PutAttentionItemTiming is the one write that
+// changes an existing item's timing, and PutAttentionItem keeps the stored
+// summary whatever its caller passed.
+func TestAttentionItemTimingChangesOnlyThroughTimingWrite(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
+	f := newFixtures(t)
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutConversation(ctx, f.conversation); err != nil {
+			return err
+		}
+		return f.putItem(ctx, tx)
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	read := func() (domain.AttentionItem, store.Snapshot) {
+		t.Helper()
+		var (
+			item domain.AttentionItem
+			snap store.Snapshot
+		)
+		if err := s.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			item, snap, err = tx.GetAttentionItemSnapshot(ctx, f.item.ID)
+			return err
+		}); err != nil {
+			t.Fatalf("GetAttentionItemSnapshot: %v", err)
+		}
+		return item, snap
+	}
+	asJSON := func(value any) string {
+		t.Helper()
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return string(encoded)
+	}
+
+	stale, created := read()
+	later := f.delivery.SubmittedAt.Add(time.Hour)
+	second := domain.AttentionDelivery{
+		ItemID: f.item.ID, DeviceID: f.delivery.DeviceID, Channel: f.delivery.Channel,
+		Attempt: f.delivery.Attempt + 1, SubmittedAt: later, Status: domain.DeliverySubmitted,
+	}
+	current := domain.TimingAggregates([]domain.AttentionDelivery{f.delivery, second})
+	if asJSON(current) == asJSON(stale.Timing) {
+		t.Fatal("fixture: the second delivery must change the timing summary")
+	}
+
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItemTiming(ctx, f.item.ID, current)
+	}); err != nil {
+		t.Fatalf("timing write: %v", err)
+	}
+	item, timed := read()
+	if item.ItemVersion != stale.ItemVersion {
+		t.Errorf("timing write moved item_version %d → %d", stale.ItemVersion, item.ItemVersion)
+	}
+	if timed.EntityVersion != created.EntityVersion+1 {
+		t.Errorf("timing write entity_version %d → %d, want one advance", created.EntityVersion, timed.EntityVersion)
+	}
+	if asJSON(item.Timing) != asJSON(current) {
+		t.Errorf("stored timing = %s, want %s", asJSON(item.Timing), asJSON(current))
+	}
+	stale.Timing = current
+	if got, want := asJSON(item), asJSON(stale); got != want {
+		t.Errorf("timing write changed more than timing:\n got %s\nwant %s", got, want)
+	}
+
+	assertUnwritten := func(name string) {
+		t.Helper()
+		item, snap := read()
+		if snap.EntityVersion != timed.EntityVersion {
+			t.Errorf("%s: entity_version %d → %d, want no write", name, timed.EntityVersion, snap.EntityVersion)
+		}
+		if asJSON(item.Timing) != asJSON(current) {
+			t.Errorf("%s: stored timing = %s, want %s", name, asJSON(item.Timing), asJSON(current))
+		}
+	}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItemTiming(ctx, f.item.ID, current)
+	}); err != nil {
+		t.Fatalf("unchanged timing write: %v", err)
+	}
+	assertUnwritten("unchanged timing write")
+
+	// A rebuilt item carries no timing, and a copy read before the delivery
+	// carries the old one. At the stored version both are replays.
+	rebuilt := f.item
+	rebuilt.Timing = domain.TimingSummary{}
+	for name, replay := range map[string]domain.AttentionItem{"zero timing": rebuilt, "stale timing": f.item} {
+		if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, replay) }); err != nil {
+			t.Fatalf("same-version replay with %s: %v", name, err)
+		}
+		assertUnwritten("same-version replay with " + name)
+	}
+
+	changed := rebuilt
+	changed.Reason = "changed without a version bump"
+	err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, changed) })
+	if !errors.Is(err, store.ErrStaleWrite) {
+		t.Fatalf("same-version changed body error = %v, want ErrStaleWrite", err)
+	}
+	assertUnwritten("refused same-version change")
+
+	// A real transition built from the stale copy, then one built with no
+	// timing at all, advance the item and leave the stored timing alone.
+	for _, timing := range []domain.TimingSummary{f.item.Timing, {}} {
+		previous, _ := read()
+		next := f.item
+		next.ItemVersion = previous.ItemVersion + 1
+		next.Timing = timing
+		version := next.ItemVersion
+		if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, next) }); err != nil {
+			t.Fatalf("transition to version %d: %v", version, err)
+		}
+		item, _ := read()
+		if item.ItemVersion != version {
+			t.Fatalf("after transition: item_version = %d, want %d", item.ItemVersion, version)
+		}
+		if asJSON(item.Timing) != asJSON(current) {
+			t.Errorf("transition to version %d overwrote timing: %s, want %s",
+				version, asJSON(item.Timing), asJSON(current))
+		}
+	}
+
+	err = s.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItemTiming(ctx, "item-missing", current)
+	})
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("timing write on a missing item = %v, want ErrNotFound", err)
+	}
+}
+
+// TestAttentionItemTimingWriteKeepsStoredDerivedFields: the timing write
+// re-persists the stored body, and a put refreshes the task name from the
+// task. A rename moves that name without the item, so a timing write that
+// refreshed it would change a second field under an unchanged item_version,
+// which engine code comparing the stored record reads as drift (#1946).
+func TestAttentionItemTimingWriteKeepsStoredDerivedFields(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
+	f := newFixtures(t)
+	seedItem(t, s, &f)
+	record := func() domain.AttentionItem {
+		t.Helper()
+		var item domain.AttentionItem
+		if err := s.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			item, err = tx.GetAttentionItemRecord(ctx, f.item.ID)
+			return err
+		}); err != nil {
+			t.Fatalf("GetAttentionItemRecord: %v", err)
+		}
+		return item
+	}
+
+	before := record()
+	renamed := domain.DisplayName{Text: "Renamed under the item", Source: domain.DisplayNameSourceSpecification}
+	if before.DisplayNames == nil || before.DisplayNames.Task == renamed {
+		t.Fatalf("fixture: stored task name = %+v, want one the rename changes", before.DisplayNames)
+	}
+	second := domain.AttentionDelivery{
+		ItemID: f.item.ID, DeviceID: f.delivery.DeviceID, Channel: f.delivery.Channel,
+		Attempt: f.delivery.Attempt + 1, SubmittedAt: f.delivery.SubmittedAt.Add(time.Hour),
+		Status: domain.DeliverySubmitted,
+	}
+	timing := domain.TimingAggregates([]domain.AttentionDelivery{f.delivery, second})
+	if reflect.DeepEqual(timing, before.Timing) {
+		t.Fatal("fixture: the second delivery must change the timing summary")
+	}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.SetTaskName(ctx, f.run.TaskID, renamed); err != nil {
+			return err
+		}
+		return tx.PutAttentionItemTiming(ctx, f.item.ID, timing)
+	}); err != nil {
+		t.Fatalf("rename then timing write: %v", err)
+	}
+
+	after := record()
+	if !reflect.DeepEqual(after.Timing, timing) {
+		t.Fatalf("stored timing = %+v, want %+v", after.Timing, timing)
+	}
+	want := before
+	want.Timing = timing
+	if !reflect.DeepEqual(after, want) {
+		t.Errorf("timing write changed more than timing in the stored record:\n got %+v\nwant %+v", after, want)
+	}
+	// The read a client gets still shows the current name.
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		item, err := tx.GetAttentionItem(ctx, f.item.ID)
+		if err == nil && item.DisplayNames.Task != renamed {
+			t.Errorf("projected task name = %+v, want %+v", item.DisplayNames.Task, renamed)
+		}
+		return err
+	}); err != nil {
+		t.Fatalf("GetAttentionItem: %v", err)
 	}
 }
 

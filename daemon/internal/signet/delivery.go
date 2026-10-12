@@ -265,9 +265,13 @@ func (s *Service) ReportDeliveryOpened(ctx context.Context, itemID domain.ItemID
 // required field of the wire item and one entity_version must always mean one
 // body: sync invalidation and command acceptance both key on entity_version,
 // so a body that drifted under an unchanged version would break them (the
-// implementation decision #28's note deferred to this unit). The re-put
-// happens only when the summary actually changed — a delivery event that
-// moves no first_* instant and no count must not churn item versions or
+// implementation decision #28's note deferred to this unit). The timing write
+// therefore raises entity_version. It leaves item_version alone: engine,
+// store, and signet records bind work to an item's exact item_version and
+// have no replacement path, so a delivery must not move it (#1946,
+// devlog/2026-10-11-1750-timing-keeps-item-version.md). The write happens
+// only when the summary actually changed — a delivery event that moves no
+// first_* instant and no count must not churn entity versions or
 // staleness-invalidate prepared commands for nothing.
 func recomputeItemTiming(ctx context.Context, tx *store.WriteTx, itemID domain.ItemID) error {
 	item, _, err := tx.GetAttentionItemSnapshot(ctx, itemID)
@@ -295,8 +299,7 @@ func recomputeItemTiming(ctx context.Context, tx *store.WriteTx, itemID domain.I
 	if same {
 		return nil
 	}
-	next.ItemVersion++
-	return tx.PutAttentionItem(ctx, next)
+	return tx.PutAttentionItemTiming(ctx, itemID, next.Timing)
 }
 
 // timingEqual compares two summaries by their canonical JSON rendering. Both

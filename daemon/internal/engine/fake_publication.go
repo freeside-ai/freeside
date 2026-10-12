@@ -2463,9 +2463,12 @@ func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
 	}
 	// Persistence projections do not constitute an item transition. Normalize
 	// them before the exact-replay check and before lifecycle validation so an
-	// otherwise identical item at the same version still converges.
+	// otherwise identical item at the same version still converges. Timing is
+	// one of them: a delivery changes it and leaves item_version alone (#1946),
+	// so a delivered item is not a later version of the rebuilt one.
 	current.Recommendation = expected.Recommendation
 	current.DecisionSurface = expected.DecisionSurface
+	current.Timing = expected.Timing
 	current.DisplayNames = expected.DisplayNames
 	current.PublishBlock = expected.PublishBlock
 	if reflect.DeepEqual(current, expected) {
