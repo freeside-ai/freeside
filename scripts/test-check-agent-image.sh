@@ -174,7 +174,7 @@ begin_case() {
   unset FREESIDE_REAL_RUN_TIMEOUT_SECONDS
   unset FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES
   unset FREESIDE_REAL_RUN_WRITER_STOP_TIMEOUT
-  unset CASE_HOME CASE_STATE_ROOT CASE_DIAGNOSTIC_DIR CASE_APP_STATE
+  unset CASE_HOME CASE_STATE_ROOT CASE_DIAGNOSTIC_DIR CASE_APP_STATE CASE_REVIEW_REASONING
   printf 'ok' >"$CASE_DIR/create_mode"
   echo "case: $CASE"
 }
@@ -782,7 +782,7 @@ RETRY_STUB
     FREESIDE_REAL_RUN_REVIEW_AUTH_SNAPSHOT=auth.json \
     FREESIDE_REAL_RUN_REVIEW_INSTRUCTIONS=AGENTS.md \
     FREESIDE_REAL_RUN_REVIEW_MODEL=review-model \
-    FREESIDE_REAL_RUN_REVIEW_REASONING=high \
+    FREESIDE_REAL_RUN_REVIEW_REASONING="${CASE_REVIEW_REASONING:-high}" \
     FREESIDE_REAL_RUN_SEED_ROOT="$CASE_DIR/seed" \
     FREESIDE_REAL_RUN_REVIEW_AUTH_IDENTITY=reviewer \
     FREESIDE_REAL_RUN_AUTH_IDENTITY=implementer \
@@ -1386,6 +1386,12 @@ if grep -q -- '-agent-image' "$CASE_DIR/preflight.args" &&
 else
 	report_failure "composition preflight omitted a required binding"
 fi
+# The review agents name the model and the effort, so preflight takes neither.
+if grep -qxE -- '-(shadow-)?review-(model|reasoning-effort)' "$CASE_DIR/preflight.args"; then
+	report_failure "composition preflight got a review model or effort flag it no longer defines"
+else
+	pass=$((pass + 1))
+fi
 assert_exists "$CASE_DIR/go.log"
 assert_exists "$CASE_DIR/rig-hold.args"
 
@@ -1488,6 +1494,11 @@ if grep -qx -- '-prompt-package' "$CASE_DIR/daemon.args" &&
 	pass=$((pass + 1))
 else
 	report_failure "daemon invocation omitted one of the three stage prompt flags"
+fi
+if grep -qxE -- '-(shadow-)?review-(model|reasoning-effort)' "$CASE_DIR/daemon.args"; then
+	report_failure "daemon invocation got a review model or effort flag it no longer defines"
+else
+	pass=$((pass + 1))
 fi
 if grep -q -- '-rig-token-file' "$CASE_DIR/daemon.args" &&
   grep -q -- 'rig cleanup -state-root' "$CASE_DIR/rig-cleanup.args"; then
@@ -1697,6 +1708,16 @@ export FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES=09
 run_real_work lifecycle
 assert_rc 2
 assert_contains "FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES must be a positive integer"
+assert_not_exists "$CASE_DIR/rig-hold.args"
+assert_not_exists "$CASE_DIR/submit.called"
+assert_not_exists "$CASE_DIR/daemon.args"
+
+begin_case "58b2 a review effort that is no Freeside level refuses before the rig and submit"
+# The variable held Codex's own word before the review agent named the effort.
+CASE_REVIEW_REASONING=xhigh
+run_real_work lifecycle
+assert_rc 2
+assert_contains "FREESIDE_REAL_RUN_REVIEW_REASONING must be a Freeside effort level"
 assert_not_exists "$CASE_DIR/rig-hold.args"
 assert_not_exists "$CASE_DIR/submit.called"
 assert_not_exists "$CASE_DIR/daemon.args"

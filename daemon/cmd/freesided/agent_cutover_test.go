@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"flag"
+	"io"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -39,13 +42,13 @@ func flagEraReviewConfig() claudeDriverConfig {
 }
 
 // TestLineupResolvedReviewDigestsEqualTheFlagEraDigests pins both review
-// configuration digests across the cutover: the identity and cost owner the
-// reviewer and shadow reviewer lines resolve produce the digests the removed
-// flags produced, so no operator approval moves.
+// configuration digests across the cutover: the identity, cost owner, model,
+// and effort the reviewer and shadow reviewer lines resolve produce the
+// digests the removed flags produced, so no operator approval moves.
 func TestLineupResolvedReviewDigestsEqualTheFlagEraDigests(t *testing.T) {
 	ctx := context.Background()
 	f := newAuthAdoptFixture(t)
-	_, patch, err := f.run(t, f.args("-shadow-review-cost-owner", "operator"))
+	_, patch, err := f.run(t, f.shadowArgs())
 	if err != nil {
 		t.Fatalf("auth adopt: %v", err)
 	}
@@ -62,7 +65,9 @@ func TestLineupResolvedReviewDigestsEqualTheFlagEraDigests(t *testing.T) {
 
 	cfg := flags
 	cfg.ReviewAuthIdentityID, cfg.ReviewCostOwner = "", ""
+	cfg.ReviewModel, cfg.ReviewReasoningEffort = "", ""
 	cfg.ShadowReviewAuthIdentityID, cfg.ShadowReviewCostOwner = "", ""
+	cfg.ShadowReviewModel, cfg.ShadowReviewReasoningEffort = "", ""
 	f.withStore(t, func(st *store.Store) {
 		cfg, err = resolveReviewSelection(ctx, st, tree, cfg, time.Now().UTC())
 	})
@@ -105,6 +110,7 @@ func TestPreflightResolvesTheAdoptedLineup(t *testing.T) {
 		want := preflightAgentSelection{
 			LineupRevision: revision, AuthIdentityID: "claude-main", AuthVolume: adoptClaudeVolume,
 			ReviewAuthIdentityID: "codex-review", ReviewCostOwner: "review-operator",
+			ReviewModel: "gpt-fixture-1", ReviewReasoningEffort: "high",
 		}
 		if err != nil || got != want {
 			t.Fatalf("preflight agents = %+v, %v; want %+v", got, err, want)
@@ -116,6 +122,198 @@ func TestPreflightResolvesTheAdoptedLineup(t *testing.T) {
 			t.Fatalf("preflight agents with the shadow arm on = %v", err)
 		}
 	})
+}
+
+// TestReviewLaunchSendsTheHarnessNativeEffort adopts both review agents at
+// max: the reviewer's launch gets xhigh, Codex's highest level, and the
+// shadow reviewer's gets max, which Claude Code has. Preflight resolves the
+// same pair, so it approves the digest the daemon will run.
+func TestReviewLaunchSendsTheHarnessNativeEffort(t *testing.T) {
+	ctx := context.Background()
+	f := newAuthAdoptFixture(t)
+	_, patch, err := f.run(t, f.shadowArgs("-review-effort", "max", "-shadow-review-effort", "max"))
+	if err != nil {
+		t.Fatalf("auth adopt: %v", err)
+	}
+	tree := loadAdoptedPatch(t, patch)
+	want := flagEraReviewConfig()
+	want.ReviewReasoningEffort, want.ShadowReviewReasoningEffort = "xhigh", "max"
+	cfg := want
+	cfg.ReviewModel, cfg.ReviewReasoningEffort = "", ""
+	cfg.ShadowReviewModel, cfg.ShadowReviewReasoningEffort = "", ""
+	f.withStore(t, func(st *store.Store) {
+		now := time.Now().UTC()
+		got, err := resolveReviewSelection(ctx, st, tree, cfg, now)
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("lineup-resolved configuration = %+v, %v; want %+v", got, err, want)
+		}
+		agents, err := resolvePreflightAgents(ctx, st, tree, domain.Digest("sha256:"+strings.Repeat("4", 64)), true, now)
+		if err != nil || agents.ReviewModel != want.ReviewModel || agents.ReviewReasoningEffort != "xhigh" ||
+			agents.ShadowReviewModel != want.ShadowReviewModel || agents.ShadowReviewReasoningEffort != "max" {
+			t.Fatalf("preflight agents = %+v, %v", agents, err)
+		}
+	})
+}
+
+// treeAdoptedBeforeReviewAgentsNamedALaunch rewrites an adopted tree's review
+// agents into the shape adoption wrote before they named a model and an
+// effort: the reviewer on codex_review_v1 asking harness_default from an
+// offer that allows only that, and the shadow reviewer line on the writer
+// agent, whose offer names no model. Every digest, lineup line, and attended
+// mark follows, so the only thing wrong with the tree is what it lacks.
+func treeAdoptedBeforeReviewAgentsNamedALaunch(t *testing.T, tree agenttree.Tree) agenttree.Tree {
+	t.Helper()
+	old := tree
+	old.Agents, old.Offers = slices.Clone(tree.Agents), slices.Clone(tree.Offers)
+	old.Lineup, old.Marks = slices.Clone(tree.Lineup), slices.Clone(tree.Marks)
+	v1, err := agentbaseline.CodexReviewAdapterV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old.Adapters = append(slices.Clone(tree.Adapters),
+		agenttree.Adapter{Name: agentbaseline.CodexReviewAdapterV1Build, Fragment: v1})
+	for i := range old.Agents {
+		if old.Agents[i].Name == agentbaseline.CodexReviewAgentName {
+			old.Agents[i].Adapter, old.Agents[i].Effort = agentbaseline.CodexReviewAdapterV1Build, domain.EffortHarnessDefault
+		}
+	}
+	for i := range old.Offers {
+		if old.Offers[i].Name != agentbaseline.CodexOfferName {
+			continue
+		}
+		old.Offers[i].Fragment.AllowedEfforts = []domain.EffortLevel{domain.EffortHarnessDefault}
+		if old.Offers[i].Fragment.Digest, err = old.Offers[i].Fragment.ComputeDigest(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	review, err := agentbaseline.RoleLaunch(domain.RoleReviewer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range old.Lineup {
+		line := &old.Lineup[i].Selection
+		switch domain.RoleName(old.Lineup[i].Key) {
+		case domain.RoleReviewer:
+		case domain.RoleShadowReviewer:
+			line.AgentName = agentbaseline.ClaudeAgentName
+		default:
+			continue
+		}
+		if line.AgentDigest, err = old.AgentDigest(line.AgentName); err != nil {
+			t.Fatal(err)
+		}
+		old.Marks = append(old.Marks, agenttree.Mark{
+			Agent: line.AgentName, AgentDigest: line.AgentDigest, LaunchDigest: review.Digest,
+		})
+	}
+	return old
+}
+
+// TestReviewRoleNeedsAModelAndAnEffort runs this build on a tree adopted
+// before the review agents named what their launch passes. Each review role
+// is refused by name with what its agent lacks, at startup, in preflight,
+// and before a review, instead of launching on the harness's own defaults.
+func TestReviewRoleNeedsAModelAndAnEffort(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	f := newAuthAdoptFixture(t)
+	_, patch, err := f.run(t, f.shadowArgs())
+	if err != nil {
+		t.Fatalf("auth adopt: %v", err)
+	}
+	old := treeAdoptedBeforeReviewAgentsNamedALaunch(t, loadAdoptedPatch(t, patch))
+	f.withStore(t, func(st *store.Store) {
+		for role, lacks := range map[domain.RoleName]string{
+			domain.RoleReviewer:       "asks effort harness_default, which sends none",
+			domain.RoleShadowReviewer: "is on an offer that names no model",
+		} {
+			_, err := reviewRoleAgent(ctx, st, old, role, now)
+			var failure *roleAdmissionError
+			if !errors.As(err, &failure) || failure.Role != role || !errors.Is(err, engine.ErrAgentNotAdmissible) ||
+				!strings.Contains(err.Error(), "role "+string(role)) || !strings.Contains(err.Error(), lacks) {
+				t.Fatalf("%s on the earlier tree = %v, want it refused because its agent %s", role, err, lacks)
+			}
+			// The identity is never compared: the agent is refused first, so
+			// the refusal has to name what the agent lacks.
+			admit := reviewAdmission(st, old, role, "", time.Now)
+			if err := admit(ctx, exec.ReviewRequest{}); !errors.Is(err, engine.ErrAgentNotAdmissible) ||
+				!strings.Contains(err.Error(), lacks) {
+				t.Fatalf("%s review admission on the earlier tree = %v, want it refused because its agent %s", role, err, lacks)
+			}
+		}
+		var failure *roleAdmissionError
+		if _, err := resolveReviewSelection(ctx, st, old, flagEraReviewConfig(), now); !errors.As(err, &failure) ||
+			failure.Role != domain.RoleReviewer {
+			t.Fatalf("startup selection on the earlier tree = %v", err)
+		}
+		_, err := resolvePreflightAgents(ctx, st, old, domain.Digest("sha256:"+strings.Repeat("4", 64)), true, now)
+		if !errors.As(err, &failure) || failure.Role != domain.RoleReviewer {
+			t.Fatalf("preflight agents on the earlier tree = %v", err)
+		}
+	})
+}
+
+// TestReviewRoleRefusesAModelTheLaunchCannotPass hand-authors each review
+// agent's offer with a model that is no single argument: a comma, which the
+// review launch's own rule refuses, and a leading dash, which a CLI would
+// read as another option. Adoption refuses both as flags; a committed offer
+// is held to the same rule.
+func TestReviewRoleRefusesAModelTheLaunchCannotPass(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	f := newAuthAdoptFixture(t)
+	_, patch, err := f.run(t, f.shadowArgs())
+	if err != nil {
+		t.Fatalf("auth adopt: %v", err)
+	}
+	adopted := loadAdoptedPatch(t, patch)
+	review, err := agentbaseline.RoleLaunch(domain.RoleReviewer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		role         domain.RoleName
+		agent, offer string
+		model        string
+	}{
+		{domain.RoleReviewer, agentbaseline.CodexReviewAgentName, agentbaseline.CodexOfferName, "gpt,fixture"},
+		{
+			domain.RoleShadowReviewer, agentbaseline.ClaudeShadowReviewAgentName,
+			agentbaseline.ClaudeShadowReviewOfferName, "--dangerously-skip-permissions",
+		},
+	} {
+		t.Run(string(tc.role), func(t *testing.T) {
+			tree := adopted
+			tree.Offers, tree.Lineup = slices.Clone(adopted.Offers), slices.Clone(adopted.Lineup)
+			tree.Marks = slices.Clone(adopted.Marks)
+			offer := slices.IndexFunc(tree.Offers, func(o agenttree.Offer) bool { return o.Name == tc.offer })
+			if offer < 0 {
+				t.Fatalf("adopted tree has no offer %s", tc.offer)
+			}
+			tree.Offers[offer].Fragment.RouteModelID = tc.model
+			if tree.Offers[offer].Fragment.Digest, err = tree.Offers[offer].Fragment.ComputeDigest(); err != nil {
+				t.Fatal(err)
+			}
+			digest, err := tree.AgentDigest(tc.agent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := range tree.Lineup {
+				if domain.RoleName(tree.Lineup[i].Key) == tc.role {
+					tree.Lineup[i].Selection.AgentDigest = digest
+				}
+			}
+			tree.Marks = append(tree.Marks, agenttree.Mark{Agent: tc.agent, AgentDigest: digest, LaunchDigest: review.Digest})
+			f.withStore(t, func(st *store.Store) {
+				_, err := reviewRoleAgent(ctx, st, tree, tc.role, now)
+				var failure *roleAdmissionError
+				if !errors.As(err, &failure) || failure.Role != tc.role || !errors.Is(err, engine.ErrAgentNotAdmissible) ||
+					!strings.Contains(err.Error(), "cannot pass as one argument") {
+					t.Fatalf("%s on an offer naming %q = %v, want it refused for the model's shape", tc.role, tc.model, err)
+				}
+			})
+		})
+	}
 }
 
 // TestReviewSelectionFailsClosed covers the review roles' startup and
@@ -169,7 +367,7 @@ func TestReviewSelectionFailsClosed(t *testing.T) {
 
 	t.Run("offer past its not_after", func(t *testing.T) {
 		f := newAuthAdoptFixture(t)
-		_, patch, err := f.run(t, f.args("-shadow-review-cost-owner", "operator"))
+		_, patch, err := f.run(t, f.shadowArgs())
 		if err != nil {
 			t.Fatalf("auth adopt: %v", err)
 		}
@@ -202,7 +400,7 @@ func TestReviewSelectionFailsClosed(t *testing.T) {
 
 	t.Run("no attended mark", func(t *testing.T) {
 		f := newAuthAdoptFixture(t)
-		_, patch, err := f.run(t, f.args("-shadow-review-cost-owner", "operator"))
+		_, patch, err := f.run(t, f.shadowArgs())
 		if err != nil {
 			t.Fatalf("auth adopt: %v", err)
 		}
@@ -333,7 +531,7 @@ func setReviewedRunLine(
 func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 	ctx := context.Background()
 	f := newAuthAdoptFixture(t)
-	_, patch, err := f.run(t, f.args("-shadow-review-cost-owner", "operator"))
+	_, patch, err := f.run(t, f.shadowArgs())
 	if err != nil {
 		t.Fatalf("auth adopt: %v", err)
 	}
@@ -618,4 +816,67 @@ func agentSelectionItems(t *testing.T, st *store.Store) []domain.AttentionItem {
 		t.Fatal(err)
 	}
 	return items
+}
+
+// removedReviewFlags are the four flags whose values the review agents now
+// name. A command line that still passes one is refused, not silently
+// ignored: an operator who kept the flag would otherwise believe it chose
+// the model the review ran on.
+var removedReviewFlags = []string{
+	"-review-model", "-review-reasoning-effort", "-shadow-review-model", "-shadow-review-reasoning-effort",
+}
+
+// The daemon's review flags bind as before and name no model and no effort.
+func TestReviewFlags(t *testing.T) {
+	args := []string{
+		"-review-image", "image", "-review-input-root", "/root", "-review-auth-mode", "subscription",
+		"-review-auth-snapshot", "auth.json", "-review-instructions", "AGENTS.md",
+		"-review-workspace-size-mb", "1024",
+		"-shadow-review-image", "shadow-image", "-shadow-review-auth-snapshot", "token",
+		"-shadow-review-workspace-size-mb", "2048", "-shadow-review-rate", "0.5",
+	}
+	parse := func(args []string) (reviewFlagValues, error) {
+		var parsed reviewFlagValues
+		flags := flag.NewFlagSet("test", flag.ContinueOnError)
+		flags.SetOutput(io.Discard)
+		reviewFlags(flags, &parsed)
+		return parsed, flags.Parse(args)
+	}
+	parsed, err := parse(args)
+	want := reviewFlagValues{
+		Image: "image", InputRoot: "/root", AuthMode: "subscription", AuthSnapshot: "auth.json",
+		Instructions: "AGENTS.md", WorkspaceSizeMB: 1024,
+		ShadowImage: "shadow-image", ShadowAuthSnapshot: "token", ShadowWorkspaceSizeMB: 2048, ShadowRate: 0.5,
+	}
+	if err != nil || parsed != want {
+		t.Fatalf("review flags = %+v, %v; want %+v", parsed, err, want)
+	}
+	if defaults, err := parse(nil); err != nil || defaults != (reviewFlagValues{
+		WorkspaceSizeMB: 8192, ShadowWorkspaceSizeMB: 8192, ShadowRate: 0.2,
+	}) {
+		t.Fatalf("review flag defaults = %+v, %v", defaults, err)
+	}
+	for _, removed := range removedReviewFlags {
+		if _, err := parse(append(slices.Clone(args), removed, "value")); err == nil ||
+			!strings.Contains(err.Error(), "flag provided but not defined") {
+			t.Fatalf("removed flag %s: err = %v, want it unknown", removed, err)
+		}
+	}
+}
+
+// Preflight parses its own registration of the review flags, so it is held
+// to the same four removals: the fixture's command line parses, and adding
+// any one of them does not.
+func TestPreflightRefusesTheRemovedReviewFlags(t *testing.T) {
+	args, _ := preflightFixture(t)
+	if _, err := parsePreflightConfig(args, &bytes.Buffer{}); err != nil {
+		t.Fatalf("fixture command line: %v", err)
+	}
+	for _, removed := range removedReviewFlags {
+		var stderr bytes.Buffer
+		if _, err := parsePreflightConfig(append(slices.Clone(args), removed, "value"), &stderr); err == nil ||
+			!strings.Contains(err.Error(), "flag provided but not defined") {
+			t.Fatalf("removed flag %s: err = %v, want it unknown", removed, err)
+		}
+	}
 }

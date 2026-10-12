@@ -252,13 +252,10 @@ func ResolveAgentDefinition(in AgentResolutionInput) (AgentDefinition, error) {
 	if !slices.Contains(in.Adapter.SendableEfforts, in.Source.Effort) {
 		return fail("effort %q is not sendable by adapter %q", in.Source.Effort, in.Source.Adapter)
 	}
-	// The authored list is operator-written; the Claude adapter can send only
-	// what the pinned build's table translates. Codex has no table yet and
-	// resolves on the authored list alone.
-	if in.Adapter.ClientKind == HarnessClientClaudeCode {
-		if _, err := TranslateEffort(in.Adapter.ClientKind, in.Source.Effort); err != nil {
-			return fail("effort %q has no native claude_code value: %v", in.Source.Effort, err)
-		}
+	// The authored list is operator-written; an adapter can send only what
+	// its client's table for the pinned build translates.
+	if _, err := TranslateEffort(in.Adapter.ClientKind, in.Source.Effort); err != nil {
+		return fail("effort %q has no native %s value: %v", in.Source.Effort, in.Adapter.ClientKind, err)
 	}
 	routeDigest, err := in.Route.ComputeDigest()
 	if err != nil {

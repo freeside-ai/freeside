@@ -698,6 +698,17 @@ func TestValidateAdmissionAgentLaunchSelection(t *testing.T) {
 		}
 	})
 
+	t.Run("coherent codex closure", func(t *testing.T) {
+		if err := validate(t, agentResolution(t), domain.AgentVendorCodex,
+			func(b *domain.AdmissionAgentBinding) {
+				if b.RouteModelID != "gpt-5.6-sol" || b.RequestedEffort != domain.EffortMax || b.NativeEffort != "xhigh" {
+					t.Fatalf("codex binding records %+v", b)
+				}
+			}); err != nil {
+			t.Fatalf("offer model and clamped effort = %v", err)
+		}
+	})
+
 	cases := []struct {
 		name       string
 		resolution func(*testing.T) domain.AgentResolutionInput
@@ -725,12 +736,17 @@ func TestValidateAdmissionAgentLaunchSelection(t *testing.T) {
 			func(b *domain.AdmissionAgentBinding) { b.RouteModelID, b.RequestedEffort, b.NativeEffort = "", "", "" },
 		},
 		{
-			"codex binding carries a model", agentResolution, domain.AgentVendorCodex,
-			func(b *domain.AdmissionAgentBinding) { b.RouteModelID = "gpt-5.6-sol" },
+			"codex wrong model", agentResolution, domain.AgentVendorCodex,
+			func(b *domain.AdmissionAgentBinding) { b.RouteModelID = "gpt-5.6-luna" },
 		},
 		{
-			"codex binding carries an effort", agentResolution, domain.AgentVendorCodex,
-			func(b *domain.AdmissionAgentBinding) { b.RequestedEffort, b.NativeEffort = domain.EffortMax, "max" },
+			"codex clamp recorded unclamped", agentResolution, domain.AgentVendorCodex,
+			func(b *domain.AdmissionAgentBinding) { b.NativeEffort = "max" },
+		},
+		{
+			// What a codex binding held while codex derived nothing.
+			"codex binding omits the selection", agentResolution, domain.AgentVendorCodex,
+			func(b *domain.AdmissionAgentBinding) { b.RouteModelID, b.RequestedEffort, b.NativeEffort = "", "", "" },
 		},
 	}
 	for _, tc := range cases {

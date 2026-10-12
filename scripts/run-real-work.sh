@@ -73,8 +73,13 @@
 #   FREESIDE_REAL_RUN_REVIEW_INSTRUCTIONS operator-host rules under the input root;
 #                                    trusted-base repository AGENTS.md files are
 #                                    discovered and composed separately
-#   FREESIDE_REAL_RUN_REVIEW_MODEL   explicit Codex reviewer model
-#   FREESIDE_REAL_RUN_REVIEW_REASONING explicit reviewer reasoning effort
+#   FREESIDE_REAL_RUN_REVIEW_MODEL   explicit Codex reviewer model, which auth
+#                                    adopt writes into the review agent's
+#                                    offer; preflight and the daemon read it
+#                                    from the adopted tree and take no flag
+#   FREESIDE_REAL_RUN_REVIEW_REASONING reviewer effort as a Freeside level (low,
+#                                    medium, high, or max), which auth adopt
+#                                    writes into the review agent the same way
 #   FREESIDE_REAL_RUN_SEED_ROOT      daemon-owned exact-base checkout root
 #   FREESIDE_REAL_RUN_AUTH_IDENTITY  writer auth identity id, recorded on a
 #                                    fresh state root for auth adopt to enroll
@@ -414,6 +419,16 @@ if [[ ! "$FREESIDE_REAL_RUN_APPROVED_RECIPE" =~ ^sha256:[0-9a-f]{64}$ ]]; then
   echo "run-real-work: FREESIDE_REAL_RUN_APPROVED_RECIPE is not a canonical digest" >&2
   exit 2
 fi
+# auth adopt refuses the effort too, but only after the build and the rig.
+# The variable once held Codex's own word, so a retained environment can
+# still say xhigh.
+case "$FREESIDE_REAL_RUN_REVIEW_REASONING" in
+low | medium | high | max) ;;
+*)
+  echo 'run-real-work: FREESIDE_REAL_RUN_REVIEW_REASONING must be a Freeside effort level: low, medium, high, or max (Codex xhigh is max)' >&2
+  exit 2
+  ;;
+esac
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/real-work-rebuild.sh
@@ -839,8 +854,6 @@ preflight_args=(
 	-review-auth-mode "$FREESIDE_REAL_RUN_REVIEW_AUTH_MODE"
 	-review-auth-snapshot "$FREESIDE_REAL_RUN_REVIEW_AUTH_SNAPSHOT"
 	-review-instructions "$FREESIDE_REAL_RUN_REVIEW_INSTRUCTIONS"
-	-review-model "$FREESIDE_REAL_RUN_REVIEW_MODEL"
-	-review-reasoning-effort "$FREESIDE_REAL_RUN_REVIEW_REASONING"
 	-publication-state-dir "$FREESIDE_REAL_RUN_APP_STATE"
 	-publication-credentials-dir "$FREESIDE_REAL_RUN_APP_CREDS"
 	-allowed-paths "$FREESIDE_REAL_RUN_ALLOWED_PATHS"
@@ -1120,8 +1133,6 @@ fi
   -review-auth-mode "$FREESIDE_REAL_RUN_REVIEW_AUTH_MODE" \
   -review-auth-snapshot "$FREESIDE_REAL_RUN_REVIEW_AUTH_SNAPSHOT" \
   -review-instructions "$FREESIDE_REAL_RUN_REVIEW_INSTRUCTIONS" \
-  -review-model "$FREESIDE_REAL_RUN_REVIEW_MODEL" \
-  -review-reasoning-effort "$FREESIDE_REAL_RUN_REVIEW_REASONING" \
   -seed-root "$FREESIDE_REAL_RUN_SEED_ROOT" \
   -state-dir "$FREESIDE_REAL_RUN_STATE_ROOT" \
   -rig-token-file "$rig_acquisition" \

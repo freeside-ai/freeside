@@ -192,8 +192,10 @@ The first start always stops this way, because no commit holds the tree yet:
    the harness again.
 
 Later fresh state roots reuse that commit. The emitted tree depends on the
-identity ids, the route names, the review model, the three prompt packages,
-the three dated inputs, and, when the run has subscription judgments on,
+identity ids, the route names, the review model, the review effort
+(`FREESIDE_REAL_RUN_REVIEW_REASONING`, a Freeside effort level: `low`,
+`medium`, `high`, or `max`), the three prompt packages, the three dated
+inputs, and, when the run has subscription judgments on,
 `FREESIDE_REAL_RUN_JUDGMENT_MODEL` and this checkout's publication-author
 prompt. It doesn't depend on the state root, the cost owners, or the account.
 
@@ -203,8 +205,8 @@ with. `auth adopt` defaults each to the current date, so the harness requires
 all three; a changed value is a different tree and stops the run.
 
 The patch creates every file, so it doesn't apply over an existing tree. To
-replace a committed tree (a renewed offer, a new review model, a changed
-prompt package), remove the old one in the same commit:
+replace a committed tree (a renewed offer, a new review model or effort, a
+changed prompt package), remove the old one in the same commit:
 
 ```sh
 git -C <agent-tree-checkout> rm -r -q policy/agents policy/fragments policy/lineup policy/agents.lock

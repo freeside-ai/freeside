@@ -54,9 +54,11 @@ func TranslateEffort(client HarnessClientKind, effort EffortLevel) (EffortTransl
 		}
 		return EffortTranslation{Requested: effort, Native: native}, nil
 	case HarnessClientCodexCLI:
-		// Codex review passes its effort through its own flags today; no
-		// Freeside translation exists for it yet.
-		return EffortTranslation{}, fmt.Errorf("codex_cli effort %q: %w", effort, ErrEffortUntranslatable)
+		native, ok := codexCLINativeEffort(effort)
+		if !ok {
+			return EffortTranslation{}, fmt.Errorf("codex_cli effort %q: %w", effort, ErrEffortUntranslatable)
+		}
+		return EffortTranslation{Requested: effort, Native: native}, nil
 	}
 	return EffortTranslation{}, fmt.Errorf("harness client %q: %w", client, ErrInvalidHarnessClientKind)
 }
@@ -95,6 +97,41 @@ func ClaudeCodeSendableEfforts() []EffortLevel {
 	return sendable
 }
 
+// codexCLINativeEffort is the model_reasoning_effort table for the Codex
+// build the review image pins (images/agent-codex/Containerfile
+// CODEX_VERSION). Codex names its levels minimal, low, medium, high, and
+// xhigh: it has no max, so max is sent as xhigh, its highest, and the clamp
+// is recorded. minimal has no Freeside level. The pinned build passes the
+// value to the service unchecked, so a level the service refuses for a
+// model fails that launch, not this table.
+func codexCLINativeEffort(effort EffortLevel) (string, bool) {
+	switch effort {
+	case EffortHarnessDefault:
+		return "", true
+	case EffortLow:
+		return "low", true
+	case EffortMedium:
+		return "medium", true
+	case EffortHigh:
+		return "high", true
+	case EffortMax:
+		return "xhigh", true
+	}
+	return "", false
+}
+
+// CodexCLISendableEfforts lists the efforts a Codex adapter can send, in
+// AllEffortLevels order.
+func CodexCLISendableEfforts() []EffortLevel {
+	var sendable []EffortLevel
+	for _, effort := range AllEffortLevels {
+		if _, ok := codexCLINativeEffort(effort); ok {
+			sendable = append(sendable, effort)
+		}
+	}
+	return sendable
+}
+
 // ClaudeCodeLaunchModel is the model a claude_code launch passes for an
 // offer's route model id: none for the reserved native default, the id
 // itself otherwise.
@@ -107,8 +144,8 @@ func ClaudeCodeLaunchModel(routeModelID string) string {
 
 // AgentLaunchSelection is the model and effort an admitted agent's launch
 // passes, as the admission's agent binding records them. Every field empty
-// means the launch passes neither: the native-default offer at
-// harness_default, or a client this derivation does not cover yet.
+// means the launch passes neither, which only the Claude native-default
+// offer at harness_default derives. A codex_cli agent always names a model.
 type AgentLaunchSelection struct {
 	RouteModelID    string
 	RequestedEffort EffortLevel
@@ -118,8 +155,8 @@ type AgentLaunchSelection struct {
 // DeriveAgentLaunchSelection is the one derivation of what an agent's launch
 // passes, used by the admission resolver to fill the binding and by the
 // reconstruction recheck to refuse a binding that disagrees. The adapter and
-// offer must be the ones the agent pins. A codex_cli agent derives nothing:
-// its launch still chooses its own model and effort flags.
+// offer must be the ones the agent pins. Codex has no native-default id, so
+// a codex_cli agent passes its offer's model as written.
 func DeriveAgentLaunchSelection(
 	agent AgentDefinition, adapter AdapterFragment, offer OfferFragment,
 ) (AgentLaunchSelection, error) {
@@ -128,21 +165,20 @@ func DeriveAgentLaunchSelection(
 			"agent %s launch selection: adapter or offer is not the one the agent pins: %w",
 			agent.Name, ErrAgentJoinInvalid)
 	}
+	var selection AgentLaunchSelection
 	switch adapter.ClientKind {
 	case HarnessClientClaudeCode:
-		effort, err := TranslateEffort(adapter.ClientKind, agent.Effort)
-		if err != nil {
-			return AgentLaunchSelection{}, fmt.Errorf("agent %s: %w", agent.Name, err)
-		}
-		selection := AgentLaunchSelection{RouteModelID: ClaudeCodeLaunchModel(offer.RouteModelID)}
-		if effort.Native != "" {
-			selection.RequestedEffort = effort.Requested
-			selection.NativeEffort = effort.Native
-		}
-		return selection, nil
+		selection.RouteModelID = ClaudeCodeLaunchModel(offer.RouteModelID)
 	case HarnessClientCodexCLI:
-		return AgentLaunchSelection{}, nil
+		selection.RouteModelID = offer.RouteModelID
 	}
-	return AgentLaunchSelection{}, fmt.Errorf("agent %s adapter client %q: %w",
-		agent.Name, adapter.ClientKind, ErrInvalidHarnessClientKind)
+	effort, err := TranslateEffort(adapter.ClientKind, agent.Effort)
+	if err != nil {
+		return AgentLaunchSelection{}, fmt.Errorf("agent %s: %w", agent.Name, err)
+	}
+	if effort.Native != "" {
+		selection.RequestedEffort = effort.Requested
+		selection.NativeEffort = effort.Native
+	}
+	return selection, nil
 }

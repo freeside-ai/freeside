@@ -88,6 +88,43 @@ func TestTranslateEffortClaudeCode(t *testing.T) {
 	}
 }
 
+// Codex has no max: max is sent as xhigh, its highest level, and the
+// translation is a clamp.
+func TestTranslateEffortCodexCLI(t *testing.T) {
+	want := map[domain.EffortLevel]string{
+		domain.EffortHarnessDefault: "",
+		domain.EffortLow:            "low",
+		domain.EffortMedium:         "medium",
+		domain.EffortHigh:           "high",
+		domain.EffortMax:            "xhigh",
+	}
+	for _, effort := range domain.AllEffortLevels {
+		t.Run(string(effort), func(t *testing.T) {
+			native, ok := want[effort]
+			if !ok {
+				t.Fatalf("no expected native value for %q: extend this table with the translation", effort)
+			}
+			got, err := domain.TranslateEffort(domain.HarnessClientCodexCLI, effort)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Requested != effort || got.Native != native {
+				t.Fatalf("TranslateEffort(%q) = %+v, want native %q", effort, got, native)
+			}
+			if clamped := effort == domain.EffortMax; got.Clamped() != clamped {
+				t.Fatalf("TranslateEffort(%q) clamped = %t, want %t", effort, got.Clamped(), clamped)
+			}
+		})
+	}
+	max, err := domain.TranslateEffort(domain.HarnessClientCodexCLI, domain.EffortMax)
+	if err != nil || max.String() != "max → xhigh" {
+		t.Fatalf("max renders as %q, %v", max.String(), err)
+	}
+	if got := domain.CodexCLISendableEfforts(); !slices.Equal(got, domain.AllEffortLevels) {
+		t.Fatalf("CodexCLISendableEfforts() = %v, want every level", got)
+	}
+}
+
 func TestTranslateEffortRefusals(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -95,7 +132,7 @@ func TestTranslateEffortRefusals(t *testing.T) {
 		effort  domain.EffortLevel
 		wantErr error
 	}{
-		{"codex has no table", domain.HarnessClientCodexCLI, domain.EffortHigh, domain.ErrEffortUntranslatable},
+		{"codex level outside the table", domain.HarnessClientCodexCLI, "minimal", domain.ErrEffortUntranslatable},
 		{"claude level outside the table", domain.HarnessClientClaudeCode, "xhigh", domain.ErrEffortUntranslatable},
 		{"unknown client", "pi", domain.EffortHigh, domain.ErrInvalidHarnessClientKind},
 	}
@@ -176,11 +213,27 @@ func TestDeriveAgentLaunchSelection(t *testing.T) {
 		}
 	})
 
-	t.Run("codex derives nothing", func(t *testing.T) {
+	t.Run("codex offer model and clamped effort", func(t *testing.T) {
 		in := agentResolution(t)
 		got, err := domain.DeriveAgentLaunchSelection(resolve(t, in), in.Adapter, in.Offer)
-		if err != nil || got != (domain.AgentLaunchSelection{}) {
-			t.Fatalf("DeriveAgentLaunchSelection = %+v, %v, want empty", got, err)
+		want := domain.AgentLaunchSelection{
+			RouteModelID: in.Offer.RouteModelID, RequestedEffort: domain.EffortMax, NativeEffort: "xhigh",
+		}
+		if err != nil || got != want {
+			t.Fatalf("DeriveAgentLaunchSelection = %+v, %v, want %+v", got, err, want)
+		}
+	})
+
+	t.Run("codex at harness_default passes the model alone", func(t *testing.T) {
+		in := agentResolution(t)
+		in.Source.Effort = domain.EffortHarnessDefault
+		in.Offer.AllowedEfforts = []domain.EffortLevel{domain.EffortHarnessDefault}
+		in.Offer.Digest = mustComputeDigest(t, in.Offer.ComputeDigest)
+		in.Adapter.SendableEfforts = []domain.EffortLevel{domain.EffortHarnessDefault}
+		in.Adapter.Digest = mustComputeDigest(t, in.Adapter.ComputeDigest)
+		got, err := domain.DeriveAgentLaunchSelection(resolve(t, in), in.Adapter, in.Offer)
+		if want := (domain.AgentLaunchSelection{RouteModelID: in.Offer.RouteModelID}); err != nil || got != want {
+			t.Fatalf("DeriveAgentLaunchSelection = %+v, %v, want %+v", got, err, want)
 		}
 	})
 

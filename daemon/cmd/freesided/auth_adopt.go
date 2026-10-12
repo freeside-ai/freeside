@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
@@ -54,6 +55,10 @@ type authAdoptConfig struct {
 
 	ClaudeRoute, CodexRoute, ReviewModel           string
 	TermsBasisDate, PricingRevision, OfferNotAfter string
+	// ReviewEffort, ShadowReviewModel, and ShadowReviewEffort are what the
+	// review agents name beside ReviewModel. An effort is a Freeside level.
+	ReviewEffort, ShadowReviewEffort domain.EffortLevel
+	ShadowReviewModel                string
 	// The daemon's three prompt-package files; the lineup lines record their
 	// digests. The review prompt is code-owned and needs no file.
 	PromptPackage, SpecificationPromptPackage, RemediationPromptPackage string
@@ -227,7 +232,9 @@ func runAuthAdoptCommand(
 
 	tree, err := agentbaseline.Tree(agentbaseline.TreeInput{
 		ClaudeEnrollment: claude.Enrollment, CodexEnrollment: codexEnrollment,
-		ReviewModel: cfg.ReviewModel, JudgmentModel: cfg.JudgmentModel, TermsBasisDate: cfg.TermsBasisDate,
+		ReviewModel: cfg.ReviewModel, ReviewEffort: cfg.ReviewEffort,
+		ShadowReviewModel: cfg.ShadowReviewModel, ShadowReviewEffort: cfg.ShadowReviewEffort,
+		JudgmentModel: cfg.JudgmentModel, TermsBasisDate: cfg.TermsBasisDate,
 		PricingRevision: cfg.PricingRevision, OfferNotAfter: notAfter, Prompts: prompts,
 	})
 	if err != nil {
@@ -441,7 +448,13 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 		"private root containing the review identity's live Codex auth store")
 	flags.StringVar(&cfg.ClaudeRoute, "claude-route", agentbaseline.DefaultClaudeRoute, "route name for the Claude enrollment")
 	flags.StringVar(&cfg.CodexRoute, "codex-route", agentbaseline.DefaultCodexRoute, "route name for the Codex enrollment")
-	flags.StringVar(&cfg.ReviewModel, "review-model", "", "the daemon's -review-model, pinned by the review offer")
+	flags.StringVar(&cfg.ReviewModel, "review-model", "", "Codex model the review agent's offer names")
+	flags.StringVar((*string)(&cfg.ReviewEffort), "review-effort", "",
+		fmt.Sprintf("effort the review agent asks, one of %v", reviewEfforts))
+	flags.StringVar(&cfg.ShadowReviewModel, "shadow-review-model", "",
+		"exact Claude model id the shadow review offer names; set exactly while the shadow arm is on")
+	flags.StringVar((*string)(&cfg.ShadowReviewEffort), "shadow-review-effort", "",
+		fmt.Sprintf("effort the shadow review agent asks, one of %v; set exactly while the shadow arm is on", reviewEfforts))
 	flags.StringVar(&cfg.TermsBasisDate, "terms-basis-date", now.Format(time.DateOnly),
 		"date of the operator's terms basis for both routes")
 	flags.StringVar(&cfg.PricingRevision, "pricing-revision", now.Format("2006-01"), "pricing revision authored onto both offers")
@@ -491,8 +504,20 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 		return authAdoptConfig{}, errors.New(
 			"-shadow-review-cost-owner must equal -cost-owner: the shadow arm runs under the implementation identity")
 	}
-	if !oneIdentity && (cfg.AuthStoreRoot == "" || cfg.ReviewModel == "") {
-		return authAdoptConfig{}, errors.New("-auth-store-root and -review-model are required to adopt the review identity")
+	if !oneIdentity && (cfg.AuthStoreRoot == "" || cfg.ReviewModel == "" || cfg.ReviewEffort == "") {
+		return authAdoptConfig{}, errors.New(
+			"-auth-store-root, -review-model, and -review-effort are required to adopt the review identity")
+	}
+	if cfg.ReviewEffort != "" {
+		if err := validateReviewEffort("review-effort", cfg.ReviewEffort); err != nil {
+			return authAdoptConfig{}, err
+		}
+	}
+	if cfg.ReviewModel != "" && !validReviewLaunchModel(cfg.ReviewModel) {
+		return authAdoptConfig{}, errors.New("-review-model cannot be passed to the review launch as one argument")
+	}
+	if err := validateShadowReviewSelection(cfg); err != nil {
+		return authAdoptConfig{}, err
 	}
 	// The call launch passes the model as one option value and always passes
 	// one, so a value it could not pass, or the id that names no model, would
@@ -520,6 +545,58 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 		}
 	}
 	return cfg, nil
+}
+
+// reviewEfforts are the efforts a review agent can ask: every Freeside level
+// but harness_default, which sends no effort, and a review launch always
+// passes one.
+var reviewEfforts = slices.DeleteFunc(slices.Clone(domain.AllEffortLevels), func(effort domain.EffortLevel) bool {
+	return effort == domain.EffortHarnessDefault
+})
+
+func validateReviewEffort(flagName string, effort domain.EffortLevel) error {
+	if !slices.Contains(reviewEfforts, effort) {
+		return fmt.Errorf("-%s %q is not an effort a review launch can pass: give one of %v",
+			flagName, effort, reviewEfforts)
+	}
+	return nil
+}
+
+// validateShadowReviewSelection holds the shadow reviewer's model and effort
+// to the shadow arm: both are needed exactly while -shadow-review-cost-owner
+// turns the arm on, because the tree has a shadow reviewer agent only then.
+func validateShadowReviewSelection(cfg authAdoptConfig) error {
+	if cfg.ShadowReviewCostOwner == "" {
+		if cfg.ShadowReviewModel != "" || cfg.ShadowReviewEffort != "" {
+			return errors.New(
+				"-shadow-review-model and -shadow-review-effort need -shadow-review-cost-owner: without it the patch has no shadow reviewer")
+		}
+		return nil
+	}
+	if cfg.ShadowReviewModel == "" || cfg.ShadowReviewEffort == "" {
+		return errors.New(
+			"-shadow-review-model and -shadow-review-effort are required with -shadow-review-cost-owner")
+	}
+	if err := validateReviewEffort("shadow-review-effort", cfg.ShadowReviewEffort); err != nil {
+		return err
+	}
+	if cfg.ShadowReviewModel == domain.ClaudeCodeNativeDefaultRouteModelID {
+		return fmt.Errorf("-shadow-review-model %s names no model: give the exact Claude model id", cfg.ShadowReviewModel)
+	}
+	if !validReviewLaunchModel(cfg.ShadowReviewModel) {
+		return errors.New("-shadow-review-model cannot be passed to the review launch as one argument")
+	}
+	return nil
+}
+
+// validReviewLaunchModel reports whether a review launch can pass the model
+// as one command-line argument: the shape every launch value has, and the
+// review launch's own rule. Adoption holds its flags to it and the daemon
+// holds a review role's offer to it (reviewRoleAgent), so a tree adoption
+// wrote is never refused for its model's shape.
+func validReviewLaunchModel(model string) bool {
+	return inference.ValidLaunchValue(model) &&
+		ward.ValidateCodexReviewModelConfiguration(model, string(domain.EffortHigh)) == nil
 }
 
 // refusePatchInsideCheckout keeps the emitted patch out of every git
