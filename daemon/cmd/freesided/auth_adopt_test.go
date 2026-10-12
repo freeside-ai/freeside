@@ -232,7 +232,7 @@ func gitForAdoptTest(t *testing.T, dir string, stdin []byte, args ...string) str
 	cmd := exec.Command("git", args...) //nolint:gosec // G204: fixed test arguments
 	cmd.Dir = dir
 	cmd.Stdin = bytes.NewReader(stdin)
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(scrubbedGitEnv(),
 		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.test",
 		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.test")

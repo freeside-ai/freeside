@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
@@ -36,12 +37,85 @@ func authorPreflightRepository(t *testing.T, files map[string]string) (string, s
 
 func authorPreflightGit(t *testing.T, root string, args ...string) string {
 	t.Helper()
+	return authorPreflightGitInput(t, root, nil, args...)
+}
+
+// authorPreflightGitInput runs a fixture Git command with stdin, which may be
+// nil. Every fixture Git command in this file goes through it, so one scrub
+// keeps them all on the repository under root.
+func authorPreflightGitInput(t *testing.T, root string, stdin io.Reader, args ...string) string {
+	t.Helper()
 	command := osexec.Command("git", append([]string{"-C", root}, args...)...) //nolint:gosec // Test-owned fixture directory and fixed Git arguments.
+	command.Stdin = stdin
+	command.Env = scrubbedGitEnv()
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, output)
 	}
 	return strings.TrimSpace(string(output))
+}
+
+// scrubbedGitEnv returns the process environment without its GIT_* entries.
+// Git exports GIT_DIR to hooks and to rebase --exec steps, and a fixture
+// command that inherits it writes to that repository instead of its own, -C
+// notwithstanding. The rest of the environment stays: Git on macOS needs it
+// to find its temporary directory without printing a warning into the output
+// these helpers return.
+func scrubbedGitEnv() []string {
+	var env []string
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "GIT_") {
+			env = append(env, entry)
+		}
+	}
+	return env
+}
+
+func TestFixtureGitIgnoresAmbientGitDir(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		git  func(t *testing.T, root string, args ...string)
+	}{
+		{"gitForAdoptTest", func(t *testing.T, root string, args ...string) {
+			t.Helper()
+			gitForAdoptTest(t, root, nil, args...)
+		}},
+		{"authorPreflightGit", func(t *testing.T, root string, args ...string) {
+			t.Helper()
+			authorPreflightGit(t, root, args...)
+		}},
+		{"authorPreflightGitInput", func(t *testing.T, root string, args ...string) {
+			t.Helper()
+			authorPreflightGitInput(t, root, strings.NewReader(""), args...)
+		}},
+	} {
+		// Serial: t.Setenv panics in a parallel test.
+		t.Run(tc.name, func(t *testing.T) {
+			// GIT_DIR names the decoy before the first command runs, so a
+			// helper that loses its scrub writes there and never to a
+			// repository the caller's own environment names.
+			decoy := t.TempDir()
+			t.Setenv("GIT_DIR", filepath.Join(decoy, ".git"))
+			tc.git(t, decoy, "init", "-q")
+			fixture := t.TempDir()
+			tc.git(t, fixture, "init", "-q")
+			tc.git(t, fixture, "config", "freeside.fixture", "target")
+
+			fixtureConfig, err := os.ReadFile(filepath.Join(fixture, ".git", "config")) //nolint:gosec // G304: fixed config path under a test-owned temp repository
+			if err != nil {
+				t.Errorf("fixture command did not create its target repository: %v", err)
+			} else if !strings.Contains(string(fixtureConfig), "fixture = target") {
+				t.Error("fixture command did not update its target repository")
+			}
+			decoyConfig, err := os.ReadFile(filepath.Join(decoy, ".git", "config")) //nolint:gosec // G304: fixed config path under a test-owned temp repository
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(decoyConfig), "fixture = target") {
+				t.Error("fixture command inherited the ambient GIT_DIR and updated the decoy repository")
+			}
+		})
+	}
 }
 
 func TestPreflightAuthorInputsUseExactBase(t *testing.T) {
@@ -100,13 +174,7 @@ func TestPreflightAuthorInputsAcceptLargeSupportedTree(t *testing.T) {
 	for i := range 20_000 {
 		fmt.Fprintf(&entries, "100644 blob %s\tfile-%05d-%s.txt\n", blob, i, strings.Repeat("x", 200))
 	}
-	command := osexec.Command("git", "-C", root, "mktree") //nolint:gosec // Test-owned fixture directory and fixed Git arguments.
-	command.Stdin = strings.NewReader(entries.String())
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git mktree: %v: %s", err, output)
-	}
-	tree := strings.TrimSpace(string(output))
+	tree := authorPreflightGitInput(t, root, strings.NewReader(entries.String()), "mktree")
 	base = authorPreflightGit(t, root, "commit-tree", tree, "-p", base, "-m", "large tree")
 	listing := authorPreflightGit(t, root, "ls-tree", "-rz", "--full-tree", base)
 	if len(listing) <= 4<<20 || len(listing) >= 64<<20 {
