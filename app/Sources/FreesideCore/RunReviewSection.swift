@@ -20,13 +20,6 @@ struct RunReviewSection: View {
         }
     }
 
-    static func missingCompletionMessage(_ state: Components.Schemas.ReviewProgressState) -> String {
-        switch state {
-        case .pending, .running: "Not completed"
-        case .completed, .failed: "Completion time unavailable"
-        }
-    }
-
     static func availabilityMessage(
         hasTimeline: Bool, state: SyncCoordinator.TimelineLoadState?, freshness: InboxStore.Freshness
     ) -> String? {
@@ -43,6 +36,13 @@ struct RunReviewSection: View {
     /// offers none: the view refetches it when the snapshot's revision moves.
     static func showsRetry(state: SyncCoordinator.TimelineLoadState?) -> Bool {
         state == .unavailable
+    }
+
+    /// Whether the section runs its own clock: only while a round in
+    /// progress shows elapsed time, and never under a pinned clock, which a
+    /// test or screenshot sets to keep its render repeatable.
+    static func ticks(_ rounds: [Components.Schemas.RunReviewRound], pinnedNow: Date?) -> Bool {
+        pinnedNow == nil && rounds.contains(where: ReviewRoundPresentation.isInProgress)
     }
 
     private struct Selection: Identifiable {
@@ -94,7 +94,17 @@ struct RunReviewSection: View {
             }
             let rounds = RunHistoryPresentation.rounds(facts)
             if let current = rounds.first {
-                roundsBlock(current: current, prior: Array(rounds.dropFirst()), all: rounds)
+                // The clock sits inside the section, around the rounds alone,
+                // so a tick redraws them without resetting the folds or the
+                // reviewer-output sheet held above it.
+                if Self.ticks(rounds, pinnedNow: pinnedNow) {
+                    TimelineView(.periodic(from: .now, by: 60)) { context in
+                        roundsBlock(current: current, prior: Array(rounds.dropFirst()), all: rounds, now: context.date)
+                    }
+                } else {
+                    roundsBlock(
+                        current: current, prior: Array(rounds.dropFirst()), all: rounds, now: pinnedNow ?? Date())
+                }
             } else if hasTimeline && state == .loaded && availability == nil {
                 Text("No review requested yet")
                     .font(FreesideFont.cardBody)
@@ -119,12 +129,12 @@ struct RunReviewSection: View {
     /// hollow-marker line.
     private func roundsBlock(
         current: Components.Schemas.RunReviewRound, prior: [Components.Schemas.RunReviewRound],
-        all: [Components.Schemas.RunReviewRound]
+        all: [Components.Schemas.RunReviewRound], now: Date
     ) -> some View {
         let attention = ReviewRoundPresentation.hasOpenAdjudication(
             runID: runID, in: coordinator.store.orderedSnapshots)
         return VStack(alignment: .leading, spacing: 11) {
-            roundRows(current, isCurrent: true, attention: attention, in: all)
+            roundRows(current, isCurrent: true, attention: attention, in: all, now: now)
             if !prior.isEmpty {
                 let showsPriorRounds = folds?.priorRounds ?? $showsPriorRounds
                 Button {
@@ -143,7 +153,7 @@ struct RunReviewSection: View {
                 .accessibilityValue(showsPriorRounds.wrappedValue ? "Expanded" : "Collapsed")
                 if showsPriorRounds.wrappedValue {
                     ForEach(prior, id: \.invocation_id) { round in
-                        roundRows(round, isCurrent: false, attention: false, in: all)
+                        roundRows(round, isCurrent: false, attention: false, in: all, now: now)
                     }
                 }
             }
@@ -154,15 +164,18 @@ struct RunReviewSection: View {
     @ViewBuilder
     private func roundRows(
         _ round: Components.Schemas.RunReviewRound, isCurrent: Bool, attention: Bool,
-        in rounds: [Components.Schemas.RunReviewRound]
+        in rounds: [Components.Schemas.RunReviewRound], now: Date
     ) -> some View {
-        markedRow(isCurrent: isCurrent, time: ReviewRoundPresentation.time(round)) {
+        markedRow(
+            isCurrent: isCurrent, time: ReviewRoundPresentation.time(round),
+            elapsed: ReviewRoundPresentation.elapsed(round, now: now)
+        ) {
             WrappingHStack(horizontalSpacing: 8, verticalSpacing: 4) {
                 Text(ReviewRoundPresentation.title(round, in: rounds, stages: stages))
                     .font(FreesideFont.sans(.callout, weight: isCurrent ? .semibold : .regular))
                     .foregroundStyle(isCurrent ? Color.ink : Color.inkDim)
                 StateChip(
-                    label: ReviewRoundPresentation.verdict(round),
+                    label: ReviewRoundPresentation.verdict(round, now: now),
                     cut: ReviewRoundPresentation.cut(round, isCurrent: isCurrent, hasOpenAdjudication: attention))
             }
         }
@@ -181,23 +194,16 @@ struct RunReviewSection: View {
         // with its label, so opening the facts never moves it.
         VStack(alignment: .leading, spacing: 6) {
             roundFacts(round, isExpanded: expanded)
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                // The disclosure's own chevron, hidden: the indent that
-                // lines the link up with the label at every type size.
-                Image(systemName: "arrowtriangle.right.fill")
-                    .font(FreesideFont.disclosureGlyph)
-                    .hidden()
-                    .accessibilityHidden(true)
-                links(round, in: rounds)
-            }
+            links(round, in: rounds)
         }
         .padding(.leading, ChronologyMarker.diameter + 8)
     }
 
     /// A marker, the row's content, and its time trailing; the time drops
-    /// under the content when the line does not fit.
+    /// under the content when the line does not fit. A round in progress
+    /// passes `elapsed`, which the row shows in place of the instant.
     private func markedRow<Content: View>(
-        isCurrent: Bool, time: Date?, @ViewBuilder content: () -> Content
+        isCurrent: Bool, time: Date?, elapsed: String? = nil, @ViewBuilder content: () -> Content
     ) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             ChronologyMarker(isCurrent: isCurrent)
@@ -206,20 +212,20 @@ struct RunReviewSection: View {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     content()
                     Spacer(minLength: 8)
-                    timeText(time)
+                    timeText(time, elapsed: elapsed)
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     content()
-                    timeText(time)
+                    timeText(time, elapsed: elapsed)
                 }
             }
         }
     }
 
     @ViewBuilder
-    private func timeText(_ time: Date?) -> some View {
+    private func timeText(_ time: Date?, elapsed: String?) -> some View {
         if let time {
-            Text(formattedTime(time))
+            Text(elapsed ?? formattedTime(time))
                 .font(FreesideFont.trailingSummary)
                 .foregroundStyle(Color.inkDim)
                 .exactInstant(time)
@@ -233,12 +239,12 @@ struct RunReviewSection: View {
             label: "Round Facts", summary: ReviewRoundPresentation.factsSummary(round), isExpanded: isExpanded
         ) {
             VStack(alignment: .leading, spacing: 6) {
-                Text(RunDisplay.reviewIdentity(round))
-                    .font(FreesideFont.cardBody)
-                Text(round.outcome.map { "Outcome: \($0.value1.rawValue.capitalized)" } ?? "Outcome unavailable")
-                    .font(FreesideFont.cardBody)
-                Text(round.findings_count.map { "\($0) findings" } ?? "Findings count unavailable")
-                    .font(FreesideFont.cardBody)
+                if let identity = ReviewRoundPresentation.identity(round) {
+                    Text(identity).font(FreesideFont.cardBody)
+                }
+                ForEach(ReviewRoundPresentation.resultLines(round), id: \.self) { line in
+                    Text(line).font(FreesideFont.cardBody)
+                }
                 if let counts = round.dispositions?.value1 {
                     Text(
                         "\(counts.fixed) fixed · \(counts.declined) declined · \(counts.deferred) deferred · \(counts.open) open"
@@ -272,8 +278,8 @@ struct RunReviewSection: View {
                     Text("Completed: \(formattedTime(completed))")
                         .font(FreesideFont.cardBody)
                         .exactInstant(completed)
-                } else {
-                    Text(Self.missingCompletionMessage(round.state)).font(FreesideFont.cardBody)
+                } else if let missing = ReviewRoundPresentation.missingCompletionLine(round) {
+                    Text(missing).font(FreesideFont.cardBody)
                 }
                 Text(Self.sourceLabel(round.source.kind))
                     .font(FreesideFont.cardBody)
@@ -287,26 +293,35 @@ struct RunReviewSection: View {
     }
 
     /// The round's own reviewer output and, for a re-review, the output of
-    /// the round whose findings it remediated, where those findings are listed.
+    /// the round whose findings it remediated, where those findings are
+    /// listed. A round in progress with neither has no line here at all.
+    @ViewBuilder
     private func links(
         _ round: Components.Schemas.RunReviewRound, in rounds: [Components.Schemas.RunReviewRound]
     ) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            evidence(round)
-            if let source = ReviewRoundPresentation.sourceRound(of: round, in: rounds),
-                source.evidence.availability == .available
-            {
-                evidenceLink("Findings from Review \(source.round)", round: source)
+        let note = ReviewRoundPresentation.evidenceNote(round)
+        let hasOutput = round.evidence.availability == .available
+        let source = ReviewRoundPresentation.sourceRound(of: round, in: rounds)
+            .flatMap { $0.evidence.availability == .available ? $0 : nil }
+        if note != nil || hasOutput || source != nil {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                // The disclosure's own chevron, hidden: the indent that
+                // lines the link up with the label at every type size.
+                Image(systemName: "arrowtriangle.right.fill")
+                    .font(FreesideFont.disclosureGlyph)
+                    .hidden()
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 6) {
+                    if let note {
+                        evidenceNote(note)
+                    } else if hasOutput {
+                        evidenceLink("Inspect reviewer output", round: round)
+                    }
+                    if let source {
+                        evidenceLink("Findings from Review \(source.round)", round: source)
+                    }
+                }
             }
-        }
-    }
-
-    @ViewBuilder
-    private func evidence(_ round: Components.Schemas.RunReviewRound) -> some View {
-        if let note = ReviewRoundPresentation.evidenceNote(round) {
-            evidenceNote(note)
-        } else {
-            evidenceLink("Inspect reviewer output", round: round)
         }
     }
 
@@ -339,13 +354,73 @@ struct RunReviewSection: View {
 /// so the summaries are testable. Every value is already in `RunReviewRound`
 /// or the synced Inbox; nothing here asks the daemon for more.
 enum ReviewRoundPresentation {
-    /// The verdict chip: the round's state until it completes, then its
-    /// outcome. Findings carry the open count when the daemon sent
-    /// dispositions, else the findings count, else the word alone.
-    static func verdict(_ round: Components.Schemas.RunReviewRound) -> String {
+    /// A round with a request and no result: the daemon has asked for the
+    /// review and has not recorded how it ended.
+    static func isInProgress(_ round: Components.Schemas.RunReviewRound) -> Bool {
         switch round.state {
-        case .pending: return "Pending"
-        case .running: return "Running"
+        case .pending, .running: true
+        case .completed, .failed: false
+        }
+    }
+
+    /// How long a round is in progress before its chip says so. A
+    /// presentation number chosen in the client, not daemon policy: nothing
+    /// the daemon sends bounds a round's duration, and passing it raises no
+    /// alert and no Inbox item.
+    static let longRunningAfter: TimeInterval = 30 * 60
+
+    /// The time since a round in progress was requested, in the grammar the
+    /// Inbox rows use (`12m`, `2h`), or nil for any other round and for one
+    /// whose request time the daemon did not record.
+    static func elapsed(_ round: Components.Schemas.RunReviewRound, now: Date) -> String? {
+        guard isInProgress(round), let requested = round.requested_at else { return nil }
+        return AttentionDisplay.relativeRowTime(requested, now: now)
+    }
+
+    static func isRunningLong(_ round: Components.Schemas.RunReviewRound, now: Date) -> Bool {
+        guard isInProgress(round), let requested = round.requested_at else { return false }
+        return now.timeIntervalSince(requested) > longRunningAfter
+    }
+
+    /// The reviewer and model line. A round in progress names whichever of
+    /// the two the daemon sent and has no line when it sent neither: the
+    /// reviewer is not unknown, only not reported yet. A round with a result
+    /// keeps the full line, where a missing identity reads as unknown.
+    static func identity(_ round: Components.Schemas.RunReviewRound) -> String? {
+        guard isInProgress(round) else { return RunDisplay.reviewIdentity(round) }
+        let sent = [round.provider, round.model_configuration].compactMap { $0 }
+        return sent.isEmpty ? nil : sent.joined(separator: " · ")
+    }
+
+    /// The outcome and findings-count lines of the round facts. A round with
+    /// a result always has both, and a value the daemon did not send reads
+    /// as unavailable, never as clean. A round in progress has neither line:
+    /// it has no result to be missing.
+    static func resultLines(_ round: Components.Schemas.RunReviewRound) -> [String] {
+        guard !isInProgress(round) else { return [] }
+        return [
+            round.outcome.map { "Outcome: \($0.value1.rawValue.capitalized)" } ?? "Outcome unavailable",
+            round.findings_count.map { "\($0) findings" } ?? "Findings count unavailable",
+        ]
+    }
+
+    /// What the round facts say in place of a completion time the daemon did
+    /// not send: nothing while the round is in progress, where its absence
+    /// is expected.
+    static func missingCompletionLine(_ round: Components.Schemas.RunReviewRound) -> String? {
+        isInProgress(round) ? nil : "Completion time unavailable"
+    }
+
+    /// The verdict chip: the round's state until it completes, then its
+    /// outcome. A round in progress past `longRunningAfter` says so in the
+    /// label; its cut does not change. Findings carry the open count when
+    /// the daemon sent dispositions, else the findings count, else the word
+    /// alone.
+    static func verdict(_ round: Components.Schemas.RunReviewRound, now: Date) -> String {
+        let long = isRunningLong(round, now: now) ? " · over \(Int(longRunningAfter / 60))m" : ""
+        switch round.state {
+        case .pending: return "Pending" + long
+        case .running: return "Running" + long
         case .failed: return "Failed"
         case .completed:
             switch round.outcome?.value1 {
@@ -427,9 +502,10 @@ enum ReviewRoundPresentation {
         round.remediation.map { "Sent \(findingsPhrase($0.value1.finding_ids.count)) to remediation" }
     }
 
-    /// Why a round shows no reviewer output link, or nil when it has one. A
-    /// round still pending or running has produced nothing yet, which is not
-    /// a failure to retain it.
+    /// Why a round that could have reviewer output shows no link to it, or
+    /// nil when there is nothing to explain: the output is available, or the
+    /// round is still in progress and has produced none yet, which is not a
+    /// failure to retain it.
     static func evidenceNote(_ round: Components.Schemas.RunReviewRound) -> String? {
         switch round.evidence.availability {
         case .available:
@@ -437,10 +513,7 @@ enum ReviewRoundPresentation {
         case .unknown:
             return "Evidence unknown"
         case .unavailable:
-            switch round.state {
-            case .pending, .running: return "Reviewer output not produced yet"
-            case .completed, .failed: return "Evidence unavailable"
-            }
+            return isInProgress(round) ? nil : "Evidence unavailable"
         }
     }
 

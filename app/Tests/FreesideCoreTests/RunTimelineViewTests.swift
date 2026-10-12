@@ -33,13 +33,16 @@ import Testing
         #expect(RunReviewSection.sourceLabel("future-source").contains("Unknown"))
     }
 
-    @Test @MainActor func activeReviewCompletionIsNotPresentedAsMissingData() {
-        for state in [Components.Schemas.ReviewProgressState.pending, .running] {
-            #expect(RunReviewSection.missingCompletionMessage(state) == "Not completed")
-        }
-        for state in [Components.Schemas.ReviewProgressState.completed, .failed] {
-            #expect(RunReviewSection.missingCompletionMessage(state) == "Completion time unavailable")
-        }
+    @Test @MainActor func theSectionTicksOnlyWhileARoundInProgressIsOnALiveClock() {
+        let running = [RunFixtures.reviewRound(.completed), RunFixtures.reviewRound(.running, round: 2)]
+        #expect(RunReviewSection.ticks(running, pinnedNow: nil))
+        #expect(RunReviewSection.ticks([RunFixtures.reviewRound(.pending)], pinnedNow: nil))
+        // A pinned clock is a test's or a screenshot's, and must not move.
+        #expect(!RunReviewSection.ticks(running, pinnedNow: Date(timeIntervalSince1970: 0)))
+        // Rounds with a result show recorded instants, which do not age.
+        #expect(!RunReviewSection.ticks([RunFixtures.reviewRound(.completed)], pinnedNow: nil))
+        #expect(!RunReviewSection.ticks([RunFixtures.reviewRound(.failed)], pinnedNow: nil))
+        #expect(!RunReviewSection.ticks([], pinnedNow: nil))
     }
 
     @Test func currentRunHandoffAgreesWithTaskRowAndHistoricalRunsKeepTheirPhase() throws {
@@ -70,6 +73,8 @@ import Testing
             let round = RunFixtures.reviewRound(state)
             #expect(round.outcome == nil)
             #expect(round.findings_count == nil)
+            // The reviewer-output sheet's line, which the round facts use
+            // only for a round with a result.
             #expect(RunDisplay.reviewIdentity(round) == "Reviewer unknown · Model unknown")
             #expect(!RunDisplay.label(state).isEmpty)
         }

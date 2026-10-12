@@ -2337,6 +2337,39 @@
                                     coordinator: coordinator, runID: activeRun.run.id,
                                     facts: .init(rounds: threeRounds), startsExpanded: true
                                 ).padding(24))))
+                    // A lone round with its facts open, which no surface above
+                    // shows: a round in progress before and after it has run
+                    // long, one whose reviewer the daemon named, and a
+                    // completed round to read them against. The request times
+                    // are set against the pinned clock, because the fixture's
+                    // own is later than it.
+                    for (name, round) in [
+                        (
+                            "running-open",
+                            RunFixtures.reviewRound(.running, requestedAt: screenshotNow.addingTimeInterval(-12 * 60))
+                        ),
+                        (
+                            "running-long-open",
+                            RunFixtures.reviewRound(.running, requestedAt: screenshotNow.addingTimeInterval(-47 * 60))
+                        ),
+                        (
+                            "running-identified-open",
+                            RunFixtures.reviewRound(
+                                .running, requestedAt: screenshotNow.addingTimeInterval(-12 * 60),
+                                provider: "openai", modelConfiguration: "codex/high")
+                        ),
+                        ("clean-open", RunFixtures.reviewRound(.completed, availability: .available)),
+                    ] {
+                        surfaces.append(
+                            Surface(
+                                name: "run-review-\(name)-\(Int(width))-\(colorScheme == .dark ? "dark" : "light")",
+                                width: width, colorScheme: colorScheme, nativeAppearance: true,
+                                view: AnyView(
+                                    RunReviewSection(
+                                        coordinator: coordinator, runID: activeRun.run.id,
+                                        facts: .init(rounds: [round]), startsExpanded: true
+                                    ).padding(24))))
+                    }
                 }
             }
 
