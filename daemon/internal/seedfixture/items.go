@@ -169,11 +169,14 @@ func seedFindingAdjudication(s seeder, run domain.Run, at time.Time) error {
 		Message:  "The retry path drops the operator's reason.",
 		RawText:  "The retry path drops the operator's reason.", CreatedAt: at,
 	}
+	// A legacy record on purpose: it carries the three strings a record
+	// stored before review admission, so a seeded store always holds one
+	// round that must read back as stored.
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: domain.InvocationID(fmt.Sprintf("review-%s-%d", run.ID, round)), RunID: run.ID, Round: round,
-		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		LegacyProvider: "openai", LegacyModelConfiguration: "gpt-codex/high",
 		ConfigurationDigest: digest("review-configuration"),
-		InstructionDigest:   instructionDigest, CostOwner: "owner",
+		InstructionDigest:   instructionDigest, LegacyCostOwner: "owner",
 		BaseSHA: baseSHA, HeadSHA: headSHA, CompletedAt: at,
 		CompletionEvidence: digest("review-completion"),
 		Outcome:            domain.ReviewFindings, FindingIDs: []domain.FindingID{findingID},

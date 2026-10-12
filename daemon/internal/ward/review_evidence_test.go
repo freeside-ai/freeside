@@ -3,6 +3,7 @@ package ward
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
@@ -38,13 +39,13 @@ func TestDecodeRetainedCodexReviewPreservesInvalidUTF8(t *testing.T) {
 }
 
 func TestDecodeRetainedCodexReview(t *testing.T) {
-	for _, corruption := range []string{"none", "request before admission", "request admission", "request legacy", "request run", "request round", "request head", "request digest", "outcome digest", "outcome invocation", "collection", "provider", "state"} {
+	for _, corruption := range []string{"none", "request before admission", "result before admission", "request admission", "request legacy", "request run", "request round", "request head", "request digest", "outcome digest", "outcome invocation", "collection", "provider", "returned admission", "state"} {
 		t.Run(corruption, func(t *testing.T) {
 			outcome := codexGoldenReviewOutcome("{}")
 			request := exec.ReviewRequest{
 				Admission: testReviewAdmission("run-golden"),
 				RunID:     "run-golden", Round: 1, Repo: "owner/repo", RepositoryID: 1, BaseRef: "main",
-				BaseSHA: outcome.Result.BaseSHA, HeadSHA: outcome.Result.HeadSHA, Workspace: "/workspace",
+				BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40), Workspace: "/workspace",
 				Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(), RequestedAt: codexReviewEpoch,
 			}
 			binding := domain.ReviewRequestRecord{InvocationID: outcome.InvocationID, RunID: request.RunID, Round: 1, BaseSHA: request.BaseSHA, HeadSHA: request.HeadSHA, RequestedAt: request.RequestedAt}
@@ -63,7 +64,16 @@ func TestDecodeRetainedCodexReview(t *testing.T) {
 			case "collection":
 				outcome.Collection.Events = []byte("tampered")
 			case "provider":
-				outcome.Result.Provider = "anthropic"
+				// A Claude row cannot pass the Codex gate: its evidence was
+				// computed under the Claude version tags.
+				outcome.Result.CompletionEvidence, _ = reviewResultEvidence(
+					claudeReviewProvider{}, *outcome.Result, outcome.CollectionEvidence)
+			case "returned admission":
+				// A row that names another agent and recomputes its unkeyed
+				// evidence is still held against the request it answers.
+				outcome.Result.Admission.LineageGroup = "another-lineage"
+				outcome.Result.CompletionEvidence, _ = reviewResultEvidence(
+					codexReviewProvider{}, *outcome.Result, outcome.CollectionEvidence)
 			case "state":
 				state = "unknown"
 			}
@@ -74,9 +84,14 @@ func TestDecodeRetainedCodexReview(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if corruption == "request before admission" {
-				// A round reviewed before requests carried an admission: its
-				// retained evidence still reads.
+			if corruption == "request before admission" || corruption == "result before admission" {
+				// A round requested before requests carried an admission
+				// still reads when it failed, because a failure returns no
+				// snapshot to hold against the request. A result always
+				// returns one, so it cannot answer such a request.
+				if corruption == "request before admission" {
+					outcome = codexGoldenReviewOutcome(`{"type":"turn.failed","error":{"message":"configuration invalid"}}`)
+				}
 				var fields map[string]json.RawMessage
 				if err := json.Unmarshal(requestBody, &fields); err != nil {
 					t.Fatal(err)

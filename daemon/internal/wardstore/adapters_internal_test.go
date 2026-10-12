@@ -365,10 +365,10 @@ func TestCodexReviewJournalRejectsRewrittenOutcomeAuthority(t *testing.T) {
 		collectionEvidence := domain.Digest("sha256:" + strings.Repeat("e", 64))
 		result := exec.ReviewResult{
 			InvocationID: domain.InvocationID(id), BaseSHA: request.BaseSHA, HeadSHA: request.HeadSHA,
-			Provider: "openai", ModelConfiguration: "gpt-codex/high",
+			Admission:           request.Admission,
 			ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("f", 64)),
-			InstructionDigest:   instructions.ResultDigest, CostOwner: "owner",
-			CompletedAt: when,
+			InstructionDigest:   instructions.ResultDigest,
+			CompletedAt:         when,
 			Findings: []domain.Finding{{
 				ID: "finding-1", RunID: request.RunID, Source: "codex_local", Severity: "P1",
 				Location: &domain.FindingLocation{Path: "main.go", StartLine: 1, EndLine: 1}, Message: "unsafe", RawText: "unsafe", CreatedAt: when,

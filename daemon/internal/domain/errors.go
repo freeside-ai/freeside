@@ -409,6 +409,10 @@ var (
 		"admission's derived fields disagree with its admitted agent closure")
 	ErrReviewAdmissionInvalid = errors.New(
 		"review admission records a binding no review launch could have run")
+	ErrReviewAdmissionMismatch = errors.New(
+		"review result's admission is not the one its invocation was admitted under")
+	ErrReviewAttribution = errors.New(
+		"review record must carry an admission snapshot or its legacy attribution, never both and never neither")
 
 	// Backend-conformance failures (issues #327, #320).
 	ErrConformanceOverclaim = errors.New(

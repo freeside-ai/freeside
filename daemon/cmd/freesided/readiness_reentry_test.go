@@ -8,6 +8,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/scheduler"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -45,10 +46,10 @@ func reentryReadyItem(t *testing.T, st *store.Store, runID domain.RunID) domain.
 	}
 	review, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: reentryTestReviewID, RunID: runID, Round: 1,
-		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, runID, reentryTestReviewID),
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		CostOwner:           "owner", BaseSHA: reentryTestBase, HeadSHA: reentryTestHead,
+		BaseSHA:             reentryTestBase, HeadSHA: reentryTestHead,
 		CompletedAt:        activeResourceTestTime.Add(-2 * time.Minute),
 		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 		Outcome:            domain.ReviewClean,

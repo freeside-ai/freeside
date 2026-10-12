@@ -1344,7 +1344,6 @@ type claudeComposition struct {
 	reviewRecovery                  func(context.Context) error
 	reviewConfigurationDigest       domain.Digest
 	shadowReviewConfigurationDigest domain.Digest
-	shadowReviewCostOwner           string
 	// selectionFailure names the writer role that failed its startup
 	// admission check; while set, the admission gate holds every attempt.
 	selectionFailure           *roleAdmissionError
@@ -1892,12 +1891,12 @@ func composeClaudeDriver(
 		},
 		reviewConfigurationDigest: reviewConfigurationDigest, containerBin: cfg.ContainerBin,
 		shadowReviewConfigurationDigest: shadowReviewDigests.runtime,
-		shadowReviewCostOwner:           cfg.ShadowReviewCostOwner, shadowReviewRate: cfg.ShadowReviewRate,
-		reviewHostInstructions:     reviewHostInstructions,
-		env:                        env,
-		specificationPromptPackage: specificationPromptPackage,
-		remediationPromptPackage:   remediationPromptPackage,
-		derive:                     claudeAdmissionDerivation(cfg),
+		shadowReviewRate:                cfg.ShadowReviewRate,
+		reviewHostInstructions:          reviewHostInstructions,
+		env:                             env,
+		specificationPromptPackage:      specificationPromptPackage,
+		remediationPromptPackage:        remediationPromptPackage,
+		derive:                          claudeAdmissionDerivation(cfg),
 		runConformance: func(runCtx context.Context) error {
 			return runClaudeConformance(
 				runCtx, st, transport, backend, cfg, janitor.WithStableCoverage,

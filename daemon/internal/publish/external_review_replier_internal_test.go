@@ -15,6 +15,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -185,7 +186,7 @@ func (h *replyHarness) review(round int, head string) domain.ReviewRecord {
 	digest := domain.Digest("sha256:" + strings.Repeat("c", 64))
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: domain.InvocationID(fmt.Sprintf("reply-review-%d", round)), RunID: h.f.run.ID, Round: round,
-		Provider: "openai", ModelConfiguration: "test", ConfigurationDigest: digest, InstructionDigest: digest, CostOwner: "owner",
+		Admission: fake.RecordAdmission(domain.RoleReviewer, h.f.run.ID, domain.InvocationID(fmt.Sprintf("reply-review-%d", round))), ConfigurationDigest: digest, InstructionDigest: digest,
 		BaseSHA: h.f.admission.Base.BaseSHA, HeadSHA: head, CompletedAt: h.now, CompletionEvidence: digest, Outcome: domain.ReviewClean,
 	})
 	if err != nil {

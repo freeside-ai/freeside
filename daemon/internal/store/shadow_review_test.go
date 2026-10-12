@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -23,11 +24,10 @@ func shadowRecord(
 	}
 	record, err := domain.NewShadowReviewRecord(domain.ShadowReviewRecord{
 		InvocationID: invocationID, RunID: runID, ShadowedRound: round,
-		Source: domain.ShadowReviewClaudeLocal, Provider: "anthropic",
-		ModelConfiguration:  "claude-opus/high",
+		Source: domain.ShadowReviewClaudeLocal, Admission: fake.RecordAdmission(domain.RoleShadowReviewer, runID, invocationID),
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		CostOwner:           "owner", BaseSHA: "base", HeadSHA: "head",
+		BaseSHA:             "base", HeadSHA: "head",
 		CompletedAt: at, CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 		Outcome: outcome, FindingIDs: findings,
 	})
@@ -48,10 +48,10 @@ func routedCandidate(
 	}
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: invocationID, RunID: runID, Round: round,
-		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, runID, invocationID),
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		CostOwner:           "owner", BaseSHA: "base", HeadSHA: "head", CompletedAt: at,
+		BaseSHA:             "base", HeadSHA: "head", CompletedAt: at,
 		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 		Outcome:            outcome, FindingIDs: findings,
 	})

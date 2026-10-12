@@ -23,7 +23,7 @@ func TestProductionReviewInvocationKeepsItsFirstAdmission(t *testing.T) {
 	p := newProductionPublicationHarness(t, "")
 	id := engine.ProductionReviewInvocationID(p.runID, 1)
 	script := fake.ReviewScript{PendingInspects: 2, Outcome: fake.OutcomeComplete, Result: exec.ReviewResult{
-		BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA, Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+		BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
 		CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("review admitted once")),
 	}}
 	calls := 0

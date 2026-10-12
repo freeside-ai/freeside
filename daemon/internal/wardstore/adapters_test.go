@@ -336,10 +336,10 @@ func TestCodexReviewJournalRoundTripsLifecycleAcrossStoreReopen(t *testing.T) {
 	}
 	result := exec.ReviewResult{
 		InvocationID: domain.InvocationID(runID), BaseSHA: request.BaseSHA, HeadSHA: request.HeadSHA,
-		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		Admission:           request.Admission,
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
-		InstructionDigest:   instructions.ResultDigest, CostOwner: "owner",
-		CompletedAt: when,
+		InstructionDigest:   instructions.ResultDigest,
+		CompletedAt:         when,
 	}
 	collectionEvidence := domain.Digest("sha256:" + strings.Repeat("c", 64))
 	result.CompletionEvidence, err = ward.CodexReviewResultEvidence(result, collectionEvidence)
@@ -426,11 +426,10 @@ func TestPutCodexReviewOutcomeRefusesUnresolvableEvidence(t *testing.T) {
 	collectionEvidence := domain.Digest("sha256:" + strings.Repeat("c", 64))
 	result := exec.ReviewResult{
 		InvocationID: domain.InvocationID(runID), BaseSHA: strings.Repeat("a", 40),
-		HeadSHA:  strings.Repeat("b", 40),
-		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		HeadSHA:             strings.Repeat("b", 40),
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		CostOwner:           "owner", CompletedAt: time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+		CompletedAt:         time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
 	}
 	result.CompletionEvidence, err = ward.CodexReviewResultEvidence(result, collectionEvidence)
 	if err != nil {

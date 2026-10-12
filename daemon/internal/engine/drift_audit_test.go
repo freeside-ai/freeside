@@ -13,6 +13,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	execfake "github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/inference/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
@@ -135,10 +136,10 @@ func newDriftAuditFixture(t *testing.T, options driftAuditFixtureOptions) *drift
 	}
 	current, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: ProductionReviewInvocationID(task.RunID, 2), RunID: task.RunID, Round: 2,
-		Provider: base.record.Provider, ModelConfiguration: base.record.ModelConfiguration,
+		Admission:           execfake.RecordAdmission(domain.RoleReviewer, task.RunID, ProductionReviewInvocationID(task.RunID, 2)),
 		ConfigurationDigest: base.record.ConfigurationDigest,
-		InstructionDigest:   base.record.InstructionDigest, CostOwner: base.record.CostOwner,
-		BaseSHA: baseSHA, HeadSHA: headSHA,
+		InstructionDigest:   base.record.InstructionDigest,
+		BaseSHA:             baseSHA, HeadSHA: headSHA,
 		CompletedAt:        base.record.CompletedAt.Add(2 * time.Minute),
 		CompletionEvidence: adjudicationDigest("8"),
 		Outcome:            domain.ReviewFindings, FindingIDs: []domain.FindingID{finding.ID},
@@ -672,10 +673,10 @@ func TestDriftAuditAutoRoutesOneSimplificationRound(t *testing.T) {
 	reemitted.CreatedAt = f.current.CompletedAt.Add(time.Minute)
 	next, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: ProductionReviewInvocationID(f.task.RunID, 3), RunID: f.task.RunID, Round: 3,
-		Provider: f.current.Provider, ModelConfiguration: f.current.ModelConfiguration,
+		Admission:           execfake.RecordAdmission(domain.RoleReviewer, f.task.RunID, ProductionReviewInvocationID(f.task.RunID, 3)),
 		ConfigurationDigest: f.current.ConfigurationDigest,
-		InstructionDigest:   f.current.InstructionDigest, CostOwner: f.current.CostOwner,
-		BaseSHA: f.current.BaseSHA, HeadSHA: f.current.HeadSHA,
+		InstructionDigest:   f.current.InstructionDigest,
+		BaseSHA:             f.current.BaseSHA, HeadSHA: f.current.HeadSHA,
 		CompletedAt:        f.current.CompletedAt.Add(time.Minute),
 		CompletionEvidence: adjudicationDigest("7"),
 		Outcome:            domain.ReviewFindings, FindingIDs: []domain.FindingID{reemitted.ID},

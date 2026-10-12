@@ -20,6 +20,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	execfake "github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/inference/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
@@ -176,10 +177,10 @@ func newFindingAdjudicationFixtureWithOptions(
 	}
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-a", RunID: runID, Round: 1,
-		Provider: "codex", ModelConfiguration: "test",
+		Admission:           execfake.RecordAdmission(domain.RoleReviewer, runID, "review-a"),
 		ConfigurationDigest: adjudicationDigest("e"),
 		InstructionDigest:   instructionDigest,
-		CostOwner:           "test", BaseSHA: baseSHA, HeadSHA: headSHA,
+		BaseSHA:             baseSHA, HeadSHA: headSHA,
 		CompletedAt: createdAt, CompletionEvidence: adjudicationDigest("9"),
 		Outcome: domain.ReviewFindings, FindingIDs: []domain.FindingID{finding.ID},
 	})
@@ -1947,10 +1948,9 @@ func assertFinalReviewFindingsCanFinish(
 	finding.CreatedAt = prior.CompletedAt.Add(time.Minute)
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-final", RunID: f.task.RunID, Round: prior.Round + 1,
-		Provider: prior.Provider, ModelConfiguration: prior.ModelConfiguration,
+		Admission:           execfake.RecordAdmission(domain.RoleReviewer, f.task.RunID, "review-final"),
 		ConfigurationDigest: prior.ConfigurationDigest,
 		InstructionDigest:   prior.InstructionDigest,
-		CostOwner:           prior.CostOwner,
 		BaseSHA:             prior.BaseSHA,
 		HeadSHA:             prior.HeadSHA,
 		CompletedAt:         finding.CreatedAt,
@@ -2045,11 +2045,10 @@ func seedDiminishingReviewRound(
 		finding.CreatedAt = f.finding.CreatedAt.Add(time.Duration(round) * time.Minute)
 		record, err := domain.NewReviewRecord(domain.ReviewRecord{
 			InvocationID: domain.InvocationID(fmt.Sprintf("review-recurring-%d", round)),
-			RunID:        f.task.RunID, Round: round, Provider: f.record.Provider,
-			ModelConfiguration:  f.record.ModelConfiguration,
+			RunID:        f.task.RunID, Round: round, Admission: execfake.RecordAdmission(domain.RoleReviewer, f.task.RunID, domain.InvocationID(fmt.Sprintf("review-recurring-%d", round))),
 			ConfigurationDigest: f.record.ConfigurationDigest,
-			InstructionDigest:   f.record.InstructionDigest, CostOwner: f.record.CostOwner,
-			BaseSHA: f.record.BaseSHA, HeadSHA: f.record.HeadSHA,
+			InstructionDigest:   f.record.InstructionDigest,
+			BaseSHA:             f.record.BaseSHA, HeadSHA: f.record.HeadSHA,
 			CompletedAt:        f.record.CompletedAt.Add(time.Duration(round) * time.Minute),
 			CompletionEvidence: adjudicationDigest(fmt.Sprintf("%d", round)),
 			Outcome:            domain.ReviewFindings, FindingIDs: []domain.FindingID{finding.ID},

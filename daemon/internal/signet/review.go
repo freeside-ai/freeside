@@ -159,7 +159,10 @@ func runReviewFacts(ctx context.Context, tx *store.ReadTx, runID domain.RunID, o
 			return nil, err
 		}
 		r.State, r.CompletedAt = domain.ReviewCompleted, &record.CompletedAt
-		r.Provider, r.ModelConfiguration = &record.Provider, &record.ModelConfiguration
+		// A round written since review admission shows its admitted agent's
+		// lineage group and model configuration; a legacy round shows the
+		// strings it stored.
+		r.Provider, r.ModelConfiguration = new(record.Provider()), new(record.ModelConfiguration())
 		r.Outcome, r.FindingsCount = &record.Outcome, new(len(record.FindingIDs))
 		r.Evidence.CompletionEvidence = &record.CompletionEvidence
 		r.Dispositions = &ReviewRoundDispositions{Open: len(record.FindingIDs)}

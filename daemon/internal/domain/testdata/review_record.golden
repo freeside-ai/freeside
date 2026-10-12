@@ -2,11 +2,34 @@
   "invocation_id": "review-run-1-1",
   "run_id": "run-1",
   "round": 1,
-  "provider": "openai",
-  "model_configuration": "gpt-5.2-codex/high",
+  "admission": {
+    "invocation_id": "review-run-1-1",
+    "run_id": "run-1",
+    "role": "reviewer",
+    "auth_identity_id": "fake-review-identity",
+    "lineage_group": "openai",
+    "agent_binding": {
+      "agent_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "launch_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "treatment_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "pricing_revision": "fake-pricing",
+      "lineup_revision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "enrollment_id": "fake-review-enrollment",
+      "enrollment_generation": 1,
+      "store_manifest_digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+      "effective_egress": [
+        "review.fake.example:443"
+      ],
+      "attended": false,
+      "route_model_id": "gpt-codex",
+      "requested_effort": "high",
+      "native_effort": "high",
+      "selection_source": "lineup"
+    },
+    "admitted_at": "2026-01-02T03:04:05Z"
+  },
   "configuration_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
   "instruction_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-  "cost_owner": "subscription:owner",
   "base_sha": "beefcafe",
   "head_sha": "cafebabe",
   "completed_at": "2026-01-02T03:04:05Z",

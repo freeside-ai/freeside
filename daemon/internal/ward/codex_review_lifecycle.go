@@ -1544,7 +1544,7 @@ func reviewProviderMatchesIntent(
 	if intent.resourceNamesMatch(reviewNames(provider, runID)) {
 		return true
 	}
-	if provider.providerLabel() != (codexReviewProvider{}).providerLabel() {
+	if provider.sourceLabel() != (codexReviewProvider{}).sourceLabel() {
 		return false
 	}
 	return intent.resourceNamesMatch(preSnapshotCodexReviewNames(runID)) ||

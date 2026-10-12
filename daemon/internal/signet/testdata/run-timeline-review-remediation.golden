@@ -13,7 +13,7 @@
       "requested_at": null,
       "completed_at": "2026-08-12T12:01:00Z",
       "provider": "openai",
-      "model_configuration": "codex/high",
+      "model_configuration": "gpt-codex/high",
       "outcome": "findings",
       "findings_count": 1,
       "dispositions": {

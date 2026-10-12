@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
@@ -454,9 +455,9 @@ func newRemediationReviewFixtureWithBatch(
 	}
 	priorRecord, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: ProductionReviewInvocationID(runID, 1), RunID: runID, Round: 1,
-		Provider: "codex", ModelConfiguration: "test",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, runID, ProductionReviewInvocationID(runID, 1)),
 		ConfigurationDigest: adjudicationDigest("1"), InstructionDigest: adjudicationDigest("2"),
-		CostOwner: "test", BaseSHA: baseSHA, HeadSHA: priorHead, CompletedAt: at,
+		BaseSHA: baseSHA, HeadSHA: priorHead, CompletedAt: at,
 		CompletionEvidence: adjudicationDigest("3"), Outcome: domain.ReviewFindings,
 		FindingIDs: findingIDs,
 	})
@@ -520,10 +521,10 @@ func newRemediationReviewFixtureWithBatch(
 	}
 	current, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: ProductionReviewInvocationID(runID, 2), RunID: runID, Round: 2,
-		Provider: "codex", ModelConfiguration: "test",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, runID, ProductionReviewInvocationID(runID, 2)),
 		ConfigurationDigest: priorRecord.ConfigurationDigest,
-		InstructionDigest:   priorRecord.InstructionDigest, CostOwner: "test",
-		BaseSHA: baseSHA, HeadSHA: currentHead, CompletedAt: at.Add(time.Minute),
+		InstructionDigest:   priorRecord.InstructionDigest,
+		BaseSHA:             baseSHA, HeadSHA: currentHead, CompletedAt: at.Add(time.Minute),
 		CompletionEvidence: adjudicationDigest("7"), Outcome: domain.ReviewClean,
 	})
 	if err != nil {

@@ -102,6 +102,92 @@ func (a ReviewAdmission) ModelConfiguration() string {
 	return a.AgentBinding.RouteModelID + "/" + a.AgentBinding.NativeEffort
 }
 
+// ReviewProviderUnknown is the provider label of a review whose agent's offer
+// names no lineage group. Unknown lineage is recorded as unknown, never
+// refused (plan §5.4), and a record's provider label is never empty.
+const ReviewProviderUnknown = "unknown"
+
+// ProviderLabel is the provider a review record shows: the lineage group of
+// the offer the admitted agent ran.
+func (a ReviewAdmission) ProviderLabel() string {
+	if a.LineageGroup == "" {
+		return ReviewProviderUnknown
+	}
+	return a.LineageGroup
+}
+
+// reviewAttribution is how a review record says who reviewed. A record
+// written since review admission carries the invocation's snapshot and none
+// of the three strings. A legacy record carries the three strings as its
+// source reported them and no snapshot; nothing resolves those against a
+// lineup. Carrying both would leave two answers to the same question, and
+// carrying neither would leave none, so both are refused wherever a record
+// is written or read.
+type reviewAttribution struct {
+	admission                           *ReviewAdmission
+	provider, modelConfiguration, payer string
+	invocationID                        InvocationID
+	runID                               RunID
+	role                                RoleName
+}
+
+func (a reviewAttribution) validate(kind string) error {
+	if a.admission == nil {
+		switch {
+		case a.provider == "":
+			return fmt.Errorf("%s provider: %w", kind, ErrEmptyField)
+		case a.modelConfiguration == "":
+			return fmt.Errorf("%s model_configuration: %w", kind, ErrEmptyField)
+		case a.payer == "":
+			return fmt.Errorf("%s cost_owner: %w", kind, ErrEmptyField)
+		}
+		return nil
+	}
+	if a.provider != "" || a.modelConfiguration != "" || a.payer != "" {
+		return fmt.Errorf("%s carries an admission and legacy attribution: %w", kind, ErrReviewAttribution)
+	}
+	if err := a.admission.Validate(); err != nil {
+		return fmt.Errorf("%s: %w", kind, err)
+	}
+	switch {
+	case a.admission.InvocationID != a.invocationID:
+		return fmt.Errorf("%s admission names invocation %q: %w",
+			kind, a.admission.InvocationID, ErrParentKeyMismatch)
+	case a.admission.RunID != a.runID:
+		return fmt.Errorf("%s admission names run %q: %w", kind, a.admission.RunID, ErrParentKeyMismatch)
+	case a.admission.Role != a.role:
+		return fmt.Errorf("%s admission is for role %q, want %q: %w",
+			kind, a.admission.Role, a.role, ErrReviewAdmissionInvalid)
+	}
+	return nil
+}
+
+func (a reviewAttribution) providerLabel() string {
+	if a.admission != nil {
+		return a.admission.ProviderLabel()
+	}
+	return a.provider
+}
+
+func (a reviewAttribution) modelConfigurationLabel() string {
+	if a.admission != nil {
+		return a.admission.ModelConfiguration()
+	}
+	return a.modelConfiguration
+}
+
+// detachedReviewAdmission returns a canonical copy a record owns, so a
+// caller's later edit to its snapshot never reaches the record.
+func detachedReviewAdmission(admission *ReviewAdmission) *ReviewAdmission {
+	if admission == nil {
+		return nil
+	}
+	detached := *admission
+	detached.AdmittedAt = detached.AdmittedAt.UTC()
+	detached.AgentBinding = *canonicalAgentBinding(&detached.AgentBinding)
+	return &detached
+}
+
 // ValidateReviewAdmissionDerivations re-runs the closure joins a review
 // snapshot rests on, as ValidateAdmissionAgentDerivations does for an
 // execution admission: the binding against the agent, its fragments, the

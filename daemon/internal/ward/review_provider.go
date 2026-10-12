@@ -43,8 +43,6 @@ type reviewProvider interface {
 	// sourceLabel is the domain.Finding.Source tag for findings this provider
 	// produces (Codex: "codex_local").
 	sourceLabel() string
-	// providerLabel is the exec.ReviewResult.Provider tag (Codex: "openai").
-	providerLabel() string
 	// topologyVersion binds the read-only container-topology generation into the
 	// durable binding and the configuration envelope (Codex:
 	// "codex_review_read_only_v3").
@@ -53,7 +51,7 @@ type reviewProvider interface {
 	// digest (Codex: "codex-review-completion-v1").
 	completionEvidenceVersion() string
 	// resultEvidenceVersion tags the normalized-result completion-evidence
-	// envelope (Codex: "codex-review-result-v3").
+	// envelope (Codex: "codex-review-result-v5").
 	resultEvidenceVersion() string
 	// configurationVersion tags the trust-profile configuration envelope (Codex:
 	// "codex-review-configuration-v3").
@@ -165,13 +163,12 @@ type codexReviewProvider struct{}
 
 var _ reviewProvider = codexReviewProvider{}
 
-func (codexReviewProvider) sourceLabel() string   { return "codex_local" }
-func (codexReviewProvider) providerLabel() string { return "openai" }
+func (codexReviewProvider) sourceLabel() string { return "codex_local" }
 
 func (codexReviewProvider) topologyVersion() string { return codexReviewTopologyVersion }
 
 func (codexReviewProvider) completionEvidenceVersion() string { return "codex-review-completion-v1" }
-func (codexReviewProvider) resultEvidenceVersion() string     { return "codex-review-result-v4" }
+func (codexReviewProvider) resultEvidenceVersion() string     { return "codex-review-result-v5" }
 func (codexReviewProvider) configurationVersion() string      { return "codex-review-configuration-v4" }
 
 func (codexReviewProvider) promptProtocol() string { return codexProductionReviewPromptVersion }

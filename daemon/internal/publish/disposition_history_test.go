@@ -1,11 +1,13 @@
 package publish
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 )
 
@@ -15,19 +17,26 @@ const (
 	dispositionDigestC = domain.Digest("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
 )
 
-// dispositionCostOwnerSentinel is the fixture's review cost owner. A cost
-// owner names a bill, so it is recorded but never published; the value is
-// distinctive so a test can prove no rendered text carries it.
-const dispositionCostOwnerSentinel = "cost-owner-sentinel-must-not-publish"
+// dispositionCostOwnerSentinel is the cost owner of the fixture's legacy
+// round, and dispositionIdentitySentinel the auth identity of its admitted
+// round. Each names who pays, so it is recorded but never published; the
+// values are distinctive so a test can prove no rendered text carries them.
+const (
+	dispositionCostOwnerSentinel = "cost-owner-sentinel-must-not-publish"
+	dispositionIdentitySentinel  = "auth-identity-sentinel-must-not-publish"
+)
 
 func dispositionHistoryFixture(t *testing.T) DispositionHistory {
 	t.Helper()
 	runID := domain.RunID("run-disposition-history")
+	// Round 1 is a legacy record: it renders the strings it stored. Round 2
+	// carries an admission snapshot: it renders the admitted agent's lineage
+	// group, model, and effort.
 	first, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-round-1", RunID: runID, Round: 1,
-		Provider: "openai", ModelConfiguration: "codex <frontier>",
+		LegacyProvider: "openai", LegacyModelConfiguration: "codex <frontier>",
 		ConfigurationDigest: dispositionDigestA, InstructionDigest: dispositionDigestB,
-		CostOwner: dispositionCostOwnerSentinel, BaseSHA: strings.Repeat("1", 40), HeadSHA: strings.Repeat("2", 40),
+		LegacyCostOwner: dispositionCostOwnerSentinel, BaseSHA: strings.Repeat("1", 40), HeadSHA: strings.Repeat("2", 40),
 		CompletedAt:        time.Date(2026, 8, 11, 15, 4, 5, 0, time.UTC),
 		CompletionEvidence: dispositionDigestC, Outcome: domain.ReviewFindings,
 		FindingIDs: []domain.FindingID{"finding-deferred", "finding-fixed", "finding-declined"},
@@ -35,11 +44,14 @@ func dispositionHistoryFixture(t *testing.T) DispositionHistory {
 	if err != nil {
 		t.Fatal(err)
 	}
+	admission := fake.RecordAdmission(domain.RoleReviewer, runID, "review-round-2")
+	admission.AuthIdentityID, admission.LineageGroup = dispositionIdentitySentinel, "openai"
+	admission.AgentBinding.RouteModelID, admission.AgentBinding.NativeEffort = "codex", "frontier"
 	second, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-round-2", RunID: runID, Round: 2,
-		Provider: "openai", ModelConfiguration: "codex frontier",
+		Admission:           admission,
 		ConfigurationDigest: dispositionDigestA, InstructionDigest: dispositionDigestB,
-		CostOwner: dispositionCostOwnerSentinel, BaseSHA: strings.Repeat("1", 40), HeadSHA: strings.Repeat("3", 40),
+		BaseSHA: strings.Repeat("1", 40), HeadSHA: strings.Repeat("3", 40),
 		CompletedAt:        time.Date(2026, 8, 11, 15, 14, 5, 0, time.UTC),
 		CompletionEvidence: dispositionDigestC, Outcome: domain.ReviewClean,
 	})
@@ -129,8 +141,12 @@ func TestPublicationTextOmitsReviewCostOwner(t *testing.T) {
 	t.Parallel()
 	history := dispositionHistoryFixture(t)
 	for _, review := range history.reviews {
-		if review.CostOwner != dispositionCostOwnerSentinel {
-			t.Fatalf("round %d cost owner = %q, want the sentinel", review.Round, review.CostOwner)
+		payer := review.LegacyCostOwner
+		if review.Admission != nil {
+			payer = string(review.Admission.AuthIdentityID)
+		}
+		if payer != dispositionCostOwnerSentinel && payer != dispositionIdentitySentinel {
+			t.Fatalf("round %d payer = %q, want a sentinel", review.Round, payer)
 		}
 	}
 	section, err := RenderDispositionHistory(history)
@@ -163,8 +179,8 @@ func TestPublicationTextOmitsReviewCostOwner(t *testing.T) {
 		"disposition history": section, "truncated disposition history": truncated,
 		"pull request title": title, "pull request body": body,
 	} {
-		if strings.Contains(text, dispositionCostOwnerSentinel) {
-			t.Errorf("%s publishes the review cost owner:\n%s", name, text)
+		if strings.Contains(text, dispositionCostOwnerSentinel) || strings.Contains(text, dispositionIdentitySentinel) {
+			t.Errorf("%s publishes who paid for a review:\n%s", name, text)
 		}
 	}
 }
@@ -221,8 +237,8 @@ func TestDispositionHistoryFailsClosedOnIncompleteOrStaleRecords(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			runID := domain.RunID("run-incomplete")
 			first, err := domain.NewReviewRecord(domain.ReviewRecord{
-				InvocationID: "review-1", RunID: runID, Round: 1, Provider: "openai", ModelConfiguration: "codex",
-				ConfigurationDigest: dispositionDigestA, InstructionDigest: dispositionDigestB, CostOwner: "operator",
+				InvocationID: "review-1", RunID: runID, Round: 1, Admission: fake.RecordAdmission(domain.RoleReviewer, runID, "review-1"),
+				ConfigurationDigest: dispositionDigestA, InstructionDigest: dispositionDigestB,
 				BaseSHA: "base", HeadSHA: "first-head", CompletedAt: time.Date(2026, 8, 11, 1, 0, 0, 0, time.UTC),
 				CompletionEvidence: dispositionDigestC, Outcome: domain.ReviewFindings, FindingIDs: []domain.FindingID{"finding"},
 			})
@@ -230,8 +246,8 @@ func TestDispositionHistoryFailsClosedOnIncompleteOrStaleRecords(t *testing.T) {
 				t.Fatal(err)
 			}
 			second, err := domain.NewReviewRecord(domain.ReviewRecord{
-				InvocationID: "review-2", RunID: runID, Round: 2, Provider: "openai", ModelConfiguration: "codex",
-				ConfigurationDigest: dispositionDigestA, InstructionDigest: dispositionDigestB, CostOwner: "operator",
+				InvocationID: "review-2", RunID: runID, Round: 2, Admission: fake.RecordAdmission(domain.RoleReviewer, runID, "review-2"),
+				ConfigurationDigest: dispositionDigestA, InstructionDigest: dispositionDigestB,
 				BaseSHA: "base", HeadSHA: "head", CompletedAt: time.Date(2026, 8, 11, 1, 2, 0, 0, time.UTC),
 				CompletionEvidence: dispositionDigestC, Outcome: domain.ReviewClean,
 			})
@@ -261,13 +277,77 @@ func TestDispositionHistoryFailsClosedOnIncompleteOrStaleRecords(t *testing.T) {
 	}
 }
 
+// TestCurrentDispositionLineageExcludesLegacyPassOnTheAdmittedHead covers the
+// upgrade window: a legacy pass whose adjudication never finished is
+// superseded by the first admitted pass on the same head and may have no
+// disposition, while a legacy pass on an earlier head was remediated and keeps
+// its place and its dispositions.
+func TestCurrentDispositionLineageExcludesLegacyPassOnTheAdmittedHead(t *testing.T) {
+	t.Parallel()
+	runID := domain.RunID("run-legacy-lineage")
+	at := time.Date(2026, 8, 11, 2, 0, 0, 0, time.UTC)
+	record := func(round int, head string, admitted bool, outcome domain.ReviewOutcome, findings ...domain.FindingID) domain.ReviewRecord {
+		t.Helper()
+		id := domain.InvocationID(fmt.Sprintf("review-%d", round))
+		in := domain.ReviewRecord{
+			InvocationID: id, RunID: runID, Round: round, ConfigurationDigest: dispositionDigestA,
+			InstructionDigest: dispositionDigestB, BaseSHA: "base", HeadSHA: head,
+			CompletedAt: at.Add(time.Duration(round) * time.Minute), CompletionEvidence: dispositionDigestC,
+			Outcome: outcome, FindingIDs: findings,
+		}
+		if admitted {
+			in.Admission = fake.RecordAdmission(domain.RoleReviewer, runID, id)
+		} else {
+			in.LegacyProvider, in.LegacyModelConfiguration, in.LegacyCostOwner = "openai", "gpt-codex/high", "owner"
+		}
+		out, err := domain.NewReviewRecord(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	remediated := record(1, "head-1", false, domain.ReviewFindings, "fixed-finding")
+	superseded := record(2, "head-2", false, domain.ReviewFindings, "unsettled-finding")
+	admitted := record(3, "head-2", true, domain.ReviewClean)
+	fixed := domain.ReviewDispositionRecord{
+		FindingID: "fixed-finding", Round: 1, Disposition: domain.ReviewDispositionFixed,
+	}
+	partial := domain.ReviewDispositionRecord{
+		FindingID: "unsettled-finding", Round: 2, Disposition: domain.ReviewDispositionDeclined,
+	}
+
+	reviews, dispositions := currentDispositionLineage(
+		[]domain.ReviewRecord{remediated, superseded, admitted},
+		[]domain.ReviewDispositionRecord{fixed, partial},
+	)
+	if len(reviews) != 2 || reviews[0].Round != 1 || reviews[1].Round != 3 ||
+		len(dispositions) != 1 || dispositions[0].Round != 1 {
+		t.Fatalf("lineage = %#v, %#v", reviews, dispositions)
+	}
+
+	// With no admitted pass, the legacy passes are the whole lineage, as they
+	// were when written.
+	reviews, _ = currentDispositionLineage([]domain.ReviewRecord{remediated, superseded}, nil)
+	if len(reviews) != 2 {
+		t.Fatalf("legacy-only lineage = %#v", reviews)
+	}
+
+	// An admitted pass with unsettled findings is never filtered: only a
+	// legacy pass is superseded by a later pass on its head.
+	unsettled := record(2, "head-2", true, domain.ReviewFindings, "unsettled-finding")
+	reviews, _ = currentDispositionLineage([]domain.ReviewRecord{remediated, unsettled, admitted}, nil)
+	if len(reviews) != 3 {
+		t.Fatalf("admitted lineage = %#v", reviews)
+	}
+}
+
 func TestCurrentDispositionLineageExcludesSupersededAuthorityOnly(t *testing.T) {
 	t.Parallel()
 	runID := domain.RunID("run-lineage")
 	stale, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-stale", RunID: runID, Round: 1,
-		Provider: "openai", ModelConfiguration: "codex", ConfigurationDigest: dispositionDigestA,
-		InstructionDigest: dispositionDigestA, CostOwner: "operator", BaseSHA: "base", HeadSHA: "head",
+		Admission: fake.RecordAdmission(domain.RoleReviewer, runID, "review-stale"), ConfigurationDigest: dispositionDigestA,
+		InstructionDigest: dispositionDigestA, BaseSHA: "base", HeadSHA: "head",
 		CompletedAt: time.Date(2026, 8, 11, 2, 0, 0, 0, time.UTC), CompletionEvidence: dispositionDigestC,
 		Outcome: domain.ReviewFindings, FindingIDs: []domain.FindingID{"stale-finding"},
 	})
@@ -276,8 +356,8 @@ func TestCurrentDispositionLineageExcludesSupersededAuthorityOnly(t *testing.T) 
 	}
 	current, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-current", RunID: runID, Round: 2,
-		Provider: "openai", ModelConfiguration: "codex", ConfigurationDigest: dispositionDigestA,
-		InstructionDigest: dispositionDigestB, CostOwner: "operator", BaseSHA: "base", HeadSHA: "head",
+		Admission: fake.RecordAdmission(domain.RoleReviewer, runID, "review-current"), ConfigurationDigest: dispositionDigestA,
+		InstructionDigest: dispositionDigestB, BaseSHA: "base", HeadSHA: "head",
 		CompletedAt: time.Date(2026, 8, 11, 2, 1, 0, 0, time.UTC), CompletionEvidence: dispositionDigestC,
 		Outcome: domain.ReviewClean,
 	})

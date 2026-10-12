@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/fakepublication"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -280,10 +281,10 @@ func TestRerunTrustEvaluationRejectsAlreadyEvaluatedCurrentProfile(t *testing.T)
 	}
 	review, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "publication-reevaluation-review-1", RunID: *item.Subject.RunID, Round: 1,
-		Provider: "openai", ModelConfiguration: "codex/test",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, *item.Subject.RunID, "publication-reevaluation-review-1"),
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		CostOwner:           "test", BaseSHA: "beefcafe", HeadSHA: item.PRHeadSHA,
+		BaseSHA:             "beefcafe", HeadSHA: item.PRHeadSHA,
 		CompletedAt:        revisedAt,
 		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 		Outcome:            domain.ReviewClean,

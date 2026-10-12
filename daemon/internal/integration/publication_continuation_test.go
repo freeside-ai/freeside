@@ -53,7 +53,7 @@ func TestOriginalPublicationReevaluationEscalatesWithoutProducer(t *testing.T) {
 	p.reviewer.Script(engine.ProductionReviewInvocationID(p.runID, 1), fake.ReviewScript{
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
-			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA, Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("original recheck findings")), Findings: []domain.Finding{{
 				ID: "original-recheck-finding", RunID: p.runID, Source: "codex_local", Severity: domain.FindingSeverityP1,
 				Location: &domain.FindingLocation{Path: "README.md", StartLine: 1, EndLine: 1}, Message: "Fix the original candidate.", RawText: "Fix the original candidate.", CreatedAt: p.now,
@@ -343,7 +343,7 @@ func completePublicationContinuationCycle(t *testing.T, p *productionPublication
 	p.reviewer.Script(engine.ProductionReviewInvocationID(p.runID, round+1), fake.ReviewScript{
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
-			BaseSHA: p.baseSHA, HeadSHA: replay.HeadSHA, Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			BaseSHA: p.baseSHA, HeadSHA: replay.HeadSHA,
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("clean continuation review")),
 		},
 	})
@@ -420,7 +420,7 @@ func completePublicationContinuationCycle(t *testing.T, p *productionPublication
 		p.reviewer.Script(engine.ProductionReviewInvocationID(p.runID, recheckRound), fake.ReviewScript{
 			Outcome: fake.OutcomeComplete,
 			Result: exec.ReviewResult{
-				BaseSHA: p.baseSHA, HeadSHA: replay.HeadSHA, Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+				BaseSHA: p.baseSHA, HeadSHA: replay.HeadSHA,
 				CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("second recheck findings")), Findings: []domain.Finding{{
 					ID: "second-recheck-finding", RunID: p.runID, Source: "codex_local", Severity: domain.FindingSeverityP1,
 					Location: &domain.FindingLocation{Path: "README.md", StartLine: 1, EndLine: 1}, Message: "Fix the next candidate.", RawText: "Fix the next candidate.", CreatedAt: p.now,

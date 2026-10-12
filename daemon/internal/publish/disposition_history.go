@@ -326,6 +326,13 @@ func loadDispositionHistoryFromTx(
 // publication and may correctly have no disposition. Remediation rounds remain
 // included because their heads may change while these authority bindings stay
 // fixed.
+//
+// A legacy pass (one with no admission snapshot) is superseded the same way
+// when the first admitted pass reviewed its head: the daemon never treats a
+// legacy record as current, so that pass's adjudication may never have
+// finished, and the admitted pass reviewed the same candidate again. A legacy
+// pass on an earlier head was remediated before the admitted pass ran, so it
+// stays in the lineage and its dispositions stay required.
 func currentDispositionLineage(
 	reviews []domain.ReviewRecord,
 	dispositions []domain.ReviewDispositionRecord,
@@ -334,12 +341,23 @@ func currentDispositionLineage(
 		return nil, nil
 	}
 	latest := reviews[len(reviews)-1]
+	sameAuthority := func(review domain.ReviewRecord) bool {
+		return review.BaseSHA == latest.BaseSHA &&
+			review.ConfigurationDigest == latest.ConfigurationDigest &&
+			review.InstructionDigest == latest.InstructionDigest
+	}
+	firstAdmittedHead := ""
+	for _, review := range reviews {
+		if sameAuthority(review) && review.Admission != nil {
+			firstAdmittedHead = review.HeadSHA
+			break
+		}
+	}
 	currentRounds := make(map[int]struct{}, len(reviews))
 	currentReviews := make([]domain.ReviewRecord, 0, len(reviews))
 	for _, review := range reviews {
-		if review.BaseSHA != latest.BaseSHA ||
-			review.ConfigurationDigest != latest.ConfigurationDigest ||
-			review.InstructionDigest != latest.InstructionDigest {
+		if !sameAuthority(review) ||
+			(review.Admission == nil && firstAdmittedHead != "" && review.HeadSHA == firstAdmittedHead) {
 			continue
 		}
 		currentRounds[review.Round] = struct{}{}
@@ -594,8 +612,8 @@ func renderDispositionHistoryUnbounded(h DispositionHistory) (string, error) {
 		fmt.Fprintf(&out, "\n### Review Round %d\n\n", review.Round)
 		fmt.Fprintf(&out, "- Invocation: %s\n", dispositionCode(string(review.InvocationID)))
 		fmt.Fprintf(&out, "- Outcome: **%s**\n", dispositionLabel(string(review.Outcome)))
-		fmt.Fprintf(&out, "- Provider: %s\n", dispositionCode(review.Provider))
-		fmt.Fprintf(&out, "- Model configuration: %s\n", dispositionCode(review.ModelConfiguration))
+		fmt.Fprintf(&out, "- Provider: %s\n", dispositionCode(review.Provider()))
+		fmt.Fprintf(&out, "- Model configuration: %s\n", dispositionCode(review.ModelConfiguration()))
 		fmt.Fprintf(&out, "- Configuration digest: %s\n", dispositionCode(string(review.ConfigurationDigest)))
 		fmt.Fprintf(&out, "- Instruction digest: %s\n", dispositionCode(string(review.InstructionDigest)))
 		fmt.Fprintf(&out, "- Base/head: %s / %s\n", dispositionCode(review.BaseSHA), dispositionCode(review.HeadSHA))

@@ -1201,7 +1201,6 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			ReviewRecovery:                  claudeWiring.reviewRecovery,
 			ReviewConfigurationDigest:       claudeWiring.reviewConfigurationDigest,
 			ShadowReviewConfigurationDigest: claudeWiring.shadowReviewConfigurationDigest,
-			ShadowReviewCostOwner:           claudeWiring.shadowReviewCostOwner,
 			ShadowReviewDefaultRate: enabledShadowReviewRate(
 				claudeWiring.shadowReviewSource, claudeWiring.shadowReviewRate),
 			ShadowReviewFailure:    shadowReviewFailure,

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
@@ -205,11 +206,10 @@ func TestReviewYieldHistoryDerivesPersistedMultiRoundHistoryAfterRestart(t *test
 		t.Helper()
 		got, recordErr := domain.NewReviewRecord(domain.ReviewRecord{
 			InvocationID: domain.InvocationID(fmt.Sprintf("review-yield-%d", round)),
-			RunID:        run.ID, Round: round, Provider: "openai",
-			ModelConfiguration:  "gpt-codex/high",
+			RunID:        run.ID, Round: round, Admission: fake.RecordAdmission(domain.RoleReviewer, run.ID, domain.InvocationID(fmt.Sprintf("review-yield-%d", round))),
 			ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 			InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-			CostOwner:           "owner", BaseSHA: "base", HeadSHA: head,
+			BaseSHA:             "base", HeadSHA: head,
 			CompletedAt:        at.Add(time.Duration(round) * time.Minute),
 			CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 			Outcome:            outcome, FindingIDs: ids,

@@ -2471,7 +2471,7 @@ func TestCodexReviewSourceNormalizesStructuredFindings(t *testing.T) {
 	if finding.ID != second.Result.Findings[0].ID || finding.RunID != request.RunID ||
 		finding.Source != "codex_local" || finding.Severity != "P2" ||
 		first.Result.BaseSHA != request.BaseSHA || first.Result.HeadSHA != request.HeadSHA ||
-		first.Result.Provider != "openai" || first.Result.ModelConfiguration != "gpt-codex/high" ||
+		!first.Result.Admission.Equal(request.Admission) ||
 		first.Result.CompletionEvidence == "" {
 		t.Fatalf("normalized result = %#v", first.Result)
 	}
@@ -3325,9 +3325,8 @@ func TestCodexReviewSourceVerifyRejectsSwappedInvocation(t *testing.T) {
 	}
 	result := exec.ReviewResult{
 		InvocationID: "review-run-1-2", BaseSHA: request.BaseSHA, HeadSHA: request.HeadSHA,
-		Provider: "openai", ModelConfiguration: "gpt-codex/high",
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
-		CostOwner:           "owner", CompletedAt: codexReviewEpoch,
+		CompletedAt:         codexReviewEpoch,
 	}
 	retained := CodexReviewRetainedCollection{Result: []byte(`{"findings":[]}`), Events: []byte("ev\n")}
 	collectionEvidence := collectionEvidence(codexReviewProvider{}, retained)

@@ -33,12 +33,13 @@ import (
 // so evidence, labels, and topology cannot silently change.
 const (
 	baseSourceLabel               = "codex_local"
-	baseProviderLabel             = "openai"
 	baseTopologyVersion           = "codex_review_read_only_v3"
 	baseCompletionEvidenceVersion = "codex-review-completion-v1"
-	// #1212 deliberately invalidates old configuration and completion approvals.
-	currentResultEvidenceVersion = "codex-review-result-v4"
-	currentConfigurationVersion  = "codex-review-configuration-v4"
+	// #1212 deliberately invalidates old configuration approvals.
+	currentConfigurationVersion = "codex-review-configuration-v4"
+	// #898 replaces the result's provider, model configuration, and cost
+	// owner with the request's admission snapshot.
+	currentResultEvidenceVersion = "codex-review-result-v5"
 	// #1291 aligns location guidance with the existing diff-overlap gate.
 	currentPromptProtocol = "codex-production-review-prompt-v6"
 )
@@ -53,7 +54,6 @@ func TestReviewProviderConstantsMatchBase(t *testing.T) {
 		want string
 	}{
 		{"sourceLabel", p.sourceLabel(), baseSourceLabel},
-		{"providerLabel", p.providerLabel(), baseProviderLabel},
 		{"topologyVersion", p.topologyVersion(), baseTopologyVersion},
 		{"completionEvidenceVersion", p.completionEvidenceVersion(), baseCompletionEvidenceVersion},
 		{"resultEvidenceVersion", p.resultEvidenceVersion(), currentResultEvidenceVersion},
@@ -190,11 +190,11 @@ func oldNormalizeCollection(
 	}
 	result := exec.ReviewResult{
 		InvocationID: id, BaseSHA: req.BaseSHA, HeadSHA: req.HeadSHA,
-		Provider: "openai", ModelConfiguration: s.cfg.Review.Model + "/" + s.cfg.Review.ReasoningEffort,
+		Admission:           req.Admission,
 		ConfigurationDigest: s.cfg.ConfigurationDigest,
 		InstructionDigest:   req.Instructions.ResultDigest,
-		CostOwner:           s.cfg.CostOwner, CompletedAt: completedAt,
-		Findings: findings,
+		CompletedAt:         completedAt,
+		Findings:            findings,
 	}
 	// #1212 changes the envelope version, preserving the historical result shape.
 	result.CompletionEvidence, _ = oldReviewResultEvidence(result, collectionEvidence)
@@ -210,7 +210,7 @@ func oldNormalizeCollection(
 }
 
 // oldReviewResultEvidence reconstructs the base-commit CodexReviewResultEvidence
-// with the explicit #1212 evidence-version change.
+// with the explicit #898 evidence-version change.
 func oldReviewResultEvidence(
 	result exec.ReviewResult, collectionEvidence domain.Digest,
 ) (domain.Digest, error) {
@@ -219,7 +219,7 @@ func oldReviewResultEvidence(
 		Version            string            `json:"version"`
 		CollectionEvidence domain.Digest     `json:"collection_evidence"`
 		Result             exec.ReviewResult `json:"result"`
-	}{"codex-review-result-v4", collectionEvidence, result})
+	}{"codex-review-result-v5", collectionEvidence, result})
 	if err != nil {
 		return "", err
 	}

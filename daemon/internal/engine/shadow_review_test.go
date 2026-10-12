@@ -29,10 +29,13 @@ type immediateShadowSource struct {
 	teardownErrors []error
 	status         exec.Status
 	pollHook       func()
-	requested      bool
-	teardowns      int
-	request        exec.ReviewRequest
-	id             domain.InvocationID
+	// returned rewrites the admission snapshot the result carries; nil
+	// returns the request's own unchanged, as a source must.
+	returned  func(*domain.ReviewAdmission)
+	requested bool
+	teardowns int
+	request   exec.ReviewRequest
+	id        domain.InvocationID
 }
 
 func (s *immediateShadowSource) RequestReview(
@@ -71,6 +74,10 @@ func (s *immediateShadowSource) Poll(
 	result.BaseSHA = s.request.BaseSHA
 	result.HeadSHA = s.request.HeadSHA
 	result.InstructionDigest = s.request.Instructions.ResultDigest
+	result.Admission = s.request.Admission
+	if s.returned != nil {
+		s.returned(&result.Admission)
+	}
 	return result, nil
 }
 
@@ -173,9 +180,9 @@ func TestShadowReviewRecordsClassifiesSamplesAndBlocksReady(t *testing.T) {
 	unrelatedRoutedFinding.RawText = "unrelated routed defect"
 	routed, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: ProductionReviewInvocationID(runID, 1), RunID: runID, Round: 1,
-		Provider: "openai", ModelConfiguration: "codex/test",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, runID, ProductionReviewInvocationID(runID, 1)),
 		ConfigurationDigest: shadowTestDigest("3"), InstructionDigest: shadowTestDigest("4"),
-		CostOwner: "routed", BaseSHA: baseSHA, HeadSHA: headSHA, CompletedAt: now,
+		BaseSHA: baseSHA, HeadSHA: headSHA, CompletedAt: now,
 		CompletionEvidence: shadowTestDigest("5"), Outcome: domain.ReviewFindings,
 		FindingIDs: []domain.FindingID{routedFinding.ID, unrelatedRoutedFinding.ID},
 	})
@@ -215,9 +222,8 @@ func TestShadowReviewRecordsClassifiesSamplesAndBlocksReady(t *testing.T) {
 	lowerShadowFinding.RawText = "lower-severity observation"
 	shadowDigest := shadowTestDigest("6")
 	source := &immediateShadowSource{result: exec.ReviewResult{
-		Provider: "anthropic", ModelConfiguration: "claude/test",
-		ConfigurationDigest: shadowDigest, CostOwner: "shadow-budget",
-		CompletedAt: now.Add(time.Minute), CompletionEvidence: shadowTestDigest("7"),
+		ConfigurationDigest: shadowDigest,
+		CompletedAt:         now.Add(time.Minute), CompletionEvidence: shadowTestDigest("7"),
 		Findings: []domain.Finding{shadowFinding, lowerShadowFinding},
 	}}
 	var failures int
@@ -228,9 +234,9 @@ func TestShadowReviewRecordsClassifiesSamplesAndBlocksReady(t *testing.T) {
 		store: st, attention: attention, workDir: dir,
 		transport: retainingShadowTransport{}, now: func() time.Time { return now.Add(2 * time.Minute) },
 		shadowReviewSource: source, shadowReviewConfigurationDigest: shadowDigest,
-		reviewAdmitter:        fake.AdmitReview,
-		shadowReviewCostOwner: "shadow-budget", shadowReviewDefaultRate: 0.2,
-		shadowReviewFailure: func(domain.RunID, int, domain.ReviewFailureClass, error) { failures++ },
+		reviewAdmitter:          fake.AdmitReview,
+		shadowReviewDefaultRate: 0.2,
+		shadowReviewFailure:     func(domain.RunID, int, domain.ReviewFailureClass, error) { failures++ },
 	}
 	_, instructions, err := exec.ComposeCodexReviewInstructions(exec.ReviewHostInstructionInput{}, nil)
 	if err != nil {
@@ -456,9 +462,9 @@ func TestPersistedLowerShadowReviewRecoversBeforeDisabledLaunchPolicy(t *testing
 	baseSHA, headSHA := strings.Repeat("c", 40), strings.Repeat("d", 40)
 	routed, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: ProductionReviewInvocationID(runID, 1), RunID: runID, Round: 1,
-		Provider: "openai", ModelConfiguration: "codex/test",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, runID, ProductionReviewInvocationID(runID, 1)),
 		ConfigurationDigest: shadowTestDigest("3"), InstructionDigest: shadowTestDigest("4"),
-		CostOwner: "routed", BaseSHA: baseSHA, HeadSHA: headSHA, CompletedAt: now,
+		BaseSHA: baseSHA, HeadSHA: headSHA, CompletedAt: now,
 		CompletionEvidence: shadowTestDigest("5"), Outcome: domain.ReviewClean,
 	})
 	if err != nil {
@@ -477,10 +483,10 @@ func TestPersistedLowerShadowReviewRecoversBeforeDisabledLaunchPolicy(t *testing
 	}
 	shadowRecord, err := domain.NewShadowReviewRecord(domain.ShadowReviewRecord{
 		InvocationID: ProductionShadowReviewInvocationID(runID, 1), RunID: runID, ShadowedRound: 1,
-		Source: domain.ShadowReviewClaudeLocal, Provider: "anthropic",
-		ModelConfiguration: "claude/test", ConfigurationDigest: shadowDigest,
-		InstructionDigest: instructions.ResultDigest, CostOwner: "shadow-budget",
-		BaseSHA: baseSHA, HeadSHA: headSHA, CompletedAt: now.Add(time.Minute),
+		Source: domain.ShadowReviewClaudeLocal, Admission: fake.RecordAdmission(domain.RoleShadowReviewer, runID, ProductionShadowReviewInvocationID(runID, 1)),
+		ConfigurationDigest: shadowDigest,
+		InstructionDigest:   instructions.ResultDigest,
+		BaseSHA:             baseSHA, HeadSHA: headSHA, CompletedAt: now.Add(time.Minute),
 		CompletionEvidence: shadowTestDigest("7"), Outcome: domain.ReviewFindings,
 		FindingIDs: []domain.FindingID{shadowFinding.ID},
 	})
@@ -552,9 +558,9 @@ func TestShadowReviewFailureIsClassifiedAndDoesNotBlockRoutedGate(t *testing.T) 
 	run := domain.Run{ID: runID, ProjectID: "project-shadow", SpecDigest: shadowTestDigest("b"), PolicyDigest: policy.Digest}
 	routed, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: ProductionReviewInvocationID(runID, 1), RunID: runID, Round: 1,
-		Provider: "openai", ModelConfiguration: "codex/test",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, runID, ProductionReviewInvocationID(runID, 1)),
 		ConfigurationDigest: shadowTestDigest("c"), InstructionDigest: shadowTestDigest("d"),
-		CostOwner: "routed", BaseSHA: strings.Repeat("1", 40), HeadSHA: strings.Repeat("2", 40),
+		BaseSHA: strings.Repeat("1", 40), HeadSHA: strings.Repeat("2", 40),
 		CompletedAt: time.Unix(1, 0).UTC(), CompletionEvidence: shadowTestDigest("e"), Outcome: domain.ReviewClean,
 	})
 	if err != nil {
@@ -579,8 +585,8 @@ func TestShadowReviewFailureIsClassifiedAndDoesNotBlockRoutedGate(t *testing.T) 
 		transport: retainingShadowTransport{}, shadowReviewSource: source,
 		reviewAdmitter:                  fake.AdmitReview,
 		shadowReviewConfigurationDigest: shadowTestDigest("f"),
-		shadowReviewCostOwner:           "shadow", shadowReviewDefaultRate: 1,
-		now: func() time.Time { return time.Unix(2, 0).UTC() },
+		shadowReviewDefaultRate:         1,
+		now:                             func() time.Time { return time.Unix(2, 0).UTC() },
 		shadowReviewFailure: func(_ domain.RunID, _ int, class domain.ReviewFailureClass, _ error) {
 			gotClass = class
 		},
@@ -639,6 +645,96 @@ func TestShadowReviewFailureIsClassifiedAndDoesNotBlockRoutedGate(t *testing.T) 
 	}
 }
 
+// TestShadowReviewRejectsResultUnderAnotherAdmission covers the shadow arm of
+// the returned-snapshot rule: a result naming an agent other than the one the
+// invocation was admitted under is a contradiction and leaves no record.
+func TestShadowReviewRejectsResultUnderAnotherAdmission(t *testing.T) {
+	ctx := t.Context()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	runID := domain.RunID("run-shadow-other-admission")
+	policy, err := domain.NewResolvedPolicy(runID, []domain.PolicyKey{{
+		Key: shadowReviewRatePolicyKey, Value: "1",
+		Provenance: domain.KeyProvenance{Source: domain.ProvenancePreset, Digest: shadowTestDigest("a")},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := domain.Run{ID: runID, ProjectID: "project-shadow", SpecDigest: shadowTestDigest("b"), PolicyDigest: policy.Digest}
+	routed, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: ProductionReviewInvocationID(runID, 1), RunID: runID, Round: 1,
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, runID, ProductionReviewInvocationID(runID, 1)),
+		ConfigurationDigest: shadowTestDigest("c"), InstructionDigest: shadowTestDigest("d"),
+		BaseSHA: strings.Repeat("1", 40), HeadSHA: strings.Repeat("2", 40),
+		CompletedAt: time.Unix(1, 0).UTC(), CompletionEvidence: shadowTestDigest("e"), Outcome: domain.ReviewClean,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, run); err != nil {
+			return err
+		}
+		if err := tx.PutResolvedPolicy(ctx, policy); err != nil {
+			return err
+		}
+		return tx.PutReviewRecord(ctx, routed, nil)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	shadowDigest := shadowTestDigest("f")
+	source := &immediateShadowSource{
+		result: exec.ReviewResult{
+			ConfigurationDigest: shadowDigest,
+			CompletedAt:         time.Unix(2, 0).UTC(), CompletionEvidence: shadowTestDigest("7"),
+		},
+		returned: func(admission *domain.ReviewAdmission) { admission.AuthIdentityID = "another-identity" },
+	}
+	var gotClass domain.ReviewFailureClass
+	var gotErr error
+	w := &productionPublicationWorkflow{
+		store: st, attention: signet.NewService(st), workDir: t.TempDir(),
+		transport: retainingShadowTransport{}, shadowReviewSource: source,
+		reviewAdmitter:                  fake.AdmitReview,
+		shadowReviewConfigurationDigest: shadowDigest,
+		shadowReviewDefaultRate:         1,
+		now:                             func() time.Time { return time.Unix(3, 0).UTC() },
+		shadowReviewFailure: func(_ domain.RunID, _ int, class domain.ReviewFailureClass, err error) {
+			gotClass, gotErr = class, err
+		},
+	}
+	_, instructions, err := exec.ComposeCodexReviewInstructions(exec.ReviewHostInstructionInput{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := productionBinding{run: run, resolvedPolicy: policy, admission: domain.ExecutionAdmission{Base: domain.BaseRevision{
+		Repo: "owner/repo", RepositoryID: 42, BaseRef: "main", BaseSHA: routed.BaseSHA,
+	}}}
+	checkpoint := productionVerificationCheckpoint{Authorization: domain.CandidateAuthorization{
+		VerificationRecipeDigest: shadowTestDigest("0"), EvidenceSnapshotDigest: shadowTestDigest("1"),
+		VerificationOutcome: domain.VerificationPassed,
+	}}
+	task := productionPublicationTask{RunID: runID, ProjectID: run.ProjectID, HeadSHA: routed.HeadSHA}
+	complete, err := w.reconcileShadowReview(ctx, task, binding, checkpoint, nil, instructions, routed)
+	if err != nil || !complete {
+		t.Fatalf("reconcileShadowReview = complete %v, err %v", complete, err)
+	}
+	if gotClass != domain.ReviewFailureContradiction || !errors.Is(gotErr, domain.ErrReviewAdmissionMismatch) {
+		t.Fatalf("shadow failure = class %q, err %v", gotClass, gotErr)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		records, err := tx.ListShadowReviewRecords(ctx, runID)
+		if err != nil {
+			return err
+		}
+		if len(records) != 0 {
+			t.Fatalf("a result under another admission left a shadow record: %#v", records)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLateCompletedShadowReviewExpiresWithoutBlockingRoutedGate(t *testing.T) {
 	ctx := t.Context()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
@@ -654,9 +750,9 @@ func TestLateCompletedShadowReviewExpiresWithoutBlockingRoutedGate(t *testing.T)
 	completedAt := time.Date(2026, 8, 24, 15, 0, 0, 0, time.UTC)
 	routed, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: ProductionReviewInvocationID(runID, 1), RunID: runID, Round: 1,
-		Provider: "openai", ModelConfiguration: "codex/test",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, runID, ProductionReviewInvocationID(runID, 1)),
 		ConfigurationDigest: shadowTestDigest("4"), InstructionDigest: shadowTestDigest("5"),
-		CostOwner: "routed", BaseSHA: strings.Repeat("3", 40), HeadSHA: strings.Repeat("4", 40),
+		BaseSHA: strings.Repeat("3", 40), HeadSHA: strings.Repeat("4", 40),
 		CompletedAt: completedAt, CompletionEvidence: shadowTestDigest("6"), Outcome: domain.ReviewClean,
 	})
 	if err != nil {
@@ -676,9 +772,8 @@ func TestLateCompletedShadowReviewExpiresWithoutBlockingRoutedGate(t *testing.T)
 	current := completedAt.Add(time.Minute)
 	shadowDigest := shadowTestDigest("7")
 	source := &immediateShadowSource{status: exec.StatusRunning, result: exec.ReviewResult{
-		Provider: "anthropic", ModelConfiguration: "claude/test",
-		ConfigurationDigest: shadowDigest, CostOwner: "shadow",
-		CompletedAt: completedAt.Add(shadowReviewWait), CompletionEvidence: shadowTestDigest("0"),
+		ConfigurationDigest: shadowDigest,
+		CompletedAt:         completedAt.Add(shadowReviewWait), CompletionEvidence: shadowTestDigest("0"),
 	}}
 	var gotClass domain.ReviewFailureClass
 	w := &productionPublicationWorkflow{
@@ -686,8 +781,8 @@ func TestLateCompletedShadowReviewExpiresWithoutBlockingRoutedGate(t *testing.T)
 		transport: retainingShadowTransport{}, shadowReviewSource: source,
 		reviewAdmitter:                  fake.AdmitReview,
 		shadowReviewConfigurationDigest: shadowDigest,
-		shadowReviewCostOwner:           "shadow", shadowReviewDefaultRate: 1,
-		now: func() time.Time { return current },
+		shadowReviewDefaultRate:         1,
+		now:                             func() time.Time { return current },
 		shadowReviewFailure: func(_ domain.RunID, _ int, class domain.ReviewFailureClass, _ error) {
 			gotClass = class
 		},

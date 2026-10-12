@@ -163,15 +163,17 @@ func (o CodexReviewSourceOutcome) Validate() error {
 
 // verifyCompletionEvidence re-gates a loaded outcome's completion evidence
 // against the caller's trusted provider, never a provider chosen by the decoded
-// row. Two fail-closed gates: the persisted provider label must match the
-// trusted provider (a rewritten row that flips the label and recomputes the
-// unkeyed evidence cannot self-validate against a different validator), and the
-// evidence must then recompute. Making it provider-aware fixes the #875 handoff
-// (a Codex-only recomputation turned every Claude result into a durable
-// contradiction). A failure/fence outcome carries no result evidence, so it
-// skips the result-evidence recompute; when it carries collection evidence (the
-// collected-contradiction rewrap), that is still resolved against the retained
-// collection below.
+// row: the evidence must recompute under that provider's own version tags, so
+// a row one provider wrote never validates for another. Making it
+// provider-aware fixes the #875 handoff (a Codex-only recomputation turned
+// every Claude result into a durable contradiction). The evidence is unkeyed,
+// so it does not prove which agent reviewed: the engine holds the result's
+// admission snapshot against the one it stored for the invocation, and a
+// retained-evidence read holds it against the persisted request
+// (verifyReturnedAdmission). A failure/fence outcome carries no result
+// evidence, so it skips the result-evidence recompute; when it carries
+// collection evidence (the collected-contradiction rewrap), that is still
+// resolved against the retained collection below.
 func (o CodexReviewSourceOutcome) verifyCompletionEvidence(provider reviewProvider) error {
 	// Resolve collection_evidence against the retained bytes with the trusted
 	// provider first: this is the check the pre-#1182 row could never satisfy,
@@ -187,9 +189,6 @@ func (o CodexReviewSourceOutcome) verifyCompletionEvidence(provider reviewProvid
 	if o.Result == nil {
 		return nil
 	}
-	if o.Result.Provider != provider.providerLabel() {
-		return domain.ErrInvalidReviewCompletionEvidence
-	}
 	if provider.sourceLabel() == (codexReviewProvider{}).sourceLabel() && o.Collection != nil {
 		_, failed := codexTerminalFailure(o.Collection.Events)
 		if o.Collection.ExitStatus != 0 || failed {
@@ -201,6 +200,21 @@ func (o CodexReviewSourceOutcome) verifyCompletionEvidence(provider reviewProvid
 		return errors.Join(err, domain.ErrInvalidReviewCompletionEvidence)
 	}
 	return nil
+}
+
+// verifyReturnedAdmission holds a retained result's admission snapshot
+// against the one on the persisted request it answers. A retained-evidence
+// read has no engine in front of it to compare the stored snapshot, the
+// result is a stored row, and its completion evidence is unkeyed, so a
+// rewritten row could name another agent and still recompute; the request is
+// a second, separately authenticated record of who was admitted. A failure
+// outcome returns no snapshot.
+func (o CodexReviewSourceOutcome) verifyReturnedAdmission(request exec.ReviewRequest) error {
+	if o.Result == nil || o.Result.Admission.Equal(request.Admission) {
+		return nil
+	}
+	return fmt.Errorf("review result %s returned an admission its request does not carry: %w",
+		o.InvocationID, domain.ErrReviewAdmissionMismatch)
 }
 
 // collectionEvidence hashes the provider-namespaced raw collection account
@@ -251,10 +265,10 @@ func NewCodexReviewSource(cfg CodexReviewSourceConfig) (*CodexReviewSource, erro
 	if cfg.provider == nil {
 		cfg.provider = codexReviewProvider{}
 	}
-	if lifecycleProvider := cfg.Lifecycle.reviewProvider(); lifecycleProvider.providerLabel() != cfg.provider.providerLabel() {
+	if lifecycleProvider := cfg.Lifecycle.reviewProvider(); lifecycleProvider.sourceLabel() != cfg.provider.sourceLabel() {
 		return nil, fmt.Errorf(
 			"codex review source: %w: lifecycle provider %q does not match source provider %q",
-			ErrInvalidConfig, lifecycleProvider.providerLabel(), cfg.provider.providerLabel(),
+			ErrInvalidConfig, lifecycleProvider.sourceLabel(), cfg.provider.sourceLabel(),
 		)
 	}
 	if cfg.Journal == nil || cfg.Review.Journal != cfg.Journal ||
@@ -1088,11 +1102,14 @@ func (s *CodexReviewSource) normalizeCollection(
 	}
 	result := exec.ReviewResult{
 		InvocationID: id, BaseSHA: req.BaseSHA, HeadSHA: req.HeadSHA,
-		Provider: provider.providerLabel(), ModelConfiguration: s.cfg.Review.Model + "/" + s.cfg.Review.ReasoningEffort,
+		// The agent that reviewed is the one the request was admitted as. The
+		// source reports nothing of its own here: Admit already refused a
+		// request whose snapshot names another identity, model, or effort.
+		Admission:           req.Admission,
 		ConfigurationDigest: s.cfg.ConfigurationDigest,
 		InstructionDigest:   req.Instructions.ResultDigest,
-		CostOwner:           s.cfg.CostOwner, CompletedAt: completedAt,
-		Findings: findings, Usage: usage,
+		CompletedAt:         completedAt,
+		Findings:            findings, Usage: usage,
 	}
 	result.CompletionEvidence, _ = reviewResultEvidence(provider, result, collEvidence)
 	return CodexReviewSourceOutcome{

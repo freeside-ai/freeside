@@ -47,6 +47,27 @@ func ReviewAdmission(
 	return admission
 }
 
+// RecordAdmission is the ReviewAdmission fixture as a review record carries
+// it.
+func RecordAdmission(
+	role domain.RoleName, runID domain.RunID, id domain.InvocationID,
+) *domain.ReviewAdmission {
+	admission := ReviewAdmission(role, runID, id)
+	return &admission
+}
+
+// SeededReviewAdmission is RecordAdmission under the lineage group, model,
+// and effort a seeded store shows for its reviewer, so a seeded round reads
+// like a real one.
+func SeededReviewAdmission(
+	runID domain.RunID, id domain.InvocationID,
+) *domain.ReviewAdmission {
+	admission := ReviewAdmission(domain.RoleReviewer, runID, id)
+	admission.LineageGroup = "openai"
+	admission.AgentBinding.RouteModelID, admission.AgentBinding.NativeEffort = "gpt-codex", "high"
+	return &admission
+}
+
 // AdmitReview admits every review invocation with the ReviewAdmission
 // fixture. It has the shape of the engine's review admitter, for a workflow
 // composed over the fake review source.

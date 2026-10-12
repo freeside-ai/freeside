@@ -204,7 +204,7 @@ func (tx *WriteTx) PutShadowReviewRecord(
 	if err := tx.putImmutable(ctx, putShadowReviewRecordSQL,
 		[]any{
 			record.InvocationID, record.RunID, record.ShadowedRound, record.Source,
-			record.Provider, record.BaseSHA, record.HeadSHA, record.Outcome,
+			record.Provider(), record.BaseSHA, record.HeadSHA, record.Outcome,
 			formatTime(record.CompletedAt), reviewBodyDigest(body), body,
 		},
 		`SELECT body_digest || body FROM shadow_review_records WHERE invocation_id = ?`,
@@ -251,7 +251,7 @@ func (tx *ReadTx) GetShadowReviewRecord(
 	}
 	if record.InvocationID != id || record.RunID != domain.RunID(runID) ||
 		record.ShadowedRound != shadowedRound || string(record.Source) != source ||
-		record.Provider != provider || record.BaseSHA != baseSHA || record.HeadSHA != headSHA ||
+		record.Provider() != provider || record.BaseSHA != baseSHA || record.HeadSHA != headSHA ||
 		string(record.Outcome) != outcome || formatTime(record.CompletedAt) != completedAt {
 		return domain.ShadowReviewRecord{}, fmt.Errorf("get shadow review record %q: %w", id, errRowInconsistent)
 	}

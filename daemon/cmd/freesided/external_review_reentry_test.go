@@ -9,6 +9,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
@@ -271,10 +272,10 @@ func TestActiveResourceExternalReviewStartsNothing(t *testing.T) {
 				activateExternalTestProfile(t, st, before, externalTestMaintainer())
 				review, err := domain.NewReviewRecord(domain.ReviewRecord{
 					InvocationID: "review-external-round-2", RunID: runID, Round: 2,
-					Provider: "openai", ModelConfiguration: "gpt-codex/high",
+					Admission:           fake.RecordAdmission(domain.RoleReviewer, runID, "review-external-round-2"),
 					ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 					InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-					CostOwner:           "owner", BaseSHA: reentryTestBase, HeadSHA: otherHead,
+					BaseSHA:             reentryTestBase, HeadSHA: otherHead,
 					CompletedAt:        activeResourceTestTime.Add(-time.Minute),
 					CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("f", 64)),
 					Outcome:            domain.ReviewClean,

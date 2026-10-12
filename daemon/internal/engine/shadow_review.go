@@ -231,11 +231,19 @@ func (w *productionPublicationWorkflow) reconcileShadowReview(
 	if result.InvocationID != id || result.BaseSHA != routed.BaseSHA ||
 		result.HeadSHA != routed.HeadSHA ||
 		result.ConfigurationDigest != w.shadowReviewConfigurationDigest ||
-		result.InstructionDigest != instructions.ResultDigest ||
-		result.CostOwner != w.shadowReviewCostOwner {
+		result.InstructionDigest != instructions.ResultDigest {
 		return w.abandonStartedShadowReview(ctx, task, routed.Round, id, authorityVerifier,
 			reviewSourceFailureWithUsage(
 				domain.ReviewFailureContradiction, domain.ErrParentKeyMismatch, result.Usage))
+	}
+	// As on the routed arm: a returned snapshot that differs from the stored
+	// one names an agent the daemon did not admit, and no record is written.
+	// The snapshot carries the identity that pays, so this also covers what
+	// the cost-owner comparison covered.
+	if !result.Admission.Equal(admission) {
+		return w.abandonStartedShadowReview(ctx, task, routed.Round, id, authorityVerifier,
+			reviewSourceFailureWithUsage(domain.ReviewFailureContradiction,
+				fmt.Errorf("shadow review result %s: %w", id, domain.ErrReviewAdmissionMismatch), result.Usage))
 	}
 	if err := authorityVerifier.VerifyRequestAuthority(ctx, id, authority); err != nil {
 		return w.abandonStartedShadowReview(
@@ -269,11 +277,10 @@ func (w *productionPublicationWorkflow) reconcileShadowReview(
 	}
 	record, err := domain.NewShadowReviewRecord(domain.ShadowReviewRecord{
 		InvocationID: id, RunID: task.RunID, ShadowedRound: routed.Round,
-		Source: domain.ShadowReviewClaudeLocal, Provider: result.Provider,
-		ModelConfiguration:  result.ModelConfiguration,
+		Source: domain.ShadowReviewClaudeLocal, Admission: &admission,
 		ConfigurationDigest: result.ConfigurationDigest,
-		InstructionDigest:   result.InstructionDigest, CostOwner: result.CostOwner,
-		BaseSHA: result.BaseSHA, HeadSHA: result.HeadSHA,
+		InstructionDigest:   result.InstructionDigest,
+		BaseSHA:             result.BaseSHA, HeadSHA: result.HeadSHA,
 		CompletedAt: result.CompletedAt, CompletionEvidence: result.CompletionEvidence,
 		Outcome: outcome, FindingIDs: findingIDs,
 	})

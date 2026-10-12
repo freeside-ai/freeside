@@ -10,7 +10,7 @@ import (
 
 func TestProductionReviewLocationContract(t *testing.T) {
 	for _, provider := range []reviewProvider{codexReviewProvider{}, claudeReviewProvider{}} {
-		t.Run(provider.providerLabel(), func(t *testing.T) {
+		t.Run(provider.sourceLabel(), func(t *testing.T) {
 			prompt := provider.reviewPrompt(exec.ReviewRequest{
 				BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
 				Verification: testReviewVerificationEvidence(),
@@ -88,7 +88,7 @@ func TestReviewLocationProtocolChangesConfiguration(t *testing.T) {
 		{codexReviewProvider{}, request.AuthMode, "codex-production-review-prompt-v5", "codex-production-review-prompt-v6"},
 		{claudeReviewProvider{}, CodexAuthSetupToken, "claude-production-review-prompt-v3", "claude-production-review-prompt-v4"},
 	} {
-		t.Run(tc.provider.providerLabel(), func(t *testing.T) {
+		t.Run(tc.provider.sourceLabel(), func(t *testing.T) {
 			envelope, err := newCodexReviewConfigurationEnvelope(
 				tc.provider, cfg, 64, tc.authMode, request.AuthIdentityID, "subscription:owner")
 			if err != nil {

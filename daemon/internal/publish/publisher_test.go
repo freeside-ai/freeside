@@ -20,6 +20,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -888,10 +889,10 @@ func testDispositionHistory(
 	}
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-" + domain.InvocationID(runID), RunID: runID, Round: 1,
-		Provider: "openai", ModelConfiguration: "codex/high",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, runID, "review-"+domain.InvocationID(runID)),
 		ConfigurationDigest: profile.Review.ConfigDigest,
 		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		CostOwner:           "operator", BaseSHA: auth.BaseSHA, HeadSHA: candidate.HeadSHA,
+		BaseSHA:             auth.BaseSHA, HeadSHA: candidate.HeadSHA,
 		CompletedAt: fixtureTime, CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 		Outcome: domain.ReviewClean,
 	})

@@ -112,8 +112,9 @@ type ReviewRequestSupersessionVerifier interface {
 //
 // Admission is the snapshot the engine admitted the invocation under before
 // it asked the source (plan §5.4): the agent the lineup selected, the identity
-// it runs under, and its launch values. A persisted request with no snapshot
-// predates review admission and is a legacy request.
+// it runs under, and its launch values. The source returns it unchanged on
+// the ReviewResult. A persisted request with no snapshot predates review
+// admission and is a legacy request.
 type ReviewRequest struct {
 	RunID        domain.RunID               `json:"run_id"`
 	Round        int                        `json:"round"`
@@ -297,18 +298,20 @@ func (r ReviewRequest) AuthorityDigest() (domain.Digest, error) {
 // once, §5.3). A clean pass is an empty Findings list; there is no separate
 // verdict field to drift from it.
 type ReviewResult struct {
-	InvocationID        domain.InvocationID `json:"invocation_id"`
-	BaseSHA             string              `json:"base_sha"`
-	HeadSHA             string              `json:"head_sha"`
-	Provider            string              `json:"provider"`
-	ModelConfiguration  string              `json:"model_configuration"`
-	ConfigurationDigest domain.Digest       `json:"configuration_digest"`
-	InstructionDigest   domain.Digest       `json:"instruction_digest"`
-	CostOwner           string              `json:"cost_owner"`
-	CompletedAt         time.Time           `json:"completed_at"`
-	CompletionEvidence  domain.Digest       `json:"completion_evidence"`
-	Findings            []domain.Finding    `json:"findings"`
-	Usage               []UsageMeasurement  `json:"usage"`
+	InvocationID domain.InvocationID `json:"invocation_id"`
+	BaseSHA      string              `json:"base_sha"`
+	HeadSHA      string              `json:"head_sha"`
+	// Admission is the request's admission snapshot, returned unchanged. It
+	// says which agent reviewed, under which identity; the engine holds it
+	// against the snapshot it stored for the invocation and writes no record
+	// when they differ, so Validate checks only that it is well-formed.
+	Admission           domain.ReviewAdmission `json:"admission"`
+	ConfigurationDigest domain.Digest          `json:"configuration_digest"`
+	InstructionDigest   domain.Digest          `json:"instruction_digest"`
+	CompletedAt         time.Time              `json:"completed_at"`
+	CompletionEvidence  domain.Digest          `json:"completion_evidence"`
+	Findings            []domain.Finding       `json:"findings"`
+	Usage               []UsageMeasurement     `json:"usage"`
 }
 
 // Validate reports whether the result is well-formed: reconcilable
@@ -322,10 +325,13 @@ func (r ReviewResult) Validate() error {
 	if r.HeadSHA == "" {
 		return fmt.Errorf("review result head_sha: %w", domain.ErrEmptyField)
 	}
-	if r.BaseSHA == "" || r.Provider == "" || r.ModelConfiguration == "" || r.CostOwner == "" ||
+	if r.BaseSHA == "" ||
 		!contentaddr.Valid(string(r.ConfigurationDigest)) ||
 		!contentaddr.Valid(string(r.InstructionDigest)) {
 		return fmt.Errorf("review result provenance: %w", domain.ErrEmptyField)
+	}
+	if err := r.Admission.Validate(); err != nil {
+		return fmt.Errorf("review result: %w", err)
 	}
 	if !contentaddr.Valid(string(r.CompletionEvidence)) {
 		return fmt.Errorf("review result completion evidence %q: %w",

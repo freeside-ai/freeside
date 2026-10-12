@@ -10,6 +10,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 )
 
@@ -577,31 +578,43 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reviewRecord, err := domain.NewReviewRecord(domain.ReviewRecord{
+	// A review record says who reviewed in one of two ways, and each has a
+	// golden. The legacy pair carries the three strings a record stored
+	// before review admission and no snapshot; its goldens are the bytes
+	// those records were stored with and must never change. The other pair
+	// carries the invocation's admission snapshot and none of the strings.
+	legacyReviewRecord, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-run-1-1", RunID: "run-1", Round: 1,
-		Provider: "openai", ModelConfiguration: "gpt-5.2-codex/high",
+		LegacyProvider: "openai", LegacyModelConfiguration: "gpt-5.2-codex/high",
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		CostOwner:           "subscription:owner", BaseSHA: "beefcafe", HeadSHA: "cafebabe",
+		LegacyCostOwner:     "subscription:owner", BaseSHA: "beefcafe", HeadSHA: "cafebabe",
 		CompletedAt: ts, CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 		Outcome: domain.ReviewFindings, FindingIDs: []domain.FindingID{finding.ID},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	shadowReviewRecord, err := domain.NewShadowReviewRecord(domain.ShadowReviewRecord{
+	reviewRecord := legacyReviewRecord
+	reviewRecord.LegacyProvider, reviewRecord.LegacyModelConfiguration, reviewRecord.LegacyCostOwner = "", "", ""
+	reviewRecord.Admission = fake.SeededReviewAdmission("run-1", "review-run-1-1")
+	legacyShadowReviewRecord, err := domain.NewShadowReviewRecord(domain.ShadowReviewRecord{
 		InvocationID: "shadow-review-run-1-1", RunID: "run-1", ShadowedRound: 1,
-		Source: domain.ShadowReviewClaudeLocal, Provider: "anthropic",
-		ModelConfiguration:  "claude-opus/high",
-		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("f", 64)),
-		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		CostOwner:           "subscription:owner", BaseSHA: "beefcafe", HeadSHA: "cafebabe",
+		Source: domain.ShadowReviewClaudeLocal, LegacyProvider: "anthropic",
+		LegacyModelConfiguration: "claude-opus/high",
+		ConfigurationDigest:      domain.Digest("sha256:" + strings.Repeat("f", 64)),
+		InstructionDigest:        domain.Digest("sha256:" + strings.Repeat("d", 64)),
+		LegacyCostOwner:          "subscription:owner", BaseSHA: "beefcafe", HeadSHA: "cafebabe",
 		CompletedAt: ts, CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("a", 64)),
 		Outcome: domain.ReviewFindings, FindingIDs: []domain.FindingID{"shadow-find-1"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	shadowReviewRecord := legacyShadowReviewRecord
+	shadowReviewRecord.LegacyProvider, shadowReviewRecord.LegacyModelConfiguration, shadowReviewRecord.LegacyCostOwner = "", "", ""
+	shadowReviewRecord.Admission = fake.RecordAdmission(
+		domain.RoleShadowReviewer, "run-1", "shadow-review-run-1-1")
 	classifierAccuracySample := domain.ClassifierAccuracySample{
 		RunID: "run-1", FindingID: "shadow-find-1", ClassificationVersion: 1,
 		ShadowInvocationID: shadowReviewRecord.InvocationID,
@@ -1839,7 +1852,9 @@ func TestGolden(t *testing.T) {
 		{"finding", finding},
 		{"finding_external", findingExternal},
 		{"review_record", reviewRecord},
+		{"review_record_legacy", legacyReviewRecord},
 		{"shadow_review_record", shadowReviewRecord},
+		{"shadow_review_record_legacy", legacyShadowReviewRecord},
 		{"classifier_accuracy_sample", classifierAccuracySample},
 		{"review_disposition_record", reviewDisposition},
 		{"external_finding_disposition_deferred", externalDispositionDeferred},

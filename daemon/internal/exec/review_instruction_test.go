@@ -239,6 +239,42 @@ func TestReviewRequestRequiresItsAdmission(t *testing.T) {
 	}
 }
 
+// TestReviewResultRequiresAWellFormedAdmission: a result returns the
+// admission snapshot it reviewed under, so one with no snapshot, such as a
+// retained result from before review admission, or with a snapshot no review
+// launch could have run, does not validate.
+func TestReviewResultRequiresAWellFormedAdmission(t *testing.T) {
+	admission := testReviewAdmission("run-1")
+	result := ReviewResult{
+		InvocationID: admission.InvocationID, BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
+		Admission:           admission,
+		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
+		CompletedAt:         time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC),
+		CompletionEvidence:  domain.Digest("sha256:" + strings.Repeat("e", 64)),
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("admitted result: %v", err)
+	}
+	for name, tc := range map[string]struct {
+		mutate func(*ReviewResult)
+		want   error
+	}{
+		"no admission":   {func(r *ReviewResult) { r.Admission = domain.ReviewAdmission{} }, domain.ErrEmptyID},
+		"no identity":    {func(r *ReviewResult) { r.Admission.AuthIdentityID = "" }, domain.ErrEmptyID},
+		"a stage's role": {func(r *ReviewResult) { r.Admission.Role = domain.RoleImplementer }, domain.ErrInvalidRoleName},
+		"an attended binding": {func(r *ReviewResult) {
+			r.Admission.AgentBinding.Attended = true
+		}, domain.ErrReviewAdmissionInvalid},
+	} {
+		refused := result
+		tc.mutate(&refused)
+		if err := refused.Validate(); !errors.Is(err, tc.want) {
+			t.Fatalf("%s: Validate = %v, want %v", name, err, tc.want)
+		}
+	}
+}
+
 // TestRetainedReviewRequestIsHeldToTheRuleItWasWrittenUnder: a reader of
 // history accepts a request from before review admission, which no source
 // would run, and holds a request that carries an admission to the whole rule.

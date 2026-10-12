@@ -599,11 +599,12 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 				Tree: tree, LineupRevision: revision, Launch: agentbaseline.RoleLaunch,
 			}, egress)
 			for role, arm := range map[domain.RoleName]struct {
-				agent  engine.ReviewRoleAgent
-				source func(context.Context, exec.ReviewRequest) error
+				agent    engine.ReviewRoleAgent
+				source   func(context.Context, exec.ReviewRequest) error
+				provider string
 			}{
-				domain.RoleReviewer:       {reviewer, admit},
-				domain.RoleShadowReviewer: {shadow, admitShadow},
+				domain.RoleReviewer:       {reviewer, admit, "openai"},
+				domain.RoleShadowReviewer: {shadow, admitShadow, "anthropic"},
 			} {
 				id := domain.InvocationID("review-admitted-" + string(role))
 				admitted, err := admitter(ctx, role, run.ID, id, now)
@@ -615,6 +616,7 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 					admitted.AuthIdentityID != arm.agent.Identity.ID || admitted.LineageGroup != offer.LineageGroup ||
 					admitted.AgentBinding.AgentDigest != definition.Digest ||
 					admitted.AgentBinding.LineupRevision != revision ||
+					admitted.ProviderLabel() != arm.provider ||
 					admitted.ModelConfiguration() != arm.agent.Model+"/"+arm.agent.NativeEffort ||
 					!slices.Equal(admitted.AgentBinding.EffectiveEgress, egress[role]) ||
 					!admitted.AdmittedAt.Equal(now) {

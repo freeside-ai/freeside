@@ -126,7 +126,6 @@ type ProductionPublicationConfig struct {
 	// routed review, advance rounds, or authorize publication.
 	ShadowReviewSource              exec.ReviewSource
 	ShadowReviewConfigurationDigest domain.Digest
-	ShadowReviewCostOwner           string
 	ShadowReviewDefaultRate         float64
 	ShadowReviewFailure             func(domain.RunID, int, domain.ReviewFailureClass, error)
 
@@ -250,7 +249,6 @@ type productionPublicationWorkflow struct {
 	reviewRecoveryPending           bool
 	reviewConfigurationDigest       domain.Digest
 	shadowReviewConfigurationDigest domain.Digest
-	shadowReviewCostOwner           string
 	shadowReviewDefaultRate         float64
 	shadowReviewFailure             func(domain.RunID, int, domain.ReviewFailureClass, error)
 	reviewHostInstructions          ReviewHostInstructions
@@ -313,13 +311,12 @@ func newProductionPublicationWorkflow(
 	}
 	if shadowEnabled {
 		if !contentaddr.Valid(string(cfg.ShadowReviewConfigurationDigest)) ||
-			strings.TrimSpace(cfg.ShadowReviewCostOwner) == "" ||
 			math.IsNaN(cfg.ShadowReviewDefaultRate) || math.IsInf(cfg.ShadowReviewDefaultRate, 0) ||
 			cfg.ShadowReviewDefaultRate < 0 || cfg.ShadowReviewDefaultRate > 1 ||
 			cfg.ShadowReviewFailure == nil {
 			return nil, errors.New("invalid shadow review configuration")
 		}
-	} else if cfg.ShadowReviewConfigurationDigest != "" || cfg.ShadowReviewCostOwner != "" ||
+	} else if cfg.ShadowReviewConfigurationDigest != "" ||
 		cfg.ShadowReviewDefaultRate != 0 || cfg.ShadowReviewFailure != nil {
 		return nil, errors.New("partial shadow review configuration")
 	}
@@ -375,7 +372,6 @@ func newProductionPublicationWorkflow(
 		reviewRecovery:           cfg.ReviewRecovery, reviewRecoveryPending: true,
 		reviewConfigurationDigest:       cfg.ReviewConfigurationDigest,
 		shadowReviewConfigurationDigest: cfg.ShadowReviewConfigurationDigest,
-		shadowReviewCostOwner:           cfg.ShadowReviewCostOwner,
 		shadowReviewDefaultRate:         cfg.ShadowReviewDefaultRate,
 		shadowReviewFailure:             cfg.ShadowReviewFailure,
 		reviewHostInstructions: ReviewHostInstructions{
@@ -3266,20 +3262,34 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		// row is still the parked failure, the round machinery below re-gates
 		// the exact-failure adoption binding before advancing past it.
 	}
-	// A record whose invocation holds no admission snapshot was requested
-	// before review admission was recorded. Its persisted request is a legacy
+	// A legacy record carries no admission snapshot: it was requested before
+	// review admission was recorded. Its persisted request is a legacy
 	// request the source no longer verifies, so the record cannot be re-gated
 	// and is not current: the next round supersedes it, as it does a record
-	// bound to superseded instructions. The record itself stays as stored.
+	// bound to superseded instructions. Its findings may then never be
+	// dispositioned, so the published disposition lineage leaves out a
+	// legacy round the admitted round reviewed again
+	// (publish.currentDispositionLineage). The record itself stays as
+	// stored, and nothing resolves an agent for it from the current lineup.
+	//
+	// A record's snapshot is a decoded field, so it is held against the
+	// snapshot the daemon stored when it admitted the invocation. A record
+	// that names another agent, or one the daemon never admitted, is a
+	// contradiction, and nothing below acts on it.
 	var latestAdmission domain.ReviewAdmission
-	latestAdmitted := false
-	if latestRecord != nil {
-		var err error
-		latestAdmission, latestAdmitted, err = w.storedReviewAdmission(
+	latestAdmitted := latestRecord != nil && latestRecord.Admission != nil
+	if latestAdmitted {
+		stored, found, err := w.storedReviewAdmission(
 			ctx, domain.RoleReviewer, task.RunID, latestRecord.InvocationID)
 		if err != nil {
 			return productionReviewPending, err
 		}
+		if !found || !latestRecord.Admission.Equal(stored) {
+			return productionReviewPending, fmt.Errorf(
+				"review record %s carries an admission the daemon did not store for it: %w",
+				latestRecord.InvocationID, domain.ErrReviewAdmissionMismatch)
+		}
+		latestAdmission = stored
 	}
 	advanceReview := false
 	if latestRecord != nil && latestRecord.ConfigurationDigest == w.reviewConfigurationDigest &&
@@ -3662,6 +3672,17 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 				domain.ReviewFailureContradiction, domain.ErrParentKeyMismatch, result.Usage),
 		)
 	}
+	// The result says which agent reviewed by returning the snapshot it was
+	// asked under. One that differs from the stored snapshot names an agent
+	// the daemon did not admit for this invocation, so the pass is a
+	// contradiction and no record is written.
+	if !result.Admission.Equal(admission) {
+		return w.recordReviewSourceFailure(ctx, task, id, round,
+			binding.admission.Base.BaseSHA, task.HeadSHA,
+			reviewSourceFailureWithUsage(domain.ReviewFailureContradiction,
+				fmt.Errorf("review result %s: %w", id, domain.ErrReviewAdmissionMismatch), result.Usage),
+		)
+	}
 	if err := authorityVerifier.VerifyRequestAuthority(ctx, id, requestAuthority); err != nil {
 		return w.retryOrRecordReviewFailure(ctx, task, id, round,
 			binding.admission.Base.BaseSHA, task.HeadSHA,
@@ -3737,10 +3758,12 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	}
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: id, RunID: task.RunID, Round: round,
-		Provider: result.Provider, ModelConfiguration: result.ModelConfiguration,
+		// The stored snapshot, which the result was just held to: the record
+		// never takes its attribution from a returned object.
+		Admission:           &admission,
 		ConfigurationDigest: result.ConfigurationDigest,
 		InstructionDigest:   result.InstructionDigest,
-		CostOwner:           result.CostOwner, BaseSHA: result.BaseSHA, HeadSHA: result.HeadSHA,
+		BaseSHA:             result.BaseSHA, HeadSHA: result.HeadSHA,
 		CompletedAt: result.CompletedAt, CompletionEvidence: result.CompletionEvidence,
 		Outcome: outcome, FindingIDs: findingIDs,
 	})

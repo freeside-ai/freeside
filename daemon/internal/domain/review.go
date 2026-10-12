@@ -13,22 +13,48 @@ import (
 // pass (plan §7). Readiness consumes its exact base, head, configuration, and
 // instruction binding; a native forge review is deliberately not representable
 // as a satisfying record.
+//
+// A record says who reviewed in one of two ways (reviewAttribution). A record
+// written since review admission carries Admission and none of the Legacy
+// fields. A legacy record carries the three Legacy fields and no Admission;
+// they omit when empty, as Admission does when nil, so a legacy record encodes
+// to the bytes it was stored with and a new record never renders an empty
+// legacy string. Read the two through Provider and ModelConfiguration.
 type ReviewRecord struct {
-	InvocationID        InvocationID  `json:"invocation_id"`
-	RunID               RunID         `json:"run_id"`
-	Round               int           `json:"round"`
-	Provider            string        `json:"provider"`
-	ModelConfiguration  string        `json:"model_configuration"`
-	ConfigurationDigest Digest        `json:"configuration_digest"`
-	InstructionDigest   Digest        `json:"instruction_digest"`
-	CostOwner           string        `json:"cost_owner"`
-	BaseSHA             string        `json:"base_sha"`
-	HeadSHA             string        `json:"head_sha"`
-	CompletedAt         time.Time     `json:"completed_at"`
-	CompletionEvidence  Digest        `json:"completion_evidence"`
-	Outcome             ReviewOutcome `json:"outcome"`
-	FindingIDs          []FindingID   `json:"finding_ids"`
+	InvocationID InvocationID `json:"invocation_id"`
+	RunID        RunID        `json:"run_id"`
+	Round        int          `json:"round"`
+	// Admission is the invocation's admission snapshot: the reviewer agent,
+	// its identity, and its lineage group. Nil only on a legacy record.
+	Admission                *ReviewAdmission `json:"admission,omitempty"`
+	LegacyProvider           string           `json:"provider,omitempty"`
+	LegacyModelConfiguration string           `json:"model_configuration,omitempty"`
+	ConfigurationDigest      Digest           `json:"configuration_digest"`
+	InstructionDigest        Digest           `json:"instruction_digest"`
+	LegacyCostOwner          string           `json:"cost_owner,omitempty"`
+	BaseSHA                  string           `json:"base_sha"`
+	HeadSHA                  string           `json:"head_sha"`
+	CompletedAt              time.Time        `json:"completed_at"`
+	CompletionEvidence       Digest           `json:"completion_evidence"`
+	Outcome                  ReviewOutcome    `json:"outcome"`
+	FindingIDs               []FindingID      `json:"finding_ids"`
 }
+
+func (r ReviewRecord) attribution() reviewAttribution {
+	return reviewAttribution{
+		admission: r.Admission, provider: r.LegacyProvider,
+		modelConfiguration: r.LegacyModelConfiguration, payer: r.LegacyCostOwner,
+		invocationID: r.InvocationID, runID: r.RunID, role: RoleReviewer,
+	}
+}
+
+// Provider is the provider label the record shows: the admitted agent's
+// lineage group, or the string a legacy record stored.
+func (r ReviewRecord) Provider() string { return r.attribution().providerLabel() }
+
+// ModelConfiguration is the model configuration the record shows: the
+// admitted agent's model and effort, or the string a legacy record stored.
+func (r ReviewRecord) ModelConfiguration() string { return r.attribution().modelConfigurationLabel() }
 
 // ReviewDispositionRecord is the immutable per-round outcome for one raw
 // review finding (plan §7). A later round writes another record; it never
@@ -172,18 +198,17 @@ func (r ReviewRecord) Validate() error {
 		return fmt.Errorf("review record run_id: %w", ErrEmptyID)
 	case r.Round < 1:
 		return fmt.Errorf("review record round %d: %w", r.Round, ErrNonPositive)
-	case r.Provider == "":
-		return fmt.Errorf("review record provider: %w", ErrEmptyField)
-	case r.ModelConfiguration == "":
-		return fmt.Errorf("review record model_configuration: %w", ErrEmptyField)
+	}
+	if err := r.attribution().validate("review record"); err != nil {
+		return err
+	}
+	switch {
 	case !contentaddr.Valid(string(r.ConfigurationDigest)):
 		return fmt.Errorf("review record configuration_digest %q: %w",
 			r.ConfigurationDigest, ErrInvalidReviewCompletionEvidence)
 	case !contentaddr.Valid(string(r.InstructionDigest)):
 		return fmt.Errorf("review record instruction_digest %q: %w",
 			r.InstructionDigest, ErrInvalidReviewCompletionEvidence)
-	case r.CostOwner == "":
-		return fmt.Errorf("review record cost_owner: %w", ErrEmptyField)
 	case r.BaseSHA == "":
 		return fmt.Errorf("review record base_sha: %w", ErrEmptyField)
 	case r.HeadSHA == "":
@@ -218,6 +243,7 @@ func (r ReviewRecord) Validate() error {
 // NewReviewRecord constructs a detached record with canonical finding IDs.
 func NewReviewRecord(record ReviewRecord) (ReviewRecord, error) {
 	record.CompletedAt = record.CompletedAt.UTC()
+	record.Admission = detachedReviewAdmission(record.Admission)
 	record.FindingIDs = slices.Clone(record.FindingIDs)
 	slices.Sort(record.FindingIDs)
 	record.FindingIDs = slices.Compact(record.FindingIDs)

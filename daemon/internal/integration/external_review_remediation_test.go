@@ -377,7 +377,6 @@ func TestExternalReviewCycleRemediatesAMixedRound(t *testing.T) {
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: p.baseSHA, HeadSHA: head,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("mixed cycle findings")),
 			Findings: []domain.Finding{own},
 		},

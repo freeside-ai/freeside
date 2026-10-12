@@ -119,8 +119,7 @@ func (p *productionPublicationHarness) scriptCleanReview(round int, baseSHA, hea
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: baseSHA, HeadSHA: headSHA,
-			Provider: "openai", ModelConfiguration: "codex/test",
-			CostOwner: "test", CompletedAt: p.now.UTC(),
+			CompletedAt:        p.now.UTC(),
 			CompletionEvidence: productionDigest([]byte("clean re-entry review")),
 		},
 	})
@@ -438,6 +437,7 @@ func (p *productionPublicationHarness) seedReadinessRoundLimitAdjudication(t *te
 			return err
 		}
 		record.InvocationID, record.Round = engine.ProductionReviewInvocationID(p.runID, 2), 2
+		record.Admission = fake.RecordAdmission(domain.RoleReviewer, record.RunID, record.InvocationID)
 		record.Outcome, record.FindingIDs = domain.ReviewFindings, []domain.FindingID{finding.ID}
 		if err := tx.PutReviewRecord(p.ctx, record, []domain.Finding{finding}); err != nil {
 			return err
@@ -1037,7 +1037,6 @@ func TestReadinessReentryFindingsRaiseReviewItem(t *testing.T) {
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: advanced, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("re-entry findings")),
 			Findings: []domain.Finding{{
 				ID: "reentry-finding-1", RunID: p.runID, Source: "codex_local", Severity: "P1",
@@ -1172,7 +1171,6 @@ func TestReadinessReentryFindingsEndAnEarlierHold(t *testing.T) {
 		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			BaseSHA: advanced, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
 			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("re-entry findings")),
 			Findings: []domain.Finding{{
 				ID: "reentry-finding-1", RunID: p.runID, Source: "codex_local", Severity: "P1",

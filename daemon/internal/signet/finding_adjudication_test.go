@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
@@ -46,9 +47,9 @@ func seedFindingAdjudicationItem(t *testing.T, f fixture) domain.AttentionItem {
 	instructionDigest := digest("c")
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-finding-adjudication-1", RunID: runID, Round: 1,
-		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, runID, "review-finding-adjudication-1"),
 		ConfigurationDigest: digest("d"), InstructionDigest: instructionDigest,
-		CostOwner: "owner", BaseSHA: "base", HeadSHA: "head", CompletedAt: *f.now,
+		BaseSHA: "base", HeadSHA: "head", CompletedAt: *f.now,
 		CompletionEvidence: digest("e"), Outcome: domain.ReviewFindings,
 		FindingIDs: findingIDs,
 	})

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 )
 
 // Seed several dispositions sharing one adjudication and review, the repeated
@@ -35,7 +36,7 @@ func seedReviewValidation(t *testing.T, count, stored int) (*Store, domain.Findi
 	}
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "reuse-review", RunID: run.ID, Round: 1,
-		Provider: "openai", ModelConfiguration: "gpt-codex/high", CostOwner: "owner",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, run.ID, "reuse-review"),
 		ConfigurationDigest: migrationAdjudicationDigest("c"), InstructionDigest: migrationAdjudicationDigest("d"),
 		CompletionEvidence: migrationAdjudicationDigest("e"), BaseSHA: "base", HeadSHA: "head",
 		CompletedAt: at, Outcome: domain.ReviewFindings, FindingIDs: ids,

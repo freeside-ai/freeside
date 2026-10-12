@@ -305,20 +305,16 @@ func (s *ReviewSource) commit(id domain.InvocationID, r exec.ReviewResult) exec.
 	if r.BaseSHA == "" {
 		r.BaseSHA = intent.BaseSHA
 	}
-	if r.Provider == "" {
-		r.Provider = "fake"
-	}
-	if r.ModelConfiguration == "" {
-		r.ModelConfiguration = "fake/review-v1"
+	// A real source returns the request's snapshot unchanged; a script that
+	// sets one of its own stands in for a source that returns another.
+	if r.Admission.InvocationID == "" {
+		r.Admission = intent.Admission
 	}
 	if r.ConfigurationDigest == "" {
 		r.ConfigurationDigest = DefaultReviewConfigurationDigest
 	}
 	if r.InstructionDigest == "" {
 		r.InstructionDigest = intent.Instructions.ResultDigest
-	}
-	if r.CostOwner == "" {
-		r.CostOwner = "test"
 	}
 	if r.CompletedAt.IsZero() {
 		r.CompletedAt = intent.RequestedAt

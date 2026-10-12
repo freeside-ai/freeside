@@ -19,6 +19,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -447,10 +448,10 @@ func TestObserveSnapshotProjectsLineageAdmissionAndActionableAttention(t *testin
 	reviewConfigurationDigest := domain.Digest("sha256:" + strings.Repeat("e", 64))
 	reviewRecord, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-yield-snapshot", RunID: run.ID, Round: 1,
-		Provider: "codex", ModelConfiguration: "test",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, run.ID, "review-yield-snapshot"),
 		ConfigurationDigest: reviewConfigurationDigest,
 		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("c", 64)),
-		CostOwner:           "test", BaseSHA: admission.Base.BaseSHA, HeadSHA: recovery.HeadSHA,
+		BaseSHA:             admission.Base.BaseSHA, HeadSHA: recovery.HeadSHA,
 		CompletedAt: admittedAt, CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("d", 64)),
 		Outcome: domain.ReviewFindings, FindingIDs: []domain.FindingID{reviewFinding.ID},
 	})
@@ -666,9 +667,9 @@ func TestObserveSnapshotProjectsShadowEvidence(t *testing.T) {
 	}
 	routed, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-routed", RunID: run.ID, Round: 1,
-		Provider: "openai", ModelConfiguration: "codex/test",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, run.ID, "review-routed"),
 		ConfigurationDigest: observedShadowDigest("a"), InstructionDigest: observedShadowDigest("b"),
-		CostOwner: "routed", BaseSHA: strings.Repeat("1", 40), HeadSHA: strings.Repeat("2", 40),
+		BaseSHA: strings.Repeat("1", 40), HeadSHA: strings.Repeat("2", 40),
 		CompletedAt: now, CompletionEvidence: observedShadowDigest("c"), Outcome: domain.ReviewClean,
 	})
 	if err != nil {
@@ -682,10 +683,10 @@ func TestObserveSnapshotProjectsShadowEvidence(t *testing.T) {
 	}
 	shadow, err := domain.NewShadowReviewRecord(domain.ShadowReviewRecord{
 		InvocationID: "shadow-review-observed", RunID: run.ID, ShadowedRound: 1,
-		Source: domain.ShadowReviewClaudeLocal, Provider: "anthropic",
-		ModelConfiguration: "claude/test", ConfigurationDigest: observedShadowDigest("d"),
-		InstructionDigest: routed.InstructionDigest, CostOwner: "shadow",
-		BaseSHA: routed.BaseSHA, HeadSHA: routed.HeadSHA, CompletedAt: now,
+		Source: domain.ShadowReviewClaudeLocal, Admission: fake.RecordAdmission(domain.RoleShadowReviewer, run.ID, "shadow-review-observed"),
+		ConfigurationDigest: observedShadowDigest("d"),
+		InstructionDigest:   routed.InstructionDigest,
+		BaseSHA:             routed.BaseSHA, HeadSHA: routed.HeadSHA, CompletedAt: now,
 		CompletionEvidence: observedShadowDigest("e"), Outcome: domain.ReviewFindings,
 		FindingIDs: []domain.FindingID{finding.ID},
 	})
@@ -760,9 +761,9 @@ func adjReviewRecord(
 	t.Helper()
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: domain.InvocationID("review-" + string(runID) + "-1"),
-		RunID:        runID, Round: round, Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		RunID:        runID, Round: round, Admission: fake.RecordAdmission(domain.RoleReviewer, runID, domain.InvocationID("review-"+string(runID)+"-1")),
 		ConfigurationDigest: adjDigest("c"), InstructionDigest: instructionDigest,
-		CostOwner: "owner", BaseSHA: "base", HeadSHA: "head", CompletedAt: at,
+		BaseSHA: "base", HeadSHA: "head", CompletedAt: at,
 		CompletionEvidence: adjDigest("e"), Outcome: domain.ReviewFindings, FindingIDs: findingIDs,
 	})
 	if err != nil {
