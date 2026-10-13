@@ -366,11 +366,38 @@ func TestDurableStopKeepsHTTPAndSurvivesReopen(t *testing.T) {
 		if item.Offers(domain.ActionResumeUnattended) {
 			t.Errorf("recurrent durable-stop item actions = %v, must not offer resume_unattended", item.RequestedDecision)
 		}
-		if !strings.Contains(item.Reason, "second durable-stop cause") {
-			t.Errorf("recurrent durable-stop reason = %q, want latest cause", item.Reason)
+		if item.Reason != durableStop.Reason {
+			t.Errorf("first stop reason changed: %q", item.Reason)
+		}
+		items, err := tx.ListOpenAttentionItems(context.Background(), domain.AttentionSystemHealth)
+		if err != nil {
+			return err
+		}
+		stops := 0
+		for _, item := range items {
+			if !strings.HasPrefix(string(item.ID), durableStopItemPrefix) {
+				continue
+			}
+			stops++
+			if item.Offers(domain.ActionResumeUnattended) {
+				t.Error("a stop still offers resume")
+			}
+		}
+		if stops != 2 {
+			t.Errorf("stop count = %d, want 2", stops)
 		}
 		return nil
 	}); err != nil {
 		t.Fatalf("read recurrent durable-stop item: %v", err)
+	}
+}
+
+func TestDurableStopReasonExplainsRecovery(t *testing.T) {
+	want := "The daemon stopped unattended operation after a health failure requiring a durable stop: janitor failed. " +
+		"Acknowledge and Run Doctor leave unattended admission closed. " +
+		"Restart the daemon, then choose Resume Unattended on each durable-stop item to reopen admission. " +
+		"A restart alone does not reopen it."
+	if got := durableStopReason(errors.New("janitor failed")); got != want {
+		t.Fatalf("reason = %q", got)
 	}
 }

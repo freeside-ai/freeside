@@ -199,17 +199,23 @@ func (d *daemon) fileDurableStop(ctx context.Context, cause error) error {
 		if err != nil {
 			return err
 		}
+		reason := durableStopReason(cause)
+		alreadyRecorded := false
 		for _, item := range open {
 			if strings.HasPrefix(string(item.ID), durableStopItemPrefix) {
+				alreadyRecorded = alreadyRecorded || item.Reason == reason
 				next := item
-				next.Reason = durableStopReason(cause)
-				if item.Offers(domain.ActionResumeUnattended) || next.Reason != item.Reason {
+				if item.Offers(domain.ActionResumeUnattended) {
 					next.ItemVersion++
 					next.RequestedDecision = withoutAction(next.RequestedDecision, domain.ActionResumeUnattended)
-					return tx.PutAttentionItem(ctx, next)
+					if err := tx.PutAttentionItem(ctx, next); err != nil {
+						return err
+					}
 				}
-				return nil
 			}
+		}
+		if alreadyRecorded {
+			return nil
 		}
 		state, err := tx.ServerState(ctx)
 		if err != nil {
@@ -256,7 +262,9 @@ func (d *daemon) fileDurableStop(ctx context.Context, cause error) error {
 func durableStopReason(cause error) string {
 	return fmt.Sprintf(
 		"The daemon stopped unattended operation after a health failure requiring a durable stop: %v. "+
-			"Unattended admission remains closed until this item is resolved; a restart does not reopen it.",
+			"Acknowledge and Run Doctor leave unattended admission closed. "+
+			"Restart the daemon, then choose Resume Unattended on each durable-stop item to reopen admission. "+
+			"A restart alone does not reopen it.",
 		cause,
 	)
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,78 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
+
+func TestEachDurableStopNotifiesEveryDevice(t *testing.T) {
+	root := t.TempDir()
+	h, err := run(t.Context(), nil, config{
+		Environment: environmentEphemeral, DBPath: filepath.Join(root, "freeside.db"),
+		FakeDriverDir: filepath.Join(root, "driver"), ListenAddr: "127.0.0.1:0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := h.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	sink := newNtfySink(t, http.StatusOK)
+	service := signet.NewService(h.store, signet.WithNtfy(signet.NtfyConfig{
+		BaseURL: sink.URL, Client: sink.Client(), TopicKey: []byte("fixture-notification-topic-key-32"),
+	}))
+	for _, device := range []domain.DeviceID{"phone", "tablet"} {
+		pairDevice(t, h, device)
+	}
+	for index, cause := range []string{"janitor stopped", "backup stopped", "backup stopped"} {
+		if index == 2 {
+			if err := h.enableDurableStopRecovery(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := h.fileDurableStop(t.Context(), errors.New(cause)); err != nil {
+			t.Fatal(err)
+		}
+		if err := service.DeliverOwed(t.Context(), func(err error) { t.Errorf("delivery: %v", err) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var items []domain.AttentionItem
+	if err := h.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		all, err := tx.ListOpenAttentionItems(t.Context(), domain.AttentionSystemHealth)
+		for _, item := range all {
+			if strings.HasPrefix(string(item.ID), durableStopItemPrefix) {
+				items = append(items, item)
+			}
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("stop items = %d, want 2 distinct causes", len(items))
+	}
+	for _, item := range items {
+		if item.Offers(domain.ActionResumeUnattended) {
+			t.Error("repeated stop left a recovery action offered")
+		}
+		for _, device := range []domain.DeviceID{"phone", "tablet"} {
+			rows := deliveriesFor(t, h, item.ID, device)
+			if len(rows) != 1 || rows[0].Status != domain.DeliveryChannelAccepted {
+				t.Errorf("item %s device %s deliveries = %v", item.ID, device, rows)
+			}
+		}
+	}
+	_, clicks := sink.published()
+	stopNotifications := 0
+	for _, click := range clicks {
+		if strings.HasPrefix(click, "freeside://attention/items/"+durableStopItemPrefix) {
+			stopNotifications++
+		}
+	}
+	if stopNotifications != 4 {
+		t.Errorf("stop notifications = %d, want exactly one per stop and device", stopNotifications)
+	}
+}
 
 // ntfySink is a loopback stand-in for the ntfy server: it records each
 // publish and answers with a scripted status. No test publishes to the hosted
