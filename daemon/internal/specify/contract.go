@@ -83,22 +83,38 @@ type Output struct {
 }
 
 // DecodeOutput strictly reconstructs and validates one typed stage payload.
-// Two tolerated presentation defects: a single Markdown code fence around the
-// whole object (issue #780), and leading or trailing whitespace on the prose
-// fields (summary, body, reply, addressal response; issue #1123). Both are
-// the model class's dominant output-shape failures despite the prompt
-// forbidding them, and each occurrence otherwise costs a full specification
-// execution; a trailing newline on a ten-kilobyte body carries no meaning the
-// operator could act on. Identifiers (fetch URLs, comment IDs) stay strict.
+// Three tolerated presentation defects: a single Markdown code fence around
+// the whole object (issue #780), surrounding whitespace on prose fields
+// (issue #1123), and a backslash before a backtick inside a JSON string
+// (issue #1984). These model output defects otherwise cost a full specification
+// execution. Every other invalid escape still fails. Identifiers (fetch URLs,
+// comment IDs) stay strict.
 // Anything beyond those exact shapes (prose, truncation, a second fence)
 // still fails strict decode, with a bounded prefix of the raw output
 // preserved for diagnosis.
 func DecodeOutput(data []byte) (Output, error) {
 	var out Output
-	if err := strictjson.Decode(stripMarkdownFence(data), &out,
+	payload, repaired := dropBacktickEscapes(stripMarkdownFence(data))
+	if err := strictjson.Decode(payload, &out,
 		strictjson.RejectInvalidUTF8, MaxOutputBytes); err != nil {
 		return Output{}, fmt.Errorf("decode specifier output: %w (output begins %q)",
 			err, outputPrefix(data))
+	}
+	// A repaired identifier must never acquire authority as a different URL
+	// or comment ID. Bare backticks plus a repair elsewhere fail closed too.
+	if repaired {
+		for _, request := range out.FetchRequests {
+			if strings.ContainsRune(request.URL, '`') {
+				return Output{}, fmt.Errorf("%w: backtick escape tolerance cannot repair fetch URLs", ErrInvalidOutput)
+			}
+		}
+		if out.Specification != nil {
+			for _, addressal := range out.Specification.Addressals {
+				if strings.ContainsRune(addressal.CommentID, '`') {
+					return Output{}, fmt.Errorf("%w: backtick escape tolerance cannot repair comment IDs", ErrInvalidOutput)
+				}
+			}
+		}
 	}
 	out.trimProse()
 	if err := out.Validate(); err != nil {
@@ -113,10 +129,18 @@ func DecodeOutput(data []byte) (Output, error) {
 // no current-contract output passes through this compatibility path.
 func DecodeLegacyAddressalOutput(data []byte, commentIDs map[string]string) (Output, error) {
 	var legacy legacyOutput
-	if err := strictjson.Decode(stripMarkdownFence(data), &legacy,
+	payload, repaired := dropBacktickEscapes(stripMarkdownFence(data))
+	if err := strictjson.Decode(payload, &legacy,
 		strictjson.RejectInvalidUTF8, MaxOutputBytes); err != nil {
 		return Output{}, fmt.Errorf("decode legacy specifier output: %w (output begins %q)",
 			err, outputPrefix(data))
+	}
+	if repaired {
+		for _, request := range legacy.FetchRequests {
+			if strings.ContainsRune(request.URL, '`') {
+				return Output{}, fmt.Errorf("%w: backtick escape tolerance cannot repair fetch URLs", ErrInvalidOutput)
+			}
+		}
 	}
 	out := Output{
 		FetchRequests: legacy.FetchRequests,
@@ -145,6 +169,42 @@ func DecodeLegacyAddressalOutput(data []byte, commentIDs map[string]string) (Out
 		return Output{}, err
 	}
 	return out, nil
+}
+
+// dropBacktickEscapes preserves JSON escape pairs except for the invalid
+// backtick escape. Consuming each pair together preserves escaped backslashes
+// and keeps escaped quotes from changing the string boundary.
+func dropBacktickEscapes(data []byte) ([]byte, bool) {
+	// Leave oversized input to strict decode; repair must not shrink it below
+	// the input limit or allocate another unbounded buffer.
+	if strictjson.Limit(len(data)) > MaxOutputBytes {
+		return data, false
+	}
+	var repaired []byte
+	inString := false
+	start := 0
+	for i := 0; i < len(data); i++ {
+		switch data[i] {
+		case '"':
+			inString = !inString
+		case '\\':
+			if !inString || i+1 == len(data) {
+				continue
+			}
+			if data[i+1] == '`' {
+				if repaired == nil {
+					repaired = make([]byte, 0, len(data))
+				}
+				repaired = append(repaired, data[start:i]...)
+				start = i + 1
+			}
+			i++
+		}
+	}
+	if repaired == nil {
+		return data, false
+	}
+	return append(repaired, data[start:]...), true
 }
 
 // trimProse strips surrounding whitespace from the free-text fields before
