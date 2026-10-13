@@ -5,6 +5,19 @@ import Testing
 @testable import FreesideCore
 
 @Suite struct DecisionCardCompositionTests {
+    @Test func durableStopDrawsAllRecoveryGuidanceUnderTheAsk() throws {
+        let item = AttentionFixtures.durableStop()
+        let composition = DecisionCardComposition.forType(.system_health)
+        #expect(composition.drawsReason(for: item))
+        #expect(DecisionCardComposition.reasonPlacement(for: item) == .underAsk)
+        let reason = try #require(DecisionCardComposition.reason(for: item))
+        #expect(reason.text == item.reason)
+        #expect(!reason.isAgentWritten)
+        #expect(reason.text.contains("Acknowledge and Run Doctor leave unattended admission closed."))
+        #expect(reason.text.contains("choose Resume Unattended on each durable-stop item"))
+        #expect(reason.text.hasSuffix("A restart alone does not reopen it."))
+    }
+
     /// Section 9: an agent question is answerable on its own, so the labeled
     /// question claim renders before the actions rather than in the lower
     /// supporting sections.

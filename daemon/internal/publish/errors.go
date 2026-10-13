@@ -136,6 +136,10 @@ var ErrAmbiguousInstallation = errors.New("multiple GitHub App installations for
 // is inoperable while the janitor is absent, starting, or stopped.
 var ErrJanitorInactive = errors.New("GitHub App installation janitor is not active")
 
+// ErrJanitorMintHeld means a pass is waiting for a possibly live token to
+// expire. It is not a new failed attempt, and does not reset earlier failures.
+var ErrJanitorMintHeld = errors.New("installation janitor mint is held")
+
 // ErrInstallationGrantUntrusted reports that current janitor coverage does not
 // authorize the exact trusted installation-to-repository binding. An exact
 // pending envelope may keep a remote installation from deletion, but never

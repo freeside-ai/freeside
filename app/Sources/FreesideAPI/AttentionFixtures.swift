@@ -6,6 +6,22 @@ import Foundation
 /// resources or decode step), so a schema change breaks these at compile
 /// time.
 public enum AttentionFixtures {
+    /// A daemon-authored stop with the recovery guidance supplied on its card.
+    public static func durableStop() -> Components.Schemas.AttentionItem {
+        var item = fixture(type: .system_health).item
+        item.id = "system-health-daemon-stop-1"
+        item.reason =
+            "The daemon stopped unattended operation after a health failure requiring a durable stop: janitor failed. "
+            + "Acknowledge and Run Doctor leave unattended admission closed. "
+            + "Restart the daemon, then choose Resume Unattended on each durable-stop item to reopen admission. "
+            + "A restart alone does not reopen it."
+        item.requested_decision = [.acknowledge, .run_doctor]
+        item.health_diagnostic = .init(
+            value1: .init(code: "daemon_durable_stop", impairs: .unattended_admission))
+        item.posture = .init(value1: .blocking)
+        return item
+    }
+
     /// The recipe digest every fixture's evidence is produced under;
     /// MockServer's default approved set contains exactly this digest.
     public static let approvedRecipeDigest = "sha256:recipe-approved"
