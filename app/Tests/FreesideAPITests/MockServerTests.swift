@@ -1481,6 +1481,50 @@ import Testing
             ])
     }
 
+    @Test func reviewDisputeRequiresCompleteOfferedRoutesAndReplays() async throws {
+        let seed = AttentionFixtures.routedReviewDispute()
+        let server = MockServer(items: [seed])
+        let client = APIClientFactory.mock(server: server)
+        let choices: [Components.Schemas.AlternativeChoice] = [
+            .init(finding_id: "finding-2", route: ._defer),
+            .init(finding_id: "finding-1", route: .remediate),
+        ]
+        for (index, invalid) in [
+            [], [choices[0]], [choices[0], choices[0]],
+            [choices[1], .init(finding_id: "finding-2", route: .remediate)],
+            [choices[0], .init(finding_id: "unknown", route: .decline)],
+        ].enumerated() {
+            var command = Self.command(id: "invalid-\(index)", against: seed, action: .adjudicate_findings)
+            command.payload.asDecision.finding_routes = invalid
+            let response = try await client.submitCommand(body: .json(command))
+            guard case .undocumented(let status, _) = response else {
+                Issue.record("invalid finding routes were accepted")
+                continue
+            }
+            #expect(status == (index == 0 || index == 2 ? 422 : 400))
+            #expect(await server.snapshot(itemID: seed.item.id)?.item.status == .open)
+        }
+        var overlong = Self.command(id: String(repeating: "c", count: 257), against: seed, action: .adjudicate_findings)
+        overlong.payload.asDecision.finding_routes = choices
+        let rejected = try await client.submitCommand(body: .json(overlong))
+        guard case .undocumented(let status, _) = rejected else {
+            Issue.record("overlong adjudication command id was accepted")
+            return
+        }
+        #expect(status == 422)
+        #expect(await server.snapshot(itemID: seed.item.id)?.item.status == .open)
+
+        var command = Self.command(id: "human-decision", against: seed, action: .adjudicate_findings)
+        command.payload.asDecision.finding_routes = choices
+        let result = try await client.submitCommand(body: .json(command)).ok.body.json
+        let replay = try await client.submitCommand(body: .json(command)).ok.body.json
+        #expect(result == replay)
+        #expect(
+            result.record.asDecision.message
+                == #"[{"finding_id":"finding-1","route":"remediate"},{"finding_id":"finding-2","route":"defer"}]"#)
+        #expect(await server.snapshot(itemID: seed.item.id)?.item.status == .resolved)
+    }
+
     @Test func findingAdjudicationAcceptAndAlternativeChoiceResolve() async throws {
         for (id, action, choices) in [
             (

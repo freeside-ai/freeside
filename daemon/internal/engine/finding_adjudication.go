@@ -176,6 +176,13 @@ func (w *productionPublicationWorkflow) reconcileFindingAdjudicationWithDissent(
 		return productionReviewPassed, nil
 	}
 
+	human, err := w.consumeReviewDisputeDecision(ctx, task, binding, record)
+	if err != nil {
+		return productionReviewPending, err
+	}
+	if human != nil {
+		return w.executeFindingAdjudication(ctx, task, record, *human, baseRoot, candidateRoot)
+	}
 	var artifact domain.FindingAdjudication
 	err = w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var getErr error
@@ -1367,6 +1374,9 @@ func (w *productionPublicationWorkflow) putFindingAdjudicationAttention(
 		return err
 	}
 	itemID := productionFindingAdjudicationItemID(task.RunID, record.Round, artifact.Revision)
+	if artifact.Decision != nil {
+		itemID = artifact.Decision.ItemID
+	}
 	var existing *domain.AttentionItem
 	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		item, err := tx.GetAttentionItem(ctx, itemID)
@@ -1626,6 +1636,9 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 	artifact domain.FindingAdjudication, baseRoot, candidateRoot string,
 ) (productionReviewGateState, error) {
 	itemID := productionFindingAdjudicationItemID(task.RunID, record.Round, artifact.Revision)
+	if artifact.Decision != nil {
+		itemID = artifact.Decision.ItemID
+	}
 	var item *domain.AttentionItem
 	var command *domain.Command
 	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -1637,8 +1650,9 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 			return err
 		}
 		if current.Type == domain.AttentionReviewDispute {
-			item = &current
-			return nil
+			got, decision, err := tx.ReviewDisputeDecision(ctx, itemID)
+			item, command = &got, decision
+			return err
 		}
 		if current.Type != domain.AttentionFindingAdjudication {
 			return domain.ErrParentKeyMismatch
@@ -1666,7 +1680,7 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 		}
 		return productionReviewPending, nil
 	}
-	if item != nil && item.Type == domain.AttentionReviewDispute {
+	if item != nil && item.Type == domain.AttentionReviewDispute && (command == nil || artifact.Decision == nil) {
 		if externalFirstRound {
 			return productionReviewEscalated, nil
 		}
@@ -1675,7 +1689,11 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 	if item != nil && command == nil {
 		return productionReviewPending, nil
 	}
-	routes, err := findingRoutesFromDecision(artifact, command)
+	routingCommand := command
+	if artifact.Decision != nil {
+		routingCommand = nil
+	}
+	routes, err := findingRoutesFromDecision(artifact, routingCommand)
 	if err != nil {
 		return productionReviewPending, err
 	}
@@ -1695,7 +1713,7 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 		case domain.RouteRemediate:
 			// #842 consumes this immutable engine fact. Until then the run parks.
 		case domain.RouteDefer, domain.RouteDecline:
-			if item == nil && entry.FindingID != "" {
+			if item == nil && entry.FindingID != "" && entry.Producer != domain.AdjudicationProducerHuman {
 				var finding domain.Finding
 				if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 					var getErr error

@@ -424,6 +424,11 @@ func authenticateRemediationLineage(ctx context.Context, tx *store.ReadTx, runID
 // decided. A missing item, or an item still open, yields nil; an item bound
 // to another adjudication fails closed.
 func findingAdjudicationDecidedAt(ctx context.Context, tx *store.ReadTx, adjudication domain.FindingAdjudication) (*time.Time, error) {
+	if adjudication.Decision != nil {
+		// Store reconstruction binds this timestamp to the accepted dispute
+		// command; human revisions have no finding-adjudication proposal card.
+		return &adjudication.CreatedAt, nil
+	}
 	runID, round, digest := adjudication.RunID, adjudication.Round, adjudication.Digest
 	item, decision, err := tx.FindingAdjudicationDecision(ctx,
 		domain.ProductionFindingAdjudicationItemID(runID, round, adjudication.Revision))

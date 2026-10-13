@@ -642,6 +642,7 @@ enum AttentionDisplay {
         case .resolve_reenrollment: return "Resolve Re-enrollment"
         case .accept_recommended_route: return "Accept Recommended Route"
         case .choose_alternative_route: return "Choose Another Route"
+        case .adjudicate_findings: return "Apply Finding Routes"
         }
     }
 
@@ -676,7 +677,7 @@ enum AttentionDisplay {
             .start_with_changes, .approve_with_changes, .decline, .acknowledge, .run_doctor,
             .resume_unattended, .recover_review, .adopt_review_configuration,
             .resolve_reenrollment, .accept_recommended_route,
-            .choose_alternative_route:
+            .choose_alternative_route, .adjudicate_findings:
             return nil
         }
     }
@@ -724,7 +725,7 @@ enum AttentionDisplay {
             .start, .start_with_changes, .approve_with_changes, .snooze, .acknowledge, .run_doctor,
             .resume_unattended, .recover_review, .adopt_review_configuration,
             .resolve_reenrollment, .accept_recommended_route,
-            .choose_alternative_route:
+            .choose_alternative_route, .adjudicate_findings:
             return nil
         }
     }
@@ -1246,6 +1247,7 @@ enum AttentionDisplay {
     ) -> (label: String, modelBacked: Bool, unverifiedKeyword: String?) {
         switch producer {
         case .engine: return ("Daemon recommendation", false, nil)
+        case .human: return ("Human decision", false, nil)
         case .model: return ("Model proposal (unverified)", true, "Model proposal")
         case .engine_model:
             return ("Model judgment with engine-authorized remediation", true, nil)

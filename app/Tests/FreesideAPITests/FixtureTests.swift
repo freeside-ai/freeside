@@ -29,7 +29,7 @@ import Testing
         .review_diminishing_returns: [
             .finish_now, .apply_then_finish, .continue_under_policy, .convert_to_policy,
         ],
-        .review_dispute: [.approve, .discuss, .stop],
+        .review_dispute: [.approve, .discuss, .stop, .adjudicate_findings],
         .review_contradiction: [.recover_review],
         .review_configuration: [.adopt_review_configuration, .discuss, .stop],
         .finding_adjudication: [
@@ -69,7 +69,7 @@ import Testing
     @Test func phase1ActionsCoverEveryOfferedActionWithoutDuplicates() {
         let offered = Set(AttentionFixtures.phase1ActionSets.values.flatMap { $0 })
         #expect(Set(AttentionFixtures.phase1Actions) == offered)
-        #expect(AttentionFixtures.phase1Actions.count == 32)
+        #expect(AttentionFixtures.phase1Actions.count == 33)
         #expect(Set(AttentionFixtures.phase1Actions).count == AttentionFixtures.phase1Actions.count)
     }
 
@@ -337,7 +337,7 @@ import Testing
         // The default hold predates publication: it carries no pull request
         // reference, so it offers its set without the conditional open_pr.
         let offered = AttentionFixtures.phase1ActionSets[type]?.filter {
-            type != .publish_blocked || $0 != .open_pr
+            (type != .publish_blocked || $0 != .open_pr) && (type != .review_dispute || $0 != .adjudicate_findings)
         }
         #expect(item.requested_decision == offered)
         #expect(item.status == .open)

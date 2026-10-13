@@ -36,6 +36,7 @@ import Testing
             .resolve_reenrollment: .resolvesReenrollment,
             .accept_recommended_route: .concludes(.resolved),
             .choose_alternative_route: .concludes(.resolved),
+            .adjudicate_findings: .concludes(.resolved),
         ]
 
         #expect(expected.count == AttentionFixtures.phase1Actions.count)

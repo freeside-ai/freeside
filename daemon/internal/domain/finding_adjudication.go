@@ -358,10 +358,14 @@ func (e FindingAdjudicationEntry) Validate() error {
 		if !e.Confidence.valid() {
 			return fmt.Errorf("adjudication entry %q confidence %q: %w", e.FindingID, *e.Confidence, ErrInvalidAdjudicationConfidence)
 		}
-	case AdjudicationProducerEngine:
+	case AdjudicationProducerEngine, AdjudicationProducerHuman:
 		if e.Confidence != nil {
 			return fmt.Errorf("adjudication entry %q: %w", e.FindingID, ErrAdjudicationConfidenceMisplaced)
 		}
+	}
+	if e.Producer == AdjudicationProducerHuman &&
+		(len(e.OfferedAlternatives) != 0 || (e.Route != RouteRemediate && e.Route != RouteDecline && e.Route != RouteDefer)) {
+		return ErrFindingAdjudicationInconsistent
 	}
 	if strings.TrimSpace(e.Rationale) == "" {
 		return fmt.Errorf("adjudication entry %q rationale: %w", e.FindingID, ErrEmptyField)
@@ -506,7 +510,7 @@ func (e FindingAdjudicationEntry) Accepted(threshold DispatchThreshold) (bool, e
 		return false, fmt.Errorf("adjudication accept threshold %q: %w", threshold, ErrInvalidDispatchThreshold)
 	}
 	switch e.Producer {
-	case AdjudicationProducerEngine:
+	case AdjudicationProducerEngine, AdjudicationProducerHuman:
 		return true, nil
 	case AdjudicationProducerModel, AdjudicationProducerEngineModel:
 		return e.Confidence.meets(threshold), nil
@@ -633,6 +637,7 @@ type FindingAdjudication struct {
 	Revision          int                   `json:"revision"`
 	PredecessorDigest *Digest               `json:"predecessor_digest"`
 	Feedback          *AdjudicationFeedback `json:"feedback"`
+	Decision          *AdjudicationDecision `json:"decision,omitempty"`
 	// FindingBatchDigest is the content address of the sorted entry finding-ID
 	// list, so the "exact batch" binding is itself checkable.
 	FindingBatchDigest        Digest                     `json:"finding_batch_digest"`
@@ -643,6 +648,21 @@ type FindingAdjudication struct {
 	Entries                   []FindingAdjudicationEntry `json:"entries"`
 	CreatedAt                 time.Time                  `json:"created_at"`
 	Digest                    Digest                     `json:"digest"`
+}
+
+// AdjudicationDecision binds a human revision to the persisted terminal
+// command. The store re-gates its item version and selected routes.
+type AdjudicationDecision struct {
+	CommandID   string `json:"command_id"`
+	ItemID      ItemID `json:"item_id"`
+	ItemVersion int    `json:"item_version"`
+}
+
+func (d AdjudicationDecision) Validate() error {
+	if d.CommandID == "" || d.ItemID == "" || d.ItemVersion < 1 {
+		return ErrFindingAdjudicationInconsistent
+	}
+	return nil
 }
 
 // AdjudicationFeedback binds a successor revision to the accepted agent turn
@@ -693,6 +713,7 @@ type canonicalSuccessorFindingAdjudication struct {
 	Revision                  int                        `json:"revision"`
 	PredecessorDigest         *Digest                    `json:"predecessor_digest"`
 	Feedback                  *AdjudicationFeedback      `json:"feedback"`
+	Decision                  *AdjudicationDecision      `json:"decision,omitempty"`
 	FindingBatchDigest        Digest                     `json:"finding_batch_digest"`
 	ApprovedSpecDigest        Digest                     `json:"approved_spec_digest"`
 	InstructionSnapshotDigest Digest                     `json:"instruction_snapshot_digest"`
@@ -723,6 +744,7 @@ type encodedSuccessorFindingAdjudication struct {
 	Revision                  int                        `json:"revision"`
 	PredecessorDigest         *Digest                    `json:"predecessor_digest"`
 	Feedback                  *AdjudicationFeedback      `json:"feedback"`
+	Decision                  *AdjudicationDecision      `json:"decision,omitempty"`
 	FindingBatchDigest        Digest                     `json:"finding_batch_digest"`
 	ApprovedSpecDigest        Digest                     `json:"approved_spec_digest"`
 	InstructionSnapshotDigest Digest                     `json:"instruction_snapshot_digest"`
@@ -746,6 +768,14 @@ func NewFindingAdjudication(
 	decisionSurfaceDigest Digest,
 	createdAt time.Time,
 ) (FindingAdjudication, error) {
+	return newFindingAdjudication(runID, round, approvedSpecDigest, instructionSnapshotDigest,
+		resolvedPolicyDigest, entries, decisionSurfaceDigest, nil, createdAt)
+}
+
+func newFindingAdjudication(
+	runID RunID, round int, approvedSpecDigest, instructionSnapshotDigest, resolvedPolicyDigest Digest,
+	entries []FindingAdjudicationEntry, decisionSurfaceDigest Digest, decision *AdjudicationDecision, createdAt time.Time,
+) (FindingAdjudication, error) {
 	sorted := slices.Clone(entries)
 	slices.SortFunc(sorted, func(a, b FindingAdjudicationEntry) int {
 		return strings.Compare(string(a.FindingID), string(b.FindingID))
@@ -759,6 +789,7 @@ func NewFindingAdjudication(
 		RunID:                     runID,
 		Round:                     round,
 		Revision:                  1,
+		Decision:                  decision,
 		FindingBatchDigest:        batchDigest,
 		ApprovedSpecDigest:        approvedSpecDigest,
 		InstructionSnapshotDigest: instructionSnapshotDigest,
@@ -875,11 +906,21 @@ func (a FindingAdjudication) Validate() error {
 			return fmt.Errorf("finding adjudication initial revision provenance: %w", ErrFindingAdjudicationInconsistent)
 		}
 	} else {
-		if a.PredecessorDigest == nil || !contentaddr.Valid(string(*a.PredecessorDigest)) || a.Feedback == nil {
+		if a.PredecessorDigest == nil || !contentaddr.Valid(string(*a.PredecessorDigest)) || (a.Feedback == nil) == (a.Decision == nil) {
 			return fmt.Errorf("finding adjudication successor revision provenance: %w", ErrFindingAdjudicationInconsistent)
 		}
-		if err := a.Feedback.Validate(); err != nil {
+		if a.Feedback != nil {
+			if err := a.Feedback.Validate(); err != nil {
+				return err
+			}
+		}
+	}
+	if a.Decision != nil {
+		if err := a.Decision.Validate(); err != nil {
 			return err
+		}
+		if a.Decision.ItemID != ProductionFindingAdjudicationItemID(a.RunID, a.Round, 1) {
+			return ErrFindingAdjudicationInconsistent
 		}
 	}
 	for label, digest := range map[string]Digest{
@@ -899,6 +940,9 @@ func (a FindingAdjudication) Validate() error {
 		return fmt.Errorf("finding adjudication entries: %w", ErrFindingAdjudicationInconsistent)
 	}
 	for i, entry := range a.Entries {
+		if entry.Producer == AdjudicationProducerHuman && a.Decision == nil {
+			return ErrFindingAdjudicationInconsistent
+		}
 		if err := entry.Validate(); err != nil {
 			return err
 		}
@@ -981,7 +1025,7 @@ func (a FindingAdjudication) canonical() any {
 		Entries:                   a.Entries,
 		CreatedAt:                 a.CreatedAt,
 	}
-	if a.Revision == 1 && a.PredecessorDigest == nil && a.Feedback == nil {
+	if a.Revision == 1 && a.PredecessorDigest == nil && a.Feedback == nil && a.Decision == nil {
 		return initial
 	}
 	return canonicalSuccessorFindingAdjudication{
@@ -991,6 +1035,7 @@ func (a FindingAdjudication) canonical() any {
 		Revision:                  a.Revision,
 		PredecessorDigest:         a.PredecessorDigest,
 		Feedback:                  a.Feedback,
+		Decision:                  a.Decision,
 		FindingBatchDigest:        a.FindingBatchDigest,
 		ApprovedSpecDigest:        a.ApprovedSpecDigest,
 		InstructionSnapshotDigest: a.InstructionSnapshotDigest,
@@ -1001,10 +1046,10 @@ func (a FindingAdjudication) canonical() any {
 	}
 }
 
-// MarshalJSON preserves the pre-revision byte shape for revision 1. Successors
-// carry revision identity and feedback provenance explicitly.
+// MarshalJSON preserves the pre-revision byte shape for legacy revision 1.
+// Successors and human decisions carry revision identity and provenance.
 func (a FindingAdjudication) MarshalJSON() ([]byte, error) {
-	if a.Revision == 1 && a.PredecessorDigest == nil && a.Feedback == nil {
+	if a.Revision == 1 && a.PredecessorDigest == nil && a.Feedback == nil && a.Decision == nil {
 		return json.Marshal(encodedFindingAdjudication{
 			EncodingVersion: a.EncodingVersion, RunID: a.RunID, Round: a.Round,
 			FindingBatchDigest: a.FindingBatchDigest, ApprovedSpecDigest: a.ApprovedSpecDigest,
@@ -1027,6 +1072,7 @@ func (a *FindingAdjudication) UnmarshalJSON(body []byte) error {
 		Revision                  json.RawMessage            `json:"revision"`
 		PredecessorDigest         json.RawMessage            `json:"predecessor_digest"`
 		Feedback                  json.RawMessage            `json:"feedback"`
+		Decision                  *AdjudicationDecision      `json:"decision"`
 		FindingBatchDigest        Digest                     `json:"finding_batch_digest"`
 		ApprovedSpecDigest        Digest                     `json:"approved_spec_digest"`
 		InstructionSnapshotDigest Digest                     `json:"instruction_snapshot_digest"`
@@ -1041,13 +1087,14 @@ func (a *FindingAdjudication) UnmarshalJSON(body []byte) error {
 		return err
 	}
 	*a = FindingAdjudication{
+		Decision:        wire.Decision,
 		EncodingVersion: wire.EncodingVersion, RunID: wire.RunID, Round: wire.Round,
 		FindingBatchDigest: wire.FindingBatchDigest, ApprovedSpecDigest: wire.ApprovedSpecDigest,
 		InstructionSnapshotDigest: wire.InstructionSnapshotDigest, ResolvedPolicyDigest: wire.ResolvedPolicyDigest,
 		DecisionSurfaceDigest: wire.DecisionSurfaceDigest,
 		Entries:               wire.Entries, CreatedAt: wire.CreatedAt, Digest: wire.Digest,
 	}
-	if len(wire.Revision) == 0 && len(wire.PredecessorDigest) == 0 && len(wire.Feedback) == 0 {
+	if len(wire.Revision) == 0 && len(wire.PredecessorDigest) == 0 && len(wire.Feedback) == 0 && wire.Decision == nil {
 		a.Revision = 1
 		return nil
 	}
@@ -1061,7 +1108,7 @@ func (a *FindingAdjudication) UnmarshalJSON(body []byte) error {
 			return fmt.Errorf("finding adjudication predecessor_digest: %w", err)
 		}
 	}
-	if len(wire.Feedback) > 0 {
+	if len(wire.Feedback) > 0 && (wire.Decision == nil || string(wire.Feedback) != "null") {
 		var feedback AdjudicationFeedback
 		if err := strictjson.Decode(wire.Feedback, &feedback,
 			strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {

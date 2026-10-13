@@ -459,6 +459,13 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 				if err := s.applyCodexReenrollmentRecovery(ctx, tx, command, item, status); err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 				}
+			case outcomeAdjudicatesFindings:
+				if err := validateReviewDisputeDecision(command, item); err != nil {
+					return err
+				}
+				if err := concludeItem(ctx, tx, item, status, s.now().UTC()); err != nil {
+					return err
+				}
 			case outcomeAcceptsRecommendedRoute, outcomeChoosesAlternativeRoute:
 				if err := s.applyFindingAdjudicationDecision(ctx, tx, command, item, status); err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
@@ -583,6 +590,7 @@ const (
 	// displayed binding before concluding the item.
 	outcomeAcceptsRecommendedRoute
 	outcomeChoosesAlternativeRoute
+	outcomeAdjudicatesFindings
 	// Proposal outcomes own the instance ledger and exact proposal digest.
 	outcomeStartsProposal
 	outcomeRevisesAndStartsProposal
@@ -674,6 +682,8 @@ func actionOutcome(action domain.Action) (domain.ItemStatus, outcomeKind) {
 		return domain.StatusResolved, outcomeAcceptsRecommendedRoute
 	case domain.ActionChooseAlternativeRoute:
 		return domain.StatusResolved, outcomeChoosesAlternativeRoute
+	case domain.ActionAdjudicateFindings:
+		return domain.StatusResolved, outcomeAdjudicatesFindings
 	case domain.ActionStart:
 		return domain.StatusResolved, outcomeStartsProposal
 	case domain.ActionStartWithChanges, domain.ActionApproveWithChanges:

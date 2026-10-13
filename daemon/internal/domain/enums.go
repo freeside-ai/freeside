@@ -1159,6 +1159,7 @@ const (
 	ActionResolveReenrollment      Action = "resolve_reenrollment"
 	ActionAcceptRecommendedRoute   Action = "accept_recommended_route"
 	ActionChooseAlternativeRoute   Action = "choose_alternative_route"
+	ActionAdjudicateFindings       Action = "adjudicate_findings"
 )
 
 // AllActions lists every valid Action.
@@ -1172,7 +1173,7 @@ var AllActions = []Action{
 	ActionStart, ActionStartWithChanges, ActionApproveWithChanges, ActionDecline, ActionSnooze,
 	ActionAcknowledge, ActionRunDoctor, ActionStopUnattended,
 	ActionResumeUnattended, ActionRecoverReview, ActionAdoptReviewConfiguration,
-	ActionResolveReenrollment, ActionAcceptRecommendedRoute, ActionChooseAlternativeRoute,
+	ActionResolveReenrollment, ActionAcceptRecommendedRoute, ActionChooseAlternativeRoute, ActionAdjudicateFindings,
 }
 
 func (a Action) valid() bool {
@@ -1186,7 +1187,7 @@ func (a Action) valid() bool {
 		ActionStart, ActionStartWithChanges, ActionApproveWithChanges, ActionDecline, ActionSnooze,
 		ActionAcknowledge, ActionRunDoctor, ActionStopUnattended,
 		ActionResumeUnattended, ActionRecoverReview, ActionAdoptReviewConfiguration,
-		ActionResolveReenrollment, ActionAcceptRecommendedRoute, ActionChooseAlternativeRoute:
+		ActionResolveReenrollment, ActionAcceptRecommendedRoute, ActionChooseAlternativeRoute, ActionAdjudicateFindings:
 		return true
 	default:
 		return false
@@ -2375,16 +2376,17 @@ const (
 	AdjudicationProducerEngine      AdjudicationProducer = "engine"
 	AdjudicationProducerModel       AdjudicationProducer = "model"
 	AdjudicationProducerEngineModel AdjudicationProducer = "engine_model"
+	AdjudicationProducerHuman       AdjudicationProducer = "human"
 )
 
 // AllAdjudicationProducers lists every valid AdjudicationProducer.
 var AllAdjudicationProducers = []AdjudicationProducer{
-	AdjudicationProducerEngine, AdjudicationProducerModel, AdjudicationProducerEngineModel,
+	AdjudicationProducerEngine, AdjudicationProducerModel, AdjudicationProducerEngineModel, AdjudicationProducerHuman,
 }
 
 func (p AdjudicationProducer) valid() bool {
 	switch p {
-	case AdjudicationProducerEngine, AdjudicationProducerModel, AdjudicationProducerEngineModel:
+	case AdjudicationProducerEngine, AdjudicationProducerModel, AdjudicationProducerEngineModel, AdjudicationProducerHuman:
 		return true
 	default:
 		return false

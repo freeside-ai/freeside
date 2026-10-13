@@ -1077,6 +1077,11 @@ func (i AttentionItem) Validate() error {
 			return fmt.Errorf("item %s health_diagnostic: %w", i.ID, err)
 		}
 	}
+	if i.Type == AttentionReviewDispute && slices.Contains(i.RequestedDecision, ActionAdjudicateFindings) &&
+		(i.ReviewDispute == nil || len(i.ReviewDispute.Findings) == 0 ||
+			i.ID != ProductionFindingAdjudicationItemID(i.ReviewDispute.RunID, i.ReviewDispute.Round, 1)) {
+		return ErrCardFactInconsistent
+	}
 	if i.ReviewDispute != nil {
 		if i.Type != AttentionReviewDispute {
 			return fmt.Errorf("item %s type %q carries a review dispute binding: %w",
@@ -1368,6 +1373,10 @@ func bindingDigests(
 // item-specific ("approve" is not universal), so a valid enum value that the
 // item did not offer is not a legitimate decision on it.
 func (i AttentionItem) Offers(a Action) bool {
+	if a == ActionAdjudicateFindings && (i.Type != AttentionReviewDispute ||
+		i.ReviewDispute == nil || len(i.ReviewDispute.Findings) == 0) {
+		return false
+	}
 	return slices.Contains(i.RequestedDecision, a)
 }
 

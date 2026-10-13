@@ -313,6 +313,9 @@ func (tx *ReadTx) validateFindingAdjudicationSuccessor(
 	ctx context.Context, artifact domain.FindingAdjudication,
 	requireCurrentItemVersion bool,
 ) error {
+	if artifact.Decision != nil {
+		return tx.validateHumanAdjudicationDecision(ctx, artifact)
+	}
 	if artifact.Revision == 1 {
 		return nil
 	}
@@ -364,6 +367,11 @@ func (tx *WriteTx) PutFindingAdjudication(
 	}
 	if err := tx.validateFindingAdjudicationBinding(ctx, artifact); err != nil {
 		return fmt.Errorf("put finding adjudication %q round %d binding: %w", artifact.RunID, artifact.Round, err)
+	}
+	if artifact.Decision != nil {
+		if err := tx.validateHumanAdjudicationDecision(ctx, artifact); err != nil {
+			return err
+		}
 	}
 	body, err := encode(artifact)
 	if err != nil {

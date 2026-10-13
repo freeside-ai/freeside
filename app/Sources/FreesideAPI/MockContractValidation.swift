@@ -532,6 +532,13 @@ enum MockContractValidation {
                     return "finding_adjudication proposal has incompatible axes and route"
                 }
                 switch proposal.producer {
+                case .human:
+                    if proposal.confidence != nil || !proposal.offered_alternatives.isEmpty
+                        || !([.remediate, .decline, ._defer] as Set<Components.Schemas.AdjudicationRoute>).contains(
+                            proposal.route)
+                    {
+                        return "invalid human finding adjudication"
+                    }
                 case .model:
                     if proposal.confidence == nil {
                         return "finding_adjudication model proposal lacks confidence"
@@ -732,12 +739,45 @@ enum MockContractValidation {
             {
                 return "invalid review_dispute binding"
             }
+            if let findings = dispute.findings {
+                if Set(findings.map(\.finding_id)).count != findings.count
+                    || (!findings.isEmpty && findings.count != dispute.finding_ids.count)
+                {
+                    return "duplicate disputed finding"
+                }
+                for finding in findings {
+                    if !dispute.finding_ids.contains(finding.finding_id) || finding.message.isEmpty
+                        || finding.offered_routes.isEmpty
+                        || Set(finding.offered_routes).count != finding.offered_routes.count
+                        || !finding.offered_routes.allSatisfy({ [.remediate, .decline, ._defer].contains($0) })
+                    {
+                        return "invalid disputed finding"
+                    }
+                    if let location = finding.location?.value1,
+                        location.path.isEmpty
+                            || (location.start_line != 0 || location.end_line != 0)
+                                && (location.start_line < 1 || location.end_line < location.start_line)
+                    {
+                        return "invalid disputed finding location"
+                    }
+                    if let external = finding.external,
+                        external.reviewer_login.isEmpty || external.thread_id.isEmpty
+                    {
+                        return "invalid disputed finding attribution"
+                    }
+                }
+            }
             guard case .run(let subject) = item.subject,
                 subject.subject_id == dispute.run_id,
                 subject.run_id == dispute.run_id
             else {
                 return "review_dispute binding disagrees with item subject"
             }
+        }
+        if item._type == .review_dispute && item.requested_decision.contains(.adjudicate_findings) {
+            guard let binding = item.review_dispute?.value1, let findings = binding.findings,
+                !findings.isEmpty, item.id == "production-review-\(binding.run_id)-\(binding.round)"
+            else { return "adjudicate_findings requires a routed dispute with findings" }
         }
         if let revision = item.spec_revision?.value1 {
             if item._type != .spec_approval {
@@ -1087,7 +1127,19 @@ enum MockContractValidation {
             MockServer.MalformedCommandError(commandID: command.command_id, reason: reason)
         }
         guard case .decision(let payload) = command.payload else { return }
+        if payload.action != .adjudicate_findings && payload.finding_routes != nil {
+            throw malformed("finding_routes on unrelated action")
+        }
         switch payload.action {
+        case .adjudicate_findings:
+            guard let choices = payload.finding_routes, !choices.isEmpty,
+                choices.allSatisfy({ !$0.finding_id.isEmpty }), Set(choices.map(\.finding_id)).count == choices.count,
+                command.command_id.lengthOfBytes(using: .utf8) <= 256,
+                payload.alternative_choices == nil, (payload.message ?? "").isEmpty,
+                (payload.attachments ?? []).isEmpty, payload.task_proposal_revision == nil,
+                payload.effect_proposal_revision == nil, payload.snooze_until == nil,
+                payload.capability_manifest_digest == nil
+            else { throw malformed("invalid finding_routes") }
         case .retry_with_capabilities:
             guard let digest = payload.capability_manifest_digest?.value1,
                 !digest.isEmpty,

@@ -723,10 +723,11 @@ func (w *productionPublicationWorkflow) escalateReentryFindings(
 	if err := w.removeReviewWorkspace(record.InvocationID); err != nil {
 		return productionReviewPending, err
 	}
-	if err := w.putReviewAttention(
+	if err := w.putReviewAttentionWithID(
 		ctx, task, record,
 		"Review found blocking findings after the pull request's readiness was invalidated. A re-entered cycle starts no remediation, so a person must decide.",
 		domain.AttentionReviewDispute,
+		productionReviewItemID(task.RunID, record.Round),
 	); err != nil {
 		return productionReviewPending, err
 	}

@@ -139,7 +139,7 @@ import Testing
         // beside the positions, ahead of the daemon's facts about the run.
         #expect(
             DecisionCardComposition.forType(.review_dispute).modules == [
-                .comparison, .claims, .factBlock, .facts, .summary, .claims, .evidence,
+                .comparison, .claims, .findingFacts, .factBlock, .facts, .summary, .claims, .evidence,
                 .details,
             ])
         #expect(

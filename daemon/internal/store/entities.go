@@ -852,6 +852,9 @@ func (tx *ReadTx) gateReviewDisputeItem(
 		return nil
 	}
 	binding := item.ReviewDispute
+	if len(binding.Findings) > 0 {
+		return tx.gateExecutableReviewDispute(ctx, item)
+	}
 	record, err := tx.reviewRecordForRound(ctx, binding.RunID, binding.Round)
 	if err != nil {
 		return err

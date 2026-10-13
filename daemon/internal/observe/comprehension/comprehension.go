@@ -31,6 +31,7 @@ var approvingActions = map[domain.Action]bool{
 	domain.ActionApprove:                true,
 	domain.ActionAcceptRecommendedRoute: true,
 	domain.ActionChooseAlternativeRoute: true,
+	domain.ActionAdjudicateFindings:     true,
 	domain.ActionStart:                  true,
 	domain.ActionStartWithChanges:       true,
 	domain.ActionFinishNow:              true,

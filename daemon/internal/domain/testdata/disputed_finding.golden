@@ -1,0 +1,19 @@
+{
+  "finding_id": "finding-1",
+  "message": "The update can be applied twice.",
+  "location": {
+    "path": "daemon/update.go",
+    "start_line": 42,
+    "end_line": 45
+  },
+  "severity": "P1",
+  "external": {
+    "reviewer_login": "reviewer",
+    "thread_id": "thread-1"
+  },
+  "offered_routes": [
+    "remediate",
+    "decline",
+    "defer"
+  ]
+}

@@ -2326,17 +2326,8 @@ func TestReviewAttentionReusesFirstClassifierRoutingDecision(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			ctx := t.Context()
-			st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-			w := &productionPublicationWorkflow{store: st, attention: signet.NewService(st)}
-			task := productionPublicationTask{
-				RunID: "run-classifier-retry", ProjectID: "project-classifier-retry",
-				HeadSHA: strings.Repeat("a", 40),
-			}
-			run := productionOwnershipRun(task.RunID)
-			run.ProjectID = task.ProjectID
-			seedProductionOwnershipRun(t, ctx, st, run)
-			record := domain.ReviewRecord{Round: 1}
+			f := newFindingAdjudicationFixture(t, domain.FindingSeverityP1, nil, "low", "high")
+			ctx, st, w, task, record := f.ctx, f.store, f.workflow, f.task, f.record
 			if err := w.putReviewAttention(ctx, task, record, tc.firstReason, tc.first); err != nil {
 				t.Fatalf("put first routing decision: %v", err)
 			}
@@ -2358,19 +2349,8 @@ func TestReviewAttentionReusesFirstClassifierRoutingDecision(t *testing.T) {
 	}
 	t.Run("rejects a changed candidate binding", func(t *testing.T) {
 		t.Parallel()
-		ctx := t.Context()
-		st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-		w := &productionPublicationWorkflow{store: st, attention: signet.NewService(st)}
-		task := productionPublicationTask{
-			RunID: "run-classifier-retry", ProjectID: "project-classifier-retry",
-			HeadSHA: strings.Repeat("a", 40),
-		}
-		if err := st.Write(ctx, func(tx *store.WriteTx) error {
-			return tx.PutRun(ctx, domain.Run{ID: task.RunID, ProjectID: task.ProjectID, SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy", Stages: []domain.Stage{}})
-		}); err != nil {
-			t.Fatal(err)
-		}
-		record := domain.ReviewRecord{Round: 1}
+		f := newFindingAdjudicationFixture(t, domain.FindingSeverityP1, nil, "low", "high")
+		ctx, w, task, record := f.ctx, f.workflow, f.task, f.record
 		if err := w.putReviewAttention(
 			ctx, task, record, "first decision", domain.AttentionReviewDispute,
 		); err != nil {
@@ -2386,15 +2366,8 @@ func TestReviewAttentionReusesFirstClassifierRoutingDecision(t *testing.T) {
 	for _, status := range []domain.ItemStatus{domain.StatusOpen, domain.StatusResolved} {
 		t.Run("legacy dispute "+string(status), func(t *testing.T) {
 			t.Parallel()
-			ctx := t.Context()
-			st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-			attention := signet.NewService(st)
-			w := &productionPublicationWorkflow{store: st, attention: attention}
-			task := productionPublicationTask{
-				RunID: "run-classifier-retry", ProjectID: "project-classifier-retry",
-				HeadSHA: strings.Repeat("a", 40),
-			}
-			record := domain.ReviewRecord{Round: 1}
+			f := newFindingAdjudicationFixture(t, domain.FindingSeverityP1, nil, "low", "high")
+			ctx, st, w, attention, task, record := f.ctx, f.store, f.workflow, f.signet, f.task, f.record
 			runID := task.RunID
 			legacy, err := domain.NewAttentionItem(domain.AttentionItemInput{
 				ID: productionReviewItemID(task.RunID, record.Round), ProjectID: task.ProjectID,
@@ -2410,9 +2383,6 @@ func TestReviewAttentionReusesFirstClassifierRoutingDecision(t *testing.T) {
 				InterruptionClass: domain.InterruptionPlannedGate, Status: status,
 			}, nil)
 			if err != nil {
-				t.Fatal(err)
-			}
-			if err := st.Write(ctx, func(tx *store.WriteTx) error { return storetest.BindSubject(ctx, tx, &legacy) }); err != nil {
 				t.Fatal(err)
 			}
 			if err := attention.PutItem(ctx, legacy); err != nil {
@@ -2435,7 +2405,11 @@ func TestReviewAttentionReusesFirstClassifierRoutingDecision(t *testing.T) {
 				item.Status != status {
 				t.Fatalf("reused legacy dispute = %#v", item)
 			}
-			if item.ItemVersion != 1 || !item.Offers(domain.ActionDiscuss) ||
+			wantVersion := 1
+			if status == domain.StatusOpen {
+				wantVersion = 2
+			}
+			if item.ItemVersion != wantVersion || item.Offers(domain.ActionAdjudicateFindings) != (status == domain.StatusOpen) || !item.Offers(domain.ActionDiscuss) ||
 				!item.Offers(domain.ActionStop) {
 				t.Fatalf("routed dispute changed = %#v", item)
 			}

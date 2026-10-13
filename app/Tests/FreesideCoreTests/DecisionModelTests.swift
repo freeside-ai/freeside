@@ -17,7 +17,8 @@ import Testing
         // The default hold carries no pull request, so it cannot offer the
         // conditional open_pr.
         let offered = AttentionFixtures.phase1ActionSets[type]?.filter {
-            type != .publish_blocked || $0 != .open_pr
+            (type != .publish_blocked || $0 != .open_pr)
+                && (type != .review_dispute || $0 != .adjudicate_findings)
         }
         #expect(model.offeredActions == offered)
     }
@@ -1461,6 +1462,21 @@ import Testing
                 touchesControlPlane: facts.scope.touches_control_plane))
 
         #expect(revision.scope.declared_path_count == facts.scope.declared_path_count)
+    }
+
+    @Test func disputeControlRequiresTypedCompleteChoices() async {
+        let seed = AttentionFixtures.routedReviewDispute()
+        let store = await makeStore(server: MockServer(items: [seed]))
+        let model = DecisionModel(store: store, itemID: seed.item.id)
+        await model.validate()
+        await model.submit(.adjudicate_findings)
+        #expect(model.appliedRecord == nil)
+        await model.submitFindingRoutes([
+            .init(finding_id: "finding-1", route: .decline),
+            .init(finding_id: "finding-2", route: ._defer),
+        ])
+        #expect(model.appliedRecord?.action == .adjudicate_findings)
+        #expect(model.snapshot?.item.status == .resolved)
     }
 
     @Test func findingAlternativeControlSubmitsTypedChoice() async {

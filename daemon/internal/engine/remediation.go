@@ -663,6 +663,11 @@ func effectiveFindingRoutesTx(
 	tx *store.ReadTx,
 	artifact domain.FindingAdjudication,
 ) (map[domain.FindingID]domain.AdjudicationRoute, error) {
+	if artifact.Decision != nil {
+		// Human routes were authenticated against the resolved dispute command
+		// when the store reconstructed this artifact. It has no proposal card.
+		return findingRoutesFromDecision(artifact, nil)
+	}
 	itemID := productionFindingAdjudicationItemID(artifact.RunID, artifact.Round, artifact.Revision)
 	item, err := tx.GetAttentionItem(ctx, itemID)
 	if errors.Is(err, store.ErrNotFound) {

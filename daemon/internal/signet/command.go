@@ -87,6 +87,7 @@ type DecisionPayload struct {
 	EffectProposalRevision   *EffectProposalRevisionInput
 	SnoozeUntil              *time.Time
 	AlternativeChoices       []AlternativeChoice
+	FindingRoutes            []AlternativeChoice `json:",omitempty"`
 	CapabilityManifestDigest *domain.Digest
 	// TaskLines are per-role agent choices for the task a task_proposal start
 	// creates (plan §5.4). Nil means absent. No decision applies them yet, so
@@ -140,7 +141,22 @@ type EffectProposalRevisionInput struct {
 }
 
 func decisionMessage(payload DecisionPayload) (string, error) {
+	if payload.Action != domain.ActionAdjudicateFindings && payload.FindingRoutes != nil {
+		return "", ErrInvalidReviewDisputeDecisionPayload
+	}
 	switch payload.Action {
+	case domain.ActionAdjudicateFindings:
+		if len(payload.FindingRoutes) == 0 || payload.AlternativeChoices != nil ||
+			payload.TaskProposalRevision != nil || payload.EffectProposalRevision != nil ||
+			payload.SnoozeUntil != nil || payload.Message != "" || len(payload.Attachments) != 0 ||
+			payload.CapabilityManifestDigest != nil {
+			return "", ErrInvalidReviewDisputeDecisionPayload
+		}
+		message, err := canonicalAlternativeChoices(payload.FindingRoutes)
+		if err != nil {
+			return "", fmt.Errorf("%w: %w", ErrInvalidReviewDisputeDecisionPayload, err)
+		}
+		return message, nil
 	case domain.ActionStartWithChanges:
 		if payload.TaskProposalRevision == nil || payload.EffectProposalRevision != nil ||
 			payload.SnoozeUntil != nil || payload.Message != "" ||

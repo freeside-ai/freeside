@@ -4,6 +4,28 @@ import Testing
 @testable import FreesideAPI
 
 @Suite struct CardFactTests {
+    @Test func executableDisputeRequiresCompleteAuthenticatedShape() throws {
+        let seed = AttentionFixtures.routedReviewDispute().item
+        #expect(MockContractValidation.itemValidityBreach(seed) == nil)
+        let body = try JSONEncoder().encode(seed)
+        #expect(try JSONDecoder().decode(Components.Schemas.AttentionItem.self, from: body) == seed)
+        var missing = seed
+        missing.review_dispute?.value1.findings = nil
+        #expect(MockContractValidation.itemValidityBreach(missing) != nil)
+        var incomplete = seed
+        incomplete.review_dispute?.value1.findings?.removeLast()
+        #expect(MockContractValidation.itemValidityBreach(incomplete) != nil)
+        var wrongIdentity = seed
+        wrongIdentity.id = "other-item"
+        #expect(MockContractValidation.itemValidityBreach(wrongIdentity) != nil)
+        var location = seed
+        location.review_dispute?.value1.findings?[0].location?.value1.end_line = 0
+        #expect(MockContractValidation.itemValidityBreach(location) != nil)
+        var attribution = seed
+        attribution.review_dispute?.value1.findings?[0].external?.reviewer_login = ""
+        #expect(MockContractValidation.itemValidityBreach(attribution) != nil)
+    }
+
     @Test func fixturesCarryEveryCardFactAndRoundTripNullablePayloads() throws {
         let fixtures = AttentionFixtures.defaultInbox().map(\.item)
 

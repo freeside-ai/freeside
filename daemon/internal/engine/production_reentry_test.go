@@ -39,6 +39,33 @@ func reentrySuccessorForTest(
 	}
 }
 
+func TestEscalateReentryFindingsLeavesNonExecutableDecisionSurface(t *testing.T) {
+	t.Parallel()
+	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP1, nil, "low", "high")
+	f.workflow.workDir = t.TempDir()
+
+	state, err := f.workflow.escalateReentryFindings(f.ctx, f.task, f.record)
+	if err != nil {
+		t.Fatalf("escalate re-entry findings: %v", err)
+	}
+	if state != productionReviewEscalated {
+		t.Fatalf("escalation state = %v, want %v", state, productionReviewEscalated)
+	}
+	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+		item, readErr := tx.GetAttentionItem(f.ctx, productionReviewItemID(f.task.RunID, f.record.Round))
+		if readErr != nil {
+			return readErr
+		}
+		if item.Offers(domain.ActionAdjudicateFindings) || item.ReviewDispute != nil ||
+			!item.Offers(domain.ActionDiscuss) || !item.Offers(domain.ActionStop) {
+			t.Fatalf("re-entry finding surface = %#v", item)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestReentryTaskRoundTripsThroughTheLaneDecoder: the row the trigger writes
 // decodes and validates as the lane reads it, and every coordinate of it is
 // re-derived from the authority, so an edited row is refused.
