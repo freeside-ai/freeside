@@ -30,6 +30,31 @@ type remediationReviewFixture struct {
 	current  domain.ReviewRecord
 }
 
+func TestDispatchableRemediationUsesDecidedRoutes(t *testing.T) {
+	artifact := domain.FindingAdjudication{Entries: []domain.FindingAdjudicationEntry{
+		{FindingID: "fix", Route: domain.RouteRemediate},
+		{FindingID: "disputed", Route: domain.RouteDispute},
+	}}
+	routes := findingAdjudicationRoutes(artifact.Entries)
+	if got := dispatchableRemediationFindingIDs(artifact, routes); len(got) != 0 {
+		t.Fatalf("disputed round dispatched %v", got)
+	}
+	// Choosing decline for a contradictory finding removes its dispute.
+	// Dispatch must read the decision, not the artifact's original route.
+	routes["disputed"] = domain.RouteDecline
+	if got := dispatchableRemediationFindingIDs(artifact, routes); !slices.Equal(got, []domain.FindingID{"fix"}) {
+		t.Fatalf("decided decline dispatched %v, want fix", got)
+	}
+	artifact.Entries[1].Route = domain.RouteDecline
+	routes["disputed"] = domain.RouteDispute
+	if got := dispatchableRemediationFindingIDs(artifact, routes); len(got) != 0 {
+		t.Fatalf("decided dispute dispatched %v", got)
+	}
+	if got := remediationFindingIDs(artifact, routes); !slices.Equal(got, []domain.FindingID{"fix"}) {
+		t.Fatalf("previously dispatched remediation findings = %v, want fix", got)
+	}
+}
+
 type remediationArtifactStore struct {
 	body     []byte
 	openErr  error

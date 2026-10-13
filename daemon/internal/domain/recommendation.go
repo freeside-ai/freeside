@@ -249,11 +249,9 @@ func FindingAdjudicatorRecommendationReason(entries []FindingAdjudicationEntry) 
 		id := entry.FindingID
 		var sentence string
 		switch {
-		case entry.Route.ParksRun() && outcome.ParksRun:
-			sentence = fmt.Sprintf("Park the run: %s %s.", id, adjudicationRouteNeed(entry.Route))
 		case entry.Route.ParksRun():
-			sentence = fmt.Sprintf("Leave %s unfixed and unrecorded: it %s.", id, adjudicationRouteNeed(entry.Route))
-		case outcome.Halted:
+			sentence = fmt.Sprintf("Park the run: %s %s.", id, adjudicationRouteNeed(entry.Route))
+		case outcome.Halted || (outcome.ParksRun && entry.Route == RouteRemediate):
 			sentence = fmt.Sprintf("Hold %s while the run is parked.", id)
 		case entry.Route == RouteRemediate:
 			sentence = fmt.Sprintf("Fix %s in this PR.", id)

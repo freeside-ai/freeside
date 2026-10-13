@@ -1167,6 +1167,21 @@ func (w *productionPublicationWorkflow) reviewRecordFindings(
 	return findings, err
 }
 
+// dispatchableRemediationFindingIDs gates new remediation on the decided
+// routes. Keep remediationFindingIDs unchanged for validating work already
+// dispatched before mixed parking batches stopped starting remediation.
+func dispatchableRemediationFindingIDs(
+	artifact domain.FindingAdjudication,
+	routes map[domain.FindingID]domain.AdjudicationRoute,
+) []domain.FindingID {
+	for _, entry := range artifact.Entries {
+		if routes[entry.FindingID].ParksRun() {
+			return nil
+		}
+	}
+	return remediationFindingIDs(artifact, routes)
+}
+
 func remediationFindingIDs(
 	artifact domain.FindingAdjudication,
 	routes map[domain.FindingID]domain.AdjudicationRoute,
@@ -1216,7 +1231,7 @@ func (w *productionPublicationWorkflow) prepareRemediationIntent(
 	candidateRoot string,
 	simplification *driftSimplification,
 ) (*preparedRemediationIntent, error) {
-	findingIDs := remediationFindingIDs(artifact, routes)
+	findingIDs := dispatchableRemediationFindingIDs(artifact, routes)
 	if len(findingIDs) == 0 {
 		return nil, nil
 	}

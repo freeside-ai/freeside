@@ -113,7 +113,7 @@ func (e *Engine) offerPublicationContinuation(ctx context.Context, recheck domai
 		if err != nil {
 			return err
 		}
-		if len(remediationFindingIDs(artifact, routes)) == 0 {
+		if len(dispatchableRemediationFindingIDs(artifact, routes)) == 0 {
 			return domain.ErrParentKeyMismatch
 		}
 		item.RequestedDecision = []domain.Action{domain.ActionApprove, domain.ActionDiscuss, domain.ActionStop}
@@ -314,6 +314,13 @@ func (w *productionPublicationWorkflow) startPublicationContinuation(ctx context
 		return productionTaskOutcome{}, err
 	}
 	if intent == nil {
+		// A continuation queued before a mixed adjudication began parking the
+		// run has remediation findings but no longer has a dispatchable intent.
+		// Retire that accepted command rather than retrying an immutable mismatch.
+		if len(remediationFindingIDs(artifact, routes)) > 0 {
+			return w.refusePublicationContinuation(ctx, source,
+				"The accepted remediation continuation cannot start because its review contains a route that holds the run.")
+		}
 		return productionTaskOutcome{}, domain.ErrParentKeyMismatch
 	}
 	err = w.store.Write(ctx, func(tx *store.WriteTx) error {
