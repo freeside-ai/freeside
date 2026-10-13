@@ -1583,6 +1583,8 @@ type ProductionPublicationIdentity struct {
 // owners after completion. It is the read-only completion boundary used by
 // supervision: absence or a pending task is ordinary incompletion, while a
 // dispatched task with absent or divergent terminal authority fails closed.
+// An in-place re-entry has no terminal: its authenticated ready binding proves
+// completion, while a cycle that finishes without a ready item is incomplete.
 func ProductionPublicationCompletion(
 	ctx context.Context, tx *store.ReadTx, run domain.Run,
 ) (ProductionPublicationIdentity, bool, error) {
@@ -1611,10 +1613,35 @@ func productionPublicationCompletion(ctx context.Context, tx *store.ReadTx, run 
 	if !entry.Dispatched() {
 		return ProductionPublicationIdentity{}, false, nil
 	}
-	if ready, err := tx.GetAttentionItemRecord(ctx, task.readyItemID()); err == nil && ready.Status == domain.StatusSuperseded && !allowSuperseded {
+	ready, readyErr := tx.GetAttentionItemRecord(ctx, task.readyItemID())
+	if readyErr == nil && ready.Status == domain.StatusSuperseded && !allowSuperseded {
 		return ProductionPublicationIdentity{}, false, nil
-	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return ProductionPublicationIdentity{}, false, err
+	} else if readyErr != nil && !errors.Is(readyErr, store.ErrNotFound) {
+		return ProductionPublicationIdentity{}, false, readyErr
+	}
+	if task.reentersInPlace() {
+		if errors.Is(readyErr, store.ErrNotFound) {
+			return ProductionPublicationIdentity{}, false, nil
+		}
+		if err := authenticateTaskSuccessor(ctx, tx, task); err != nil {
+			return ProductionPublicationIdentity{}, false, err
+		}
+		// The store re-gates the binding against the sealed cycle and its
+		// predecessor's publication proof. A finished cycle with a ready item
+		// must have that proof; missing nested authority is not incompletion.
+		binding, err := tx.GetReadyItemPRBinding(ctx, task.readyItemID())
+		if err != nil {
+			return ProductionPublicationIdentity{}, false, err
+		}
+		if binding.RunID != task.RunID || binding.PublicationInvocationID != task.PublicationID ||
+			binding.HeadSHA != task.HeadSHA {
+			return ProductionPublicationIdentity{}, false, fmt.Errorf(
+				"re-entered publication binding disagrees with completed task: %w", domain.ErrParentKeyMismatch)
+		}
+		return ProductionPublicationIdentity{
+			ProducingInvocationID:   binding.ProducingInvocationID,
+			PublicationInvocationID: task.PublicationID,
+		}, true, nil
 	}
 	terminalEntry, err := tx.GetInbox(ctx, string(task.ProducingInvocationID))
 	if errors.Is(err, store.ErrNotFound) {

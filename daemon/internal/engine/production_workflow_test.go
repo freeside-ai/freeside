@@ -2151,6 +2151,44 @@ func TestDecodeProductionPublicationTaskPreservesLegacyRemediationNoop(t *testin
 	}
 }
 
+func TestProductionPublicationCompletionFinishedReentryWithoutReadiness(t *testing.T) {
+	t.Parallel()
+	for _, successor := range []domain.PublicationSuccessor{
+		externalReviewSuccessorForTest(),
+		reentrySuccessorForTest(productionReadyItemID("run-reentry"), domain.ReadinessInvalidationBaseAdvanced),
+	} {
+		t.Run(string(successor.Origin), func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			run := domain.Run{ID: successor.RunID, ProjectID: "project-reentry"}
+			task := newReentryTask(run.ProjectID, successor)
+			payload, err := json.Marshal(task)
+			if err != nil {
+				t.Fatal(err)
+			}
+			st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+			if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+				if _, _, err := tx.EnqueueOutbox(ctx, task.intentKey(), KindProductionPublicationRequested, payload); err != nil {
+					return err
+				}
+				return tx.MarkOutboxDispatched(ctx, task.intentKey())
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := st.Read(ctx, func(tx *store.ReadTx) error {
+				entry, err := tx.GetOutbox(ctx, task.intentKey())
+				identity, complete, err := productionPublicationCompletion(ctx, tx, run, entry, err, false)
+				if err != nil || complete || identity != (ProductionPublicationIdentity{}) {
+					t.Fatalf("completion = %#v, %t, %v; want incomplete without error", identity, complete, err)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestProductionPublicationCompletionAuthenticatesTaskAndTerminal(t *testing.T) {
 	t.Parallel()
 	run := domain.Run{ID: "run-supervision-completion", ProjectID: "project-supervision"}
