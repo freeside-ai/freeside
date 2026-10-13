@@ -20,6 +20,7 @@ pattern; a routine run needs no row.
 | #1211 run-70, 2026-09-21 | #1211 | gh-imgup#70 to PR #111, ready for review | Client target | Implementation aborted at ten minutes on the writer stop timeout (fixed in-run, PR #1456, validated on a resumed implementation of about 29 minutes). Publication blocked because a stale implementer prompt package was reused. Nine findings (#1457 to #1465); the recommendation held exit only on Stop working from a real client (#1457). The owner then narrowed the gate to a live Stop check and made the next run also the #1445 proof. |
 | #1445 run-113 after #1535, 2026-09-25 | #1445 | gh-imgup#113 to PR #120, merged | Client target | The first passing policy-approved closure proof: `verify-source` receipt, stored authoring, a `propose_site` proposal, a policy approval, and publisher-written `Closes #113`; the merge closed the issue. The first session died at preflight because Claude Code auto-update pruned the pinned judgment CLI. `return_to_agent` worked live for the first time: the feedback run republished onto the same PR. Two clean reviews still passed a PR missing the decision note its repository's AGENTS.md required, because the review rubric only admits defects with a failure path (#1542). The successor publication raised a self-clearing "repair external state" card (#1544). Restore stalled at `registered=false` again. |
 | #1445 run-114 human gate, 2026-09-25 | #1445, #1211 | gh-imgup#114 to PR #121, merged by the owner | Client target | The human-gated proof passed and closed #1445: the PR stayed a draft with `Refs #114` until the closure card was approved on the iPhone, then the publisher wrote `Closes #114`. The first session died at preflight because a review-prompt bump (PR #1546) invalidated the onboarded reviewer digest. The reviewer flagged the missing decision note live (#1542 working), but the adjudicator recommended parking an in-scope fix twice; two Discuss rounds reached `remediate` (#1550). A #1211 sketch exercise afterwards bricked the daemon with a durable stop once its clarified spec was ready (#1556). Restore stalled at `registered=false` a third time, probably because nobody was handed the menu Start step. |
+| Wave 8 exit run 2, 2026-10-12 to 13 | #1613 | gh-imgup#116 to PR #127, merged by the owner | CLI | The pull request waited overnight for its merge, and the run's daemon stopped itself twice meanwhile: a GitHub 500 on the janitor's token mint (#1997), then the backup producer refusing the run's own effect-proposal artifact twelve hours after start (#1996). Stopped, it could not see the merge, recorded no completion, and so could not raise review growth. That stop was the first real stopped-state evidence on an exit run. The first real external review superseded the ready card and reached the Mac as a card, but the adjudicator's batch parked, no remediator ran, and the card offered only discuss and stop (#1989, #1990). The spine drove the Mac client through computer use; the iPhone never connected (#1514), so no phone proof exists. Three owner decisions changed this skill (devlog/2026-10-13-1002-exit-run-owner-decisions.md). |
 
 ## Recurring Pitfalls
 
@@ -122,6 +123,42 @@ Look for each of these before and during the run; most have bitten twice.
   clarification questions put the daemon in a durable stop once the spec was
   ready (#1556). Until that's fixed, run sketch or clarification checks last
   in a session, and don't Acknowledge or doctor the stop: it's evidence.
+- **A stopped daemon answers `/health` and records nothing.** A durable
+  stop keeps reads serving, so `/health` stays 200 while the daemon cannot
+  mint a GitHub token, see a merge, or record a completion. The stop state
+  is the STOPPED banner in the client or an open `daemon_durable_stop`
+  item; "janitor is not active" in the log is a cue to read it, not proof,
+  because a janitor that is absent or still starting logs the same error.
+  Read the stop state right before handing over the merge, again while the
+  merge waits, and before waiting on the completion fact. Hand the link
+  over with the deadline: until #1996 lands, a daemon that has made an
+  effect proposal stops at its next backup pass, at most twelve hours after
+  start. If it stops before the merge, tell the owner at once, because a
+  merge the stopped daemon can't see leaves no completion fact.
+- **Acknowledge does not clear a stop.** It is record-only. Resume is
+  offered only after a fresh daemon start, and a restarted daemon stops
+  again while the cause remains. Once a run's daemon has stopped for a
+  cause the run can't remove, record the stop as evidence and wind the run
+  down.
+- **External review needs an admitted reviewer and the open pull request.**
+  Admit the reviewer's login at onboarding and post the review before the
+  merge; the ready card is superseded within seconds. Expect a parked
+  batch: no remediator runs and the card offers only discuss and stop
+  (#1989, #1990). The real target proves the alert; remediation proof needs
+  the challenge repository.
+- **Confirm the phone reaches the run daemon before the first submission.**
+  A phone that cannot connect loses every phone proof in the run, and the
+  daemon's log shows only that a notification was submitted, never that it
+  arrived.
+- **An agent can press a card's buttons, not the menus.** Background app
+  control drives the Ephemeral client's cards without taking the pointer,
+  so it is safe on a shared Mac. The card's More Actions menu and the
+  menu-bar Start and Stop need full-screen control, which the owner
+  approves each time (#1988). Record that the spine, not the operator,
+  drove: a card the spine reads is not an operator's unprompted reading.
+- **The liveness probe logs its own notices.** `probe.log` beside the
+  installed probe script records "sent recovered notice"; read it to
+  confirm the recovery notice after restoration.
 - **Private details leak through the run record.** The first Wave 7 comment
   posted a tailnet address and a device name; the template now asks for
   build commits only.
