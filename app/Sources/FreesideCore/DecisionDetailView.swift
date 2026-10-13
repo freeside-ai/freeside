@@ -2448,6 +2448,11 @@ struct DecisionDetailView: View {
 
     private func disputedFindingCards(_ findings: [Components.Schemas.DisputedFinding]) -> some View {
         VStack(alignment: .leading, spacing: 20) {
+            if findings.contains(where: { $0.external != nil }) {
+                Text(AttentionDisplay.externalDisputeConsequence)
+                    .font(FreesideFont.cardBody)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             ForEach(findings, id: \.finding_id) { finding in
                 VStack(alignment: .leading, spacing: 8) {
                     UnverifiedLabel(text: "Finding", carriesInfo: false, rendersInteractiveControls: true)
@@ -2467,7 +2472,10 @@ struct DecisionDetailView: View {
                     ChoiceList<Components.Schemas.AdjudicationRoute?>(
                         accessibilityLabel: "Route for \(finding.message)",
                         options: finding.offered_routes.map {
-                            .init(value: $0, label: AttentionDisplay.label($0), register: .item)
+                            .init(
+                                value: $0,
+                                label: AttentionDisplay.disputeRouteLabel($0, external: finding.external != nil),
+                                register: .item)
                         },
                         selection: Binding(
                             get: { alternativeSelections[finding.finding_id] },

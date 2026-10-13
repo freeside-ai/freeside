@@ -2702,3 +2702,21 @@ The client work is #1798 to #1803.)
 
 (Owner decisions of 2026-10-11, #1925;
 [decision note](../../devlog/2026-10-11-1145-retire-blocked-items.md).)
+
+---
+
+## Revision 85 ("A Command Controls The Supervised Daemon"):
+
+1. **The lifecycle command is a second sanctioned production path.** The
+   operator may run it. A script or agent may run it against `prod` only
+   inside a procedure the operator started that names the command: the
+   walkthrough's stop before the rig, its restore after the rig, and the exit
+   run. Tests, dev scripts, and agents doing other work still never stop,
+   unload, or re-register `ai.freeside.daemon`.
+2. **The feature carries the material rule change.** The command uses the
+   installed app's registration boundary. This revises the 2026-09-26
+   menu-only owner decision because the Wave 8 exit run repeatedly stalled
+   waiting for menu input that an agent could not provide.
+
+(Owner decisions of 2026-10-13, #1988;
+[decision note](../../devlog/2026-10-13-0806-daemon-lifecycle-command.md).)

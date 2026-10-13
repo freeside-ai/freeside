@@ -4,6 +4,52 @@ import Testing
 @testable import FreesideCore
 
 @Suite struct TaskProgressTests {
+    @Test func reviewDisputeNamesTheOpenCardWithoutAnImplementationRound() {
+        for hasRun in [true, false] {
+            var fixture = TaskProgressFixtures.make("Review dispute")
+            if !hasRun { fixture.runs = [] }
+            #expect(fixture.position?.status == "Review Dispute")
+            #expect(fixture.position?.heading?.label == "Review Dispute")
+            #expect(fixture.position?.heading?.round == nil)
+            #expect(fixture.position?.attentionItemID == fixture.items[0].item.id)
+            #expect(fixture.position?.guidance == "Resolve the review dispute in Inbox.")
+            #expect(!TaskDisplay.progressLines(fixture.task, position: fixture.position).contains("Round 1"))
+        }
+        let fixture = TaskProgressFixtures.make("Review dispute")
+        let heading = RunDisplay.stageHeading(
+            fixture.runs[0].run, task: fixture.task, attentionItems: fixture.items)
+        #expect(heading?.label == "Review Dispute")
+        #expect(heading?.round == nil)
+    }
+
+    @Test func reviewDisputeRequiresTheCurrentOpenBoundItem() {
+        let original = TaskProgressFixtures.make("Review dispute")
+        let changes: [(inout TaskProgressFixtures.Case) -> Void] = [
+            { $0.items[0].item.status = .resolved },
+            { $0.items[0].item.project_id = "foreign" },
+            { $0.items[0].item._type = .agent_question },
+            { $0.task.lifecycle = .finished },
+            { $0.runs[0].run.superseded_by = "new-run" },
+            { $0.runs[0].run.outcome = .failed },
+            {
+                $0.items[0].item.subject = .run(
+                    .init(subject_type: .run, subject_id: "old", run_id: "old", task_id: original.task.id))
+            },
+            {
+                $0.items[0].item.subject = .run(
+                    .init(
+                        subject_type: .run, subject_id: original.runs[0].run.id,
+                        run_id: original.runs[0].run.id, task_id: "foreign"))
+            },
+        ]
+        for change in changes {
+            var fixture = original
+            change(&fixture)
+            #expect(fixture.position?.attentionItemID == nil)
+            #expect(fixture.position?.heading?.label != "Review Dispute")
+        }
+    }
+
     @Test func stateMatrixUsesExplicitOutcomesAndGuidance() {
         let expected = [
             "Queued": "Queued", "No position": "No Execution Position Recorded",
@@ -300,6 +346,14 @@ enum TaskProgressFixtures {
             result.runs[0].run.stages.append(
                 .init(
                     id: "review", run_id: result.runs[0].run.id, name: "review", attempts: []))
+        case "Review dispute":
+            var item = AttentionFixtures.routedReviewDispute()
+            item.item.project_id = result.task.project_id
+            item.item.subject = .run(
+                .init(
+                    subject_type: .run, subject_id: result.runs[0].run.id,
+                    run_id: result.runs[0].run.id, task_id: result.task.id))
+            result.items = [item]
         case "Verification":
             result.runs[0].run.hold_reason = .init(value1: .verification_findings)
         case "Stop pending", "Stop failed", "Stopped":

@@ -124,6 +124,26 @@ enum AttentionDisplay {
         return "Ready for Final Review (Degraded)"
     }
 
+    static func hasExternalDisputedFindings(_ item: Components.Schemas.AttentionItem) -> Bool {
+        item.requested_decision.contains(.adjudicate_findings)
+            && item.review_dispute?.value1.findings?.contains(where: { $0.external != nil }) == true
+    }
+
+    static func disputeRouteLabel(
+        _ route: Components.Schemas.AdjudicationRoute, external: Bool
+    ) -> String {
+        guard external else { return label(route) }
+        switch route {
+        case .remediate: return "Fix in This Pull Request"
+        case .decline: return "Decline and Reply"
+        case ._defer: return "Defer and Reply"
+        default: return label(route)
+        }
+    }
+
+    static let externalDisputeConsequence =
+        "For external findings, Fix starts remediation in this pull request. Decline and Defer each record an outcome and reply in the finding's thread. Defer files no follow-up issue. Declining every finding lets the cycle restore readiness for the unchanged head."
+
     static func ask(_ item: Components.Schemas.AttentionItem) -> String {
         switch item._type {
         case .spec_approval:
@@ -135,6 +155,9 @@ enum AttentionDisplay {
         case .review_diminishing_returns:
             return "How should review conclude after diminishing returns?"
         case .review_dispute:
+            if hasExternalDisputedFindings(item) {
+                return "How should these external review findings be handled?"
+            }
             return "How should this review dispute be resolved?"
         case .review_contradiction:
             return "Recover review under the approved execution contract?"
@@ -180,6 +203,9 @@ enum AttentionDisplay {
         case .review_diminishing_returns:
             return "Review has reached diminishing returns."
         case .review_dispute:
+            if hasExternalDisputedFindings(item) {
+                return "Choose how to answer each external review finding."
+            }
             return "A review finding needs a disposition."
         case .review_contradiction:
             return "Review contradicted the approved execution contract."

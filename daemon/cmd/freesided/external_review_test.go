@@ -72,7 +72,6 @@ func TestBuildExternalFindings(t *testing.T) {
 			name: "review body and inline comment",
 			obs:  externalReviewActivity(),
 			want: []want{
-				{4101, "maintainer", "review/900100", "cafed00d", "", "", "Two problems below.", at},
 				{4101, "maintainer", "review_comment/800200", "cafed00d", "daemon/main.go:42", "P1", "P1: this leaks the handle", at},
 				{4102, "review-bot[bot]", "review_comment/800201", "cafed00d", "daemon/main.go:7", "", "nit: rename", at.Add(time.Second)},
 			},
@@ -205,12 +204,32 @@ func TestBuildExternalFindingsIsOrderIndependent(t *testing.T) {
 	obs.Reviews[0], obs.Reviews[1] = obs.Reviews[1], obs.Reviews[0]
 	obs.Comments[0], obs.Comments[1] = obs.Comments[1], obs.Comments[0]
 	second, _ := buildExternalFindings(obs, externalTestBinding())
-	if len(first) != 4 || len(second) != len(first) {
-		t.Fatalf("built %d then %d findings, want 4 both times", len(first), len(second))
+	if len(first) != 2 || len(second) != len(first) {
+		t.Fatalf("built %d then %d findings, want 2 both times", len(first), len(second))
 	}
 	for i := range first {
 		if first[i].ID != second[i].ID {
 			t.Errorf("finding %d: %s then %s", i, first[i].ID, second[i].ID)
+		}
+	}
+}
+
+func TestBuildExternalFindingsKeepsBodyWithoutUsableInlineComments(t *testing.T) {
+	t.Parallel()
+	for _, unusable := range []bool{false, true} {
+		obs := externalReviewActivity()
+		if unusable {
+			obs.Comments = obs.Comments[:1]
+			obs.Comments[0].AuthorID = 0
+		} else {
+			obs.Comments = nil
+		}
+		findings, skipped := buildExternalFindings(obs, externalTestBinding())
+		if len(findings) != 1 || findings[0].External.ThreadID != "review/900100" || findings[0].Message != obs.Reviews[0].Body {
+			t.Fatalf("review body was lost: %#v", findings)
+		}
+		if unusable && len(skipped) != 1 {
+			t.Fatalf("unusable comment was not reported: %v", skipped)
 		}
 	}
 }
@@ -260,8 +279,8 @@ func TestActiveResourceStoresExternalFindings(t *testing.T) {
 	}
 
 	want, _ := buildExternalFindings(externalReviewActivity(), externalTestBinding())
-	if len(want) != 3 {
-		t.Fatalf("fixture builds %d findings, want 3", len(want))
+	if len(want) != 2 {
+		t.Fatalf("fixture builds %d findings, want 2", len(want))
 	}
 	for _, w := range want {
 		got, err := readStoredFinding(t, st, w.ID)
@@ -383,8 +402,8 @@ func TestActiveResourceExternalIntakeSkipsUnusableActivity(t *testing.T) {
 		t.Fatalf("skipped = %v, want the oversized comment", result.skipped)
 	}
 	kept, _ := buildExternalFindings(activity, externalTestBinding())
-	if len(kept) != 2 {
-		t.Fatalf("fixture builds %d findings, want 2", len(kept))
+	if len(kept) != 1 || kept[0].External.ThreadID != "review_comment/800200" {
+		t.Fatalf("fixture findings = %#v, want only the usable inline comment", kept)
 	}
 	for _, f := range kept {
 		if _, err := readStoredFinding(t, st, f.ID); err != nil {
@@ -567,7 +586,7 @@ func TestCommitExternalFindingsRefusesChangedBinding(t *testing.T) {
 		now: func() time.Time { return activeResourceTestTime },
 	}
 	observation, err := reconciler.observe(ctx, item, activeResourceTestTime)
-	if err != nil || len(observation.externalFindings) != 3 {
+	if err != nil || len(observation.externalFindings) != 2 {
 		t.Fatalf("observe built %d findings, %v", len(observation.externalFindings), err)
 	}
 	observation.binding.PRNumber++

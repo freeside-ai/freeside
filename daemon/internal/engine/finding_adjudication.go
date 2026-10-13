@@ -204,10 +204,11 @@ func (w *productionPublicationWorkflow) reconcileFindingAdjudicationWithDissent(
 	if err != nil {
 		return productionReviewPending, err
 	}
-	if parked {
-		// An external review cycle ends on that item: a pass that finds it was
-		// interrupted between the item and the end of the cycle's task.
-		if task.externalReviewFirstRound(record) {
+	if parked != nil {
+		// A human decision was consumed above. Stop and legacy cards without
+		// an executable decision retain the external cycle's terminal ending.
+		if task.externalReviewFirstRound(record) &&
+			(parked.Status != domain.StatusOpen || !parked.Offers(domain.ActionAdjudicateFindings)) {
 			return productionReviewEscalated, nil
 		}
 		return productionReviewPending, nil
@@ -958,10 +959,10 @@ func (w *productionPublicationWorkflow) parkUnacceptedFindingBatch(
 	cause adjudicationParkCause, fallback inference.FallbackReason,
 ) (productionReviewGateState, error) {
 	w.logAdjudicationRefusal(ctx, task, record, cause, fallback)
-	// An external review cycle that cannot adjudicate ends as it does when it
-	// never tries: on a person, with the item naming the reviewer's findings.
+	// The first round stays pending so reconciliation can consume the
+	// person's authenticated routes, including after a restart.
 	if task.externalReviewFirstRound(record) {
-		return w.escalateExternalReviewFindings(ctx, task, record)
+		return w.awaitExternalReviewDecision(ctx, task, record, externalReviewVerdict(record))
 	}
 	reason := fmt.Sprintf(
 		"Review found %d issue(s); deterministic routing could not accept the complete adjudication batch.",
@@ -977,7 +978,7 @@ func (w *productionPublicationWorkflow) parkUnacceptedFindingBatch(
 
 func (w *productionPublicationWorkflow) findingAdjudicationFailSafeParked(
 	ctx context.Context, task productionPublicationTask, record domain.ReviewRecord,
-) (bool, error) {
+) (*domain.AttentionItem, error) {
 	var item domain.AttentionItem
 	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
@@ -985,21 +986,21 @@ func (w *productionPublicationWorkflow) findingAdjudicationFailSafeParked(
 		return err
 	})
 	if errors.Is(err, store.ErrNotFound) {
-		return false, nil
+		return nil, nil
 	}
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	if item.Type != domain.AttentionReviewDispute {
-		return false, nil
+		return nil, nil
 	}
 	validSubject := item.Subject.Type == domain.SubjectRun &&
 		item.Subject.ID == domain.SubjectID(task.RunID) && item.Subject.RunID != nil &&
 		*item.Subject.RunID == task.RunID
 	if item.ProjectID != task.ProjectID || !validSubject || item.PRHeadSHA != task.HeadSHA {
-		return false, domain.ErrParentKeyMismatch
+		return nil, domain.ErrParentKeyMismatch
 	}
-	return true, nil
+	return &item, nil
 }
 
 func (w *productionPublicationWorkflow) reserveFindingAdjudicationAttention(
@@ -1658,12 +1659,6 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 	if err != nil {
 		return productionReviewPending, err
 	}
-	// An external review cycle never parks its task on an answer nothing will
-	// read. Its first round waits only while an adjudication card is open;
-	// every other ending that needs a person finishes the cycle's task and
-	// leaves the item as the durable surface, as the cycle does when it
-	// adjudicates nothing. A pass that finds such an item already written was
-	// interrupted between the item and the task's end.
 	externalFirstRound := task.externalReviewFirstRound(record)
 	if command != nil && command.Action == domain.ActionStop {
 		if externalFirstRound {
@@ -1672,7 +1667,7 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 		return productionReviewPending, nil
 	}
 	if item != nil && item.Type == domain.AttentionReviewDispute && (command == nil || artifact.Decision == nil) {
-		if externalFirstRound {
+		if externalFirstRound && !item.Offers(domain.ActionAdjudicateFindings) {
 			return productionReviewEscalated, nil
 		}
 		return productionReviewPending, nil
@@ -1740,13 +1735,14 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 		if err := w.reserveFindingAdjudicationAttention(task, record); err != nil {
 			return productionReviewPending, err
 		}
+		if externalFirstRound {
+			return w.awaitExternalReviewDecision(ctx, task, record,
+				"Adjudication requires a second decision before a critical or high finding can be declined or deferred.")
+		}
 		if err := w.putReviewAttention(ctx, task, record,
 			"Adjudication requires a second decision before a critical or high finding can be declined or deferred.",
 			domain.AttentionReviewDispute); err != nil {
 			return productionReviewPending, err
-		}
-		if externalFirstRound {
-			return productionReviewEscalated, nil
 		}
 		return productionReviewPending, nil
 	}

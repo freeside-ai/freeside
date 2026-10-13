@@ -201,7 +201,11 @@ enum TaskDisplay {
                 position.guidance =
                     "The configured agent account is busy. This work is queued; no action is needed for this wait."
             }
-            if let handoff = finalReviewItem(task, run: run, attentionItems: attentionItems) {
+            if let dispute = reviewDisputeItem(task, run: run, attentionItems: attentionItems) {
+                position.status = AttentionDisplay.title(dispute.item)
+                position.guidance = "Resolve the review dispute in Inbox."
+                position.attentionItemID = dispute.item.id
+            } else if let handoff = finalReviewItem(task, run: run, attentionItems: attentionItems) {
                 position.status = AttentionDisplay.title(handoff.item)
                 position.guidance = "Review the pull request from Inbox."
                 position.attentionItemID = handoff.item.id
@@ -428,7 +432,8 @@ enum TaskDisplay {
         let approval = specificationApproval(task, runID: position.run_id, run: run, history: history)
         let handoff =
             (!suppressesGuidanceForCancellation(task)
-            ? finalReviewHeading(task, run: run, attentionItems: attentionItems) : nil)
+            ? reviewDisputeHeading(task, run: run, attentionItems: attentionItems)
+                ?? finalReviewHeading(task, run: run, attentionItems: attentionItems) : nil)
             .map { Position.Heading(label: $0, round: nil) }
         if let run {
             return Position(
@@ -471,6 +476,38 @@ enum TaskDisplay {
     ) -> String? {
         finalReviewItem(task, run: run, attentionItems: attentionItems).map {
             AttentionDisplay.title($0.item)
+        }
+    }
+
+    static func reviewDisputeHeading(
+        _ task: Components.Schemas.Task, run: Components.Schemas.Run?,
+        attentionItems: [Components.Schemas.AttentionItemSnapshot]
+    ) -> String? {
+        reviewDisputeItem(task, run: run, attentionItems: attentionItems).map {
+            AttentionDisplay.title($0.item)
+        }
+    }
+
+    private static func reviewDisputeItem(
+        _ task: Components.Schemas.Task, run: Components.Schemas.Run?,
+        attentionItems: [Components.Schemas.AttentionItemSnapshot]
+    ) -> Components.Schemas.AttentionItemSnapshot? {
+        guard task.lifecycle == .active, !suppressesGuidanceForCancellation(task),
+            let current = task.current_position?.value1, task.run_ids.contains(current.run_id)
+        else { return nil }
+        if let run {
+            guard run.id == current.run_id, run.task_id == task.id, run.project_id == task.project_id,
+                run.lifecycle == .active, run.superseded_by == nil,
+                run.outcome != .failed, run.outcome != .lost
+            else { return nil }
+        }
+        return attentionItems.first { snapshot in
+            let item = snapshot.item
+            guard item._type == .review_dispute, item.status == .open,
+                item.project_id == task.project_id, case .run(let subject) = item.subject
+            else { return false }
+            return subject.subject_id == current.run_id && subject.run_id == current.run_id
+                && subject.task_id == task.id
         }
     }
 

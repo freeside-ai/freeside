@@ -184,8 +184,8 @@ func (p *productionPublicationHarness) externalReviewEnd(t *testing.T) externalR
 // TestExternalReviewCycleEndsOnAPerson drives issue #524's second part end to
 // end: an admitted reviewer's finding on the published head withdraws
 // readiness, the cycle verifies and reviews the unchanged head against the
-// base its last review used, and the run ends on a review-dispute item that
-// names every admitted finding and no other reviewer's.
+// base its last review used, and the cycle waits on a review-dispute item
+// that names every admitted finding and no other reviewer's.
 func TestExternalReviewCycleEndsOnAPerson(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
@@ -256,13 +256,13 @@ func TestExternalReviewCycleEndsOnAPerson(t *testing.T) {
 
 	end := p.externalReviewEnd(t)
 	assertObservedReentryConclusion(t, p, domain.RunConclusion{Outcome: domain.RunOutcomePending})
-	if len(end.reviewItems) != 1 || end.readyItem || end.pending != 0 {
-		t.Fatalf("cycle end = %d review items, ready item %t, %d tasks pending; want one item and nothing else",
+	if len(end.reviewItems) != 1 || end.readyItem || end.pending != 1 {
+		t.Fatalf("cycle end = %d review items, ready item %t, %d tasks pending; want one item and one waiting task",
 			len(end.reviewItems), end.readyItem, end.pending)
 	}
 	item := end.reviewItems[0]
 	if item.ID != productionReviewItemIDForTest(p.runID, 2) || item.Type != domain.AttentionReviewDispute ||
-		item.PRHeadSHA != head {
+		item.PRHeadSHA != head || !item.Offers(domain.ActionAdjudicateFindings) {
 		t.Fatalf("review item = %#v", item)
 	}
 	for _, want := range []string{
@@ -327,7 +327,7 @@ func TestExternalReviewCycleReportsFreesideFindings(t *testing.T) {
 		t.Fatalf("cycle result = %#v, %v", result, err)
 	}
 	end := p.externalReviewEnd(t)
-	if len(end.reviewItems) != 1 || end.readyItem || end.pending != 0 {
+	if len(end.reviewItems) != 1 || end.readyItem || end.pending != 1 {
 		t.Fatalf("cycle end = %#v", end)
 	}
 	reason := end.reviewItems[0].Reason
@@ -339,7 +339,7 @@ func TestExternalReviewCycleReportsFreesideFindings(t *testing.T) {
 }
 
 // TestExternalReviewCycleConvergesAcrossRestarts interrupts the cycle at each
-// durable boundary it crosses, restarts, and requires the same end: one
+// durable boundary it crosses, restarts, and requires the same card: one
 // review item, each review requested once, and no ready item.
 func TestExternalReviewCycleConvergesAcrossRestarts(t *testing.T) {
 	t.Parallel()
@@ -399,7 +399,11 @@ func TestExternalReviewCycleConvergesAcrossRestarts(t *testing.T) {
 					}
 					end = p.externalReviewEnd(t)
 				}
-				if len(end.reviewItems) != 1 || end.readyItem || end.pending != 0 {
+				wantPending := 0
+				if round == 2 {
+					wantPending = 1
+				}
+				if len(end.reviewItems) != 1 || end.readyItem || end.pending != wantPending {
 					t.Fatalf("cycle end = %d review items, ready item %t, %d tasks pending",
 						len(end.reviewItems), end.readyItem, end.pending)
 				}
@@ -419,7 +423,7 @@ func TestExternalReviewCycleConvergesAcrossRestarts(t *testing.T) {
 				}
 				again := p.externalReviewEnd(t)
 				if len(again.reviewItems) != 1 || again.reviewItems[0].ID != item.ID ||
-					again.reviewItems[0].ItemVersion != item.ItemVersion || again.readyItem || again.pending != 0 {
+					again.reviewItems[0].ItemVersion != item.ItemVersion || again.readyItem || again.pending != wantPending {
 					t.Fatalf("restart changed the cycle's end: %#v", again)
 				}
 				for id, count := range reviewCalls.requestIDs {
