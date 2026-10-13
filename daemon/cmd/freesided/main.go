@@ -1074,6 +1074,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		judgmentRuntime.Driver = ownedJudgments
 		judgmentHealth := newJudgmentRoleHealth(st, func() time.Time { return time.Now().UTC() }, cfg.Logger)
 		judgments, err := inference.New(inference.Config{
+			Logger:     cfg.Logger,
 			StatePath:  filepath.Join(cfg.StateDir, "inference-budget.json"),
 			AnchorPath: cfg.DBPath + ".inference-budget-anchor",
 			Roles: judgmentRoles{

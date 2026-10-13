@@ -1,8 +1,10 @@
 package integration_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -43,6 +45,7 @@ func (p *productionPublicationHarness) configureAdjudicator(t *testing.T) *infer
 		MaxCallsPerRoot: 10, MaxStarvationPerRoot: time.Hour,
 	}
 	p.judgments, err = inference.New(inference.Config{
+		Logger:    p.logger,
 		StatePath: filepath.Join(t.TempDir(), "ledger.json"),
 		Roles:     inferencefake.Roles{Provider: "fake", Model: "adjudicator", Driver: driver},
 		Sites:     []inference.Site{inference.ClassifierSite(budget), inference.AdjudicatorSite(budget)},
@@ -53,6 +56,66 @@ func (p *productionPublicationHarness) configureAdjudicator(t *testing.T) *infer
 	}
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	return driver
+}
+
+func TestExternalReviewRejectedBatchLogsCause(t *testing.T) {
+	const marker = "UNTRUSTED-REVIEWER-AND-MODEL-TEXT"
+	for _, tc := range []struct {
+		name, cause   string
+		lowConfidence bool
+	}{
+		{"missing entry", "batch_mismatch", false},
+		{"low confidence", "entry_not_accepted", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			p := newProductionPublicationHarness(t, "")
+			p.logger = slog.New(slog.NewTextHandler(&logs, nil))
+			driver := p.configureAdjudicator(t)
+			_, findings := p.startAdjudicatedExternalReview(t, marker, marker)
+			p.scriptCleanReview(2, p.baseSHA, p.replay.HeadSHA)
+			confidence := "high"
+			if tc.lowConfidence {
+				confidence = "low"
+			}
+			entries := []map[string]any{}
+			for i, finding := range findings {
+				if i > 0 && !tc.lowConfidence {
+					break
+				}
+				entries = append(entries, map[string]any{
+					"finding_id": finding.ID, "goal_relationship": "adjacent", "compatibility": nil,
+					"route": "defer", "confidence": confidence, "rationale": marker,
+					"evidence": []string{marker}, "cited_rules": []string{}, "assumptions": []string{},
+					"alternatives": []string{}, "open_questions": []string{},
+				})
+			}
+			output, err := json.Marshal(map[string]any{"entries": entries})
+			if err != nil {
+				t.Fatal(err)
+			}
+			driver.Script(inference.AdjudicatorSiteID, inferencefake.Script{Response: inference.Response{Output: output, ComputeUnits: 4}})
+			logs.Reset()
+			if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 {
+				t.Fatalf("cycle: %+v, %v", result, err)
+			}
+			end := p.externalReviewEnd(t)
+			if len(end.reviewItems) != 1 || end.readyItem || end.pending != 0 {
+				t.Fatalf("parked cycle: %+v", end)
+			}
+			for _, want := range []string{"run=" + string(p.runID), "round=2", "external_first_round=true", "cause=" + tc.cause} {
+				if !strings.Contains(logs.String(), want) {
+					t.Errorf("log missing %q: %s", want, logs.String())
+				}
+			}
+			if strings.Contains(logs.String(), marker) {
+				t.Fatal("untrusted text reached log")
+			}
+			if strings.Count(logs.String(), "finding adjudication unavailable") != 1 {
+				t.Fatalf("expected one refusal: %s", logs.String())
+			}
+		})
+	}
 }
 
 // adjudicatorVerdict is one entry a scripted adjudicator returns.

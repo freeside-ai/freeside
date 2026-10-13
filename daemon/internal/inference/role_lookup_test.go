@@ -132,7 +132,7 @@ func onlyIdentity(t *testing.T, statePath string) recordedIdentity {
 	return *record.Identity
 }
 
-const unboundReason = "judgment role has no admissible lineup line"
+const unboundReason = inference.FallbackRoleUnbound
 
 // A role the lineup cannot fill returns the site's declared fail-safe at
 // every site, reaches no driver, spends no budget, and is reported unbound
@@ -197,7 +197,7 @@ func TestRoleLeftOffFailsSafeWithoutAnItem(t *testing.T) {
 		Edit: func(domain.RoleName, *inference.RoleCall) error { return inference.ErrRoleOff },
 	}, health, []inference.Site{site})
 	result, err := client.Call(context.Background(), site.ID, "project-1", "run-1", siteFields(site))
-	if err != nil || !result.Fallback || result.Reason != inference.ErrUnavailable.Error() ||
+	if err != nil || !result.Fallback || result.Reason != inference.FallbackRoleOff ||
 		!bytes.Equal(result.Output, []byte(site.FailSafe)) {
 		t.Fatalf("result = %+v, %v", result, err)
 	}
@@ -768,7 +768,7 @@ func TestObservedFactsAreBoundedAndRecorded(t *testing.T) {
 		"negative output tokens": {ModelID: "observed-model", OutputTokens: -1},
 	} {
 		result, identity := run(observed)
-		if !result.Fallback || result.Reason != "driver response exceeded contract" || identity.Observed != nil {
+		if !result.Fallback || result.Reason != inference.FallbackResponseExceededContract || identity.Observed != nil {
 			t.Fatalf("%s: result = %+v, observed = %+v", name, result, identity.Observed)
 		}
 	}

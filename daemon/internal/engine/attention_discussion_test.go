@@ -1,8 +1,10 @@
 package engine
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -21,6 +23,7 @@ import (
 )
 
 type attentionDiscussionFixture struct {
+	logs          *bytes.Buffer
 	dbPath        string
 	store         *store.Store
 	signet        *signet.Service
@@ -177,7 +180,9 @@ func newAttentionDiscussionFixture(
 		Window: time.Hour, Site: limits, Project: limits, Global: limits,
 		MaxCallsPerRoot: 20, MaxStarvationPerRoot: time.Hour,
 	}
+	logs := new(bytes.Buffer)
 	client, err := inference.New(inference.Config{
+		Logger:    slog.New(slog.NewTextHandler(logs, nil)),
 		StatePath: filepath.Join(dir, "inference.json"),
 		Roles: inferencefake.Roles{
 			Provider: "fake", Model: "test", Driver: inferenceDriver,
@@ -189,6 +194,7 @@ func newAttentionDiscussionFixture(
 		t.Fatal(err)
 	}
 	fixture := &attentionDiscussionFixture{
+		logs:   logs,
 		dbPath: dbPath, store: st, signet: service, advisory: advisoryStore,
 		inference: client, item: item, now: now,
 	}
@@ -252,7 +258,7 @@ func (f *attentionDiscussionFixture) blockUnattended(t *testing.T) {
 
 func (f *attentionDiscussionFixture) engine(t *testing.T, withInference bool) *Engine {
 	t.Helper()
-	options := []Option{}
+	options := []Option{WithLogger(slog.New(slog.NewTextHandler(f.logs, nil)))}
 	if withInference {
 		options = append(options, WithInference(f.inference))
 	}
@@ -372,6 +378,11 @@ func TestAttentionDiscussionFallbackReturnsConversationToIdle(t *testing.T) {
 		t.Fatalf("Reconcile = %#v, %v", result, err)
 	}
 	f.assertReply(t, unavailableAttentionDiscussionReply, []domain.Action{domain.ActionDiscuss, domain.ActionStop})
+	for _, want := range []string{"root_lineage=run-discussion", "site=attention_discussion", "reason=driver_absent"} {
+		if !strings.Contains(f.logs.String(), want) {
+			t.Errorf("log missing %q: %s", want, f.logs.String())
+		}
+	}
 }
 
 func TestAttentionDiscussionSecretInputUsesFallbackWithoutProvider(t *testing.T) {
@@ -400,6 +411,11 @@ func TestAttentionDiscussionSecretInputUsesFallbackWithoutProvider(t *testing.T)
 	f.assertReply(t, unavailableAttentionDiscussionReply, []domain.Action{domain.ActionDiscuss, domain.ActionStop})
 	if requests := driver.Requests(); len(requests) != 0 {
 		t.Fatalf("secret-bearing discussion reached provider: %#v", requests)
+	}
+	if !strings.Contains(f.logs.String(), "cause=secret_input") ||
+		!strings.Contains(f.logs.String(), "run=run-discussion") ||
+		strings.Contains(f.logs.String(), "ghp_") {
+		t.Fatalf("unsafe or missing refusal log: %s", f.logs.String())
 	}
 }
 

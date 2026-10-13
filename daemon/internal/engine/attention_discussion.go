@@ -233,6 +233,8 @@ func (e *Engine) produceAttentionDiscussionReply(
 	}
 	if importer.ContainsSecret(prefix) || importer.ContainsSecret(cardFacts) ||
 		importer.ContainsSecret([]byte(discussion.item.Reason)) {
+		e.logger.WarnContext(ctx, "attention discussion refused", "item", discussion.item.ID,
+			"run", *discussion.item.Subject.RunID, "cause", "secret_input")
 		return unavailableAttentionDiscussionReply, nil
 	}
 	workCtx, finish, err := e.BeginRunWork(ctx, *discussion.item.Subject.RunID)

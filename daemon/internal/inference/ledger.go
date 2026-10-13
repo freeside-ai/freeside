@@ -335,6 +335,8 @@ func validateLedgerState(state ledgerState) error {
 	return nil
 }
 
+var errBudgetExhausted = errors.New("inference cumulative budget exhausted")
+
 // reserveCall admits one call against the cumulative budgets and writes its
 // record, identity included, before the driver runs.
 func (l *ledger) reserveCall(
@@ -397,7 +399,7 @@ func (l *ledger) reserveCall(
 		return callRecord{}, err
 	}
 	if exhausted {
-		return callRecord{}, errors.New("inference cumulative budget exhausted")
+		return callRecord{}, errBudgetExhausted
 	}
 	l.protected[called.ID] = true
 	return called, nil

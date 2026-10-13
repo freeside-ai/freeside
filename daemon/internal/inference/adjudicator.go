@@ -375,7 +375,7 @@ func (c *Client) AdjudicateFindings(
 ) ([]domain.FindingAdjudicationEntry, error) {
 	// Checked before anything is sent: a refused batch reaches no model.
 	if _, err := input.compatibilities(); err != nil {
-		return nil, errors.Join(ErrAdjudicationNotAvailable, err)
+		return nil, &AdjudicationUnavailable{Cause: AdjudicationInputRefused, Err: err}
 	}
 	declaredPaths, err := adjudicationJSON(input.DeclaredPaths)
 	if err != nil {
@@ -426,11 +426,11 @@ func (c *Client) AdjudicateFindings(
 		"conversation_feedback":       {Value: feedback, Sensitivity: SensitivityRepository},
 		"diff_metrics":                {Value: diffMetrics, Sensitivity: SensitivityOperational},
 	})
+	if result.Fallback {
+		return nil, &AdjudicationUnavailable{Cause: AdjudicationJudgmentFallback, Fallback: result.Reason, Err: err}
+	}
 	if err != nil {
 		return nil, err
-	}
-	if result.Fallback {
-		return nil, fmt.Errorf("%w: %s", ErrAdjudicationNotAvailable, result.Reason)
 	}
 	var output adjudicatorOutput
 	if err := json.Unmarshal(result.Output, &output); err != nil {
@@ -438,7 +438,7 @@ func (c *Client) AdjudicateFindings(
 	}
 	entries, err := output.domainEntries(input)
 	if err != nil {
-		return nil, errors.Join(ErrAdjudicationNotAvailable, err)
+		return nil, &AdjudicationUnavailable{Cause: AdjudicationOutputRefused, Err: err}
 	}
 	return entries, nil
 }

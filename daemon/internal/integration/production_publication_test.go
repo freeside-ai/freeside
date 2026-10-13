@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"net"
 	"net/http"
@@ -212,6 +213,7 @@ func (s *faultReviewSource) VerifyReviewRequestSupersession(
 }
 
 type productionPublicationHarness struct {
+	logger *slog.Logger
 	*publicationHarness
 	// preparationDigest, when set, is the builder-source digest the next
 	// engine reports as its own: a daemon upgraded since the image was built.
@@ -883,6 +885,9 @@ func (p *productionPublicationHarness) newEngineForMode(
 		}),
 	}
 	productionDelivery := p.productionDelivery
+	if p.logger != nil {
+		options = append(options, engine.WithLogger(p.logger))
+	}
 	if productionDelivery == nil {
 		productionDelivery = func(context.Context, exec.StartSpec) error { return nil }
 	}

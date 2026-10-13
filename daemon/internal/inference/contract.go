@@ -606,7 +606,7 @@ type CallResult struct {
 	Producer    string
 	InputDigest string
 	Fallback    bool
-	Reason      string
+	Reason      FallbackReason
 	// AuthorOutputRefusalReason is set only for a classified explain-site refusal.
 	// It contains fixed field/category text, never a provider or validator error.
 	AuthorOutputRefusalReason string

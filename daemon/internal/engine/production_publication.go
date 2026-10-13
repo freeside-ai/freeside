@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"net"
 	"net/http"
@@ -225,6 +226,7 @@ type productionVerificationCheckpoint struct {
 }
 
 type productionPublicationWorkflow struct {
+	logger                          *slog.Logger
 	store                           *store.Store
 	attention                       attentionService
 	workDir                         string

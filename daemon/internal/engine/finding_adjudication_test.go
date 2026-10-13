@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	mrand "math/rand"
 	"os"
@@ -773,6 +774,8 @@ func TestFindingAdjudicationDiscussCreatesAuthenticatedSuccessor(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	var refusalLogs bytes.Buffer
+	f.workflow.logger = slog.New(slog.NewTextHandler(&refusalLogs, nil))
 	binaryBody := []byte{0xff, 0xfe}
 	binaryDigest := domain.Digest(contentaddr.Sum(binaryBody))
 	if _, err := f.blobs.Put(binaryDigest, bytes.NewReader(binaryBody)); err != nil {
@@ -798,6 +801,10 @@ func TestFindingAdjudicationDiscussCreatesAuthenticatedSuccessor(t *testing.T) {
 	}
 	if adjudicator.calls != 2 {
 		t.Fatalf("unsupported attachment retried adjudicator: calls = %d, want 2", adjudicator.calls)
+	}
+	if !strings.Contains(refusalLogs.String(), "cause=input_refused") ||
+		strings.Count(refusalLogs.String(), "finding adjudication unavailable") != 1 {
+		t.Fatalf("attachment refusal log = %s", refusalLogs.String())
 	}
 	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
 		pending, err := tx.ListPendingOutbox(f.ctx, string(domain.AgentInvocationRequestedKind))
