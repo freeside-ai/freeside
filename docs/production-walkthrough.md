@@ -583,7 +583,10 @@ submission without it, because the daemon records completion against the
 declaration: a task accepted without one never finishes when its pull request
 merges, and it keeps its work-in-progress slot. A task the daemon accepted
 before this rule is left as it is and stays "Ready" after its merge. Release
-it with `freesided abandon -db <database> -task <task-id>`.
+it with `freesided abandon -db <database> -task <task-id>`, which also expires
+its open specification approvals and execution-failure recovery cards. Other
+item kinds and quarantine notices stay open. Abandonment does not stop
+execution, so new cards may appear; repeat `abandon` to retire eligible ones.
 
 A publication file with a literal `title` and `body` is still accepted for any
 other spec file. Its text is published as written, with no publisher-written

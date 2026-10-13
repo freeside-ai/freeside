@@ -13,13 +13,14 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
 // runAbandonMain implements `freesided abandon --task <id>` (issue #1318 D6):
 // it records an explicit task abandonment, releasing the task's WIP admission
-// slot, and is idempotent on a task whose current episode is already
-// abandoned.
+// slot, then expires its open approval and execution-recovery cards. Repeating
+// it retires any eligible cards raised since the previous call.
 //
 // It does not stop an in-flight provider execution or certify quiescence.
 // Routine submission milestones cannot reopen the released episode. A later
@@ -71,8 +72,11 @@ type abandonResult struct {
 	TaskID domain.TaskID `json:"task_id"`
 	// Released is true when this call released a held WIP slot, false when the
 	// task held none (already abandoned, completed, or never started).
-	Released bool `json:"released"`
+	Released     bool            `json:"released"`
+	RetiredItems []domain.ItemID `json:"retired_items"`
 }
+
+var errAbandonUnchanged = errors.New("abandon: unchanged")
 
 func runAbandonCommand(ctx context.Context, cfg abandonCommandConfig) (abandonResult, error) {
 	if err := validateAbandonConfig(cfg); err != nil {
@@ -93,12 +97,42 @@ func runAbandonCommand(ctx context.Context, cfg abandonCommandConfig) (abandonRe
 	st := handle.store
 	var released bool
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		before, err := tx.GetTaskSnapshot(ctx, cfg.TaskID)
+		if err != nil {
+			return err
+		}
 		released, err = tx.AbandonTask(ctx, cfg.TaskID, time.Now().UTC())
-		return err
-	}); err != nil {
+		if err != nil {
+			return err
+		}
+		after, err := tx.GetTaskSnapshot(ctx, cfg.TaskID)
+		if err != nil {
+			return err
+		}
+		if before.Snapshot.EntityVersion == after.Snapshot.EntityVersion {
+			return errAbandonUnchanged
+		}
+		return nil
+	}); err != nil && !errors.Is(err, errAbandonUnchanged) {
 		return abandonResult{}, fmt.Errorf("abandon: task %q: %w", cfg.TaskID, err)
 	}
-	return abandonResult{TaskID: cfg.TaskID, Released: released}, nil
+	// A stale card can fail its persistence policy gate. Keep the slot release
+	// committed even then; the operator can retry retirement with abandon.
+	retired := []domain.ItemID{}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		var err error
+		retired, err = engine.RetireAbandonedTaskItems(ctx, tx, cfg.TaskID)
+		if err != nil {
+			return err
+		}
+		if len(retired) == 0 {
+			return errAbandonUnchanged
+		}
+		return nil
+	}); err != nil && !errors.Is(err, errAbandonUnchanged) {
+		return abandonResult{}, fmt.Errorf("abandon: task %q: slot-release step committed; retire items (retry abandon): %w", cfg.TaskID, err)
+	}
+	return abandonResult{TaskID: cfg.TaskID, Released: released, RetiredItems: retired}, nil
 }
 
 func validateAbandonConfig(cfg abandonCommandConfig) error {
