@@ -436,13 +436,76 @@ visible change, follow
 [Iterating on a Visible Change](#iterating-on-a-visible-change) instead of
 re-running it after every step.
 
+## Control The Supervised Daemon From A Command
+
+The installed Mac app accepts lifecycle commands without opening a window or
+adding a menu-bar item. These use the same SMAppService registration and
+operator-disabled and registration-current preferences as the menu:
+
+```sh
+"$HOME/Applications/Freeside.app/Contents/MacOS/FreesideMac" daemon status
+"$HOME/Applications/Freeside.app/Contents/MacOS/FreesideMac" daemon stop
+"$HOME/Applications/Freeside.app/Contents/MacOS/FreesideMac" daemon start --timeout 30
+```
+
+The operator may run these commands. A script or agent may control production
+only inside an operator-started procedure that names the command, such as the
+production walkthrough or exit run. Tests, dev scripts, and agents doing other
+work must not touch the production label (plan §10).
+
+Each command prints one line of space-separated `key=value` fields. For example:
+
+```text
+action=status registration=enabled health=reachable
+action=stop registration=not_registered health=unreachable
+action=start registration=requires_approval health=unknown error=login_items_approval_required
+```
+
+`registration` is `enabled`, `not_registered`, `requires_approval`, `not_found`,
+or `unknown`; `health` is `reachable`, `unreachable`, or `unknown` if no probe
+finished. A failed command also has an `error` token. Usage and configuration
+errors print only `error` and diagnostic fields. Exit codes are:
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Start or stop reached the requested state; status found both running or both stopped. |
+| 1 | Service operation failed, or status found registration and health disagreeing. |
+| 3 | Login Items approval is required. A person must approve Freeside in System Settings. |
+| 4 | The deadline expired. The line reports the last observed registration and health. |
+| 64 | Invalid arguments. Use `daemon start`, `stop`, or `status`, optionally followed by `--timeout SECONDS`. |
+| 78 | Invalid environment configuration, or an ephemeral app refusing lifecycle control. |
+
+The default deadline is 30 seconds for each command, including status; the
+timeout accepts integers from 1 through 3600. Start waits for registration and
+health; stop waits for unregistration and failed health. A timed-out operation
+may still have changed registration: read status before retrying.
+
+The command resolves its tier exactly as the app does: `FREESIDE_ENV`, then the
+bundle's tier, then the build configuration. Leave `FREESIDE_ENV` unset when
+using the installed prod app. Overriding it to `dev` asks that bundle for the
+dev LaunchAgent plist, which it does not contain. An ephemeral tier refuses
+before constructing a service. `Freeside Dev.app` supports the same command for
+its own supervised tier. A source Debug build forced to `prod` can register
+its own bundle as production, just as the existing `FreesideMacProd` scheme
+can; use the installed app path for these procedures.
+
 ## Restore After A Production Rig
 
-After a production rig, restore the bundled daemon through the installed app's
-**Stop**/**Start** controls. `scripts/restore-supervised-daemon.sh` clears the
-launchd disable override, prints the needed app actions and waits for both service
-registration and `http://127.0.0.1:7331/health`. Login Items approval or a timeout
-leaves restoration incomplete. See the
+After a production rig, `scripts/restore-supervised-daemon.sh` clears the launchd
+disable override and runs the installed app's `daemon start`. If registration
+is enabled but health is unreachable, it tries `daemon stop` and `daemon start`
+once. The helper sets `FREESIDE_ENV=prod` so an inherited tier override cannot
+redirect restoration. It then checks both service registration and
+`http://127.0.0.1:7331/health`.
+The helper derives the app executable from the selected installed daemon's
+`Contents/Resources/freesided` path, including an alternate install location.
+Standalone binaries must first be installed in the app bundle. The helper
+requires Python 3 and returns within a 120-second deadline, overridden
+by `FREESIDE_REAL_RUN_RESTORE_TIMEOUT_SECONDS`. Its process deadline also stops
+an old app that ignores the command; install the current app if it is missing
+or too old. Tests set `FREESIDE_REAL_RUN_RESTORE_APP` to an absolute fixture
+executable. Login Items approval or a timeout leaves restoration incomplete.
+The menu remains available for manual control. See the
 [production walkthrough runbook](../docs/production-walkthrough.md) for the exact
 sequence and retained-session recovery command.
 

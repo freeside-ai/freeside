@@ -633,6 +633,12 @@ LAUNCHCTL_STUB
 printf '%s\n' '{"status":"ok","version":"0123456789ab"}'
 CURL_STUB
 	chmod +x "$stub_bin/launchctl" "$stub_bin/curl"
+	cat >"$stub_bin/FreesideMac" <<'APP_STUB'
+#!/usr/bin/env bash
+[[ "$1 $2" == 'daemon start' ]] || exit 64
+echo 'action=start registration=enabled health=reachable'
+APP_STUB
+	chmod +x "$stub_bin/FreesideMac"
 	cat >"$stub_bin/git" <<'GIT_STUB'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -767,6 +773,7 @@ RETRY_STUB
 		GO_STUB_SEED_MODE="$seed_mode" \
 		RESUME_STUB_MODE="$resume_mode" \
 		FREESIDE_REAL_RUN_RESTORE_DAEMON="$CASE_DIR/old/freesided" \
+		FREESIDE_REAL_RUN_RESTORE_APP="$stub_bin/FreesideMac" \
 		GIT_STUB_CHECKOUT_MODE="$checkout_mode" \
 		REAL_SLEEP="$real_sleep" \
 		FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS="${FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS:-30}" \

@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 84
+revision: 85
 status: active
-updated: 2026-10-11
+updated: 2026-10-13
 ---
 
 # Freeside
@@ -5514,11 +5514,15 @@ stay with that run.
   stopped, such as `renew-codex`, `rig`, and `preflight`'s database checks,
   refuse. To inspect a live supervised database, `freesided snapshot` writes
   an owner-only copy for offline `sqlite3` use.
-- **No script stops the production label.** No script, test, or agent stops,
-  unloads, or re-registers `ai.freeside.daemon`. The one exception is the
-  installer: `prod` adopts a merged daemon change when the operator re-runs
-  `app/scripts/install-mac-app.sh --daemon-path ...` (no self-updater
-  exists), and that re-run's re-registration is the one sanctioned stop.
+- **Production lifecycle control has two sanctioned paths.** The installer
+  remains the first: `prod` adopts a merged daemon change when the operator
+  re-runs `app/scripts/install-mac-app.sh --daemon-path ...` (no self-updater
+  exists). The installed app's `daemon start|stop|status` command is the
+  second. The operator may run it. A script or agent may run it against
+  `prod` only inside a procedure the operator started that names the command:
+  the walkthrough's stop before the rig, its restore after the rig, and the
+  exit run. Tests, dev scripts, and agents doing other work still never stop,
+  unload, or re-register `ai.freeside.daemon`.
 
 `dev` ships with the first installer change, alongside `prod`: the installer's
 identity constants become parameters of the environment either way, so a
@@ -6159,32 +6163,21 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 84 ("The Blocked Attention Type Is Retired"):
+Revision 85 ("A Command Controls The Supervised Daemon"):
 
-1. **No `blocked` attention item.** The type consolidated external waits that
-   passed a waiting threshold, and its one producer raised a second card beside
-   a specification approval that was already the operator's signal. Nothing
-   raises the type now, and no item of the type is ever open; Sections
-   [4](#4-the-attention-model) and [9](#9-comprehension) lose its rows. Rejected: keeping the type and
-   removing only the duplicate beside the approval, which leaves a card kind
-   with no producer.
-2. **History is kept; nothing is deleted.** A migration closes each open
-   `blocked` item as superseded. The API schema and the domain keep the type
-   name, its wait kinds, and `blocked_on`, marked retired, so a closed item
-   from before the change still loads and shows as resolved. Rejected:
-   deleting the rows and removing the name, because sync cannot tell a client
-   that an item was deleted and a stored row must still validate when read.
-3. **Budgeting keeps two clocks.** Section [5.12](#512-workflow-definition-initiators-and-artifacts) drops the waiting
-   thresholds and the example workflow's `waiting:` line. A long wait for an
-   approval, PR checks, or an external review raises no attention item.
-   Rejected: keeping the thresholds and naming a different signal for a later
-   unit; nothing implemented the PR-check or review thresholds.
-4. **The approval card gains no waiting text.** Its row keeps the age it
-   shows today. Notification and escalation for a long wait are separate
-   work (#1924).
+1. **The lifecycle command is a second sanctioned production path.** The
+   operator may run it. A script or agent may run it against `prod` only
+   inside a procedure the operator started that names the command: the
+   walkthrough's stop before the rig, its restore after the rig, and the exit
+   run. Tests, dev scripts, and agents doing other work still never stop,
+   unload, or re-register `ai.freeside.daemon`.
+2. **The feature carries the material rule change.** The command uses the
+   installed app's registration boundary. This revises the 2026-09-26
+   menu-only owner decision because the Wave 8 exit run repeatedly stalled
+   waiting for menu input that an agent could not provide.
 
-(Owner decisions of 2026-10-11, #1925;
-[decision note](../devlog/2026-10-11-1145-retire-blocked-items.md).)
+(Owner decisions of 2026-10-13, #1988;
+[decision note](../devlog/2026-10-13-0806-daemon-lifecycle-command.md).)
 
 ## 14. Risks
 

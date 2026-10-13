@@ -135,8 +135,11 @@ with a partial run.
 - **Credentials are live:** the Codex reviewer token and the provider auth
   identity. An expired token fails at composition preflight, after
   onboarding and image work are already spent (#1363).
-- **The supervised daemon is stopped** through the Freeside menu or
-  `launchctl`, before the harness acquires the rig, and the restore path is
+- **The supervised daemon is stopped** with
+  `"$HOME/Applications/Freeside.app/Contents/MacOS/FreesideMac" daemon stop`
+  (require exit 0), or by the operator through the Freeside menu, before the
+  harness acquires the rig. This operator-started exit run authorizes the
+  lifecycle command under plan §10. The restore path is
   known (docs/production-walkthrough.md, Restore The Supervised Daemon).
 - **Clients are rebuilt and installed from the tip** on both the Mac and the
   physical iPhone, and both are on the tailnet the daemon will listen on. A
@@ -291,9 +294,12 @@ merge, and an external review can only be posted before it. So:
   the harness died first, use `real-work-session.sh recover` rather than a
   fresh session; a session the host killed is recoverable and a second
   session would not be this run's evidence.
-- Verify the supervised daemon is restored, not just requested: restoration
-  has timed out with `registered=false` more than once, and relaunching the
-  Mac client can re-register the normal daemon beside a campaign daemon.
+- Verify the restore helper completed: it now runs the installed app's
+  `daemon start` after rig release and checks registration and health. Run
+  `"$HOME/Applications/Freeside.app/Contents/MacOS/FreesideMac" daemon status`
+  and require `registration=enabled health=reachable` with exit 0. Handle
+  pending Login Items approval or a missing/current-app diagnostic before
+  retrying; do not start production before the campaign has released its rig.
 - Ask the operator for screenshots of anything visually wrong; they attach
   to the finding issue and are the only evidence a client defect leaves.
 

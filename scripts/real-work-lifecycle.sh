@@ -357,7 +357,7 @@ real_work_restore_supervised() {
 			return 1
 		fi
 	fi
-	bash "$session/restore-supervised-daemon.sh" 2>&1 | tee -a "$session/restore.log" || return 1
+	bash "$session/restore-supervised-daemon.sh" "$installed" 2>&1 | tee -a "$session/restore.log" || return 1
 	if [[ -f "$session/runtime-upgrade-started" || -f "$session/runtime-upgrade-inherited" ]]; then
 		curl --fail --silent --show-error --max-time 2 http://127.0.0.1:7331/health >"$session/restored-health.json" &&
 			python3 "$session/real-work-retained.py" health "$session/restored-health.json" "$(cat "$version")"

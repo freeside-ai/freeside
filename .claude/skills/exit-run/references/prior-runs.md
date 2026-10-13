@@ -67,15 +67,15 @@ Look for each of these before and during the run; most have bitten twice.
 - **Restore is not proved by asking.** Supervised restoration has timed out
   with `registered=false` more than once; verify registration and `/health`
   on the normal port before calling the session complete.
-- **Hand over the menu Start step at restore.** `complete` only requests
-  completion; the foreground harness then stops the campaign daemon,
-  releases the rig, and runs the restore helper, which prints "Restore the
-  supervised daemon from the installed Freeside menu: ... choose Start" and
-  waits 120 s. Watch the harness output and tell the operator to choose
-  Start when that prompt appears, not before: an early Start can launch
-  the supervised daemon while the run is still cleaning up. Run-114 never
-  handed it over and stalled at `registered=false`, which is probably why
-  earlier runs stalled too.
+- **Watch the automatic restore result.** `complete` only requests completion;
+  the foreground harness then stops the campaign daemon, releases the rig,
+  and runs the restore helper. Run-114 stalled at the former menu Start
+  handoff with `registered=false`. The helper now runs the installed app's
+  `daemon start` itself, with one stop/start retry for an unresponsive
+  registered daemon. Watch for a nonzero result: approval requires the
+  operator, and a missing or old app requires an install. Verify registration
+  and health after the helper returns. Never start production before rig
+  release.
 - **Auto-update prunes a pinned CLI.** A judgment pin that points into
   Claude Code's auto-updated `versions/` directory disappears between runs.
   Copy the binary into the run root and pin that copy by path and SHA256.
@@ -154,8 +154,10 @@ Look for each of these before and during the run; most have bitten twice.
   control drives the Ephemeral client's cards without taking the pointer,
   so it is safe on a shared Mac. The card's More Actions menu and the
   menu-bar Start and Stop need full-screen control, which the owner
-  approves each time (#1988). Record that the spine, not the operator,
-  drove: a card the spine reads is not an operator's unprompted reading.
+  approves each time. Use the installed app's `daemon stop` and `daemon
+  start` commands for the exit run's supervised lifecycle steps (#1988).
+  Record that the spine, not the operator, drove: a card the spine reads
+  is not an operator's unprompted reading.
 - **The liveness probe logs its own notices.** `probe.log` beside the
   installed probe script records "sent recovered notice"; read it to
   confirm the recovery notice after restoration.

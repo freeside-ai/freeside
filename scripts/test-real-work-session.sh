@@ -21,6 +21,29 @@ printf 'health\n' >>"$FIXTURE/events"
 printf '{"status":"ok","version":"%s"}\n' "${HEALTH_BUILD:-reviewed-build}"
 STUB
 chmod +x "$tmp/bin/launchctl" "$tmp/bin/curl"
+export FREESIDE_REAL_RUN_RESTORE_APP="$tmp/bin/FreesideMac"
+cat >"$FREESIDE_REAL_RUN_RESTORE_APP" <<'STUB'
+#!/usr/bin/env bash
+printf 'command %s\n' "$1 $2" >>"$FIXTURE/events"
+[[ "${FREESIDE_ENV:-}" == prod ]] || exit 78
+case "$RESTORE_MODE" in
+approval) echo 'action=start registration=requires_approval health=unknown error=login_items_approval_required'; exit 3 ;;
+registration-failure) echo 'action=start registration=not_found health=unknown error=service_operation_failed'; exit 1 ;;
+old-app) exec sleep 30 ;;
+old-output) echo 'not a lifecycle result'; exit 0 ;;
+retry)
+  if [[ "$2" == start && ! -f "$FIXTURE/retried" ]]; then
+    touch "$FIXTURE/retried"
+    echo 'action=start registration=enabled health=unreachable error=timeout'; exit 4
+  fi ;;
+esac
+if [[ "$2" == stop ]]; then
+  echo 'action=stop registration=not_registered health=unreachable'
+else
+  echo 'action=start registration=enabled health=reachable'
+fi
+STUB
+chmod +x "$FREESIDE_REAL_RUN_RESTORE_APP"
 
 new_session() {
 	export FIXTURE=$tmp/$1 RESTORE_MODE=ok
@@ -53,7 +76,7 @@ STUB
 
 run_recovery() {
 	set +e
-	bash "$FIXTURE/real-work-session.sh" recover "$FIXTURE" >"$FIXTURE/output" 2>&1
+	bash "$FIXTURE/real-work-session.sh" recover "$FIXTURE" "$@" >"$FIXTURE/output" 2>&1
 	rc=$?
 	set -e
 }
@@ -71,10 +94,16 @@ run_recovery
 grep -q '^earlier cleanup diagnostic$' "$FIXTURE/rig-cleanup.log"
 grep -q '^earlier restore diagnostic$' "$FIXTURE/restore.log"
 events=$(tr '\n' ' ' <"$FIXTURE/events")
-[[ "$events" == "rig rig recover -state-root $FIXTURE/state -confirm launchctl enable gui/$(id -u)/ai.freeside.daemon launchctl print gui/$(id -u)/ai.freeside.daemon health " ]]
+[[ "$events" == "rig rig recover -state-root $FIXTURE/state -confirm launchctl enable gui/$(id -u)/ai.freeside.daemon command daemon start launchctl print gui/$(id -u)/ai.freeside.daemon health " ]]
 run_recovery
 [[ "$rc" == 0 && "$(grep -c '^rig ' "$FIXTURE/events")" == 1 ]]
 bash "$FIXTURE/real-work-session.sh" complete "$FIXTURE" >>"$FIXTURE/output"
+
+for tier in dev ephemeral; do
+	new_session "restore-from-$tier"
+	FREESIDE_ENV=$tier run_recovery
+	[[ "$rc" == 0 && "$(cat "$FIXTURE/status")" == completed ]]
+done
 
 new_session reviewed-recovery-binary
 cp "$FIXTURE/freesided" "$FIXTURE/reviewed-freesided"
@@ -99,7 +128,7 @@ for refusal in live-database live-listener live-holder resource-remains hang; do
 	touch "$FIXTURE/$refusal"
 	run_recovery
 	[[ "$rc" != 0 && -f "$FIXTURE/manifest" && -x "$FIXTURE/freesided" ]]
-	if grep -q '^launchctl' "$FIXTURE/events"; then
+	if grep -Eq '^(launchctl|command)' "$FIXTURE/events"; then
 		echo 'restoration ran after refused recovery' >&2
 		exit 1
 	fi
@@ -157,6 +186,25 @@ for mode in failure approval registration-failure timeout; do
 	grep -q '^earlier restore diagnostic$' "$FIXTURE/restore.log"
 done
 
+new_session restore-retry
+export RESTORE_MODE=retry
+run_recovery
+[[ "$rc" == 0 ]]
+[[ "$(grep '^command ' "$FIXTURE/events" | tr '\n' ' ')" == 'command daemon start command daemon stop command daemon start ' ]]
+
+for mode in old-app old-output missing; do
+	new_session "restore-$mode"
+	export RESTORE_MODE=$mode
+	started=$SECONDS
+	if [[ "$mode" == missing ]]; then
+		FREESIDE_REAL_RUN_RESTORE_APP="$tmp/missing" run_recovery
+	else
+		run_recovery
+	fi
+	[[ "$rc" != 0 && $((SECONDS - started)) -lt 5 ]]
+	grep -q 'install the current app' "$FIXTURE/restore.log"
+done
+
 cat >"$tmp/bin/go" <<'STUB'
 #!/usr/bin/env bash
 [[ "$1 $2" == 'tool buildid' ]] || exit 2
@@ -181,12 +229,12 @@ touch "$FIXTURE/runtime-upgrade-started" "$FIXTURE/old-installed"
 export FREESIDE_REAL_RUN_RESTORE_DAEMON="$FIXTURE/installed"
 run_recovery
 [[ "$rc" != 0 && "$(cat "$FIXTURE/status")" == recovery-required && -f "$FIXTURE/rig-release-verified" ]]
-if grep -q '^launchctl ' "$FIXTURE/events"; then echo 'old binary was restored' >&2; exit 1; fi
+if grep -Eq '^(launchctl|command) ' "$FIXTURE/events"; then echo 'old binary was restored' >&2; exit 1; fi
 rm "$FIXTURE/old-installed"
 touch "$FIXTURE/schema-refusal"
 run_recovery
 [[ "$rc" != 0 && "$(cat "$FIXTURE/status")" == recovery-required ]]
-if grep -q '^launchctl ' "$FIXTURE/events"; then echo 'incompatible schema was restored' >&2; exit 1; fi
+if grep -Eq '^(launchctl|command) ' "$FIXTURE/events"; then echo 'incompatible schema was restored' >&2; exit 1; fi
 rm "$FIXTURE/schema-refusal"
 export HEALTH_BUILD=old-build
 run_recovery
@@ -195,6 +243,38 @@ export HEALTH_BUILD=reviewed-build
 run_recovery
 [[ "$rc" == 0 && "$(cat "$FIXTURE/status")" == completed ]]
 [[ "$(grep -c '^rig ' "$FIXTURE/events")" == 1 ]]
+
+# The selected installed daemon and the app that restores it must share a bundle.
+# Guard the helper's Python invocation so a regression cannot run the user's app.
+alternate_bundle="$tmp/Alternate Install/Freeside.app/Contents"
+mkdir -p "$alternate_bundle/Resources" "$alternate_bundle/MacOS"
+cp "$FIXTURE/installed" "$alternate_bundle/Resources/freesided"
+cp "$FREESIDE_REAL_RUN_RESTORE_APP" "$alternate_bundle/MacOS/FreesideMac"
+alternate_daemon="$alternate_bundle/Resources/freesided"
+RESTORE_FIXTURE_PYTHON=$(command -v python3)
+export RESTORE_FIXTURE_PYTHON
+export EXPECTED_RESTORE_APP="$alternate_bundle/MacOS/FreesideMac"
+mkdir "$tmp/guard-bin"
+cat >"$tmp/guard-bin/python3" <<'STUB'
+#!/usr/bin/env bash
+if [[ "$1" == - && $# == 3 && "$2" =~ ^[0-9]+$ && "$3" != "$EXPECTED_RESTORE_APP" ]]; then
+  echo 'fixture refused a restore command outside the selected app' >&2
+  exit 99
+fi
+exec "$RESTORE_FIXTURE_PYTHON" "$@"
+STUB
+chmod +x "$tmp/guard-bin/python3"
+PATH="$tmp/guard-bin:$PATH" FREESIDE_REAL_RUN_RESTORE_APP='' \
+	FREESIDE_REAL_RUN_RESTORE_DAEMON="$alternate_daemon" run_recovery
+[[ "$rc" == 0 && "$(cat "$FIXTURE/status")" == completed ]]
+PATH="$tmp/guard-bin:$PATH" FREESIDE_REAL_RUN_RESTORE_APP='' \
+	FREESIDE_REAL_RUN_RESTORE_DAEMON="$FIXTURE/wrong-daemon" run_recovery "$alternate_daemon"
+[[ "$rc" == 0 && "$(cat "$FIXTURE/status")" == completed ]]
+command_count=$(grep -c '^command ' "$FIXTURE/events")
+PATH="$tmp/guard-bin:$PATH" FREESIDE_REAL_RUN_RESTORE_APP='' run_recovery "$FIXTURE/installed"
+[[ "$rc" != 0 && "$(grep -c '^command ' "$FIXTURE/events")" == "$command_count" ]]
+grep -q 'installed daemon must be an absolute app-bundle' "$FIXTURE/restore.log"
+
 # select-target records the operator's client-task choice for the foreground
 # client-target harness. It only applies while awaiting a target, writes the
 # request atomically, refuses bad IDs, and never allows a second selection.
