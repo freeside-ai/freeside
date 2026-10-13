@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 
 // Config binds the inference boundary once at daemon composition.
 type Config struct {
+	Logger     *slog.Logger
 	StatePath  string
 	AnchorPath string
 	// Roles resolves each call's role through the lineup. Nil is the
@@ -41,6 +43,7 @@ type AdvisoryWriter interface {
 
 // Client validates and accounts every daemon-side inference call.
 type Client struct {
+	logger     *slog.Logger
 	roles      RoleSource
 	health     HealthReporter
 	callLaunch domain.CallLaunch
@@ -57,6 +60,9 @@ type Client struct {
 // Driver, is permitted and represents the explicit inference-down state;
 // every such call returns its site fallback.
 func New(cfg Config) (*Client, error) {
+	if cfg.Logger == nil {
+		cfg.Logger = slog.New(slog.DiscardHandler)
+	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
@@ -155,7 +161,8 @@ func New(cfg Config) (*Client, error) {
 		return nil, err
 	}
 	return &Client{
-		roles: cfg.Roles, health: cfg.Health, callLaunch: callLaunch,
+		logger: cfg.Logger,
+		roles:  cfg.Roles, health: cfg.Health, callLaunch: callLaunch,
 		sites: sites, siteRoles: siteRoles, ledger: ledger, advisory: cfg.Advisory,
 		now: cfg.Now, inFlight: map[string]bool{},
 	}, nil
@@ -183,10 +190,6 @@ type admittedCall struct {
 	// launch is the model and effort the driver passes for the admitted agent.
 	launch domain.AgentLaunchSelection
 }
-
-// errRoleUnbound is the fixed fallback reason for a role that could not be
-// admitted. The specific reason goes to the health item, not the result.
-var errRoleUnbound = errors.New("judgment role has no admissible lineup line")
 
 // admit resolves the site's role and runs the wardless admission on what the
 // source returned. The source's answer is input, not a verdict: the prompt
@@ -285,7 +288,24 @@ func admitRole(
 // Call enforces the site allowlist, sensitivity declaration, the role's
 // admission through the lineup, redaction, cumulative budgets, output bounds,
 // schema, producer label, and audit sample.
-func (c *Client) Call(ctx context.Context, siteID, project, root string, fields map[string]InputField) (CallResult, error) {
+func (c *Client) Call(ctx context.Context, siteID, project, root string, fields map[string]InputField) (result CallResult, err error) {
+	defer func() {
+		if !result.Fallback {
+			return
+		}
+		level := slog.LevelWarn
+		if result.Reason == FallbackRoleOff || result.Reason == FallbackRoleSourceAbsent {
+			level = slog.LevelDebug
+		}
+		attrs := []any{
+			"site", siteID, "project", project, "root_lineage", root,
+			"producer", result.Producer, "reason", result.Reason,
+		}
+		if result.Identity != nil {
+			attrs = append(attrs, "record_id", result.Identity.RecordID)
+		}
+		c.logger.Log(ctx, level, "judgment call fell back", attrs...)
+	}()
 	site, ok := c.sites[siteID]
 	if !ok || project == "" || root == "" {
 		return CallResult{}, errors.New("unknown or unscoped inference call")
@@ -297,29 +317,29 @@ func (c *Client) Call(ctx context.Context, siteID, project, root string, fields 
 	for name, field := range fields {
 		maximum, permitted := allowed[name]
 		if !permitted || !field.Sensitivity.valid() || field.Sensitivity != maximum {
-			return fallback(site, unboundProducer, "outbound field policy rejected input"), nil
+			return fallback(site, unboundProducer, FallbackFieldPolicyRejected), nil
 		}
 		if !utf8.ValidString(field.Value) {
-			return fallback(site, unboundProducer, "outbound field is not valid UTF-8"), nil
+			return fallback(site, unboundProducer, FallbackFieldNotUTF8), nil
 		}
 	}
 	if len(fields) != len(site.Fields) {
-		return fallback(site, unboundProducer, "outbound field allowlist incomplete"), nil
+		return fallback(site, unboundProducer, FallbackFieldAllowlistIncomplete), nil
 	}
 	if c.roles == nil {
-		return fallback(site, unboundProducer, ErrUnavailable.Error()), nil
+		return fallback(site, unboundProducer, FallbackRoleSourceAbsent), nil
 	}
 	role := c.siteRoles[site.ID]
 	admitted, err := c.admit(ctx, site, role)
 	switch {
 	case errors.Is(err, ErrRoleOff):
 		c.reportResolved(ctx, role)
-		return fallback(site, unboundProducer, ErrUnavailable.Error()), nil
+		return fallback(site, unboundProducer, FallbackRoleOff), nil
 	case err != nil:
 		if c.health != nil {
 			c.health.RoleUnbound(ctx, role, err.Error())
 		}
-		return fallback(site, unboundProducer, errRoleUnbound.Error()), nil
+		return fallback(site, unboundProducer, FallbackRoleUnbound), nil
 	}
 	c.reportResolved(ctx, role)
 	outbound := make(map[string]string, len(fields))
@@ -332,19 +352,23 @@ func (c *Client) Call(ctx context.Context, siteID, project, root string, fields 
 	}
 	body, err := json.Marshal(outbound)
 	if err != nil || len(body) > site.MaxInputBytes {
-		return fallback(site, admitted.producer, "input size limit exceeded"), nil
+		return fallback(site, admitted.producer, FallbackInputTooLarge), nil
 	}
 	digest := contentaddr.Sum(body)
 	if admitted.driver == nil {
-		return fallback(site, admitted.producer, ErrUnavailable.Error()), nil
+		return fallback(site, admitted.producer, FallbackDriverAbsent), nil
 	}
 	if !c.beginDriver(site.ID) {
-		return fallback(site, admitted.producer, "inference driver call remains in flight"), nil
+		return fallback(site, admitted.producer, FallbackCallInFlight), nil
 	}
 	record, err := c.ledger.reserveCall(site, project, root, admitted.producer, digest, admitted.identity)
 	if err != nil {
 		c.endDriver(site.ID)
-		return fallback(site, admitted.producer, err.Error()), nil
+		reason := FallbackLedgerUnavailable
+		if errors.Is(err, errBudgetExhausted) {
+			reason = FallbackBudgetExhausted
+		}
+		return fallback(site, admitted.producer, reason), nil
 	}
 	identity := &CallIdentity{
 		RecordID: record.ID, Role: role, AgentDigest: admitted.identity.Admission.AgentDigest,
@@ -352,7 +376,7 @@ func (c *Client) Call(ctx context.Context, siteID, project, root string, fields 
 		TreatmentDigest:    admitted.identity.TreatmentDigest,
 		SiteContractDigest: admitted.identity.SiteContractDigest,
 	}
-	fail := func(reason string) CallResult {
+	fail := func(reason FallbackReason) CallResult {
 		result := fallback(site, admitted.producer, reason)
 		result.Identity = identity
 		return result
@@ -388,36 +412,42 @@ func (c *Client) Call(ctx context.Context, siteID, project, root string, fields 
 	case result := <-completed:
 		defer c.endDriver(site.ID)
 		if result.err != nil {
-			return fail(ErrUnavailable.Error()), nil
+			if errors.Is(result.err, context.DeadlineExceeded) || errors.Is(callCtx.Err(), context.DeadlineExceeded) {
+				return fail(FallbackDeadlineExceeded), nil
+			}
+			return fail(FallbackDriverFailed), nil
 		}
 		response = result.response
 	case <-callCtx.Done():
 		close(abandoned)
-		return fail(ErrUnavailable.Error()), nil
+		if errors.Is(callCtx.Err(), context.DeadlineExceeded) {
+			return fail(FallbackDeadlineExceeded), nil
+		}
+		return fail(FallbackDriverFailed), nil
 	}
 	if len(response.Output) > site.MaxOutputBytes || response.ComputeUnits < 0 ||
 		response.ComputeUnits > site.MaxComputeUnits || !response.Observed.valid() {
-		return fail("driver response exceeded contract"), nil
+		return fail(FallbackResponseExceededContract), nil
 	}
 	// The observation is recorded for every answer within the contract,
 	// whether or not its output then passes the schema: what answered is a
 	// fact about the call, not about the answer's quality.
 	if err := c.ledger.recordObserved(record.ID, observedFrom(response.Observed)); err != nil {
-		return fail("call record persistence failed"), err
+		return fail(FallbackCallRecordPersistenceFailed), err
 	}
 	if err := site.ValidateOutput(response.Output); err != nil {
-		result := fail("output schema rejected response")
+		result := fail(FallbackOutputSchemaRejected)
 		var refusal *authorOutputRefusal
 		if site.ID == PublicationAuthorExplainSiteID && errors.As(err, &refusal) {
 			result.AuthorOutputRefusalReason = refusal.reason
 		}
 		return result, nil
 	}
-	result := CallResult{
+	result = CallResult{
 		Output: bytes.Clone(response.Output), Producer: admitted.producer, InputDigest: digest, Identity: identity,
 	}
 	if err := c.audit(ctx, site, record, result); err != nil {
-		return fail("audit persistence failed"), err
+		return fail(FallbackAuditPersistenceFailed), err
 	}
 	return result, nil
 }
@@ -560,7 +590,7 @@ func (c *Client) endDriver(siteID string) {
 	delete(c.inFlight, siteID)
 }
 
-func fallback(site Site, producer, reason string) CallResult {
+func fallback(site Site, producer string, reason FallbackReason) CallResult {
 	return CallResult{Producer: producer, Fallback: true, Reason: reason, Output: []byte(site.FailSafe)}
 }
 

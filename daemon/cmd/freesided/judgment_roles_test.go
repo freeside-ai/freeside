@@ -125,7 +125,7 @@ func TestJudgmentSitesReadTheAdoptedLineup(t *testing.T) {
 		})
 		return tree
 	}
-	const unbound = "judgment role has no admissible lineup line"
+	const unbound = inference.FallbackRoleUnbound
 
 	f.withStore(t, func(st *store.Store) {
 		now := func() time.Time { return time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC) }
@@ -271,7 +271,7 @@ func TestJudgmentSitesReadTheAdoptedLineup(t *testing.T) {
 		authorSites := []inference.Site{sites[6], sites[7]}
 		off := newClient(adopted, judgmentRuntime{Driver: driver}, health)
 		for _, site := range authorSites {
-			if result := call(off, site); !result.Fallback || result.Reason != inference.ErrUnavailable.Error() {
+			if result := call(off, site); !result.Fallback || result.Reason != inference.FallbackRoleOff {
 				t.Fatalf("%s with no prompt file = %+v", site.ID, result)
 			}
 		}

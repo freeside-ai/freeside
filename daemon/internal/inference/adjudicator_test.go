@@ -104,6 +104,10 @@ func TestAdjudicatorRejectsEngineCompositionWithoutAllowedInput(t *testing.T) {
 	if !errors.Is(err, inference.ErrAdjudicationNotAvailable) || entries != nil {
 		t.Fatalf("AdjudicateFindings = %#v, %v", entries, err)
 	}
+	var refusal *inference.AdjudicationUnavailable
+	if !errors.As(err, &refusal) || refusal.Cause != inference.AdjudicationOutputRefused {
+		t.Fatalf("output refusal cause = %v", err)
+	}
 }
 
 func TestAdjudicatorAllowlistConvertsValidatedProposal(t *testing.T) {
@@ -215,6 +219,10 @@ func TestAdjudicatorRefusesExternalFindingAmongFindings(t *testing.T) {
 			}
 			if requests := driver.Requests(); len(requests) != 0 {
 				t.Fatalf("refused input reached the model: %#v", requests)
+			}
+			var refusal *inference.AdjudicationUnavailable
+			if !errors.As(err, &refusal) || refusal.Cause != inference.AdjudicationInputRefused {
+				t.Fatalf("input refusal cause = %v", err)
 			}
 		})
 	}
@@ -404,6 +412,11 @@ func TestAdjudicatorDeterministicFallbackIsSchemaValidEmptySet(t *testing.T) {
 		context.Background(), "project-1", "run-1", adjudicatorInput())
 	if !errors.Is(err, inference.ErrAdjudicationNotAvailable) || entries != nil {
 		t.Fatalf("inference-down fallback = %#v, %v", entries, err)
+	}
+	var refusal *inference.AdjudicationUnavailable
+	if !errors.As(err, &refusal) || refusal.Cause != inference.AdjudicationJudgmentFallback ||
+		refusal.Fallback != inference.FallbackDriverAbsent {
+		t.Fatalf("judgment fallback cause = %v", err)
 	}
 	if site := inference.AdjudicatorSite(testBudget(10)); site.FailSafe != `{"entries":[]}` ||
 		site.Timeout != 120*time.Second {

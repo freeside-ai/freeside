@@ -180,6 +180,7 @@ func New(st *store.Store, attention *signet.Service, driver exec.StageDriver, op
 		}
 	}
 	if e.productionPublication != nil {
+		e.productionPublication.logger = e.logger
 		e.productionPublication.beginTaskWork = e.BeginRunWork
 		if e.admission != nil && !e.productionPublication.holdOnly &&
 			e.productionDeliveryValidator == nil {

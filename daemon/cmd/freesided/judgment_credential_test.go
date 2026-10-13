@@ -438,7 +438,7 @@ func TestJudgmentCallsCarryTheirEnrollmentsToken(t *testing.T) {
 // drift auditor's blocking. The failure is not remembered: once the store is
 // readable the next call binds the role and resolves the item.
 func TestJudgmentRoleIsUnboundWhileItsCredentialCannotBeRead(t *testing.T) {
-	const unbound = "judgment role has no admissible lineup line"
+	const unbound = inference.FallbackRoleUnbound
 	volume := adoptClaudeVolume
 	failures := map[string]func(r *judgmentCredentialRig){
 		"the volume is gone": func(r *judgmentCredentialRig) { r.volumes.set(volume, nil) },

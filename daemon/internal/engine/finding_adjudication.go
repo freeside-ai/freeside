@@ -293,7 +293,7 @@ func (w *productionPublicationWorkflow) reconcileFindingAdjudicationWithDissent(
 
 	if len(residue) > 0 {
 		if w.findingAdjudicator == nil {
-			return w.parkUnacceptedFindingBatch(ctx, task, record)
+			return w.parkUnacceptedFindingBatch(ctx, task, record, parkAdjudicatorUnconfigured, "")
 		}
 		modelEntries, err := w.findingAdjudicator.Adjudicate(ctx, findingAdjudicationRequest{
 			RunID: record.RunID, Round: record.Round,
@@ -303,9 +303,12 @@ func (w *productionPublicationWorkflow) reconcileFindingAdjudicationWithDissent(
 			DeclaredPaths:             slices.Clone(declaredPaths), Dissent: dissent,
 			Findings: residue,
 		})
-		if err != nil || validateModelAdjudicationEntries(
-			residue, modelEntries, confidenceThreshold) != nil {
-			return w.parkUnacceptedFindingBatch(ctx, task, record)
+		if err != nil {
+			cause, fallback := adjudicationErrorCause(err)
+			return w.parkUnacceptedFindingBatch(ctx, task, record, cause, fallback)
+		}
+		if err := validateModelAdjudicationEntries(residue, modelEntries, confidenceThreshold); err != nil {
+			return w.parkUnacceptedFindingBatch(ctx, task, record, adjudicationValidationCause(err), "")
 		}
 		entries = append(entries, modelEntries...)
 	}
@@ -407,6 +410,7 @@ func (w *productionPublicationWorkflow) reviseFindingAdjudication(
 		feedback.Attachments, err = w.materializeFindingAdjudicationAttachments(
 			discussion.conversation, discussion.invocation.ThroughSequence)
 		if errors.Is(err, inference.ErrAdjudicationNotAvailable) {
+			w.logAdjudicationRefusal(ctx, task, record, parkInputRefused, "")
 			return prior, w.completeUnavailableFindingAdjudicationDiscussion(ctx, *discussion, prior)
 		}
 		if err != nil {
@@ -415,6 +419,8 @@ func (w *productionPublicationWorkflow) reviseFindingAdjudication(
 		entries, err = w.revisedFindingAdjudicationEntries(
 			ctx, binding, record, prior, baseRoot, candidateRoot, dissent, feedback)
 		if errors.Is(err, inference.ErrAdjudicationNotAvailable) {
+			cause, fallback := adjudicationErrorCause(err)
+			w.logAdjudicationRefusal(ctx, task, record, cause, fallback)
 			return prior, w.completeUnavailableFindingAdjudicationDiscussion(ctx, *discussion, prior)
 		}
 		if err != nil {
@@ -731,7 +737,10 @@ func (w *productionPublicationWorkflow) revisedFindingAdjudicationEntries(
 	}
 	threshold := resolvedFindingThreshold(binding.resolvedPolicy, findingConfidenceThresholdKey)
 	if err := validateModelAdjudicationEntries(residue, modelEntries, threshold); err != nil {
-		return nil, errors.Join(inference.ErrAdjudicationNotAvailable, err)
+		return nil, &adjudicationBatchRefusal{
+			cause: adjudicationValidationCause(err),
+			err:   errors.Join(inference.ErrAdjudicationNotAvailable, err),
+		}
 	}
 	return modelEntries, nil
 }
@@ -939,7 +948,9 @@ func findingAdjudicationReplySummary(
 
 func (w *productionPublicationWorkflow) parkUnacceptedFindingBatch(
 	ctx context.Context, task productionPublicationTask, record domain.ReviewRecord,
+	cause adjudicationParkCause, fallback inference.FallbackReason,
 ) (productionReviewGateState, error) {
+	w.logAdjudicationRefusal(ctx, task, record, cause, fallback)
 	// An external review cycle that cannot adjudicate ends as it does when it
 	// never tries: on a person, with the item naming the reviewer's findings.
 	if task.externalReviewFirstRound(record) {
