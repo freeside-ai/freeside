@@ -1,12 +1,31 @@
 package specify_test
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
 )
+
+func TestTranscriptToleratesBacktickEscape(t *testing.T) {
+	// The transcript is valid JSON; only the model's nested payload is malformed.
+	payload := "{\"specification\":{\"summary\":\"Validate header names.\",\"body\":\"RFC 7230 token characters include \\`.\",\"addressals\":[]}}"
+	record, err := json.Marshal(map[string]any{
+		"type": "result", "subtype": "success", "is_error": false, "result": payload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := specify.DecodeTranscript(strings.NewReader(string(record) + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Specification == nil || out.Specification.Body != "RFC 7230 token characters include `." {
+		t.Fatalf("specification = %+v", out.Specification)
+	}
+}
 
 func TestTranscriptRoundTrip(t *testing.T) {
 	want := specify.Output{Specification: &specify.Specification{

@@ -3,6 +3,7 @@ package specify_test
 import (
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -85,6 +86,134 @@ func TestDecodeOutputStrictAndExclusive(t *testing.T) {
 				t.Fatalf("error = %v, want %v", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestDecodeOutputToleratesBacktickEscape(t *testing.T) {
+	spec := func(body string) string {
+		return "{\"specification\":{\"summary\":\"s\",\"body\":\"" + body + "\",\"addressals\":[]}}"
+	}
+	accepted := []struct{ name, body, want string }{
+		{"body", "token \\` character", "token ` character"},
+		{"escaped backslash", "token \\\\` character", "token \\` character"},
+		{"escaped backslash and backtick", "token \\\\\\` character", "token \\` character"},
+		{"escaped quote", "say \\\"\\`\\\"", "say \"`\""},
+		{"unicode", "界\\`", "界`"},
+		{"trailing whitespace", "token \\` \\n", "token `"},
+		{"valid escapes", "\\\"\\\\\\/\\b\\f\\n\\r\\t\\u0061\\u0060x", "\"\\/\b\f\n\r\ta`x"},
+	}
+	for _, tc := range accepted {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, fenced := range []bool{false, true} {
+				payload := spec(tc.body)
+				if fenced {
+					payload = "```json\n" + payload + "\n```"
+				}
+				out, err := specify.DecodeOutput([]byte(payload))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if out.Specification.Body != tc.want {
+					t.Fatalf("body = %q, want %q", out.Specification.Body, tc.want)
+				}
+			}
+		})
+	}
+	t.Run("all specification prose", func(t *testing.T) {
+		payload := "{\"specification\":{\"title\":\"a\\`\",\"summary\":\"b\\`\",\"body\":\"c\\`\",\"addressals\":[{\"comment_id\":\"c1\",\"response\":\"d\\`\"}]}}"
+		out, err := specify.DecodeOutput([]byte(payload))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := out.Specification
+		if *s.Title != "a`" || s.Summary != "b`" || s.Body != "c`" || s.Addressals[0].Response != "d`" {
+			t.Fatalf("prose = %+v", s)
+		}
+	})
+	t.Run("reply", func(t *testing.T) {
+		out, err := specify.DecodeOutput([]byte("{\"reply\":\"Use \\`code\\`.\"}"))
+		if err != nil || out.Reply == nil || *out.Reply != "Use `code`." {
+			t.Fatalf("reply = %+v, %v", out, err)
+		}
+	})
+	malformed := spec("token \\` character")
+	rejected := []struct{ name, payload string }{
+		{"truncated", malformed[:len(malformed)-1]},
+		{"second object", malformed + "{}"},
+		{"unknown field", strings.Replace(malformed, "\"summary\"", "\"unknown\"", 1)},
+		{"invalid unicode", spec("\\`\\uZZZZ")},
+		{"invalid UTF-8", spec("\\`\xff")},
+		{"regex escape", spec("\\`\\d")},
+		{"quote escape", spec("\\`\\'")},
+		{"dollar escape", spec("\\`\\$")},
+		{"outside string", malformed + "\\`"},
+	}
+	for _, tc := range rejected {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := specify.DecodeOutput([]byte(tc.payload))
+			if err == nil || !strings.Contains(err.Error(), "output begins") {
+				t.Fatalf("error = %v, want failure with raw-output prefix", err)
+			}
+			prefix := tc.payload
+			if len(prefix) > 80 {
+				prefix = prefix[:80] + "…"
+			}
+			if !strings.Contains(err.Error(), "output begins "+strconv.Quote(prefix)) {
+				t.Fatalf("error lost the bounded raw prefix: %v", err)
+			}
+		})
+	}
+	for _, tc := range []struct{ name, payload string }{
+		{"fetch URL", "{\"fetch_requests\":[{\"url\":\"https://example.com/\\`\",\"purpose\":\"research\"}]}"},
+		{"comment ID", "{\"specification\":{\"summary\":\"s\",\"body\":\"b\",\"addressals\":[{\"comment_id\":\"c\\`\",\"response\":\"r\"}]}}"},
+		{"bare URL with repaired purpose", "{\"fetch_requests\":[{\"url\":\"https://example.com/`\",\"purpose\":\"research \\`\"}]}"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := specify.DecodeOutput([]byte(tc.payload)); !errors.Is(err, specify.ErrInvalidOutput) {
+				t.Fatalf("identifier error = %v, want ErrInvalidOutput", err)
+			}
+		})
+	}
+}
+
+func TestDecodeLegacyAddressalOutputToleratesBacktickEscape(t *testing.T) {
+	payload := "{\"specification\":{\"summary\":\"s\",\"body\":\"Use \\`code\\`.\",\"addressals\":[{\"comment\":\"Use \\`code\\`.\",\"response\":\"Added \\`code\\`.\"}]}}"
+	out, err := specify.DecodeLegacyAddressalOutput([]byte(payload), map[string]string{"Use `code`.": "c`"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Specification.Body != "Use `code`." || out.Specification.Addressals[0].CommentID != "c`" ||
+		out.Specification.Addressals[0].Response != "Added `code`." {
+		t.Fatalf("legacy specification = %+v", out.Specification)
+	}
+	for _, payload := range []string{
+		"{\"fetch_requests\":[{\"url\":\"https://example.com/\\`\",\"purpose\":\"research\"}]}",
+		"{\"reply\":\"\\`\\d\"}",
+		"{\"reply\":\"\\`\"}{}",
+	} {
+		if _, err := specify.DecodeLegacyAddressalOutput([]byte(payload), nil); err == nil {
+			t.Fatalf("legacy decoder accepted %q", payload)
+		}
+	}
+}
+
+func TestBacktickEscapePreservesInputLimitAndValidIdentifiers(t *testing.T) {
+	for _, decode := range []func([]byte) (specify.Output, error){
+		specify.DecodeOutput,
+		func(data []byte) (specify.Output, error) {
+			return specify.DecodeLegacyAddressalOutput(data, nil)
+		},
+	} {
+		payload := "{\"reply\":\"\\`\"}"
+		payload += strings.Repeat(" ", int(specify.MaxOutputBytes)+1-len(payload))
+		if _, err := decode([]byte(payload)); !errors.Is(err, strictjson.ErrLimitExceeded) {
+			t.Fatalf("oversized input error = %v, want ErrLimitExceeded", err)
+		}
+		payload = "{\"fetch_requests\":[{\"url\":\"https://example.com/`\",\"purpose\":\"research\"}]}"
+		out, err := decode([]byte(payload))
+		if err != nil || len(out.FetchRequests) != 1 || out.FetchRequests[0].URL != "https://example.com/`" {
+			t.Fatalf("valid identifier = %+v, %v", out, err)
+		}
 	}
 }
 
