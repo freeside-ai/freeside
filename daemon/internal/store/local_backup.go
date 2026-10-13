@@ -253,9 +253,21 @@ func (f *LocalBackupFiles) NewCheckpointHealthSource(
 		return nil, errors.New("encrypted checkpoint health: missing encryption key")
 	}
 	f.artifacts = artifacts
-	f.approvedRecipes = maps.Clone(approvedRecipes)
+	f.approvedRecipes = backupApprovedRecipes(approvedRecipes)
 	f.payloadExtractors = maps.Clone(payloadExtractors)
 	return newEncryptedCheckpointHealthSource(opts, f)
+}
+
+// backupApprovedRecipes preserves the compiled recipe approved by every store
+// open. GetArtifact checks eligibility before the proposal gate, so omitting
+// that recipe rejects healthy proposal evidence before its instance is checked.
+func backupApprovedRecipes(configured map[domain.Digest]bool) map[domain.Digest]bool {
+	approved := maps.Clone(configured)
+	if approved == nil {
+		approved = map[domain.Digest]bool{}
+	}
+	approved[domain.EffectProposalRecipeDigest] = true
+	return approved
 }
 
 // NewScopedCheckpointHealthSource narrows the initialized file set's recipe
@@ -265,9 +277,9 @@ func (f *LocalBackupFiles) NewScopedCheckpointHealthSource(requested map[domain.
 	if f == nil {
 		return nil, errors.New("encrypted checkpoint health: nil backup files")
 	}
-	approved := map[domain.Digest]bool{}
+	approved := map[domain.Digest]bool{domain.EffectProposalRecipeDigest: true}
 	for recipe, requested := range requested {
-		if requested && (recipe == domain.EffectProposalRecipeDigest || f.approvedRecipes[recipe]) {
+		if requested && f.approvedRecipes[recipe] {
 			approved[recipe] = true
 		}
 	}
@@ -315,7 +327,7 @@ func newLocalCheckpointHealthSource(
 	return &localCheckpointHealthSource{
 		files:             files,
 		artifacts:         opts.Artifacts,
-		approvedRecipes:   maps.Clone(opts.ApprovedRecipes),
+		approvedRecipes:   backupApprovedRecipes(opts.ApprovedRecipes),
 		payloadExtractors: maps.Clone(opts.PayloadExtractors),
 		checkpointMaxAge:  opts.CheckpointMaxAge,
 		restoreTestMaxAge: opts.RestoreTestMaxAge,
