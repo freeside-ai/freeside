@@ -13,9 +13,9 @@ delete a section that has nothing to say rather than leaving it empty.
 ## <Tracker Name> Exit Run: <Target> (<run label>)
 
 **<Bottom line: can the tracker close? If not, what stands between here and
-closure, in two sentences.>** Proposal: <the exit set (Required and
-Investigate) in one line, the deferred set in one line>. Dispositions below
-are a proposal until the owner adopts them.
+closure, in two sentences.>** Proposal: <every finding that isn't fixed
+in-run Deferred; the ones suggested to block on, in one line>. Dispositions
+below are a proposal until the owner adopts them.
 
 *Status revision <date>: <what changed since the comment was posted>.*
 
@@ -46,23 +46,34 @@ and the daemon's tests prove the condition raises the item.
 
 ### Findings
 
-Severity and exit disposition are separate. "Required" means merge before
-exit; "Investigate" means diagnose before exit and fix any proven gap;
-"Deferred" means deferral-labeled now and swept at the next planning.
+Severity and exit disposition are separate. "Deferred" means
+deferral-labeled now and swept at the next planning; the proposal defers
+every finding that isn't fixed in-run. The owner's answer can make one
+"Required" (merge before exit) or "Investigate" (diagnose before exit and
+fix any proven gap); those rows appear with the status revision that
+records it.
+
+**Suggested to block on:**
+
+- #<n>: <which stated outcome it contradicts, in one line>.
 
 | Issue | What's wrong | Sev | Lane | Disposition | Reason or trigger |
 | --- | --- | --- | --- | --- | --- |
 | #<n> | <one line> | P<1-3> | <lane> | Fixed in-run, PR #<n> | <why every run would hit it> |
-| #<n> | <one line> | P<1-3> | <lane> | Required | <which stated outcome it contradicts> |
-| #<n> | <one line> | P<1-3> | <lane> | Investigate | <what a proven gap would require> |
+| #<n> | <one line> | P<1-3> | <lane> | Deferred, suggested to block on | <which stated outcome it contradicts> |
 | #<n> | <one line> | P<1-3> | <lane> | Deferred | <trigger that promotes it> |
+| #<n> | <one line> | P<1-3> | <lane> | Required (owner, <date>) | <which stated outcome it contradicts> |
+| #<n> | <one line> | P<1-3> | <lane> | Investigate (owner, <date>) | <what a proven gap would require> |
 
 Not filed: <symptom>, covered by #<n>; <symptom>, appears covered by #<n>,
 please confirm.
 
 Conditionally blocking, needs one check before deciding: <#n: the check>.
 
-### Start Order (Proposal For The Exit Set)
+### Start Order (For The Adopted Exit Set)
+
+<Leave this section out of a proposal. Add it with the status revision that
+records the owner's Required and Investigate findings.>
 
 Prerequisites: <what is already merged; `main` at `<sha>`>.
 
