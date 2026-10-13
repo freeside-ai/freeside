@@ -2283,6 +2283,7 @@ func normalizeAttentionItem(item domain.AttentionItem) domain.AttentionItem {
 	if item.ReviewDispute != nil {
 		binding := *item.ReviewDispute
 		binding.FindingIDs = nonNilSlice(slices.Clone(binding.FindingIDs))
+		binding.Findings = slices.Clone(binding.Findings)
 		item.ReviewDispute = &binding
 	}
 	if item.SpecRevision != nil {

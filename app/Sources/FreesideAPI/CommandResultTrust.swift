@@ -81,8 +81,11 @@ public enum CommandResultTrust {
         case .snooze:
             guard let until = payload.snooze_until else { return payload.message ?? "" }
             return try RFC3339DateTranscoder().encode(until)
-        case .choose_alternative_route:
-            guard let choices = payload.alternative_choices else {
+        case .choose_alternative_route, .adjudicate_findings:
+            guard
+                let choices = payload.action == .adjudicate_findings
+                    ? payload.finding_routes : payload.alternative_choices
+            else {
                 return payload.message ?? ""
             }
             return String(

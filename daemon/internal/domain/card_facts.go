@@ -248,10 +248,27 @@ func (d HealthDiagnostic) Validate() error {
 // ReviewDisputeBinding identifies the disputed findings and the immutable
 // completion evidence for the bound review round.
 type ReviewDisputeBinding struct {
-	RunID              RunID       `json:"run_id"`
-	Round              int         `json:"round"`
-	FindingIDs         []FindingID `json:"finding_ids"`
-	CompletionEvidence Digest      `json:"completion_evidence"`
+	RunID              RunID             `json:"run_id"`
+	Round              int               `json:"round"`
+	FindingIDs         []FindingID       `json:"finding_ids"`
+	CompletionEvidence Digest            `json:"completion_evidence"`
+	Findings           []DisputedFinding `json:"findings,omitempty"`
+}
+
+// DisputedFinding carries the authenticated finding and the routes the person
+// can execute. External identity is attribution, never routing authority.
+type DisputedFinding struct {
+	FindingID     FindingID                `json:"finding_id"`
+	Message       string                   `json:"message"`
+	Location      *FindingLocation         `json:"location"`
+	Severity      FindingSeverity          `json:"severity"`
+	External      *DisputedFindingExternal `json:"external"`
+	OfferedRoutes []AdjudicationRoute      `json:"offered_routes"`
+}
+
+type DisputedFindingExternal struct {
+	ReviewerLogin string `json:"reviewer_login"`
+	ThreadID      string `json:"thread_id"`
 }
 
 // SpecDiff is the daemon-computed line diff from the last reviewed
@@ -635,6 +652,35 @@ func (b ReviewDisputeBinding) Validate() error {
 		}
 		seen[id] = struct{}{}
 	}
+	rows := make(map[FindingID]bool, len(b.Findings))
+	if len(b.Findings) > 0 && len(b.Findings) != len(b.FindingIDs) {
+		return ErrCardFactInconsistent
+	}
+	for _, finding := range b.Findings {
+		if _, ok := seen[finding.FindingID]; !ok || rows[finding.FindingID] ||
+			finding.Message == "" || !utf8.ValidString(finding.Message) || len(finding.OfferedRoutes) == 0 {
+			return ErrCardFactInconsistent
+		}
+		rows[finding.FindingID] = true
+		if finding.Location != nil {
+			if err := finding.Location.Validate(); err != nil {
+				return err
+			}
+		}
+		if finding.Severity != "" && !finding.Severity.valid() {
+			return ErrCardFactInconsistent
+		}
+		if finding.External != nil && (finding.External.ReviewerLogin == "" || finding.External.ThreadID == "") {
+			return ErrCardFactInconsistent
+		}
+		routes := make(map[AdjudicationRoute]bool)
+		for _, route := range finding.OfferedRoutes {
+			if (route != RouteRemediate && route != RouteDecline && route != RouteDefer) || routes[route] {
+				return ErrCardFactInconsistent
+			}
+			routes[route] = true
+		}
+	}
 	return nil
 }
 
@@ -676,6 +722,19 @@ func cloneReviewDisputeBinding(in *ReviewDisputeBinding) *ReviewDisputeBinding {
 	}
 	out := *in
 	out.FindingIDs = append([]FindingID(nil), in.FindingIDs...)
+	out.Findings = slices.Clone(in.Findings)
+	for index := range out.Findings {
+		row := &out.Findings[index]
+		row.OfferedRoutes = slices.Clone(row.OfferedRoutes)
+		if row.Location != nil {
+			value := *row.Location
+			row.Location = &value
+		}
+		if row.External != nil {
+			value := *row.External
+			row.External = &value
+		}
+	}
 	return &out
 }
 

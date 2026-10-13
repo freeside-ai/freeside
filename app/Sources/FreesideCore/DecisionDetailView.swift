@@ -955,6 +955,9 @@ struct DecisionDetailView: View {
             if let adjudication = item.finding_adjudication?.value1 {
                 findingCards(adjudication, register: register)
             }
+            if let findings = item.review_dispute?.value1.findings, !findings.isEmpty {
+                disputedFindingCards(findings)
+            }
         case .factBlock:
             factBlocks(item, register: register)
         case .summary:
@@ -2443,6 +2446,50 @@ struct DecisionDetailView: View {
         Self.selectedAlternatives(binding, selections: alternativeSelections)
     }
 
+    private func disputedFindingCards(_ findings: [Components.Schemas.DisputedFinding]) -> some View {
+        VStack(alignment: .leading, spacing: 20) {
+            ForEach(findings, id: \.finding_id) { finding in
+                VStack(alignment: .leading, spacing: 8) {
+                    UnverifiedLabel(text: "Finding", carriesInfo: false, rendersInteractiveControls: true)
+                    QuoteBlock {
+                        Text(finding.message)
+                            .font(FreesideFont.cardBody)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let location = finding.location?.value1 {
+                        Text(AttentionDisplay.findingLocation(location)).font(.caption)
+                    }
+                    Text(finding.severity.rawValue.isEmpty ? "Unrated" : finding.severity.rawValue)
+                        .font(.caption)
+                    if let external = finding.external {
+                        Text("\(external.reviewer_login) · \(external.thread_id)").font(.caption)
+                    }
+                    ChoiceList<Components.Schemas.AdjudicationRoute?>(
+                        accessibilityLabel: "Route for \(finding.message)",
+                        options: finding.offered_routes.map {
+                            .init(value: $0, label: AttentionDisplay.label($0), register: .item)
+                        },
+                        selection: Binding(
+                            get: { alternativeSelections[finding.finding_id] },
+                            set: { alternativeSelections[finding.finding_id] = $0 })
+                    )
+                    .disabled(!model.actionsEnabled)
+                }
+            }
+        }
+    }
+
+    private func selectedFindingRoutes(
+        _ findings: [Components.Schemas.DisputedFinding]
+    ) -> [Components.Schemas.AlternativeChoice] {
+        findings.compactMap { finding in
+            guard let route = alternativeSelections[finding.finding_id], finding.offered_routes.contains(route) else {
+                return nil
+            }
+            return .init(finding_id: finding.finding_id, route: route)
+        }
+    }
+
     static func selectedAlternatives(
         _ binding: Components.Schemas.FindingAdjudicationBinding,
         selections: [String: Components.Schemas.AdjudicationRoute]
@@ -2501,6 +2548,10 @@ struct DecisionDetailView: View {
         _ action: Components.Schemas.Action,
         item: Components.Schemas.AttentionItem
     ) -> Bool {
+        if action == .adjudicate_findings {
+            guard let findings = item.review_dispute?.value1.findings, !findings.isEmpty else { return false }
+            return selectedFindingRoutes(findings).count == findings.count
+        }
         guard action == .choose_alternative_route else { return true }
         guard let binding = item.finding_adjudication?.value1 else { return false }
         return !selectedAlternatives(binding).isEmpty
@@ -3866,6 +3917,9 @@ struct DecisionDetailView: View {
         case .choose_alternative_route:
             guard let binding = item?.finding_adjudication?.value1 else { return }
             Task { await model.submitFindingAlternatives(selectedAlternatives(binding)) }
+        case .adjudicate_findings:
+            guard let findings = item?.review_dispute?.value1.findings else { return }
+            Task { await model.submitFindingRoutes(selectedFindingRoutes(findings)) }
         case .retry_with_capabilities:
             capabilityRetrySnapshot = model.snapshot
         default:

@@ -1132,13 +1132,22 @@ struct ChoiceList<Value: Hashable>: View {
     }
 
     private func move(by offset: Int) -> KeyPress.Result {
-        guard let index = options.firstIndex(where: { $0.value == selection }) else {
+        let selectedIndex = options.firstIndex(where: { $0.value == selection })
+        guard
+            let nextIndex = Self.indexAfterMoving(
+                optionCount: options.count, selectedIndex: selectedIndex, offset: offset)
+        else {
             return .ignored
         }
-        let next = index + offset
-        guard options.indices.contains(next) else { return .handled }
-        selection = options[next].value
+        selection = options[nextIndex].value
         return .handled
+    }
+
+    static func indexAfterMoving(optionCount: Int, selectedIndex: Int?, offset: Int) -> Int? {
+        guard optionCount > 0 else { return nil }
+        guard let selectedIndex else { return offset > 0 ? 0 : optionCount - 1 }
+        let nextIndex = selectedIndex + offset
+        return (0..<optionCount).contains(nextIndex) ? nextIndex : selectedIndex
     }
 }
 

@@ -713,7 +713,12 @@ struct RealDaemonConvergenceTests {
         // TestOpenPRNeedsAPRReference (signet policy_test.go) covers that
         // cell with and without the reference.
         func constructible(_ action: Components.Schemas.Action) -> Bool {
+            // Executable disputes require a persisted review, findings, and
+            // resolved scope, which the generic seed route cannot create.
+            // TestReviewDisputeHumanDecisionContinuesAndReplays and the external
+            // restart integration test exercise that authenticated action cell.
             action != .retry_with_capabilities && !(type == .publish_blocked && action == .open_pr)
+                && !(type == .review_dispute && action == .adjudicate_findings)
         }
         let constructibleAllowed = allowed.filter(constructible)
 

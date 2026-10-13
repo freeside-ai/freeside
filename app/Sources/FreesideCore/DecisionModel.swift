@@ -809,6 +809,10 @@ public final class DecisionModel {
         )
     }
 
+    public func submitFindingRoutes(_ routes: [Components.Schemas.AlternativeChoice]) async {
+        await submit(.adjudicate_findings, findingRoutes: routes)
+    }
+
     private func submit(
         _ action: Components.Schemas.Action,
         capabilityManifestDigest: String? = nil,
@@ -816,6 +820,7 @@ public final class DecisionModel {
         effectRevision: Components.Schemas.EffectProposalRevisionInput? = nil,
         snoozeUntil: Date? = nil,
         alternativeChoices: [Components.Schemas.AlternativeChoice]? = nil,
+        findingRoutes: [Components.Schemas.AlternativeChoice]? = nil,
         message: String? = nil,
         answerRoute: Components.Schemas.AnswerRoute? = nil,
         reviewedSnapshot: Components.Schemas.AttentionItemSnapshot? = nil,
@@ -830,6 +835,7 @@ public final class DecisionModel {
             (action == .retry_with_capabilities) == (capabilityManifestDigest != nil),
             (action == .snooze) == (snoozeUntil != nil),
             (action == .choose_alternative_route) == (alternativeChoices != nil),
+            (action == .adjudicate_findings) == (findingRoutes != nil),
             ([
                 .discuss, .request_changes, .answer_and_retry, .answer_without_retry,
                 .return_to_agent,
@@ -881,6 +887,7 @@ public final class DecisionModel {
                     },
                     snooze_until: snoozeUntil,
                     alternative_choices: alternativeChoices,
+                    finding_routes: findingRoutes,
                     decision_action_surface_digest: submittedSurface?.digest
                 ))
         )

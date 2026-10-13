@@ -832,10 +832,10 @@ struct DecisionCardComposition: Equatable {
             // claims stay below with the summary.
             return .init(
                 modules: [
-                    .comparison, .claims, .factBlock, .facts, .summary, .claims, .evidence,
+                    .comparison, .claims, .findingFacts, .factBlock, .facts, .summary, .claims, .evidence,
                     .details,
                 ],
-                actionInsertionIndex: 4,
+                actionInsertionIndex: 5,
                 reviewingActionInsertionIndex: nil,
                 leadsWithItsClaim: true)
         case .review_diminishing_returns:

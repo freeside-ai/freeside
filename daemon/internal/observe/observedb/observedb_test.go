@@ -995,8 +995,8 @@ func TestObserveSnapshotProjectsAdjudicationDispatch(t *testing.T) {
 			denominator++
 		case domain.AdjudicationProducerEngineModel:
 			denominator++
-		case domain.AdjudicationProducerModel:
-			// Pure model residue is visible in the projection but sits outside
+		case domain.AdjudicationProducerModel, domain.AdjudicationProducerHuman:
+			// Model and human decisions are visible in the projection but sit outside
 			// this ratio's engine-versus-engine_model contrast.
 		}
 	}

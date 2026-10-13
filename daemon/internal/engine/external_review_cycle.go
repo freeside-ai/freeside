@@ -276,8 +276,9 @@ func (w *productionPublicationWorkflow) escalateExternalReviewFindings(
 	if err := w.removeReviewWorkspace(record.InvocationID); err != nil {
 		return productionReviewPending, err
 	}
-	if err := w.putReviewAttention(
+	if err := w.putReviewAttentionWithID(
 		ctx, task, record, externalReviewVerdict(record), domain.AttentionReviewDispute,
+		productionReviewItemID(task.RunID, record.Round),
 	); err != nil {
 		return productionReviewPending, err
 	}

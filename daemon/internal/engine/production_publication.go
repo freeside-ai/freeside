@@ -4605,9 +4605,18 @@ func (w *productionPublicationWorkflow) putReviewAttention(
 	reason string,
 	itemType domain.AttentionType,
 ) error {
-	return w.putReviewAttentionWithID(
+	reason, err := w.withExternalReviewFindings(ctx, task, reason)
+	if err != nil {
+		return err
+	}
+	actions := []domain.Action{domain.ActionDiscuss, domain.ActionStop}
+	if record.Outcome == domain.ReviewFindings && !task.externalReviewFirstRound(record) {
+		actions = append([]domain.Action{domain.ActionAdjudicateFindings}, actions...)
+	}
+	return w.putReviewAttentionWithActionsAndID(
 		ctx, task, record, reason, itemType,
 		productionReviewItemID(task.RunID, record.Round),
+		actions, nil,
 	)
 }
 
@@ -4660,6 +4669,12 @@ func (w *productionPublicationWorkflow) putReviewAttentionWithActionsAndID(
 		}
 	}
 	var reviewBinding *domain.ReviewDisputeBinding
+	if itemType == domain.AttentionReviewDispute && slices.Contains(disputeActions, domain.ActionAdjudicateFindings) {
+		reviewBinding, err = w.routedReviewDisputeBinding(ctx, task, record)
+		if err != nil {
+			return err
+		}
+	}
 	if strings.HasPrefix(string(itemID), domain.PublicationContinuationItemPrefix) {
 		reviewBinding = &domain.ReviewDisputeBinding{RunID: record.RunID, Round: record.Round, FindingIDs: slices.Clone(record.FindingIDs), CompletionEvidence: record.CompletionEvidence}
 	}
@@ -4696,15 +4711,21 @@ func (w *productionPublicationWorkflow) putReviewAttentionWithActionsAndID(
 		if existing.Type != domain.AttentionReviewDispute {
 			return nil
 		}
+		if existing.Status == domain.StatusOpen && reviewBinding == nil &&
+			slices.Contains(disputeActions, domain.ActionAdjudicateFindings) {
+			reviewBinding, err = w.routedReviewDisputeBinding(ctx, task, record)
+			if err != nil {
+				return err
+			}
+		}
 		if agentClaims == nil {
 			if existing.Status == domain.StatusOpen &&
 				(!slices.Equal(existing.RequestedDecision, disputeActions) ||
-					(reviewBinding != nil && existing.ReviewDispute == nil)) {
+					(reviewBinding != nil && !reflect.DeepEqual(existing.ReviewDispute, reviewBinding))) {
 				repaired := *existing
 				repaired.RequestedDecision = disputeActions
-				if reviewBinding != nil && repaired.ReviewDispute == nil {
+				if reviewBinding != nil {
 					repaired.ReviewDispute = reviewBinding
-					repaired.Reason = reason
 				}
 				repaired.ItemVersion++
 				return w.attention.PutItem(ctx, repaired)
@@ -4720,7 +4741,8 @@ func (w *productionPublicationWorkflow) putReviewAttentionWithActionsAndID(
 			Subject: subject,
 			Type:    itemType, Priority: domain.PriorityNormal, Reason: reason,
 			RequestedDecision: actions, AgentClaims: agentClaims,
-			PRHeadSHA: task.HeadSHA, ItemVersion: existing.ItemVersion + 1,
+			ReviewDispute: reviewBinding,
+			PRHeadSHA:     task.HeadSHA, ItemVersion: existing.ItemVersion + 1,
 			InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
 			CreatedAt: &createdAt, DisplayNames: names,
 		}, w.approvedRecipes)
@@ -4730,7 +4752,7 @@ func (w *productionPublicationWorkflow) putReviewAttentionWithActionsAndID(
 		claimsMatch := reflect.DeepEqual(existing.AgentClaims, desired.AgentClaims)
 		digestsMatch := slices.Equal(existing.ArtifactDigests, desired.ArtifactDigests)
 		presentationMatches := slices.Equal(existing.RequestedDecision, desired.RequestedDecision) &&
-			existing.Reason == desired.Reason && claimsMatch && digestsMatch
+			existing.Reason == desired.Reason && claimsMatch && digestsMatch && reflect.DeepEqual(existing.ReviewDispute, desired.ReviewDispute)
 		if !presentationMatches && existing.Status != domain.StatusOpen {
 			return fmt.Errorf("review attention item %q presentation disagrees with run %q: %w",
 				itemID, task.RunID, domain.ErrParentKeyMismatch)
@@ -4744,6 +4766,7 @@ func (w *productionPublicationWorkflow) putReviewAttentionWithActionsAndID(
 			repaired.RequestedDecision = executableDisputeActions
 			repaired.Reason = desired.Reason
 			repaired.AgentClaims = desired.AgentClaims
+			repaired.ReviewDispute = desired.ReviewDispute
 			repaired.ArtifactDigests = desired.ArtifactDigests
 			repaired.ItemVersion++
 			return w.attention.PutItem(ctx, repaired)

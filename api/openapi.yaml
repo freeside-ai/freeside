@@ -3290,6 +3290,15 @@ components:
             Per-finding offered routes selected by choose_alternative_route.
             Findings omitted from this list retain their recommended route.
             Absent for every other action; finding IDs must be distinct.
+        finding_routes:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/AlternativeChoice"
+          description: >
+            Complete per-finding routes for adjudicate_findings. Every finding
+            in the dispute's findings list must occur exactly once, with an
+            offered route. Absent for every other action.
         task_lines:
           type: array
           minItems: 1
@@ -4868,6 +4877,12 @@ components:
       additionalProperties: false
       required: [run_id, round, finding_ids, completion_evidence]
       properties:
+        findings:
+          type: array
+          nullable: true
+          items:
+            $ref: "#/components/schemas/DisputedFinding"
+          description: Authenticated findings and executable routes for a routed dispute.
         run_id:
           type: string
           minLength: 1
@@ -4883,6 +4898,44 @@ components:
             minLength: 1
         completion_evidence:
           $ref: "#/components/schemas/Digest"
+
+    DisputedFinding:
+      type: object
+      description: A bound review finding and the routes the human may execute.
+      additionalProperties: false
+      required: [finding_id, message, location, severity, external, offered_routes]
+      properties:
+        finding_id:
+          type: string
+          minLength: 1
+        message:
+          type: string
+          minLength: 1
+        location:
+          allOf:
+            - $ref: "#/components/schemas/FindingLocation"
+          nullable: true
+        severity:
+          type: string
+          enum: ["", P0, P1, P2, P3]
+        external:
+          type: object
+          nullable: true
+          additionalProperties: false
+          required: [reviewer_login, thread_id]
+          properties:
+            reviewer_login:
+              type: string
+              minLength: 1
+            thread_id:
+              type: string
+              minLength: 1
+        offered_routes:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/AdjudicationRoute"
 
     AttentionItem:
       type: object
@@ -5164,6 +5217,10 @@ components:
             - $ref: "#/components/schemas/HealthDiagnostic"
         review_dispute:
           nullable: true
+          description: >
+            Routed disputes carry findings and offer adjudicate_findings for a
+            complete per-finding decision. Legacy shadow and continuation
+            bindings retain their own action sets.
           allOf:
             - $ref: "#/components/schemas/ReviewDisputeBinding"
         spec_revision:
@@ -6532,6 +6589,7 @@ components:
         - resolve_reenrollment
         - accept_recommended_route
         - choose_alternative_route
+        - adjudicate_findings
 
     Priority:
       type: string
@@ -6568,7 +6626,7 @@ components:
         The proposal's judgment and authority provenance. engine_model means
         the goal judgment and confidence came from the model while the engine
         independently derived the allowed remediation authority.
-      enum: [engine, model, engine_model]
+      enum: [engine, model, engine_model, human]
 
     AdjudicationConfidence:
       type: string

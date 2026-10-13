@@ -1609,6 +1609,15 @@ public actor MockServer {
                 throw MalformedCommandError(
                     commandID: command.command_id, reason: "snooze_until is not in the future")
             }
+        case .concludes(_) where payload.action == .adjudicate_findings:
+            guard let findings = current.item.review_dispute?.value1.findings,
+                let choices = payload.finding_routes, choices.count == findings.count,
+                choices.allSatisfy({ choice in
+                    findings.contains { $0.finding_id == choice.finding_id && $0.offered_routes.contains(choice.route) }
+                })
+            else {
+                throw InvalidFindingAdjudicationDecisionError(reason: "finding routes are incomplete or not offered")
+            }
         case .concludes(_) where payload.action == .choose_alternative_route:
             guard let binding = current.item.finding_adjudication?.value1,
                 let choices = payload.alternative_choices

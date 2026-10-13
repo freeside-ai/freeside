@@ -61,7 +61,7 @@ public enum AttentionFixtures {
         .review_diminishing_returns: [
             .finish_now, .apply_then_finish, .continue_under_policy, .convert_to_policy,
         ],
-        .review_dispute: [.approve, .discuss, .stop],
+        .review_dispute: [.approve, .discuss, .stop, .adjudicate_findings],
         .review_contradiction: [.recover_review],
         .review_configuration: [.adopt_review_configuration, .discuss, .stop],
         .finding_adjudication: [
@@ -99,12 +99,32 @@ public enum AttentionFixtures {
         .acknowledge, .run_doctor, .stop_unattended,
         .resume_unattended, .recover_review, .adopt_review_configuration,
         .resolve_reenrollment,
-        .accept_recommended_route, .choose_alternative_route,
+        .accept_recommended_route, .choose_alternative_route, .adjudicate_findings,
     ]
 
     /// The default mock inbox: one open item per Phase 1 type.
     public static func defaultInbox() -> [Components.Schemas.AttentionItemSnapshot] {
         phase1Types.map { fixture(type: $0) }
+    }
+
+    public static func routedReviewDispute() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = fixture(type: .review_dispute)
+        snapshot.item.id = "production-review-run-review_dispute-2"
+        snapshot.item.reason = "Choose a route for each disputed finding to continue the review."
+        snapshot.item.agent_claims = []
+        snapshot.item.artifact_digests = Array(Set(snapshot.item.evidence_snapshot.map(\.digest))).sorted()
+        snapshot.item.requested_decision = [.adjudicate_findings, .discuss, .stop]
+        snapshot.item.review_dispute?.value1.findings = [
+            .init(
+                finding_id: "finding-1", message: "A retry can apply the same update twice.",
+                location: .init(value1: .init(path: "daemon/update.go", start_line: 42, end_line: 45)),
+                severity: .P1, external: .init(reviewer_login: "reviewer", thread_id: "review-thread-1"),
+                offered_routes: [.remediate, .decline, ._defer]),
+            .init(
+                finding_id: "finding-2", message: "Document how operators recover interrupted updates.",
+                location: nil, severity: .P2, external: nil, offered_routes: [.decline, ._defer]),
+        ]
+        return snapshot
     }
 
     /// A published handoff deliberately joined to the sample task's current
@@ -826,7 +846,10 @@ public enum AttentionFixtures {
         }
         // The default hold was opened before publication, so it carries no
         // pull request reference and cannot offer open_pr.
-        let actions = type == .publish_blocked ? allowed.filter { $0 != .open_pr } : allowed
+        let actions =
+            type == .publish_blocked
+            ? allowed.filter { $0 != .open_pr }
+            : type == .review_dispute ? allowed.filter { $0 != .adjudicate_findings } : allowed
 
         // Every card keeps its referenced screenshot claim; cards whose type
         // carries §9's summary layer also get an inline text claim, whose

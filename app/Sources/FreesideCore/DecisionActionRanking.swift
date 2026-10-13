@@ -78,7 +78,7 @@ struct DecisionActionRanking: Equatable {
             .start, .start_with_changes, .approve_with_changes, .decline, .snooze, .acknowledge,
             .run_doctor, .stop_unattended, .resume_unattended, .recover_review,
             .adopt_review_configuration, .resolve_reenrollment,
-            .accept_recommended_route, .choose_alternative_route:
+            .accept_recommended_route, .choose_alternative_route, .adjudicate_findings:
             return false
         }
     }
@@ -96,7 +96,7 @@ struct DecisionActionRanking: Equatable {
             .return_to_agent, .start, .start_with_changes, .approve_with_changes, .acknowledge,
             .run_doctor, .recover_review, .adopt_review_configuration,
             .resolve_reenrollment, .accept_recommended_route,
-            .choose_alternative_route:
+            .choose_alternative_route, .adjudicate_findings:
             return false
         }
     }
@@ -120,7 +120,7 @@ struct DecisionActionRanking: Equatable {
             .return_to_agent, .start, .start_with_changes, .approve_with_changes, .acknowledge,
             .run_doctor, .recover_review, .adopt_review_configuration,
             .resolve_reenrollment, .accept_recommended_route,
-            .choose_alternative_route:
+            .choose_alternative_route, .adjudicate_findings:
             return .max
         }
     }

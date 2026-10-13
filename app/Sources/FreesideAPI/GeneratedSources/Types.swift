@@ -6556,6 +6556,11 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/DecisionPayload/alternative_choices`.
             public var alternative_choices: [Components.Schemas.AlternativeChoice]?
+            /// Complete per-finding routes for adjudicate_findings. Every finding in the dispute's findings list must occur exactly once, with an offered route. Absent for every other action.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/DecisionPayload/finding_routes`.
+            public var finding_routes: [Components.Schemas.AlternativeChoice]?
             /// Per-role agent choices for the task a start or start_with_changes decision on a task_proposal creates; at most one line per role. Absent for every other action and item type. The daemon does not yet apply lines from a decision and rejects a decision that carries this field with 400.
             ///
             ///
@@ -6583,6 +6588,7 @@ public enum Components {
             ///   - effect_proposal_revision: Typed closure revision, present only for approve_with_changes on a source_issue_closure effect proposal. The daemon preserves the proposal's target, provenance, and origin, and rebuilds the revised proposal from the prior one inside the accepting transaction.
             ///   - snooze_until: Typed UTC deferral instant, present only for snooze. The daemon requires a future canonical instant and records it in the proposal ledger.
             ///   - alternative_choices: Per-finding offered routes selected by choose_alternative_route. Findings omitted from this list retain their recommended route. Absent for every other action; finding IDs must be distinct.
+            ///   - finding_routes: Complete per-finding routes for adjudicate_findings. Every finding in the dispute's findings list must occur exactly once, with an offered route. Absent for every other action.
             ///   - task_lines: Per-role agent choices for the task a start or start_with_changes decision on a task_proposal creates; at most one line per role. Absent for every other action and item type. The daemon does not yet apply lines from a decision and rejects a decision that carries this field with 400.
             ///   - decision_action_surface_digest: The digest of the DecisionActionSurface the client rendered the decision from (plan §8). Optional comprehension telemetry: the daemon revalidates it against the live device, item decision surface, capability contract, and offered-action set, and stamps it onto the command's decision_evidence. It never widens the offered actions; it can only reject. Absent for a client build that does not adopt the action surface.
             public init(
@@ -6600,6 +6606,7 @@ public enum Components {
                 effect_proposal_revision: Components.Schemas.DecisionPayload.effect_proposal_revisionPayload? = nil,
                 snooze_until: Foundation.Date? = nil,
                 alternative_choices: [Components.Schemas.AlternativeChoice]? = nil,
+                finding_routes: [Components.Schemas.AlternativeChoice]? = nil,
                 task_lines: [Components.Schemas.TaskLineInput]? = nil,
                 decision_action_surface_digest: Swift.String? = nil
             ) {
@@ -6617,6 +6624,7 @@ public enum Components {
                 self.effect_proposal_revision = effect_proposal_revision
                 self.snooze_until = snooze_until
                 self.alternative_choices = alternative_choices
+                self.finding_routes = finding_routes
                 self.task_lines = task_lines
                 self.decision_action_surface_digest = decision_action_surface_digest
             }
@@ -6635,6 +6643,7 @@ public enum Components {
                 case effect_proposal_revision
                 case snooze_until
                 case alternative_choices
+                case finding_routes
                 case task_lines
                 case decision_action_surface_digest
             }
@@ -6696,6 +6705,10 @@ public enum Components {
                     [Components.Schemas.AlternativeChoice].self,
                     forKey: .alternative_choices
                 )
+                self.finding_routes = try container.decodeIfPresent(
+                    [Components.Schemas.AlternativeChoice].self,
+                    forKey: .finding_routes
+                )
                 self.task_lines = try container.decodeIfPresent(
                     [Components.Schemas.TaskLineInput].self,
                     forKey: .task_lines
@@ -6719,6 +6732,7 @@ public enum Components {
                     "effect_proposal_revision",
                     "snooze_until",
                     "alternative_choices",
+                    "finding_routes",
                     "task_lines",
                     "decision_action_surface_digest"
                 ])
@@ -10448,6 +10462,10 @@ public enum Components {
         ///
         /// - Remark: Generated from `#/components/schemas/ReviewDisputeBinding`.
         public struct ReviewDisputeBinding: Codable, Hashable, Sendable {
+            /// Authenticated findings and executable routes for a routed dispute.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ReviewDisputeBinding/findings`.
+            public var findings: [Components.Schemas.DisputedFinding]?
             /// - Remark: Generated from `#/components/schemas/ReviewDisputeBinding/run_id`.
             public var run_id: Swift.String
             /// - Remark: Generated from `#/components/schemas/ReviewDisputeBinding/round`.
@@ -10459,22 +10477,26 @@ public enum Components {
             /// Creates a new `ReviewDisputeBinding`.
             ///
             /// - Parameters:
+            ///   - findings: Authenticated findings and executable routes for a routed dispute.
             ///   - run_id:
             ///   - round:
             ///   - finding_ids:
             ///   - completion_evidence:
             public init(
+                findings: [Components.Schemas.DisputedFinding]? = nil,
                 run_id: Swift.String,
                 round: Swift.Int,
                 finding_ids: [Swift.String],
                 completion_evidence: Components.Schemas.Digest
             ) {
+                self.findings = findings
                 self.run_id = run_id
                 self.round = round
                 self.finding_ids = finding_ids
                 self.completion_evidence = completion_evidence
             }
             public enum CodingKeys: String, CodingKey {
+                case findings
                 case run_id
                 case round
                 case finding_ids
@@ -10482,6 +10504,10 @@ public enum Components {
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.findings = try container.decodeIfPresent(
+                    [Components.Schemas.DisputedFinding].self,
+                    forKey: .findings
+                )
                 self.run_id = try container.decode(
                     Swift.String.self,
                     forKey: .run_id
@@ -10499,10 +10525,159 @@ public enum Components {
                     forKey: .completion_evidence
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "findings",
                     "run_id",
                     "round",
                     "finding_ids",
                     "completion_evidence"
+                ])
+            }
+        }
+        /// A bound review finding and the routes the human may execute.
+        ///
+        /// - Remark: Generated from `#/components/schemas/DisputedFinding`.
+        public struct DisputedFinding: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/DisputedFinding/finding_id`.
+            public var finding_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/DisputedFinding/message`.
+            public var message: Swift.String
+            /// - Remark: Generated from `#/components/schemas/DisputedFinding/location`.
+            public struct locationPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/DisputedFinding/location/value1`.
+                public var value1: Components.Schemas.FindingLocation
+                /// Creates a new `locationPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.FindingLocation) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/DisputedFinding/location`.
+            public var location: Components.Schemas.DisputedFinding.locationPayload?
+            /// - Remark: Generated from `#/components/schemas/DisputedFinding/severity`.
+            @frozen public enum severityPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case _empty = ""
+                case P0 = "P0"
+                case P1 = "P1"
+                case P2 = "P2"
+                case P3 = "P3"
+            }
+            /// - Remark: Generated from `#/components/schemas/DisputedFinding/severity`.
+            public var severity: Components.Schemas.DisputedFinding.severityPayload
+            /// - Remark: Generated from `#/components/schemas/DisputedFinding/external`.
+            public struct externalPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/DisputedFinding/external/reviewer_login`.
+                public var reviewer_login: Swift.String
+                /// - Remark: Generated from `#/components/schemas/DisputedFinding/external/thread_id`.
+                public var thread_id: Swift.String
+                /// Creates a new `externalPayload`.
+                ///
+                /// - Parameters:
+                ///   - reviewer_login:
+                ///   - thread_id:
+                public init(
+                    reviewer_login: Swift.String,
+                    thread_id: Swift.String
+                ) {
+                    self.reviewer_login = reviewer_login
+                    self.thread_id = thread_id
+                }
+                public enum CodingKeys: String, CodingKey {
+                    case reviewer_login
+                    case thread_id
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    let container = try decoder.container(keyedBy: CodingKeys.self)
+                    self.reviewer_login = try container.decode(
+                        Swift.String.self,
+                        forKey: .reviewer_login
+                    )
+                    self.thread_id = try container.decode(
+                        Swift.String.self,
+                        forKey: .thread_id
+                    )
+                    try decoder.ensureNoAdditionalProperties(knownKeys: [
+                        "reviewer_login",
+                        "thread_id"
+                    ])
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/DisputedFinding/external`.
+            public var external: Components.Schemas.DisputedFinding.externalPayload?
+            /// - Remark: Generated from `#/components/schemas/DisputedFinding/offered_routes`.
+            public var offered_routes: [Components.Schemas.AdjudicationRoute]
+            /// Creates a new `DisputedFinding`.
+            ///
+            /// - Parameters:
+            ///   - finding_id:
+            ///   - message:
+            ///   - location:
+            ///   - severity:
+            ///   - external:
+            ///   - offered_routes:
+            public init(
+                finding_id: Swift.String,
+                message: Swift.String,
+                location: Components.Schemas.DisputedFinding.locationPayload? = nil,
+                severity: Components.Schemas.DisputedFinding.severityPayload,
+                external: Components.Schemas.DisputedFinding.externalPayload? = nil,
+                offered_routes: [Components.Schemas.AdjudicationRoute]
+            ) {
+                self.finding_id = finding_id
+                self.message = message
+                self.location = location
+                self.severity = severity
+                self.external = external
+                self.offered_routes = offered_routes
+            }
+            public enum CodingKeys: String, CodingKey {
+                case finding_id
+                case message
+                case location
+                case severity
+                case external
+                case offered_routes
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.finding_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .finding_id
+                )
+                self.message = try container.decode(
+                    Swift.String.self,
+                    forKey: .message
+                )
+                self.location = try container.decodeIfPresent(
+                    Components.Schemas.DisputedFinding.locationPayload.self,
+                    forKey: .location
+                )
+                self.severity = try container.decode(
+                    Components.Schemas.DisputedFinding.severityPayload.self,
+                    forKey: .severity
+                )
+                self.external = try container.decodeIfPresent(
+                    Components.Schemas.DisputedFinding.externalPayload.self,
+                    forKey: .external
+                )
+                self.offered_routes = try container.decode(
+                    [Components.Schemas.AdjudicationRoute].self,
+                    forKey: .offered_routes
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "finding_id",
+                    "message",
+                    "location",
+                    "severity",
+                    "external",
+                    "offered_routes"
                 ])
             }
         }
@@ -11026,6 +11201,9 @@ public enum Components {
             }
             /// - Remark: Generated from `#/components/schemas/AttentionItem/health_diagnostic`.
             public var health_diagnostic: Components.Schemas.AttentionItem.health_diagnosticPayload?
+            /// Routed disputes carry findings and offer adjudicate_findings for a complete per-finding decision. Legacy shadow and continuation bindings retain their own action sets.
+            ///
+            ///
             /// - Remark: Generated from `#/components/schemas/AttentionItem/review_dispute`.
             public struct review_disputePayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/AttentionItem/review_dispute/value1`.
@@ -11044,6 +11222,9 @@ public enum Components {
                     try self.value1.encode(to: encoder)
                 }
             }
+            /// Routed disputes carry findings and offer adjudicate_findings for a complete per-finding decision. Legacy shadow and continuation bindings retain their own action sets.
+            ///
+            ///
             /// - Remark: Generated from `#/components/schemas/AttentionItem/review_dispute`.
             public var review_dispute: Components.Schemas.AttentionItem.review_disputePayload?
             /// Authenticated revision facts for a revised spec_approval item; null on the initial approval and every other item type.
@@ -11233,7 +11414,7 @@ public enum Components {
             ///   - diff_stats:
             ///   - blocked_on: Retired with the `blocked` attention type (plan revision 84). Non-null only on a closed `blocked` item stored before the retirement.
             ///   - health_diagnostic:
-            ///   - review_dispute:
+            ///   - review_dispute: Routed disputes carry findings and offer adjudicate_findings for a complete per-finding decision. Legacy shadow and continuation bindings retain their own action sets.
             ///   - spec_revision: Authenticated revision facts for a revised spec_approval item; null on the initial approval and every other item type.
             ///   - agent_question: Typed question facts, present on every agent_question item and null on every other type.
             ///   - review_diminishing: Why the review loop stopped, on a review_diminishing_returns item; null on every other type. Also null on such an item stored before the facts existed and on one a review escalation raised, so a client must render the item without them.
@@ -13280,6 +13461,7 @@ public enum Components {
             case resolve_reenrollment = "resolve_reenrollment"
             case accept_recommended_route = "accept_recommended_route"
             case choose_alternative_route = "choose_alternative_route"
+            case adjudicate_findings = "adjudicate_findings"
         }
         /// Item priority. Provisional vocabulary (domain enums.go).
         ///
@@ -13331,6 +13513,7 @@ public enum Components {
             case engine = "engine"
             case model = "model"
             case engine_model = "engine_model"
+            case human = "human"
         }
         /// The proposal producer's confidence in its recommended route.
         ///

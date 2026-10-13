@@ -372,6 +372,7 @@ type decisionPayloadRequest struct {
 	EffectProposalRevision      *effectProposalRevisionRequest `json:"effect_proposal_revision"`
 	SnoozeUntil                 *time.Time                     `json:"snooze_until"`
 	AlternativeChoices          []AlternativeChoice            `json:"alternative_choices"`
+	FindingRoutes               []AlternativeChoice            `json:"finding_routes"`
 	TaskLines                   []domain.TaskLineChoice        `json:"task_lines"`
 	CapabilityManifestDigest    *domain.Digest                 `json:"capability_manifest_digest"`
 	AnswerRoute                 *domain.AnswerRoute            `json:"answer_route"`
@@ -482,6 +483,7 @@ func (h httpHandler) submitDecisionCommand(w http.ResponseWriter, r *http.Reques
 		TaskProposalRevision: arm.TaskProposalRevision,
 		SnoozeUntil:          arm.SnoozeUntil,
 		AlternativeChoices:   arm.AlternativeChoices,
+		FindingRoutes:        arm.FindingRoutes,
 		TaskLines:            arm.TaskLines,
 	}
 	if arm.EffectProposalRevision != nil {
@@ -890,6 +892,7 @@ func isCommandRequestError(err error) bool {
 		ErrActionNotAllowedForType, ErrUnsupportedAction,
 		ErrInvalidProposalDecisionPayload, ErrInvalidFindingAdjudicationDecisionPayload,
 		ErrAlternativeNotOffered, ErrInvalidCapabilityRetryDecisionPayload,
+		ErrInvalidReviewDisputeDecisionPayload, ErrFindingRouteNotOffered, ErrFindingRoutesIncomplete,
 		ErrCapabilityManifestNotOffered,
 		ErrMessageRequired, ErrContentNotAllowed, ErrAnswerRouteRequired, ErrAttachmentNotStored,
 		// A referenced action surface that does not match the command is

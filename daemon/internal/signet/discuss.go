@@ -39,6 +39,10 @@ const MaxDiscussCommandIDBytes = 256
 // aggregate protocol limit.
 const MaxRequestChangesCommandIDBytes = MaxDiscussCommandIDBytes
 
+// MaxAdjudicateFindingsCommandIDBytes bounds the decision identity that the
+// human adjudication artifact retains for replay.
+const MaxAdjudicateFindingsCommandIDBytes = MaxDiscussCommandIDBytes
+
 // AgentInvocationRequestedKind identifies a committed discuss invocation in
 // the durable outbox.
 const AgentInvocationRequestedKind = kindAgentInvocationRequested
@@ -100,7 +104,11 @@ func (s *Service) validateCommandContent(command domain.Command) error {
 		}
 		return nil
 	}
-	if command.Action == domain.ActionChooseAlternativeRoute {
+	if command.Action == domain.ActionChooseAlternativeRoute || command.Action == domain.ActionAdjudicateFindings {
+		if command.Action == domain.ActionAdjudicateFindings && len(command.CommandID) > MaxAdjudicateFindingsCommandIDBytes {
+			return fmt.Errorf("action %q command id is %d bytes: %w",
+				command.Action, len(command.CommandID), domain.ErrClaimTextTooLarge)
+		}
 		if len(command.Attachments) > 0 {
 			return fmt.Errorf("action %q: %w", command.Action, ErrContentNotAllowed)
 		}

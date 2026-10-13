@@ -27,7 +27,7 @@ func TestAdjudicationEnumRegistrationReferences(t *testing.T) {
 		len(domain.AllWorkUnitCompatibilities) != 5 ||
 		len(domain.AllProposedCompatibilities) != 4 ||
 		len(domain.AllAdjudicationRoutes) != 9 ||
-		len(domain.AllAdjudicationProducers) != 3 ||
+		len(domain.AllAdjudicationProducers) != 4 ||
 		len(domain.AllAdjudicationConfidences) != 3 ||
 		len(domain.AllDispatchThresholds) != 2 {
 		t.Fatalf("adjudication vocabulary sizes changed; update the §7 fixtures")
@@ -89,6 +89,8 @@ func TestAdjudicationRowCrossProduct(t *testing.T) {
 					_, rowValid := validAdjudicationRows[key]
 					wantValid := rowValid
 					switch producer {
+					case domain.AdjudicationProducerHuman:
+						wantValid = wantValid && (route == domain.RouteRemediate || route == domain.RouteDecline || route == domain.RouteDefer)
 					case domain.AdjudicationProducerEngine:
 						_, engineOK := engineFastPathRows[key]
 						wantValid = wantValid && engineOK
@@ -124,6 +126,9 @@ func TestAdjudicationRowCrossProduct(t *testing.T) {
 		want := len(engineFastPathRows)
 		if producer == domain.AdjudicationProducerModel {
 			want = len(validAdjudicationRows) - 1 // every row but the engine-only allowed row
+		}
+		if producer == domain.AdjudicationProducerHuman {
+			want = 3
 		}
 		if valid != want {
 			t.Fatalf("producer %s validated %d rows, want %d", producer, valid, want)
