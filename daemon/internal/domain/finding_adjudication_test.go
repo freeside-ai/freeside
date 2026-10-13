@@ -19,6 +19,46 @@ func adjDigest(seed string) domain.Digest {
 	return domain.Digest(contentaddr.Sum([]byte(seed)))
 }
 
+func TestAcceptFindingAdjudication(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		routes []domain.AdjudicationRoute
+		want   domain.FindingAdjudicationAcceptance
+	}{
+		{"remediate", []domain.AdjudicationRoute{domain.RouteRemediate}, domain.FindingAdjudicationAcceptance{Remediates: true}},
+		{"all remediate", []domain.AdjudicationRoute{domain.RouteRemediate, domain.RouteRemediate}, domain.FindingAdjudicationAcceptance{Remediates: true}},
+		{"defer and decline", []domain.AdjudicationRoute{domain.RouteDefer, domain.RouteDecline}, domain.FindingAdjudicationAcceptance{}},
+		{"remediate and defer", []domain.AdjudicationRoute{domain.RouteRemediate, domain.RouteDefer}, domain.FindingAdjudicationAcceptance{Remediates: true}},
+		{"dispute", []domain.AdjudicationRoute{domain.RouteDispute, domain.RouteRemediate, domain.RouteDefer}, domain.FindingAdjudicationAcceptance{ParksRun: true, Halted: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			entries := make([]domain.FindingAdjudicationEntry, len(tc.routes))
+			for i, route := range tc.routes {
+				entries[i].Route = route
+			}
+			if got := domain.AcceptFindingAdjudication(entries); got != tc.want {
+				t.Fatalf("accept = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+	for _, route := range []domain.AdjudicationRoute{
+		domain.RouteParkRevision, domain.RouteParkSeparateWork, domain.RouteAttentionHumanDecision,
+		domain.RouteParkUnknown, domain.RouteAttentionUnclear,
+	} {
+		t.Run(string(route), func(t *testing.T) {
+			entries := []domain.FindingAdjudicationEntry{{Route: route}}
+			want := domain.FindingAdjudicationAcceptance{ParksRun: true}
+			if got := domain.AcceptFindingAdjudication(entries); got != want {
+				t.Fatalf("single park = %+v, want %+v", got, want)
+			}
+			entries = append(entries, domain.FindingAdjudicationEntry{Route: domain.RouteRemediate})
+			if got := domain.AcceptFindingAdjudication(entries); got != want {
+				t.Fatalf("mixed park = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
 // TestAdjudicationEnumRegistrationReferences pins every new vocabulary's
 // registration slice so the enum-registration ratchet sees a test reference.
 func TestAdjudicationEnumRegistrationReferences(t *testing.T) {

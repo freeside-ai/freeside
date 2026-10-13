@@ -86,7 +86,7 @@ func (w *productionPublicationWorkflow) reconcileDriftAudit(
 	}
 	// The dispatch needs a routed finding, so a batch without one cannot
 	// carry a reversal list.
-	routedFix := len(remediationFindingIDs(artifact, routes)) > 0
+	routedFix := len(dispatchableRemediationFindingIDs(artifact, routes)) > 0
 	if diminishing.item != nil {
 		simplification, err := w.decidedDriftSimplification(
 			ctx, task, record, diminishing, routedFix, baseRoot, candidateRoot)

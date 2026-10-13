@@ -1243,13 +1243,6 @@ func findingAdjudicationReason(
 		line := fmt.Sprintf(
 			"Accepting starts a remediator that edits this PR. It may change only the run's allowed paths (%s), not just where a finding was reported. The updated PR is then reviewed again.",
 			summarizeAllowedPaths(allowedPaths))
-		if slices.ContainsFunc(artifact.Entries, func(entry domain.FindingAdjudicationEntry) bool {
-			return entry.Route.ParksRun()
-		}) {
-			// The engine dispatches the remediator whenever any finding
-			// remediates, so a Park route on the same card doesn't park the run.
-			line += " Findings routed to Park get no disposition and aren't fixed by accepting."
-		}
 		lines = append(lines, line)
 	default:
 		lines = append(lines, "Accepting records each finding's outcome, and the run continues.")
@@ -1270,11 +1263,9 @@ func findingAdjudicationReason(
 		switch {
 		case handsOff:
 			// The lead already says no route on this card is acted on.
-		case entry.Route.ParksRun() && outcome.Remediates:
-			line += " It gets no disposition and isn't fixed by accepting. Use Discuss to argue for fixing it in this PR."
 		case entry.Route.ParksRun():
 			line += " It isn't fixed in this run. Use Discuss to argue for fixing it in this PR."
-		case outcome.Halted:
+		case outcome.Halted || (outcome.ParksRun && entry.Route == domain.RouteRemediate):
 			line += " Nothing happens to it while the run is parked."
 		case entry.Route == domain.RouteDefer:
 			line += " It's recorded as deferred and isn't fixed in this PR."
@@ -1785,7 +1776,7 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 	if handled {
 		return diminishingState, nil
 	}
-	if task.reevaluation != nil && len(remediationFindingIDs(artifact, routes)) > 0 {
+	if task.reevaluation != nil && len(dispatchableRemediationFindingIDs(artifact, routes)) > 0 {
 		// A reevaluation can recheck a completed cycle, but cannot replace
 		// its dispatched task with a new remediation producer.
 		if err := w.putReviewAttentionWithActionsAndID(ctx, task, record,

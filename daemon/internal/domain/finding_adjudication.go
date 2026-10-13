@@ -130,10 +130,10 @@ func AdjudicationRouteLabel(route AdjudicationRoute) string {
 }
 
 // ParksRun reports whether accepting the route leaves its finding with
-// neither a disposition nor a remediation, so the review round stays
-// incomplete and the run can't publish. It describes the engine's
-// executeFindingAdjudication and persistFindingRouteDispositions; the engine
-// tests pin that behavior, and a change there has to change this too.
+// neither a disposition nor a remediation and blocks new remediation for
+// the whole card, so the review round stays incomplete and can't publish.
+// It describes executeFindingAdjudication and persistFindingRouteDispositions;
+// the engine tests pin that behavior, and a change there must change this too.
 func (r AdjudicationRoute) ParksRun() bool {
 	switch r {
 	case RouteRemediate, RouteDefer, RouteDecline:
@@ -149,7 +149,9 @@ func (r AdjudicationRoute) ParksRun() bool {
 // one card does to the run. It is the single statement of that outcome the
 // item reason and the recommendation reason share.
 type FindingAdjudicationAcceptance struct {
-	// ParksRun: the round can't complete, so nothing is published.
+	// ParksRun: no new remediation starts and the round can't complete,
+	// so nothing is published. Defer and decline still record dispositions
+	// unless Halted is also true.
 	ParksRun bool
 	// Halted: a disputed finding stops the engine before it records any
 	// disposition or starts any remediation, so no finding is acted on.
@@ -160,8 +162,8 @@ type FindingAdjudicationAcceptance struct {
 
 // AcceptFindingAdjudication derives the card-level outcome of accepting
 // entries' recommended routes. The engine checks a dispute before anything
-// else, and dispatches remediation whenever any finding remediates and none
-// is disputed.
+// else, and dispatches remediation only when a finding remediates and none
+// parks the run.
 func AcceptFindingAdjudication(entries []FindingAdjudicationEntry) FindingAdjudicationAcceptance {
 	var outcome FindingAdjudicationAcceptance
 	parks := false
@@ -178,7 +180,10 @@ func AcceptFindingAdjudication(entries []FindingAdjudicationEntry) FindingAdjudi
 	if outcome.Halted {
 		return FindingAdjudicationAcceptance{ParksRun: true, Halted: true}
 	}
-	outcome.ParksRun = parks && !outcome.Remediates
+	outcome.ParksRun = parks
+	if parks {
+		outcome.Remediates = false
+	}
 	return outcome
 }
 

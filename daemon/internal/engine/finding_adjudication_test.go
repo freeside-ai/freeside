@@ -113,10 +113,12 @@ func newFindingAdjudicationFixtureWithNote(
 // identities for a git-backed candidate, or another finding identity. The zero
 // value of each field keeps the default.
 type findingAdjudicationFixtureOptions struct {
-	note             string
-	policy           map[string]string
-	baseSHA, headSHA string
-	findingID        domain.FindingID
+	note               string
+	policy             map[string]string
+	baseSHA, headSHA   string
+	findingID          domain.FindingID
+	extraFindingIDs    []domain.FindingID
+	reviewInvocationID domain.InvocationID
 }
 
 func newFindingAdjudicationFixtureWithOptions(
@@ -176,14 +178,26 @@ func newFindingAdjudicationFixtureWithOptions(
 		Location: location, Message: "review finding", RawText: "review finding",
 		CreatedAt: createdAt,
 	}
+	findings := []domain.Finding{finding}
+	findingIDs := []domain.FindingID{finding.ID}
+	for _, id := range options.extraFindingIDs {
+		extra := finding
+		extra.ID, extra.Location = id, nil
+		findings = append(findings, extra)
+		findingIDs = append(findingIDs, id)
+	}
+	reviewInvocationID := options.reviewInvocationID
+	if reviewInvocationID == "" {
+		reviewInvocationID = "review-a"
+	}
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
-		InvocationID: "review-a", RunID: runID, Round: 1,
-		Admission:           execfake.RecordAdmission(domain.RoleReviewer, runID, "review-a"),
+		InvocationID: reviewInvocationID, RunID: runID, Round: 1,
+		Admission:           execfake.RecordAdmission(domain.RoleReviewer, runID, reviewInvocationID),
 		ConfigurationDigest: adjudicationDigest("e"),
 		InstructionDigest:   instructionDigest,
 		BaseSHA:             baseSHA, HeadSHA: headSHA,
 		CompletedAt: createdAt, CompletionEvidence: adjudicationDigest("9"),
-		Outcome: domain.ReviewFindings, FindingIDs: []domain.FindingID{finding.ID},
+		Outcome: domain.ReviewFindings, FindingIDs: findingIDs,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -203,7 +217,7 @@ func newFindingAdjudicationFixtureWithOptions(
 		if err := tx.PutResolvedPolicy(ctx, policy); err != nil {
 			return err
 		}
-		if err := tx.PutReviewRecord(ctx, record, []domain.Finding{finding}); err != nil {
+		if err := tx.PutReviewRecord(ctx, record, findings); err != nil {
 			return err
 		}
 		return tx.PutClassification(ctx, domain.Classification{
@@ -2253,6 +2267,172 @@ func TestRemediationOversizedInputParksRunWithoutStoppingLane(t *testing.T) {
 	assertNoDispatchedMarker()
 }
 
+// A real candidate and durable publication task make the unfixed engine queue
+// remediation. Parking must suppress that queue on every reconciliation while
+// still recording a deferred finding on the same card.
+func TestAcceptingMixedParkingRoutesNeverDispatchesRemediation(t *testing.T) {
+	for _, route := range []domain.AdjudicationRoute{
+		domain.RouteParkRevision, domain.RouteParkSeparateWork,
+		domain.RouteAttentionHumanDecision, domain.RouteParkUnknown, domain.RouteAttentionUnclear,
+	} {
+		for _, withDefer := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/defer=%t", route, withDefer), func(t *testing.T) {
+				candidateRoot := t.TempDir()
+				git := func(args ...string) string {
+					return strings.TrimSpace(string(runRemediationGit(t, candidateRoot, nil, args...)))
+				}
+				git("init", "-q", "-b", "main", "--object-format=sha1")
+				git("commit", "-q", "--allow-empty", "-m", "base")
+				baseSHA := git("rev-parse", "HEAD")
+				if err := os.MkdirAll(filepath.Join(candidateRoot, "daemon"), 0o750); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(candidateRoot, "daemon/a.go"), []byte("package fixture\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				git("add", "daemon/a.go")
+				git("commit", "-q", "-m", "candidate")
+				headSHA := git("rev-parse", "HEAD")
+				extraIDs := []domain.FindingID{"finding-park"}
+				entries := []domain.FindingAdjudicationEntry{
+					modelRouteEntry(t, "finding-park", route, domain.ConfidenceHigh),
+				}
+				if withDefer {
+					extraIDs = append(extraIDs, "finding-defer")
+					entries = append(entries, modelRouteEntry(t, "finding-defer", domain.RouteDefer, domain.ConfidenceHigh))
+				}
+				f := newFindingAdjudicationFixtureWithOptions(t, domain.FindingSeverityP2,
+					&domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}, "high", "high",
+					findingAdjudicationFixtureOptions{
+						baseSHA: baseSHA, headSHA: headSHA, extraFindingIDs: extraIDs,
+						reviewInvocationID: ProductionReviewInvocationID("run-adjudication", 1),
+						note:               "producer=fake/test; fixture",
+					})
+				f.workflow.artifacts, f.workflow.workDir = f.blobs, t.TempDir()
+				f.workflow.findingAdjudicator = newDeterministicFindingAdjudicator(entries...)
+				f.task = validPublicationTask(t, f.task.RunID, f.task.ProjectID)
+				f.task.HeadSHA, f.task.Replay.HeadSHA = headSHA, headSHA
+				f.task.Replay.ObservedBaseSHA, f.task.Replay.ImportOptions.BaseSHA = baseSHA, baseSHA
+				payload, err := json.Marshal(f.task)
+				if err != nil {
+					t.Fatal(err)
+				}
+				invocation, err := domain.NewAgentInvocation(productionInvocationID(f.task.RunID),
+					[]domain.ArtifactID{domain.ArtifactID("production-input-" + string(f.task.RunID))}, nil, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := f.store.Write(f.ctx, func(tx *store.WriteTx) error {
+					return tx.PutAgentInvocation(f.ctx, invocation)
+				}); err != nil {
+					t.Fatal(err)
+				}
+				if err := f.store.WriteInternal(f.ctx, func(tx *store.InternalTx) error {
+					_, _, err := tx.EnqueueOutbox(f.ctx, f.task.intentKey(), KindProductionPublicationRequested, payload)
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+				if state, err := f.workflow.reconcileFindingAdjudication(
+					f.ctx, f.task, f.binding, f.record, f.baseRoot, candidateRoot,
+				); err != nil || state != productionReviewPending {
+					t.Fatalf("initial park = %d, %v", state, err)
+				}
+				acceptFindingAdjudicationItem(t, f, productionReviewItemID(f.task.RunID, 1))
+				for pass := range 2 {
+					state, err := f.workflow.reconcileFindingAdjudication(
+						f.ctx, f.task, f.binding, f.record, f.baseRoot, candidateRoot)
+					if err != nil || state != productionReviewPending {
+						t.Fatalf("accepted pass %d = %d, %v", pass, state, err)
+					}
+					dispatched, err := f.workflow.remediationDispatched(f.ctx, f.task, f.record)
+					if err != nil || dispatched {
+						t.Fatalf("pass %d: remediation dispatched = %v, %v", pass, dispatched, err)
+					}
+					complete, err := f.workflow.reviewRoundDispositionComplete(f.ctx, f.task, f.record)
+					if err != nil || complete {
+						t.Fatalf("pass %d: round complete = %v, %v", pass, complete, err)
+					}
+					if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+						dispositions, err := tx.ListFindingDispositions(f.ctx, f.task.RunID)
+						if err != nil {
+							return err
+						}
+						want := 0
+						if withDefer {
+							want = 1
+							if len(dispositions) == 1 && (dispositions[0].FindingID != "finding-defer" ||
+								dispositions[0].Disposition != domain.ReviewDispositionDeferred) {
+								t.Fatalf("unexpected disposition: %#v", dispositions[0])
+							}
+						}
+						if len(dispositions) != want {
+							t.Fatalf("pass %d: dispositions = %#v, want %d", pass, dispositions, want)
+						}
+						return nil
+					}); err != nil {
+						t.Fatal(err)
+					}
+				}
+
+				// A continuation accepted before this mixed card began holding the
+				// run must retire with operator feedback. It must not stay pending
+				// and repeat ErrParentKeyMismatch on every reconciliation.
+				var adjudication domain.FindingAdjudication
+				if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+					var err error
+					adjudication, err = tx.GetFindingAdjudicationForRound(f.ctx, f.task.RunID, f.record.Round)
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+				continuation := domain.PublicationContinuationIntent{
+					AdjudicationDigest: adjudication.Digest,
+					Successor: domain.PublicationSuccessor{
+						RunID:                   f.task.RunID,
+						CommandID:               "command-accept-park",
+						PriorReviewInvocationID: f.record.InvocationID,
+					},
+				}
+				f.task.continuation = &continuation
+				if err := f.store.WriteInternal(f.ctx, func(tx *store.InternalTx) error {
+					_, _, err := tx.EnqueueOutbox(f.ctx, continuation.Key(),
+						domain.PublicationContinuationRequestedKind, []byte("legacy mixed continuation"))
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+				for pass := range 2 {
+					outcome, err := f.workflow.startPublicationContinuation(f.ctx, f.task, candidateRoot)
+					if err != nil || !outcome.completed {
+						t.Fatalf("continuation pass %d = %#v, %v", pass, outcome, err)
+					}
+					if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+						pending, err := tx.ListPendingOutbox(f.ctx, domain.PublicationContinuationRequestedKind)
+						if err != nil {
+							return err
+						}
+						if len(pending) != 0 {
+							t.Fatalf("continuation pass %d pending rows = %#v, want none", pass, pending)
+						}
+						feedback, err := tx.GetAttentionItem(f.ctx,
+							operatorFeedbackUndeliverableItemID(continuation.Successor.CommandID))
+						if err != nil {
+							return err
+						}
+						if feedback.Reason != "The accepted remediation continuation cannot start because its review contains a route that holds the run." {
+							t.Fatalf("continuation pass %d feedback reason = %q", pass, feedback.Reason)
+						}
+						return nil
+					}); err != nil {
+						t.Fatal(err)
+					}
+				}
+			})
+		}
+	}
+}
+
 // TestAcceptingParkingRouteRecordsNoDisposition pins the behavior the parking
 // card text claims (#1551): accepting a single parking finding records no
 // disposition and dispatches no remediation, so the round stays incomplete and
@@ -2373,10 +2553,10 @@ func TestFindingAdjudicationMixedCardTextFollowsTheEngine(t *testing.T) {
 	}{{
 		name:   "remediate and park",
 		routes: [2]domain.AdjudicationRoute{domain.RouteRemediate, domain.RouteParkSeparateWork},
-		wantReason: "Accepting starts a remediator that edits this PR. It may change only the run's allowed paths (daemon/**), not just where a finding was reported. The updated PR is then reviewed again. Findings routed to Park get no disposition and aren't fixed by accepting.\n" +
-			"finding-a (no location reported): Fix in this PR.\n" +
-			"finding-b (no location reported): Park: needs separate work. It gets no disposition and isn't fixed by accepting. Use Discuss to argue for fixing it in this PR.",
-		wantRecommendation: "Fix finding-a in this PR. Leave finding-b unfixed and unrecorded: it needs separate work.",
+		wantReason: "Accepting parks the run: nothing is fixed or published.\n" +
+			"finding-a (no location reported): Fix in this PR. Nothing happens to it while the run is parked.\n" +
+			"finding-b (no location reported): Park: needs separate work. It isn't fixed in this run. Use Discuss to argue for fixing it in this PR.",
+		wantRecommendation: "Hold finding-a while the run is parked. Park the run: finding-b needs separate work.",
 	}, {
 		name:   "dispute halts",
 		routes: [2]domain.AdjudicationRoute{domain.RouteRemediate, domain.RouteDispute},
