@@ -3,6 +3,36 @@ import FreesideCore
 import SwiftUI
 
 @main
+enum FreesideMacEntryPoint {
+    static func main() {
+        guard CommandLine.arguments.dropFirst().first == "daemon" else {
+            FreesideMacApp.main()
+            return
+        }
+        guard let command = DaemonLifecycleCommand(arguments: Array(CommandLine.arguments.dropFirst())) else {
+            print(DaemonLifecycleCommand.usage.line)
+            exit(DaemonLifecycleCommand.usage.exitCode)
+        }
+        Task { @MainActor in
+            #if DEBUG
+                let isDebugBuild = true
+            #else
+                let isDebugBuild = false
+            #endif
+            do {
+                let environment = try FreesideEnvironment.current(isDebugBuild: isDebugBuild)
+                let result = await command.run(environment: environment)
+                print(result.line)
+                exit(result.exitCode)
+            } catch {
+                print("error=invalid_environment")
+                exit(78)
+            }
+        }
+        dispatchMain()
+    }
+}
+
 struct FreesideMacApp: App {
     @State private var session: AppSession
     @State private var daemon: DaemonMenuModel?

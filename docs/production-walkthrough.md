@@ -29,10 +29,17 @@ pass `prompts/phase-1a/implementer.md` as `FREESIDE_REAL_RUN_PROMPT_PACKAGE`,
 default-branch commit. The daemon admits the content digest of these exact
 bytes; a workspace copy is never prompt authority.
 
-Before acquiring the rig, the operator stops the production daemon: choose
-**Stop** in the installed Freeside menu and wait for **Stopped**. This step is
-the operator's alone. No script or agent stops, unloads, or re-registers
-`ai.freeside.daemon`
+Before acquiring the rig, stop the production daemon:
+
+```sh
+"$HOME/Applications/Freeside.app/Contents/MacOS/FreesideMac" daemon stop
+```
+
+Require exit 0 before continuing. A person may instead choose **Stop** in the
+installed Freeside menu and wait for **Stopped**. The operator may run the
+command, or a script or agent may run it inside this operator-started
+walkthrough or the exit run. Tests, dev scripts, and agents doing other work
+still never stop, unload, or re-register `ai.freeside.daemon`
 ([plan §10](plan.md#environments-prod-dev-and-ephemeral)).
 
 The stop is still needed because `freesided rig hold` and preflight refuse
@@ -338,6 +345,11 @@ bash /absolute/new-session/real-work-session.sh recover /absolute/new-session \
   /absolute/Freeside.app/Contents/Resources/freesided
 ```
 
+Restoration starts `Contents/MacOS/FreesideMac` from that same bundle. The
+selected path must name the installed app's `Contents/Resources/freesided`,
+not a standalone retained binary; install that binary with the Mac installer
+first.
+
 A refused build, schema or health check leaves `recovery-required`. After installing
 the session's daemon, repeat `recover`. Alternatively, resume that released session
 from the same reviewed source version with unchanged inputs. Before migration,
@@ -388,11 +400,11 @@ stale gate. Logs remain available after success too.
 
 After release, the harness calls its retained copy of
 `app/scripts/restore-supervised-daemon.sh`. It clears the launchd disable override
-for the current UID and prints the app actions:
-
-1. In **Stopped** or **LaunchAgent unavailable**, choose **Start**.
-2. In **Daemon unreachable**, choose **Stop**, wait for **Stopped**, then **Start**.
-3. If requested, choose **Open Login Items…** and approve Freeside.
+for the current UID and runs the installed app's `daemon start`. If registration
+is enabled but health is unreachable, it runs `daemon stop`, then `daemon start`
+once more. No menu input is needed. Pending Login Items approval returns a
+nonzero exit; approve Freeside in System Settings and retry. The menu's
+**Start**, **Stop**, and **Open Login Items…** controls remain a manual option.
 
 The app owns SMAppService registration. `launchctl enable` alone does not
 register a service removed by `bootout`; reopening an app with a current
@@ -406,8 +418,11 @@ curl --fail --silent --show-error http://127.0.0.1:7331/health
 Registration errors, pending Login Items approval, or health timeout leave
 restoration incomplete and return nonzero. The wait defaults to 120 seconds;
 `FREESIDE_REAL_RUN_RESTORE_TIMEOUT_SECONDS` sets another positive bound. Retry
-the helper after resolving the app error or approval. Client endpoint preferences
-are never changed automatically.
+the helper after resolving the error or approval. A missing or older app that
+does not support the command also fails within the bound and asks for the
+current app to be installed. See the [command reference](../app/README.md#control-the-supervised-daemon-from-a-command)
+for output and exit codes. Client endpoint preferences are never changed
+automatically.
 
 These are the implementation's supported recovery steps. Repository fixtures
 exercise registration and health outcomes with stand-ins; they do not prove
@@ -535,8 +550,9 @@ completion and interruption stop the daemon, release the rig, and restore the
 supervised service through the existing cleanup path. If cleanup fails, follow
 the printed recovery command before retrying.
 
-Before rerunning the exercise, the operator stops the restored production
-daemon again with **Stop** in the Freeside menu.
+Before rerunning the exercise, stop the restored production daemon again with
+`"$HOME/Applications/Freeside.app/Contents/MacOS/FreesideMac" daemon stop`
+and require exit 0, or choose **Stop** in the Freeside menu.
 Recovery has left the task count unchanged; for an exercise requiring its
 first task from the client composer, keep the database at zero tasks and use
 the client-submission path below. The ordinary harness invocation with source

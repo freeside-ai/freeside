@@ -2673,3 +2673,32 @@ The client work is #1798 to #1803.)
 
 (Owner decision of 2026-10-07, #1826;
 [decision note](../../devlog/2026-10-07-1050-clean-machine-wave-placement.md).)
+
+---
+
+## Revision 84 ("The Blocked Attention Type Is Retired"):
+
+1. **No `blocked` attention item.** The type consolidated external waits that
+   passed a waiting threshold, and its one producer raised a second card beside
+   a specification approval that was already the operator's signal. Nothing
+   raises the type now, and no item of the type is ever open; Sections
+   [4](../plan.md#4-the-attention-model) and [9](../plan.md#9-comprehension) lose its rows. Rejected: keeping the type and
+   removing only the duplicate beside the approval, which leaves a card kind
+   with no producer.
+2. **History is kept; nothing is deleted.** A migration closes each open
+   `blocked` item as superseded. The API schema and the domain keep the type
+   name, its wait kinds, and `blocked_on`, marked retired, so a closed item
+   from before the change still loads and shows as resolved. Rejected:
+   deleting the rows and removing the name, because sync cannot tell a client
+   that an item was deleted and a stored row must still validate when read.
+3. **Budgeting keeps two clocks.** Section [5.12](../plan.md#512-workflow-definition-initiators-and-artifacts) drops the waiting
+   thresholds and the example workflow's `waiting:` line. A long wait for an
+   approval, PR checks, or an external review raises no attention item.
+   Rejected: keeping the thresholds and naming a different signal for a later
+   unit; nothing implemented the PR-check or review thresholds.
+4. **The approval card gains no waiting text.** Its row keeps the age it
+   shows today. Notification and escalation for a long wait are separate
+   work (#1924).
+
+(Owner decisions of 2026-10-11, #1925;
+[decision note](../../devlog/2026-10-11-1145-retire-blocked-items.md).)
