@@ -25,15 +25,16 @@ pattern; a routine run needs no row.
 
 Look for each of these before and during the run; most have bitten twice.
 
-- **Merging before the walkthrough.** The ready card resolves on merge and
-  takes `open_pr`, `mark_seen`, `dismiss`, and `return_to_agent` with it.
-  Hand the operator the action list before the PR link.
+- **Merging before the pre-merge evidence.** The ready card resolves on
+  merge and takes its actions with it, and an external review can no longer
+  be posted. Collect what the contract needs from the open pull request
+  before handing the owner the link.
 - **An in-run fix the run never ran.** "Fixed in-run" is earned only when
   the fix is merged and the exercised runtime carries it, with the affected
   evidence repeated: Wave 7 run 1 rebuilt the daemon from `f5fb30d1` before
   attempt 2, and run-70 validated #1456 on a resumed implementation. A fix
-  that is only an open PR leaves the finding Required and the evidence on
-  the SHA that ran.
+  that is only an open PR leaves the finding suggested to block on and the
+  evidence on the SHA that ran.
 - **Stale inputs.** A prompt package, harness flag, or client build from an
   earlier run proves the earlier run. Take prompts from the approved
   default-branch commit and rebuild both clients from the tip.

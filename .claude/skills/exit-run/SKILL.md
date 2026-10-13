@@ -1,6 +1,6 @@
 ---
 name: exit-run
-description: Run a live exit run, the real-backlog production exercise that closes a wave tracker or an ad hoc tracker. Drive scripts/run-real-work.sh against a real issue in a real project from the default-branch tip, walk the operator through the Mac and iPhone checks, file an issue per finding, propose which findings must be fixed before exit, and record the run, the dispositions, and the start order as a tracking comment on the tracker. Use when the user asks to "run the exit run", "run the exit exercise", "do the exit run for #N", "close out wave N with a real run", "prove the close condition", "run gh-imgup#<n> through production for #1211", or names a tracker plus a target issue to run, even without the words "exit run". Also use to re-run a prior exit run or to file and disposition a finished run's findings. Not for the fresh-context adversarial review (review-wave), wave planning (plan-wave), implementing an exit-required unit (ordinary work-unit flow), or a hermetic test run.
+description: Run a live exit run, the real-backlog production exercise that closes a wave tracker or an ad hoc tracker. Drive scripts/run-real-work.sh against a real issue in a real project from the default-branch tip, walk the operator through the Mac and iPhone checks, file an issue per finding, propose exit dispositions and which findings to block exit on, and record the run, the dispositions, and the start order as a tracking comment on the tracker. Use when the user asks to "run the exit run", "run the exit exercise", "do the exit run for #N", "close out wave N with a real run", "prove the close condition", "run gh-imgup#<n> through production for #1211", or names a tracker plus a target issue to run, even without the words "exit run". Also use to re-run a prior exit run or to file and disposition a finished run's findings. Not for the fresh-context adversarial review (review-wave), wave planning (plan-wave), implementing an exit-required unit (ordinary work-unit flow), or a hermetic test run.
 ---
 
 # Exit Run (Spine)
@@ -16,11 +16,12 @@ tracker. Three parties share it:
 - **You** drive the harness and the forge, and write every record.
 - **The operator** does what needs a human or a physical device: stops the
   supervised daemon, pairs the Mac and iPhone, approves the specification in
-  a client, exercises cards, merges the PR. Hand each of these over as an
-  explicit checkpoint and wait; never assume it happened.
-- **The owner** decides which findings block exit. You propose; the owner
-  adopts, amends, or rejects; only then do you record dispositions as
-  decided.
+  a client, and exercises cards. Hand each of these over as an explicit
+  checkpoint and wait; never assume it happened.
+- **The owner** decides which findings block exit and merges the run's pull
+  request. You propose dispositions; the owner adopts, amends, or rejects;
+  only then do you record them as decided. The owner merges every real-work
+  pull request: never merge one, and don't ask who will.
 
 Stop and report when a precondition fails, when the harness fails before the
 first daemon launch, when a fix would need a production store mutation, or
@@ -71,15 +72,16 @@ order:
    them on purpose.
 
 The written contract has five parts: the gates this run must satisfy; the
-mode; the actions that must be exercised on real items, on which device; the
-boundaries the record may rely on without proving (an accepted policy, an
-inactive configuration, a clean-break decision); and what a clean review
-would leave unproven. That last one matters: a run whose review returns zero
-findings exercises adjudication, remediation, and re-review as no-ops. If a
-gate needs a non-empty finding round, plan a controlled defect in a
-dedicated challenge repository, never the real target (#1275 is the
-precedent), or record the gate as not measurable, before the run rather
-than after.
+mode; the actions that must be exercised on real items, on which device
+(the ready card's own actions belong on the list only under the rule in
+Walk Through below); the boundaries the record may rely on without proving
+(an accepted policy, an inactive configuration, a clean-break decision);
+and what a clean review would leave unproven. That last one matters: a run
+whose review returns zero findings exercises adjudication, remediation, and
+re-review as no-ops. If a gate needs a non-empty finding round, plan a
+controlled defect in a dedicated challenge repository, never the real
+target (#1275 is the precedent), or record the gate as not measurable,
+before the run rather than after.
 
 Three alert gates need no real condition, only proof that the alert reaches
 the operator: a stalled writer, held work, and a review that keeps growing.
@@ -221,9 +223,10 @@ report. Running this skill authorizes no implementation.
   **Fixed in-run** only when the fix is merged and the exercised runtime
   carries it: the daemon rebuilt or restarted from the new `main` SHA
   (docs/production-walkthrough.md, Replace A Retained Runtime) and the
-  affected evidence repeated on it. Otherwise the finding is Required with
-  its PR named, and the run's evidence stays attributed to the SHA that
-  ran. Both prior in-run fixes met this bar (`references/prior-runs.md`).
+  affected evidence repeated on it. Otherwise the finding is suggested to
+  block on with its PR named, and the run's evidence stays attributed to
+  the SHA that ran. Both prior in-run fixes met this bar
+  (`references/prior-runs.md`).
 - Writing to the production store to unblock a run is the last resort and
   needs the owner's explicit yes. Back the store up first and record
   exactly what changed.
@@ -233,14 +236,22 @@ report. Running this skill authorizes no implementation.
 
 ## Walk Through on Both Clients
 
-The run's PR is not the proof; the walkthrough is. Two consecutive exit runs
-lost their ready-card evidence because the operator merged the PR as soon as
-its link arrived, and the merge resolved the card before `open_pr`,
-`mark_seen`, `dismiss`, and `return_to_agent` were exercised. So:
+The run's PR is not the proof; the walkthrough is. The merge ends the part
+of it that needs the ready pull request open: the ready card resolves on
+merge, and an external review can only be posted before it. So:
 
-- Hand the operator the action list **before** the PR link, and say
-  plainly that merging ends the walkthrough. Get their report of each
-  action, on each device, and only then hand over the merge.
+- Collect the pre-merge evidence first: every action the contract lists,
+  with the operator's report of each on each device. Then hand the owner
+  the PR link as a plain checkpoint and wait for the merge.
+- The ready card's own actions (`open_pr`, `mark_seen`, `dismiss`,
+  `return_to_agent`) are not a per-run obligation. Put one on the
+  contract's list only when a tracker gate names it, a prior run left a gap
+  on it, or it changed since it last ran live; exercise it before the
+  merge. Otherwise record them as "not exercised, owner decision" beside
+  what covers them: `open_pr` and `mark_seen` have run on real cards on
+  both clients and `return_to_agent` has run live once
+  (`references/prior-runs.md`), and `dismiss` rests on its engine and
+  client tests.
 - Record, per action: the card, the device, whether it actually ran, and
   the resulting state. "Offered" is not "exercised". An action the run
   produced no real item for is recorded as covered by its engine and client
@@ -328,32 +339,38 @@ contract someone can pick up by fiat.
 
 ## Propose Exit Dispositions
 
-Each finding gets one of: **Fixed in-run**, **Required** (merge before exit),
+Propose **Deferred beyond exit** for every finding that is not **Fixed
+in-run**, and mark the ones you would block exit on as **Suggested to block
+on**. The marker is a note on a Deferred finding, not a fourth disposition:
+a `deferral` label never stops the owner choosing to block. The owner's
+answer turns a finding into **Required** (merge before exit) or
 **Investigate before exit** (a diagnosis that may spawn a required fix), or
-**Deferred beyond exit**. The test for Required is the tracker's stated
-outcome, not its checklist: Wave 7's first run passed every checklist item
-while the operator could not tell which card was live, and the owner adopted
-a second closure core for that reason. Use these rules:
+leaves it Deferred; you propose neither of those two yourself.
+
+The test for the marker is the tracker's stated outcome, not its checklist:
+Wave 7's first run passed every checklist item while the operator could not
+tell which card was live, and the owner adopted a second closure core for
+that reason. Use these rules:
 
 - A defect that contradicts the tracker's stated outcome or the plan
   premise it proves (unattended operation that silently bricks, a decision
-  surface the operator can't read from the phone) is Required whatever its
-  severity label.
+  surface the operator can't read from the phone) is suggested to block on
+  whatever its severity label.
 - A known defect that stays reachable in the deployment under evaluation is
   not excused by "it didn't happen during this run".
 - An accepted policy, an inactive configuration, or a recorded clean break
   is a legitimate boundary; name it in the record instead of proving
   through it.
 - A finding whose fix is cheap and sits on the path the next run will take
-  (a prompt rule, a harness flag) is worth folding in even when it isn't
-  strictly Required; say which it is.
-- A cosmetic or ergonomic defect with no functional loss is Deferred, with
-  the trigger that would promote it.
+  (a prompt rule, a harness flag) is worth suggesting even when it doesn't
+  contradict the outcome; say which it is.
+- A cosmetic or ergonomic defect with no functional loss carries no marker;
+  give the trigger that would promote it.
 
-Write the proposal, then ask the owner. Put the recommendation first, the
-reason in one line each, and the conditionally blocking items (a check to
-run before deciding) as their own group. Record the owner's answer on the
-tracker with its date; until then the comment says "proposal".
+Write the proposal, then ask the owner. Put the suggested-to-block-on group
+first, the reason in one line each, and the conditionally blocking items (a
+check to run before deciding) as their own group. Record the owner's answer
+on the tracker with its date; until then the comment says "proposal".
 
 ## Record on the Tracker
 
@@ -373,9 +390,11 @@ note.
 - **Synthetic-trigger proofs**, apart from the real items: per raised alert,
   the command, the item ID, and what each device received.
 - **Findings table:** issue, what's wrong, severity, lane, disposition,
-  reason or trigger.
-- **Start order** for the exit set (Required and Investigate before exit;
-  a diagnosis must finish before closure): Startable now, typed chains,
+  reason or trigger, with the suggested-to-block-on group above it.
+- **Start order** for the exit set the owner adopted (Required and
+  Investigate before exit; a diagnosis must finish before closure). A
+  proposal has no exit set, so add this section with the status revision
+  that records the owner's answer: Startable now, typed chains,
   cross-cutting gates (contract serialization, refute-first, four-front
   cap), critical path, parallel lanes, and the Mermaid diagram. Derive it
   from the issues' Dependencies fields.
