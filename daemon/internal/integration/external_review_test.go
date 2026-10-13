@@ -11,8 +11,17 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
+	"github.com/freeside-ai/freeside/daemon/internal/observe/observedb"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
+
+func assertObservedReentryConclusion(t *testing.T, p *productionPublicationHarness, want domain.RunConclusion) {
+	t.Helper()
+	_, got, err := observedb.Borrow(p.store).ObserveConclusion(p.ctx, p.runID)
+	if err != nil || got != want {
+		t.Errorf("follow conclusion = %#v, %v; want %#v", got, err, want)
+	}
+}
 
 func externalMaintainer() domain.ExternalReviewer {
 	return domain.ExternalReviewer{
@@ -202,6 +211,7 @@ func TestExternalReviewCycleEndsOnAPerson(t *testing.T) {
 	}
 
 	started := p.externalReviewEnd(t)
+	assertObservedReentryConclusion(t, p, domain.RunConclusion{Outcome: domain.RunOutcomePending})
 	successor := started.successor
 	if successor.Version != domain.PublicationExternalReviewVersion ||
 		successor.Origin != domain.PublicationSuccessorExternalReview ||
@@ -245,6 +255,7 @@ func TestExternalReviewCycleEndsOnAPerson(t *testing.T) {
 	}
 
 	end := p.externalReviewEnd(t)
+	assertObservedReentryConclusion(t, p, domain.RunConclusion{Outcome: domain.RunOutcomePending})
 	if len(end.reviewItems) != 1 || end.readyItem || end.pending != 0 {
 		t.Fatalf("cycle end = %d review items, ready item %t, %d tasks pending; want one item and nothing else",
 			len(end.reviewItems), end.readyItem, end.pending)
@@ -283,6 +294,7 @@ func TestExternalReviewCycleEndsOnAPerson(t *testing.T) {
 	if p.startExternalReview(t) {
 		t.Fatal("a second cycle started with the first one's item open")
 	}
+	assertObservedReentryConclusion(t, p, domain.RunConclusion{Outcome: domain.RunOutcomePending})
 }
 
 // TestExternalReviewCycleReportsFreesideFindings: when Freeside's own review
@@ -552,6 +564,7 @@ func TestExternalReviewCycleIsNotReadyWhileItsReviewRuns(t *testing.T) {
 			t.Fatalf("pass %d = %#v, %v", pass, result, err)
 		}
 		end := p.externalReviewEnd(t)
+		assertObservedReentryConclusion(t, p, domain.RunConclusion{Outcome: domain.RunOutcomePending})
 		if len(end.reviewItems) != 0 || end.readyItem || end.pending != 1 {
 			t.Fatalf("pass %d: %d review items, ready item %t, %d tasks pending; want only the pending task",
 				pass, len(end.reviewItems), end.readyItem, end.pending)

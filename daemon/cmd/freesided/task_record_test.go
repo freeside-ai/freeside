@@ -75,6 +75,37 @@ func recordItem(record taskRecord, id domain.ItemID) *taskRecordItem {
 	return &record.Items[index]
 }
 
+func TestTaskRecordConclusionDuringExternalReview(t *testing.T) {
+	st := schedTestStore(t)
+	item := reentryReadyItem(t, st, "run-record-external-review")
+	runID := *item.Subject.RunID
+	armActiveTestSchedules(t, st, item)
+	activateExternalTestProfile(t, st, activeResourceTestTime.Add(-time.Hour), externalTestMaintainer())
+	reconciler := externalReentryReconciler(st, staticReview(externalReentryActivity()))
+	reconcileClean(t, &reconciler, "start cycle")
+	successor, queued := readReentry(t, st, runID)
+	if successor == nil || !queued {
+		t.Fatal("external review cycle was not queued")
+	}
+	for _, finished := range []bool{false, true} {
+		if finished {
+			if err := st.WriteInternal(t.Context(), func(tx *store.InternalTx) error {
+				return tx.MarkOutboxDispatched(t.Context(), successor.TaskKey())
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		record := readRecord(t, st, taskOfRun(t, st, runID))
+		if len(record.Runs) != 1 {
+			t.Fatalf("runs = %d, want 1", len(record.Runs))
+		}
+		run := record.Runs[0]
+		if run.Conclusion == nil || len(run.Errors) != 0 {
+			t.Errorf("finished=%t: conclusion=%#v, errors=%#v", finished, run.Conclusion, run.Errors)
+		}
+	}
+}
+
 // TestTaskRecordGolden pins the record's shape. A change to these bytes is a
 // change to taskRecordVersion. The store stamps a random task id and the wall
 // clock on every task, so the test replaces those two values before

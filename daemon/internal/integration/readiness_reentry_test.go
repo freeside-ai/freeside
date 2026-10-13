@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
+	"github.com/freeside-ai/freeside/daemon/internal/observe/observedb"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -220,7 +222,7 @@ func (p *productionPublicationHarness) assertReentered(
 
 func TestReadinessReentersAfterBaseAdvance(t *testing.T) {
 	t.Parallel()
-	p := newProductionPublicationHarness(t, "")
+	p := newProductionPublicationHarnessWithBoundIssue(t, "", 1986)
 	first := p.publishReady(t)
 	pushes, body := p.transport.pushCount(), p.forge.pullRequests()[0].Body
 
@@ -257,6 +259,7 @@ func TestReadinessReentersAfterBaseAdvance(t *testing.T) {
 		t.Fatalf("reviewed tree = %#v, want the head's change on the advanced base", tree)
 	}
 	p.assertReentered(t, superseded, 2, advanced, p.replay.HeadSHA)
+	assertObservedReentryConclusion(t, p, domain.RunConclusion{Outcome: domain.RunOutcomePublished, Final: true})
 	if first.ID != superseded.ID {
 		t.Fatalf("superseded %s, want the first ready item %s", superseded.ID, first.ID)
 	}
@@ -273,6 +276,106 @@ func TestReadinessReentersAfterBaseAdvance(t *testing.T) {
 	}
 	if p.room.runs != 2 {
 		t.Fatalf("converged replay re-ran verification: %d runs", p.room.runs)
+	}
+	// Completion must authenticate the re-entered cycle even though it has
+	// no producing terminal of its own.
+	recordOriginalCompletion(t, p)
+	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		invocation, err := tx.PublishedPublicationInvocationID(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		return tx.AppendRunMilestone(p.ctx, domain.RunMilestone{
+			RunID: p.runID, Kind: domain.MilestoneWorkUnitCompleted,
+			InvocationID: &invocation, RecordedAt: p.now,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := domain.RunConclusion{Outcome: domain.RunOutcomeCompleted, Final: true}
+	assertObservedReentryConclusion(t, p, want)
+	if got := authenticatedProductionConclusion(t, p); got != want {
+		t.Fatalf("engine conclusion = %#v, want %#v", got, want)
+	}
+}
+
+func TestReadinessReentryConclusionAuthenticatesTaskSuccessor(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	p.publishReady(t)
+	advanced := p.advanceBase(t, "UPSTREAM.md", "upstream change\n")
+	if _, started := p.invalidateReady(t, domain.ReadinessInvalidation{
+		Reason: domain.ReadinessInvalidationBaseAdvanced, Bound: p.baseSHA, Observed: advanced,
+	}); !started {
+		t.Fatal("base advance started no re-entry")
+	}
+	p.scriptCleanReview(2, advanced, p.replay.HeadSHA)
+	p.reconcileUntilReady(t, 1)
+	assertObservedReentryConclusion(t, p, domain.RunConclusion{Outcome: domain.RunOutcomePublished, Final: true})
+	var successor *domain.PublicationSuccessor
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		var err error
+		successor, err = tx.CurrentPublicationSuccessor(p.ctx, p.runID)
+		return err
+	}); err != nil || successor == nil {
+		t.Fatalf("current successor = %#v, %v", successor, err)
+	}
+	key := successor.TaskKey()
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(readOutboxPayload(t, p, key), &payload); err != nil {
+		t.Fatal(err)
+	}
+	// The task keeps its IDs and head, but its claimed review authority must
+	// still match the separately sealed successor.
+	successor.ReviewRound++
+	if err := successor.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	forged, err := json.Marshal(successor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload["successor"] = forged
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeOutboxPayload(t, p, key, body)
+	if _, conclusion, err := observedb.Borrow(p.store).ObserveConclusion(p.ctx, p.runID); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("divergent successor returned conclusion %#v, %v; want parent-key mismatch", conclusion, err)
+	}
+}
+
+func TestReadinessReentryConclusionRequiresReadyProof(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	p.publishReady(t)
+	advanced := p.advanceBase(t, "UPSTREAM.md", "upstream change\n")
+	if _, started := p.invalidateReady(t, domain.ReadinessInvalidation{
+		Reason: domain.ReadinessInvalidationBaseAdvanced, Bound: p.baseSHA, Observed: advanced,
+	}); !started {
+		t.Fatal("base advance started no re-entry")
+	}
+	p.scriptCleanReview(2, advanced, p.replay.HeadSHA)
+	p.reconcileUntilReady(t, 1)
+	assertObservedReentryConclusion(t, p, domain.RunConclusion{Outcome: domain.RunOutcomePublished, Final: true})
+	item := p.currentReadyItem(t)
+	raw, err := sql.Open("sqlite", p.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := raw.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	// Retained readiness must fail closed if its proof is lost, rather than
+	// being mistaken for a cycle that ended without re-earning readiness.
+	if _, err := raw.ExecContext(p.ctx, "DELETE FROM ready_item_pr_bindings WHERE item_id = ?", item.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, conclusion, err := observedb.Borrow(p.store).ObserveConclusion(p.ctx, p.runID); err == nil {
+		t.Fatalf("missing ready proof returned conclusion %#v", conclusion)
 	}
 }
 
@@ -788,9 +891,11 @@ func TestReadinessReentryDiscardsCycleWhenHeadMoves(t *testing.T) {
 		fact.Bound != second || fact.Observed != third {
 		t.Fatalf("discarded ready item = %#v", discarded)
 	}
+	assertObservedReentryConclusion(t, p, domain.RunConclusion{Outcome: domain.RunOutcomePending})
 	p.transport.onHeadFetch(nil)
 	p.reconcileUntilReady(t, 2)
 	p.assertReentered(t, discarded, 3, p.baseSHA, third)
+	assertObservedReentryConclusion(t, p, domain.RunConclusion{Outcome: domain.RunOutcomePublished, Final: true})
 	if p.room.runs != 3 {
 		t.Fatalf("verification runs = %d, want 3", p.room.runs)
 	}
