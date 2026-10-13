@@ -98,7 +98,7 @@ func newEncryptedCheckpointHealthSource(
 	return &encryptedCheckpointHealthSource{
 		files:             files,
 		artifacts:         opts.Artifacts,
-		approvedRecipes:   maps.Clone(opts.ApprovedRecipes),
+		approvedRecipes:   backupApprovedRecipes(opts.ApprovedRecipes),
 		payloadExtractors: maps.Clone(opts.PayloadExtractors),
 		checkpointMaxAge:  opts.CheckpointMaxAge,
 		restoreTestMaxAge: opts.RestoreTestMaxAge,
