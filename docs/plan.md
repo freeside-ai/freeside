@@ -619,6 +619,9 @@ recommendation-led presentation.
 - Approvals bind to artifact digests and the PR head SHA. Changed inputs
   invalidate them.
 - Retries supersede failures.
+- Explicit abandonment expires the abandoned task's open specification
+  approvals and execution-failure recovery cards, leaving other item kinds and
+  quarantine notices open without certifying that execution stopped.
 - Resolutions are transactional and version-checked.
 - A stale submission receives a conflict and the replacement item.
 - Notifications are read-only hints, never authority.

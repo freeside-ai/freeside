@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
@@ -134,6 +135,89 @@ WHERE (subject_run_id = ?1 OR body_run_id = ?1 OR body_mentions_selected_run)
        OR body_run_id_keys > 1
        OR body_run_id_aliases > 0)`
 )
+
+// Task and run lookups need the same dual-view and JSON parser guards. Keep
+// the SQL identical except for the binding name so fixes apply to both reads.
+var attentionTaskColumnDivergenceSQL = strings.ReplaceAll(attentionRunColumnDivergenceSQL, "run", "task")
+
+// ListOpenAttentionItemRecordsForTask returns structurally authenticated open
+// records for one task, in ID order, without mutable evidence policy. Like the
+// run-scoped history read, callers must re-gate actionable records before use.
+func (tx *ReadTx) ListOpenAttentionItemRecordsForTask(ctx context.Context, taskID domain.TaskID) ([]domain.AttentionItem, error) {
+	var divergent int
+	if err := tx.tx.QueryRowContext(ctx, attentionTaskColumnDivergenceSQL, taskID).Scan(&divergent); err != nil {
+		return nil, fmt.Errorf("list open items for task %q: column integrity: %w", taskID, err)
+	}
+	if divergent > 0 {
+		return nil, fmt.Errorf("list open items for task %q: %d row(s) whose lookup columns diverge from their bodies: %w", taskID, divergent, errRowInconsistent)
+	}
+	if err := tx.checkAttentionTaskBodyLookup(ctx, taskID); err != nil {
+		return nil, fmt.Errorf("list open items for task %q: column integrity: %w", taskID, err)
+	}
+	rows, err := tx.tx.QueryContext(ctx, `
+SELECT id, project_id, conversation_id, item_type, status, health_posture, subject_run_id, subject_task_id, readiness_summary, readiness_detail, yield_history, entity_version, as_of_revision, body
+FROM attention_items WHERE subject_task_id = ? AND status = 'open' ORDER BY id`, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("list open items for task %q: %w", taskID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var items []domain.AttentionItem
+	for rows.Next() {
+		item, _, err := tx.scanAttentionItemHistory(ctx, rows)
+		if err != nil {
+			return nil, fmt.Errorf("list open items for task %q: %w", taskID, err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list open items for task %q: %w", taskID, err)
+	}
+	return items, nil
+}
+
+// checkAttentionTaskBodyLookup covers bodies accepted by Go but rejected by
+// SQLite JSON1, as checkAttentionRunBodyLookup does for run-scoped reads.
+func (tx *ReadTx) checkAttentionTaskBodyLookup(ctx context.Context, taskID domain.TaskID) error {
+	rows, err := tx.tx.QueryContext(ctx, `SELECT id, item_type, status, subject_task_id, body FROM attention_items ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id, itemType, status string
+		var subjectTaskID sql.NullString
+		var body []byte
+		if err := rows.Scan(&id, &itemType, &status, &subjectTaskID, &body); err != nil {
+			return err
+		}
+		var lookup struct {
+			Subject domain.Subject       `json:"subject"`
+			Type    domain.AttentionType `json:"type"`
+			Status  domain.ItemStatus    `json:"status"`
+		}
+		if err := json.Unmarshal(body, &lookup); err != nil {
+			if subjectTaskID.Valid && subjectTaskID.String == string(taskID) {
+				return fmt.Errorf("item %q: %w", id, errRowInconsistent)
+			}
+			continue
+		}
+		bodyTaskID := ""
+		if lookup.Subject.TaskID != nil {
+			bodyTaskID = string(*lookup.Subject.TaskID)
+		}
+		if (!subjectTaskID.Valid || subjectTaskID.String != string(taskID)) && bodyTaskID != string(taskID) {
+			continue
+		}
+		columnTaskID := ""
+		if subjectTaskID.Valid {
+			columnTaskID = subjectTaskID.String
+		}
+		if columnTaskID != bodyTaskID || itemType != string(lookup.Type) || status != string(lookup.Status) {
+			return fmt.Errorf("item %q: %w", id, errRowInconsistent)
+		}
+	}
+	return rows.Err()
+}
 
 // RecordUnattendedOperationTransition appends one operator stop/resume
 // decision (plan §4 stop_unattended; issue #319). Append-only by design: the

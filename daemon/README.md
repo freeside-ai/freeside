@@ -2212,7 +2212,14 @@ needed to distinguish an accepted Stop from confirmed termination.
 A bound confirmed acknowledgement atomically releases
 any held episode and projects `stopped`; an already completed episode stays
 `finished`. Explicit abandonment projects `abandoned` without claiming that
-execution stopped. Stopped and abandoned tasks leave Active filters and remain
+execution stopped. `freesided abandon` also expires the abandoned task's open
+specification approvals and execution-failure recovery cards, reporting their
+IDs in `retired_items` (an empty list when none were retired). Other item kinds
+and quarantine notices stay open. Slot release commits before retirement; if
+retirement fails, the error identifies that partial outcome and the command
+can be retried. The daemon can still raise new cards after abandonment;
+running `abandon` again retires eligible cards raised since the previous call.
+Stopped and abandoned tasks leave Active filters and remain
 in Finished/All history. A confirmed queued task needs no run or position.
 Ordinary submission cannot reopen a terminal episode; an uncancelled explicit
 retry needs atomic cap-checked admission, and cancellation forbids it. No client may set
