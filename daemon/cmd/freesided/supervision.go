@@ -345,6 +345,9 @@ func (t *scheduledFailureTracker) consumption(
 		delete(t.failures, kind)
 		return scheduler.Consumption{Outcome: domain.OutcomeHandled}, nil
 	}
+	if kind == domain.ScheduleJanitor && errors.Is(err, publish.ErrJanitorMintHeld) {
+		return scheduler.Consumption{Outcome: domain.OutcomeObserveFailed}, nil
+	}
 	failure := scheduledFailure{at: t.now().UTC(), cause: err.Error()}
 	if !transientExternalFailure(err) {
 		return scheduler.Consumption{}, &scheduledFailureRunError{
@@ -407,7 +410,13 @@ func transientExternalFailure(err error) bool {
 func janitorRegistrationFailures(faults []publish.JanitorRegistrationFault) error {
 	causes := make([]error, 0, len(faults))
 	for _, fault := range faults {
+		if errors.Is(fault.Err, publish.ErrJanitorMintHeld) {
+			continue
+		}
 		causes = append(causes, fmt.Errorf("registration %d: %w", fault.RegistrationID, fault.Err))
+	}
+	if len(causes) == 0 && len(faults) > 0 {
+		return publish.ErrJanitorMintHeld
 	}
 	return errors.Join(causes...)
 }

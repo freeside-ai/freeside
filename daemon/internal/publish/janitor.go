@@ -100,12 +100,26 @@ type JanitorCycle struct {
 // errJanitorUnsafe marks a failure of the daemon's own safety machinery rather
 // than of one registration's remote or authored state: the durable audit
 // barrier, or a credential the janitor minted that it cannot account for,
-// whether revocation failed or the mint's outcome is simply unknown. Neither
-// belongs to the registration that happened to reach it first, and continuing
-// the pass would keep acting destructively without a barrier, or keep minting
-// credentials the daemon cannot take back. Such a failure stops the pass, as
-// every failure did before #281.
+// whether revocation failed or the mint's outcome is simply unknown. These
+// failures stop the pass. Credential failures also hold the installation's
+// mints until revocation or expiry; their cause determines whether supervision
+// stops the daemon. See devlog/2026-10-13-1015-janitor-token-holds.md.
 var errJanitorUnsafe = errors.New("installation janitor: unsafe to continue")
+
+// janitorCredentialError preserves the pass-stop marker without making that
+// marker a second, non-transient cause for the supervisor to classify.
+type janitorCredentialError struct{ cause error }
+
+func (e *janitorCredentialError) Error() string {
+	return errJanitorUnsafe.Error() + ": " + e.cause.Error()
+}
+func (e *janitorCredentialError) Unwrap() error        { return e.cause }
+func (e *janitorCredentialError) Is(target error) bool { return target == errJanitorUnsafe }
+
+type janitorMintHold struct {
+	until time.Time
+	token Secret
+}
 
 // JanitorRegistrationFault names one registration the latest pass could not
 // complete, with the error that denied it. A faulted registration is absent
@@ -160,6 +174,7 @@ type InstallationJanitor struct {
 	faults     []JanitorRegistrationFault
 	churn      []JanitorRegistrationChurn
 	incomplete []JanitorRegistrationIncomplete
+	mintHolds  map[int64]janitorMintHold
 }
 
 // NewInstallationJanitor constructs a janitor with a hard per-cycle removal
@@ -483,8 +498,8 @@ func (j *InstallationJanitor) Run(ctx context.Context, interval time.Duration) e
 // scheduler's janitor kind). The janitor keeps ownership of what a pass
 // means and what coverage it publishes; only the ticker moved out. Coverage
 // persists between scheduled passes exactly as it does between always-on
-// loop iterations, and a pass-wide failure is returned for the caller to
-// treat as fatally as the loop's own exit. It refuses to run while the
+// loop iterations, and a pass-wide failure is returned for the caller's
+// cause-based supervision. It refuses to run while the
 // always-on loop is active, which would double-drive the lifecycle.
 func (j *InstallationJanitor) RunScheduledPass(ctx context.Context) error {
 	if j == nil {
@@ -567,7 +582,8 @@ type janitorPass struct {
 //
 // Three classes are not attributable and are returned as an error, stopping
 // the pass: enumerating the keystore, a canceled context, and errJanitorUnsafe
-// (the shared audit barrier, or a credential the janitor could not revoke).
+// (the shared audit barrier, or a credential the janitor cannot account for).
+// A later pass can cover siblings while the affected installation is held.
 func (j *InstallationJanitor) runCycle(
 	ctx context.Context,
 ) (JanitorCycle, janitorPass, error) {
@@ -1025,6 +1041,10 @@ func (j *InstallationJanitor) enumerateRepositoryGrants(
 	registrationID int64,
 	installationID int64,
 ) ([]int64, error) {
+	if err := j.checkMintHold(ctx, installationID); err != nil {
+		return nil, err
+	}
+	requestedAt := j.now()
 	token, mintErr := j.mintGrantReadToken(ctx, jwt, registrationID, installationID)
 	if token.Reveal() == "" {
 		return nil, mintErr
@@ -1038,14 +1058,10 @@ func (j *InstallationJanitor) enumerateRepositoryGrants(
 	defer cancel()
 	revokeErr := j.revokeInstallationToken(revokeCtx, token)
 	if revokeErr != nil {
-		// A token the janitor minted and could not revoke outlives the pass.
-		// Its lifetime is bounded only when the mint's expiry check passed,
-		// and unknown when the response never got that far, which is why an
-		// unrevoked token is never merely waited out. Faulting the
-		// registration would re-mint one every pass, so an unrevoked token
-		// stops the pass instead: the daemon must not keep issuing
-		// credentials it has just proven it cannot take back.
-		revokeErr = fmt.Errorf("%w: %w", errJanitorUnsafe, revokeErr)
+		// Retain the credential only for revocation, and mint nothing else
+		// for this installation until revocation succeeds or its hold ends.
+		j.holdMint(installationID, requestedAt, token)
+		revokeErr = &janitorCredentialError{cause: revokeErr}
 	}
 	if mintErr != nil {
 		if revokeErr != nil {
@@ -1057,6 +1073,40 @@ func (j *InstallationJanitor) enumerateRepositoryGrants(
 		return nil, revokeErr
 	}
 	return repositoryIDs, nil
+}
+
+func (j *InstallationJanitor) holdMint(installationID int64, requestedAt time.Time, token Secret) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.mintHolds == nil {
+		j.mintHolds = make(map[int64]janitorMintHold)
+	}
+	j.mintHolds[installationID] = janitorMintHold{
+		until: requestedAt.Add(installationTokenLifetime + installationTokenSkew), token: token,
+	}
+}
+
+func (j *InstallationJanitor) checkMintHold(ctx context.Context, installationID int64) error {
+	j.mu.RLock()
+	hold, held := j.mintHolds[installationID]
+	j.mu.RUnlock()
+	if !held {
+		return nil
+	}
+	if j.now().Before(hold.until) {
+		if hold.token.Reveal() == "" {
+			return fmt.Errorf("%w until %s", ErrJanitorMintHeld, hold.until.UTC().Format(time.RFC3339))
+		}
+		revokeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		if err := j.revokeInstallationToken(revokeCtx, hold.token); err != nil {
+			return err
+		}
+	}
+	j.mu.Lock()
+	delete(j.mintHolds, installationID)
+	j.mu.Unlock()
+	return nil
 }
 
 func (j *InstallationJanitor) mintGrantReadToken(
@@ -1081,13 +1131,17 @@ func (j *InstallationJanitor) mintGrantReadToken(
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("Content-Type", "application/json")
 	// Minting is not idempotent, so from here on an error that leaves the
-	// outcome unknown must not be retried: the token GitHub may have created
-	// is live for GitHub's declared lifetime and this daemon never learned
-	// its value, so it can never be revoked. Only a refusal proves nothing
-	// was created.
+	// outcome unknown holds future mints for GitHub's declared lifetime plus
+	// skew. Only a refusal proves nothing was created. The owner accepted this
+	// bound in devlog/2026-10-13-1015-janitor-token-holds.md.
+	requestedAt := j.now()
+	unknown := func(cause error) (Secret, error) {
+		j.holdMint(installationID, requestedAt, "")
+		return "", &janitorCredentialError{cause: cause}
+	}
 	resp, err := j.client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("mint grant-read token: %w: %w", errJanitorUnsafe, err)
+		return unknown(fmt.Errorf("mint grant-read token: %w", err))
 	}
 	defer drainAndClose(resp.Body)
 	if resp.StatusCode != http.StatusCreated {
@@ -1096,7 +1150,7 @@ func (j *InstallationJanitor) mintGrantReadToken(
 			RequestPath: "/app/installations/{installation_id}/access_tokens",
 		})
 		if resp.StatusCode < http.StatusBadRequest || resp.StatusCode >= http.StatusInternalServerError {
-			return "", fmt.Errorf("%w: %w", errJanitorUnsafe, mintErr)
+			return unknown(mintErr)
 		}
 		// GitHub refused the request, which is this registration's own state:
 		// a wrong key, a withdrawn installation.
@@ -1107,12 +1161,11 @@ func (j *InstallationJanitor) mintGrantReadToken(
 	var minted grantReadMintResponse
 	decodeErr := decodeResponse(resp.Body, &minted)
 	if minted.Token.Reveal() == "" {
-		// No token was recovered, so GitHub created nothing this daemon must
-		// account for: there is nothing to audit or revoke.
+		// No token was recovered, so the possible credential cannot be revoked.
 		if decodeErr != nil {
-			return "", fmt.Errorf("mint grant-read token: %w: decode response", errJanitorUnsafe)
+			return unknown(errors.New("mint grant-read token: decode response"))
 		}
-		return "", fmt.Errorf("mint grant-read token: %w: response carries no token", errJanitorUnsafe)
+		return unknown(errors.New("mint grant-read token: response carries no token"))
 	}
 	// A token now provably exists. Every return below carries it out for the
 	// caller to revoke, and it MUST be audited first: a token whose revoke also
@@ -1410,5 +1463,6 @@ func (j *InstallationJanitor) finishRun() {
 	j.faults = nil
 	j.churn = nil
 	j.incomplete = nil
+	// Mint holds outlive this loop, just as their possible credentials do.
 	j.mu.Unlock()
 }
