@@ -17,6 +17,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	inferencefake "github.com/freeside-ai/freeside/daemon/internal/inference/fake"
+	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -100,7 +101,7 @@ func TestExternalReviewRejectedBatchLogsCause(t *testing.T) {
 				t.Fatalf("cycle: %+v, %v", result, err)
 			}
 			end := p.externalReviewEnd(t)
-			if len(end.reviewItems) != 1 || end.readyItem || end.pending != 0 {
+			if len(end.reviewItems) != 1 || end.readyItem || end.pending != 1 {
 				t.Fatalf("parked cycle: %+v", end)
 			}
 			for _, want := range []string{"run=" + string(p.runID), "round=2", "external_first_round=true", "cause=" + tc.cause} {
@@ -350,7 +351,7 @@ func TestExternalReviewCycleDisputeNamesTheFinding(t *testing.T) {
 		t.Fatalf("cycle result = %#v, %v", result, err)
 	}
 	end := p.externalReviewEnd(t)
-	if len(end.reviewItems) != 1 || end.readyItem || end.pending != 0 {
+	if len(end.reviewItems) != 1 || end.readyItem || end.pending != 1 {
 		t.Fatalf("cycle end = %d review items, ready item %t, %d tasks pending",
 			len(end.reviewItems), end.readyItem, end.pending)
 	}
@@ -960,7 +961,7 @@ func TestExternalReviewCycleNeverDismissesAnUnratedFindingAlone(t *testing.T) {
 		t.Fatalf("cycle result = %#v, %v", result, err)
 	}
 	end := p.externalReviewEnd(t)
-	if len(end.reviewItems) != 1 || end.readyItem || end.pending != 0 {
+	if len(end.reviewItems) != 1 || end.readyItem || end.pending != 1 {
 		t.Fatalf("cycle end = %d review items, ready item %t, %d tasks pending",
 			len(end.reviewItems), end.readyItem, end.pending)
 	}
@@ -971,6 +972,16 @@ func TestExternalReviewCycleNeverDismissesAnUnratedFindingAlone(t *testing.T) {
 	}
 	if dispositions := p.externalDispositions(t); len(dispositions) != 0 {
 		t.Fatalf("an unrated finding was dismissed without a person: %#v", dispositions)
+	}
+	command := p.externalDisputeCommand(t, end.reviewItems[0], signet.AlternativeChoice{FindingID: finding.ID, Route: domain.RouteDecline})
+	if _, err := p.attention.Submit(p.ctx, command); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatal(err)
+	}
+	if decided := p.externalReviewEnd(t); !decided.readyItem || decided.pending != 0 || len(decided.reviewItems) != 0 {
+		t.Fatalf("human decline did not conclude the second decision: %#v", decided)
 	}
 }
 

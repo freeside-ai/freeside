@@ -1720,6 +1720,18 @@
                 throw ScreenshotError.missingRetryTask
             }
             let approvalFixture = TaskFixtures.approvedCampaign()
+            for scheme in [ColorScheme.light, .dark] {
+                let dispute = TaskProgressFixtures.make("Review dispute")
+                surfaces.append(
+                    Surface(
+                        name: "task-review-dispute-\(scheme)", width: 390,
+                        colorScheme: scheme, nativeAppearance: true,
+                        view: AnyView(
+                            TaskRowView(
+                                task: dispute.task, position: dispute.position,
+                                now: RunFixtures.screenshotInstant
+                            ).padding())))
+            }
             for (group, names) in TaskProgressFixtures.groups.enumerated() {
                 for width in [CGFloat(320), CGFloat(390)] {
                     for scheme in [ColorScheme.light, .dark] {

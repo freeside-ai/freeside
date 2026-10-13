@@ -75,6 +75,11 @@ enum RunDisplay {
         attentionItems: [Components.Schemas.AttentionItemSnapshot] = []
     ) -> (label: String, round: String?)? {
         if let task,
+            let dispute = TaskDisplay.reviewDisputeHeading(task, run: run, attentionItems: attentionItems)
+        {
+            return (dispute, nil)
+        }
+        if let task,
             let handoff = TaskDisplay.finalReviewHeading(task, run: run, attentionItems: attentionItems)
         {
             return (handoff, nil)

@@ -5,6 +5,17 @@ import Testing
 @testable import FreesideCore
 
 @Suite struct AttentionDisplayTests {
+    @Test func externalReviewDecisionNamesItsEffects() {
+        let item = AttentionFixtures.routedReviewDispute().item
+        #expect(AttentionDisplay.ask(item) == "How should these external review findings be handled?")
+        #expect(AttentionDisplay.disputeRouteLabel(.remediate, external: true) == "Fix in This Pull Request")
+        #expect(AttentionDisplay.disputeRouteLabel(.decline, external: true) == "Decline and Reply")
+        #expect(AttentionDisplay.disputeRouteLabel(._defer, external: true) == "Defer and Reply")
+        #expect(AttentionDisplay.externalDisputeConsequence.contains("Defer files no follow-up issue."))
+        #expect(AttentionDisplay.externalDisputeConsequence.contains("unchanged head"))
+        #expect(!AttentionDisplay.hasExternalDisputedFindings(AttentionFixtures.fixture(type: .review_dispute).item))
+    }
+
     /// Every card that asks for a decision asks it in one sentence. A
     /// retired blocked item, which only a closed row still carries, never
     /// asked for one: where its typed wait says what it waited on, it leads

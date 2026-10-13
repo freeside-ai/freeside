@@ -49,7 +49,7 @@ func buildExternalFindings(
 	obs publish.PullReviewObservation, binding domain.ReadyItemPRBinding,
 ) (findings []domain.Finding, skipped []error) {
 	seen := map[domain.FindingID]bool{}
-	add := func(what string, id int64, in domain.ExternalFindingInput) {
+	add := func(what string, id int64, in domain.ExternalFindingInput) bool {
 		in.RunID = binding.RunID
 		in.Forge = domain.ExternalReviewForgeGitHub
 		in.Severity = domain.FindingSeverity(nativeReviewBadge(in.RawText))
@@ -58,34 +58,19 @@ func buildExternalFindings(
 		if err != nil {
 			skipped = append(skipped, fmt.Errorf("skip %s %d on %s#%d: %w",
 				what, id, binding.Repo, binding.PRNumber, err))
-			return
+			return false
 		}
 		// One reviewer repeating identical text in one thread on one head has
 		// one ID. The first by forge time is the finding; a repeat says
 		// nothing new.
 		if seen[finding.ID] {
-			return
+			return true
 		}
 		seen[finding.ID] = true
 		findings = append(findings, finding)
+		return true
 	}
-
-	reviews := slices.Clone(obs.Reviews)
-	slices.SortFunc(reviews, func(a, b publish.PullReview) int {
-		return cmp.Or(a.SubmittedAt.Compare(b.SubmittedAt), cmp.Compare(a.ID, b.ID))
-	})
-	for _, rv := range reviews {
-		if rv.State == externalReviewApprovedState || rv.State == externalReviewDismissedState ||
-			strings.TrimSpace(rv.Body) == "" {
-			continue
-		}
-		add("review", rv.ID, domain.ExternalFindingInput{
-			ReviewerAccountID: rv.AuthorID, ReviewerLogin: rv.AuthorLogin,
-			ThreadID: publish.ExternalReviewThreadID(rv.ID), HeadSHA: rv.CommitID,
-			RawText: rv.Body, CreatedAt: rv.SubmittedAt.UTC(),
-		})
-	}
-
+	commentedReviews := map[int64]bool{}
 	comments := slices.Clone(obs.Comments)
 	slices.SortFunc(comments, func(a, b publish.PullReviewComment) int {
 		return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), cmp.Compare(a.ID, b.ID))
@@ -105,11 +90,30 @@ func buildExternalFindings(
 		if startLine > c.OriginalLine {
 			startLine = 0
 		}
-		add("review comment", c.ID, domain.ExternalFindingInput{
+		if add("review comment", c.ID, domain.ExternalFindingInput{
 			ReviewerAccountID: c.AuthorID, ReviewerLogin: c.AuthorLogin,
 			ThreadID: publish.ExternalReviewCommentThreadID(root), HeadSHA: c.OriginalCommitID,
 			Location: reviewCommentLocation(c.Path, startLine, c.OriginalLine),
 			RawText:  c.Body, CreatedAt: c.CreatedAt.UTC(),
+		}) {
+			commentedReviews[c.ReviewID] = true
+		}
+	}
+	// A review's body summarizes its usable inline findings. If none could
+	// be stored, retain the body so the reviewer's only usable text survives.
+	reviews := slices.Clone(obs.Reviews)
+	slices.SortFunc(reviews, func(a, b publish.PullReview) int {
+		return cmp.Or(a.SubmittedAt.Compare(b.SubmittedAt), cmp.Compare(a.ID, b.ID))
+	})
+	for _, rv := range reviews {
+		if commentedReviews[rv.ID] || rv.State == externalReviewApprovedState || rv.State == externalReviewDismissedState ||
+			strings.TrimSpace(rv.Body) == "" {
+			continue
+		}
+		add("review", rv.ID, domain.ExternalFindingInput{
+			ReviewerAccountID: rv.AuthorID, ReviewerLogin: rv.AuthorLogin,
+			ThreadID: publish.ExternalReviewThreadID(rv.ID), HeadSHA: rv.CommitID,
+			RawText: rv.Body, CreatedAt: rv.SubmittedAt.UTC(),
 		})
 	}
 	return findings, skipped

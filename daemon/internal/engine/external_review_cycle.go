@@ -86,9 +86,9 @@ func loadExternalCycleFindings(
 // give an outcome: the cycle's open findings in its first round, and none in
 // any other round or task.
 //
-// The round's stored adjudication fixes that set. The cycle's admitted
-// findings are read live, and a reviewer can leave one more between the
-// cycle's ready item and the end of its task. That finding was never judged,
+// The round's stored dispute binding or adjudication fixes that set. The
+// cycle's admitted findings are read live, and a reviewer can leave one more
+// between the cycle's ready item and the end of its task. That finding was never judged,
 // so counting it would hold a finished round open; it has no outcome, so the
 // trigger starts the next cycle for it.
 func (w *productionPublicationWorkflow) openExternalFindings(
@@ -100,6 +100,7 @@ func (w *productionPublicationWorkflow) openExternalFindings(
 	var (
 		findings externalCycleFindings
 		judged   *domain.FindingAdjudication
+		disputed *domain.ReviewDisputeBinding
 	)
 	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
@@ -108,7 +109,12 @@ func (w *productionPublicationWorkflow) openExternalFindings(
 		}
 		artifact, err := tx.GetFindingAdjudicationForRound(ctx, task.RunID, record.Round)
 		if errors.Is(err, store.ErrNotFound) {
-			return nil
+			item, itemErr := tx.GetAttentionItem(ctx, productionReviewItemID(task.RunID, record.Round))
+			if errors.Is(itemErr, store.ErrNotFound) {
+				return nil
+			}
+			disputed = item.ReviewDispute
+			return itemErr
 		}
 		judged = &artifact
 		return err
@@ -116,6 +122,11 @@ func (w *productionPublicationWorkflow) openExternalFindings(
 		return nil, err
 	}
 	if judged == nil {
+		if disputed != nil {
+			return slices.DeleteFunc(findings.open, func(finding domain.Finding) bool {
+				return !slices.Contains(disputed.FindingIDs, finding.ID)
+			}), nil
+		}
 		return findings.open, nil
 	}
 	return slices.DeleteFunc(findings.open, func(finding domain.Finding) bool {
@@ -123,6 +134,24 @@ func (w *productionPublicationWorkflow) openExternalFindings(
 			return entry.FindingID == finding.ID
 		})
 	}), nil
+}
+
+// Only the two first-round adjudication fallbacks offer a finding decision.
+// Other external endings have no continuation and keep their existing actions.
+func (w *productionPublicationWorkflow) awaitExternalReviewDecision(
+	ctx context.Context, task productionPublicationTask, record domain.ReviewRecord, reason string,
+) (productionReviewGateState, error) {
+	reason, err := w.withExternalReviewFindings(ctx, task, reason)
+	if err != nil {
+		return productionReviewPending, err
+	}
+	reason += " Choose a route for each finding: fix it in this pull request, decline it with a reply, or defer it with a reply and no follow-up issue. Fix is available only inside this run's declared paths. Declining every finding restores readiness for the unchanged head after the cycle completes."
+	if err := w.putReviewAttentionWithActionsAndID(ctx, task, record, reason,
+		domain.AttentionReviewDispute, productionReviewItemID(task.RunID, record.Round),
+		[]domain.Action{domain.ActionAdjudicateFindings, domain.ActionDiscuss, domain.ActionStop}, nil); err != nil {
+		return productionReviewPending, err
+	}
+	return productionReviewPending, nil
 }
 
 // externalRoundCard is what the adjudication card of an external review
