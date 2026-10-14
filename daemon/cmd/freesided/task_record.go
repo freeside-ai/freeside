@@ -10,13 +10,14 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
 // taskRecordVersion names the record's JSON shape. Any change to that shape,
 // including to signet.TaskTimeline, which the record embeds, changes it.
-const taskRecordVersion = "freeside-task-record-v1"
+const taskRecordVersion = "freeside-task-record-v2"
 
 // taskRecord is what `freesided inspect task` prints: one task's recorded
 // facts, read under one store revision, for an agent to read. It is built
@@ -73,7 +74,39 @@ type taskRecordRun struct {
 	Admissions           []taskRecordAdmission          `json:"admissions"`
 	ResolvedPolicyDigest *domain.Digest                 `json:"resolved_policy_digest"`
 	BillableCost         *domain.CostSoFar              `json:"billable_cost"`
+	Publication          *taskRecordPublication         `json:"publication"`
 	Errors               []taskRecordRunError           `json:"errors"`
+}
+
+// taskRecordPublication is a run's last published pull request and the facts
+// that prove it: the head the producing attempt exported, whether the ready
+// item carries its evidence, and the outcome the publisher recorded. These
+// are the facts the real-run verifier checks, so a run's proof reads here
+// without a test binary.
+type taskRecordPublication struct {
+	ReadyItemID             domain.ItemID                `json:"ready_item_id"`
+	ExportHeadSHA           string                       `json:"export_head_sha"`
+	EvidenceSnapshotPresent bool                         `json:"evidence_snapshot_present"`
+	Outcome                 taskRecordPublicationOutcome `json:"outcome"`
+	// Completion is null while the work unit is not done, and also when its
+	// read failed, which Errors then names.
+	Completion *taskRecordCompletion `json:"completion"`
+}
+
+type taskRecordPublicationOutcome struct {
+	Repo             string `json:"repo"`
+	BaseRef          string `json:"base_ref"`
+	HeadSHA          string `json:"head_sha"`
+	PRNumber         int    `json:"pr_number"`
+	EvidenceEligible bool   `json:"evidence_eligible"`
+}
+
+type taskRecordCompletion struct {
+	Criterion      domain.CompletionCriterionKind `json:"criterion"`
+	PRNumber       int                            `json:"pr_number"`
+	MergeCommitSHA string                         `json:"merge_commit_sha"`
+	BoundIssue     *int                           `json:"bound_issue"`
+	RecordedAt     time.Time                      `json:"recorded_at"`
 }
 
 // taskRecordRunSection names one of a run's reads.
@@ -87,17 +120,22 @@ const (
 	// returns.
 	taskRecordRunObservation taskRecordRunSection = "observation"
 	taskRecordRunConclusion  taskRecordRunSection = "conclusion"
+	// taskRecordRunPublication covers Publication other than its Completion.
+	taskRecordRunPublication taskRecordRunSection = "publication"
+	taskRecordRunCompletion  taskRecordRunSection = "completion"
 )
 
 var allTaskRecordRunSections = []taskRecordRunSection{
 	taskRecordRunAdmissions, taskRecordRunPolicy, taskRecordRunCost,
 	taskRecordRunObservation, taskRecordRunConclusion,
+	taskRecordRunPublication, taskRecordRunCompletion,
 }
 
 func (s taskRecordRunSection) valid() bool {
 	switch s {
 	case taskRecordRunAdmissions, taskRecordRunPolicy, taskRecordRunCost,
-		taskRecordRunObservation, taskRecordRunConclusion:
+		taskRecordRunObservation, taskRecordRunConclusion,
+		taskRecordRunPublication, taskRecordRunCompletion:
 		return true
 	default:
 		return false
@@ -356,6 +394,14 @@ func readTaskRecordRun(ctx context.Context, tx *store.ReadTx, runID domain.RunID
 	} else {
 		out.BillableCost = cost
 	}
+	if publication, binding, err := readTaskRecordPublication(ctx, tx, runID); err != nil {
+		fail(taskRecordRunPublication, err)
+	} else if publication != nil {
+		out.Publication = publication
+		if publication.Completion, err = readTaskRecordCompletion(ctx, tx, runID, binding); err != nil {
+			fail(taskRecordRunCompletion, err)
+		}
+	}
 	observation, err := tx.ObserveRun(ctx, runID)
 	if err != nil {
 		// The conclusion is classified from the observation.
@@ -402,6 +448,96 @@ func authenticatedTaskRecordConclusion(
 		}
 	}
 	return signet.AuthenticatedRunConclusion(ctx, tx, run, observation, readyAuthenticated)
+}
+
+// readTaskRecordPublication reads the run's last published cycle the way the
+// real-run verifier does (readRealRunCheckpoint in internal/integration),
+// keeping the history reads so a later policy change cannot hide what was
+// published. A run that never published returns nil and no error.
+func readTaskRecordPublication(
+	ctx context.Context, tx *store.ReadTx, runID domain.RunID,
+) (*taskRecordPublication, domain.ReadyItemPRBinding, error) {
+	itemID, err := tx.PublishedProductionReadyItemID(ctx, runID)
+	if err != nil {
+		return nil, domain.ReadyItemPRBinding{}, err
+	}
+	binding, err := tx.GetReadyItemPRBinding(ctx, itemID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, domain.ReadyItemPRBinding{}, nil
+	}
+	if err != nil {
+		return nil, domain.ReadyItemPRBinding{}, err
+	}
+	ready, err := tx.GetAttentionItemRecord(ctx, itemID)
+	if err != nil {
+		return nil, domain.ReadyItemPRBinding{}, err
+	}
+	export, err := tx.GetExecutionExportRecord(ctx, binding.ProducingInvocationID)
+	if err != nil {
+		return nil, domain.ReadyItemPRBinding{}, err
+	}
+	entry, err := tx.GetInbox(ctx, publicationrecord.OutcomeKey(binding.PublicationIdentity))
+	if err != nil {
+		return nil, domain.ReadyItemPRBinding{}, err
+	}
+	if entry.Kind != publicationrecord.IntentKindOutcome {
+		return nil, domain.ReadyItemPRBinding{}, fmt.Errorf(
+			"publication outcome row has kind %q: %w", entry.Kind, domain.ErrParentKeyMismatch)
+	}
+	outcome, err := publicationrecord.DecodeOutcome(entry.Payload)
+	if err != nil {
+		return nil, domain.ReadyItemPRBinding{}, err
+	}
+	return &taskRecordPublication{
+		ReadyItemID: itemID, ExportHeadSHA: export.HeadSHA,
+		EvidenceSnapshotPresent: len(ready.EvidenceSnapshot) > 0,
+		Outcome: taskRecordPublicationOutcome{
+			Repo: outcome.Repo, BaseRef: outcome.BaseRef, HeadSHA: outcome.HeadSHA,
+			PRNumber: outcome.PRNumber, EvidenceEligible: outcome.EvidenceEligible,
+		},
+	}, binding, nil
+}
+
+// readTaskRecordCompletion reads the run's work-unit completion and binds it
+// to the published pull request, as the verifier's
+// realRunCompletedCheckpoint does: a completion of some other pull request,
+// or a ready binding of some other run, is a contradiction, not this run's
+// done fact. No declaration or no completion is nil and no error.
+func readTaskRecordCompletion(
+	ctx context.Context, tx *store.ReadTx, runID domain.RunID, ready domain.ReadyItemPRBinding,
+) (*taskRecordCompletion, error) {
+	if ready.RunID != runID {
+		return nil, fmt.Errorf("published ready binding belongs to run %s, not %s: %w",
+			ready.RunID, runID, domain.ErrParentKeyMismatch)
+	}
+	declaration, err := tx.GetWorkUnitDeclarationByRun(ctx, runID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	completion, err := tx.GetWorkUnitCompletion(ctx, declaration.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	binding, err := tx.EffectiveWorkUnitPRBinding(ctx, declaration.ID)
+	if err != nil {
+		return nil, err
+	}
+	if binding.Repo != ready.Repo || binding.RepositoryID != ready.RepositoryID ||
+		binding.PRNumber != ready.PRNumber || binding.BaseRef != ready.BaseRef || binding.HeadSHA != ready.HeadSHA {
+		return nil, fmt.Errorf("completed work-unit binding disagrees with the published ready resource: %w",
+			domain.ErrParentKeyMismatch)
+	}
+	return &taskRecordCompletion{
+		Criterion: completion.Criterion, PRNumber: completion.PRNumber,
+		MergeCommitSHA: completion.MergeCommitSHA, BoundIssue: completion.BoundIssue,
+		RecordedAt: completion.RecordedAt,
+	}, nil
 }
 
 func projectTaskRecordAdmission(admission domain.ExecutionAdmission) taskRecordAdmission {

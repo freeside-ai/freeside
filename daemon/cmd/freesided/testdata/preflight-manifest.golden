@@ -1,5 +1,5 @@
 {
-  "version": "freeside-production-composition-v1",
+  "version": "freeside-production-composition-v2",
   "status": "passed",
   "rig": {
     "version": 3,

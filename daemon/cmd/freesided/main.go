@@ -204,6 +204,9 @@ func main() {
 		case "rig":
 			runRigMain(os.Args[2:])
 			return
+		case "deputy":
+			runDeputyMain(os.Args[2:])
+			return
 		case "comprehension":
 			runComprehensionMain(os.Args[2:])
 			return
@@ -595,6 +598,9 @@ type config struct {
 	// Claude configures real execution and its ward gate. Without it or explicit
 	// FakeDriverEnabled, the daemon serves setup and state without an engine.
 	Claude *claudeDriverConfig
+	// DeputyLaunch is set only by deputy: the composition this daemon serves
+	// under, which every new submission must bind (deputyLaunch.admit).
+	DeputyLaunch *deputyLaunch
 }
 
 // defaultLogLevel emits what an unattended daemon's operator needs and
@@ -757,6 +763,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	if err != nil {
 		return nil, err
 	}
+	manualInitiator = cfg.DeputyLaunch.gateManualInitiator(manualInitiator, cfg.Logger)
 	lock, err := daemonlock.Acquire(cfg.DBPath)
 	if err != nil {
 		return nil, fmt.Errorf("acquire database daemon lock: %w", err)
@@ -1364,7 +1371,8 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	}
 	d.pairing.configure(d.readiness().APIURL, attention.MintPairingCode)
 	d.pairing.registerControlRoutes(
-		d.pairing.mux, st, blobs, localBackupFiles, cfg.ApprovedRecipes, integrityProbe, cfg.Environment, attention)
+		d.pairing.mux, st, blobs, localBackupFiles, cfg.ApprovedRecipes, integrityProbe, cfg.Environment, attention,
+		cfg.DeputyLaunch)
 	var fakeSched *scheduler.Scheduler
 	var claudeSched *scheduler.Scheduler
 	var activeReconciler *activeResourceReconciler
