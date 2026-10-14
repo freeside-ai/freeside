@@ -56,6 +56,49 @@ func (r *captureMintRecorder) RecordInstallationMint(rec publish.InstallationMin
 	return nil
 }
 
+// memoryMintHolds is an in-memory InstallationMintHoldStore. recordErr,
+// readErr, and releaseErr, when set, fail that operation, so a test can prove
+// each store failure fails closed.
+type memoryMintHolds struct {
+	mu                             sync.Mutex
+	holds                          map[int64]publish.InstallationMintHold
+	recordErr, readErr, releaseErr error
+}
+
+func newMemoryMintHolds() *memoryMintHolds {
+	return &memoryMintHolds{holds: map[int64]publish.InstallationMintHold{}}
+}
+
+func (m *memoryMintHolds) RecordInstallationMintHold(hold publish.InstallationMintHold) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.recordErr != nil {
+		return m.recordErr
+	}
+	m.holds[hold.InstallationID] = hold
+	return nil
+}
+
+func (m *memoryMintHolds) ReleaseInstallationMintHold(installationID int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.releaseErr != nil {
+		return m.releaseErr
+	}
+	delete(m.holds, installationID)
+	return nil
+}
+
+func (m *memoryMintHolds) InstallationMintHold(installationID int64) (publish.InstallationMintHold, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.readErr != nil {
+		return publish.InstallationMintHold{}, false, m.readErr
+	}
+	hold, found := m.holds[installationID]
+	return hold, found, nil
+}
+
 func (r *captureMintRecorder) snapshot() []publish.InstallationMintRecord {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -155,6 +198,7 @@ func newJanitor(
 		authority,
 		recorder,
 		&captureMintRecorder{},
+		newMemoryMintHolds(),
 		fixedNow,
 		maxRemovals,
 	)
@@ -574,6 +618,7 @@ func TestInstallationJanitorRequiresRegistrationOwner(t *testing.T) {
 		installationAuthoritySource{},
 		&removalRecorder{},
 		&captureMintRecorder{},
+		newMemoryMintHolds(),
 		fixedNow,
 		1,
 	)
@@ -691,7 +736,7 @@ func TestInstallationJanitorRunActivatesOnlyAfterCleanPass(t *testing.T) {
 				Account:        "operator",
 				AccountID:      101,
 				RepositoryIDs:  []int64{fixtureRepositoryID},
-			}), &removalRecorder{}, &captureMintRecorder{}, fixedNow, 1)
+			}), &removalRecorder{}, &captureMintRecorder{}, newMemoryMintHolds(), fixedNow, 1)
 		if err != nil {
 			t.Fatalf("NewInstallationJanitor: %v", err)
 		}

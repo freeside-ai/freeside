@@ -116,11 +116,6 @@ func (e *janitorCredentialError) Error() string {
 func (e *janitorCredentialError) Unwrap() error        { return e.cause }
 func (e *janitorCredentialError) Is(target error) bool { return target == errJanitorUnsafe }
 
-type janitorMintHold struct {
-	until time.Time
-	token Secret
-}
-
 // JanitorRegistrationFault names one registration the latest pass could not
 // complete, with the error that denied it. A faulted registration is absent
 // from coverage, so its runtime gate is already shut; the fault is what tells
@@ -163,6 +158,7 @@ type InstallationJanitor struct {
 	authority    InstallationAuthoritySource
 	recorder     JanitorRecorder
 	mintRecorder InstallationMintRecorder
+	holds        InstallationMintHoldStore
 	now          func() time.Time
 	maxRemovals  int
 
@@ -174,7 +170,11 @@ type InstallationJanitor struct {
 	faults     []JanitorRegistrationFault
 	churn      []JanitorRegistrationChurn
 	incomplete []JanitorRegistrationIncomplete
-	mintHolds  map[int64]janitorMintHold
+	// retained holds a minted token whose revoke failed, only so a later pass
+	// can retry the revoke. Whether the installation is held is the durable
+	// hold's decision; a token is never persisted, so a restart loses it and
+	// the hold runs to its deadline.
+	retained map[int64]Secret
 }
 
 // NewInstallationJanitor constructs a janitor with a hard per-cycle removal
@@ -183,7 +183,8 @@ type InstallationJanitor struct {
 // It takes two audit ports because it records two different events to two
 // durable surfaces: recorder commits the destructive-action barrier (the file
 // journal), and mintRecorder commits each grant-read mint (the SQLite audit
-// ledger, via the store-backed recorder).
+// ledger, via the store-backed recorder). holds keeps each installation's
+// mint hold in the same database, so a hold survives a restart (#2004).
 func NewInstallationJanitor(
 	ks *Keystore,
 	client *http.Client,
@@ -191,11 +192,12 @@ func NewInstallationJanitor(
 	authority InstallationAuthoritySource,
 	recorder JanitorRecorder,
 	mintRecorder InstallationMintRecorder,
+	holds InstallationMintHoldStore,
 	now func() time.Time,
 	maxRemovals int,
 ) (*InstallationJanitor, error) {
 	if ks == nil || client == nil || authority == nil || recorder == nil ||
-		mintRecorder == nil || now == nil {
+		mintRecorder == nil || holds == nil || now == nil {
 		return nil, errors.New("installation janitor: nil dependency")
 	}
 	if baseURL == "" {
@@ -211,6 +213,7 @@ func NewInstallationJanitor(
 		authority:    authority,
 		recorder:     recorder,
 		mintRecorder: mintRecorder,
+		holds:        holds,
 		now:          now,
 		maxRemovals:  maxRemovals,
 		covered:      map[int64]registrationCoverage{},
@@ -1035,6 +1038,12 @@ type installationRepositoriesPage struct {
 	} `json:"repositories"`
 }
 
+// janitorMintTimeout bounds the detached grant-read mint request. It matches
+// the production client's own 30-second timeout, so detaching the request
+// from the pass adds no new unknown outcome; it only stops a client without
+// a timeout from holding shutdown open indefinitely.
+const janitorMintTimeout = 30 * time.Second
+
 func (j *InstallationJanitor) enumerateRepositoryGrants(
 	ctx context.Context,
 	jwt Secret,
@@ -1044,9 +1053,43 @@ func (j *InstallationJanitor) enumerateRepositoryGrants(
 	if err := j.checkMintHold(ctx, installationID); err != nil {
 		return nil, err
 	}
+	// The hold is committed before the request leaves, so a crash at any
+	// point after this leaves a restarted daemon refusing to mint until the
+	// deadline. Only a proven outcome releases it early.
 	requestedAt := j.now()
-	token, mintErr := j.mintGrantReadToken(ctx, jwt, registrationID, installationID)
+	if err := j.holds.RecordInstallationMintHold(InstallationMintHold{
+		InstallationID: installationID,
+		RegistrationID: registrationID,
+		RequestedAt:    requestedAt.UTC(),
+		HeldUntil:      requestedAt.Add(installationTokenLifetime + installationTokenSkew).UTC(),
+	}); err != nil {
+		return nil, fmt.Errorf("mint grant-read token: %w: %w", errJanitorUnsafe, err)
+	}
+	// A shutdown that lands during the hold write would otherwise fail the
+	// request below as an unknown outcome and hold the installation for the
+	// whole lifetime, though nothing was sent.
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Join(err, j.releaseMintHold(installationID))
+	}
+	// Past that check the request runs detached from the pass, bounded like
+	// the revoke below. A shutdown landing between the check and the dispatch
+	// would otherwise fail the request before it is sent, an error that
+	// cannot be told apart from an unknown outcome, and hold the installation
+	// across the restart with no token in existence. Finishing the request
+	// turns that window into a known outcome.
+	mintCtx, cancelMint := context.WithTimeout(context.WithoutCancel(ctx), janitorMintTimeout)
+	token, mintErr := j.mintGrantReadToken(mintCtx, jwt, registrationID, installationID)
+	cancelMint()
 	if token.Reveal() == "" {
+		if errors.Is(mintErr, errJanitorUnsafe) {
+			// The outcome is unknown: GitHub may hold a live token, so the
+			// hold stays until its deadline.
+			return nil, mintErr
+		}
+		// GitHub refused, or the request never left: no token exists.
+		if err := j.releaseMintHold(installationID); err != nil {
+			return nil, errors.Join(mintErr, err)
+		}
 		return nil, mintErr
 	}
 	var repositoryIDs []int64
@@ -1056,57 +1099,85 @@ func (j *InstallationJanitor) enumerateRepositoryGrants(
 
 	revokeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
-	revokeErr := j.revokeInstallationToken(revokeCtx, token)
-	if revokeErr != nil {
-		// Retain the credential only for revocation, and mint nothing else
-		// for this installation until revocation succeeds or its hold ends.
-		j.holdMint(installationID, requestedAt, token)
-		revokeErr = &janitorCredentialError{cause: revokeErr}
+	var holdErr error
+	if err := j.revokeInstallationToken(revokeCtx, token); err != nil {
+		// Retain the credential only for revocation; the durable hold stops
+		// any other mint for this installation until revocation succeeds or
+		// the hold ends.
+		j.retainToken(installationID, token)
+		holdErr = &janitorCredentialError{cause: err}
+	} else {
+		holdErr = j.releaseMintHold(installationID)
 	}
 	if mintErr != nil {
-		if revokeErr != nil {
-			return nil, errors.Join(mintErr, revokeErr)
+		if holdErr != nil {
+			return nil, errors.Join(mintErr, holdErr)
 		}
 		return nil, mintErr
 	}
-	if revokeErr != nil {
-		return nil, revokeErr
+	if holdErr != nil {
+		return nil, holdErr
 	}
 	return repositoryIDs, nil
 }
 
-func (j *InstallationJanitor) holdMint(installationID int64, requestedAt time.Time, token Secret) {
+func (j *InstallationJanitor) retainToken(installationID int64, token Secret) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if j.mintHolds == nil {
-		j.mintHolds = make(map[int64]janitorMintHold)
+	if j.retained == nil {
+		j.retained = make(map[int64]Secret)
 	}
-	j.mintHolds[installationID] = janitorMintHold{
-		until: requestedAt.Add(installationTokenLifetime + installationTokenSkew), token: token,
-	}
+	j.retained[installationID] = token
 }
 
+func (j *InstallationJanitor) dropToken(installationID int64) {
+	j.mu.Lock()
+	delete(j.retained, installationID)
+	j.mu.Unlock()
+}
+
+// releaseMintHold deletes the durable hold once its token is proven never
+// created, proven revoked, or past its deadline. A failed release leaves the
+// row, which only holds the installation longer, but the store failing is the
+// daemon's own safety machinery failing, so it stops the pass.
+func (j *InstallationJanitor) releaseMintHold(installationID int64) error {
+	if err := j.holds.ReleaseInstallationMintHold(installationID); err != nil {
+		return fmt.Errorf("release mint hold: %w: %w", errJanitorUnsafe, err)
+	}
+	return nil
+}
+
+// checkMintHold refuses a mint while the installation's durable hold is in
+// force. The row, not process memory, is the authority, so a restarted daemon
+// honors a hold an earlier process took. A retained token, which only this
+// process can have, gets one revoke retry per pass; its success ends the hold.
 func (j *InstallationJanitor) checkMintHold(ctx context.Context, installationID int64) error {
+	hold, held, err := j.holds.InstallationMintHold(installationID)
+	if err != nil {
+		return fmt.Errorf("check mint hold: %w: %w", errJanitorUnsafe, err)
+	}
 	j.mu.RLock()
-	hold, held := j.mintHolds[installationID]
+	token := j.retained[installationID]
 	j.mu.RUnlock()
 	if !held {
+		// A row leaves only through a release after a proven outcome or past
+		// its deadline, so a token left behind is dead or expired.
+		j.dropToken(installationID)
 		return nil
 	}
-	if j.now().Before(hold.until) {
-		if hold.token.Reveal() == "" {
-			return fmt.Errorf("%w until %s", ErrJanitorMintHeld, hold.until.UTC().Format(time.RFC3339))
+	if j.now().Before(hold.HeldUntil) {
+		if token.Reveal() == "" {
+			return fmt.Errorf("%w until %s", ErrJanitorMintHeld, hold.HeldUntil.UTC().Format(time.RFC3339))
 		}
 		revokeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
-		if err := j.revokeInstallationToken(revokeCtx, hold.token); err != nil {
+		if err := j.revokeInstallationToken(revokeCtx, token); err != nil {
 			return err
 		}
 	}
-	j.mu.Lock()
-	delete(j.mintHolds, installationID)
-	j.mu.Unlock()
-	return nil
+	// Revoked, or past the deadline: the token is dead either way.
+	j.dropToken(installationID)
+	return j.releaseMintHold(installationID)
 }
 
 func (j *InstallationJanitor) mintGrantReadToken(
@@ -1131,12 +1202,11 @@ func (j *InstallationJanitor) mintGrantReadToken(
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("Content-Type", "application/json")
 	// Minting is not idempotent, so from here on an error that leaves the
-	// outcome unknown holds future mints for GitHub's declared lifetime plus
-	// skew. Only a refusal proves nothing was created. The owner accepted this
+	// outcome unknown is unsafe, and the caller keeps the durable hold it
+	// recorded before this request for GitHub's declared lifetime plus skew.
+	// Only a refusal proves nothing was created. The owner accepted this
 	// bound in devlog/2026-10-13-1015-janitor-token-holds.md.
-	requestedAt := j.now()
 	unknown := func(cause error) (Secret, error) {
-		j.holdMint(installationID, requestedAt, "")
 		return "", &janitorCredentialError{cause: cause}
 	}
 	resp, err := j.client.Do(req)
@@ -1463,6 +1533,6 @@ func (j *InstallationJanitor) finishRun() {
 	j.faults = nil
 	j.churn = nil
 	j.incomplete = nil
-	// Mint holds outlive this loop, just as their possible credentials do.
+	// Retained tokens outlive this loop, just as their credentials do.
 	j.mu.Unlock()
 }

@@ -461,7 +461,7 @@ func withDurableInstallationPoll(
 		return err
 	}
 	janitor, err := publish.NewInstallationJanitor(
-		keystore, client, defaultGitHubAPIBase, authority, authority, recorder,
+		keystore, client, defaultGitHubAPIBase, authority, authority, recorder, recorder,
 		time.Now, defaultJanitorRemovalBound,
 	)
 	if err != nil {
@@ -647,6 +647,7 @@ func withInstallationJanitor(
 		defaultGitHubAPIBase,
 		authority,
 		authority,
+		recorder,
 		recorder,
 		time.Now,
 		defaultJanitorRemovalBound,

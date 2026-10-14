@@ -138,6 +138,8 @@ var ErrJanitorInactive = errors.New("GitHub App installation janitor is not acti
 
 // ErrJanitorMintHeld means a pass is waiting for a possibly live token to
 // expire. It is not a new failed attempt, and does not reset earlier failures.
+// The hold is durable, so a restarted daemon reports it until the same
+// deadline (#2004).
 var ErrJanitorMintHeld = errors.New("installation janitor mint is held")
 
 // ErrInstallationGrantUntrusted reports that current janitor coverage does not

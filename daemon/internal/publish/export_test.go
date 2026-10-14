@@ -84,3 +84,8 @@ func (p *Publisher) ConvergePRForTest(
 	}
 	return p.convergePR(ctx, repo, identity, c, title, body, wantDraft, allowCreate, expectedPRNumber, nil)
 }
+
+// ErrJanitorUnsafeForTest is the janitor's pass-stopping marker, so an
+// external test can assert that a failed hold write is the daemon's own
+// safety failure rather than one registration's fault.
+var ErrJanitorUnsafeForTest = errJanitorUnsafe

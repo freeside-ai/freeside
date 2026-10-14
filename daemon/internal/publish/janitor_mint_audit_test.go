@@ -30,6 +30,7 @@ func newMintAuditJanitor(
 		trustedPublicBinding(fixtureRepositoryID),
 		&removalRecorder{},
 		mintRecorder,
+		newMemoryMintHolds(),
 		fixedNow,
 		1,
 	)

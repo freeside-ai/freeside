@@ -110,6 +110,30 @@ type InstallationMintRecorder interface {
 	RecordInstallationMint(InstallationMintRecord) error
 }
 
+// InstallationMintHold is the janitor's durable per-installation mint hold
+// (issue #2004): no grant-read token may be minted for InstallationID before
+// HeldUntil, because an earlier token's outcome is unknown or its revoke
+// failed. Like InstallationMintRecord it has no token field, so a held token
+// can never reach the database.
+type InstallationMintHold struct {
+	InstallationID int64
+	RegistrationID int64
+	RequestedAt    time.Time
+	HeldUntil      time.Time
+}
+
+// InstallationMintHoldStore is the janitor's mint-hold port. The recorded
+// hold, not process memory, decides whether an installation is held, so a
+// hold survives a daemon restart. Record replaces any earlier hold for the
+// installation, release of an absent hold succeeds, and the read reports an
+// expired hold as found: expiry is the janitor's decision against its own
+// clock. StoreRecorder implements it.
+type InstallationMintHoldStore interface {
+	RecordInstallationMintHold(InstallationMintHold) error
+	ReleaseInstallationMintHold(installationID int64) error
+	InstallationMintHold(installationID int64) (InstallationMintHold, bool, error)
+}
+
 // StoreRecorder lands each mint on the store-owned SQLite audit
 // surface (plan §5.9; issue #107). The enclosing transaction's commit
 // is the durability barrier the retired 1A JSONL substrate provided
@@ -208,4 +232,64 @@ func (r *StoreRecorder) RecordInstallationMint(rec InstallationMintRecord) error
 		return fmt.Errorf("audit: record installation mint: %w", err)
 	}
 	return nil
+}
+
+var _ InstallationMintHoldStore = (*StoreRecorder)(nil)
+
+// RecordInstallationMintHold commits the hold in its own internal
+// transaction, under context.Background() for the same reason as RecordMint:
+// the janitor sends the mint request only after this commit returns.
+func (r *StoreRecorder) RecordInstallationMintHold(hold InstallationMintHold) error {
+	ctx := context.Background()
+	err := r.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordInstallationMintHold(ctx, store.InstallationMintHold{
+			InstallationID: hold.InstallationID,
+			RegistrationID: hold.RegistrationID,
+			RequestedAt:    hold.RequestedAt,
+			HeldUntil:      hold.HeldUntil,
+		})
+	})
+	if err != nil {
+		return fmt.Errorf("audit: record installation mint hold: %w", err)
+	}
+	return nil
+}
+
+// ReleaseInstallationMintHold deletes the installation's hold in its own
+// internal transaction.
+func (r *StoreRecorder) ReleaseInstallationMintHold(installationID int64) error {
+	ctx := context.Background()
+	err := r.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.ReleaseInstallationMintHold(ctx, installationID)
+	})
+	if err != nil {
+		return fmt.Errorf("audit: release installation mint hold: %w", err)
+	}
+	return nil
+}
+
+// InstallationMintHold reads the installation's hold, if one is recorded.
+func (r *StoreRecorder) InstallationMintHold(installationID int64) (InstallationMintHold, bool, error) {
+	ctx := context.Background()
+	var (
+		row   store.InstallationMintHold
+		found bool
+	)
+	err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		row, found, err = tx.InstallationMintHold(ctx, installationID)
+		return err
+	})
+	if err != nil {
+		return InstallationMintHold{}, false, fmt.Errorf("audit: read installation mint hold: %w", err)
+	}
+	if !found {
+		return InstallationMintHold{}, false, nil
+	}
+	return InstallationMintHold{
+		InstallationID: row.InstallationID,
+		RegistrationID: row.RegistrationID,
+		RequestedAt:    row.RequestedAt,
+		HeldUntil:      row.HeldUntil,
+	}, true, nil
 }

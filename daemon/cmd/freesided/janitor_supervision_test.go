@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,25 +17,54 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 )
 
-type supervisionJanitorPorts struct{}
+// supervisionJanitorPorts keeps mint holds in memory: these tests exercise
+// one janitor, so durability across a restart is not under test here.
+type supervisionJanitorPorts struct {
+	mu    sync.Mutex
+	holds map[int64]publish.InstallationMintHold
+}
 
-func (supervisionJanitorPorts) InstallationAuthority(context.Context, int64) (publish.InstallationAuthority, error) {
+func (*supervisionJanitorPorts) InstallationAuthority(context.Context, int64) (publish.InstallationAuthority, error) {
 	return publish.InstallationAuthority{
 		TrustedOwners:        []publish.TrustedOwner{{Login: "example", ID: 42}},
 		TrustedInstallations: []publish.TrustedInstallation{{RegistrationID: 91, InstallationID: 777, Account: "example", AccountID: 42, RepositoryIDs: []int64{44}}},
 	}, nil
 }
 
-func (supervisionJanitorPorts) RecordInstallationRemoval(publish.InstallationRemovalRecord) error {
+func (*supervisionJanitorPorts) RecordInstallationRemoval(publish.InstallationRemovalRecord) error {
 	return nil
 }
 
-func (supervisionJanitorPorts) RecordInstallationQuarantine(publish.InstallationRemovalRecord) error {
+func (*supervisionJanitorPorts) RecordInstallationQuarantine(publish.InstallationRemovalRecord) error {
 	return nil
 }
 
-func (supervisionJanitorPorts) RecordInstallationMint(publish.InstallationMintRecord) error {
+func (*supervisionJanitorPorts) RecordInstallationMint(publish.InstallationMintRecord) error {
 	return nil
+}
+
+func (p *supervisionJanitorPorts) RecordInstallationMintHold(hold publish.InstallationMintHold) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.holds == nil {
+		p.holds = map[int64]publish.InstallationMintHold{}
+	}
+	p.holds[hold.InstallationID] = hold
+	return nil
+}
+
+func (p *supervisionJanitorPorts) ReleaseInstallationMintHold(installationID int64) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.holds, installationID)
+	return nil
+}
+
+func (p *supervisionJanitorPorts) InstallationMintHold(installationID int64) (publish.InstallationMintHold, bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	hold, found := p.holds[installationID]
+	return hold, found, nil
 }
 
 func TestScheduledJanitorCredentialFailures(t *testing.T) {
@@ -84,8 +114,8 @@ func TestScheduledJanitorCredentialFailures(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			ports := supervisionJanitorPorts{}
-			j, err := publish.NewInstallationJanitor(ks, srv.Client(), srv.URL, ports, ports, ports, func() time.Time { return now }, 4)
+			ports := &supervisionJanitorPorts{}
+			j, err := publish.NewInstallationJanitor(ks, srv.Client(), srv.URL, ports, ports, ports, ports, func() time.Time { return now }, 4)
 			if err != nil {
 				t.Fatal(err)
 			}
