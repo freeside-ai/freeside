@@ -779,7 +779,7 @@ freesided inspect task -db <db> -task <task-id>
 - `tasks`: every task the store holds, with `task_id`, `project_id`,
   `created_at`, and `latest_run_id` (`null` before the first run).
 
-`freesided inspect task` prints one task's record, `freeside-task-record-v1`.
+`freesided inspect task` prints one task's record, `freeside-task-record-v2`.
 Every section is read in one transaction, at the store revision
 `as_of_revision`; `as_of` is the read time. To wait for a change, read again
 and compare `as_of_revision`. A revision that hasn't moved means no recorded
@@ -791,7 +791,7 @@ revision.
 | --- | --- |
 | `task` | Project, creation time, lifecycle facts, and the current cancellation with its acknowledgement state. |
 | `timeline` | The timeline a paired client gets, unchanged: runs and attempts, milestones, the current hold, review rounds, verification, pull request, completion, and stop events. |
-| `runs` | For each run: `conclusion` (outcome, hold reason, terminal invocation status), the current `hold`, each invocation's last observed status, the governing digests of each recorded admission, the resolved policy digest, and `billable_cost` (`null` when none was recorded). |
+| `runs` | For each run: `conclusion` (outcome, hold reason, terminal invocation status), the current `hold`, each invocation's last observed status, the governing digests of each recorded admission, the resolved policy digest, `billable_cost` (`null` when none was recorded), and `publication` (`null` until the run publishes). |
 | `items` | Every attention item of the task or one of its runs, open or closed, and the stall notices for the task's invocations: type, status, `created_at`, `decided_at`, the typed cause (`health_diagnostic`, `execution_failure`, `publish_block`, `blocked_on`), the commands applied (command id, action, device id), and the deliveries. |
 | `counts` | Items by type, with every type listed; health notices by code; runs held now; and failed stops. |
 
@@ -806,7 +806,8 @@ nothing.
   the items are, and `failed_stops` when the task is.
 - **`errors` on a run** lists each of the run's reads that failed, by
   `section`: `admissions`, `resolved_policy_digest`, `billable_cost`,
-  `observation` (the hold and the invocations), or `conclusion`. A null run
+  `observation` (the hold and the invocations), `conclusion`, `publication`,
+  or `completion`. A null run
   field was not read exactly when `errors` names its section; otherwise the
   run has none. The admissions read scans every run's rows, so one
   unreadable admission fails that section for every run. `runs_held` counts
@@ -835,6 +836,16 @@ Reading the record:
 - **`invocations` are the driver's last observations.** A finished
   invocation can still read as the status last seen. The authoritative
   outcome is `conclusion.terminal_status` and the timeline.
+- **`publication` is a run's proof of work.** It names the last published
+  cycle's `ready_item_id`, the `export_head_sha` the producing attempt
+  exported, whether the ready item carries its `evidence_snapshot`, the
+  `outcome` the publisher recorded (`repo`, `base_ref`, `head_sha`,
+  `pr_number`, `evidence_eligible`), and the work unit's `completion`
+  (`null` while the unit is not done). These are the facts the real-run
+  verifier checks: an outcome whose `head_sha` matches `export_head_sha`
+  and is `evidence_eligible` is a pull request of exactly the exported
+  head. A completion bound to another pull request is an `integrity` error
+  in the `completion` section.
 - **`failed_stops` is 0 or 1.** The store keeps the latest cancellation only.
   A failed stop is a cancellation whose acknowledgement `state` is
   `failed_to_stop`; the store holds no typed reason for it, so the record
@@ -844,7 +855,7 @@ Reading the record:
   flag names, and the store refuses evidence that names any other recipe;
   the record reports that section as `unapproved_recipe`.
 - **The timeline's shape is part of the record's version.** A change to the
-  task timeline or its events changes `freeside-task-record-v1`.
+  task timeline or its events changes `freeside-task-record-v2`.
 
 The record never holds evidence, claims, conversation messages (a command's
 message and attachments included), transcripts, prompt text, credentials, or

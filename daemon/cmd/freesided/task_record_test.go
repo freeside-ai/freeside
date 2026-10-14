@@ -580,3 +580,76 @@ func TestTaskRecordErrorKinds(t *testing.T) {
 		t.Error("a zero value is valid")
 	}
 }
+
+// TestTaskRecordReportsPublication reads a published run's proof the way the
+// real-run verifier checks it, then stores a completion its evidence does
+// not support and expects only the completion section to fail.
+func TestTaskRecordReportsPublication(t *testing.T) {
+	st := schedTestStore(t)
+	ctx := t.Context()
+	runID := domain.RunID("run-published")
+	capturedRunNamed(t, st, runID, domain.ProductionReadyItemID(runID))
+	readRun := func() taskRecordRun {
+		var run taskRecordRun
+		if err := st.Read(ctx, func(tx *store.ReadTx) error {
+			run = readTaskRecordRun(ctx, tx, runID)
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return run
+	}
+	run := readRun()
+	want := taskRecordPublication{
+		ReadyItemID: domain.ProductionReadyItemID(runID), ExportHeadSHA: "cafed00d",
+		Outcome: taskRecordPublicationOutcome{
+			Repo: "owner/repo", BaseRef: "main", HeadSHA: "cafed00d", PRNumber: 450, EvidenceEligible: true,
+		},
+	}
+	if run.Publication == nil || *run.Publication != want {
+		t.Fatalf("publication = %+v, want %+v", run.Publication, want)
+	}
+	if sections := runErrorSections(run); slices.Contains(sections, taskRecordRunPublication) ||
+		slices.Contains(sections, taskRecordRunCompletion) {
+		t.Fatalf("errors = %+v", run.Errors)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		ready, err := tx.GetReadyItemPRBinding(ctx, domain.ProductionReadyItemID(runID))
+		if err != nil {
+			return err
+		}
+		ready.RunID = "run-other"
+		if _, err := readTaskRecordCompletion(ctx, tx, runID, ready); !errors.Is(err, domain.ErrParentKeyMismatch) {
+			t.Errorf("a ready binding of another run: %v, want an integrity error", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var unit domain.WorkUnitID
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		declaration, err := tx.GetWorkUnitDeclarationByRun(ctx, runID)
+		unit = declaration.ID
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	boundIssue := 443
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordWorkUnitCompletion(ctx, domain.WorkUnitCompletion{
+			UnitID: unit, Criterion: domain.CompletionBoundIssueClosedByMergedPR, PRNumber: 450,
+			MergeCommitSHA: "feedface", BoundIssue: &boundIssue, RecordedAt: taskRecordAsOf,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	run = readRun()
+	if run.Publication == nil || run.Publication.Completion != nil {
+		t.Fatalf("publication = %+v, want it with no completion", run.Publication)
+	}
+	index := slices.IndexFunc(run.Errors, func(e taskRecordRunError) bool { return e.Section == taskRecordRunCompletion })
+	if index < 0 || run.Errors[index].Kind != taskRecordErrorIntegrity {
+		t.Fatalf("errors = %+v, want an integrity error on the completion", run.Errors)
+	}
+}
