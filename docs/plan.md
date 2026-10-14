@@ -6296,3 +6296,4 @@ The integration role is the **spine**, a role rather than a territory.
 - Antfarm, Nimbalyst, Conductor, and Gas Town/Beads as cautionary references;
   and
 - `agentclientprotocol.com` for Phase 3.
+
