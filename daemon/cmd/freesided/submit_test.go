@@ -666,8 +666,26 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 		t.Fatalf("other-project result = %#v, want same spec under a distinct run", otherProjectResult)
 	}
 
+	// The same source in the same project is the unfinished task's, so new
+	// work on it is refused; the identity checks below use their own stores.
+	duplicate := cfg
+	duplicate.SubmissionID = "duplicate"
+	duplicate.PublicationPath = filepath.Join(root, "duplicate-publication.json")
+	if err := os.WriteFile(
+		duplicate.PublicationPath,
+		[]byte(`{"title":"Describe it again","body":"## Why\n\nCloses #456.\n","commit_author":{"app_slug":"freeside-test","bot_user_id":12345}}`),
+		0o600,
+	); err != nil {
+		t.Fatalf("write duplicate publication metadata: %v", err)
+	}
+	if _, err := runSubmitCommand(ctx, duplicate); !errors.Is(err, errDuplicateSource) ||
+		!strings.Contains(err.Error(), "task task-") {
+		t.Fatalf("same source in the same project: %v, want a refusal naming the unfinished task", err)
+	}
+
 	otherPolicy := cfg
 	otherPolicy.SubmissionID = "other-policy"
+	otherPolicy.DBPath = filepath.Join(t.TempDir(), "freeside.db")
 	otherPolicy.PolicyPath = filepath.Join(root, "other-policy.json")
 	otherPolicyBody := submissionPolicyBody("app/**", strings.Repeat("cd", 32))
 	if err := os.WriteFile(otherPolicy.PolicyPath, []byte(otherPolicyBody), 0o600); err != nil {
@@ -684,6 +702,7 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 
 	otherPublication := cfg
 	otherPublication.SubmissionID = "other-publication"
+	otherPublication.DBPath = filepath.Join(t.TempDir(), "freeside.db")
 	otherPublication.PublicationPath = filepath.Join(root, "other-publication.json")
 	if err := os.WriteFile(
 		otherPublication.PublicationPath,

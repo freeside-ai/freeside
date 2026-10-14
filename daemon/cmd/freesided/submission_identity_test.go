@@ -23,7 +23,12 @@ func TestSubmissionIdentityNewWorkAndSavedManualRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := runSubmitCommand(t.Context(), cfg)
+	// The same inputs into the same store are now refused as a duplicate of
+	// the unfinished first task (submit_test.go, "duplicate"), so the second
+	// new submission goes to its own store.
+	other := cfg
+	other.DBPath = filepath.Join(root, "other.db")
+	second, err := runSubmitCommand(t.Context(), other)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -34,6 +34,9 @@ func TestSubmitDeclaredBranchPersistsAndChangesRunIdentity(t *testing.T) {
 	if err := os.WriteFile(publicationPath, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// A second store: in the first the declared branch is a duplicate of the
+	// unfinished task, and the identity is what this test compares.
+	cfg.DBPath = filepath.Join(t.TempDir(), "freeside.db")
 	declared, err := runSubmitCommand(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)

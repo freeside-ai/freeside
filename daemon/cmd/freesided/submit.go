@@ -285,6 +285,10 @@ var errWorkUnitRequired = errors.New(
 		`the smallest being {"completion_criterion":"bound_pr_merged"}; ` +
 		`a task submitted without one never finishes when its pull request merges`)
 
+// errDuplicateSource marks new work refused because its source is an
+// unfinished task's.
+var errDuplicateSource = errors.New("duplicate source")
+
 // submittedSourceReference checks a publication file against the task source
 // (#1928). A task that is exactly one issue URL must name that issue in
 // source_issue, and a declared source_issue must be the task's whole source,
@@ -821,6 +825,9 @@ func applyLaunchSubmission(
 			if err := launch.admit(req.ProjectID, publication.CommitAuthor, composition.digest, resolvedPolicy); err != nil {
 				return fmt.Errorf("submit: %w", err)
 			}
+			if err := refuseUnfinishedDuplicate(ctx, tx, cfg.ProjectID, specArtifact.ID); err != nil {
+				return err
+			}
 		}
 		if cfg.RunID == "" {
 			if err := engine.RegisterSubmissionArtifact(ctx, tx, specArtifact); err != nil {
@@ -1026,6 +1033,34 @@ func validateSubmissionComposition(
 			runID, wantInvocation, domain.ErrParentKeyMismatch)
 	}
 	return false, nil
+}
+
+// refuseUnfinishedDuplicate refuses new work whose source is already an
+// unfinished task's in the same project, so one work item cannot run twice
+// by accident. A replay of the same submission never reaches it; deliberate
+// new work on the same source goes through that task's own reattempt, or
+// after it is abandoned. The same source in another project is new work
+// there; a deputy's launch manifest admits only its own project, so in a
+// deputy's store this covers every task. The scan reads every task: a
+// real-work store holds few.
+func refuseUnfinishedDuplicate(
+	ctx context.Context, tx *store.WriteTx, project domain.ProjectID, source domain.ArtifactID,
+) error {
+	tasks, err := tx.ListTasks(ctx)
+	if err != nil {
+		return err
+	}
+	for _, row := range tasks {
+		task := row.Value
+		if task.ProjectID != project || task.Source == nil || task.Source.WorkItemArtifactID != source ||
+			task.DisplayLifecycle(nil) != nil {
+			continue
+		}
+		return fmt.Errorf("%w: task %s already holds this source and is not finished; "+
+			"reattempt it with `freesided reattempt`, abandon it with `freesided abandon`, "+
+			"or redeliver its own submission with --retry-submission-id", errDuplicateSource, task.ID)
+	}
+	return nil
 }
 
 // validateLaunchComposition binds a submission to the manifest a deputy
