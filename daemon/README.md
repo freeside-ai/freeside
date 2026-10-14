@@ -1630,6 +1630,107 @@ currently active trust profile at import, where its protected paths are
 applied; an unattended admission remains bound to the exact profile digest it
 recorded before execution.
 
+### Run Real Work With The Deputy
+
+`freesided deputy -root <state-root>` is the real-work daemon in one
+process. It does in-process what `scripts/run-real-work.sh` does across
+several: it takes the production rig lease, adopts the agent tree, runs the
+composition preflight, and serves an `ephemeral` daemon that uses `prod`'s
+App authority under that lease (#1583). The script stays in place; the
+deputy is the path that replaces it. Its settings come from one file, not
+flags:
+
+```sh
+freesided deputy -root <state-root>
+freesided submit -db <state-root>/daemon/freeside.db --require-composition ...
+```
+
+**Settings.** `<state-root>/daemon/settings.json` is required, mode `0600`
+and owned by the running user, version `freeside-deputy-settings-v1`. Every
+key is required (an unused one is `""`), an unknown or repeated key is
+refused, and each refusal is one line naming the field. The SHA-256 of the
+file bytes is the settings revision, printed at start and recorded in the
+composition manifest.
+
+| Group | Keys |
+| --- | --- |
+| top level | `listen`, `seed_root`, `approved_recipe`, `manual_submission_config` |
+| `images` | `agent`, `exporter`, `review`: digest-pinned references |
+| `repository` | `repo`, `repository_id`, `base_ref`, `base_sha`, `allowed_paths`, `checkout`, `project` |
+| `prompts` | `prompt_package`, `specification_prompt_package`, `remediation_prompt_package`, `vendor_instructions` |
+| `agent_tree` | `checkout` and `commit` (the policy tree adoption must reproduce), and the `auth adopt` inputs: `auth_identity`, `review_auth_identity`, `cost_owner`, `review_cost_owner`, `claude_account`, `terms_basis_date`, `pricing_revision`, `offer_not_after`, `auth_volume` |
+| `review` | `input_root`, `auth_mode`, `auth_snapshot`, `instructions`, `model`, `effort` |
+| `judgment` | `claude_bin`, `claude_sha256`, `model`, `publication_author_prompt`: all empty or all set |
+| `prod` | `app_state_dir`, `app_credentials_dir`, `installed_daemon` |
+| `timeouts` | `writer_stop`, `writer_stall`: Go durations |
+| `build` | `proxy`, `base_build_ref`, `dns` |
+
+The deputy fixes what the script hard-codes: the Claude driver, unattended
+mode, run conformance, provider-only egress to `api.anthropic.com:443`, and
+an 8 GiB review workspace. The supervision deadline stays a `submit` flag.
+
+**Start-up order.**
+
+1. Print the build, the settings digest, and the repository it publishes to.
+2. Take the rig lease. A live holder refuses. A stale lease for this root is
+   recovered as `freesided rig recover` would, and a `system_health` card
+   (`deputy_run_interrupted`) names the run it interrupted. A stale lease
+   for another root refuses and names the `rig recover` command.
+3. Check `prod`'s App authority against `prod.installed_daemon`, under the
+   lease, and record the two auth identities from the settings once (a
+   later file that names other ones is refused).
+4. Self-check: adopt the agent tree and compare the patch with
+   `agent_tree.commit`, then run the composition preflight. Both need the
+   database idle and the listener free, so they run before the daemon
+   serves.
+5. Serve. On a passing self-check the Claude driver is composed and
+   execution is enabled. On a failure the daemon serves without it, and one
+   blocking `system_health` card (`deputy_preflight_failed`) names the
+   failed checks and the manifest; a later passing start resolves it.
+
+The readiness line goes to stdout once the daemon serves; progress lines go
+to stderr. SIGINT or SIGTERM tears the daemon down. The lease is then
+released only after the containers its manifest records are deleted and
+every recorded container, volume, and network is proven absent, as `rig
+cleanup` proves for the script. A failed proof, or a daemon that ended in
+error, abandons the lease instead, so the next start recovers it.
+
+**What it writes.** Under `<state-root>/daemon/`: `freeside.db`,
+`rig-acquisition.json` (the lease's acquisition record, `0600`) and
+`composition-manifest.json`, both removed when the deputy ends, the
+adoption's `agent-tree.patch`,
+`auth-adopt.json`, and `auth-adopt.log`. A passing manifest is also kept by
+content digest under `<state-root>/production-evidence/composition/`.
+
+**The launch manifest.** The deputy composes once per start, so its manifest
+(`freeside-production-composition-v2`) has no run identity; it binds the
+settings digest, the project, and the publication author instead. `submit
+--require-composition` with no `--composition-manifest` reads the
+`composition-manifest.json` beside `-db`. It refuses a submission whose
+project, commit author, or allowed paths differ from the ones the launch
+composed, and a launch manifest with no daemon serving `-db`: the manifest
+attests a running deputy, not a database. The deputy checks the same
+binding again when the submission reaches it, so new work submitted without
+`--require-composition`, or by any other control client, is refused unless it
+names this launch's passing manifest; a deputy whose start-up check failed
+accepts no new work. A paired client's `submit_task` names no manifest, so
+it binds this launch implicitly: the deputy creates the task only for a
+`manual_submission_config` project whose policy and commit author the launch
+admits, and answers any other project as unconfigured. Re-runs of an
+existing task (`freesided reattempt`, a capability retry, a revised
+specification) are not new work: each new attempt is checked again at
+admission against the deputy's allowed paths and the App bot it resolves
+for its repository. A per-submission manifest still binds its one
+submission, and a v1 one still replays.
+`submit` also refuses a second unfinished task for the same specification in
+the same project; the refusal names the first task and the commands that
+settle it (`freesided reattempt`, `freesided abandon`, or a replay with
+`--retry-submission-id`).
+
+**`prod` stays stopped for now.** The deputy holds `prod`'s database lock
+like the script does, so the operator stops the `prod` daemon before a
+start and restores it after. A later unit removes that step.
+
 ### Rebuild A Project Image For A Dependency Change
 
 A candidate that changes `package.json` or `package-lock.json` cannot verify
