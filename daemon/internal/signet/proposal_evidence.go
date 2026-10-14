@@ -55,3 +55,51 @@ func (s *Service) evidenceBlobs() EvidenceBlobWriter {
 	}
 	return s.blobs
 }
+
+// RestoreProposalEvidence writes every effect-proposal evidence body missing
+// from blobs, rebuilt from the durable instance and authenticated revision
+// rows, and returns how many it wrote. It repairs stores written before
+// proposal paths persisted their bodies; the daemon runs it at startup before
+// its first backup pass. A present blob is left untouched even when corrupt:
+// this is recovery of absent bodies, not repair, and Verify still reports a
+// corrupt one. Any proposal row the store refuses to reconstruct or any blob
+// error fails the pass; the read re-gates every instance and revision, not
+// only those an artifact row names.
+func RestoreProposalEvidence(ctx context.Context, st *store.Store, blobs *BlobStore) (int, error) {
+	if blobs == nil {
+		return 0, ErrAttachmentsUnavailable
+	}
+	var evidence []domain.ProposalInstance
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		evidence, err = tx.ListProposalEvidence(ctx)
+		return err
+	}); err != nil {
+		return 0, fmt.Errorf("restore proposal evidence: %w", err)
+	}
+	written := 0
+	for _, instance := range evidence {
+		if err := ctx.Err(); err != nil {
+			return written, err
+		}
+		artifact, body, err := instance.EvidenceArtifactBody()
+		if err != nil {
+			return written, fmt.Errorf("restore proposal evidence %q: %w", instance.ID, err)
+		}
+		present, err := blobs.Has(artifact.Digest)
+		if err != nil {
+			return written, fmt.Errorf("restore proposal evidence %q: %w", instance.ID, err)
+		}
+		if present {
+			continue
+		}
+		created, err := blobs.Put(artifact.Digest, bytes.NewReader(body))
+		if err != nil {
+			return written, fmt.Errorf("restore proposal evidence %q: %w", instance.ID, err)
+		}
+		if created {
+			written++
+		}
+	}
+	return written, nil
+}
