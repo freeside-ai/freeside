@@ -9,11 +9,14 @@
 // files must not contain BEGIN/COMMIT (the store owns the transaction) and,
 // once merged, are immutable: fixing a migration means adding a new one.
 //
-// Contiguous numbering is deliberately hostile to parallel authorship: the
-// coordination protocol serializes migration work (kind:contract, exclusive),
-// so two branches minting the same NNNN is a protocol violation, and the
-// contiguity and digest checks turn it into a hard error at merge instead of
-// a silent ordering ambiguity.
+// Contiguous numbering is deliberately hostile to silent parallel
+// authorship. Two branches may both take the next number; the contiguity and
+// digest checks turn the collision into a hard error once one has landed,
+// instead of a silent ordering ambiguity. The branch that lands second renames
+// its file behind the other at rebase, and every migration declares each
+// schema name it removes on a "-- drop: <kind> <name>" line, which the store's
+// declared-drop test checks. daemon/README.md (Adding a Migration) has the
+// steps.
 package migrations
 
 import "embed"
