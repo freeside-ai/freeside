@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 87
+revision: 88
 status: active
 updated: 2026-10-14
 ---
@@ -605,8 +605,8 @@ a payload difference rejects the recommendation; an invalid binding never
 renders.
 
 An `agent_judgment` recommendation is a labeled proposal. The type case is the
-finding adjudicator's parked batch: the item-level recommendation endorses the
-accept-the-recommended-route action, while each finding's route, rationale,
+finding adjudicator's card for accepted parking routes: the item-level
+recommendation endorses the accept-the-recommended-route action, while each finding's route, rationale,
 producer, and confidence stay in the Section [7](#7-review-policy) adjudication artifact and are
 never collapsed into this one field. `confidence` appears only when the
 producer supplies it. An item without a recommendation offers equally weighted
@@ -1450,8 +1450,9 @@ the admitted offer.
 
 Whether a failure blocks the run or returns a declared fail-safe is a property
 of the role, not of the launch shape. The task namer fails safe to the
-identifier fallback; the adjudicator's fail-safe parks its batch to human
-attention; the researcher's fail-safe hands the specifier a typed failed
+identifier fallback; a failed adjudicator call or invalid answer set sends its
+whole batch to human attention, while valid answers are accepted per finding;
+the researcher's fail-safe hands the specifier a typed failed
 request; every other ward role's failure blocks its stage.
 
 #### Admission
@@ -4601,10 +4602,29 @@ or confidence field.
 An adjudicator proposal is a model-residue entry. It also records a
 self-assessed proposal confidence on the declared ordinal scale. The engine
 labels that proposal as model output and judges it against the same
-bounded-below resolved-policy threshold. A proposal whose confidence is absent,
-out of scale, or below threshold is the ceilings' low-confidence output. It is
-not accepted, and the batch parks to recommendation-led attention. `unknown` is
-its compatibility representation only where compatibility exists (`required`).
+bounded-below resolved-policy threshold. Each valid answer is accepted or
+refused independently. A below-threshold answer waits for a person, without
+discarding the other answers. Under `required`, it is stored as `unknown` with
+the `park_unknown` route, retaining the model's confidence and rationale;
+other goals retain their entry but cannot execute it without a human decision.
+A failed call or invalid answer set (including missing, duplicate, foreign,
+or malformed entries) still sends the whole batch to a person.
+
+When any answer is below threshold, disputed, or held by the severity ceiling,
+one routed `review_dispute` lists those findings and any accepted parking
+routes in the round. Accepted declines and defers below the ceiling are
+recorded before that item is raised, so their external thread replies can
+proceed while the dispute is open. Recorded outcomes are final: the human
+answer preserves their entries. Remediation waits until the person answers
+every listed finding, then fixes the accepted and human-selected remediation
+findings together in one dispatch. No unanswered finding is treated as fixed
+or permits readiness.
+
+A round needing no dispute retains its existing card and timing: accepted
+parking routes raise `finding_adjudication`, and declines and defers wait for
+the card's decision. Discuss revisions of that card retain whole-batch
+acceptance. The card's alternative route choices remain available until it
+is decided.
 
 The vocabulary is repository-generic. Repository-specific language, such as a
 lane, a serialized-contract rule, or an ownership file, appears only inside
@@ -4702,9 +4722,11 @@ alter acceptance criteria, file an issue, or declare a finding fixed.
 Ceilings: a critical or high severity finding, credible or not, never routes to
 a declined or deferred disposition without either a second adjudication
 (deterministic or from a distinct agent) or a durable AttentionItem. Malformed,
-missing, or low-confidence output is never accepted. The batch parks to
-recommendation-led attention, with `unknown` as its compatibility representation
-only under `required`.
+missing, or low-confidence output is never accepted. A failed or invalid
+answer set sends the batch to a person; a valid below-threshold answer or a
+ceiling-held decline or defer sends that finding to the routed dispute above.
+Missing severity on an external finding counts as high. `unknown` remains the
+compatibility representation of a below-threshold answer only under `required`.
 
 Adjudication consumes the review loop's resolved-policy bounds. It also consumes
 the cumulative Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) budgets attributed to root lineage. Every site ships
@@ -6176,26 +6198,21 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 87 ("Routed Disputes Ask Only For Unsettled Findings"):
+Revision 88 ("Accept Each Adjudicated Finding Independently"):
 
-1. **The round binding stays complete; the displayed list may be smaller.**
-   A routed dispute asks for a route for every listed finding. Each omitted
-   finding must have an entry in the round's first non-human adjudication.
-   Omission does not assert that remediation has finished. Human successors
-   preserve every omitted entry and the complete finding batch.
-2. **The displayed set is stored independently.** Once a dispute becomes
-   routed, its displayed finding IDs are immutable and checked on reads and
-   later writes. Migration backfills existing full-list cards only after
-   validating their old completeness invariant. This prevents removing a row
-   from the item body from hiding a requested decision.
-3. **The first revision avoids recursive reconstruction.** Later revisions
-   preserve the same batch. The subset evidence check refuses a human first
-   revision before reconstruction, because human validation reads the dispute
-   item itself. The engine remains responsible for selecting the findings
-   needing an answer; this unit does not change its selection behavior.
+1. **Keep valid answers when another answer is below threshold.** A routed
+   dispute lists only findings needing a person, including any parking routes
+   that must be settled with them. A failed call or invalid answer set still
+   sends the whole batch to a person.
+2. **Record accepted declines and defers before raising that dispute.** Their
+   external thread replies can proceed immediately. A human successor keeps
+   recorded outcomes and their provenance unchanged.
+3. **Wait for the human answer before remediation.** One dispatch combines the
+   adjudicator's and the person's fixes. Rounds needing no dispute and Discuss
+   revisions keep their existing behavior and choices.
 
-(Owner-assigned #2009 and its approved persistence amendment;
-[decision note](../devlog/2026-10-14-0815-routed-dispute-subsets.md).)
+(Owner decision in #1990;
+[decision note](../devlog/2026-10-14-1140-per-finding-adjudication.md).)
 
 ## 14. Risks
 

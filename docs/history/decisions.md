@@ -2738,3 +2738,27 @@ The client work is #1798 to #1803.)
 (Implementation decisions for owner-assigned #1989, following its plan and
 #1016's merged contract;
 [decision note](../../devlog/2026-10-13-1315-external-review-decisions.md).)
+
+
+---
+
+## Revision 87 ("Routed Disputes Ask Only For Unsettled Findings"):
+
+1. **The round binding stays complete; the displayed list may be smaller.**
+   A routed dispute asks for a route for every listed finding. Each omitted
+   finding must have an entry in the round's first non-human adjudication.
+   Omission does not assert that remediation has finished. Human successors
+   preserve every omitted entry and the complete finding batch.
+2. **The displayed set is stored independently.** Once a dispute becomes
+   routed, its displayed finding IDs are immutable and checked on reads and
+   later writes. Migration backfills existing full-list cards only after
+   validating their old completeness invariant. This prevents removing a row
+   from the item body from hiding a requested decision.
+3. **The first revision avoids recursive reconstruction.** Later revisions
+   preserve the same batch. The subset evidence check refuses a human first
+   revision before reconstruction, because human validation reads the dispute
+   item itself. The engine remains responsible for selecting the findings
+   needing an answer; this unit does not change its selection behavior.
+
+(Owner-assigned #2009 and its approved persistence amendment;
+[decision note](../../devlog/2026-10-14-0815-routed-dispute-subsets.md).)
