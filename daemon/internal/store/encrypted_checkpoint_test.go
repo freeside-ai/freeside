@@ -43,6 +43,12 @@ func TestEncryptedCheckpointRoundTripAndPlaintextProbe(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed credential verifier: %v", err)
 	}
+	// A janitor mint hold must survive restore, or a restored daemon could
+	// mint while an earlier token may still be live (#2004).
+	mintHold := installationMintHoldFixture()
+	if err := recordMintHold(t, s, mintHold); err != nil {
+		t.Fatalf("seed mint hold: %v", err)
+	}
 	before, err := s.ServerState(ctx)
 	if err != nil {
 		t.Fatalf("ServerState before checkpoint: %v", err)
@@ -124,6 +130,9 @@ func TestEncryptedCheckpointRoundTripAndPlaintextProbe(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatalf("verify restored rows: %v", err)
+	}
+	if got, found := readMintHold(t, s, mintHold.InstallationID); !found || !mintHoldEqual(got, mintHold) {
+		t.Fatalf("restored mint hold = %+v, %v; want %+v", got, found, mintHold)
 	}
 }
 

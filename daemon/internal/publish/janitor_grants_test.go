@@ -529,6 +529,7 @@ func TestPendingExpansionPreservesOnlyCurrentMintAuthority(t *testing.T) {
 				authority,
 				&removalRecorder{},
 				&captureMintRecorder{},
+				newMemoryMintHolds(),
 				fixedNow,
 				1,
 			)
@@ -670,6 +671,7 @@ func TestPendingEnvelopeNeverAuthorizesMint(t *testing.T) {
 		authority,
 		&removalRecorder{},
 		&captureMintRecorder{},
+		newMemoryMintHolds(),
 		fixedNow,
 		1,
 	)

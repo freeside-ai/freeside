@@ -139,7 +139,7 @@ func runFakePublicationCommand(
 		return fakePublicationCommandResult{}, err
 	}
 	janitor, err := publish.NewInstallationJanitor(
-		keystore, client, defaultGitHubAPIBase, authority, authority, recorder, time.Now,
+		keystore, client, defaultGitHubAPIBase, authority, authority, recorder, recorder, time.Now,
 		defaultJanitorRemovalBound,
 	)
 	if err != nil {

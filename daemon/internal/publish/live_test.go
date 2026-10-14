@@ -621,6 +621,7 @@ func TestLiveInstallationJanitorPublishesCoverage(t *testing.T) {
 		store,
 		liveGuardRecorder{},
 		&captureMintRecorder{},
+		newMemoryMintHolds(),
 		time.Now,
 		1,
 	)
