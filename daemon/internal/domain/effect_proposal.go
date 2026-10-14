@@ -134,8 +134,17 @@ func (i ProposalInstance) Validate() error {
 // digest binds a decision to this proposal body. The built-in recipe is a
 // deterministic daemon authority, not caller configuration.
 func (i ProposalInstance) EvidenceArtifact() (Artifact, error) {
+	artifact, _, err := i.EvidenceArtifactBody()
+	return artifact, err
+}
+
+// EvidenceArtifactBody returns EvidenceArtifact together with the canonical
+// proposal JSON its digest names. Those bytes are the evidence body a blob
+// store must hold for the artifact to verify, and they are rebuildable from
+// the durable proposal alone.
+func (i ProposalInstance) EvidenceArtifactBody() (Artifact, []byte, error) {
 	if err := i.Validate(); err != nil {
-		return Artifact{}, err
+		return Artifact{}, nil, err
 	}
 	recipe := EffectProposalRecipeDigest
 	// The digest names the canonical proposal JSON; its byte length is the
@@ -143,9 +152,9 @@ func (i ProposalInstance) EvidenceArtifact() (Artifact, error) {
 	// recomputes it from the blob store per synced item).
 	body, err := json.Marshal(i.Proposal.canonical())
 	if err != nil {
-		return Artifact{}, fmt.Errorf("proposal instance %s canonical body: %w", i.ID, err)
+		return Artifact{}, nil, fmt.Errorf("proposal instance %s canonical body: %w", i.ID, err)
 	}
-	return NewArtifact(ArtifactInput{
+	artifact, err := NewArtifact(ArtifactInput{
 		ID:     ArtifactID("effect-proposal/" + string(i.ID) + "/" + contentaddr.Hex(string(i.Proposal.Digest))),
 		Type:   ArtifactKindEvidence,
 		Digest: i.Proposal.Digest,
@@ -159,6 +168,10 @@ func (i ProposalInstance) EvidenceArtifact() (Artifact, error) {
 			CreatedAt: i.CreatedAt, Source: EvidenceSourceRun, Availability: EvidenceAvailable,
 		},
 	}, map[Digest]bool{EffectProposalRecipeDigest: true})
+	if err != nil {
+		return Artifact{}, nil, err
+	}
+	return artifact, body, nil
 }
 
 type canonicalEffectProposal struct {
