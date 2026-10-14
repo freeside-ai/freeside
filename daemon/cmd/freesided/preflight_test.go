@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -131,9 +132,13 @@ func (e *fakePreflightEnvironment) InspectRepositoryAuthority(
 ) repositoryAuthorityInspection {
 	e.repositoryCalls++
 	e.publicationAuthor = cfg.PublicationAuthor
-	return repositoryAuthorityInspection{
+	inspection := repositoryAuthorityInspection{
 		BaseError: e.repositoryBaseError, AuthorityError: e.authorityError,
 	}
+	if e.authorityError == nil {
+		inspection.Author = engine.ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345}
+	}
+	return inspection
 }
 
 func (e *fakePreflightEnvironment) CheckAuthVolume(
@@ -234,6 +239,37 @@ func TestPreflightManifestGolden(t *testing.T) {
 		environment.publicationAuthor.BotUserID != 12345 {
 		t.Fatalf("publication author = %+v", environment.publicationAuthor)
 	}
+}
+
+// TestPreflightLaunchManifestGolden pins the manifest deputy writes for a
+// run: no submission identity, the settings revision, and the App bot
+// identity the registration resolved, recorded rather than compared.
+func TestPreflightLaunchManifestGolden(t *testing.T) {
+	args, environment := preflightFixture(t)
+	cfg, err := parsePreflightConfig(args, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.TaskPath, cfg.PolicyPath, cfg.PublicationPath = "", "", ""
+	cfg.ProjectID = "proj-launch"
+	cfg.Launch = true
+	cfg.SettingsDigest = domain.Digest("sha256:" + strings.Repeat("5", 64))
+	manifest, err := composePreflight(t.Context(), cfg, environment,
+		time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC), "2dce6570ee23")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Status != compositionPassed {
+		t.Fatalf("launch manifest status %s: %+v", manifest.Status, manifest.Checks)
+	}
+	if environment.publicationAuthor != (engine.ProductionCommitAuthor{}) {
+		t.Fatalf("launch preflight claimed author %+v", environment.publicationAuthor)
+	}
+	body, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden.Assert(t, "preflight-launch-manifest", append(body, '\n'))
 }
 
 func TestPreflightCoversEnabledShadowReviewConfiguration(t *testing.T) {

@@ -39,7 +39,7 @@ import (
 )
 
 const (
-	compositionManifestVersion              = "freeside-production-composition-v1"
+	compositionManifestVersion              = "freeside-production-composition-v2"
 	preflightMaxSeedEntries                 = 100_000
 	preflightMaxShadowReviewCredentialBytes = 1 << 20
 )
@@ -152,8 +152,18 @@ type compositionManifest struct {
 	AgentLineupRevision domain.Digest       `json:"agent_lineup_revision,omitempty"`
 	ClaudeAuthVolume    string              `json:"claude_auth_volume"`
 	Identity            compositionIdentity `json:"identity"`
-	Images              []compositionImage  `json:"images"`
-	Checks              []compositionCheck  `json:"checks"`
+	// SettingsDigest, Project, and PublicationAuthor are set only on a
+	// launch manifest, which deputy writes once for a run that serves many
+	// submissions: the settings revision the run was composed from, the one
+	// project it serves, and the App bot identity the repository-bound
+	// registration resolved to. Submit checks each submission's project and
+	// commit author against them in place of the per-submission Identity a
+	// launch manifest leaves empty.
+	SettingsDigest    domain.Digest                  `json:"settings_digest,omitempty"`
+	Project           domain.ProjectID               `json:"project,omitempty"`
+	PublicationAuthor *engine.ProductionCommitAuthor `json:"publication_author,omitempty"`
+	Images            []compositionImage             `json:"images"`
+	Checks            []compositionCheck             `json:"checks"`
 }
 
 type preflightConfig struct {
@@ -198,6 +208,12 @@ type preflightConfig struct {
 	LaunchAgentLabel  string
 	AllowedPaths      []string
 	PublicationAuthor engine.ProductionCommitAuthor
+	// Launch composes a run rather than one submission: no task, policy,
+	// publication, or work-unit file is read, the source identity check is
+	// not run, and the resolved App bot identity is recorded instead of
+	// compared. SettingsDigest is then the settings revision to record.
+	Launch         bool
+	SettingsDigest domain.Digest
 }
 
 type databaseInspection struct {
@@ -253,6 +269,9 @@ type preflightAgentSelection struct {
 type repositoryAuthorityInspection struct {
 	BaseError      error
 	AuthorityError error
+	// Author is the App bot identity the registration resolved to, set when
+	// AuthorityError is nil.
+	Author engine.ProductionCommitAuthor
 }
 
 type preflightEnvironment interface {
@@ -306,11 +325,38 @@ func runPreflightCommandWithEnvironment(
 	if err != nil {
 		return err
 	}
+	manifest, err := composePreflight(ctx, cfg, environment, now, daemonBuild)
+	if err != nil {
+		return err
+	}
+	body, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode composition manifest: %w", err)
+	}
+	body = append(body, '\n')
+	if _, err := stdout.Write(body); err != nil {
+		return fmt.Errorf("write composition manifest: %w", err)
+	}
+	if manifest.Status == compositionFailed {
+		return errCompositionPreflight
+	}
+	return nil
+}
+
+// composePreflight evaluates one production composition. The error reports
+// only a failure to evaluate; a failed check is the manifest's status.
+func composePreflight(
+	ctx context.Context,
+	cfg preflightConfig,
+	environment preflightEnvironment,
+	now time.Time,
+	daemonBuild string,
+) (compositionManifest, error) {
 	// Before any authority access: a run's preflight reads prod's App
 	// authority before the run's daemon takes prod's lock (#1583).
 	prodLock, err := holdProdLockForProdAppDirectories(cfg.PublicationStateDir, cfg.PublicationCredentialsDir)
 	if err != nil {
-		return err
+		return compositionManifest{}, err
 	}
 	defer func() { _ = prodLock.Close() }()
 	manifest := newCompositionManifest(cfg, daemonBuild, now)
@@ -324,9 +370,13 @@ func runPreflightCommandWithEnvironment(
 		// database used to recognize an immutable retained policy.
 		identityCfg.DBPath = manifest.Rig.Resources.DatabasePath
 	}
-	identity, identityErr := inspectCompositionIdentity(ctx, identityCfg)
-	manifest.Identity = identity
-	cfg.PublicationAuthor = identity.CommitAuthor
+	var identityErr error
+	if !cfg.Launch {
+		var identity compositionIdentity
+		identity, identityErr = inspectCompositionIdentity(ctx, identityCfg)
+		manifest.Identity = identity
+		cfg.PublicationAuthor = identity.CommitAuthor
+	}
 	// The lineup names every identity, and the review configuration digests
 	// take the review identities as inputs, so the roles resolve first. That
 	// needs the database the rig names.
@@ -379,18 +429,7 @@ func runPreflightCommandWithEnvironment(
 			}
 		}
 	}
-	body, err := json.MarshalIndent(manifest, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode composition manifest: %w", err)
-	}
-	body = append(body, '\n')
-	if _, err := stdout.Write(body); err != nil {
-		return fmt.Errorf("write composition manifest: %w", err)
-	}
-	if manifest.Status == compositionFailed {
-		return errCompositionPreflight
-	}
-	return nil
+	return manifest, nil
 }
 
 func parsePreflightConfig(args []string, stderr io.Writer) (preflightConfig, error) {
@@ -508,9 +547,20 @@ func newCompositionManifest(cfg preflightConfig, daemonBuild string, now time.Ti
 		BuildEgressDigest: domain.Digest(contentaddr.Sum([]byte(cfg.BuildProxy))),
 		AllowedPaths:      slices.Clone(cfg.AllowedPaths),
 		ClaudeAuthVolume:  cfg.AuthVolume,
+		SettingsDigest:    cfg.SettingsDigest,
+		Project:           launchProject(cfg),
 		Images:            images,
 		Checks:            checks,
 	}
+}
+
+// launchProject is the project a launch manifest binds; a per-submission
+// manifest binds its project through the run identity instead.
+func launchProject(cfg preflightConfig) domain.ProjectID {
+	if !cfg.Launch {
+		return ""
+	}
+	return cfg.ProjectID
 }
 
 func evaluateComposition(
@@ -658,7 +708,10 @@ func evaluateComposition(
 	case errors.Is(identityErr, errWorkUnitRequired):
 		refusal, remediation = errWorkUnitRequired.Error(), "pass the work-unit declaration file before submission"
 	}
-	if refusal != "" {
+	if cfg.Launch {
+		notRunCheck(manifest, "source_implementation_identity",
+			"launch composition: submit binds each submission's commit author and paths to this manifest")
+	} else if refusal != "" {
 		if rigErr != nil {
 			// The journal that lets a resumed session through lives under the
 			// rig's database path, which is unknown without the rig.
@@ -697,6 +750,10 @@ func evaluateComposition(
 		notRunCheck(manifest, "publication_authority", "authenticated publication authority observation requires the production audit database")
 	} else if repositoryInspection.AuthorityError != nil {
 		failCheck(manifest, "publication_authority", "publication authority, credentials, or claimed App bot identity are unavailable or inconsistent", "restore the repository-bound GitHub App authority and canonical bot attribution before submission")
+	} else if cfg.Launch {
+		author := repositoryInspection.Author
+		manifest.PublicationAuthor = &author
+		passCheck(manifest, "publication_authority", "publication authority resolves App bot "+author.Name()+" for the repository-bound registration")
 	} else {
 		passCheck(manifest, "publication_authority", "publication authority and claimed App bot identity match the repository-bound registration")
 	}
@@ -1093,7 +1150,7 @@ func retainedPreflightPolicyMatches(ctx context.Context, cfg preflightConfig, po
 
 func inspectRepositoryAuthority(
 	ctx context.Context, cfg preflightConfig, now time.Time,
-) repositoryAuthorityInspection {
+) (inspection repositoryAuthorityInspection) {
 	localErr := inspectLocalRepositoryBase(ctx, cfg)
 	authorityStore, err := publish.NewInstallationAuthorityStore(cfg.PublicationStateDir)
 	if err != nil {
@@ -1141,8 +1198,15 @@ func inspectRepositoryAuthority(
 	if err != nil {
 		return repositoryAuthorityInspection{BaseError: errors.Join(localErr, err), AuthorityError: err}
 	}
-	if resolved.AppSlug != cfg.PublicationAuthor.AppSlug ||
-		resolved.BotUserID != cfg.PublicationAuthor.BotUserID {
+	author := engine.ProductionCommitAuthor{AppSlug: resolved.AppSlug, BotUserID: resolved.BotUserID}
+	// Every later return that leaves the authority unrefuted reports the
+	// resolved author, which a launch manifest records.
+	defer func() {
+		if inspection.AuthorityError == nil {
+			inspection.Author = author
+		}
+	}()
+	if !cfg.Launch && author != cfg.PublicationAuthor {
 		return repositoryAuthorityInspection{
 			BaseError:      errors.Join(localErr, publish.ErrAppBotIdentityMismatch),
 			AuthorityError: publish.ErrAppBotIdentityMismatch,
