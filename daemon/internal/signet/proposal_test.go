@@ -102,7 +102,7 @@ func newProposalDecisionFixture(t *testing.T) proposalDecisionFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := signet.NewService(base.store,
+	service := signet.NewService(base.store, signet.WithBlobStore(base.blobs),
 		signet.WithClock(func() time.Time { return *base.now }),
 	)
 	return proposalDecisionFixture{fixture: base, service: service, instance: instance, item: item, policy: policy, handles: handles}
@@ -290,7 +290,7 @@ func TestTaskProposalSnoozeAdvancesVersionAndRetryConverges(t *testing.T) {
 	if _, err := f.service.Submit(context.Background(), start); !errors.Is(err, signet.ErrProposalSnoozed) {
 		t.Fatalf("submit snoozed proposal error = %v", err)
 	}
-	deliveryService := signet.NewService(f.store,
+	deliveryService := signet.NewService(f.store, signet.WithBlobStore(f.blobs),
 		signet.WithClock(func() time.Time { return *f.now }),
 		signet.WithNtfy(signet.NtfyConfig{
 			BaseURL: "http://127.0.0.1:1", TopicKey: []byte("0123456789abcdef0123456789abcdef"),
@@ -518,7 +518,7 @@ func TestTaskProposalRevisionFactsExposeExactAuthenticatedDiff(t *testing.T) {
 
 func TestTaskProposalDecisionUsesStoreResolvedSubject(t *testing.T) {
 	f := newProposalDecisionFixture(t)
-	service := signet.NewService(f.store, signet.WithClock(func() time.Time { return *f.now }))
+	service := signet.NewService(f.store, signet.WithBlobStore(f.blobs), signet.WithClock(func() time.Time { return *f.now }))
 	_, err := service.Submit(context.Background(), f.proposalCommand("command-start", domain.ActionStart))
 	if err != nil {
 		t.Fatalf("store-resolved proposal decision: %v", err)

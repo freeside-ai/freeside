@@ -106,12 +106,9 @@ func (s *Service) openEffectProposalItem(
 				return fmt.Errorf("open effect proposal item %q supersede: %w", instanceID, err)
 			}
 		}
-		item, artifact, err := s.newEffectProposalItem(ctx, tx, instance, merge, class, reason)
+		item, err := s.newEffectProposalItem(ctx, tx, instance, merge, class, reason)
 		if err != nil {
 			return fmt.Errorf("open effect proposal item %q: %w", instanceID, err)
-		}
-		if err := tx.PutArtifact(ctx, artifact); err != nil {
-			return fmt.Errorf("open effect proposal item %q artifact: %w", instanceID, err)
 		}
 		if err := tx.PutAttentionItem(ctx, item); err != nil {
 			return fmt.Errorf("open effect proposal item %q item: %w", instanceID, err)
@@ -128,7 +125,8 @@ func (s *Service) openEffectProposalItem(
 	return result, nil
 }
 
-// newEffectProposalItem builds the open closure item and its evidence carrier.
+// newEffectProposalItem persists the closure proposal's evidence (body and
+// carrier row, through PutProposalEvidence) and builds the open item over it.
 // The item's PRHeadSHA is the candidate head, so the command-binding check and
 // the approval binding judge the same head. approve_with_changes is offered only
 // when the proposal can be revised to resolve, which a daemon_fallback proposal
@@ -142,22 +140,22 @@ func (s *Service) newEffectProposalItem(
 	merge domain.ProspectiveMerge,
 	class domain.InterruptionClass,
 	reason string,
-) (domain.AttentionItem, domain.Artifact, error) {
+) (domain.AttentionItem, error) {
 	closure := instance.Proposal.ClosureProposal
 	declaration, _, err := tx.ResolveProposalSubject(ctx, closure.SubjectHandle)
 	if err != nil {
-		return domain.AttentionItem{}, domain.Artifact{}, err
+		return domain.AttentionItem{}, err
 	}
 	subject := domain.Subject{
 		Type: domain.SubjectProposalBatch, ID: domain.SubjectID(instance.ProposalBatchID),
 	}
 	names, err := tx.DisplayNamesFor(ctx, declaration.ProjectID, subject)
 	if err != nil {
-		return domain.AttentionItem{}, domain.Artifact{}, err
+		return domain.AttentionItem{}, err
 	}
-	artifact, err := instance.EvidenceArtifact()
+	artifact, err := PutProposalEvidence(ctx, tx, s.evidenceBlobs(), instance)
 	if err != nil {
-		return domain.AttentionItem{}, domain.Artifact{}, err
+		return domain.AttentionItem{}, err
 	}
 	actions := []domain.Action{
 		domain.ActionApprove, domain.ActionApproveWithChanges,
@@ -168,7 +166,7 @@ func (s *Service) newEffectProposalItem(
 	}
 	suffix, err := randomItemSuffix()
 	if err != nil {
-		return domain.AttentionItem{}, domain.Artifact{}, err
+		return domain.AttentionItem{}, err
 	}
 	now := s.now().UTC()
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
@@ -188,9 +186,9 @@ func (s *Service) newEffectProposalItem(
 		CreatedAt:         &now,
 	}, map[domain.Digest]bool{domain.EffectProposalRecipeDigest: true})
 	if err != nil {
-		return domain.AttentionItem{}, domain.Artifact{}, err
+		return domain.AttentionItem{}, err
 	}
-	return item, artifact, nil
+	return item, nil
 }
 
 // followUpFilingItemReason is fixed daemon text. The finding and adjudicator
@@ -208,10 +206,12 @@ const followUpFilingItemReason = "Decide whether to file the follow-up issue"
 // binds no prospective merge, so nothing supersedes its item and the ID needs
 // no per-open suffix: a repeat call returns the item it finds, open or
 // decided, and writes nothing. The item offers approve, decline, and snooze;
-// a filing cannot be approved with changes.
+// a filing cannot be approved with changes. blobs receives the proposal's
+// evidence body (PutProposalEvidence); a nil writer fails closed.
 func OpenFollowUpFilingItem(
 	ctx context.Context,
 	tx *store.WriteTx,
+	blobs EvidenceBlobWriter,
 	instanceID domain.ProposalInstanceID,
 	now time.Time,
 ) (domain.AttentionItem, error) {
@@ -243,9 +243,9 @@ func OpenFollowUpFilingItem(
 	if err != nil {
 		return domain.AttentionItem{}, fmt.Errorf("open follow-up filing item %q: %w", instanceID, err)
 	}
-	artifact, err := instance.EvidenceArtifact()
+	artifact, err := PutProposalEvidence(ctx, tx, blobs, instance)
 	if err != nil {
-		return domain.AttentionItem{}, fmt.Errorf("open follow-up filing item %q: %w", instanceID, err)
+		return domain.AttentionItem{}, fmt.Errorf("open follow-up filing item %q artifact: %w", instanceID, err)
 	}
 	createdAt := now.UTC()
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
@@ -265,9 +265,6 @@ func OpenFollowUpFilingItem(
 	}, map[domain.Digest]bool{domain.EffectProposalRecipeDigest: true})
 	if err != nil {
 		return domain.AttentionItem{}, fmt.Errorf("open follow-up filing item %q: %w", instanceID, err)
-	}
-	if err := tx.PutArtifact(ctx, artifact); err != nil {
-		return domain.AttentionItem{}, fmt.Errorf("open follow-up filing item %q artifact: %w", instanceID, err)
 	}
 	if err := tx.PutAttentionItem(ctx, item); err != nil {
 		return domain.AttentionItem{}, fmt.Errorf("open follow-up filing item %q item: %w", instanceID, err)

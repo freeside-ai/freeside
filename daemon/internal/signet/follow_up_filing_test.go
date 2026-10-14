@@ -137,7 +137,7 @@ func newFilingFixture(t *testing.T) filingFixture {
 		if err != nil {
 			return err
 		}
-		item, err = signet.OpenFollowUpFilingItem(ctx, tx, instance.ID, now)
+		item, err = signet.OpenFollowUpFilingItem(ctx, tx, base.blobs, instance.ID, now)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -256,7 +256,7 @@ func TestOpenFollowUpFilingItemReturnsTheItemItFinds(t *testing.T) {
 		var item domain.AttentionItem
 		if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
 			var err error
-			item, err = signet.OpenFollowUpFilingItem(ctx, tx, f.instance.ID, (*f.now).Add(time.Hour))
+			item, err = signet.OpenFollowUpFilingItem(ctx, tx, f.blobs, f.instance.ID, (*f.now).Add(time.Hour))
 			return err
 		}); err != nil {
 			t.Fatalf("OpenFollowUpFilingItem: %v", err)
@@ -300,7 +300,7 @@ func TestOpenFollowUpFilingItemRefusesAClosureInstance(t *testing.T) {
 	f := newClosureFixture(t, true, domain.ClosureFlagOriginProposeSite)
 	ctx := context.Background()
 	err := f.store.Write(ctx, func(tx *store.WriteTx) error {
-		_, err := signet.OpenFollowUpFilingItem(ctx, tx, f.instance.ID, *f.now)
+		_, err := signet.OpenFollowUpFilingItem(ctx, tx, f.blobs, f.instance.ID, *f.now)
 		return err
 	})
 	if !errors.Is(err, domain.ErrEffectProposalInconsistent) {

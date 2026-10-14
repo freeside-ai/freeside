@@ -331,7 +331,7 @@ func (w *productionPublicationWorkflow) allocateFollowUpFilings(
 		if !inserted {
 			continue
 		}
-		if _, err := signet.OpenFollowUpFilingItem(ctx, tx, instance.ID, now); err != nil {
+		if _, err := signet.OpenFollowUpFilingItem(ctx, tx, w.artifacts, instance.ID, now); err != nil {
 			return err
 		}
 	}

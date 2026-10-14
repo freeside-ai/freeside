@@ -283,7 +283,11 @@ func TestResolveClosureStaleApprovalWritesRefs(t *testing.T) {
 func TestResolveClosureHumanGateHoldsDraftUntilDecided(t *testing.T) {
 	ctx := context.Background()
 	f := seedClosureFixture(t, "run-gate", "true")
-	attention := signet.NewService(f.store)
+	blobs, err := signet.NewBlobStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	attention := signet.NewService(f.store, signet.WithBlobStore(blobs))
 	if _, err := attention.OpenEffectProposalItem(ctx, f.instanceID, f.merge); err != nil {
 		t.Fatalf("open effect proposal item: %v", err)
 	}
