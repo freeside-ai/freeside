@@ -198,7 +198,7 @@ func runDeputy(
 		return err
 	}
 
-	check, manifest, err := deputySelfCheck(ctx, host, paths, settings, lease, stderr)
+	check, launch, err := deputySelfCheck(ctx, host, paths, settings, lease, stderr)
 	if err != nil {
 		return err
 	}
@@ -224,7 +224,7 @@ func runDeputy(
 		return err
 	}
 	daemonRan = true
-	h, err := run(ctx, stop, deputyDaemonConfig(settings, paths, check.passed(), manifest, logger))
+	h, err := run(ctx, stop, deputyDaemonConfig(settings, paths, launch, logger))
 	if err != nil {
 		return err
 	}
@@ -415,26 +415,27 @@ func (r deputySelfCheckResult) passed() bool { return len(r.Failed) == 0 }
 // deputySelfCheck adopts the agent tree and runs the composition preflight,
 // in that order, as the script did. Both need the database idle and the
 // listener free, so they run before the daemon opens either. An error is a
-// failure to evaluate; a failed check is the result.
+// failure to evaluate; a failed check is the result. The launch carries the
+// manifest's digest only when the check passed.
 func deputySelfCheck(
 	ctx context.Context, host deputyHost, paths deputyPaths, settings loadedDeputySettings,
 	lease *daemonlock.RigLease, stderr io.Writer,
-) (deputySelfCheckResult, compositionManifest, error) {
+) (deputySelfCheckResult, deputyLaunch, error) {
 	if result, ok := adoptDeputyAgentTree(ctx, host, paths, settings); !ok {
-		return result, compositionManifest{}, nil
+		return result, deputyLaunch{}, nil
 	}
 	manifest, err := composePreflight(ctx, deputyPreflightConfig(settings, paths, lease), host.preflight,
 		host.now(), buildVersion())
 	if err != nil {
-		return deputySelfCheckResult{}, compositionManifest{}, err
+		return deputySelfCheckResult{}, deputyLaunch{}, err
 	}
 	body, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
-		return deputySelfCheckResult{}, compositionManifest{}, err
+		return deputySelfCheckResult{}, deputyLaunch{}, err
 	}
 	body = append(body, '\n')
 	if err := atomicfile.WriteFile(paths.Manifest, body, 0o600); err != nil {
-		return deputySelfCheckResult{}, compositionManifest{}, err
+		return deputySelfCheckResult{}, deputyLaunch{}, err
 	}
 	var result deputySelfCheckResult
 	for _, check := range manifest.Checks {
@@ -448,14 +449,14 @@ func deputySelfCheck(
 	}
 	if !result.passed() {
 		result.Remediation += "; the composition manifest is " + paths.Manifest
-		return result, manifest, nil
+		return result, deputyLaunch{Manifest: manifest}, nil
 	}
 	evidence, err := publishCompositionEvidence(paths.EvidenceDir, body)
 	if err != nil {
-		return deputySelfCheckResult{}, compositionManifest{}, err
+		return deputySelfCheckResult{}, deputyLaunch{}, err
 	}
 	_, _ = fmt.Fprintf(stderr, "freesided deputy: production composition manifest: %s\n", evidence)
-	return result, manifest, nil
+	return result, deputyLaunch{ManifestDigest: submissionBytes(body).digest, Manifest: manifest}, nil
 }
 
 // adoptDeputyAgentTree runs auth adopt in-process and compares the tree it
@@ -640,10 +641,12 @@ func publishCompositionEvidence(dir string, body []byte) (string, error) {
 }
 
 // deputyDaemonConfig maps the settings onto the daemon configuration the
-// script's flags built. A failed self-check leaves the driver unset, so the
-// daemon serves pairing and state and runs no agent.
+// script's flags built. A failed self-check, a launch with no manifest
+// digest, leaves the driver unset, so the daemon serves pairing and state
+// and runs no agent. Either way the daemon holds the launch, so it binds
+// new work to it.
 func deputyDaemonConfig(
-	settings loadedDeputySettings, paths deputyPaths, execute bool, manifest compositionManifest, logger *slog.Logger,
+	settings loadedDeputySettings, paths deputyPaths, launch deputyLaunch, logger *slog.Logger,
 ) config {
 	cfg := config{
 		Environment:                deputyEnvironment,
@@ -655,8 +658,9 @@ func deputyDaemonConfig(
 		AttentionDeliveryInterval: defaultAttentionDeliveryInterval,
 		ApprovedRecipes:           map[domain.Digest]bool{settings.ApprovedRecipe: true},
 		Logger:                    logger,
+		DeputyLaunch:              &launch,
 	}
-	if !execute {
+	if launch.ManifestDigest == "" {
 		return cfg
 	}
 	cfg.Claude = &claudeDriverConfig{
@@ -665,7 +669,7 @@ func deputyDaemonConfig(
 		WriterStopTimeout: settings.stopTime, WriterStallInterval: settings.stallFor,
 		Rebuild:  settings.rebuildInputs(),
 		StateDir: paths.StateRoot, RigTokenFile: paths.Acquisition,
-		Judgments:                      deputyJudgments(settings, manifest.JudgmentConfigurationDigest),
+		Judgments:                      deputyJudgments(settings, launch.Manifest.JudgmentConfigurationDigest),
 		ProviderEndpoints:              []string{deputyProviderEndpoints},
 		PromptPackageFile:              settings.Prompts.PromptPackage,
 		SpecificationPromptPackageFile: settings.Prompts.SpecificationPromptPackage,

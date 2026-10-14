@@ -120,7 +120,7 @@ func decodeControlPayload[T any](body json.RawMessage) (T, error) {
 func (p *pairingControl) registerControlRoutes(
 	mux *http.ServeMux, st *store.Store, blobs *signet.BlobStore, backupFiles *store.LocalBackupFiles,
 	approved map[domain.Digest]bool, integrityProbe credentialIntegrityProbe, env environment,
-	attention *signet.Service,
+	attention *signet.Service, launch *deputyLaunch,
 ) {
 	p.registerNotifyTest(mux, st, attention)
 	observation := observedb.Borrow(st)
@@ -220,6 +220,6 @@ func (p *pairingControl) registerControlRoutes(
 		if err != nil {
 			return nil, err
 		}
-		return applySubmission(ctx, st, blobs, req)
+		return applyLaunchSubmission(ctx, st, blobs, req, launch)
 	})
 }

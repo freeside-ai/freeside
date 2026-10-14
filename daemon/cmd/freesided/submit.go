@@ -9,8 +9,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -117,7 +119,8 @@ func runSubmitMain(args []string) {
 	policyPath := flags.String("policy", "", "resolved per-run policy-key JSON array (required)")
 	publicationPath := flags.String("publication", "", "reviewer-facing pull-request metadata JSON file (required); "+
 		"a task that is exactly one GitHub issue URL needs source_issue set to that URL")
-	compositionPath := flags.String("composition-manifest", "", "passing production-composition manifest bound to the submitted inputs")
+	compositionPath := flags.String("composition-manifest", "", "passing production-composition manifest bound to the submitted inputs "+
+		"(with --require-composition, defaults to composition-manifest.json beside -db, where deputy writes it)")
 	requireComposition := flags.Bool("require-composition", false, "require trusted production-composition evidence (unattended submission)")
 	workUnitPath := flags.String("work-unit", "", "work-unit declaration JSON file (required for new work; §5.18 capture); "+
 		`the smallest is {"completion_criterion":"bound_pr_merged"}`)
@@ -378,6 +381,11 @@ func submissionBytes(body []byte) submissionFile {
 }
 
 func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResult, error) {
+	if cfg.RequireComposition && cfg.CompositionPath == "" && cfg.DBPath != "" {
+		// A deputy writes its run's composition beside its database, so
+		// unattended submission to it needs no path.
+		cfg.CompositionPath = filepath.Join(filepath.Dir(cfg.DBPath), deputyCompositionManifestName)
+	}
 	if cfg.CompositionPath != "" && cfg.RunID != "" {
 		return submitResult{}, errors.New("submit: --run-id cannot override production composition identity")
 	}
@@ -527,20 +535,6 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		implementationRunID = engine.ManualSubmissionRunID(
 			"cli:"+cfg.SubmissionID, cfg.ProjectID, spec.digest, policyDigest, publicationFile.digest, workUnitDigest)
 	}
-	var composition submissionFile
-	if cfg.CompositionPath != "" {
-		composition, err = cfg.input("composition", cfg.CompositionPath)
-		if err != nil {
-			return submitResult{}, fmt.Errorf("submit: read composition manifest: %w", err)
-		}
-		if err := validateSubmissionComposition(composition.body, implementationRunID, compositionIdentity{
-			SubmissionID: cfg.SubmissionID,
-			SourceDigest: spec.digest, PolicyDigest: policyDigest,
-			PublicationDigest: publicationDigest, WorkUnitDigest: workUnitDigest,
-		}); err != nil {
-			return submitResult{}, fmt.Errorf("submit: composition manifest: %w", err)
-		}
-	}
 	specificationRunID, err := engine.SpecificationRunIDForImplementation(implementationRunID)
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
@@ -560,6 +554,22 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 	// with no configuration change that could ever release it.
 	if err := engine.SubmittedPathBoundary(resolvedPolicy); err != nil {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
+	}
+	var composition submissionFile
+	launchComposition := false
+	if cfg.CompositionPath != "" {
+		composition, err = cfg.input("composition", cfg.CompositionPath)
+		if err != nil {
+			return submitResult{}, fmt.Errorf("submit: read composition manifest: %w", err)
+		}
+		if launchComposition, err = validateSubmissionComposition(composition.body, implementationRunID, compositionIdentity{
+			SubmissionID: cfg.SubmissionID,
+			SourceDigest: spec.digest, PolicyDigest: policyDigest,
+			PublicationDigest: publicationDigest, WorkUnitDigest: workUnitDigest,
+			CommitAuthor: publication.CommitAuthor,
+		}, cfg.ProjectID, resolvedPolicy); err != nil {
+			return submitResult{}, fmt.Errorf("submit: composition manifest: %w", err)
+		}
 	}
 	if err := engine.SubmittedEgressPolicy(resolvedPolicy); err != nil {
 		// A retained request may be an already accepted manual submission.
@@ -622,6 +632,13 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		return result, err
 	}
 	defer func() { _ = handle.Close() }()
+	if launchComposition {
+		// A launch manifest attests the deputy that composed it while that
+		// deputy serves; with no daemon on the database it is a record of a
+		// run that has ended, and binds nothing.
+		return submitResult{}, fmt.Errorf("submit: composition manifest %s is a deputy launch's, and no deputy serves %s: %w",
+			cfg.CompositionPath, cfg.DBPath, domain.ErrParentKeyMismatch)
+	}
 	blobs, err := signet.NewBlobStore(cfg.DBPath + ".blobs")
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: open blob store: %w", err)
@@ -632,6 +649,16 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 // applySubmission runs the same store transaction for offline and daemon-routed
 // submissions. The caller owns the store and blob store.
 func applySubmission(ctx context.Context, st *store.Store, blobs *signet.BlobStore, req submitApplyRequest) (submitResult, error) {
+	return applyLaunchSubmission(ctx, st, blobs, req, nil)
+}
+
+// applyLaunchSubmission is applySubmission for a daemon that may be a
+// deputy. A non-nil launch is the deputy's own composition, and new work it
+// accepts must bind to it (deputyLaunch.admit); a nil launch admits as
+// before.
+func applyLaunchSubmission(
+	ctx context.Context, st *store.Store, blobs *signet.BlobStore, req submitApplyRequest, launch *deputyLaunch,
+) (submitResult, error) {
 	if err := validateSubmitApply(req); err != nil {
 		return submitResult{}, fmt.Errorf("submit: invalid prepared request: %w", err)
 	}
@@ -788,6 +815,11 @@ func applySubmission(ctx context.Context, st *store.Store, blobs *signet.BlobSto
 				replay = true
 			} else if !errors.Is(err, store.ErrNotFound) {
 				return err
+			}
+		}
+		if manual != nil && !replay {
+			if err := launch.admit(req.ProjectID, publication.CommitAuthor, composition.digest, resolvedPolicy); err != nil {
+				return fmt.Errorf("submit: %w", err)
 			}
 		}
 		if cfg.RunID == "" {
@@ -954,32 +986,140 @@ func validateSubmitApply(req submitApplyRequest) error {
 
 // validateSubmissionComposition binds a passing preflight manifest to the
 // exact inputs being submitted: a manifest for different inputs, a different
-// derived run identity, or a non-passing status refuses the submission.
+// derived run identity, or a non-passing status refuses the submission. It
+// reports whether the manifest is a deputy's launch manifest, which binds
+// only through the running deputy.
 func validateSubmissionComposition(
 	body []byte, runID domain.RunID, identity compositionIdentity,
-) error {
+	project domain.ProjectID, policy domain.ResolvedPolicy,
+) (launch bool, err error) {
 	if err := ward.RejectDuplicateJSONKeys(body); err != nil {
-		return err
+		return false, err
 	}
 	var manifest compositionManifest
 	if err := strictjson.Decode(
 		body, &manifest, strictjson.RejectInvalidUTF8, strictjson.Limit(maxSubmissionFileBytes),
 	); err != nil {
-		return err
+		return false, err
+	}
+	launch = manifest.Identity == (compositionIdentity{})
+	// A v1 manifest is a per-submission one written before launch manifests
+	// existed; its shape is v2's without the launch fields, so a retained
+	// submission bound to one still replays.
+	version := manifest.Version == compositionManifestVersion ||
+		manifest.Version == legacyCompositionManifestVersion && !launch
+	if !version || manifest.Status != compositionPassed {
+		return false, fmt.Errorf("manifest is not a passing %s composition: %w", compositionManifestVersion, domain.ErrParentKeyMismatch)
+	}
+	if launch {
+		return true, validateLaunchComposition(manifest, identity, project, policy)
 	}
 	wantInvocation := domain.InvocationID("inv-implement-" + string(runID))
-	if manifest.Version != compositionManifestVersion || manifest.Status != compositionPassed ||
-		manifest.Identity.SubmissionID != identity.SubmissionID ||
+	if manifest.Identity.SubmissionID != identity.SubmissionID ||
 		manifest.Identity.SourceDigest != identity.SourceDigest ||
 		manifest.Identity.PolicyDigest != identity.PolicyDigest ||
 		manifest.Identity.PublicationDigest != identity.PublicationDigest ||
 		manifest.Identity.WorkUnitDigest != identity.WorkUnitDigest ||
 		manifest.Identity.ImplementationRunID != runID ||
 		manifest.Identity.ImplementationInvocationID != wantInvocation {
-		return fmt.Errorf("passing manifest does not bind the submitted inputs, run %q, and invocation %q: %w",
+		return false, fmt.Errorf("passing manifest does not bind the submitted inputs, run %q, and invocation %q: %w",
 			runID, wantInvocation, domain.ErrParentKeyMismatch)
 	}
+	return false, nil
+}
+
+// validateLaunchComposition binds a submission to the manifest a deputy
+// composed for its whole run, which names no submission. What the
+// per-submission check proves through the identity is checked here against
+// the run: the project is the one the run serves, the commit author is the
+// App bot the run resolved, and the policy's paths stay inside the run's
+// allowlist. The settings digest marks the manifest as a launch's; a
+// manifest without one binds nothing.
+func validateLaunchComposition(
+	manifest compositionManifest, identity compositionIdentity,
+	project domain.ProjectID, policy domain.ResolvedPolicy,
+) error {
+	if manifest.SettingsDigest == "" || manifest.Project == "" || manifest.PublicationAuthor == nil {
+		return fmt.Errorf("passing manifest binds no submission and no launch: %w", domain.ErrParentKeyMismatch)
+	}
+	if project != manifest.Project {
+		return fmt.Errorf("project %s is not the run's project %s: %w", project, manifest.Project, domain.ErrParentKeyMismatch)
+	}
+	if identity.CommitAuthor != *manifest.PublicationAuthor {
+		return fmt.Errorf("publication commit_author %s[bot] (%d) is not the run's App bot %s[bot] (%d): %w",
+			identity.CommitAuthor.AppSlug, identity.CommitAuthor.BotUserID,
+			manifest.PublicationAuthor.AppSlug, manifest.PublicationAuthor.BotUserID, domain.ErrParentKeyMismatch)
+	}
+	if _, err := resolvedPathAllowlist(policy, policy.Digest, manifest.AllowedPaths); err != nil {
+		return fmt.Errorf("paths policy against the run's allowed paths: %w", err)
+	}
 	return nil
+}
+
+// deputyLaunch is a deputy's own record of the composition it serves under:
+// the digest of its passing launch manifest and the manifest itself, or no
+// digest when its start-up check failed.
+type deputyLaunch struct {
+	ManifestDigest domain.Digest
+	Manifest       compositionManifest
+}
+
+// admit binds new work to the deputy's launch on the daemon's side of the
+// control socket. Submit checks the same binding before it sends, but the
+// socket accepts any prepared request, including one from submit run
+// without --require-composition, so the deputy does not rely on that. New
+// work must name this launch's manifest and pass its project, commit
+// author, and path checks; a deputy whose check failed accepts none. A nil
+// launch is a daemon that is not a deputy.
+func (l *deputyLaunch) admit(
+	project domain.ProjectID, author engine.ProductionCommitAuthor, composition domain.Digest, policy domain.ResolvedPolicy,
+) error {
+	switch {
+	case l == nil:
+		return nil
+	case l.ManifestDigest == "":
+		return fmt.Errorf("this deputy's start-up check failed, so it accepts no new work: %w", domain.ErrParentKeyMismatch)
+	case composition != l.ManifestDigest:
+		return fmt.Errorf("new work must bind this deputy's launch manifest %s (submit --require-composition): %w",
+			l.ManifestDigest, domain.ErrParentKeyMismatch)
+	}
+	if err := validateLaunchComposition(l.Manifest, compositionIdentity{CommitAuthor: author}, project, policy); err != nil {
+		return fmt.Errorf("composition manifest: %w", err)
+	}
+	return nil
+}
+
+// gateManualInitiator binds paired-client submit_task to the launch, as
+// admit binds /submissions. A paired client names no manifest, so it binds
+// this launch implicitly: a project's configured commit author and policy
+// must pass admit, and a deputy whose start-up check failed admits none.
+// The lookup runs only for new tasks (the signet boundary replays recorded
+// ones first). A refused project answers as unconfigured, a definite
+// no-effect 404; the log says why. A nil launch is a daemon that is not a
+// deputy.
+func (l *deputyLaunch) gateManualInitiator(
+	lookup func(domain.ProjectID) (engine.ManualInitiator, bool), logger *slog.Logger,
+) func(domain.ProjectID) (engine.ManualInitiator, bool) {
+	if l == nil {
+		return lookup
+	}
+	return func(project domain.ProjectID) (engine.ManualInitiator, bool) {
+		initiator, ok := lookup(project)
+		if !ok {
+			return engine.ManualInitiator{}, false
+		}
+		policy, err := domain.NewResolvedPolicy("deputy-launch-admission", initiator.PolicyKeys)
+		if err == nil {
+			err = l.admit(project, initiator.CommitAuthor, l.ManifestDigest, policy)
+		}
+		if err != nil {
+			if logger != nil {
+				logger.Warn("paired-client submission refused by the deputy launch", "project", project, "error", err)
+			}
+			return engine.ManualInitiator{}, false
+		}
+		return initiator, true
+	}
 }
 
 // legacyProductionReplay preserves exact retries from the production-only

@@ -40,6 +40,7 @@ import (
 
 const (
 	compositionManifestVersion              = "freeside-production-composition-v2"
+	legacyCompositionManifestVersion        = "freeside-production-composition-v1"
 	preflightMaxSeedEntries                 = 100_000
 	preflightMaxShadowReviewCredentialBytes = 1 << 20
 )

@@ -253,6 +253,284 @@ func TestSubmitCommandBindsCompositionManifest(t *testing.T) {
 	}
 }
 
+// TestSubmitBindsLaunchCompositionManifest covers the manifest a deputy
+// writes once for its run: submit finds it beside the database and binds each
+// submission's project, commit author, and paths to it, through the running
+// daemon.
+func TestSubmitBindsLaunchCompositionManifest(t *testing.T) {
+	t.Parallel()
+	cases := map[string]struct {
+		edit func(*compositionManifest)
+		want string
+	}{
+		"matching launch": {func(*compositionManifest) {}, ""},
+		"other App bot": {func(m *compositionManifest) {
+			m.PublicationAuthor = &engine.ProductionCommitAuthor{AppSlug: "other-app", BotUserID: 12345}
+		}, "is not the run's App bot other-app[bot]"},
+		"other project":         {func(m *compositionManifest) { m.Project = "proj-other" }, "is not the run's project proj-other"},
+		"paths outside the run": {func(m *compositionManifest) { m.AllowedPaths = []string{"app/**"} }, "paths policy"},
+		"no settings digest":    {func(m *compositionManifest) { m.SettingsDigest = "" }, "binds no submission and no launch"},
+		"no project":            {func(m *compositionManifest) { m.Project = "" }, "binds no submission and no launch"},
+		"failed launch":         {func(m *compositionManifest) { m.Status = compositionFailed }, "is not a passing"},
+		"v1 launch": {func(m *compositionManifest) {
+			m.Version = legacyCompositionManifestVersion
+		}, "is not a passing"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			body := writeLaunchManifest(t, root, tc.edit)
+			dbPath := filepath.Join(root, "freeside.db")
+			h, err := run(t.Context(), nil, config{Environment: environmentEphemeral, DBPath: dbPath, ListenAddr: "127.0.0.1:0"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = h.Close() }()
+			result, err := runSubmitCommand(t.Context(), launchSubmitConfig(t, root, dbPath))
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("submit: %v", err)
+				}
+				if want := domain.Digest(contentaddr.Sum(body)); result.CompositionDigest != want {
+					t.Fatalf("composition digest = %q, want the launch manifest's %q", result.CompositionDigest, want)
+				}
+				return
+			}
+			if !errors.Is(err, domain.ErrParentKeyMismatch) && !errors.Is(err, domain.ErrPathBoundaryMismatch) ||
+				!strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error %v, want a refusal naming %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestDeputyAdmitsOnlyWorkBoundToItsLaunch checks the deputy's own side of
+// the control socket: a client that skips --require-composition, or one sent
+// to a deputy whose check failed, cannot add work the launch did not bind.
+func TestDeputyAdmitsOnlyWorkBoundToItsLaunch(t *testing.T) {
+	t.Parallel()
+	cases := map[string]struct {
+		failedCheck bool
+		unbound     bool
+		want        string
+	}{
+		"bound to the launch":    {},
+		"no composition":         {unbound: true, want: "must bind this deputy's launch manifest"},
+		"deputy check failed":    {failedCheck: true, want: "accepts no new work"},
+		"failed and no manifest": {failedCheck: true, unbound: true, want: "accepts no new work"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			body := writeLaunchManifest(t, root, func(*compositionManifest) {})
+			var manifest compositionManifest
+			if err := json.Unmarshal(body, &manifest); err != nil {
+				t.Fatal(err)
+			}
+			launch := &deputyLaunch{ManifestDigest: domain.Digest(contentaddr.Sum(body)), Manifest: manifest}
+			if tc.failedCheck {
+				launch = &deputyLaunch{Manifest: manifest}
+			}
+			dbPath := filepath.Join(root, "freeside.db")
+			h, err := run(t.Context(), nil, config{
+				Environment: environmentEphemeral, DBPath: dbPath, ListenAddr: "127.0.0.1:0", DeputyLaunch: launch,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = h.Close() }()
+			cfg := launchSubmitConfig(t, root, dbPath)
+			cfg.RequireComposition = !tc.unbound
+			_, err = runSubmitCommand(t.Context(), cfg)
+			if tc.want != "" {
+				if !errors.Is(err, domain.ErrParentKeyMismatch) || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("error %v, want a refusal naming %q", err, tc.want)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("bound submit: %v", err)
+			}
+			if _, err := runSubmitCommand(t.Context(), cfg); err != nil {
+				t.Fatalf("replay of an accepted submission: %v", err)
+			}
+		})
+	}
+}
+
+// TestDeputyLaunchAdmitRechecksTheLaunchBinding covers a handcrafted request
+// that names the launch manifest's digest with inputs it does not bind.
+func TestDeputyLaunchAdmitRechecksTheLaunchBinding(t *testing.T) {
+	t.Parallel()
+	author := engine.ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345}
+	launch := &deputyLaunch{ManifestDigest: "sha256:m", Manifest: compositionManifest{
+		Version: compositionManifestVersion, Status: compositionPassed,
+		SettingsDigest: "sha256:s", Project: "proj-submit", PublicationAuthor: &author,
+		AllowedPaths: []string{"daemon/**"},
+	}}
+	pathsPolicy := func(paths string) domain.ResolvedPolicy {
+		policy, err := domain.NewResolvedPolicy("run-admit", []domain.PolicyKey{{
+			Key: "paths", Value: paths,
+			Provenance: domain.KeyProvenance{
+				Source: domain.ProvenanceOverride, Digest: domain.Digest("sha256:" + strings.Repeat("ab", 32)),
+			},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return policy
+	}
+	policy := pathsPolicy("daemon/**")
+	if err := (*deputyLaunch)(nil).admit("proj-any", engine.ProductionCommitAuthor{}, "", policy); err != nil {
+		t.Fatalf("a daemon that is not a deputy: %v", err)
+	}
+	if err := launch.admit("proj-submit", author, "sha256:m", policy); err != nil {
+		t.Fatalf("bound request: %v", err)
+	}
+	other := engine.ProductionCommitAuthor{AppSlug: "other-app", BotUserID: 1}
+	for name, err := range map[string]error{
+		"other project":  launch.admit("proj-other", author, "sha256:m", policy),
+		"other App bot":  launch.admit("proj-submit", other, "sha256:m", policy),
+		"other manifest": launch.admit("proj-submit", author, "sha256:other", policy),
+		"other paths":    launch.admit("proj-submit", author, "sha256:m", pathsPolicy("app/**")),
+	} {
+		if !errors.Is(err, domain.ErrParentKeyMismatch) && !errors.Is(err, domain.ErrPathBoundaryMismatch) {
+			t.Errorf("%s: %v, want a refusal", name, err)
+		}
+	}
+}
+
+// TestDeputyLaunchGatesPairedClientSubmissions covers the paired client's
+// submit_task intake, which names no manifest: only a configured project
+// the launch admits resolves, and a failed launch resolves none.
+func TestDeputyLaunchGatesPairedClientSubmissions(t *testing.T) {
+	t.Parallel()
+	author := engine.ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345}
+	manifest := compositionManifest{
+		Version: compositionManifestVersion, Status: compositionPassed,
+		SettingsDigest: "sha256:s", Project: "proj-submit", PublicationAuthor: &author,
+		AllowedPaths: []string{"daemon/**"},
+	}
+	pathsKeys := func(paths string) []domain.PolicyKey {
+		return []domain.PolicyKey{{
+			Key: "paths", Value: paths,
+			Provenance: domain.KeyProvenance{
+				Source: domain.ProvenanceOverride, Digest: domain.Digest("sha256:" + strings.Repeat("ab", 32)),
+			},
+		}}
+	}
+	configured := map[domain.ProjectID]engine.ManualInitiator{
+		"proj-submit":      {PolicyKeys: pathsKeys("daemon/**"), CommitAuthor: author},
+		"proj-other":       {PolicyKeys: pathsKeys("daemon/**"), CommitAuthor: author},
+		"proj-other-paths": {PolicyKeys: pathsKeys("app/**"), CommitAuthor: author},
+	}
+	lookup := func(project domain.ProjectID) (engine.ManualInitiator, bool) {
+		initiator, ok := configured[project]
+		return initiator, ok
+	}
+
+	passing := (&deputyLaunch{ManifestDigest: "sha256:m", Manifest: manifest}).gateManualInitiator(lookup, nil)
+	if initiator, ok := passing("proj-submit"); !ok || initiator.CommitAuthor != author {
+		t.Fatalf("the launch's own project: %+v, %v", initiator, ok)
+	}
+	for _, project := range []domain.ProjectID{"proj-other", "proj-other-paths", "proj-unconfigured"} {
+		if _, ok := passing(project); ok {
+			t.Errorf("%s resolved under a launch that does not admit it", project)
+		}
+	}
+	failed := (&deputyLaunch{Manifest: manifest}).gateManualInitiator(lookup, nil)
+	if _, ok := failed("proj-submit"); ok {
+		t.Error("a deputy whose start-up check failed resolved a project")
+	}
+	notDeputy := (*deputyLaunch)(nil).gateManualInitiator(lookup, nil)
+	if _, ok := notDeputy("proj-other"); !ok {
+		t.Error("a daemon that is not a deputy refused a configured project")
+	}
+}
+
+// TestSubmitRefusesALaunchManifestWithoutItsDeputy writes straight to a
+// database no daemon holds: the deputy that composed the manifest is gone,
+// so the manifest binds nothing.
+func TestSubmitRefusesALaunchManifestWithoutItsDeputy(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeLaunchManifest(t, root, func(*compositionManifest) {})
+	dbPath := filepath.Join(root, "freeside.db")
+	_, err := runSubmitCommand(t.Context(), launchSubmitConfig(t, root, dbPath))
+	if !errors.Is(err, domain.ErrParentKeyMismatch) || !strings.Contains(err.Error(), "no deputy serves") {
+		t.Fatalf("submit with no deputy: %v", err)
+	}
+}
+
+func writeLaunchManifest(t *testing.T, root string, edit func(*compositionManifest)) []byte {
+	t.Helper()
+	manifest := compositionManifest{
+		Version: compositionManifestVersion, Status: compositionPassed,
+		SettingsDigest:    "sha256:" + domain.Digest(strings.Repeat("5", 64)),
+		Project:           "proj-submit",
+		PublicationAuthor: &engine.ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345},
+		AllowedPaths:      []string{"daemon/**"},
+	}
+	edit(&manifest)
+	body, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, deputyCompositionManifestName), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func launchSubmitConfig(t *testing.T, root, dbPath string) submitCommandConfig {
+	t.Helper()
+	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
+	return submitCommandConfig{
+		DBPath: dbPath, TaskPath: taskPath,
+		PolicyPath: policyPath, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath,
+		RequireComposition: true, SubmissionID: "launch-test", ProjectID: "proj-submit",
+	}
+}
+
+// TestSubmitReplaysAV1Manifest keeps a submission bound to a per-submission
+// manifest from before launch manifests: the v1 shape is v2's without the
+// launch fields.
+func TestSubmitReplaysAV1Manifest(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
+	manifest, _ := submissionCompositionManifest(t, "proj-submit", taskPath, policyPath, publicationPath)
+	legacy := bytes.Replace(manifest, []byte(compositionManifestVersion), []byte(legacyCompositionManifestVersion), 1)
+	manifestPath := filepath.Join(root, "composition.json")
+	if err := os.WriteFile(manifestPath, legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runSubmitCommand(t.Context(), submitCommandConfig{
+		DBPath: filepath.Join(root, "freeside.db"), TaskPath: taskPath,
+		PolicyPath: policyPath, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath,
+		CompositionPath: manifestPath, RequireComposition: true, SubmissionID: "composition-test",
+		ProjectID: "proj-submit",
+	}); err != nil {
+		t.Fatalf("v1 manifest submit: %v", err)
+	}
+}
+
+func TestSubmitRequiresTheDefaultManifestToExist(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
+	_, err := runSubmitCommand(t.Context(), submitCommandConfig{
+		DBPath: filepath.Join(root, "freeside.db"), TaskPath: taskPath,
+		PolicyPath: policyPath, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath,
+		RequireComposition: true, SubmissionID: "no-manifest", ProjectID: "proj-submit",
+	})
+	if err == nil || !strings.Contains(err.Error(), filepath.Join(root, deputyCompositionManifestName)) {
+		t.Fatalf("missing default manifest: %v", err)
+	}
+}
+
 func TestSubmitCommandRejectsCompositionRunOverride(t *testing.T) {
 	_, err := runSubmitCommand(t.Context(), submitCommandConfig{
 		CompositionPath: "previously-attested.json", RunID: "override",

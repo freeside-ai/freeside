@@ -287,12 +287,18 @@ func TestDeputyDaemonConfigRunsAgentsOnlyAfterAPassingCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	paths := newDeputyPaths("/deputy/daemon")
-	disabled := deputyDaemonConfig(settings, paths, false, compositionManifest{}, nil)
-	if disabled.Claude != nil || disabled.Environment != environmentEphemeral || disabled.DBPath != paths.DB {
+	disabled := deputyDaemonConfig(settings, paths, deputyLaunch{}, nil)
+	if disabled.Claude != nil || disabled.Environment != environmentEphemeral || disabled.DBPath != paths.DB ||
+		disabled.DeputyLaunch == nil {
 		t.Fatalf("failed check: %+v", disabled)
 	}
-	enabled := deputyDaemonConfig(settings, paths, true,
-		compositionManifest{JudgmentConfigurationDigest: "sha256:j"}, nil).Claude
+	passing := deputyDaemonConfig(settings, paths, deputyLaunch{
+		ManifestDigest: "sha256:m", Manifest: compositionManifest{JudgmentConfigurationDigest: "sha256:j"},
+	}, nil)
+	if passing.DeputyLaunch == nil || passing.DeputyLaunch.ManifestDigest != "sha256:m" {
+		t.Fatalf("passing check binds launch %+v", passing.DeputyLaunch)
+	}
+	enabled := passing.Claude
 	if enabled == nil || enabled.RigTokenFile != paths.Acquisition || !enabled.RunConformance ||
 		enabled.OperatingMode != domain.ModeUnattended || enabled.StateRoot != "/prod/daemon" ||
 		enabled.WriterStopTimeout != 20*time.Minute || enabled.Judgments != (judgmentConfig{}) {
