@@ -28,6 +28,7 @@ func newFollowUpFilingFixture(
 	f.writePath(t, f.headRoot)
 	f.workflow.findingAdjudicator = newDeterministicFindingAdjudicator(
 		modelRouteEntry(t, f.finding.ID, route, domain.ConfidenceHigh))
+	f.workflow.artifacts = f.blobs
 	return f
 }
 
@@ -211,7 +212,6 @@ func TestAcceptedSeparateWorkVerdictProposesOneFollowUpFiling(t *testing.T) {
 	for _, action := range []domain.Action{domain.ActionAcceptRecommendedRoute, domain.ActionStop} {
 		t.Run(string(action), func(t *testing.T) {
 			f := newFollowUpFilingFixture(t, domain.FindingSeverityP2, domain.RouteParkSeparateWork, nil)
-			f.workflow.artifacts = f.blobs
 			seedFollowUpFilingSubject(t, f, true)
 			reconcileFollowUpFiling(t, f, productionReviewPending)
 			if open := readFollowUpFilingState(t, f, 1); len(open.instances) != 0 || len(open.cards) != 0 {

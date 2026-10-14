@@ -33,7 +33,7 @@ func TestApprovingAFilingWakesTheFiler(t *testing.T) {
 	// The hook is read at each approval, so a filer bound after the service
 	// is built is still the one woken.
 	var bound signet.FollowUpFiler
-	service := signet.NewService(f.store,
+	service := signet.NewService(f.store, signet.WithBlobStore(f.blobs),
 		signet.WithClock(func() time.Time { return *f.now }),
 		signet.WithFollowUpFiler(func() signet.FollowUpFiler { return bound }))
 	bound = filer
@@ -61,7 +61,7 @@ func TestOnlyACommittedFilingApproveWakesTheFiler(t *testing.T) {
 	t.Run("decline", func(t *testing.T) {
 		f := newFilingFixture(t)
 		filer := &wakeCounter{}
-		service := signet.NewService(f.store,
+		service := signet.NewService(f.store, signet.WithBlobStore(f.blobs),
 			signet.WithClock(func() time.Time { return *f.now }),
 			signet.WithFollowUpFiler(func() signet.FollowUpFiler { return filer }))
 		if _, err := service.Submit(ctx, filingDecision(f, "decline-filing", domain.ActionDecline)); err != nil {
@@ -74,7 +74,7 @@ func TestOnlyACommittedFilingApproveWakesTheFiler(t *testing.T) {
 	t.Run("refused approve", func(t *testing.T) {
 		f := newFilingFixture(t)
 		filer := &wakeCounter{}
-		service := signet.NewService(f.store,
+		service := signet.NewService(f.store, signet.WithBlobStore(f.blobs),
 			signet.WithClock(func() time.Time { return *f.now }),
 			signet.WithFollowUpFiler(func() signet.FollowUpFiler { return filer }))
 		stale := filingDecision(f, "approve-stale", domain.ActionApprove)
@@ -90,7 +90,7 @@ func TestOnlyACommittedFilingApproveWakesTheFiler(t *testing.T) {
 		f := newClosureFixture(t, true, domain.ClosureFlagOriginProposeSite)
 		item := f.open(t, f.merge)
 		filer := &wakeCounter{}
-		service := signet.NewService(f.store,
+		service := signet.NewService(f.store, signet.WithBlobStore(f.blobs),
 			signet.WithClock(func() time.Time { return *f.now }),
 			signet.WithFollowUpFiler(func() signet.FollowUpFiler { return filer }))
 		if _, err := service.Submit(ctx, f.decision(item, "approve-closure", domain.ActionApprove)); err != nil {

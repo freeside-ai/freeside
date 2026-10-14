@@ -62,7 +62,16 @@ func openIntakeFixture(t *testing.T, root string) intakeFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	workflow, err := engine.New(st, attention, driver)
+	// Production wires intake only beside specification, which gives the
+	// engine the artifact store proposal admission writes evidence into.
+	fetcher, err := specify.NewFetcher(st, blobs, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow, err := engine.New(st, attention, driver, engine.WithSpecification(engine.SpecificationConfig{
+		Fetcher: fetcher, Blobs: blobs, Now: func() time.Time { return now },
+		PromptPackageDigest: domain.Digest(contentaddr.Sum([]byte("intake fixture prompt package"))),
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}

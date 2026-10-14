@@ -6,7 +6,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
@@ -57,6 +59,34 @@ func TestEffectProposalGoldenAndRoundTrip(t *testing.T) {
 	}
 	if decoded.Digest != proposal.Digest || decoded.TaskProposal.SubjectHandle != "subject-opaque-1" {
 		t.Fatalf("decoded = %#v", decoded)
+	}
+}
+
+// The evidence body is what a blob store must hold for the proposal's
+// evidence artifact to verify, so it must hash to the artifact digest and
+// match the size the metadata advertises.
+func TestProposalInstanceEvidenceArtifactBodyNamesDigest(t *testing.T) {
+	instance := domain.ProposalInstance{
+		ID: "proposal-1", ProposalBatchID: "batch-1",
+		Admission: domain.ProposalAdmissionKey{Source: domain.ProposalSourceClientCommand, SubmissionCommandID: "command-1"},
+		Proposal:  validEffectProposal(t), CreatedAt: time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC),
+	}
+	artifact, body, err := instance.EvidenceArtifactBody()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := domain.Digest(contentaddr.Sum(body)); got != artifact.Digest || got != instance.Proposal.Digest {
+		t.Fatalf("body digest = %s, artifact %s, proposal %s", got, artifact.Digest, instance.Proposal.Digest)
+	}
+	if artifact.Metadata.SizeBytes != int64(len(body)) {
+		t.Fatalf("size = %d, body %d bytes", artifact.Metadata.SizeBytes, len(body))
+	}
+	plain, err := instance.EvidenceArtifact()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.ID != artifact.ID || plain.Digest != artifact.Digest {
+		t.Fatalf("EvidenceArtifact = %#v, EvidenceArtifactBody artifact = %#v", plain, artifact)
 	}
 }
 

@@ -118,7 +118,7 @@ func newClosureFixture(
 		t.Fatal(err)
 	}
 
-	service := signet.NewService(base.store, signet.WithClock(func() time.Time { return *base.now }))
+	service := signet.NewService(base.store, signet.WithBlobStore(base.blobs), signet.WithClock(func() time.Time { return *base.now }))
 	merge := domain.ProspectiveMerge{
 		PublicationIdentity: testDigest("b"),
 		CandidateHeadSHA:    "head-aaa",

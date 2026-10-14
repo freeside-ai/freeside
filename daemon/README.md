@@ -1439,7 +1439,10 @@ later changes the audit digest and requires the existing profile reapproval.
 the current config-bound conformance and workspace-handoff declaration plus
 checkpoint encryption, checkpoint currency, artifact closure, and restore-test
 age. Pass each current policy digest as a repeatable `-approved-recipe`; the
-same set gates both artifact reconstruction and checkpoint closure. Each
+same set gates both artifact reconstruction and checkpoint closure. Before
+its first backup pass, the daemon rebuilds any missing effect-proposal
+evidence body from its durable proposal rows, so a store written before
+proposal paths persisted those bodies reaches a healthy closure. Each
 unhealthy dimension converges on one blocking `system_health` item; a later
 healthy pass resolves that item. Production driver mode supplies its live
 backend digest and runs the same composition at startup and every 24 hours by

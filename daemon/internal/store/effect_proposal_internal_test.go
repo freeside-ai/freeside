@@ -135,6 +135,13 @@ func TestProposalInstanceReconstructionRejectsTampering(t *testing.T) {
 			if err == nil || (tc.want != nil && !errors.Is(err, tc.want)) {
 				t.Fatalf("read error = %v, want %v", err, tc.want)
 			}
+			err = st.Read(ctx, func(tx *ReadTx) error {
+				_, err := tx.ListProposalEvidence(ctx)
+				return err
+			})
+			if err == nil || (tc.want != nil && !errors.Is(err, tc.want)) {
+				t.Fatalf("evidence list error = %v, want %v", err, tc.want)
+			}
 			// Restore the canonical row before the next independent mutation.
 			key, _ := instance.Admission.String()
 			body, _ := marshalProposalInstance(instance)
@@ -397,6 +404,35 @@ func TestProposalLedgerRejectsMismatchedCommandAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Run("evidence list carries the instance and its authenticated revision", func(t *testing.T) {
+		var evidence []domain.ProposalInstance
+		if err := st.Read(ctx, func(tx *ReadTx) error {
+			var err error
+			evidence, err = tx.ListProposalEvidence(ctx)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if len(evidence) != 2 || evidence[0].ID != instance.ID || evidence[1].ID != instance.ID ||
+			evidence[0].Proposal.Digest != proposal.Digest || evidence[1].Proposal.Digest != revised.Digest {
+			t.Fatalf("evidence = %#v, want the instance then its revision", evidence)
+		}
+		if _, err := st.db.ExecContext(ctx, `UPDATE effect_proposal_revisions SET supersedes_digest = ?
+			WHERE command_id = 'command-revision'`, revised.Digest); err != nil {
+			t.Fatal(err)
+		}
+		err := st.Read(ctx, func(tx *ReadTx) error {
+			_, err := tx.ListProposalEvidence(ctx)
+			return err
+		})
+		if !errors.Is(err, errRowInconsistent) {
+			t.Fatalf("evidence list over a tampered revision error = %v, want row inconsistency", err)
+		}
+		if _, err := st.db.ExecContext(ctx, `UPDATE effect_proposal_revisions SET supersedes_digest = ?
+			WHERE command_id = 'command-revision'`, proposal.Digest); err != nil {
+			t.Fatal(err)
+		}
+	})
 	revisionInstance := instance
 	revisionInstance.Proposal = revised
 	revisionArtifact, err := revisionInstance.EvidenceArtifact()

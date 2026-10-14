@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -40,6 +41,8 @@ type ProposalAdmissionResult struct {
 
 // AdmitProposal validates through the closed registry, allocates the effect
 // identity under the occurrence key, and creates its item in one transaction.
+// The proposal's evidence body goes to the engine's artifact store before its
+// carrier row, so an engine without one refuses admission.
 // A retry after an acknowledged or lost response returns the same committed
 // identity and consumes no second client-visible revision.
 func (e *Engine) AdmitProposal(
@@ -111,11 +114,8 @@ func (e *Engine) admitProposalAt(
 			result.Item = item
 			return errReplay
 		}
-		artifact, err := instance.EvidenceArtifact()
+		artifact, err := signet.PutProposalEvidence(ctx, tx, e.artifacts, instance)
 		if err != nil {
-			return err
-		}
-		if err := tx.PutArtifact(ctx, artifact); err != nil {
 			return fmt.Errorf("persist proposal artifact: %w", err)
 		}
 		subject := domain.Subject{

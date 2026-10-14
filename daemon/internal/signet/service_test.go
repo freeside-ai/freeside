@@ -30,6 +30,7 @@ import (
 type fixture struct {
 	service *signet.Service
 	store   *store.Store
+	blobs   *signet.BlobStore
 	dbPath  string
 	item    domain.AttentionItem
 	device  domain.Device
@@ -89,7 +90,12 @@ func newServiceFixture(t *testing.T, seedItem bool) fixture {
 		t.Fatalf("NewAttentionItem: %v", err)
 	}
 	now := start
+	blobs, err := signet.NewBlobStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	service := signet.NewService(s,
+		signet.WithBlobStore(blobs),
 		signet.WithPairingKey(testPairingKey),
 		signet.WithHostFacts(testHostFacts),
 		signet.WithClock(func() time.Time { return now }),
@@ -113,7 +119,7 @@ func newServiceFixture(t *testing.T, seedItem bool) fixture {
 	if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutDevice(ctx, device) }); err != nil {
 		t.Fatalf("seed device: %v", err)
 	}
-	return fixture{service: service, store: s, dbPath: dbPath, item: item, device: device, now: &now}
+	return fixture{service: service, store: s, blobs: blobs, dbPath: dbPath, item: item, device: device, now: &now}
 }
 
 // TestPutItemRejectsDisallowedAction exercises the signet item boundary: an

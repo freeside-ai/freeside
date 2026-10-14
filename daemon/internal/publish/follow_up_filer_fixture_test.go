@@ -295,6 +295,7 @@ type filingHarness struct {
 	t      *testing.T
 	path   string
 	store  *store.Store
+	blobs  *signet.BlobStore
 	gh     *fakeGitHub
 	now    time.Time
 	tokens publish.TokenSource
@@ -319,6 +320,11 @@ func newFilingHarness(t *testing.T) *filingHarness {
 		now: filingAt.Add(24 * time.Hour), tokens: testTokenSource(),
 		bot: publish.AppBotIdentity{AppSlug: filingBotSlug, BotUserID: filingBotID},
 	}
+	blobs, err := signet.NewBlobStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.blobs = blobs
 	h.gh.filing.milestones = map[string]int{"1B": 7}
 	h.gh.filing.now = func() time.Time { return h.now }
 	h.open()
@@ -570,7 +576,7 @@ func (h *filingHarness) propose(run filingRun, finding int, decision domain.Acti
 		if err != nil {
 			return err
 		}
-		item, err := signet.OpenFollowUpFilingItem(ctx, tx, instance.ID, created)
+		item, err := signet.OpenFollowUpFilingItem(ctx, tx, h.blobs, instance.ID, created)
 		if err != nil || decision == "" {
 			return err
 		}

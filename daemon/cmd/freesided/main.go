@@ -929,6 +929,17 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	if err != nil {
 		return nil, err
 	}
+	// A store written before proposal paths persisted their evidence bodies
+	// holds carrier rows whose bytes the closure scan cannot verify. Rebuild
+	// them from the durable proposal rows first, so this pass already sees them.
+	// A failed rebuild is reported, never fatal, for the reason below: it
+	// re-gates every proposal row, including ones no backup pass reads, and a
+	// body it could not write still surfaces as unhealthy backup closure.
+	if restored, err := signet.RestoreProposalEvidence(parent, st, blobs); err != nil {
+		fmt.Fprintln(os.Stderr, "freesided:", err)
+	} else if restored > 0 && cfg.Logger != nil {
+		cfg.Logger.Info("restored effect-proposal evidence bodies", "count", restored)
+	}
 	if err := localBackups.Maintain(parent); err != nil {
 		// A durable row this binary cannot reconstruct is reported, never
 		// fatal: startup is the one pass an operator cannot retry past, and

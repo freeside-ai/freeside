@@ -202,11 +202,8 @@ func (s *Service) applyStartProposalWithChanges(
 	}
 	revisedInstance := instance
 	revisedInstance.Proposal = revised
-	artifact, err := revisedInstance.EvidenceArtifact()
+	artifact, err := PutProposalEvidence(ctx, tx, s.evidenceBlobs(), revisedInstance)
 	if err != nil {
-		return err
-	}
-	if err := tx.PutArtifact(ctx, artifact); err != nil {
 		return err
 	}
 
