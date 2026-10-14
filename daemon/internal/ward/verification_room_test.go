@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
 
@@ -238,11 +239,7 @@ func TestVerificationOutputIsBounded(t *testing.T) {
 
 func TestRecipeReadCommandSeparatesRuntimeDiagnostics(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "runtime")
-	if err := os.WriteFile( //nolint:gosec // test-owned executable runtime fixture
-		path, []byte("#!/bin/sh\nprintf 'runtime progress\\n' >&2\nprintf 'recipe bytes'\n"), 0o700,
-	); err != nil {
-		t.Fatal(err)
-	}
+	execfixture.Write(t, path, []byte("#!/bin/sh\nprintf 'runtime progress\\n' >&2\nprintf 'recipe bytes'\n"), 0o700)
 	result, err := runRecipeReadCommand(t.Context(), path, nil, 1<<10)
 	if err != nil || result.ExitCode != 0 || result.Truncated || string(result.Output) != "recipe bytes" {
 		t.Fatalf("runRecipeReadCommand = %#v, %v", result, err)

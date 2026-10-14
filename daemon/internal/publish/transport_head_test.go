@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
 )
 
 // commitOn writes content to path on the fixture work tree's branch
@@ -202,9 +204,7 @@ func failingGit(t *testing.T, pattern, stdout string, status int) string {
 	script := "#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in " + pattern +
 		") printf '" + stdout + "'; exit " + strconv.Itoa(status) + ";; esac; done\nexec '" + real + "' \"$@\"\n"
 	path := filepath.Join(t.TempDir(), "git")
-	if err := os.WriteFile(path, []byte(script), 0o700); err != nil { //nolint:gosec // G306: an executable test fixture
-		t.Fatal(err)
-	}
+	execfixture.Write(t, path, []byte(script), 0o700)
 	return path
 }
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
+	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
 )
 
 // prodAppDirs creates prod's two App directories under a temporary home.
@@ -326,9 +327,7 @@ func TestCheckProdAppAuthorityRefusesBeforeTheLease(t *testing.T) {
 func fakeProdDaemon(t *testing.T, script string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "freesided")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+script+"\n"), 0o700); err != nil { //nolint:gosec // G306: executable fixture in an owner-only test directory.
-		t.Fatal(err)
-	}
+	execfixture.Write(t, path, []byte("#!/bin/sh\n"+script+"\n"), 0o700)
 	return path
 }
 

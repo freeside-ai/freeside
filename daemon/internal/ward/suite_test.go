@@ -19,6 +19,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
 
@@ -483,9 +484,7 @@ exit 1
 		t.Run(tc.name, func(t *testing.T) {
 			binDir := t.TempDir()
 			for name, body := range map[string]string{"nslookup": tc.nslookup, "nc": tc.nc} {
-				if err := os.WriteFile(filepath.Join(binDir, name), []byte(body), 0o700); err != nil { //nolint:gosec // executable fixtures are isolated in t.TempDir
-					t.Fatal(err)
-				}
+				execfixture.Write(t, filepath.Join(binDir, name), []byte(body), 0o700)
 			}
 			proofPath := filepath.Join(t.TempDir(), "networkless-proof.txt")
 			cmd := osexec.Command("sh", "-c", networklessProbeScript("owner", proofPath)) //nolint:gosec // fixed shell and test-owned script

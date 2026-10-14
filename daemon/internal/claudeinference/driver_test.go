@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 )
 
@@ -87,9 +88,7 @@ func testDriver(t *testing.T, script string) *Driver {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "cli")
 	body := []byte("#!/bin/sh\n" + script)
-	if err := os.WriteFile(p, body, 0o700); err != nil { //nolint:gosec // G306: executable synthetic CLI fixture in a private test directory.
-		t.Fatal(err)
-	}
+	execfixture.Write(t, p, body, 0o700)
 	h := sha256.Sum256(body)
 	d, err := New(Config{Binary: p, SHA256: hex.EncodeToString(h[:])})
 	if err != nil {
@@ -119,9 +118,8 @@ printf '%s' '` + string(b) + `'
 	if _, err := d.Complete(t.Context(), r, inference.Secret("synthetic-credential")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(d.config.Binary, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil { //nolint:gosec // G306: changed executable fixture must fail the content pin.
-		t.Fatal(err)
-	}
+	// The changed executable must fail the content pin.
+	execfixture.Write(t, d.config.Binary, []byte("#!/bin/sh\nexit 0\n"), 0o700)
 	if _, err := d.Complete(t.Context(), r, inference.Secret("synthetic-credential")); err == nil {
 		t.Fatal("accepted changed CLI pin")
 	}
