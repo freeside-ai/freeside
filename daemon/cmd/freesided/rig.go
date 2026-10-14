@@ -429,7 +429,25 @@ func runRigHoldWithLeaseRoot(
 		}
 		err = errors.Join(err, lease.Abandon())
 	}()
-	databaseLock, err := daemonlock.Acquire(lease.Manifest().Resources.DatabasePath)
+	if err := proveRigIdle(ctx, host, lease.Manifest().Resources, *launchAgentLabel); err != nil {
+		return err
+	}
+	if err := json.NewEncoder(stdout).Encode(rigHoldOutput{
+		Token: lease.Token(), Manifest: lease.Manifest(),
+	}); err != nil {
+		return fmt.Errorf("write rig acquisition: %w", err)
+	}
+	published = true
+	<-ctx.Done()
+	cleanRelease = errors.Is(context.Cause(ctx), errRigCleanRelease)
+	return nil
+}
+
+// proveRigIdle checks that nothing else uses a newly acquired lease's
+// resources: the database is unlocked, no supervised daemon is loaded, and
+// the listener and its loopback twin are free. rig hold and deputy share it.
+func proveRigIdle(ctx context.Context, host rigHost, resources daemonlock.RigResources, launchAgentLabel string) error {
+	databaseLock, err := daemonlock.Acquire(resources.DatabasePath)
 	if errors.Is(err, daemonlock.ErrAlreadyRunning) {
 		return fmt.Errorf("database is already held by a daemon: %w", err)
 	}
@@ -439,12 +457,12 @@ func runRigHoldWithLeaseRoot(
 	if err := databaseLock.Close(); err != nil {
 		return fmt.Errorf("release rig database probe: %w", err)
 	}
-	if supervised, err := host.SupervisedDaemon(ctx, *launchAgentLabel); err != nil {
+	if supervised, err := host.SupervisedDaemon(ctx, launchAgentLabel); err != nil {
 		return err
 	} else if supervised {
-		return fmt.Errorf("supervised daemon %q is loaded; stop it before starting the production rig", *launchAgentLabel)
+		return fmt.Errorf("supervised daemon %q is loaded; stop it before starting the production rig", launchAgentLabel)
 	}
-	canonicalListen := lease.Manifest().Resources.ListenAddress
+	canonicalListen := resources.ListenAddress
 	if description, live, err := host.ProbeDaemon(ctx, canonicalListen); err != nil {
 		return err
 	} else if live {
@@ -462,14 +480,6 @@ func runRigHoldWithLeaseRoot(
 			return fmt.Errorf("loopback listen address %q is already occupied by %s", twin, description)
 		}
 	}
-	if err := json.NewEncoder(stdout).Encode(rigHoldOutput{
-		Token: lease.Token(), Manifest: lease.Manifest(),
-	}); err != nil {
-		return fmt.Errorf("write rig acquisition: %w", err)
-	}
-	published = true
-	<-ctx.Done()
-	cleanRelease = errors.Is(context.Cause(ctx), errRigCleanRelease)
 	return nil
 }
 
@@ -704,7 +714,17 @@ func runRigRecover(
 	if flags.NArg() != 0 || *stateRoot == "" {
 		return fmt.Errorf("%w: -state-root is required", errRigUsage)
 	}
-	lease, err := daemonlock.AcquireStaleRig(*stateRoot)
+	return recoverStaleRig(ctx, stdout, host, *stateRoot, *containerBin, *launchAgentLabel, *confirm)
+}
+
+// recoverStaleRig is rig recover after its flags. Without confirm it prints
+// what it would clean up and refuses; deputy confirms for the lease its own
+// root recorded, because that lease is the one its previous start left.
+func recoverStaleRig(
+	ctx context.Context, stdout io.Writer, host rigHost,
+	stateRoot, containerBin, launchAgentLabel string, confirm bool,
+) (err error) {
+	lease, err := daemonlock.AcquireStaleRig(stateRoot)
 	if err != nil {
 		return err
 	}
@@ -715,10 +735,10 @@ func runRigRecover(
 		}
 	}()
 	manifest := lease.Manifest()
-	if supervised, err := host.SupervisedDaemon(ctx, *launchAgentLabel); err != nil {
+	if supervised, err := host.SupervisedDaemon(ctx, launchAgentLabel); err != nil {
 		return err
 	} else if supervised {
-		return fmt.Errorf("supervised daemon %q is loaded; stop it before recovery", *launchAgentLabel)
+		return fmt.Errorf("supervised daemon %q is loaded; stop it before recovery", launchAgentLabel)
 	}
 	databaseLock, err := daemonlock.Acquire(manifest.Resources.DatabasePath)
 	if errors.Is(err, daemonlock.ErrAlreadyRunning) {
@@ -737,13 +757,13 @@ func runRigRecover(
 		return fmt.Errorf("recorded listen address %q is still live (%s); stop that daemon before recovery",
 			manifest.Resources.ListenAddress, description)
 	}
-	present, err := host.PresentContainers(ctx, *containerBin, manifest.Resources.Containers)
+	present, err := host.PresentContainers(ctx, containerBin, manifest.Resources.Containers)
 	if err != nil {
 		return err
 	}
-	if !*confirm {
+	if !confirm {
 		presentVolumes, presentNetworks, err := host.PresentPersistentResources(
-			ctx, *containerBin, manifest.Resources.Volumes, manifest.Resources.Networks,
+			ctx, containerBin, manifest.Resources.Volumes, manifest.Resources.Networks,
 		)
 		if err != nil {
 			return err
@@ -758,27 +778,27 @@ func runRigRecover(
 		}
 		return daemonlock.ErrRigRecoveryConfirmation
 	}
-	if err := cleanupRigContainers(ctx, host, *containerBin, present); err != nil {
+	if err := cleanupRigContainers(ctx, host, containerBin, present); err != nil {
 		return err
 	}
-	volumes, networks, err := host.PresentPersistentResources(ctx, *containerBin,
+	volumes, networks, err := host.PresentPersistentResources(ctx, containerBin,
 		manifest.Resources.Volumes, manifest.Resources.Networks)
 	if err != nil {
 		return err
 	}
 	if len(volumes)+len(networks) > 0 {
-		active, err := host.RuntimeCLIActive(ctx, *containerBin)
+		active, err := host.RuntimeCLIActive(ctx, containerBin)
 		if err != nil {
 			return err
 		}
 		if active {
 			return errors.New("runtime CLI process is still active; wait before recovering review journals")
 		}
-		if err := host.RecoverReviewResources(ctx, *containerBin, manifest); err != nil {
+		if err := host.RecoverReviewResources(ctx, containerBin, manifest); err != nil {
 			return fmt.Errorf("recover recorded review journals: %w", err)
 		}
 	}
-	if err := requireRigResourcesAbsent(ctx, host, *containerBin, manifest.Resources); err != nil {
+	if err := requireRigResourcesAbsent(ctx, host, containerBin, manifest.Resources); err != nil {
 		return err
 	}
 	if err := lease.Close(); err != nil {
