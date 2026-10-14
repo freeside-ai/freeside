@@ -18,20 +18,15 @@ on:
       - "prompts/**"
       - "scripts/**"
       - ".github/workflows/vocabulary-ci.yml"
-  pull_request:
-    paths:
-      - "daemon/**"
-      - "api/**"
-      - "app/**"
-      - "prompts/**"
-      - "scripts/**"
-      - ".github/workflows/vocabulary-ci.yml"
+  # Pull requests run this through pull-request.yml, which selects it
+  # from the changed paths and reports the required check.
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: vocabulary-ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
