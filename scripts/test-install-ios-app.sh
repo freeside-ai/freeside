@@ -5,10 +5,10 @@
 # invocation, and devicectl install/launch dispatch. Command stand-ins
 # replace the build, signing, and device boundaries (xcodebuild, xcrun
 # devicectl, security, openssl), so the suite needs neither Xcode nor a
-# device and runs on Linux as well as macOS. The two cases that exercise
-# --server-url pass through to a real Swift toolchain (the installer's own
-# Foundation URL validator) when one is present and report explicit skips
-# otherwise.
+# device and runs on Linux as well as macOS. The cases that exercise
+# --server-url (including the URL relaunch that devicectl cannot complete)
+# pass through to a real Swift toolchain (the installer's own Foundation URL
+# validator) when one is present and report explicit skips otherwise.
 #
 # Exit code: 0 when every assertion passes, 1 otherwise.
 set -euo pipefail
@@ -395,6 +395,7 @@ run_installer --device Ashpool --launch
 assert_rc 0
 assert_file_contains "$CASE_DIR/devicectl-calls" "device process launch --device $ASHPOOL_UDID ai.freeside.app.ios"
 assert_file_omits "$CASE_DIR/devicectl-calls" "FreesideServerURL"
+assert_file_omits "$CASE_DIR/devicectl-calls" "--terminate-existing"
 
 begin_case "--launch-only retries an installed app without signing or building" launch-only
 run_installer --device Ashpool --launch-only
@@ -402,6 +403,7 @@ assert_rc 0
 assert_file_contains "$CASE_DIR/devicectl-calls" "device process launch --device $ASHPOOL_UDID ai.freeside.app.ios"
 assert_absent "$CASE_DIR/xcodebuild-args"
 assert_file_omits "$CASE_DIR/devicectl-calls" "device install app"
+assert_file_omits "$CASE_DIR/devicectl-calls" "--terminate-existing"
 
 # --- Cases that need a real Swift toolchain --------------------------------
 # The device-list resolver and the --server-url validator both run under
@@ -452,18 +454,25 @@ JSON
     assert_contains "'Twins' matched 2 connected devices"
     assert_absent "$CASE_DIR/xcodebuild-args"
 
-    begin_case "--launch with a valid URL passes it as a launch argument" launch-url
+    begin_case "--launch with a valid URL replaces a running instance with it" launch-url
     export FREESIDE_IOS_TEAM_ID=ABCDE12345
     run_installer --device Ashpool --server-url http://100.64.0.1:7331 --launch
     assert_rc 0
     assert_file_contains "$CASE_DIR/devicectl-calls" \
-        "ai.freeside.app.ios -- -FreesideServerURL http://100.64.0.1:7331"
+        "device process launch --terminate-existing --device $ASHPOOL_UDID ai.freeside.app.ios -- -FreesideServerURL http://100.64.0.1:7331"
 
-    begin_case "--launch-only passes a URL without rebuilding" launch-only-url
+    begin_case "--launch-only relaunches with a URL without rebuilding" launch-only-url
     run_installer --device Ashpool --server-url http://100.64.0.1:7331 --launch-only
     assert_rc 0
     assert_file_contains "$CASE_DIR/devicectl-calls" \
-        "ai.freeside.app.ios -- -FreesideServerURL http://100.64.0.1:7331"
+        "device process launch --terminate-existing --device $ASHPOOL_UDID ai.freeside.app.ios -- -FreesideServerURL http://100.64.0.1:7331"
+    assert_absent "$CASE_DIR/xcodebuild-args"
+
+    begin_case "a URL relaunch that devicectl cannot complete fails" launch-only-url-fails
+    export STUB_LAUNCH_FAILS=1
+    run_installer --device Ashpool --server-url http://100.64.0.1:7331 --launch-only
+    assert_rc 1
+    assert_contains "could not launch the app"
     assert_absent "$CASE_DIR/xcodebuild-args"
 
     begin_case "a malformed --server-url is rejected before the build" url-malformed
@@ -473,7 +482,7 @@ JSON
     assert_contains "not an http(s) URL"
     assert_absent "$CASE_DIR/xcodebuild-args"
 else
-    skip=$((skip + 7))
+    skip=$((skip + 8))
     echo "skip: resolver and --server-url cases (no swift toolchain for the swift -e parsers)"
 fi
 

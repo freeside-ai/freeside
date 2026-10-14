@@ -33,7 +33,11 @@
 # --launch-only retries that launch without rebuilding or reinstalling, which
 # is needed after trusting a personal-team developer certificate. AppSession then
 # persists it on-device at pairing (issue #847 step 1), so later
-# home-screen launches reach the same daemon with no argument. The URL is
+# home-screen launches reach the same daemon with no argument. A
+# --server-url launch terminates any running instance first, because the
+# app reads the argument only at process start; re-running
+# --launch-only --server-url <url> is therefore how an already-paired phone
+# switches to a new daemon. The URL is
 # validated with the client's own parser, identically to the Mac
 # installer, so a malformed one fails before the multi-minute build.
 #
@@ -318,14 +322,19 @@ fi
 echo "install-ios-app: resolved '$device' to device $device_udid"
 
 launch_app() {
-    echo "install-ios-app: launching $bundle_id"
     if [[ "$server_url_given" == true ]]; then
-        xcrun devicectl device process launch --device "$device_udid" "$bundle_id" \
+        echo "install-ios-app: launching $bundle_id, replacing any running instance"
+        # The app reads -FreesideServerURL only at process start, so a launch
+        # that merely foregrounds a running instance keeps its old endpoint
+        # while devicectl still reports success (#1514).
+        xcrun devicectl device process launch --terminate-existing \
+            --device "$device_udid" "$bundle_id" \
             -- -FreesideServerURL "$server_url" ||
             die "could not launch the app on '$device_udid'. On a first personal-team
   install, trust the developer certificate in Settings > General > VPN & Device
   Management, then retry this launch without rebuilding: $0 --device '$device' --server-url '$server_url' --launch-only"
     else
+        echo "install-ios-app: launching $bundle_id"
         xcrun devicectl device process launch --device "$device_udid" "$bundle_id" ||
             die "could not launch the app on '$device_udid'. On a first personal-team
   install, trust the developer certificate in Settings > General > VPN & Device
