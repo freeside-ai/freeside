@@ -365,6 +365,11 @@ unit, never a fix in passing (Monorepo Scope Discipline).
   logic, the janitor and engine `now`) is already deterministic. Detail:
   `daemon/README.md`; worked example:
   `daemon/internal/scheduler/run_synctest_test.go`.
+- **Executed test fixtures:** a test that writes a file it then executes,
+  directly or through `PATH`, writes it with `execfixture.Write`, so a
+  parallel fork can't make the exec fail with `text file busy`. Fixtures
+  nothing executes stay as they are; this is a ratchet, not a sweep.
+  Detail: `daemon/internal/execfixture/execfixture.go`.
 
 ## Monorepo Scope Discipline
 
