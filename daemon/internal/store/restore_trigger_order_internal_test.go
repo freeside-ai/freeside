@@ -4,6 +4,8 @@ import (
 	"context"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -160,6 +162,92 @@ func TestLocalBackupProducerRestoresFindingDispositions(t *testing.T) {
 				t.Fatal("sealed checkpoint has no successful restore test")
 			}
 		})
+	}
+}
+
+// insertTriggerRestoreHandling classifies every insert trigger in the
+// migrated schema by how restore copes with it.
+var insertTriggerRestoreHandling = map[string]string{
+	// The trigger reads rows in other tables, so restore copies its table
+	// after every other table (restoreLateCopyTables).
+	"runs_task_insert":                                     "late-copy",
+	"finding_disposition_requires_round_finding":           "late-copy",
+	"external_finding_disposition_requires_admitted_cycle": "late-copy",
+	// Restore drops the trigger and reinstates it before commit.
+	outboxPublicationInsertTrigger: "suspended",
+	// The trigger only rejects a row that conflicts with one already in
+	// another table; a consistent checkpoint holds no such pair, and the
+	// trigger needs nothing copied first.
+	"execution_exports_exclude_outcomes":       "exclusion",
+	"execution_outcomes_exclude_exports":       "exclusion",
+	"review_record_rejects_failure":            "exclusion",
+	"review_failure_rejects_record":            "exclusion",
+	"shadow_review_rejects_routed_invocation":  "exclusion",
+	"routed_review_rejects_shadow_invocation":  "exclusion",
+	"review_failure_rejects_shadow_invocation": "exclusion",
+	"review_retry_rejects_shadow_invocation":   "exclusion",
+	"routed_review_finding_rejects_shadow":     "exclusion",
+	"shadow_review_finding_rejects_routed":     "exclusion",
+}
+
+var insertTriggerSQL = regexp.MustCompile(`(?is)^\s*CREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?\S+\s+(?:BEFORE\s+|AFTER\s+|INSTEAD\s+OF\s+)?INSERT\s+ON\s`)
+
+// TestRestoreClassifiesEveryInsertTrigger keeps restore's copy order in step
+// with the schema: a new insert trigger fails here until it is classified,
+// and a trigger that reads other tables must have its table registered in
+// restoreLateCopyTables, or restore of a store holding its rows fails.
+func TestRestoreClassifiesEveryInsertTrigger(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+	rows, err := st.db.QueryContext(ctx,
+		`SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' ORDER BY name`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	seen := map[string]bool{}
+	var lateTables []string
+	for rows.Next() {
+		var name, table, definition string
+		if err := rows.Scan(&name, &table, &definition); err != nil {
+			t.Fatal(err)
+		}
+		if !insertTriggerSQL.MatchString(definition) {
+			// A header the pattern cannot read must not let an insert
+			// trigger skip classification.
+			header, _, _ := strings.Cut(strings.ToUpper(definition), "BEGIN")
+			if strings.Contains(header, "INSERT") {
+				t.Errorf("cannot read the event of trigger %s: %s", name, header)
+			}
+			continue
+		}
+		seen[name] = true
+		switch insertTriggerRestoreHandling[name] {
+		case "late-copy":
+			if !slices.Contains(restoreLateCopyTables, table) {
+				t.Errorf("trigger %s reads other tables, but its table %s is not in restoreLateCopyTables",
+					name, table)
+			}
+			lateTables = append(lateTables, table)
+		case "suspended", "exclusion":
+		default:
+			t.Errorf("insert trigger %s on %s is unclassified: if it requires rows in another table, "+
+				"register %s in restoreLateCopyTables (restore.go); then classify it here", name, table, table)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	for name := range insertTriggerRestoreHandling {
+		if !seen[name] {
+			t.Errorf("classified insert trigger %s is not in the schema", name)
+		}
+	}
+	for _, table := range restoreLateCopyTables {
+		if !slices.Contains(lateTables, table) {
+			t.Errorf("restoreLateCopyTables lists %s, but no late-copy trigger is on it", table)
+		}
 	}
 }
 
