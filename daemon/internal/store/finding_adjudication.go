@@ -534,6 +534,32 @@ func (tx *ReadTx) GetFindingAdjudication(
 	return artifact, nil
 }
 
+// firstNonHumanFindingAdjudication authenticates the omitted-finding evidence
+// without reconstructing a human answer, whose validation reads this same card.
+// Every successor preserves the finding batch, so revision 1 proves membership
+// for every later revision without that recursive dependency.
+func (tx *ReadTx) firstNonHumanFindingAdjudication(
+	ctx context.Context, runID domain.RunID, round int,
+) (domain.FindingAdjudication, error) {
+	row, err := scanFindingAdjudicationRow(tx.tx.QueryRowContext(ctx,
+		`SELECT `+selectFindingAdjudicationColumns+
+			` FROM finding_adjudications WHERE run_id = ? AND round = ? AND revision = 1`, runID, round))
+	if err != nil {
+		return domain.FindingAdjudication{}, notFoundOr(err)
+	}
+	if row.bodyDigest != reviewBodyDigest(string(row.body)) {
+		return domain.FindingAdjudication{}, errRowInconsistent
+	}
+	artifact, err := decode[domain.FindingAdjudication](row.body)
+	if err != nil {
+		return domain.FindingAdjudication{}, err
+	}
+	if artifact.Decision != nil {
+		return domain.FindingAdjudication{}, domain.ErrParentKeyMismatch
+	}
+	return tx.reconstructFindingAdjudication(ctx, row)
+}
+
 func (tx *ReadTx) getFindingAdjudicationRevision(
 	ctx context.Context, runID domain.RunID, round, revision int,
 ) (domain.FindingAdjudication, error) {

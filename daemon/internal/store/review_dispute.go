@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"slices"
 	"strings"
@@ -58,6 +59,21 @@ func (tx *ReadTx) gateExecutableReviewDispute(ctx context.Context, item domain.A
 		if row.Message != finding.Message || !reflect.DeepEqual(row.Location, finding.Location) || row.Severity != finding.Severity ||
 			!reflect.DeepEqual(row.External, identity) || !slices.Equal(row.OfferedRoutes, domain.ReviewDisputeRoutes(finding, domain.CanonicalDeclaredPaths(policy))) {
 			return domain.ErrParentKeyMismatch
+		}
+	}
+	if len(binding.Findings) < len(binding.FindingIDs) {
+		prior, err := tx.firstNonHumanFindingAdjudication(ctx, binding.RunID, binding.Round)
+		if errors.Is(err, ErrNotFound) {
+			return domain.ErrParentKeyMismatch
+		}
+		if err != nil {
+			return err
+		}
+		for _, id := range binding.FindingIDs {
+			listed := slices.ContainsFunc(binding.Findings, func(row domain.DisputedFinding) bool { return row.FindingID == id })
+			if !listed && !slices.ContainsFunc(prior.Entries, func(entry domain.FindingAdjudicationEntry) bool { return entry.FindingID == id }) {
+				return domain.ErrParentKeyMismatch
+			}
 		}
 	}
 	return nil

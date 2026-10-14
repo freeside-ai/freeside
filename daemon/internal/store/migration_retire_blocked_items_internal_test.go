@@ -112,15 +112,18 @@ func TestRetireBlockedItemsMigrationClosesOpenRows(t *testing.T) {
 
 // forgetRetireBlockedItems returns the database to the one a daemon at 0095
 // holds. 0096 changes no schema, so its record is all there is to forget; the
-// one later migration only adds a table, which is dropped with its record so
+// later migrations only add tables, which are dropped with their records so
 // the recorded history stays contiguous.
 func forgetRetireBlockedItems(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	if _, err := db.ExecContext(ctx, `DROP TABLE review_dispute_rows`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.ExecContext(ctx, `DROP TABLE review_admissions`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE name IN
-		('0096_retire_blocked_items.sql', '0097_review_admissions.sql')`); err != nil {
+		('0096_retire_blocked_items.sql', '0097_review_admissions.sql', '0098_review_dispute_rows.sql')`); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -267,14 +267,21 @@ enum AttentionDisplay {
             ].compactMap { $0 }
         case .review_dispute:
             guard let dispute = item.review_dispute?.value1 else { return [] }
-            return [
+            let listed = dispute.findings?.map(\.finding_id) ?? []
+            let disputed = listed.isEmpty ? dispute.finding_ids : listed
+            let routed = dispute.finding_ids.filter { !disputed.contains($0) }
+            var rows: [FactRow] = [
                 .init("Run", dispute.run_id, monospaced: true),
                 .init("Round", "\(dispute.round)"),
                 .init(
                     "Disputed findings",
-                    dispute.finding_ids.joined(separator: ", "), monospaced: true),
-                .init("Completion evidence", dispute.completion_evidence, monospaced: true),
+                    disputed.joined(separator: ", "), monospaced: true),
             ]
+            if !routed.isEmpty {
+                rows.append(.init("Already routed", routed.joined(separator: ", "), monospaced: true))
+            }
+            rows.append(.init("Completion evidence", dispute.completion_evidence, monospaced: true))
+            return rows
         case .ready_for_final_review:
             // Diff alone: the checklist's "Bound to" row above carries the
             // readiness candidate's head and base, and Details keeps this

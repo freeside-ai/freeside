@@ -127,6 +127,12 @@ public enum AttentionFixtures {
         return snapshot
     }
 
+    public static func subsetReviewDispute() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = routedReviewDispute()
+        snapshot.item.review_dispute?.value1.findings?.removeLast()
+        return snapshot
+    }
+
     /// A published handoff deliberately joined to the sample task's current
     /// run. The general inbox fixtures have independent subject identities.
     public static func publishedTaskReady(degraded: Bool = false) -> Components.Schemas.AttentionItemSnapshot {

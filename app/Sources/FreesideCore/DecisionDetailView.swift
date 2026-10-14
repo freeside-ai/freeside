@@ -2490,8 +2490,15 @@ struct DecisionDetailView: View {
     private func selectedFindingRoutes(
         _ findings: [Components.Schemas.DisputedFinding]
     ) -> [Components.Schemas.AlternativeChoice] {
+        Self.selectedFindingRoutes(findings, selections: alternativeSelections)
+    }
+
+    static func selectedFindingRoutes(
+        _ findings: [Components.Schemas.DisputedFinding],
+        selections: [String: Components.Schemas.AdjudicationRoute]
+    ) -> [Components.Schemas.AlternativeChoice] {
         findings.compactMap { finding in
-            guard let route = alternativeSelections[finding.finding_id], finding.offered_routes.contains(route) else {
+            guard let route = selections[finding.finding_id], finding.offered_routes.contains(route) else {
                 return nil
             }
             return .init(finding_id: finding.finding_id, route: route)

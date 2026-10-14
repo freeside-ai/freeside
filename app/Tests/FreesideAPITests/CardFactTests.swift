@@ -4,7 +4,7 @@ import Testing
 @testable import FreesideAPI
 
 @Suite struct CardFactTests {
-    @Test func executableDisputeRequiresCompleteAuthenticatedShape() throws {
+    @Test func executableDisputeAllowsAuthenticatedSubset() throws {
         let seed = AttentionFixtures.routedReviewDispute().item
         #expect(MockContractValidation.itemValidityBreach(seed) == nil)
         let body = try JSONEncoder().encode(seed)
@@ -14,7 +14,16 @@ import Testing
         #expect(MockContractValidation.itemValidityBreach(missing) != nil)
         var incomplete = seed
         incomplete.review_dispute?.value1.findings?.removeLast()
-        #expect(MockContractValidation.itemValidityBreach(incomplete) != nil)
+        #expect(MockContractValidation.itemValidityBreach(incomplete) == nil)
+        var empty = seed
+        empty.review_dispute?.value1.findings = []
+        #expect(MockContractValidation.itemValidityBreach(empty) != nil)
+        var unbound = incomplete
+        unbound.review_dispute?.value1.findings?[0].finding_id = "unbound"
+        #expect(MockContractValidation.itemValidityBreach(unbound) != nil)
+        var duplicate = seed
+        duplicate.review_dispute?.value1.findings?[1] = seed.review_dispute!.value1.findings![0]
+        #expect(MockContractValidation.itemValidityBreach(duplicate) != nil)
         var wrongIdentity = seed
         wrongIdentity.id = "other-item"
         #expect(MockContractValidation.itemValidityBreach(wrongIdentity) != nil)
