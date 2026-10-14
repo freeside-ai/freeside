@@ -300,9 +300,15 @@ translate agent jargon or search for the conclusion.
 checks from the repo root, and CI runs those steps through the same script,
 so its step table is the authoritative check list; the one exception is
 daemon lint, which CI runs through golangci-lint-action at the same pinned
-version. `bash scripts/check.sh --list` prints the components (`daemon`,
-`app`, `api`, `scripts`, `convergence`, `docs`) and their steps; the script
-header documents the tool overrides and the daemon's opt-in live suites. Operator
+version. On a pull request the component workflows run as reusable
+workflows called from `.github/workflows/pull-request.yml`, which has no
+path filter, selects the components from the PR's changed files, and
+reports the `required` check. Branch protection on `main` requires that
+check together with the up-to-date rule, so a PR behind `main` rebases
+before it can merge. `bash scripts/check.sh --list` prints the components
+(`daemon`, `app`, `api`, `scripts`, `convergence`, `docs`) and their steps;
+the script header documents the tool overrides and the daemon's opt-in live
+suites. Operator
 tools that are not checks live with their component: installers in
 app/README.md, image builds in images/README.md, the real unattended run in
 the `scripts/run-real-work.sh` header, and the API linter pin in
@@ -310,7 +316,8 @@ api/README.md. `prompts/` and `policy/` are not yet initialized. Lint,
 format, and CI follow the daemon's pattern, `daemon/.golangci.yml` and
 `.github/workflows/daemon-ci.yml` (Linux runs build, test, vet, and lint;
 macOS runs build and test); each new component adds its own on that pattern
-in its first PR and registers its steps in `scripts/check.sh`.
+in its first PR, registers its steps in `scripts/check.sh`, and registers
+its paths in `pull-request.yml`.
 
 To inspect a running daemon, read its recorded state through `freesided`
 instead of the database or the logs. Start one with
