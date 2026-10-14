@@ -1525,6 +1525,30 @@ import Testing
         #expect(await server.snapshot(itemID: seed.item.id)?.item.status == .resolved)
     }
 
+    @Test func subsetDisputeRequiresExactlyListedChoices() async throws {
+        let seed = AttentionFixtures.subsetReviewDispute()
+        let server = MockServer(items: [seed])
+        let client = APIClientFactory.mock(server: server)
+        let invalidChoices: [[Components.Schemas.AlternativeChoice]] = [
+            [], [.init(finding_id: "finding-2", route: .decline)],
+        ]
+        for (index, choices) in invalidChoices.enumerated() {
+            var command = Self.command(id: "subset-invalid-\(index)", against: seed, action: .adjudicate_findings)
+            command.payload.asDecision.finding_routes = choices
+            let response = try await client.submitCommand(body: .json(command))
+            guard case .undocumented = response else {
+                Issue.record("invalid subset choice accepted")
+                continue
+            }
+            #expect(await server.snapshot(itemID: seed.item.id)?.item.status == .open)
+        }
+        var command = Self.command(id: "subset-answer", against: seed, action: .adjudicate_findings)
+        command.payload.asDecision.finding_routes = [.init(finding_id: "finding-1", route: .decline)]
+        let result = try await client.submitCommand(body: .json(command)).ok.body.json
+        #expect(result.record.asDecision.message == #"[{"finding_id":"finding-1","route":"decline"}]"#)
+        #expect(await server.snapshot(itemID: seed.item.id)?.item.status == .resolved)
+    }
+
     @Test func findingAdjudicationAcceptAndAlternativeChoiceResolve() async throws {
         for (id, action, choices) in [
             (

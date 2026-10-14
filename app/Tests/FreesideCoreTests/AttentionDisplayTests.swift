@@ -198,6 +198,16 @@ import Testing
         #expect(AttentionDisplay.relativeRowTime(ordinary, now: now) == nil)
     }
 
+    @Test func subsetDisputeSeparatesAlreadyRoutedFindings() {
+        let now = AttentionFixtures.createdInstant
+        let rows = AttentionDisplay.cardFacts(AttentionFixtures.subsetReviewDispute().item, now: now)
+        #expect(rows.first { $0.label == "Disputed findings" }?.value == "finding-1")
+        #expect(rows.first { $0.label == "Already routed" }?.value == "finding-2")
+        let full = AttentionDisplay.cardFacts(AttentionFixtures.routedReviewDispute().item, now: now)
+        #expect(!full.contains { $0.label == "Already routed" })
+        #expect(full.first { $0.label == "Disputed findings" }?.value == "finding-1, finding-2")
+    }
+
     @Test func relativeRowTimeFormatsBareDatesWithTheSharedUnits() {
         let now = Date(timeIntervalSince1970: 200_000)
         #expect(

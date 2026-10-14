@@ -740,9 +740,7 @@ enum MockContractValidation {
                 return "invalid review_dispute binding"
             }
             if let findings = dispute.findings {
-                if Set(findings.map(\.finding_id)).count != findings.count
-                    || (!findings.isEmpty && findings.count != dispute.finding_ids.count)
-                {
+                if Set(findings.map(\.finding_id)).count != findings.count {
                     return "duplicate disputed finding"
                 }
                 for finding in findings {

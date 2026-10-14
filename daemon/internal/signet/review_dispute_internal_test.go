@@ -50,3 +50,36 @@ func TestAdjudicateFindingsCommandIDStaysWithinArtifactBudget(t *testing.T) {
 		t.Fatalf("overlong command id error = %v, want ErrClaimTextTooLarge", err)
 	}
 }
+
+func TestReviewDisputeDecisionCountsOnlyListedFindings(t *testing.T) {
+	item := domain.AttentionItem{
+		ID: "subset", Type: domain.AttentionReviewDispute, Status: domain.StatusOpen,
+		ItemVersion: 1, RequestedDecision: []domain.Action{domain.ActionAdjudicateFindings},
+		ReviewDispute: &domain.ReviewDisputeBinding{
+			FindingIDs: []domain.FindingID{"first", "second", "omitted"},
+			Findings: []domain.DisputedFinding{
+				{FindingID: "first", OfferedRoutes: []domain.AdjudicationRoute{domain.RouteDecline}},
+				{FindingID: "second", OfferedRoutes: []domain.AdjudicationRoute{domain.RouteDecline}},
+			},
+		},
+	}
+	for _, tc := range []struct {
+		message string
+		want    error
+	}{
+		{`[{"finding_id":"first","route":"decline"},{"finding_id":"second","route":"decline"}]`, nil},
+		{`[{"finding_id":"first","route":"decline"}]`, ErrFindingRoutesIncomplete},
+		{`[{"finding_id":"first","route":"decline"},{"finding_id":"omitted","route":"decline"}]`, ErrFindingRouteNotOffered},
+	} {
+		command, err := domain.NewCommand(domain.CommandInput{
+			CommandID: "answer", DeviceID: "device", ItemID: item.ID,
+			ItemVersion: item.ItemVersion, Action: domain.ActionAdjudicateFindings, Message: tc.message,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := validateReviewDisputeDecision(command, item); !errors.Is(err, tc.want) {
+			t.Errorf("%s: %v, want %v", tc.message, err, tc.want)
+		}
+	}
+}

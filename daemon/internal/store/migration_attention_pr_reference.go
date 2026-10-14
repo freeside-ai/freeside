@@ -51,6 +51,8 @@ func applyDataMigration(
 		return addReturnActionToProductionReadyItems(ctx, tx)
 	case version == 81 && name == projectAuthorityBackfillMigration:
 		return backfillProjectAuthority(ctx, tx)
+	case version == 98 && name == reviewDisputeRowsMigration:
+		return backfillReviewDisputeRows(ctx, tx)
 	default:
 		return nil
 	}

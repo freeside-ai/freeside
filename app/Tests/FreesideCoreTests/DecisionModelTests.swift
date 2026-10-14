@@ -1479,6 +1479,21 @@ import Testing
         #expect(model.snapshot?.item.status == .resolved)
     }
 
+    @Test func subsetDisputeSubmitsOnlyListedSelections() async throws {
+        let seed = AttentionFixtures.subsetReviewDispute()
+        let findings = try #require(seed.item.review_dispute?.value1.findings)
+        #expect(DecisionDetailView.selectedFindingRoutes(findings, selections: ["finding-2": ._defer]).isEmpty)
+        let choices = DecisionDetailView.selectedFindingRoutes(
+            findings, selections: ["finding-1": .decline, "finding-2": ._defer])
+        #expect(choices == [.init(finding_id: "finding-1", route: .decline)])
+        let store = await makeStore(server: MockServer(items: [seed]))
+        let model = DecisionModel(store: store, itemID: seed.item.id)
+        await model.validate()
+        await model.submitFindingRoutes(choices)
+        #expect(model.snapshot?.item.status == .resolved)
+        #expect(model.appliedRecord?.message == #"[{"finding_id":"finding-1","route":"decline"}]"#)
+    }
+
     @Test func findingAlternativeControlSubmitsTypedChoice() async {
         let server = MockServer()
         let store = await makeStore(server: server)

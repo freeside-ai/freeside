@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 86
+revision: 87
 status: active
-updated: 2026-10-13
+updated: 2026-10-14
 ---
 
 # Freeside
@@ -414,7 +414,7 @@ Approval is not a universal action.
 | --- | --- |
 | `spec_approval` | Approve, request changes, discuss, or stop. Render the full specification. For a task bound to an issue, say that approving posts to that issue, and render the public plan that will post or say that only the daemon's notice will (Section [5.11](#511-github-integration-reconciliation-plus-intake)). A revision shows the diff from the last reviewed version, prior comments, and claimed addressals. |
 | `review_diminishing_returns` | Finish now; apply the current batch and finish; continue under specified policy; or turn a recurring preference into a project-policy proposal PR. It never mutates policy directly. |
-| `review_dispute` | For routed findings: choose a route for every bound finding and submit `adjudicate_findings`, discuss, or stop. Decline and defer are always offered; remediate requires a located finding within the run's declared paths. The complete decision records a human adjudication and resumes routing. For an observation-only shadow finding: approve continuation without routing the finding, discuss, or stop; only approve lets the run reach readiness, and stop ends the run and raises the normal durable publication-blocked surface. For a completed publication cycle whose trust recheck needs code changes: approve one remediation continuation on the existing owned PR, discuss, or stop. Without a published PR, approve records an acknowledgment-only refusal. |
+| `review_dispute` | For routed findings: choose a route for every listed finding and submit `adjudicate_findings`, discuss, or stop. Decline and defer are always offered; remediate requires a located finding within the run's declared paths. A routed dispute may list fewer findings than it binds; the rest already have stored adjudication routes, which do not imply completed remediation. The displayed finding IDs are stored independently and fixed when the card becomes routed. The complete decision over the listed findings records a human adjudication and resumes routing. For an observation-only shadow finding: approve continuation without routing the finding, discuss, or stop; only approve lets the run reach readiness, and stop ends the run and raises the normal durable publication-blocked surface. For a completed publication cycle whose trust recheck needs code changes: approve one remediation continuation on the existing owned PR, discuss, or stop. Without a published PR, approve records an acknowledgment-only refusal. |
 | `finding_adjudication` | Accept the recommended route, choose an offered alternative, discuss, or stop (added with the Section [7](#7-review-policy) adjudication routing, 1B). Acceptance binds to the adjudication artifact digest and the item version; a Discuss response re-invokes adjudication against the same version bindings, and the new artifact supersedes the item. Stop leaves the run parked. |
 | `review_contradiction` | Recover only the exact persisted contradiction named by the card, or leave it parked. The card renders the bound run, invocation, round, base SHA, head SHA, and immutable failure-body digest; recovery preserves the original failure evidence. |
 | `review_configuration` | Adopt the review configuration (`adopt_review_configuration`), discuss, or stop. The run is parked, not terminal. Adopting authorizes one operator-approved profile supersession, limited to review configuration, for exactly the parked failure the card's binding names. The superseding profile is resolved at decision time as the repository's currently activated revision and re-gated on every read. Stop concludes the run as a configuration failure, as it always did. The card renders the same bound coordinates as `review_contradiction` plus the digest of the superseded profile. |
@@ -4628,7 +4628,7 @@ route is a function of the axes:
 | `required` | `human_decision_required` | recommendation-led `finding_adjudication` attention |
 | `required` | `unknown` | park plus recommendation-led attention; no scope widening |
 | `adjacent` | absent | reasoned deferred disposition; its recorded reason and the adjudication artifact carry the follow-up recommendation, and the Section [5.17](#517-follow-up-issue-filing) human-gated proposal path (1B.1) consumes that recommendation when it lands |
-| `contradictory` | absent | reasoned declined disposition, or the `review_dispute` item, where the human adjudicates every bound finding through `adjudicate_findings` (Section [4](#4-the-attention-model)), when the finding's severity is critical or high (the ceilings' second-adjudication case) or the self-assessed proposal confidence is below the resolved-policy threshold |
+| `contradictory` | absent | reasoned declined disposition, or the `review_dispute` item, where the human adjudicates every listed finding through `adjudicate_findings` (Section [4](#4-the-attention-model)), when the finding's severity is critical or high (the ceilings' second-adjudication case) or the self-assessed proposal confidence is below the resolved-policy threshold |
 | `unclear` | absent | recommendation-led attention with gating questions |
 
 These eight rows are the complete valid vocabulary. Implementation fixtures
@@ -6176,23 +6176,26 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 86 ("External Review Decisions Can Continue The Cycle"):
+Revision 87 ("Routed Disputes Ask Only For Unsettled Findings"):
 
-1. **Two external first-round dispute cards execute human routes.** When
-   adjudication is unavailable or requires a second decision, the cycle waits
-   on `adjudicate_findings`. Its stored human artifact drives remediation or
-   records decline/defer and a thread reply. Other endings retain their
-   existing actions. Declining every finding can restore readiness for the
-   unchanged head.
-2. **The card fixes its finding set.** A finding arriving after the card opens
-   is answered in a later cycle, never added to an already displayed decision.
-3. **Inline findings replace a review's summary at intake.** A review body
-   remains a finding only when that review has no usable inline finding.
-   Previously stored findings remain unchanged.
+1. **The round binding stays complete; the displayed list may be smaller.**
+   A routed dispute asks for a route for every listed finding. Each omitted
+   finding must have an entry in the round's first non-human adjudication.
+   Omission does not assert that remediation has finished. Human successors
+   preserve every omitted entry and the complete finding batch.
+2. **The displayed set is stored independently.** Once a dispute becomes
+   routed, its displayed finding IDs are immutable and checked on reads and
+   later writes. Migration backfills existing full-list cards only after
+   validating their old completeness invariant. This prevents removing a row
+   from the item body from hiding a requested decision.
+3. **The first revision avoids recursive reconstruction.** Later revisions
+   preserve the same batch. The subset evidence check refuses a human first
+   revision before reconstruction, because human validation reads the dispute
+   item itself. The engine remains responsible for selecting the findings
+   needing an answer; this unit does not change its selection behavior.
 
-(Implementation decisions for owner-assigned #1989, following its plan and
-#1016's merged contract;
-[decision note](../devlog/2026-10-13-1315-external-review-decisions.md).)
+(Owner-assigned #2009 and its approved persistence amendment;
+[decision note](../devlog/2026-10-14-0815-routed-dispute-subsets.md).)
 
 ## 14. Risks
 

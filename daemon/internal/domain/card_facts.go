@@ -245,8 +245,9 @@ func (d HealthDiagnostic) Validate() error {
 	return nil
 }
 
-// ReviewDisputeBinding identifies the disputed findings and the immutable
-// completion evidence for the bound review round.
+// ReviewDisputeBinding binds the whole round in FindingIDs and its immutable
+// completion evidence. Findings lists only the findings a person must answer;
+// the store requires prior adjudication entries for every omitted finding.
 type ReviewDisputeBinding struct {
 	RunID              RunID             `json:"run_id"`
 	Round              int               `json:"round"`
@@ -653,9 +654,6 @@ func (b ReviewDisputeBinding) Validate() error {
 		seen[id] = struct{}{}
 	}
 	rows := make(map[FindingID]bool, len(b.Findings))
-	if len(b.Findings) > 0 && len(b.Findings) != len(b.FindingIDs) {
-		return ErrCardFactInconsistent
-	}
 	for _, finding := range b.Findings {
 		if _, ok := seen[finding.FindingID]; !ok || rows[finding.FindingID] ||
 			finding.Message == "" || !utf8.ValidString(finding.Message) || len(finding.OfferedRoutes) == 0 {

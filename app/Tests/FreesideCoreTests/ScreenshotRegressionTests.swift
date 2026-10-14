@@ -2977,42 +2977,60 @@
                 }
             }
 
-            let routed = AttentionFixtures.routedReviewDispute()
-            let routedClient = APIClientFactory.mock(server: MockServer(items: [routed]))
-            let routedStore = InboxStore(client: routedClient, now: { screenshotNow })
-            routedStore.replaceAll(with: [routed])
-            await preloadReferences(routed.item, into: routedStore)
-            let routedModel = DecisionModel(store: routedStore, itemID: routed.item.id)
-            await routedModel.validate()
-            await routedModel.refreshActionSurface()
-            #expect(routedModel.validation == .validated)
-            let routedDetail = DecisionDetailView(
-                store: routedStore, itemID: routed.item.id,
-                loadsAttachments: false, showsValidationProgress: false,
-                now: screenshotNow, model: routedModel)
-            let selectedRoutedDetail = DecisionDetailView(
-                store: routedStore, itemID: routed.item.id,
-                alternativeSelections: ["finding-1": .remediate, "finding-2": ._defer],
-                loadsAttachments: false, showsValidationProgress: false,
-                now: screenshotNow, model: routedModel)
-            for (suffix, width, scheme) in [
-                ("", canvasWidth, ColorScheme.light),
-                ("-dark", canvasWidth, ColorScheme.dark),
-                ("-phone", CGFloat(390), ColorScheme.light),
-                ("-phone-dark", CGFloat(390), ColorScheme.dark),
+            for (variant, routed) in [
+                ("routed", AttentionFixtures.routedReviewDispute()),
+                ("subset", AttentionFixtures.subsetReviewDispute()),
             ] {
-                surfaces.append(
-                    Surface(
-                        name: "decision-review_dispute-routed\(suffix)", width: width, colorScheme: scheme,
-                        view: AnyView(
-                            routedDetail.screenshotCard(
-                                routed.item, at: dynamicTypeSize, compactLayout: width < canvasWidth))))
-                surfaces.append(
-                    Surface(
-                        name: "decision-review_dispute-routed-selected\(suffix)", width: width, colorScheme: scheme,
-                        view: AnyView(
-                            selectedRoutedDetail.screenshotCard(
-                                routed.item, at: dynamicTypeSize, compactLayout: width < canvasWidth))))
+                let routedClient = APIClientFactory.mock(server: MockServer(items: [routed]))
+                let routedStore = InboxStore(client: routedClient, now: { screenshotNow })
+                routedStore.replaceAll(with: [routed])
+                await preloadReferences(routed.item, into: routedStore)
+                let routedModel = DecisionModel(store: routedStore, itemID: routed.item.id)
+                await routedModel.validate()
+                await routedModel.refreshActionSurface()
+                #expect(routedModel.validation == .validated)
+                let routedDetail = DecisionDetailView(
+                    store: routedStore, itemID: routed.item.id,
+                    loadsAttachments: false, showsValidationProgress: false,
+                    now: screenshotNow, model: routedModel)
+                let expandedRoutedDetail = DecisionDetailView(
+                    store: routedStore, itemID: routed.item.id, expandedDisclosures: [.runDetails],
+                    loadsAttachments: false, showsValidationProgress: false,
+                    now: screenshotNow, model: routedModel)
+                let selectedRoutedDetail = DecisionDetailView(
+                    store: routedStore, itemID: routed.item.id,
+                    alternativeSelections: ["finding-1": .remediate, "finding-2": ._defer],
+                    loadsAttachments: false, showsValidationProgress: false,
+                    now: screenshotNow, model: routedModel)
+                for (suffix, width, scheme) in [
+                    ("", canvasWidth, ColorScheme.light),
+                    ("-dark", canvasWidth, ColorScheme.dark),
+                    ("-phone", CGFloat(390), ColorScheme.light),
+                    ("-phone-dark", CGFloat(390), ColorScheme.dark),
+                ] {
+                    surfaces.append(
+                        Surface(
+                            name: "decision-review_dispute-\(variant)\(suffix)", width: width, colorScheme: scheme,
+                            view: AnyView(
+                                routedDetail.screenshotCard(
+                                    routed.item, at: dynamicTypeSize, compactLayout: width < canvasWidth))))
+                    surfaces.append(
+                        Surface(
+                            name: "decision-review_dispute-\(variant)-selected\(suffix)", width: width,
+                            colorScheme: scheme,
+                            view: AnyView(
+                                selectedRoutedDetail.screenshotCard(
+                                    routed.item, at: dynamicTypeSize, compactLayout: width < canvasWidth))))
+                    if variant == "subset" {
+                        surfaces.append(
+                            Surface(
+                                name: "decision-review_dispute-subset-details\(suffix)", width: width,
+                                colorScheme: scheme,
+                                view: AnyView(
+                                    expandedRoutedDetail.screenshotCard(
+                                        routed.item, at: dynamicTypeSize, compactLayout: width < canvasWidth))))
+                    }
+                }
             }
 
             // Visual audit D06: a question that enumerates no options keeps

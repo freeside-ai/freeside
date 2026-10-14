@@ -2720,3 +2720,21 @@ The client work is #1798 to #1803.)
 
 (Owner decisions of 2026-10-13, #1988;
 [decision note](../../devlog/2026-10-13-0806-daemon-lifecycle-command.md).)
+
+## Revision 86 ("External Review Decisions Can Continue The Cycle"):
+
+1. **Two external first-round dispute cards execute human routes.** When
+   adjudication is unavailable or requires a second decision, the cycle waits
+   on `adjudicate_findings`. Its stored human artifact drives remediation or
+   records decline/defer and a thread reply. Other endings retain their
+   existing actions. Declining every finding can restore readiness for the
+   unchanged head.
+2. **The card fixes its finding set.** A finding arriving after the card opens
+   is answered in a later cycle, never added to an already displayed decision.
+3. **Inline findings replace a review's summary at intake.** A review body
+   remains a finding only when that review has no usable inline finding.
+   Previously stored findings remain unchanged.
+
+(Implementation decisions for owner-assigned #1989, following its plan and
+#1016's merged contract;
+[decision note](../../devlog/2026-10-13-1315-external-review-decisions.md).)

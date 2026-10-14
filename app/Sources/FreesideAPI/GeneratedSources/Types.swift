@@ -6556,7 +6556,7 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/DecisionPayload/alternative_choices`.
             public var alternative_choices: [Components.Schemas.AlternativeChoice]?
-            /// Complete per-finding routes for adjudicate_findings. Every finding in the dispute's findings list must occur exactly once, with an offered route. Absent for every other action.
+            /// Complete per-finding routes for adjudicate_findings. Every finding in the dispute's findings list must occur exactly once, with an offered route. Routes for findings outside that list are refused, including bound findings already routed. Absent for every other action.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/DecisionPayload/finding_routes`.
@@ -6588,7 +6588,7 @@ public enum Components {
             ///   - effect_proposal_revision: Typed closure revision, present only for approve_with_changes on a source_issue_closure effect proposal. The daemon preserves the proposal's target, provenance, and origin, and rebuilds the revised proposal from the prior one inside the accepting transaction.
             ///   - snooze_until: Typed UTC deferral instant, present only for snooze. The daemon requires a future canonical instant and records it in the proposal ledger.
             ///   - alternative_choices: Per-finding offered routes selected by choose_alternative_route. Findings omitted from this list retain their recommended route. Absent for every other action; finding IDs must be distinct.
-            ///   - finding_routes: Complete per-finding routes for adjudicate_findings. Every finding in the dispute's findings list must occur exactly once, with an offered route. Absent for every other action.
+            ///   - finding_routes: Complete per-finding routes for adjudicate_findings. Every finding in the dispute's findings list must occur exactly once, with an offered route. Routes for findings outside that list are refused, including bound findings already routed. Absent for every other action.
             ///   - task_lines: Per-role agent choices for the task a start or start_with_changes decision on a task_proposal creates; at most one line per role. Absent for every other action and item type. The daemon does not yet apply lines from a decision and rejects a decision that carries this field with 400.
             ///   - decision_action_surface_digest: The digest of the DecisionActionSurface the client rendered the decision from (plan §8). Optional comprehension telemetry: the daemon revalidates it against the live device, item decision surface, capability contract, and offered-action set, and stamps it onto the command's decision_evidence. It never widens the offered actions; it can only reject. Absent for a client build that does not adopt the action surface.
             public init(
@@ -10458,11 +10458,13 @@ public enum Components {
                 ])
             }
         }
-        /// Disputed finding identities bound to one completed review round.
+        /// The complete finding binding for one completed review round, with the subset of findings that require a human decision on a routed dispute.
+        ///
         ///
         /// - Remark: Generated from `#/components/schemas/ReviewDisputeBinding`.
         public struct ReviewDisputeBinding: Codable, Hashable, Sendable {
-            /// Authenticated findings and executable routes for a routed dispute.
+            /// Authenticated findings and executable routes requiring a human answer. On a routed dispute this is a nonempty subset of finding_ids. Each omitted finding already has a stored adjudication route; omission does not mean its remediation has finished.
+            ///
             ///
             /// - Remark: Generated from `#/components/schemas/ReviewDisputeBinding/findings`.
             public var findings: [Components.Schemas.DisputedFinding]?
@@ -10470,6 +10472,8 @@ public enum Components {
             public var run_id: Swift.String
             /// - Remark: Generated from `#/components/schemas/ReviewDisputeBinding/round`.
             public var round: Swift.Int
+            /// Every finding bound to the review round, including already routed findings omitted from findings.
+            ///
             /// - Remark: Generated from `#/components/schemas/ReviewDisputeBinding/finding_ids`.
             public var finding_ids: [Swift.String]
             /// - Remark: Generated from `#/components/schemas/ReviewDisputeBinding/completion_evidence`.
@@ -10477,10 +10481,10 @@ public enum Components {
             /// Creates a new `ReviewDisputeBinding`.
             ///
             /// - Parameters:
-            ///   - findings: Authenticated findings and executable routes for a routed dispute.
+            ///   - findings: Authenticated findings and executable routes requiring a human answer. On a routed dispute this is a nonempty subset of finding_ids. Each omitted finding already has a stored adjudication route; omission does not mean its remediation has finished.
             ///   - run_id:
             ///   - round:
-            ///   - finding_ids:
+            ///   - finding_ids: Every finding bound to the review round, including already routed findings omitted from findings.
             ///   - completion_evidence:
             public init(
                 findings: [Components.Schemas.DisputedFinding]? = nil,
@@ -11201,7 +11205,7 @@ public enum Components {
             }
             /// - Remark: Generated from `#/components/schemas/AttentionItem/health_diagnostic`.
             public var health_diagnostic: Components.Schemas.AttentionItem.health_diagnosticPayload?
-            /// Routed disputes carry findings and offer adjudicate_findings for a complete per-finding decision. Legacy shadow and continuation bindings retain their own action sets.
+            /// Routed disputes carry findings and offer adjudicate_findings for a complete decision over the listed findings only. Bound findings omitted from that list already have stored routes. Legacy shadow and continuation bindings retain their own action sets.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/AttentionItem/review_dispute`.
@@ -11222,7 +11226,7 @@ public enum Components {
                     try self.value1.encode(to: encoder)
                 }
             }
-            /// Routed disputes carry findings and offer adjudicate_findings for a complete per-finding decision. Legacy shadow and continuation bindings retain their own action sets.
+            /// Routed disputes carry findings and offer adjudicate_findings for a complete decision over the listed findings only. Bound findings omitted from that list already have stored routes. Legacy shadow and continuation bindings retain their own action sets.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/AttentionItem/review_dispute`.
@@ -11414,7 +11418,7 @@ public enum Components {
             ///   - diff_stats:
             ///   - blocked_on: Retired with the `blocked` attention type (plan revision 84). Non-null only on a closed `blocked` item stored before the retirement.
             ///   - health_diagnostic:
-            ///   - review_dispute: Routed disputes carry findings and offer adjudicate_findings for a complete per-finding decision. Legacy shadow and continuation bindings retain their own action sets.
+            ///   - review_dispute: Routed disputes carry findings and offer adjudicate_findings for a complete decision over the listed findings only. Bound findings omitted from that list already have stored routes. Legacy shadow and continuation bindings retain their own action sets.
             ///   - spec_revision: Authenticated revision facts for a revised spec_approval item; null on the initial approval and every other item type.
             ///   - agent_question: Typed question facts, present on every agent_question item and null on every other type.
             ///   - review_diminishing: Why the review loop stopped, on a review_diminishing_returns item; null on every other type. Also null on such an item stored before the facts existed and on one a review escalation raised, so a client must render the item without them.

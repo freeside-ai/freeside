@@ -537,6 +537,9 @@ func (tx *WriteTx) putAttentionItem(ctx context.Context, item domain.AttentionIt
 		if err != nil {
 			return fmt.Errorf("put attention item %q: %w", item.ID, err)
 		}
+		if err := tx.validateReviewDisputeRowsUpdate(ctx, decoded, item); err != nil {
+			return fmt.Errorf("put attention item %q displayed findings: %w", item.ID, err)
+		}
 		if item.Subject.TaskID == nil {
 			item.Subject.TaskID = decoded.Subject.TaskID
 		}
@@ -757,6 +760,9 @@ func (tx *WriteTx) putAttentionItem(ctx context.Context, item domain.AttentionIt
 	}
 	if err := tx.persistDecisionSurface(ctx, surface, createdSurface, changedSurface); err != nil {
 		return fmt.Errorf("put attention item %q decision surface: %w", item.ID, err)
+	}
+	if err := tx.persistReviewDisputeRows(ctx, item); err != nil {
+		return fmt.Errorf("put attention item %q displayed findings: %w", item.ID, err)
 	}
 	if existing == nil && item.Type == domain.AttentionReadyForFinalReview && item.Status == domain.StatusOpen {
 		tx.readyItemCreated = true
@@ -1462,6 +1468,9 @@ func (tx *ReadTx) scanAttentionItemHistory(ctx context.Context, sc scanner) (dom
 	if err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
+	if err := tx.gateReviewDisputeRows(ctx, item); err != nil {
+		return domain.AttentionItem{}, Snapshot{}, err
+	}
 	if err := tx.gateSubjectTask(ctx, item.ProjectID, item.Subject); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
@@ -1497,6 +1506,9 @@ func (tx *ReadTx) scanAttentionItemHistory(ctx context.Context, sc scanner) (dom
 func (tx *ReadTx) scanAttentionItemSnapshot(ctx context.Context, sc scanner) (domain.AttentionItem, Snapshot, error) {
 	item, snap, err := scanAttentionItemRecord(sc)
 	if err != nil {
+		return domain.AttentionItem{}, Snapshot{}, err
+	}
+	if err := tx.gateReviewDisputeRows(ctx, item); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	// Reconstruction re-runs the evidence gate: decode's Validate cannot check

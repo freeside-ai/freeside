@@ -79,7 +79,28 @@ func TestHumanFindingAdjudicationGoldenAndRoundTrip(t *testing.T) {
 	}
 	golden.Assert(t, "disputed_finding", append(body, '\n'))
 	binding.FindingIDs = append(binding.FindingIDs, "finding-2")
-	if err := binding.Validate(); err == nil {
-		t.Fatal("incomplete finding rows accepted")
+	if err := binding.Validate(); err != nil {
+		t.Fatalf("proper subset rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*domain.ReviewDisputeBinding){
+		"duplicate": func(b *domain.ReviewDisputeBinding) {
+			b.Findings = append(b.Findings, b.Findings[0])
+			b.FindingIDs = append(b.FindingIDs, "finding-3")
+		},
+		"unbound":        func(b *domain.ReviewDisputeBinding) { b.Findings[0].FindingID = "foreign" },
+		"empty message":  func(b *domain.ReviewDisputeBinding) { b.Findings[0].Message = "" },
+		"missing routes": func(b *domain.ReviewDisputeBinding) { b.Findings[0].OfferedRoutes = nil },
+		"invalid route": func(b *domain.ReviewDisputeBinding) {
+			b.Findings[0].OfferedRoutes = []domain.AdjudicationRoute{domain.RouteDispute}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := binding
+			candidate.Findings = slices.Clone(binding.Findings)
+			mutate(&candidate)
+			if candidate.Validate() == nil {
+				t.Fatal("invalid subset accepted")
+			}
+		})
 	}
 }
