@@ -1873,6 +1873,79 @@ func (tx *ReadTx) ListProposalBatch(
 	return slices.Clone(instances), nil
 }
 
+// ListProposalEvidence returns every durable proposal body an evidence
+// artifact can name: each instance as admitted and, for each authenticated
+// revision, a copy of its instance carrying that revision. Instances in
+// instance-id order come first, then revisions in (instance id, digest) order.
+// Rows reconstruct and re-gate through the paths the evidence artifact gate
+// uses, so a row that gate refuses fails this read too.
+func (tx *ReadTx) ListProposalEvidence(ctx context.Context) ([]domain.ProposalInstance, error) {
+	rows, err := tx.tx.QueryContext(ctx, `SELECT instance_id, admission_key,
+		proposal_batch_id, effect_kind, content_digest, resolved_policy_run_id, resolved_policy_digest,
+		subject_handle, created_at, body FROM effect_proposal_instances ORDER BY instance_id`)
+	if err != nil {
+		return nil, fmt.Errorf("list proposal evidence: %w", err)
+	}
+	var instances []domain.ProposalInstance
+	for rows.Next() {
+		instance, _, err := scanProposalInstance(rows)
+		if err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("list proposal evidence: %w", err)
+		}
+		instances = append(instances, instance)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, fmt.Errorf("list proposal evidence: %w", err)
+	}
+	byID := make(map[domain.ProposalInstanceID]domain.ProposalInstance, len(instances))
+	for _, instance := range instances {
+		if _, err := tx.gateProposalSubject(ctx, instance.Proposal); err != nil {
+			return nil, fmt.Errorf("list proposal evidence %q gate: %w", instance.ID, err)
+		}
+		byID[instance.ID] = instance
+	}
+
+	type revisionKey struct {
+		instanceID domain.ProposalInstanceID
+		digest     domain.Digest
+	}
+	revisionRows, err := tx.tx.QueryContext(ctx, `SELECT instance_id, content_digest
+		FROM effect_proposal_revisions ORDER BY instance_id, content_digest`)
+	if err != nil {
+		return nil, fmt.Errorf("list proposal evidence revisions: %w", err)
+	}
+	var revisionKeys []revisionKey
+	for revisionRows.Next() {
+		var key revisionKey
+		if err := revisionRows.Scan(&key.instanceID, &key.digest); err != nil {
+			_ = revisionRows.Close()
+			return nil, fmt.Errorf("list proposal evidence revisions: %w", err)
+		}
+		revisionKeys = append(revisionKeys, key)
+	}
+	if err := errors.Join(revisionRows.Err(), revisionRows.Close()); err != nil {
+		return nil, fmt.Errorf("list proposal evidence revisions: %w", err)
+	}
+	evidence := slices.Clone(instances)
+	for _, key := range revisionKeys {
+		instance, ok := byID[key.instanceID]
+		if !ok {
+			return nil, fmt.Errorf("list proposal evidence revision %q/%q: %w", key.instanceID, key.digest, errRowInconsistent)
+		}
+		proposal, _, err := tx.authenticatedProposalRevision(ctx, instance, key.digest)
+		if err != nil {
+			return nil, fmt.Errorf("list proposal evidence revision %q/%q: %w", key.instanceID, key.digest, err)
+		}
+		if _, err := tx.gateProposalSubject(ctx, proposal); err != nil {
+			return nil, fmt.Errorf("list proposal evidence revision %q/%q gate: %w", key.instanceID, key.digest, err)
+		}
+		instance.Proposal = proposal
+		evidence = append(evidence, instance)
+	}
+	return evidence, nil
+}
+
 // marshalProposalInstance is used only by adversarial internal tests to
 // produce canonical seed bodies before tampering extracted columns.
 func marshalProposalInstance(instance domain.ProposalInstance) ([]byte, error) {
