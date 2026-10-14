@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 )
@@ -30,9 +31,10 @@ func TestCappedMaterializationBufferStopsStreamingCommand(t *testing.T) {
 	}
 
 	producer := filepath.Join(t.TempDir(), "producer.sh")
-	writeExecutable(t,
+	execfixture.Write(t,
 		producer,
 		[]byte("#!/bin/sh\nwhile :; do printf '0123456789abcdef0123456789abcdef\\n'; done\n"),
+		0o700,
 	)
 	runner, err := newNetRunner(producer, t.TempDir(), "file")
 	if err != nil {
@@ -104,7 +106,7 @@ func TestRetainWorktreePopulatesImportedCandidate(t *testing.T) {
 	}
 	batchLog := filepath.Join(t.TempDir(), "cat-file-batches")
 	gitWrapper := filepath.Join(t.TempDir(), "git-wrapper.sh")
-	writeExecutable(t, gitWrapper, []byte(fmt.Sprintf(`#!/bin/sh
+	execfixture.Write(t, gitWrapper, []byte(fmt.Sprintf(`#!/bin/sh
 for arg
 do
 	if [ "$arg" = "--batch" ]; then
@@ -112,7 +114,7 @@ do
 	fi
 done
 exec git "$@"
-`, batchLog)))
+`, batchLog)), 0o700)
 	remote.transport.gitPath = gitWrapper
 
 	retained := filepath.Join(t.TempDir(), "review-workspace")
