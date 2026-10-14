@@ -10,7 +10,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
-func (w *productionPublicationWorkflow) routedReviewDisputeBinding(ctx context.Context, task productionPublicationTask, record domain.ReviewRecord) (*domain.ReviewDisputeBinding, error) {
+func (w *productionPublicationWorkflow) routedReviewDisputeBinding(ctx context.Context, task productionPublicationTask, record domain.ReviewRecord, listed []domain.FindingID) (*domain.ReviewDisputeBinding, error) {
 	binding := &domain.ReviewDisputeBinding{
 		RunID: record.RunID, Round: record.Round,
 		FindingIDs: slices.Clone(record.FindingIDs), CompletionEvidence: record.CompletionEvidence,
@@ -26,11 +26,28 @@ func (w *productionPublicationWorkflow) routedReviewDisputeBinding(ctx context.C
 	}
 	slices.Sort(binding.FindingIDs)
 	err = w.store.Read(ctx, func(tx *store.ReadTx) error {
+		if listed != nil {
+			// Early external dispositions disappear from openExternalFindings.
+			// Keep the whole stored batch bound even after those replies settle.
+			artifact, err := tx.GetFindingAdjudicationForRound(ctx, record.RunID, record.Round)
+			if err != nil {
+				return err
+			}
+			for _, entry := range artifact.Entries {
+				if !slices.Contains(binding.FindingIDs, entry.FindingID) {
+					binding.FindingIDs = append(binding.FindingIDs, entry.FindingID)
+				}
+			}
+			slices.Sort(binding.FindingIDs)
+		}
 		policy, err := tx.GetResolvedPolicy(ctx, record.RunID)
 		if err != nil {
 			return err
 		}
 		for _, id := range binding.FindingIDs {
+			if listed != nil && !slices.Contains(listed, id) {
+				continue
+			}
 			finding, err := tx.GetFinding(ctx, id)
 			if err != nil {
 				return err

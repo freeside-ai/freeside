@@ -113,12 +113,13 @@ func newFindingAdjudicationFixtureWithNote(
 // identities for a git-backed candidate, or another finding identity. The zero
 // value of each field keeps the default.
 type findingAdjudicationFixtureOptions struct {
-	note               string
-	policy             map[string]string
-	baseSHA, headSHA   string
-	findingID          domain.FindingID
-	extraFindingIDs    []domain.FindingID
-	reviewInvocationID domain.InvocationID
+	note                 string
+	policy               map[string]string
+	baseSHA, headSHA     string
+	findingID            domain.FindingID
+	extraFindingIDs      []domain.FindingID
+	extraFindingSeverity domain.FindingSeverity
+	reviewInvocationID   domain.InvocationID
 }
 
 func newFindingAdjudicationFixtureWithOptions(
@@ -183,6 +184,9 @@ func newFindingAdjudicationFixtureWithOptions(
 	for _, id := range options.extraFindingIDs {
 		extra := finding
 		extra.ID, extra.Location = id, nil
+		if options.extraFindingSeverity != "" {
+			extra.Severity = options.extraFindingSeverity
+		}
 		findings = append(findings, extra)
 		findingIDs = append(findingIDs, id)
 	}
@@ -1434,11 +1438,6 @@ func TestFindingAdjudicationFailClosedAndNotAcceptedParkWithoutArtifact(t *testi
 		{"unresolvable location", &domain.FindingLocation{Path: "daemon/missing.go"}, "high", func(*findingAdjudicationFixture) findingAdjudicator { return nil }},
 		{"missing output", &domain.FindingLocation{Path: "daemon/a.go"}, "low", func(*findingAdjudicationFixture) findingAdjudicator {
 			return &scriptedFindingAdjudicator{}
-		}},
-		{"low-confidence output", &domain.FindingLocation{Path: "daemon/a.go"}, "low", func(f *findingAdjudicationFixture) findingAdjudicator {
-			return &scriptedFindingAdjudicator{entries: []domain.FindingAdjudicationEntry{
-				modelRouteEntry(t, f.finding.ID, domain.RouteDefer, domain.ConfidenceMedium),
-			}}
 		}},
 		{"malformed output", &domain.FindingLocation{Path: "daemon/a.go"}, "low", func(f *findingAdjudicationFixture) findingAdjudicator {
 			return &scriptedFindingAdjudicator{entries: []domain.FindingAdjudicationEntry{{

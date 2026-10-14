@@ -104,16 +104,31 @@ func TestExternalReviewRejectedBatchLogsCause(t *testing.T) {
 			if len(end.reviewItems) != 1 || end.readyItem || end.pending != 1 {
 				t.Fatalf("parked cycle: %+v", end)
 			}
-			for _, want := range []string{"run=" + string(p.runID), "round=2", "external_first_round=true", "cause=" + tc.cause} {
-				if !strings.Contains(logs.String(), want) {
-					t.Errorf("log missing %q: %s", want, logs.String())
-				}
-			}
 			if strings.Contains(logs.String(), marker) {
 				t.Fatal("untrusted text reached log")
 			}
-			if strings.Count(logs.String(), "finding adjudication unavailable") != 1 {
-				t.Fatalf("expected one refusal: %s", logs.String())
+			if tc.lowConfidence {
+				if strings.Contains(logs.String(), "finding adjudication unavailable") {
+					t.Fatal("valid low-confidence answers were logged as a failed batch")
+				}
+				if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+					artifact, err := tx.GetFindingAdjudicationForRound(p.ctx, p.runID, 2)
+					if err == nil && len(artifact.Entries) != len(findings) {
+						t.Fatal("low-confidence answers were discarded")
+					}
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				for _, want := range []string{"run=" + string(p.runID), "round=2", "external_first_round=true", "cause=" + tc.cause} {
+					if !strings.Contains(logs.String(), want) {
+						t.Errorf("log missing %q: %s", want, logs.String())
+					}
+				}
+				if strings.Count(logs.String(), "finding adjudication unavailable") != 1 {
+					t.Fatalf("expected one refusal: %s", logs.String())
+				}
 			}
 		})
 	}
@@ -127,6 +142,7 @@ type adjudicatorVerdict struct {
 	// itself: a required fix inside the declared paths.
 	compatibility domain.ProposedCompatibility
 	route         domain.AdjudicationRoute
+	confidence    string
 }
 
 func declineVerdict(id domain.FindingID) adjudicatorVerdict {
@@ -171,6 +187,9 @@ func scriptAdjudication(t *testing.T, driver *inferencefake.Driver, verdicts ...
 		}
 		if verdict.compatibility != "" {
 			next.Compatibility = &verdict.compatibility
+		}
+		if verdict.confidence != "" {
+			next.Confidence = verdict.confidence
 		}
 		if verdict.route != "" {
 			next.Route = &verdict.route

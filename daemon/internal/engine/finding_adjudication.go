@@ -315,7 +315,8 @@ func (w *productionPublicationWorkflow) reconcileFindingAdjudicationWithDissent(
 			cause, fallback := adjudicationErrorCause(err)
 			return w.parkUnacceptedFindingBatch(ctx, task, record, cause, fallback)
 		}
-		if err := validateModelAdjudicationEntries(residue, modelEntries, confidenceThreshold); err != nil {
+		modelEntries, err = acceptedModelAdjudicationEntries(residue, modelEntries, confidenceThreshold)
+		if err != nil {
 			return w.parkUnacceptedFindingBatch(ctx, task, record, adjudicationValidationCause(err), "")
 		}
 		entries = append(entries, modelEntries...)
@@ -836,6 +837,51 @@ func validateModelAdjudicationEntries(
 	residue []findingAdjudicationInput, entries []domain.FindingAdjudicationEntry,
 	threshold domain.DispatchThreshold,
 ) error {
+	if err := validateModelAdjudicationAnswerSet(residue, entries); err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		accepted, err := entry.Accepted(threshold)
+		if err != nil || !accepted {
+			return errors.Join(err, inference.ErrAdjudicationNotAvailable)
+		}
+	}
+	return nil
+}
+
+// Preserve valid answers independently. Required answers below threshold must
+// lose their remediation route before any consumer can select work to fix.
+func acceptedModelAdjudicationEntries(
+	residue []findingAdjudicationInput, entries []domain.FindingAdjudicationEntry,
+	threshold domain.DispatchThreshold,
+) ([]domain.FindingAdjudicationEntry, error) {
+	if err := validateModelAdjudicationAnswerSet(residue, entries); err != nil {
+		return nil, err
+	}
+	result := slices.Clone(entries)
+	for i, entry := range result {
+		accepted, err := entry.Accepted(threshold)
+		if err != nil {
+			return nil, errors.Join(err, inference.ErrAdjudicationNotAvailable)
+		}
+		if accepted || entry.GoalRelationship != domain.GoalRequired {
+			continue
+		}
+		unknown := domain.ProposedUnknown
+		result[i], err = domain.NewModelAdjudicationEntry(entry.FindingID,
+			entry.GoalRelationship, &unknown, domain.RouteParkUnknown, *entry.Confidence,
+			entry.Rationale, entry.Evidence, entry.CitedRules, entry.Assumptions,
+			entry.Alternatives, entry.OpenQuestions)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func validateModelAdjudicationAnswerSet(
+	residue []findingAdjudicationInput, entries []domain.FindingAdjudicationEntry,
+) error {
 	if len(entries) != len(residue) {
 		return domain.ErrParentKeyMismatch
 	}
@@ -854,10 +900,6 @@ func validateModelAdjudicationEntries(
 			return domain.ErrParentKeyMismatch
 		}
 		delete(expected, entry.FindingID)
-		accepted, err := entry.Accepted(threshold)
-		if err != nil || !accepted {
-			return errors.Join(err, inference.ErrAdjudicationNotAvailable)
-		}
 	}
 	if len(expected) != 0 {
 		return domain.ErrParentKeyMismatch
@@ -1691,6 +1733,15 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 			return productionReviewPending, err
 		}
 	}
+	if item == nil && artifact.Decision == nil {
+		waiting, err := w.pendingAdjudicatedFindings(ctx, artifact)
+		if err != nil {
+			return productionReviewPending, err
+		}
+		if len(waiting) > 0 {
+			return w.awaitPendingFindingDecisions(ctx, task, record, artifact, routes, waiting)
+		}
+	}
 	needsFindingAttention := false
 	needsDisputeAttention := false
 	for _, entry := range artifact.Entries {
@@ -1860,11 +1911,7 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 				return err
 			}
 		}
-		if err := persistFindingRouteDispositions(ctx, tx, artifact, routes, dispositionAt); err != nil {
-			return err
-		}
-		return w.proposeFollowUpFilings(ctx, tx, task.ProjectID, artifact, routes,
-			domain.FollowUpSourceDeferredDisposition)
+		return w.persistUnresolvedFindingRoutes(ctx, tx, task.ProjectID, artifact, routes, dispositionAt)
 	}); err != nil {
 		return productionReviewPending, err
 	}
@@ -1888,6 +1935,9 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 
 func persistFindingRouteDispositions(ctx context.Context, tx *store.WriteTx, artifact domain.FindingAdjudication, routes map[domain.FindingID]domain.AdjudicationRoute, at time.Time) error {
 	for _, entry := range artifact.Entries {
+		if _, selected := routes[entry.FindingID]; !selected {
+			continue
+		}
 		var disposition domain.ReviewDisposition
 		switch routes[entry.FindingID] {
 		case domain.RouteDefer:

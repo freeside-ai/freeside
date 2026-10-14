@@ -4649,6 +4649,16 @@ func (w *productionPublicationWorkflow) putReviewAttentionWithActionsAndID(
 	disputeActions []domain.Action,
 	agentClaims []domain.AgentClaim,
 ) error {
+	return w.putReviewAttentionWithListedFindings(ctx, task, record, reason, itemType,
+		itemID, disputeActions, agentClaims, nil)
+}
+
+func (w *productionPublicationWorkflow) putReviewAttentionWithListedFindings(
+	ctx context.Context, task productionPublicationTask, record domain.ReviewRecord,
+	reason string, itemType domain.AttentionType, itemID domain.ItemID,
+	disputeActions []domain.Action, agentClaims []domain.AgentClaim,
+	listedFindings []domain.FindingID,
+) error {
 	runID := task.RunID
 	subject := domain.Subject{
 		Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID,
@@ -4670,7 +4680,7 @@ func (w *productionPublicationWorkflow) putReviewAttentionWithActionsAndID(
 	}
 	var reviewBinding *domain.ReviewDisputeBinding
 	if itemType == domain.AttentionReviewDispute && slices.Contains(disputeActions, domain.ActionAdjudicateFindings) {
-		reviewBinding, err = w.routedReviewDisputeBinding(ctx, task, record)
+		reviewBinding, err = w.routedReviewDisputeBinding(ctx, task, record, listedFindings)
 		if err != nil {
 			return err
 		}
@@ -4713,7 +4723,7 @@ func (w *productionPublicationWorkflow) putReviewAttentionWithActionsAndID(
 		}
 		if existing.Status == domain.StatusOpen && reviewBinding == nil &&
 			slices.Contains(disputeActions, domain.ActionAdjudicateFindings) {
-			reviewBinding, err = w.routedReviewDisputeBinding(ctx, task, record)
+			reviewBinding, err = w.routedReviewDisputeBinding(ctx, task, record, listedFindings)
 			if err != nil {
 				return err
 			}

@@ -40,6 +40,9 @@ func TestAdjudicationParkCauses(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
+					// A valid low-confidence answer now survives in the batch.
+					// An invalid entry still refuses the whole answer set.
+					entry.Confidence = nil
 					adjudicator.entries = []domain.FindingAdjudicationEntry{entry}
 				}
 				f.workflow.findingAdjudicator = adjudicator
