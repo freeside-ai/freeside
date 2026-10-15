@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -350,7 +351,7 @@ func TestListAttentionItemsRegatesEvidence(t *testing.T) {
 // TestListAttentionItemRowsReportsRefusedRows: where ListAttentionItems
 // fails whole on one refused row, the row-by-row read keeps every row in
 // the same order and reports the refused one in place, with its id, its
-// subject columns, and its error.
+// subject columns, and an error naming the recipe the read did not approve.
 func TestListAttentionItemRowsReportsRefusedRows(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -437,6 +438,9 @@ func TestListAttentionItemRowsReportsRefusedRows(t *testing.T) {
 	refused, read := rows[0], rows[1]
 	if !errors.Is(refused.Err, domain.ErrUnapprovedRecipe) || refused.Item != nil {
 		t.Fatalf("refused row = %+v, want ErrUnapprovedRecipe and no item", refused)
+	}
+	if !strings.Contains(refused.Err.Error(), string(fixtureRecipe)) {
+		t.Errorf("refused row error %q does not name recipe %s", refused.Err, fixtureRecipe)
 	}
 	if refused.SubjectRunID == nil || *refused.SubjectRunID != runID || refused.Snapshot != (store.Snapshot{}) {
 		t.Errorf("refused row subject run = %v, snapshot = %+v", refused.SubjectRunID, refused.Snapshot)

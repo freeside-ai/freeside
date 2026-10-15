@@ -1706,6 +1706,11 @@ func (c attentionItemColumns) reconstruct() (domain.AttentionItem, Snapshot, err
 func (tx *ReadTx) gateEvidence(ctx context.Context, item domain.AttentionItem) error {
 	for _, a := range item.EvidenceSnapshot {
 		if err := domain.EligibleForEvidenceSnapshot(a, tx.approvedRecipes); err != nil {
+			// Name the recipe so an operator can tell which digest a read
+			// with no daemon must approve (-approved-recipe).
+			if recipe := a.Provenance.VerificationRecipeDigest; recipe != nil && errors.Is(err, domain.ErrUnapprovedRecipe) {
+				return fmt.Errorf("%w: recipe %s", err, *recipe)
+			}
 			return err
 		}
 		if err := tx.gateEffectProposalArtifact(ctx, a); err != nil {
