@@ -44,7 +44,9 @@ Look for each of these before and during the run; most have bitten twice.
   provider identity before onboarding; preflight rejects them after the
   expensive steps.
 - **Old state roots.** A clean-break migration retires a retained root at
-  daemon startup. Decide fresh-versus-retained in preflight.
+  daemon startup. Decide fresh-versus-retained in preflight. A retained root
+  also carries its open health items; see "A retained root holds admission
+  on old health items" below.
 - **Stranded submissions.** Before the per-session `submission-id`
   (2026-09-16), identical inputs re-attached to an earlier run and runs
   escaped with an attempt marker in the specification body. Now a lost
@@ -192,9 +194,9 @@ Look for each of these before and during the run; most have bitten twice.
   next run at admission with `blocking_system_health` until an operator
   resolves them in a client; advisory notices never hold it. No read lists
   them before launch, and resolving one needs a client on the running
-  daemon, so resolve them at the pairing checkpoint: open Inbox > System
-  health in the Mac client and close each blocking item with its card's
-  action before the first approval, leaving advisory ones open (#2043).
+  daemon, so the SKILL.md Preflight bullet "The state root is usable" sets
+  the expectation and Run the Harness step 2 (the pairing checkpoint) says
+  how to resolve and record them before the first approval (#2043).
 - **Resume replaces the production daemon.** A failed `--resume-session`
   leaves its session `recovery-required`, and its `recover` restores the
   supervised daemon only after the build the restore gate expects is
