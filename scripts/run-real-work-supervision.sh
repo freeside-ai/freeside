@@ -21,18 +21,35 @@ real_work_report_failure() {
 	printf '\n' >&2
 }
 
+# real_work_waits_on_human reports whether a supervision state is a decision
+# gate: the daemon is idle and only a human can advance the run. A hold is not
+# one here, because the follow snapshot does not show it.
+real_work_waits_on_human() {
+	case "$1:$2" in
+	specification:waiting_for_specification_approval | implementation:attention_required)
+		return 0
+		;;
+	esac
+	return 1
+}
+
 # real_work_supervise follows the specification identity until it binds the exact
 # implementation run, then follows that run to publication or actionable
 # attention. It keeps reconciliation live through actionable attention, and
 # returns 0 once publication is durably accepted or the implementation has
-# completed, 124 for the global timeout, 1 for any other terminal state
-# (including specification completion) or observation that stays unreadable across
-# FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES consecutive attempts (default 10),
-# and 2 for an invalid numeric configuration.
+# completed, 124 once executing time reaches the timeout, 1 for any other
+# terminal state (including specification completion) or observation that
+# stays unreadable across FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES
+# consecutive attempts (default 10), and 2 for an invalid numeric
+# configuration. The timeout bounds a runaway unattended run, so its clock
+# pauses while the run waits on a human (real_work_waits_on_human) and resumes
+# when the run leaves that state; startup, holds, and unreadable observations
+# still count. Liveness checks run on every observation, paused or not.
 real_work_supervise() {
 	local freesided=$1 db_path=$2 specification_run_id=$3 implementation_run_id=$4
 	local daemon_pid=$5 timeout_seconds=$6 snapshot_path=$7 interval_seconds=${8:-1}
-	local lane run_id state previous_state="" state_changed deadline resolved
+	local lane run_id state previous_state="" state_changed resolved
+	local spent=0 last_tick now gated=false waiting
 	local observation_failures=0
 	local max_observation_failures=${FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES:-10}
 	# Both counters drive Bash arithmetic below. A malformed value aborts under
@@ -49,7 +66,6 @@ real_work_supervise() {
 		echo "run-real-work: FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES must be a positive integer, got: $max_observation_failures" >&2
 		return 2
 	fi
-	deadline=$((SECONDS + timeout_seconds))
 	if [[ -n "$specification_run_id" ]]; then
 		lane=specification
 		run_id=$specification_run_id
@@ -58,7 +74,14 @@ real_work_supervise() {
 		run_id=$implementation_run_id
 	fi
 
-	while ((SECONDS < deadline)); do
+	last_tick=$SECONDS
+	while true; do
+		# Each interval is charged to the state observed at its start, so a
+		# gate's wait, including its sleeps, never reaches the budget.
+		now=$SECONDS
+		[[ "$gated" == true ]] || spent=$((spent + now - last_tick))
+		last_tick=$now
+		((spent < timeout_seconds)) || break
 		if declare -F require_live_rig >/dev/null && ! require_live_rig; then
 			return 1
 		fi
@@ -81,6 +104,10 @@ real_work_supervise() {
 				return 1
 			fi
 			echo "run-real-work: transient observation failure $observation_failures/$max_observation_failures for $lane run=$run_id; retrying" >&2
+			if [[ "$gated" == true ]]; then
+				gated=false
+				echo "run-real-work: supervision deadline resumed for $lane run=$run_id; ${spent}s of ${timeout_seconds}s executing time used" >&2
+			fi
 			sleep "$interval_seconds"
 			continue
 		fi
@@ -95,6 +122,19 @@ real_work_supervise() {
 			state_changed=true
 			echo "run-real-work: $lane run=$run_id state=$state" >&2
 			previous_state=$state
+		fi
+		if real_work_waits_on_human "$lane" "$state"; then
+			waiting=true
+		else
+			waiting=false
+		fi
+		if [[ "$waiting" != "$gated" ]]; then
+			gated=$waiting
+			if [[ "$gated" == true ]]; then
+				echo "run-real-work: supervision deadline paused at $lane run=$run_id state=$state; ${spent}s of ${timeout_seconds}s executing time used" >&2
+			else
+				echo "run-real-work: supervision deadline resumed for $lane run=$run_id; ${spent}s of ${timeout_seconds}s executing time used" >&2
+			fi
 		fi
 		case "$lane:$state" in
 		specification:implementation_bound)
@@ -144,6 +184,6 @@ real_work_supervise() {
 		esac
 		sleep "$interval_seconds"
 	done
-	echo "run-real-work: timed out supervising $lane run=$run_id" >&2
+	echo "run-real-work: timed out supervising $lane run=$run_id after ${spent}s executing time" >&2
 	return 124
 }

@@ -7,6 +7,15 @@ deadline ends at publication; the walkthrough has no automatic deadline or
 stdin prompt. Closing the shell is an interruption, not a request to complete
 the walkthrough.
 
+Before publication, the deadline (`FREESIDE_REAL_RUN_TIMEOUT_SECONDS`) counts
+only executing time, from the moment the harness starts supervising the run;
+preflight and a client-target selection wait come before that and are not
+bounded. It pauses while the run waits at the specification
+approval gate or at an implementation attention card such as a review dispute,
+so an operator who is away does not lose the run. It does not pause at a
+specification attention card, which still ends supervision and runs cleanup, or
+during a hold, because the harness's follow snapshot does not show one.
+
 Completed-history verification is different: it verifies the selected run's
 authenticated completion and remote merge, then exits through the ordinary
 cleanup path. It does not start a walkthrough, retain a client endpoint, or
@@ -716,7 +725,9 @@ implementation.
    as the target.
 
 After the specification is approved, the harness resolves the selected task's
-implementation run from its recorded run list, follows it to publication, and
+implementation run from its recorded run list, follows it to publication (the
+deadline starts at that selection, not at the client submission, and pauses at
+gates, as described at the top of this document), and
 runs the same `TestRealWorkItemCompletesProductionPipeline` verifier with every
 existing assertion. In this mode it additionally requires that the verified run
 belongs to the selected task and to `FREESIDE_REAL_RUN_PROJECT`, and that the

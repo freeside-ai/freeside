@@ -179,14 +179,30 @@
 #   with the credential stored for the enrollment its role's lineup line
 #   names, so no variable names a token file;
 #   FREESIDE_REAL_RUN_JUDGMENT_AUTH_SNAPSHOT is refused.
-#   FREESIDE_REAL_RUN_TIMEOUT_SECONDS global supervision deadline in seconds;
-#                                    a positive integer (default 3600). Bounds
-#                                    the whole supervised workflow (spec-approval
-#                                    wait through publication), so it must exceed
+#   FREESIDE_REAL_RUN_TIMEOUT_SECONDS supervision deadline in seconds of
+#                                    executing time; a positive integer (default
+#                                    3600). It bounds the supervised workflow up
+#                                    to publication but pauses while the run
+#                                    waits for specification approval or at an
+#                                    implementation attention card, and resumes
+#                                    when the run leaves that state (a
+#                                    specification attention card still ends
+#                                    supervision). Startup, a hold (the
+#                                    follow snapshot does not show one), and
+#                                    unreadable observations still count. It
+#                                    must exceed
 #                                    FREESIDE_REAL_RUN_WRITER_STOP_TIMEOUT plus
-#                                    the preceding workflow time, or supervision
-#                                    returns 124 and stops the daemon before the
-#                                    writer budget is reached; raise both together
+#                                    the other executing time (daemon
+#                                    startup, holds, publication), or
+#                                    supervision returns 124 and stops the
+#                                    daemon before the writer budget is
+#                                    reached; raise both together. The clock
+#                                    starts when supervision does, so it does
+#                                    not bound preflight or, in --client-target
+#                                    mode, the operator's target selection
+#                                    (which has no deadline), even if the
+#                                    selected task's specification executes
+#                                    during that wait
 #   FREESIDE_REAL_RUN_WRITER_STOP_TIMEOUT max time the implementation writer
 #                                    container may run before it must reach
 #                                    observed stopped (a Go duration such as
@@ -506,11 +522,19 @@ composition_evidence_tmp=""
 db_path="$FREESIDE_REAL_RUN_STATE_ROOT/freeside.db"
 listen_address="$FREESIDE_REAL_RUN_LISTEN"
 rig_release_timeout=${FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS:-30}
-# Supervision bounds the whole workflow (spec-approval wait through publication)
-# and must outlast the writer budget plus that preceding time, or it returns 124
-# and cleanup stops the daemon before the writer's own deadline can fire. The
-# default is 45m writer plus 15m of spec-approval, preflight, and publication
-# headroom; raise both together when raising the writer budget.
+# Supervision bounds executing time up to publication: its clock pauses while
+# the run waits on a human (specification approval or an implementation
+# attention card), because a waiting run is idle, not runaway. A specification
+# attention card still ends supervision. Startup, a hold, and unreadable
+# observations still count. It must outlast the writer budget plus that other
+# executing time, or it returns 124 and cleanup stops the daemon before the
+# writer's own deadline can fire; `freesided submit` rejects a writer budget
+# that is not below it. The default is 45m writer plus 15m of daemon startup
+# and publication headroom; raise both together when raising the writer
+# budget. The clock starts when supervision does, so it does not bound
+# preflight or, in --client-target mode, the deadline-free wait for the
+# operator to select a target, even if that task's specification is already
+# executing.
 supervision_timeout=${FREESIDE_REAL_RUN_TIMEOUT_SECONDS:-3600}
 writer_stop_timeout=${FREESIDE_REAL_RUN_WRITER_STOP_TIMEOUT:-45m}
 
