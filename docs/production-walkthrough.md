@@ -126,6 +126,16 @@ redacted mint/preview receipt and successful client pairing instead. Renewal
 does not consume or create a workflow attempt, restart the session, or authorize
 another submission. Any campaign-specific minting budget still applies.
 
+A retained state root keeps the system-health items its earlier runs left
+open, and a restart does not close them. The blocking ones hold the next run's
+first admission with reason `blocking_system_health` until an operator resolves
+them in a paired client (Inbox > System health; Resume Unattended closed a
+durable-stop notice on run 117). Advisory items never hold admission. No
+`freesided` read lists these items before the daemon starts, so resolve them
+once the clients are paired and before the first approval. A blocking item that
+no offered action closes keeps holding admission; stop the run and report it
+rather than going on.
+
 During the walkthrough, fetch the printed run on both paired clients and exercise
 its offered ready-card actions. Record which actions actually ran, the run and
 invocation IDs, endpoint, and the published head that final verification checked.
