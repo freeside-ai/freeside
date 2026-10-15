@@ -56,6 +56,20 @@ write_sequence() {
 	rm -f "$stub_root/$run_id.count"
 }
 
+# write_gated_sequence holds GATE for COUNT observations before the remaining
+# lines, so a case can keep a run at a gate for a measured stretch.
+write_gated_sequence() {
+	local run_id=$1 count=$2 gate=$3 i
+	shift 3
+	{
+		for ((i = 0; i < count; i++)); do
+			printf '%s\n' "$gate"
+		done
+		printf '%s\n' "$@"
+	} >"$stub_root/$run_id"
+	rm -f "$stub_root/$run_id.count"
+}
+
 assert_contains() {
 	local path=$1 want=$2
 	if ! grep -Fq -- "$want" "$path"; then
@@ -65,13 +79,35 @@ assert_contains() {
 	fi
 }
 
+assert_count() {
+	local path=$1 want=$2 count=$3 got
+	got=$(grep -Fc -- "$want" "$path" || true)
+	if [[ "$got" -ne "$count" ]]; then
+		echo "'$want' appears $got times in $path, want $count" >&2
+		cat "$path" >&2
+		exit 1
+	fi
+}
+
+# assert_outlasted_budget proves a gate case held its gate longer than its
+# budget. SECONDS ticks whole seconds, so a difference of budget + 1 is the
+# least that guarantees more than budget wall seconds passed; without it a gate
+# case could pass without ever testing the pause.
+assert_outlasted_budget() {
+	local name=$1 started=$2 budget=$3
+	if ((SECONDS - started <= budget)); then
+		echo "$name: finished within $((SECONDS - started))s, so the gate never outlasted the ${budget}s budget" >&2
+		exit 1
+	fi
+}
+
 run_case() {
-	local name=$1 specification=$2 timeout=$3 expected=$4
+	local name=$1 specification=$2 timeout=$3 expected=$4 interval=${5:-0.01}
 	local case_dir=$fixture_root/$name status
 	mkdir -p "$case_dir"
 	set +e
 	real_work_supervise "$stub" /state/freeside.db "$specification" run-impl "" \
-		"$timeout" "$case_dir/snapshot.json" 0.01 2>"$case_dir/stderr"
+		"$timeout" "$case_dir/snapshot.json" "$interval" 2>"$case_dir/stderr"
 	status=$?
 	set -e
 	if [[ "$status" -ne "$expected" ]]; then
@@ -194,6 +230,62 @@ write_sequence run-impl "$(snapshot pending pending)"
 run_case timeout "" 1 124
 assert_contains "$fixture_root/timeout/stderr" 'timed out supervising implementation run=run-impl'
 assert_contains "$fixture_root/timeout/snapshot.json" '"state":"pending"'
+
+# The gate cases poll every 0.1 s, so 25 gate observations hold the gate for
+# at least 2.5 s against a 1 s budget whatever the machine's speed.
+
+# An attention card pauses the deadline: a run that waits there past the
+# budget still reaches publication, and the pause and resume print once each.
+write_gated_sequence run-impl 25 "$(snapshot attention_required pending "$parked_extra")" \
+	"$(snapshot published published)"
+started=$SECONDS
+run_case gate-pause "" 1 0 0.1
+assert_outlasted_budget gate-pause "$started" 1
+assert_count "$fixture_root/gate-pause/stderr" 'supervision deadline paused at implementation run=run-impl state=attention_required' 1
+assert_count "$fixture_root/gate-pause/stderr" 'supervision deadline resumed for implementation run=run-impl' 1
+assert_contains "$fixture_root/gate-pause/snapshot.json" '"state":"published"'
+
+# Waiting for specification approval pauses the deadline the same way. The
+# binding observation after the gate is executing time, and whole-second
+# SECONDS charges it a full second when it straddles a tick, so this case runs
+# a 2 s budget against a gate of at least 4 s.
+write_gated_sequence run-spec 40 "$(snapshot waiting_for_specification_approval pending)" \
+	"$(snapshot implementation_bound pending)"
+write_sequence run-impl "$(snapshot published published)"
+started=$SECONDS
+run_case approval-pause run-spec 2 0 0.1
+assert_outlasted_budget approval-pause "$started" 2
+assert_count "$fixture_root/approval-pause/stderr" 'supervision deadline paused at specification run=run-spec state=waiting_for_specification_approval' 1
+assert_count "$fixture_root/approval-pause/stderr" 'supervision deadline resumed for specification run=run-spec' 1
+
+# Leaving a gate restarts the clock: executing time after it is still bounded.
+write_gated_sequence run-impl 10 "$(snapshot attention_required pending "$parked_extra")" \
+	"$(snapshot pending pending)"
+run_case gate-then-executing "" 1 124 0.1
+assert_contains "$fixture_root/gate-then-executing/stderr" 'supervision deadline resumed for implementation run=run-impl'
+assert_contains "$fixture_root/gate-then-executing/stderr" 'timed out supervising implementation run=run-impl'
+
+# Liveness still runs while the deadline is paused: a daemon that exits at a
+# gate ends supervision with status 1, after the 1 s budget would have expired.
+write_sequence run-impl "$(snapshot attention_required pending "$parked_extra")"
+dead_daemon_dir=$fixture_root/gate-dead-daemon
+mkdir -p "$dead_daemon_dir"
+sleep 2 &
+daemon_pid=$!
+started=$SECONDS
+set +e
+real_work_supervise "$stub" /state/freeside.db "" run-impl "$daemon_pid" \
+	1 "$dead_daemon_dir/snapshot.json" 0.1 2>"$dead_daemon_dir/stderr"
+dead_daemon_status=$?
+set -e
+wait "$daemon_pid" || true
+if [[ "$dead_daemon_status" -ne 1 ]]; then
+	echo "gate-dead-daemon: status=$dead_daemon_status, want 1" >&2
+	cat "$dead_daemon_dir/stderr" >&2
+	exit 1
+fi
+assert_outlasted_budget gate-dead-daemon "$started" 1
+assert_contains "$dead_daemon_dir/stderr" 'the daemon exited before implementation run=run-impl finished'
 
 # A lock collision against the live database is a transient, not a run
 # failure: the supervisor retries and the run still reaches publication.
