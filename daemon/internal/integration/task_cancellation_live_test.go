@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/claudeinference"
+	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
@@ -81,9 +82,7 @@ func TestTaskCancellationPinnedNativeCLI(t *testing.T) {
 	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
 	shim := []byte("#!/bin/sh\nexport ANTHROPIC_BASE_URL=" + quote(server.URL) + "\nexec " + quote(native) + " \"$@\"\n")
 	shimPath := filepath.Join(root, "localhost-cli")
-	if err := os.WriteFile(shimPath, shim, 0o500); err != nil { // #nosec G306 -- executable test shim in a private directory.
-		t.Fatal(err)
-	}
+	execfixture.Write(t, shimPath, shim, 0o500)
 	shimHash := sha256.Sum256(shim)
 	driver, err := claudeinference.New(claudeinference.Config{Binary: shimPath, SHA256: hex.EncodeToString(shimHash[:])})
 	if err != nil {

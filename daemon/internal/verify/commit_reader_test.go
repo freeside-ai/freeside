@@ -7,8 +7,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
+
+	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
 )
 
 func countedCommitGit(t *testing.T) (string, func(int, int)) {
@@ -22,13 +23,7 @@ func countedCommitGit(t *testing.T) (string, func(int, int)) {
 	script := filepath.Join(dir, "git")
 	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
 	body := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" >> %s\nexec %s \"$@\"\n", quote(log), quote(realGit))
-	// A concurrent fork must not inherit the executable's write descriptor.
-	syscall.ForkLock.RLock()
-	err = os.WriteFile(script, []byte(body), 0o700) //nolint:gosec // G306: test-owned executable
-	syscall.ForkLock.RUnlock()
-	if err != nil {
-		t.Fatal(err)
-	}
+	execfixture.Write(t, script, []byte(body), 0o700)
 	return script, func(trees, blobs int) {
 		t.Helper()
 		data, err := os.ReadFile(log) //nolint:gosec // G304: test-owned invocation log in t.TempDir.

@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
 )
 
 // fakeContainer writes a stand-in container CLI that answers the build
@@ -34,9 +36,7 @@ build)
 *) exit 64 ;;
 esac
 `
-	if err := os.WriteFile(path, []byte(script), 0o700); err != nil { //nolint:gosec // test executable
-		t.Fatal(err)
-	}
+	execfixture.Write(t, path, []byte(script), 0o700)
 	return path, argsFile
 }
 

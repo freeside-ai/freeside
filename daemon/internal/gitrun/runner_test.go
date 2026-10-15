@@ -3,11 +3,12 @@ package gitrun
 import (
 	"bytes"
 	"errors"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
 )
 
 func TestBaseline(t *testing.T) {
@@ -69,9 +70,7 @@ func TestRunnerPrependsBaselineAndExtras(t *testing.T) {
 	scratch := t.TempDir()
 	gitPath := filepath.Join(scratch, "record-git")
 	script := "#!/bin/sh\nprintf '%s\\n' \"$@\"\n"
-	if err := os.WriteFile(gitPath, []byte(script), 0o700); err != nil { //nolint:gosec // G306: test fixture must be executable
-		t.Fatal(err)
-	}
+	execfixture.Write(t, gitPath, []byte(script), 0o700)
 	extra := []string{"-c", "core.autocrlf=false"}
 	runner, err := New(Options{GitPath: gitPath, Scratch: scratch, ConfigExtra: extra})
 	if err != nil {
@@ -101,9 +100,7 @@ func TestRunnerPrependsBaselineAndExtras(t *testing.T) {
 func TestRunnerFailureUsesCallerClass(t *testing.T) {
 	scratch := t.TempDir()
 	gitPath := filepath.Join(scratch, "fail-git")
-	if err := os.WriteFile(gitPath, []byte("#!/bin/sh\nprintf 'rejected\\n' >&2\nexit 7\n"), 0o700); err != nil { //nolint:gosec // G306: test fixture must be executable
-		t.Fatal(err)
-	}
+	execfixture.Write(t, gitPath, []byte("#!/bin/sh\nprintf 'rejected\\n' >&2\nexit 7\n"), 0o700)
 	class := errors.New("package plumbing failed")
 	runner, err := New(Options{GitPath: gitPath, Scratch: scratch, Class: class})
 	if err != nil {

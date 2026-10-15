@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
 	"github.com/freeside-ai/freeside/daemon/internal/topicstore"
 )
 
@@ -97,9 +98,7 @@ delete)
 	;;
 esac
 `
-	if err := os.WriteFile(fakeContainer, []byte(fake), 0o700); err != nil { //nolint:gosec // executable test fixture contains only fixed script text
-		t.Fatal(err)
-	}
+	execfixture.Write(t, fakeContainer, []byte(fake), 0o700)
 	checker := filepath.Join("..", "..", "..", "scripts", "check-agent-image.sh")
 	command := exec.CommandContext(t.Context(), "bash", checker, "project:test", fakeContainer) //nolint:gosec // fixed shell and checker with a test-owned fake runtime path
 	command.Env = append(os.Environ(), "FAKE_STATE="+stateDir, "TMPDIR="+t.TempDir())

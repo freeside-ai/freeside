@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 )
@@ -656,10 +657,7 @@ func TestObserverGitScriptComparesAgainstCommit(t *testing.T) {
 	// base_sha=none is the shape the host gate then refuses; this pins the
 	// emitter half of that refusal.
 	stubBin := t.TempDir()
-	//nolint:gosec // the stub must be executable to shadow git on PATH
-	if err := os.WriteFile(filepath.Join(stubBin, "git"), []byte("#!/bin/sh\nexit 127\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	execfixture.Write(t, filepath.Join(stubBin, "git"), []byte("#!/bin/sh\nexit 127\n"), 0o755)
 	env := scrubbedLiveGitEnv()
 	for i, entry := range env {
 		if strings.HasPrefix(entry, "PATH=") {

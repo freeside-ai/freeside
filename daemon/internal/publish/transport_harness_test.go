@@ -5,61 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
-	"syscall"
 	"testing"
-	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
 )
-
-// writeExecutable prevents the ETXTBSY race described in go.dev/issue/22315:
-// a parallel fork can inherit a script's write descriptor until its own exec.
-// forkExec holds ForkLock for writing, so this read lock prevents forks while
-// the write descriptor is open, including the interval before Close.
-func writeExecutable(t *testing.T, path string, body []byte) {
-	t.Helper()
-	syscall.ForkLock.RLock()
-	err := os.WriteFile(path, body, 0o700) //nolint:gosec // G306: test-owned executable
-	syscall.ForkLock.RUnlock()
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestWriteExecutableSurvivesParallelForks(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("Linux enforces ETXTBSY for these scripts")
-	}
-	t.Parallel()
-	var stop atomic.Bool
-	var forks sync.WaitGroup
-	for range 16 {
-		forks.Go(func() {
-			for !stop.Load() {
-				if err := exec.CommandContext(t.Context(), "/bin/true").Run(); err != nil {
-					t.Errorf("parallel fork: %v", err)
-					return
-				}
-			}
-		})
-	}
-	defer func() {
-		stop.Store(true)
-		forks.Wait()
-	}()
-	path := filepath.Join(t.TempDir(), "script.sh")
-	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); {
-		writeExecutable(t, path, []byte("#!/bin/sh\nexit 0\n"))
-		if err := exec.CommandContext(t.Context(), path).Run(); err != nil { //nolint:gosec // G204: test-owned executable
-			t.Fatal(err)
-		}
-	}
-}
 
 // stubGit writes a fake git binary that appends every invocation's
 // argument vector, full environment, and working directory to recPath,
@@ -71,7 +23,7 @@ func stubGit(t *testing.T, recPath string, extra string, exit int) string {
 	path := filepath.Join(t.TempDir(), "git")
 	script := "#!/bin/sh\nrec='" + recPath + "'\n{\nprintf 'BEGIN\\n'\nfor a in \"$@\"; do printf 'ARG %s\\n' \"$a\"; done\nenv | sed 's/^/ENV /'\nprintf 'CWD %s\\n' \"$PWD\"\n} >> \"$rec\"\n" +
 		extra + "exit " + strconv.Itoa(exit) + "\n"
-	writeExecutable(t, path, []byte(script))
+	execfixture.Write(t, path, []byte(script), 0o700)
 	return path
 }
 

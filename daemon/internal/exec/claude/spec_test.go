@@ -20,6 +20,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/stage"
+	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
@@ -1074,7 +1075,11 @@ func newLaunchRig(t *testing.T) launchRig {
 		if err := os.MkdirAll(filepath.Dir(file.path), dirMode); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(file.path, []byte(file.body), file.mode); err != nil {
+		// Only the binaries are executed; the seed and data files stay
+		// ordinary writes.
+		if file.mode&0o111 != 0 {
+			execfixture.Write(t, file.path, []byte(file.body), file.mode)
+		} else if err := os.WriteFile(file.path, []byte(file.body), file.mode); err != nil {
 			t.Fatal(err)
 		}
 		// WriteFile and MkdirAll apply the umask; the walk reads exact bits.
@@ -1279,9 +1284,7 @@ func TestLaunchCommandRenamesOverWhatTheAgentLeft(t *testing.T) {
 	stub := "#!/bin/sh\nfor arg; do case \"$arg\" in " +
 		shellQuote(descriptor) + "|" + shellQuote(filepath.Join(evidence, path.Base(transcriptPath))) +
 		") exit 0 ;; esac; done\nexec " + shellQuote(rm) + " \"$@\"\n"
-	if err := os.WriteFile(filepath.Join(keeping, "rm"), []byte(stub), 0o700); err != nil { //nolint:gosec // G306: an executable stand-in
-		t.Fatal(err)
-	}
+	execfixture.Write(t, filepath.Join(keeping, "rm"), []byte(stub), 0o700)
 	output, err := rig.run(t, keeping)
 	if err == nil || !strings.Contains(string(output), path.Base(transcriptPath)) {
 		t.Fatalf("launch command did not fail on the directory at the transcript path: %v: %s", err, output)

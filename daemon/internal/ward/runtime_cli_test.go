@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
 )
 
 func readFixture(t *testing.T, name string) []byte {
@@ -697,12 +699,7 @@ func TestCreateContainerArgsRefusesInjection(t *testing.T) {
 // error. The exit status remains available for operational classification.
 func TestCreateContainerRedactsStderr(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "container-fixture")
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" >&2\nexit 7\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(bin, 0o700); err != nil { //nolint:gosec // executable test fixture is isolated in t.TempDir
-		t.Fatal(err)
-	}
+	execfixture.Write(t, bin, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" >&2\nexit 7\n"), 0o700)
 	const secret = "secret-fixture-value"
 	err := NewCLIRuntime(bin).CreateContainer(context.Background(), ContainerSpec{
 		Size:            testContainerSize,
@@ -728,12 +725,7 @@ func TestCreateContainerRedactsStderr(t *testing.T) {
 // foreign user-created object, and these errors reach ConformanceFailure.Reason.
 func TestListInspectExportWithholdStderr(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "container-fixture")
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\nprintf 'foreign-container-SECRET\\n' >&2\nexit 7\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(bin, 0o700); err != nil { //nolint:gosec // executable test fixture is isolated in t.TempDir
-		t.Fatal(err)
-	}
+	execfixture.Write(t, bin, []byte("#!/bin/sh\nprintf 'foreign-container-SECRET\\n' >&2\nexit 7\n"), 0o700)
 	rt := NewCLIRuntime(bin)
 	const foreign = "foreign-container-SECRET"
 	ctx := context.Background()
@@ -800,12 +792,7 @@ func TestRuntimeStdoutBounds(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "container-fixture")
 	// Emit more than maxRuntimeOutput (16 MiB) regardless of the subcommand.
 	script := "#!/bin/sh\ndd if=/dev/zero bs=1048576 count=17 2>/dev/null\n"
-	if err := os.WriteFile(bin, []byte(script), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(bin, 0o700); err != nil { //nolint:gosec // executable test fixture is isolated in t.TempDir
-		t.Fatal(err)
-	}
+	execfixture.Write(t, bin, []byte(script), 0o700)
 	rt := NewCLIRuntime(bin)
 
 	if _, err := rt.ListContainers(context.Background()); err == nil {
@@ -824,12 +811,7 @@ func TestExportRootFSStreamsStdout(t *testing.T) {
 		"[ \"$1\" = export ] || exit 8\n" +
 		"[ \"$2\" = fixture ] || exit 9\n" +
 		"printf archive-bytes\n"
-	if err := os.WriteFile(bin, []byte(script), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(bin, 0o700); err != nil { //nolint:gosec // executable test fixture is isolated in t.TempDir
-		t.Fatal(err)
-	}
+	execfixture.Write(t, bin, []byte(script), 0o700)
 	var dest bytes.Buffer
 	if err := NewCLIRuntime(bin).ExportRootFS(context.Background(), "fixture", &dest, 1024); err != nil {
 		t.Fatal(err)
