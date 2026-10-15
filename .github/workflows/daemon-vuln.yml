@@ -1,10 +1,9 @@
 name: daemon vuln scan
 
-# Scheduled + main-push govulncheck for the daemon module, a ci-vuln analog
-# of daemon-race-incident.yml's ci-race observer. Deliberately NOT PR-blocking:
-# a newly published advisory against an unchanged dependency would otherwise
-# redden every unrelated open PR. Findings are filed as deduped issues instead,
-# exactly one open issue per vulnerability ID.
+# Scheduled + main-push govulncheck for the daemon module. Deliberately NOT
+# PR-blocking: a newly published advisory against an unchanged dependency
+# would otherwise redden every unrelated open PR. Findings are filed as
+# deduped issues instead, exactly one open issue per vulnerability ID.
 
 on:
   push:
