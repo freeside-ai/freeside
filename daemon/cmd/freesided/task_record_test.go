@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -359,22 +360,70 @@ func TestTaskRecordReportsUnreadableTask(t *testing.T) {
 	}
 }
 
-// TestTaskRecordReportsUnreadableItems removes the attempt history an item
-// row is bound to. The store fails the whole item list, so the items and
-// their counts are null with the error, and the runs still read.
+// TestTaskRecordReportsUnreadableItems removes the attempt history the
+// task's item rows are bound to. Each refused row prints as its id and
+// error with nothing else, the list itself reads, and the counts, which
+// count read items only, are zero; the runs still read.
 func TestTaskRecordReportsUnreadableItems(t *testing.T) {
 	st, dbPath := openSeededStore(t)
 	id := taskOfRun(t, st, fixtureActiveRunID)
+	want := readRecord(t, st, id).Items
 	execStoreSQL(t, dbPath, `DELETE FROM production_attempts`)
 	record := readRecord(t, st, id)
-	if record.Items != nil || record.ItemsError == nil || record.ItemsError.Kind != taskRecordErrorIntegrity {
-		t.Fatalf("items = %v, error = %+v", record.Items, record.ItemsError)
+	if record.ItemsError != nil || len(record.Items) != len(want) || len(want) == 0 {
+		t.Fatalf("items = %d (want %d), items_error = %+v", len(record.Items), len(want), record.ItemsError)
 	}
-	if record.Counts.ItemsByType != nil || record.Counts.HealthNoticesByCode != nil {
-		t.Fatalf("counts = %+v, want null item counts", record.Counts)
+	for index, item := range record.Items {
+		refused := taskRecordItem{ID: want[index].ID, Error: item.Error}
+		if item.Error == nil || item.Error.Kind != taskRecordErrorIntegrity || !reflect.DeepEqual(item, refused) {
+			t.Errorf("item %d = %+v, want only id %q and an integrity error", index, item, want[index].ID)
+		}
+	}
+	for _, count := range record.Counts.ItemsByType {
+		if count.Count != 0 {
+			t.Errorf("counts = %+v, want zero: a refused item has no type", record.Counts.ItemsByType)
+		}
 	}
 	if record.Task == nil || len(record.Runs) != 3 || record.Counts.FailedStops == nil {
 		t.Fatalf("task = %v, runs = %d, failed_stops = %v", record.Task, len(record.Runs), record.Counts.FailedStops)
+	}
+}
+
+// TestTaskRecordCountsUnattributedRefusedRows forges the subject columns of
+// one of the task's item rows. The row is refused and its unverified columns
+// no longer route it here, so it leaves the items, and the count of refused
+// rows the record did not attribute says the store refused something.
+func TestTaskRecordCountsUnattributedRefusedRows(t *testing.T) {
+	st, dbPath := openSeededStore(t)
+	id := taskOfRun(t, st, fixtureActiveRunID)
+	const forged = "execution-failure-" + fixtureActiveRunID
+	before := readRecord(t, st, id)
+	if recordItem(before, forged) == nil || !equalPointers(before.Counts.UnattributedRefusedItems, new(0)) {
+		t.Fatalf("before forging: item = %+v, unattributed = %v", recordItem(before, forged), before.Counts.UnattributedRefusedItems)
+	}
+	execStoreSQL(t, dbPath, `UPDATE attention_items SET subject_task_id = NULL, subject_run_id = NULL WHERE id = '`+forged+`'`)
+	record := readRecord(t, st, id)
+	if recordItem(record, forged) != nil || len(record.Items) != len(before.Items)-1 || record.ItemsError != nil {
+		t.Fatalf("items = %d (before %d), items_error = %+v", len(record.Items), len(before.Items), record.ItemsError)
+	}
+	if !equalPointers(record.Counts.UnattributedRefusedItems, new(1)) {
+		t.Fatalf("unattributed refused items = %v, want 1", record.Counts.UnattributedRefusedItems)
+	}
+}
+
+// TestTaskRecordReportsFailedItemEnumeration: when the enumeration itself
+// fails, the items and their counts are null with items_error.
+func TestTaskRecordReportsFailedItemEnumeration(t *testing.T) {
+	st, dbPath := openSeededStore(t)
+	id := taskOfRun(t, st, fixtureActiveRunID)
+	execStoreSQL(t, dbPath, `DROP TABLE attention_deliveries`)
+	record := readRecord(t, st, id)
+	if record.Items != nil || record.ItemsError == nil {
+		t.Fatalf("items = %v, error = %+v", record.Items, record.ItemsError)
+	}
+	if record.Counts.ItemsByType != nil || record.Counts.HealthNoticesByCode != nil ||
+		record.Counts.UnattributedRefusedItems != nil {
+		t.Fatalf("counts = %+v, want null item counts", record.Counts)
 	}
 }
 

@@ -1,5 +1,5 @@
 {
-  "version": "freeside-task-record-v2",
+  "version": "freeside-task-record-v3",
   "as_of_revision": 20,
   "as_of": "2026-10-01T09:00:00Z",
   "task_id": "task-GOLDEN",
@@ -450,6 +450,7 @@
   "items": [
     {
       "id": "execution-failure-run-freeside-656",
+      "error": null,
       "type": "execution_failure",
       "status": "open",
       "run_id": "run-freeside-656",
@@ -474,6 +475,7 @@
     },
     {
       "id": "finding-adjudication-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+      "error": null,
       "type": "finding_adjudication",
       "status": "open",
       "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
@@ -488,6 +490,7 @@
     },
     {
       "id": "invocation-stalled-inv-run-freeside-656-20",
+      "error": null,
       "type": "system_health",
       "status": "open",
       "run_id": null,
@@ -505,6 +508,7 @@
     },
     {
       "id": "review-configuration-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+      "error": null,
       "type": "review_configuration",
       "status": "open",
       "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
@@ -519,6 +523,7 @@
     },
     {
       "id": "review-contradiction-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+      "error": null,
       "type": "review_contradiction",
       "status": "open",
       "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
@@ -533,6 +538,7 @@
     },
     {
       "id": "review-diminishing-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+      "error": null,
       "type": "review_diminishing_returns",
       "status": "open",
       "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
@@ -547,6 +553,7 @@
     },
     {
       "id": "review-dispute-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+      "error": null,
       "type": "review_dispute",
       "status": "open",
       "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
@@ -561,6 +568,7 @@
     },
     {
       "id": "spec-approval-run-freeside-656-1",
+      "error": null,
       "type": "spec_approval",
       "status": "resolved",
       "run_id": "run-specification-4e43b0ee6a2c5cade4f35788f3138230700ac6f98d5524dd68f013c0e5db8e6b",
@@ -647,6 +655,7 @@
       }
     ],
     "runs_held": 1,
-    "failed_stops": 0
+    "failed_stops": 0,
+    "unattributed_refused_items": 0
   }
 }
