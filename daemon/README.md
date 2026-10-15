@@ -416,6 +416,55 @@ the owning sibling registry names it. Policy/profile and reviewer-configuration
 drift remains covered by the adjacent fail-closed recovery fixtures; a new
 drift axis needs both a preterminal refusal and a terminal-fact adoption case.
 
+## Adding a Migration
+
+Name the file `NNNN_description.sql` in `migrations/` and take the next
+number after the highest one on your base. The store refuses duplicate
+numbers, gaps, and any change to a file a database has already applied, so a
+merged migration is immutable: fix one by adding another.
+
+**Declare every name a migration removes.** Add one line per removed name,
+anywhere in the file:
+
+```sql
+-- drop: column attention_items.legacy_note
+-- drop: index attention_items_by_legacy_note
+```
+
+The kind is `table`, `column`, `index`, `trigger`, or `view`; a column is
+written `table.column`. Declaring a table or view covers its columns, but not
+its indexes or triggers, which have names of their own. A rename drops the old
+name. `TestMigrationsDeclareDrops` in `internal/store` applies every
+migration in order on an empty database and fails on a removed name with no
+declaration, on a declared name that is still there, and on a malformed
+`-- drop:` line. Names a table rebuild recreates within the same file are not
+removals. Migrations 0001 to 0099 predate the line and can't gain one, so the
+test's frozen allowlist holds their removals and refuses an entry for any
+later file.
+
+**Renumber at rebase when another migration took your number.** Two branches
+can both take the next number; the one that lands second renames behind the
+other:
+
+1. Rebase onto the fresh default branch, then
+   `git mv daemon/migrations/NNNN_name.sql daemon/migrations/MMMM_name.sql`
+   with the next free number.
+2. Replace every reference to the old file name: `grep -rn 'NNNN_name.sql'
+   daemon/` from the repo root. Hits include a data hook's constant or case
+   in `internal/store` and the partial-schema skip lists in that package's
+   tests. The data hook matches on file name alone, and
+   `TestMigrationNamesReferencedFromGoExist` fails on a stale name in a
+   non-test file there. Set the schema-head pin, `const want` in
+   `internal/store/migrate_internal_test.go`, to the new head number.
+3. Run `bash scripts/check.sh daemon` from the repo root.
+
+A `dev` daemon that ran your branch build recorded the old name and digest,
+so it refuses the renamed history. Clearing it is the operator's act, like
+every `dev` install (see Running a Dev Daemon): stop Freeside Dev and its
+daemon, delete its state root `~/Library/Application Support/Freeside Dev/`,
+and reinstall with `app/scripts/install-mac-app.sh dev --daemon-path
+<freesided>`. An `ephemeral` root is disposable already; start a new one.
+
 ## Local Test Runs on a Shared Machine
 
 `bash scripts/check.sh daemon test` runs at most one local test step at once

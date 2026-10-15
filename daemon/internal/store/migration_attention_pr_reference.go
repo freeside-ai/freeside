@@ -14,44 +14,47 @@ import (
 
 const attentionPRReferenceMigration = "0036_attention_pr_reference.sql"
 
+// applyDataMigration runs the Go backfill a migration needs, matched on the
+// file name alone. A migration renumbered at rebase then needs only its file
+// renamed and its name replaced here; TestMigrationNamesReferencedFromGoExist
+// fails on a name that no longer names a file.
 func applyDataMigration(
 	ctx context.Context,
 	tx *sql.Tx,
-	version int,
 	name string,
 ) error {
-	switch {
-	case version == 36 && name == attentionPRReferenceMigration:
+	switch name {
+	case attentionPRReferenceMigration:
 		if err := backfillLegacyFakePRReferences(ctx, tx); err != nil {
 			return err
 		}
 		return rewriteAnchoredPRReferences(ctx, tx)
-	case version == 39 && name == outboxPayloadAuthenticationMigration:
+	case outboxPayloadAuthenticationMigration:
 		return authenticateExistingOutboxPayloads(ctx, tx)
-	case version == 40 && name == codexReenrollmentMigration:
+	case codexReenrollmentMigration:
 		return rewriteLegacyCodexReenrollmentMarkers(ctx, tx)
-	case version == 58 && name == attentionDecisionSurfacesMigration:
+	case attentionDecisionSurfacesMigration:
 		if err := retireOpenBlockedItems(ctx, tx); err != nil {
 			return err
 		}
 		return backfillAttentionDecisionSurfaces(ctx, tx)
-	case version == 59 && name == attentionDecisionSurfaceBodiesMigration:
+	case attentionDecisionSurfaceBodiesMigration:
 		if err := retireOpenBlockedItems(ctx, tx); err != nil {
 			return err
 		}
 		return backfillAttentionDecisionSurfaceBodies(ctx, tx)
-	case version == 70 && name == "0070_tasks.sql":
+	case "0070_tasks.sql":
 		if err := retireOpenBlockedItems(ctx, tx); err != nil {
 			return err
 		}
 		return backfillTasks(ctx, tx)
-	case version == 72 && name == "0072_task_lifecycle_facts.sql":
+	case "0072_task_lifecycle_facts.sql":
 		return backfillTaskLifecycleFacts(ctx, tx)
-	case version == 62 && name == readyReturnActionMigration:
+	case readyReturnActionMigration:
 		return addReturnActionToProductionReadyItems(ctx, tx)
-	case version == 81 && name == projectAuthorityBackfillMigration:
+	case projectAuthorityBackfillMigration:
 		return backfillProjectAuthority(ctx, tx)
-	case version == 98 && name == reviewDisputeRowsMigration:
+	case reviewDisputeRowsMigration:
 		return backfillReviewDisputeRows(ctx, tx)
 	default:
 		return nil
