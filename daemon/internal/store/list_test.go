@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -344,4 +346,132 @@ func TestListAttentionItemsRegatesEvidence(t *testing.T) {
 	if !errors.Is(err, domain.ErrUnapprovedRecipe) {
 		t.Fatalf("ListAttentionItems under empty policy error = %v, want ErrUnapprovedRecipe", err)
 	}
+}
+
+// TestListAttentionItemRowsReportsRefusedRows: where ListAttentionItems
+// fails whole on one refused row, the row-by-row read keeps every row in
+// the same order and reports the refused one in place, with its id, its
+// subject columns, and an error naming the recipe the read did not approve.
+func TestListAttentionItemRowsReportsRefusedRows(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := tempDBPath(t)
+	approved := approvedFixtureRecipes()
+	recipe := fixtureRecipe
+	at := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	artifact, err := domain.NewArtifact(domain.ArtifactInput{
+		ID: "rows-evidence", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:rows-evidence",
+		Provenance: domain.Provenance{
+			ProducerClass: domain.ProducerVerifier, ProducerInvocationID: "rows-invocation",
+			HeadBinding: domain.HeadBound, SourceHeadSHA: "cafebabe",
+			VerificationRecipeDigest: &recipe, SensitivityClass: domain.SensitivityNormal,
+		},
+		Metadata: domain.EvidenceMetadata{
+			MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: 1, CreatedAt: at,
+			Source: domain.EvidenceSourceRun, Availability: domain.EvidenceAvailable,
+		},
+	}, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := domain.RunID("rows-run")
+	approving := openStoreAt(t, path, store.Options{ApprovedRecipes: approved})
+	if err := approving.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, domain.Run{ID: runID, ProjectID: "proj-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"}); err != nil {
+			return err
+		}
+		// The evidence-bearing item sorts first, so a refused row does not
+		// stop the rows after it.
+		for _, id := range []domain.ItemID{"rows-item-a", "rows-item-b"} {
+			input := domain.AttentionItemInput{
+				ID: id, ProjectID: "proj-1",
+				Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+				Type:    domain.AttentionExecutionFailure, Priority: domain.PriorityHigh, Reason: "Recovery needed.",
+				RequestedDecision: []domain.Action{domain.ActionStop}, ItemVersion: 1,
+				Status: domain.StatusOpen, InterruptionClass: domain.InterruptionExceptional,
+			}
+			if id == "rows-item-a" {
+				input.EvidenceSnapshot = []domain.Artifact{artifact}
+			}
+			item, err := domain.NewAttentionItem(input, approved)
+			if err != nil {
+				return err
+			}
+			if err := tx.PutAttentionItem(ctx, item); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed items: %v", err)
+	}
+	if err := approving.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	readRows := func(options store.Options) (rows []store.AttentionItemRow, listed []store.Snapshotted[domain.AttentionItem], listErr error) {
+		t.Helper()
+		s := openStoreAt(t, path, options)
+		if err := s.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			if rows, err = tx.ListAttentionItemRows(ctx); err != nil {
+				return err
+			}
+			listed, listErr = tx.ListAttentionItems(ctx)
+			return nil
+		}); err != nil {
+			t.Fatalf("ListAttentionItemRows: %v", err)
+		}
+		if err := s.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		return rows, listed, listErr
+	}
+
+	rows, _, listErr := readRows(store.Options{})
+	if !errors.Is(listErr, domain.ErrUnapprovedRecipe) {
+		t.Fatalf("ListAttentionItems error = %v, want ErrUnapprovedRecipe", listErr)
+	}
+	if len(rows) != 2 || rows[0].ID != "rows-item-a" || rows[1].ID != "rows-item-b" {
+		t.Fatalf("rows = %+v, want rows-item-a then rows-item-b", rows)
+	}
+	refused, read := rows[0], rows[1]
+	if !errors.Is(refused.Err, domain.ErrUnapprovedRecipe) || refused.Item != nil {
+		t.Fatalf("refused row = %+v, want ErrUnapprovedRecipe and no item", refused)
+	}
+	if !strings.Contains(refused.Err.Error(), string(fixtureRecipe)) {
+		t.Errorf("refused row error %q does not name recipe %s", refused.Err, fixtureRecipe)
+	}
+	if refused.SubjectRunID == nil || *refused.SubjectRunID != runID || refused.Snapshot != (store.Snapshot{}) {
+		t.Errorf("refused row subject run = %v, snapshot = %+v", refused.SubjectRunID, refused.Snapshot)
+	}
+	if read.Err != nil || read.Item == nil || read.Item.ID != "rows-item-b" {
+		t.Fatalf("read row = %+v, want rows-item-b", read)
+	}
+	if !equalTaskIDs(refused.SubjectTaskID, read.Item.Subject.TaskID) {
+		t.Errorf("refused row subject task = %v, want the column the read row carries (%v)",
+			refused.SubjectTaskID, read.Item.Subject.TaskID)
+	}
+
+	// Under the recipe that produced the evidence every row reads, and the
+	// rows equal the whole-list read.
+	rows, listed, listErr := readRows(store.Options{ApprovedRecipes: approved})
+	if listErr != nil || len(rows) != len(listed) {
+		t.Fatalf("approved read: %d rows, %d listed, list error %v", len(rows), len(listed), listErr)
+	}
+	for index, row := range rows {
+		if row.Err != nil || row.Item == nil {
+			t.Fatalf("approved row %d = %+v", index, row)
+		}
+		if !reflect.DeepEqual(*row.Item, listed[index].Value) || row.Snapshot != listed[index].Snapshot {
+			t.Errorf("approved row %d differs from ListAttentionItems", index)
+		}
+	}
+}
+
+func equalTaskIDs(a, b *domain.TaskID) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }

@@ -827,7 +827,7 @@ freesided inspect task -db <db> -task <task-id>
 - `tasks`: every task the store holds, with `task_id`, `project_id`,
   `created_at`, and `latest_run_id` (`null` before the first run).
 
-`freesided inspect task` prints one task's record, `freeside-task-record-v2`.
+`freesided inspect task` prints one task's record, `freeside-task-record-v3`.
 Every section is read in one transaction, at the store revision
 `as_of_revision`; `as_of` is the read time. To wait for a change, read again
 and compare `as_of_revision`. A revision that hasn't moved means no recorded
@@ -841,7 +841,7 @@ revision.
 | `timeline` | The timeline a paired client gets, unchanged: runs and attempts, milestones, the current hold, review rounds, verification, pull request, completion, and stop events. |
 | `runs` | For each run: `conclusion` (outcome, hold reason, terminal invocation status), the current `hold`, each invocation's last observed status, the governing digests of each recorded admission, the resolved policy digest, `billable_cost` (`null` when none was recorded), and `publication` (`null` until the run publishes). |
 | `items` | Every attention item of the task or one of its runs, open or closed, and the stall notices for the task's invocations: type, status, `created_at`, `decided_at`, the typed cause (`health_diagnostic`, `execution_failure`, `publish_block`, `blocked_on`), the commands applied (command id, action, device id), and the deliveries. |
-| `counts` | Items by type, with every type listed; health notices by code; runs held now; and failed stops. |
+| `counts` | Items by type, with every type listed; health notices by code; refused item rows not placed in this task; runs held now; and failed stops. |
 
 Only an unknown task id or a failed read fails the command (exit status 1; a
 usage error exits 2). A section that fails a store check stays in the record
@@ -849,9 +849,18 @@ as `null`, with an error that says why. An empty list was read and holds
 nothing.
 
 - **`task_error`, `timeline_error`, and `items_error`** sit beside `task`,
-  `timeline`, and `items`. One item that fails the store's evidence check
-  fails the whole item list, for every task. The item counts are `null` when
-  the items are, and `failed_stops` when the task is.
+  `timeline`, and `items`. `items_error` means the item list itself could
+  not be read. The item counts are `null` when the items are, and
+  `failed_stops` when the task is.
+- **`error` on an item** says why the store refused that one item. A refused
+  item prints its `id` and `error`, and every other field is `null`; the
+  task's other items still print. The store could not verify a refused row,
+  so the record places it by the task and run ids the row stores, and counts
+  every refused row it did not place in this task as
+  `unattributed_refused_items`: usually another task's, but a corrupt row of
+  this task lands there too. The other counts cover the items that were
+  read. The timeline is the client's, unchanged, so one refused item fails
+  the whole `timeline`.
 - **`errors` on a run** lists each of the run's reads that failed, by
   `section`: `admissions`, `resolved_policy_digest`, `billable_cost`,
   `observation` (the hold and the invocations), `conclusion`, `publication`,
@@ -901,9 +910,14 @@ Reading the record:
 - **`-approved-recipe` applies only with no daemon.** A running daemon reads
   with its own approved set. A direct read approves only the digests the
   flag names, and the store refuses evidence that names any other recipe;
-  the record reports that section as `unapproved_recipe`.
+  the record reports that item or section as `unapproved_recipe`, and the
+  message names the recipe. A stopped root therefore needs the digests its
+  daemon ran with: `FREESIDE_REAL_RUN_APPROVED_RECIPE` for a
+  `scripts/run-real-work.sh` root, `approved_recipe` in
+  `<root>/daemon/settings.json` for a deputy root. A direct read that meets
+  `unapproved_recipe` says so on stderr; stdout stays one JSON line.
 - **The timeline's shape is part of the record's version.** A change to the
-  task timeline or its events changes `freeside-task-record-v2`.
+  task timeline or its events changes `freeside-task-record-v3`.
 
 The record never holds evidence, claims, conversation messages (a command's
 message and attachments included), transcripts, prompt text, credentials, or

@@ -84,6 +84,65 @@ func (tx *ReadTx) ListAttentionItems(ctx context.Context) ([]Snapshotted[domain.
 	return items, nil
 }
 
+// AttentionItemRow is one attention_items row as a diagnostic read returns
+// it: either the reconstructed item or the error that refused the row.
+//
+// A refused row's ID and subject columns are the row's own extracted
+// columns. Reconstruction may have failed before or at the check that binds
+// them to the canonical body, so they are not trusted state: a caller may
+// use them only to say which row failed and to route the failure to a task
+// or run, never as facts about the item.
+type AttentionItemRow struct {
+	ID            domain.ItemID
+	SubjectTaskID *domain.TaskID
+	SubjectRunID  *domain.RunID
+	// Item is set exactly when Err is nil.
+	Item     *domain.AttentionItem
+	Snapshot Snapshot
+	Err      error
+}
+
+// ListAttentionItemRows enumerates every persisted attention item in
+// ListAttentionItems' order, reconstructing each row through the same gates,
+// but reports a refused row in place instead of failing the list. It is for
+// diagnostic records that must show what they can read; the sync bootstrap
+// keeps ListAttentionItems, which never omits state. The returned error is
+// the query's own failure; any error while reconstructing a row, a database
+// error inside one of its gates included, is that row's Err.
+func (tx *ReadTx) ListAttentionItemRows(ctx context.Context) ([]AttentionItemRow, error) {
+	rows, err := tx.tx.QueryContext(ctx, listAttentionItemsSQL)
+	if err != nil {
+		return nil, fmt.Errorf("list attention item rows: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := []AttentionItemRow{}
+	for rows.Next() {
+		columns, err := scanAttentionItemColumns(rows)
+		if err != nil {
+			return nil, fmt.Errorf("list attention item rows: row %d: %w", len(out)+1, err)
+		}
+		row := AttentionItemRow{ID: domain.ItemID(columns.id)}
+		item, snap, err := tx.reconstructAttentionItemSnapshot(ctx, columns)
+		if err != nil {
+			row.Err = err
+			if columns.subjectTaskID.Valid {
+				row.SubjectTaskID = new(domain.TaskID(columns.subjectTaskID.String))
+			}
+			if columns.subjectRunID.Valid {
+				row.SubjectRunID = new(domain.RunID(columns.subjectRunID.String))
+			}
+		} else {
+			row.Item, row.Snapshot = &item, snap
+			row.SubjectTaskID, row.SubjectRunID = item.Subject.TaskID, item.Subject.RunID
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list attention item rows: %w", err)
+	}
+	return out, nil
+}
+
 const listAttentionDeliveriesSQL = `
 SELECT item_id, device_id, channel, attempt, entity_version, as_of_revision, body
 FROM attention_deliveries ORDER BY item_id, device_id, channel, attempt`

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -154,6 +155,127 @@ func TestInspectReadsStoreWithNoDaemon(t *testing.T) {
 	// The reads above moved nothing.
 	if after := inspect[inspectIndex](t, ctx, "-db", dbPath); after.AsOfRevision != direct.AsOfRevision {
 		t.Fatalf("revision moved from %d to %d across reads", direct.AsOfRevision, after.AsOfRevision)
+	}
+}
+
+// TestInspectReadsStoppedRootWithRecipeEvidence is the exit-run case: a
+// stopped root holding items whose evidence names the daemon's recipe, this
+// task's and another task's. With no -approved-recipe the direct read still
+// lists the task's items, shows the refused one as its id and error, leaves
+// the other task's refused item out, and says on stderr what the read
+// needs. With the daemon's digest the record equals the served one.
+func TestInspectReadsStoppedRootWithRecipeEvidence(t *testing.T) {
+	recipe := domain.Digest("sha256:" + strings.Repeat("e", 64))
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	h := startDaemon(t, config{
+		DBPath: dbPath, ListenAddr: "127.0.0.1:0", SeedFixture: "representative",
+		Environment: environmentEphemeral, ApprovedRecipes: map[domain.Digest]bool{recipe: true},
+	})
+	ctx := t.Context()
+	const own, foreign = domain.ItemID("execution-failure-evidence-own"), domain.ItemID("execution-failure-evidence-foreign")
+	putRecipeEvidenceItem(t, h.store, recipe, fixtureActiveRunID, own)
+	putRecipeEvidenceItem(t, h.store, recipe, "run-evidence-foreign", foreign)
+	id := taskOfRun(t, h.store, fixtureActiveRunID)
+	args := []string{"task", "-db", dbPath, "-task", string(id)}
+	served := inspect[taskRecord](t, ctx, args...)
+	if item := recordItem(served, own); item == nil || item.Error != nil || recordItem(served, foreign) != nil {
+		t.Fatalf("served own item = %+v, foreign present = %t", item, recordItem(served, foreign) != nil)
+	}
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := runInspectCommand(ctx, args, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	var refused taskRecord
+	if err := strictjson.Decode(stdout.Bytes(), &refused, strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {
+		t.Fatal(err)
+	}
+	item := recordItem(refused, own)
+	if item == nil || item.Error == nil || item.Error.Kind != taskRecordErrorUnapprovedRecipe ||
+		!strings.Contains(item.Error.Message, string(recipe)) || item.Type != nil || item.Commands != nil {
+		t.Fatalf("refused own item = %+v", item)
+	}
+	if recordItem(refused, foreign) != nil || refused.ItemsError != nil || len(refused.Items) != len(served.Items) {
+		t.Fatalf("items = %d (served %d), foreign present = %t, items_error = %+v",
+			len(refused.Items), len(served.Items), recordItem(refused, foreign) != nil, refused.ItemsError)
+	}
+	// The other task's refused row is counted, not shown.
+	if !equalPointers(refused.Counts.UnattributedRefusedItems, new(1)) ||
+		!equalPointers(served.Counts.UnattributedRefusedItems, new(0)) {
+		t.Fatalf("unattributed refused items: direct %v, served %v",
+			refused.Counts.UnattributedRefusedItems, served.Counts.UnattributedRefusedItems)
+	}
+	// The timeline is the client's, unchanged, and still fails whole.
+	if refused.TimelineError == nil || refused.TimelineError.Kind != taskRecordErrorUnapprovedRecipe {
+		t.Fatalf("timeline error = %+v", refused.TimelineError)
+	}
+	if note := stderr.String(); !strings.Contains(note, "-approved-recipe") || !strings.Contains(note, "approved 0 ") {
+		t.Fatalf("stderr = %q, want the approved-recipe note", note)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := runInspectCommand(ctx, append(args, "-approved-recipe", string(recipe)), &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	var approved taskRecord
+	if err := strictjson.Decode(stdout.Bytes(), &approved, strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(comparableRecord(t, approved), comparableRecord(t, served)) || stderr.Len() != 0 {
+		t.Fatalf("approved direct record differs from the served one, or stderr = %q\ndirect: %s\nserved: %s",
+			stderr.String(), comparableRecord(t, approved), comparableRecord(t, served))
+	}
+}
+
+// putRecipeEvidenceItem writes an execution-failure item on runID, creating
+// the run when it is new, whose evidence names recipe. The store must
+// approve recipe.
+func putRecipeEvidenceItem(t *testing.T, st *store.Store, recipe domain.Digest, runID domain.RunID, id domain.ItemID) {
+	t.Helper()
+	approved := map[domain.Digest]bool{recipe: true}
+	at := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	artifact, err := domain.NewArtifact(domain.ArtifactInput{
+		ID: domain.ArtifactID(id) + "-evidence", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:" + domain.Digest(id),
+		Provenance: domain.Provenance{
+			ProducerClass: domain.ProducerVerifier, ProducerInvocationID: domain.InvocationID("invocation-" + id),
+			HeadBinding: domain.HeadBound, SourceHeadSHA: "cafebabe",
+			VerificationRecipeDigest: &recipe, SensitivityClass: domain.SensitivityNormal,
+		},
+		Metadata: domain.EvidenceMetadata{
+			MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: 1, CreatedAt: at,
+			Source: domain.EvidenceSourceRun, Availability: domain.EvidenceAvailable,
+		},
+	}, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
+		run, err := tx.GetRun(t.Context(), runID)
+		if errors.Is(err, store.ErrNotFound) {
+			run = domain.Run{ID: runID, ProjectID: "proj-evidence", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"}
+			if err := tx.PutRun(t.Context(), run); err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		}
+		item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+			ID: id, ProjectID: run.ProjectID,
+			Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+			Type:    domain.AttentionExecutionFailure, Priority: domain.PriorityHigh, Reason: "Recovery needed.",
+			RequestedDecision: []domain.Action{domain.ActionStop}, ItemVersion: 1, Status: domain.StatusOpen,
+			InterruptionClass: domain.InterruptionExceptional, EvidenceSnapshot: []domain.Artifact{artifact},
+		}, approved)
+		if err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(t.Context(), item)
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 

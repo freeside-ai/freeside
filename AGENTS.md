@@ -328,7 +328,9 @@ the reads on offer and the tasks the daemon holds, and
 its timeline, runs, attention items, and counts, as versioned JSON. Both
 write nothing and read through the control socket while a daemon runs, so
 they are safe on any tier. To wait for a state change, read again and
-compare `as_of_revision`. Detail: `daemon/README.md` (Read A Task's Record).
+compare `as_of_revision`. A stopped root needs the daemon's digests, one
+`-approved-recipe` each, or its evidence-bearing items and timeline report
+`unapproved_recipe`. Detail: `daemon/README.md` (Read A Task's Record).
 
 While iterating on a visible `app/` change, render only the surfaces the step
 touches with `bash app/scripts/render-surfaces.sh OUTPUT_DIR SURFACE...` and

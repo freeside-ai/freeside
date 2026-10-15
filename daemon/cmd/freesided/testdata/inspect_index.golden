@@ -14,7 +14,7 @@
       "ids": [
         "task_id"
       ],
-      "version": "freeside-task-record-v2"
+      "version": "freeside-task-record-v3"
     },
     {
       "name": "follow -snapshot",

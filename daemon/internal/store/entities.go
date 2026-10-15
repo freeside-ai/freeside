@@ -1504,7 +1504,17 @@ func (tx *ReadTx) scanAttentionItemHistory(ctx context.Context, sc scanner) (dom
 // scanAttentionItemHistory so a row tampered to reach a typed binding gate
 // still reports that gate's own error, which is the more specific diagnosis.
 func (tx *ReadTx) scanAttentionItemSnapshot(ctx context.Context, sc scanner) (domain.AttentionItem, Snapshot, error) {
-	item, snap, err := scanAttentionItemRecord(sc)
+	columns, err := scanAttentionItemColumns(sc)
+	if err != nil {
+		return domain.AttentionItem{}, Snapshot{}, err
+	}
+	return tx.reconstructAttentionItemSnapshot(ctx, columns)
+}
+
+// reconstructAttentionItemSnapshot is scanAttentionItemSnapshot after the
+// column scan: the row cross-check, then every snapshot-tier gate.
+func (tx *ReadTx) reconstructAttentionItemSnapshot(ctx context.Context, columns attentionItemColumns) (domain.AttentionItem, Snapshot, error) {
+	item, snap, err := columns.reconstruct()
 	if err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
@@ -1555,25 +1565,46 @@ func (tx *ReadTx) scanAttentionItemSnapshot(ctx context.Context, sc scanner) (do
 }
 
 func scanAttentionItemRecord(sc scanner) (domain.AttentionItem, Snapshot, error) {
-	var (
-		id             string
-		projectID      string
-		conversationID sql.NullString
-		itemType       string
-		status         string
-		healthPosture  sql.NullString
-		subjectRunID   sql.NullString
-		subjectTaskID  sql.NullString
-		readinessBody  sql.NullString
-		detailBody     sql.NullString
-		yieldBody      sql.NullString
-		snap           Snapshot
-		body           []byte
-	)
-	if err := sc.Scan(&id, &projectID, &conversationID, &itemType, &status, &healthPosture, &subjectRunID, &subjectTaskID, &readinessBody, &detailBody, &yieldBody, &snap.EntityVersion, &snap.AsOfRevision, &body); err != nil {
+	columns, err := scanAttentionItemColumns(sc)
+	if err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
-	item, err := decode[domain.AttentionItem](body)
+	return columns.reconstruct()
+}
+
+// attentionItemColumns is one attention_items row as scanned, before
+// reconstruct checks the extracted columns against the canonical body.
+type attentionItemColumns struct {
+	id             string
+	projectID      string
+	conversationID sql.NullString
+	itemType       string
+	status         string
+	healthPosture  sql.NullString
+	subjectRunID   sql.NullString
+	subjectTaskID  sql.NullString
+	readinessBody  sql.NullString
+	detailBody     sql.NullString
+	yieldBody      sql.NullString
+	snap           Snapshot
+	body           []byte
+}
+
+func scanAttentionItemColumns(sc scanner) (attentionItemColumns, error) {
+	var c attentionItemColumns
+	err := sc.Scan(&c.id, &c.projectID, &c.conversationID, &c.itemType, &c.status, &c.healthPosture,
+		&c.subjectRunID, &c.subjectTaskID, &c.readinessBody, &c.detailBody, &c.yieldBody,
+		&c.snap.EntityVersion, &c.snap.AsOfRevision, &c.body)
+	return c, err
+}
+
+// reconstruct decodes the body and cross-checks every extracted column
+// against it.
+func (c attentionItemColumns) reconstruct() (domain.AttentionItem, Snapshot, error) {
+	id, projectID, conversationID, itemType, status := c.id, c.projectID, c.conversationID, c.itemType, c.status
+	healthPosture, subjectRunID, subjectTaskID := c.healthPosture, c.subjectRunID, c.subjectTaskID
+	readinessBody, detailBody, yieldBody, snap := c.readinessBody, c.detailBody, c.yieldBody, c.snap
+	item, err := decode[domain.AttentionItem](c.body)
 	if err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
@@ -1675,6 +1706,11 @@ func scanAttentionItemRecord(sc scanner) (domain.AttentionItem, Snapshot, error)
 func (tx *ReadTx) gateEvidence(ctx context.Context, item domain.AttentionItem) error {
 	for _, a := range item.EvidenceSnapshot {
 		if err := domain.EligibleForEvidenceSnapshot(a, tx.approvedRecipes); err != nil {
+			// Name the recipe so an operator can tell which digest a read
+			// with no daemon must approve (-approved-recipe).
+			if recipe := a.Provenance.VerificationRecipeDigest; recipe != nil && errors.Is(err, domain.ErrUnapprovedRecipe) {
+				return fmt.Errorf("%w: recipe %s", err, *recipe)
+			}
 			return err
 		}
 		if err := tx.gateEffectProposalArtifact(ctx, a); err != nil {

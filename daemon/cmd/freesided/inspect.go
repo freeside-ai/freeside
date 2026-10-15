@@ -139,8 +139,23 @@ func runInspectCommand(ctx context.Context, args []string, stdout, stderr io.Wri
 	if err := errors.Join(readErr, handle.Close()); err != nil {
 		return err
 	}
-	return json.NewEncoder(stdout).Encode(value)
+	if err := json.NewEncoder(stdout).Encode(value); err != nil {
+		return err
+	}
+	// Only a direct read gets the note: a served record was read under the
+	// running daemon's own recipe set, which no flag can add to.
+	if record, ok := value.(taskRecord); ok && record.hasErrorKind(taskRecordErrorUnapprovedRecipe) {
+		_, err := fmt.Fprintf(stderr, unapprovedRecipeNote, len(approvedRecipes))
+		return err
+	}
+	return nil
 }
+
+// unapprovedRecipeNote goes to stderr, so stdout stays one JSON value.
+const unapprovedRecipeNote = "freesided inspect: this read approved %d verification recipes, so it " +
+	"could not read evidence the record reports as unapproved_recipe. Pass -approved-recipe " +
+	"once per digest the daemon was launched with: FREESIDE_REAL_RUN_APPROVED_RECIPE for a " +
+	"run-real-work.sh root, or approved_recipe in <root>/daemon/settings.json for a deputy root.\n"
 
 func readTaskRecordFrom(ctx context.Context, st *store.Store, id domain.TaskID) (taskRecord, error) {
 	var record taskRecord

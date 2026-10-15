@@ -17,7 +17,7 @@ import (
 
 // taskRecordVersion names the record's JSON shape. Any change to that shape,
 // including to signet.TaskTimeline, which the record embeds, changes it.
-const taskRecordVersion = "freeside-task-record-v2"
+const taskRecordVersion = "freeside-task-record-v3"
 
 // taskRecord is what `freesided inspect task` prints: one task's recorded
 // facts, read under one store revision, for an agent to read. It is built
@@ -188,10 +188,14 @@ type taskRecordAgent struct {
 // several writers compose the reason from a claim's text, an agent's
 // question, a reviewer's finding, or a driver error that names host paths.
 // The typed causes say why the item exists.
+//
+// An item the store refused to reconstruct carries only its id and Error;
+// every other field is null, because nothing else about it was read.
 type taskRecordItem struct {
 	ID               domain.ItemID                 `json:"id"`
-	Type             domain.AttentionType          `json:"type"`
-	Status           domain.ItemStatus             `json:"status"`
+	Error            *taskRecordError              `json:"error"`
+	Type             *domain.AttentionType         `json:"type"`
+	Status           *domain.ItemStatus            `json:"status"`
 	RunID            *domain.RunID                 `json:"run_id"`
 	CreatedAt        *time.Time                    `json:"created_at"`
 	DecidedAt        *time.Time                    `json:"decided_at"`
@@ -221,14 +225,22 @@ type taskRecordDelivery struct {
 	OpenedAt          *time.Time            `json:"opened_at"`
 }
 
-// taskRecordCounts counts what the record holds. The two item counts are
+// taskRecordCounts counts what the record holds. The three item counts are
 // null when the items were not read, and FailedStops when the task was not.
+//
+// UnattributedRefusedItems counts the refused item rows the record did not
+// attribute to this task. A refused row is attributed by its stored subject
+// columns, which nothing verified, so a corrupt row of this task can land
+// here instead of in Items; a nonzero count says the store refused rows this
+// record does not show.
 // RunsHeld counts the holds that were read.
 type taskRecordCounts struct {
 	ItemsByType         []taskRecordTypeCount `json:"items_by_type"`
 	HealthNoticesByCode []taskRecordCodeCount `json:"health_notices_by_code"`
 	RunsHeld            int                   `json:"runs_held"`
 	FailedStops         *int                  `json:"failed_stops"`
+	// UnattributedRefusedItems: see the type comment.
+	UnattributedRefusedItems *int `json:"unattributed_refused_items"`
 }
 
 type taskRecordTypeCount struct {
@@ -288,6 +300,29 @@ func newTaskRecordError(err error) *taskRecordError {
 	return &taskRecordError{Kind: kind, Message: err.Error()}
 }
 
+// hasErrorKind reports whether any section of the record, or any item or
+// run in it, was left unread by an error of the given kind.
+func (r taskRecord) hasErrorKind(kind taskRecordErrorKind) bool {
+	for _, e := range []*taskRecordError{r.TaskError, r.TimelineError, r.ItemsError} {
+		if e != nil && e.Kind == kind {
+			return true
+		}
+	}
+	for _, item := range r.Items {
+		if item.Error != nil && item.Error.Kind == kind {
+			return true
+		}
+	}
+	for _, run := range r.Runs {
+		for _, e := range run.Errors {
+			if e.Kind == kind {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // readTaskRecord builds the record in the caller's transaction, so every
 // section is read at one store revision. Only an unknown task and a failed
 // transaction fail it: a section that fails a store check is reported in the
@@ -326,10 +361,12 @@ func readTaskRecord(ctx context.Context, tx *store.ReadTx, id domain.TaskID, asO
 		}
 		record.Runs = append(record.Runs, run)
 	}
-	if record.Items, err = readTaskRecordItems(ctx, tx, id, record.Runs); err != nil {
+	var unattributed int
+	if record.Items, unattributed, err = readTaskRecordItems(ctx, tx, id, record.Runs); err != nil {
 		record.Items, record.ItemsError = nil, newTaskRecordError(err)
 	} else {
 		record.Counts.ItemsByType, record.Counts.HealthNoticesByCode = countTaskRecordItems(record.Items)
+		record.Counts.UnattributedRefusedItems = &unattributed
 	}
 	if record.Task != nil {
 		// The store keeps the latest cancellation only, so this is 0 or 1.
@@ -563,18 +600,20 @@ func projectTaskRecordAdmission(admission domain.ExecutionAdmission) taskRecordA
 
 // readTaskRecordItems returns every attention item that belongs to the task,
 // open or closed, in item-id order. The store has no read of items by task,
-// so this filters the whole list. ListAttentionItems re-runs the evidence
-// gate on every row and fails as a whole when one row fails.
+// so this filters the whole list. ListAttentionItemRows re-runs every
+// reconstruction gate on each row and reports a refused row in place, so one
+// refused row, this task's or another's, hides no other item. The error is
+// the enumeration's own failure.
 func readTaskRecordItems(
 	ctx context.Context, tx *store.ReadTx, id domain.TaskID, runs []taskRecordRun,
-) ([]taskRecordItem, error) {
-	stored, err := tx.ListAttentionItems(ctx)
+) (items []taskRecordItem, unattributed int, err error) {
+	stored, err := tx.ListAttentionItemRows(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	deliveries, err := tx.ListAttentionDeliveries(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	deliveriesByItem := make(map[domain.ItemID][]taskRecordDelivery)
 	for _, delivery := range deliveries {
@@ -584,18 +623,27 @@ func readTaskRecordItems(
 			SubmittedAt: d.SubmittedAt, ChannelAcceptedAt: d.ChannelAcceptedAt, OpenedAt: d.OpenedAt,
 		})
 	}
-	items := []taskRecordItem{}
-	for _, snapshot := range stored {
-		item := snapshot.Value
-		if !taskRecordOwnsItem(item, id, runs) {
+	items = []taskRecordItem{}
+	for _, row := range stored {
+		// A refused row's subject columns are unverified; they only route
+		// its id and error to this record, and nothing else of it is read.
+		if !taskRecordOwnsItem(row.ID, row.SubjectTaskID, row.SubjectRunID, id, runs) {
+			if row.Err != nil {
+				unattributed++
+			}
 			continue
 		}
+		if row.Err != nil {
+			items = append(items, taskRecordItem{ID: row.ID, Error: newTaskRecordError(row.Err)})
+			continue
+		}
+		item := row.Item
 		commands, err := tx.ListCommandsForItem(ctx, item.ID)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		out := taskRecordItem{
-			ID: item.ID, Type: item.Type, Status: item.Status, RunID: item.Subject.RunID,
+			ID: item.ID, Type: &item.Type, Status: &item.Status, RunID: item.Subject.RunID,
 			CreatedAt: item.CreatedAt, DecidedAt: item.DecidedAt,
 			HealthDiagnostic: item.HealthDiagnostic, ExecutionFailure: item.ExecutionFailure,
 			PublishBlock: item.PublishBlock, BlockedOn: item.BlockedOn,
@@ -609,7 +657,7 @@ func readTaskRecordItems(
 		}
 		items = append(items, out)
 	}
-	return items, nil
+	return items, unattributed, nil
 }
 
 // taskRecordOwnsItem reports whether an item belongs to the task: its
@@ -617,21 +665,24 @@ func readTaskRecordItems(
 // one of the task's invocations. A stall notice has the system as its
 // subject, so only its id ties it to an invocation; the invocation ids come
 // from the run's admissions and observations, whichever were read.
-func taskRecordOwnsItem(item domain.AttentionItem, id domain.TaskID, runs []taskRecordRun) bool {
-	if item.Subject.TaskID != nil && *item.Subject.TaskID == id {
+func taskRecordOwnsItem(
+	itemID domain.ItemID, subjectTaskID *domain.TaskID, subjectRunID *domain.RunID,
+	id domain.TaskID, runs []taskRecordRun,
+) bool {
+	if subjectTaskID != nil && *subjectTaskID == id {
 		return true
 	}
 	for _, run := range runs {
-		if item.Subject.RunID != nil && *item.Subject.RunID == run.RunID {
+		if subjectRunID != nil && *subjectRunID == run.RunID {
 			return true
 		}
 		for _, admission := range run.Admissions {
-			if isInvocationStallNotice(string(item.ID), admission.InvocationID) {
+			if isInvocationStallNotice(string(itemID), admission.InvocationID) {
 				return true
 			}
 		}
 		for _, invocation := range run.Invocations {
-			if isInvocationStallNotice(string(item.ID), invocation.InvocationID) {
+			if isInvocationStallNotice(string(itemID), invocation.InvocationID) {
 				return true
 			}
 		}
@@ -639,8 +690,10 @@ func taskRecordOwnsItem(item domain.AttentionItem, id domain.TaskID, runs []task
 	return false
 }
 
-// countTaskRecordItems counts items by type, listing every type so a zero is
-// explicit, and health notices by code, listing only the codes that occur.
+// countTaskRecordItems counts the items that were read by type, listing
+// every type so a zero is explicit, and health notices by code, listing only
+// the codes that occur. A refused item has no type to count; it shows in the
+// items list with its error.
 func countTaskRecordItems(items []taskRecordItem) ([]taskRecordTypeCount, []taskRecordCodeCount) {
 	byType := make([]taskRecordTypeCount, len(domain.AllAttentionTypes))
 	for index, attentionType := range domain.AllAttentionTypes {
@@ -648,7 +701,10 @@ func countTaskRecordItems(items []taskRecordItem) ([]taskRecordTypeCount, []task
 	}
 	byCode := []taskRecordCodeCount{}
 	for _, item := range items {
-		if index := slices.Index(domain.AllAttentionTypes, item.Type); index >= 0 {
+		if item.Type == nil {
+			continue
+		}
+		if index := slices.Index(domain.AllAttentionTypes, *item.Type); index >= 0 {
 			byType[index].Count++
 		}
 		if item.HealthDiagnostic == nil {
