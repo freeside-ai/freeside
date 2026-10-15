@@ -911,7 +911,11 @@ Reading the record:
   with its own approved set. A direct read approves only the digests the
   flag names, and the store refuses evidence that names any other recipe;
   the record reports that item or section as `unapproved_recipe`, and the
-  message names the recipe.
+  message names the recipe. A stopped root therefore needs the digests its
+  daemon ran with: `FREESIDE_REAL_RUN_APPROVED_RECIPE` for a
+  `scripts/run-real-work.sh` root, `approved_recipe` in
+  `<root>/daemon/settings.json` for a deputy root. A direct read that meets
+  `unapproved_recipe` says so on stderr; stdout stays one JSON line.
 - **The timeline's shape is part of the record's version.** A change to the
   task timeline or its events changes `freeside-task-record-v3`.
 

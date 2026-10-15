@@ -300,6 +300,29 @@ func newTaskRecordError(err error) *taskRecordError {
 	return &taskRecordError{Kind: kind, Message: err.Error()}
 }
 
+// hasErrorKind reports whether any section of the record, or any item or
+// run in it, was left unread by an error of the given kind.
+func (r taskRecord) hasErrorKind(kind taskRecordErrorKind) bool {
+	for _, e := range []*taskRecordError{r.TaskError, r.TimelineError, r.ItemsError} {
+		if e != nil && e.Kind == kind {
+			return true
+		}
+	}
+	for _, item := range r.Items {
+		if item.Error != nil && item.Error.Kind == kind {
+			return true
+		}
+	}
+	for _, run := range r.Runs {
+		for _, e := range run.Errors {
+			if e.Kind == kind {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // readTaskRecord builds the record in the caller's transaction, so every
 // section is read at one store revision. Only an unknown task and a failed
 // transaction fail it: a section that fails a store check is reported in the
