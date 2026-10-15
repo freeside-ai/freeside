@@ -65,6 +65,12 @@ for completion in (None, {}, {"pr_number": 8, "merge_commit_sha": "expected-merg
     refuses(lambda: module.check_remote(dict(completed, completion=completion), merged))
 for state in ("ready", "retained"):
     refuses(lambda: module.check_remote(dict(checkpoint, state=state), merged))
+# A pre-publication checkpoint has nothing published, so even a remote PR that
+# matches a binding never verifies it, and neither does its empty binding.
+refuses(lambda: module.check_remote(dict(checkpoint, state="pre-publication"), observed))
+empty = {"state": "pre-publication", "branch": "", "binding": {
+    "repo": "", "repository_id": 0, "pr_number": 0, "head_sha": "", "base_ref": ""}}
+refuses(lambda: module.check_remote(empty, observed))
 
 fields = "repository repository_id base_ref base_sha profile_digest review_configuration_digest allowed_paths claude_auth_volume images identity build_egress_configuration_digest".split()
 original = dict.fromkeys(fields, "unchanged")
@@ -348,3 +354,29 @@ for bad in wrong-version not-ok; do
   fi
 done
 echo 'PASS: retained health passes a matching healthy build and fails a wrong version or non-ok status'
+
+# The remote action skips gh for a pre-publication checkpoint and still calls
+# it for a published one. The stub gh fails and leaves a marker when invoked.
+mkdir "$health_tmp/bin"
+cat >"$health_tmp/bin/gh" <<SH
+#!/usr/bin/env bash
+touch "$health_tmp/gh-called"
+exit 1
+SH
+chmod +x "$health_tmp/bin/gh"
+printf '%s\n' '{"state":"pre-publication","branch":"","binding":{"repo":"","pr_number":0}}' \
+  >"$health_tmp/pre-publication.json"
+printf '%s\n' '{"state":"ready","branch":"fix/output","binding":{"repo":"owner/project","pr_number":7}}' \
+  >"$health_tmp/ready.json"
+if ! out=$(PATH="$health_tmp/bin:$PATH" python3 "$retained" remote "$health_tmp/pre-publication.json") ||
+  [[ "$out" != 'Pre-publication checkpoint: no remote publication to verify' ]] ||
+  [[ -e "$health_tmp/gh-called" ]]; then
+  echo 'FAIL: retained remote did not skip gh for a pre-publication checkpoint' >&2
+  exit 1
+fi
+if PATH="$health_tmp/bin:$PATH" python3 "$retained" remote "$health_tmp/ready.json" 2>/dev/null ||
+  [[ ! -e "$health_tmp/gh-called" ]]; then
+  echo 'FAIL: retained remote accepted a ready checkpoint without verifying its PR' >&2
+  exit 1
+fi
+echo 'PASS: retained remote skips gh only for a pre-publication checkpoint'

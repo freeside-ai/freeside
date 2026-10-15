@@ -240,6 +240,11 @@ def main():
                     pending.unlink(missing_ok=True)
     elif action == "remote":
         checkpoint = read_json(sys.argv[2])
+        if checkpoint["state"] == "pre-publication":
+            # The verifier proved the admitted run never published, so there
+            # is no remote PR to compare; check_remote still refuses this state.
+            print("Pre-publication checkpoint: no remote publication to verify")
+            return
         binding = checkpoint["binding"]
         response = subprocess.run(
             ["gh", "api", "--method", "GET",
