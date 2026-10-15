@@ -3,9 +3,15 @@ package store
 import (
 	"context"
 	"database/sql"
+	"io/fs"
+	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
 // This file is an internal test (package store): the failure paths exercise
@@ -55,18 +61,46 @@ func assertAtHead(t *testing.T, db *sql.DB) {
 	}
 }
 
+// TestCurrentSchemaVersion requires every non-Go file checked into
+// daemon/migrations to be an embedded migration. The head is counted from the
+// directory on disk, not from migrations.FS, so a file the go:embed pattern
+// misses (a wrong extension or case) fails here instead of shipping a binary
+// without it, and adding a migration needs no edit to this test.
 func TestCurrentSchemaVersion(t *testing.T) {
 	t.Parallel()
 	got, err := CurrentSchemaVersion()
 	if err != nil {
 		t.Fatalf("current schema version: %v", err)
 	}
-	// This is the single schema-head pin to bump when adding a migration.
-	// Other numeric assertions cover historical boundaries or synthetic fixtures.
-	const want = 99
-	if got != want {
-		t.Fatalf("current schema version = %d, want %d", got, want)
+	dir := filepath.Join("..", "..", "migrations")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read migrations directory: %v", err)
 	}
+	var onDisk []string
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".go") {
+			onDisk = append(onDisk, entry.Name())
+		}
+	}
+	if len(onDisk) == 0 {
+		t.Fatalf("no migration files in %s", dir)
+	}
+	if got == len(onDisk) {
+		return
+	}
+	embedded, err := fs.Glob(migrations.FS, "*.sql")
+	if err != nil {
+		t.Fatalf("list embedded migrations: %v", err)
+	}
+	var stray []string
+	for _, name := range onDisk {
+		if !slices.Contains(embedded, name) {
+			stray = append(stray, name)
+		}
+	}
+	t.Fatalf("current schema version = %d, want %d files in %s; not embedded: %v",
+		got, len(onDisk), dir, stray)
 }
 
 // TestFailingMigrationRollsBack is acceptance fixture 3: a deliberately

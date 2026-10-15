@@ -454,8 +454,7 @@ other:
    in `internal/store` and the partial-schema skip lists in that package's
    tests. The data hook matches on file name alone, and
    `TestMigrationNamesReferencedFromGoExist` fails on a stale name in a
-   non-test file there. Set the schema-head pin, `const want` in
-   `internal/store/migrate_internal_test.go`, to the new head number.
+   non-test file there.
 3. Run `bash scripts/check.sh daemon` from the repo root.
 
 A `dev` daemon that ran your branch build recorded the old name and digest,
