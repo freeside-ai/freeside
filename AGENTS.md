@@ -425,6 +425,18 @@ A heading whose exact spelling is a machine-read record identifier keeps that
 spelling; `### Post-merge obligations` and `### Coordination model` are
 interface tokens, not prose to retitle.
 
+## Forge Record
+
+- **Use `freeside-ai/freeside` on GitHub for forge calls.** This project has
+  the following forge record:
+
+  - **Host:** `github.com`.
+  - **Slug:** `freeside-ai/freeside`. Pass `--repo freeside-ai/freeside` to
+    `gh`; never derive the owner from a sibling project.
+  - **Consumers:** `await-pr-review`, `merge-cleanup`, `self-merge`, and
+    `visual-evidence` read this record before inferring a repository from a
+    remote.
+
 ## Automated Reviewer
 
 **Codex** reviews pull requests automatically. Handle its findings per the
