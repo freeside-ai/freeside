@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -121,6 +123,12 @@ func realRunIdentities(ctx context.Context, st *store.Store, final bool, identit
 // durable ready result with every gate present rather than stubbed.
 
 const realRunLiveEnv = "FREESIDE_REAL_RUN_LIVE_TEST"
+
+// realRunRepositoryCheckoutEnv names the managed repository's local checkout.
+// The verifier reads it only when the admitted image was built at another
+// commit than the base, so a run whose image was built at the base, or a
+// manual verification of such a retained state root, needs none.
+const realRunRepositoryCheckoutEnv = "FREESIDE_REAL_RUN_REPOSITORY_CHECKOUT"
 
 const (
 	realRunImplementationRunIDEnv      = "FREESIDE_REAL_RUN_IMPLEMENTATION_RUN_ID"
@@ -274,6 +282,61 @@ func requireEnv(t *testing.T, name string) string {
 	return value
 }
 
+// realRunBaseObserver reads the base's project-image inputs from the
+// operator's checkout, the read the composition preflight makes. It reads the
+// variable only when called, so the checkout stays optional until an image
+// built at another commit needs it.
+func realRunBaseObserver(ctx context.Context, env realRunEnv) func() (domain.ProjectImageBaseInputs, error) {
+	return func() (domain.ProjectImageBaseInputs, error) {
+		checkout := os.Getenv(realRunRepositoryCheckoutEnv)
+		if checkout == "" {
+			return domain.ProjectImageBaseInputs{}, fmt.Errorf(
+				"%s is required to read the base's environment inputs when the admitted image "+
+					"was built at another commit", realRunRepositoryCheckoutEnv)
+		}
+		return projectimage.ObserveBaseInputs(ctx, "git", checkout, env.baseSHA)
+	}
+}
+
+// checkRealRunProjectImage applies the daemon's project-image admission rule
+// (admitProjectImageAtBase in cmd/freesided) to the record the run admits, so
+// the verifier refuses exactly what the daemon would. The record must name
+// the run's repository and approved recipe, and its decoded preparation
+// command must be the fixed approved one, the gate the daemon's composition
+// re-runs (resolveProjectImagePreparation); one built at the base is admitted
+// from the record alone, and one built at another commit only when
+// AdmissibleAt accepts the base's inputs, which observe reads lazily so the
+// common case needs no checkout. preparation is the verifier binary's own
+// digest: the harness builds the verifier and freesided from one tree.
+func checkRealRunProjectImage(
+	image domain.ProjectImage, env realRunEnv,
+	observe func() (domain.ProjectImageBaseInputs, error), preparation domain.Digest,
+) error {
+	if image.Repository != env.repo || image.RepositoryID != env.repositoryID ||
+		image.RecipeDigest != env.approvedRecipe {
+		return fmt.Errorf("admitted project-image record disagrees with the real-run authority")
+	}
+	if !slices.Equal(image.PreparationCommand, []string{projectimage.PreparationPath}) {
+		return fmt.Errorf("admitted project-image preparation command %q is not the approved %q",
+			image.PreparationCommand, projectimage.PreparationPath)
+	}
+	if image.CommitSHA == env.baseSHA {
+		return nil
+	}
+	inputs, err := observe()
+	if err != nil {
+		return fmt.Errorf("observe project-image inputs at base %s: %w", env.baseSHA, err)
+	}
+	if inputs.CommitSHA != env.baseSHA {
+		return fmt.Errorf("project-image inputs were observed at %s, not the run base %s",
+			inputs.CommitSHA, env.baseSHA)
+	}
+	if err := image.AdmissibleAt(inputs, preparation); err != nil {
+		return fmt.Errorf("admitted project image cannot serve the run base: %w", err)
+	}
+	return nil
+}
+
 // TestRealWorkItemCompletesProductionPipeline verifies the durable output of
 // the full production composition driven by scripts/run-real-work.sh.
 func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
@@ -348,7 +411,8 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 	// policy refusal, the engine holds the invocation rather than failing it,
 	// and the run would poll out its entire deadline having never started the
 	// writer. Same reason the image digest pinning is checked up front.
-	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+	var admitted domain.ProjectImage
+	authorityErr := st.Read(ctx, func(tx *store.ReadTx) error {
 		profile, err := tx.LatestTrustProfile(ctx, env.repo)
 		if err != nil {
 			return err
@@ -368,19 +432,22 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 				continue
 			}
 			matching++
-			if image.Repository != env.repo || image.RepositoryID != env.repositoryID ||
-				image.CommitSHA != env.baseSHA || image.RecipeDigest != env.approvedRecipe {
-				return fmt.Errorf("admitted project-image record disagrees with the real-run authority")
-			}
+			admitted = image
 		}
 		if matching != 1 {
 			return fmt.Errorf("found %d project-image records for admitted image %q, want exactly one", matching, env.agentImage)
 		}
 		return nil
-	}); err != nil {
+	})
+	if authorityErr == nil {
+		// Outside the transaction: observing the base runs git subprocesses.
+		authorityErr = checkRealRunProjectImage(
+			admitted, env, realRunBaseObserver(ctx, env), projectimage.PreparationDigest())
+	}
+	if authorityErr != nil {
 		t.Fatalf("no usable production trust/image authority for %q: %v; "+
 			"activate its AutomationTrustProfile and onboard the digest-pinned project image before the run",
-			env.repo, err)
+			env.repo, authorityErr)
 	}
 
 	// The harness asserts the durable outcome rather than driving the daemon

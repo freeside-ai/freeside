@@ -134,9 +134,13 @@
 #                                    composition preflight verifies its origin
 #                                    and that the base is reachable, and reads
 #                                    the base's environment inputs from it to
-#                                    check the agent image against that base;
-#                                    it never fetches into it, so keep it
-#                                    current.
+#                                    check the agent image against that base.
+#                                    When the agent image was built at another
+#                                    commit, the verifier
+#                                    (TestRealWorkItemCompletesProductionPipeline)
+#                                    reads the same inputs from it first, before
+#                                    the preflight runs. Neither fetches into
+#                                    it, so keep it current.
 #   FREESIDE_REAL_RUN_PROMPT_PACKAGE trusted prompt-package file
 #   FREESIDE_REAL_RUN_SPECIFICATION_PROMPT_PACKAGE trusted specifier prompt-package file
 #   FREESIDE_REAL_RUN_REMEDIATION_PROMPT_PACKAGE trusted remediator prompt-package file
