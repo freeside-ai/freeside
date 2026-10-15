@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Hermetic fixtures execute the shipped supervision, identity adoption, final
-# verification and EXIT trap, without agents, services, containers or forge writes.
+# verification, retained-resume handoff and EXIT trap, without agents,
+# services, containers or forge writes.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d)
@@ -17,6 +18,9 @@ directory.joinpath("cleanup.sh").write_text(source[start:end] + '\n')
 start = source.index('specification_verifier_env=(-u FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID)')
 end = source.index('\nfi', start) + len('\nfi')
 directory.joinpath("specification-env.sh").write_text(source[start:end] + '\n')
+start = source.index('if [[ -n "$retained_session" ]]; then\n  healthy=false')
+end = source.index('\nfi\n', start) + len('\nfi')
+directory.joinpath("retained.sh").write_text(source[start:end] + '\n')
 PY
 
 mkdir "$tmp/bin"
@@ -116,6 +120,7 @@ listen_address=127.0.0.1:7331
 supervision_timeout=3
 last_supervision_snapshot=$workdir/snapshot.json
 client_target=$CLIENT_TARGET
+retained_session=${RETAINED_SESSION:-}
 specification_run_id=$SPECIFICATION
 target_task_id=""
 implementation_run_id=run-impl
@@ -147,7 +152,7 @@ assert_absent() {
 }
 
 run_case() {
-  local name=$1 state=$2 scenario=$3 expected=$4 specification=${5:-} client=${6:-false} cleanup_fail=${7:-false} snapshot_run=${8:-}
+  local name=$1 state=$2 scenario=$3 expected=$4 specification=${5:-} client=${6:-false} cleanup_fail=${7:-false} snapshot_run=${8:-} retained_session=${9:-}
   local session=$tmp/$name status run=run-impl
   [[ "$client" != true ]] || run=target-run
   mkdir "$session"
@@ -208,6 +213,7 @@ STUB
     SPECIFICATION_ENV="$tmp/specification-env.sh" \
     VERIFY_SCENARIO="$scenario" SNAPSHOT_STATE="$state" \
     CLIENT_TARGET="$client" SPECIFICATION="$specification" CLEANUP_FAIL="$cleanup_fail" \
+    RETAINED_SESSION="$retained_session" \
     FREESIDE_REAL_RUN_RETAINED="${AMBIENT_RETAINED:-1}" FREESIDE_REAL_RUN_CHECKPOINT_PATH="$session/stale-checkpoint.json" \
     FREESIDE_REAL_RUN_RUN_ID=legacy-run FREESIDE_REAL_RUN_INVOCATION=legacy-inv \
     FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID=ambient-spec \
@@ -255,6 +261,14 @@ run_case published published success 0
 run_case published-handoff published success 0 run-spec
 run_case published-client published success 0 target-spec true
 run_case cleanup-failure completed success 1 "" false true
+# A pre-publication resume supervises the implementation lane directly, yet
+# the final verifier still receives the specification pairing (the go stub
+# asserts it), and publication reaches the ordinary walkthrough.
+run_case resumed-published published success 0 run-spec false false "" /fixture/retained
+if grep -Fxq run-spec "$tmp/resumed-published/observed-runs"; then
+  echo 'resumed-published: supervision observed the specification lane' >&2
+  exit 1
+fi
 for scenario in error positive-error skip marker-only checkpoint-only wrong-state incomplete-history \
   wrong-run missing-binding malformed wrong-marker-run marker-prefix-run \
   ready-marker retained-marker remote-refusal spec-failure log-unwritable; do
@@ -269,3 +283,88 @@ run_case foreign-client-snapshot completed success 1 target-spec true false run-
 run_case malformed-snapshot completed success 1 "" false false __MALFORMED__
 run_case missing-snapshot-run completed success 1 "" false false __MISSING_RUN__
 echo 'run-real-work final verification fixtures passed'
+
+cat >"$tmp/retained-caller.sh" <<'CALLER'
+#!/usr/bin/env bash
+set -euo pipefail
+workdir=$CASE_DIR
+retained_session=/fixture/retained
+implementation_run_id=run-impl
+listen_address=127.0.0.1:7331
+build_version=build-7
+daemon_pid=4242
+child_job_exists() { true; }
+require_live_rig() { true; }
+real_work_local_address() { printf '%s\n' "$1"; }
+real_work_walkthrough() { touch "$workdir/walkthrough"; }
+source "$RETAINED"
+echo 'fell through to supervision'
+CALLER
+
+# real-work-verify.sh prints the checkpoint as its first stdout line, then the
+# evidence path; a refusal exits 1 with nothing on stdout.
+retained_case() {
+  local name=$1 checkpoint=$2 expected=$3 session=$tmp/retained-$1 status
+  mkdir "$session"
+  cat >"$session/real-work-verify.sh" <<STUB
+[[ "\$1" == retained ]] || exit 2
+[[ -n '$checkpoint' ]] || { echo 'verifier refused' >&2; exit 1; }
+printf '%s\n' '$checkpoint'
+echo "Verification evidence: $session/verification.fixture"
+STUB
+  cat >"$session/real-work-retained.py" <<'STUB'
+import sys
+assert sys.argv[1] == "health" and sys.argv[3] == "build-7"
+STUB
+  set +e
+  env PATH="$tmp/retained-bin:$PATH" CASE_DIR="$session" RETAINED="$tmp/retained.sh" \
+    bash "$tmp/retained-caller.sh" >"$session/output" 2>&1
+  status=$?
+  set -e
+  if [[ "$status" -ne "$expected" ]]; then
+    echo "retained-$name: status=$status, want $expected" >&2
+    cat "$session/output" >&2
+    exit 1
+  fi
+}
+mkdir "$tmp/retained-bin"
+cat >"$tmp/retained-bin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf '{"status":"ok","version":"build-7"}\n'
+STUB
+chmod +x "$tmp/retained-bin/curl"
+
+for state in ready retained completed; do
+  retained_case "$state" "{\"state\":\"$state\",\"binding\":{\"run_id\":\"run-impl\"}}" 0
+  output=$tmp/retained-$state/output
+  grep -Fq 'Retained endpoint restored for run=run-impl' "$output"
+  grep -Fq 'Complete explicitly: bash' "$output"
+  [[ -f "$tmp/retained-$state/walkthrough" ]]
+  assert_absent "$output" 'fell through to supervision'
+  assert_absent "$output" 'resumed before publication'
+done
+
+retained_case pre-publication '{"state":"pre-publication","binding":{}}' 0
+output=$tmp/retained-pre-publication/output
+grep -Fq 'retained run=run-impl resumed before publication; supervising from its current state' "$output"
+grep -Fq 'fell through to supervision' "$output"
+[[ ! -e "$tmp/retained-pre-publication/walkthrough" ]]
+assert_absent "$output" 'Retained endpoint restored'
+assert_absent "$output" 'Complete explicitly'
+
+retained_case refused '' 1
+grep -Fq 'Retained checkpoint refused; inspect' "$tmp/retained-refused/output"
+for name in no-state unknown-state malformed; do
+  case "$name" in
+  no-state) checkpoint='{"binding":{}}' ;;
+  unknown-state) checkpoint='{"state":"published"}' ;;
+  malformed) checkpoint='{' ;;
+  esac
+  retained_case "$name" "$checkpoint" 1
+  output=$tmp/retained-$name/output
+  grep -Fq 'Retained checkpoint refused: no recognized state' "$output"
+  [[ ! -e "$tmp/retained-$name/walkthrough" ]]
+  assert_absent "$output" 'fell through to supervision'
+  assert_absent "$output" 'Retained endpoint restored'
+done
+echo 'run-real-work retained-resume fixtures passed'
