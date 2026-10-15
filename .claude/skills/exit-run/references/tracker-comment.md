@@ -27,7 +27,7 @@ Evidence basis: the run itself from `main` at `<sha>`, the state root
 
 | Step | Result |
 | --- | --- |
-| State root | <fresh or retained; onboarding profile; anything the current daemon refused> |
+| State root | <fresh or retained; onboarding profile; anything the current daemon refused; if retained, the system-health items resolved at the pairing checkpoint (id and action) and any advisory ones left open, with why> |
 | Clients | <Mac and iPhone build commit only; no addresses, device names, or pairing codes> |
 | Campaign <n>, specification | <run id; outcome; who approved, on which device, which actions the card offered> |
 | Campaign <n>, implementation attempt <k> | <run id; outcome; if failed, the finding and whether an item was raised> |

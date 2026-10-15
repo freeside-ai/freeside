@@ -149,7 +149,14 @@ with a partial run.
   root has no paired endpoint to check here.
 - **The state root is usable:** a fresh root, or a retained one the current
   daemon can open. Clean-break migrations retire old roots at startup; don't
-  spend a run discovering that.
+  spend a run discovering that. A retained root also keeps every
+  system-health item its earlier runs left open, and a restart doesn't close
+  them. The blocking ones (not the advisory ones) hold the first run's
+  admission with reason `blocking_system_health` until an operator resolves
+  them in a client. No `freesided` read lists them before launch:
+  `inspect task` keeps only a task's own items, and a notice such as a
+  durable stop names the daemon, not a task. Plan to resolve them at the pairing
+  checkpoint (Run the Harness, step 2), or record why one stays open.
 - **Nothing else holds the rig** or an execution slot: no stranded
   dispatched invocation, no orphaned cleanup reservation (#1181, #1465).
 
@@ -171,6 +178,20 @@ operator needs to know when their step is next.
    before the iPhone pairs is renewed from the session's retained binary
    (docs/production-walkthrough.md, the `pairing-code` command). Record a
    redacted receipt and which device paired, never the code.
+
+   On a retained root, before the first approval, open Inbox > System health
+   in the Mac client and resolve each open item with the action its card
+   offers (on run 117, More Actions > Resume Unattended closed the run-116
+   `daemon_durable_stop` notice; Acknowledge only records, and the item
+   stays open). Record each item's id and the action taken for the run
+   record. Only an advisory item may stay open, since it never holds
+   admission; record why. A blocking item that no offered action closes
+   holds every run at admission: it is a defect that stops the run (below),
+   so file it and stop rather than going on. A missed blocking item shows
+   as the run's hold reason `blocking_system_health`. In CLI mode the seed
+   task's specification run is already waiting for admission, so that hold
+   can show now; in client-target mode nothing waits until the operator
+   composes a task.
 3. **Checkpoint (client-target mode):** when the harness prints its
    awaiting-target line, hand the operator the exact source text to enter in
    the composer. Then run
