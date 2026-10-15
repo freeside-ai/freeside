@@ -495,6 +495,13 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 		if err != nil {
 			return err
 		}
+		if checkpoint.State == "pre-publication" {
+			// Nothing has published, so the submitted implementation
+			// invocation's admission is the whole record. The run is live work,
+			// so read it through the current-policy gate, not as history.
+			admission, err = tx.GetExecutionAdmission(ctx, invocationID)
+			return err
+		}
 		invocationID = checkpoint.Binding.ProducingInvocationID
 		if checkpoint.State == "retained" || checkpoint.State == "completed" {
 			admission, err = tx.GetExecutionAdmissionRecord(ctx, invocationID)
@@ -511,13 +518,16 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("read durable execution record: %v", err)
 	}
+	prePublication := checkpoint.State == "pre-publication"
 	ready, outcome := checkpoint.ready, checkpoint.outcome
-	if ready.PRHeadSHA != export.HeadSHA || len(ready.EvidenceSnapshot) == 0 {
-		t.Error("publication evidence does not match its authenticated producer export")
-	}
-	if outcome.Repo != env.repo || outcome.BaseRef != env.baseRef ||
-		outcome.HeadSHA != export.HeadSHA || outcome.PRNumber <= 0 || !outcome.EvidenceEligible {
-		t.Error("publication outcome does not name the exact verified export head")
+	if !prePublication {
+		if ready.PRHeadSHA != export.HeadSHA || len(ready.EvidenceSnapshot) == 0 {
+			t.Error("publication evidence does not match its authenticated producer export")
+		}
+		if outcome.Repo != env.repo || outcome.BaseRef != env.baseRef ||
+			outcome.HeadSHA != export.HeadSHA || outcome.PRNumber <= 0 || !outcome.EvidenceEligible {
+			t.Error("publication outcome does not name the exact verified export head")
+		}
 	}
 
 	// Admission: the unattended class the run was actually admitted under.
@@ -547,18 +557,21 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 	}
 
 	// Export: the strong production publisher refuses publication without this
-	// exact admission/base/head binding.
-	if export.HeadSHA == "" {
-		t.Error("execution export carries no head")
-	}
-	if export.ObservedBaseSHA != admission.Base.BaseSHA {
-		t.Errorf("observed base %q, admitted base %q", export.ObservedBaseSHA, admission.Base.BaseSHA)
-	}
-	if export.AdmissionID != admission.ID {
-		t.Errorf("export admission %q, admission %q", export.AdmissionID, admission.ID)
-	}
-	if err := domain.ValidateExportBinding(admission, export); err != nil {
-		t.Errorf("export does not bind to its admission: %v", err)
+	// exact admission/base/head binding. A pre-publication run has published
+	// nothing, so there is no publication export to bind yet.
+	if !prePublication {
+		if export.HeadSHA == "" {
+			t.Error("execution export carries no head")
+		}
+		if export.ObservedBaseSHA != admission.Base.BaseSHA {
+			t.Errorf("observed base %q, admitted base %q", export.ObservedBaseSHA, admission.Base.BaseSHA)
+		}
+		if export.AdmissionID != admission.ID {
+			t.Errorf("export admission %q, admission %q", export.AdmissionID, admission.ID)
+		}
+		if err := domain.ValidateExportBinding(admission, export); err != nil {
+			t.Errorf("export does not bind to its admission: %v", err)
+		}
 	}
 
 	// Client-target mode: the operator selected the target task from a client,
@@ -621,6 +634,10 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 	}
 	if err := writeRealRunCheckpoint(os.Getenv("FREESIDE_REAL_RUN_CHECKPOINT_PATH"), checkpoint); err != nil {
 		t.Fatal(err)
+	}
+	if prePublication {
+		t.Logf("pre-publication production checkpoint verified: run=%s; nothing is published and no authority is granted", runID)
+		return
 	}
 	if checkpoint.State == "retained" {
 		t.Logf("retained production checkpoint verified: run=%s prior PR #%d at head %s; publication history is not a current ready result", runID, outcome.PRNumber, export.HeadSHA)

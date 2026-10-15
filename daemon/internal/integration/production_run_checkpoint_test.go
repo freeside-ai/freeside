@@ -18,6 +18,8 @@ import (
 
 // A retained checkpoint proves authenticated publication history, not permission
 // to continue work. Only a current open ready binding proves current readiness.
+// A pre-publication checkpoint proves only that the admitted run has not
+// published; it carries no binding and grants nothing.
 type realRunCheckpoint struct {
 	State      string                     `json:"state"`
 	Binding    domain.ReadyItemPRBinding  `json:"binding"`
@@ -42,6 +44,9 @@ func readRealRunCheckpoint(ctx context.Context, tx *store.ReadTx, runID domain.R
 		}
 	}
 	result.Binding, err = tx.GetReadyItemPRBinding(ctx, selected)
+	if errors.Is(err, store.ErrNotFound) && retained && selected == domain.ProductionReadyItemID(runID) {
+		return realRunPrePublicationCheckpoint(ctx, tx, runID, err)
+	}
 	if err != nil {
 		return result, err
 	}
@@ -103,6 +108,50 @@ func readRealRunCheckpoint(ctx context.Context, tx *store.ReadTx, runID domain.R
 	}
 	result.State, result.Review = "ready", &review
 	return result, nil
+}
+
+// A run interrupted after admission and before publication, such as at a
+// review_dispute gate, has no ready binding to select. The caller has already
+// anchored on the run's admission. Absence of a ready item is not proof: a
+// publish_blocked hold after publication records no ready binding. Proof is
+// the run's publication slot, which holds its reservation until the publisher
+// commits an intent; a committed intent, and so any successor chain, means
+// publication began. A ready item whose binding is missing, or a completion,
+// is damaged history either way.
+func realRunPrePublicationCheckpoint(ctx context.Context, tx *store.ReadTx, runID domain.RunID, missing error) (realRunCheckpoint, error) {
+	reservation, err := publish.NewReservation(domain.ProductionPublicationInvocationID(runID), runID)
+	if err != nil {
+		return realRunCheckpoint{}, err
+	}
+	if err := publish.CheckInvocationAvailable(ctx, tx, reservation); err != nil {
+		return realRunCheckpoint{}, fmt.Errorf("run publication began without a ready binding: %w", errors.Join(err, missing))
+	}
+	// Availability also passes a free slot. The run reserves its slot in the
+	// transaction that creates it and nothing frees it, so a free slot is
+	// damage that could equally have taken a committed intent. Only the
+	// reservation itself, which the check above matched to this run, proves it.
+	key, err := reservation.Key()
+	if err != nil {
+		return realRunCheckpoint{}, err
+	}
+	slot, err := tx.GetOutbox(ctx, key)
+	if err != nil || slot.Kind != publish.IntentKindReservation {
+		return realRunCheckpoint{}, fmt.Errorf("run publication slot holds no reservation: %w", errors.Join(err, missing))
+	}
+	items, err := tx.ListAttentionItems(ctx)
+	if err != nil {
+		return realRunCheckpoint{}, err
+	}
+	for _, snapshot := range items {
+		item := snapshot.Value
+		if item.Type == domain.AttentionReadyForFinalReview && item.Subject.RunID != nil && *item.Subject.RunID == runID {
+			return realRunCheckpoint{}, fmt.Errorf("published ready item has no binding: %w", missing)
+		}
+	}
+	if err := tx.RequireIncompletePublication(ctx, runID); err != nil {
+		return realRunCheckpoint{}, err
+	}
+	return realRunCheckpoint{State: "pre-publication"}, nil
 }
 
 // A completion is historical authority for restoring access, never permission

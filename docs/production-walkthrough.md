@@ -348,6 +348,20 @@ history without granting submission, Retry, execution, or publication authority.
 The ordinary `verify` command continues to refuse completed work; the retained
 startup check establishes history restoration, not a new publication acceptance.
 
+A run that was admitted but never published, for example one interrupted while
+a `review_dispute` card waited on a decision, supplies a `pre-publication`
+checkpoint. It proves only that the admitted run has not published, so there
+is no remote PR to check and no endpoint to restore. The harness prints no
+restored-endpoint handoff; it supervises the implementation run from its
+current state, and the open attention item stays actionable from the paired
+clients. Once the run publishes or completes, the ordinary final verification
+and walkthrough follow, as for a fresh run. The supervision clock starts
+again at the resume and stays paused while the run waits at that attention
+item. A ready card whose publication binding is missing is damaged history,
+not this state, and is refused. A session interrupted at
+`waiting_for_specification_approval` has no implementation admission yet and
+cannot be resumed this way.
+
 Before completing the upgraded session, install its exact reviewed daemon using
 the existing Mac installer, with `--daemon-path /absolute/new-session/freesided`.
 The restoration gate compares the installed daemon's Go build ID with the retained
@@ -468,6 +482,13 @@ listener or resources that cannot be cleaned. Interruption of `rig hold` itself
 deliberately leaves `.freeside-rig.json`; checked recovery is the expected path,
 not permission to delete the manifest manually. A live holder still owned by
 the harness must finish through that harness. Recovery never kills a stored PID.
+
+`recover` releases the rig and restores the supervised daemon, but it never
+relaunches the run. To continue a run interrupted before it published, resume
+the released session with `--resume-session` from the same reviewed version and
+inputs ([Replace A Retained Runtime](#replace-a-retained-runtime)); its startup
+check reports a `pre-publication` checkpoint and supervision continues from
+the run's state.
 
 If cleanup failed, inspect `rig-cleanup.log` and correct the reported condition
 before retrying recovery. If only restoration failed, the saved `rig-released`

@@ -1206,11 +1206,30 @@ if [[ -n "$retained_session" ]]; then
     echo "Retained checkpoint refused; inspect $workdir/verify-retained.log" >&2
     exit 1
   }
-  echo "Retained endpoint restored for run=$implementation_run_id; this is not successor-publication acceptance." >&2
-  printf 'Verify the current publication: bash %q verify %q\n' "$workdir/real-work-session.sh" "$workdir" >&2
-  printf 'Complete explicitly: bash %q complete %q\n' "$workdir/real-work-session.sh" "$workdir" >&2
-  real_work_walkthrough "$workdir" "$daemon_pid"
-  exit 0
+  # The verifier prints the checkpoint as its first line. A run admitted but
+  # never published has no endpoint to restore: supervise it from its current
+  # state instead, and let the ordinary final verification judge the result.
+  retained_state=$(python3 - "$workdir/verify-retained.log" <<'PY'
+import json, sys
+with open(sys.argv[1]) as stream:
+    checkpoint = json.loads(stream.readline())
+state = checkpoint.get("state") if isinstance(checkpoint, dict) else None
+if state not in ("ready", "retained", "completed", "pre-publication"):
+    raise SystemExit("unrecognized retained checkpoint state")
+print(state)
+PY
+  ) || {
+    echo "Retained checkpoint refused: no recognized state; inspect $workdir/verify-retained.log" >&2
+    exit 1
+  }
+  if [[ "$retained_state" != pre-publication ]]; then
+    echo "Retained endpoint restored for run=$implementation_run_id; this is not successor-publication acceptance." >&2
+    printf 'Verify the current publication: bash %q verify %q\n' "$workdir/real-work-session.sh" "$workdir" >&2
+    printf 'Complete explicitly: bash %q complete %q\n' "$workdir/real-work-session.sh" "$workdir" >&2
+    real_work_walkthrough "$workdir" "$daemon_pid"
+    exit 0
+  fi
+  echo "run-real-work: retained run=$implementation_run_id resumed before publication; supervising from its current state" >&2
 fi
 
 if [[ "$client_target" == true ]]; then
@@ -1242,7 +1261,8 @@ if [[ "$client_target" == true ]]; then
   specification_verifier_env=(FREESIDE_REAL_RUN_SPECIFICATION_RUN_ID="$specification_run_id")
 fi
 
-if [[ -n "$specification_run_id" ]]; then
+# A resumed run is past the specification gate: its implementation is admitted.
+if [[ -n "$specification_run_id" && -z "$retained_session" ]]; then
   echo "gated-unattended: waiting for an operator to approve or revise the generated specification" >&2
   echo "implementation verification resumes automatically after approval" >&2
 fi
@@ -1250,8 +1270,12 @@ fi
 # Follow durable, read-only snapshots instead of rerunning the integration
 # verifier as a polling mechanism. The verifier below remains the one final
 # success authority after observation reaches published or completed.
+# A resumed session is past the specification gate, so supervision starts on
+# the implementation lane; specification_run_id still feeds the final verifier.
+supervised_specification_run_id=$specification_run_id
+[[ -z "$retained_session" ]] || supervised_specification_run_id=""
 set +e
-real_work_supervise "$workdir/freesided" "$db_path" "$specification_run_id" \
+real_work_supervise "$workdir/freesided" "$db_path" "$supervised_specification_run_id" \
 	"$implementation_run_id" "$daemon_pid" \
 	"$supervision_timeout" "$last_supervision_snapshot"
 supervision_status=$?
