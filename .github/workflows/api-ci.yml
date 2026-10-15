@@ -16,18 +16,15 @@ on:
       - "scripts/check.sh"
       - "scripts/api-contract-digest.sh"
       - ".github/workflows/api-ci.yml"
-  pull_request:
-    paths:
-      - "api/**"
-      - "scripts/check.sh"
-      - "scripts/api-contract-digest.sh"
-      - ".github/workflows/api-ci.yml"
+  # Pull requests run this through pull-request.yml, which selects it
+  # from the changed paths and reports the required check.
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: api-ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:

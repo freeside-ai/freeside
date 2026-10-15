@@ -1,13 +1,15 @@
 name: commit messages
 
 on:
-  pull_request:
+  # Pull requests run this through pull-request.yml on every change; it
+  # reports the required check.
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: commit-messages-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:

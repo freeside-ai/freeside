@@ -1,0 +1,162 @@
+name: pull request
+
+# The one always-reporting PR gate. Branch protection on main requires the
+# `required` check together with the up-to-date rule, so a PR merges only
+# after its checks pass on its content combined with the tip of main.
+# Component workflows keep their own path filters on push to main, but a
+# path-filtered workflow never reports when it is skipped, so none of them
+# can be required. This workflow has no path filter: `select` picks the
+# components from the PR's changed files, the component workflows run as
+# called workflows, and `required` reports one result on every PR.
+#
+# The path lists in `select` copy the component workflows' push filters.
+# A change to one must change the other; when in doubt, select more.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pull-request-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  select:
+    name: select components
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      daemon: ${{ steps.select.outputs.daemon }}
+      app: ${{ steps.select.outputs.app }}
+      api: ${{ steps.select.outputs.api }}
+      docs: ${{ steps.select.outputs.docs }}
+      scripts: ${{ steps.select.outputs.scripts }}
+      convergence: ${{ steps.select.outputs.convergence }}
+      vocabulary: ${{ steps.select.outputs.vocabulary }}
+    steps:
+      - name: Select components from changed files
+        id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+        run: |
+          set -euo pipefail
+          # Both sides of a rename count, so moving a file out of a
+          # component still selects it.
+          listing=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR}/files" \
+            --jq '.[] | .filename, (.previous_filename // empty)')
+          mapfile -t files <<<"$listing"
+          printf 'changed: %s\n' "${files[@]}"
+
+          # The files endpoint lists at most 3000 files; a longer PR
+          # selects everything rather than trusting a truncated list.
+          select_all=false
+          if (( CHANGED_FILES >= 3000 )); then
+            select_all=true
+          fi
+
+          # Every filter entry is a directory prefix (ending in /) or an
+          # exact file. A workflow change selects every component, since
+          # this caller and every called workflow live there.
+          changed_under() {
+            local file pattern
+            for file in "${files[@]}"; do
+              for pattern in .github/workflows/ "$@"; do
+                if [[ $pattern == */ && $file == "$pattern"* ]] || [[ $file == "$pattern" ]]; then
+                  return 0
+                fi
+              done
+            done
+            return 1
+          }
+
+          select_component() {
+            local component=$1 selected=false
+            shift
+            if [[ $select_all == true ]] || changed_under "$@"; then
+              selected=true
+            fi
+            echo "$component=$selected" | tee -a "$GITHUB_OUTPUT"
+          }
+
+          select_component daemon daemon/ scripts/check.sh
+          select_component app app/ api/openapi.yaml scripts/check.sh
+          select_component api api/ scripts/check.sh scripts/api-contract-digest.sh
+          select_component docs docs/plan.md scripts/link-plan-section-refs.sh scripts/check.sh
+          select_component scripts scripts/ app/scripts/ .githooks/ \
+            app/Apps/iOS/Info.plist app/Freeside.xcodeproj/project.pbxproj
+          select_component convergence app/ daemon/ api/openapi.yaml \
+            scripts/run-convergence.sh scripts/check.sh
+          select_component vocabulary daemon/ api/ app/ prompts/ scripts/
+
+  daemon:
+    needs: select
+    if: needs.select.outputs.daemon == 'true'
+    uses: ./.github/workflows/daemon-ci.yml
+
+  app:
+    needs: select
+    if: needs.select.outputs.app == 'true'
+    uses: ./.github/workflows/app-ci.yml
+
+  api:
+    needs: select
+    if: needs.select.outputs.api == 'true'
+    uses: ./.github/workflows/api-ci.yml
+
+  docs:
+    needs: select
+    if: needs.select.outputs.docs == 'true'
+    uses: ./.github/workflows/docs-ci.yml
+
+  scripts:
+    needs: select
+    if: needs.select.outputs.scripts == 'true'
+    uses: ./.github/workflows/scripts-ci.yml
+
+  convergence:
+    needs: select
+    if: needs.select.outputs.convergence == 'true'
+    uses: ./.github/workflows/convergence-ci.yml
+
+  vocabulary:
+    needs: select
+    if: needs.select.outputs.vocabulary == 'true'
+    uses: ./.github/workflows/vocabulary-ci.yml
+
+  commit-messages:
+    uses: ./.github/workflows/commit-messages.yml
+
+  # The job name is the context branch protection requires; keep it exact.
+  required:
+    name: required
+    if: always()
+    needs:
+      - select
+      - daemon
+      - app
+      - api
+      - docs
+      - scripts
+      - convergence
+      - vocabulary
+      - commit-messages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every selected job to succeed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"$NEEDS"
+          # A skipped job is an unselected component. Any other result
+          # (failure, cancelled, or one this gate does not know) fails it,
+          # and selection itself must have succeeded.
+          jq -e '.select.result == "success"
+            and all(.[]; .result == "success" or .result == "skipped")' \
+            <<<"$NEEDS" >/dev/null

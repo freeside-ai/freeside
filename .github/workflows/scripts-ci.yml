@@ -27,20 +27,15 @@ on:
       - "app/Apps/iOS/Info.plist"
       - "app/Freeside.xcodeproj/project.pbxproj"
       - ".github/workflows/scripts-ci.yml"
-  pull_request:
-    paths:
-      - "scripts/**"
-      - "app/scripts/**"
-      - ".githooks/**"
-      - "app/Apps/iOS/Info.plist"
-      - "app/Freeside.xcodeproj/project.pbxproj"
-      - ".github/workflows/scripts-ci.yml"
+  # Pull requests run this through pull-request.yml, which selects it
+  # from the changed paths and reports the required check.
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: scripts-ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
