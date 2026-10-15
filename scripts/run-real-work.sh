@@ -567,8 +567,12 @@ write_diagnostic() {
 		echo "run-real-work: could not produce the final diagnostic snapshot" >&2
 		return 1
 	fi
-	diagnostic_path=$(mktemp "${diagnostic_dir%/}/freeside-real-work.XXXXXX.json")
-	cp "$last_supervision_snapshot" "$diagnostic_path"
+	# BSD mktemp replaces only a trailing X run, so the template carries no
+	# suffix. cleanup calls this under `if !`, which disables errexit here:
+	# each failure returns explicitly, or an empty path would make cp copy
+	# the snapshot into the caller's working directory.
+	diagnostic_path=$(mktemp "${diagnostic_dir%/}/freeside-real-work.XXXXXX") || return 1
+	cp "$last_supervision_snapshot" "$diagnostic_path" || return 1
 	echo "run-real-work: diagnostic artifact: $diagnostic_path" >&2
 }
 

@@ -1881,12 +1881,44 @@ done
 
 for mode in migration-continue migration-before-write; do
   begin_case "$mode preserves the approved migration attempt"
+  # Both runs share one diagnostic directory, so each must get its own
+  # artifact (BSD mktemp, #1186) and none may reach the caller's working
+  # directory (#1450). An empty cwd makes a leak visible.
+  mkdir "$CASE_DIR/cwd"
+  pushd "$CASE_DIR/cwd" >/dev/null
   run_real_work lifecycle current ok ok success ok ok clean "$mode"
+  popd >/dev/null
   assert_rc 0
   assert_contains "Continuing the same approved migration attempt"
   assert_contains "Retained endpoint restored"
   assert_not_exists "$CASE_DIR/submit.args"
+  assert_not_exists "$CASE_DIR/cwd/supervision.json"
+  artifacts=("$CASE_DIR"/freeside-real-work.*)
+  if [[ ${#artifacts[@]} -eq 2 && -s "${artifacts[0]}" && -s "${artifacts[1]}" ]]; then
+    pass=$((pass + 1))
+  else
+    report_failure "expected one diagnostic artifact per run, got: ${artifacts[*]}"
+  fi
 done
+
+begin_case "an unwritable diagnostic artifact fails the run outside the cwd"
+# GNU mktemp accepts the old suffixed template, so the loop above cannot
+# fail on Linux. Refusing the artifact's mktemp reaches the same empty-path
+# state on every platform: the run must report it, not cp to ''.
+real_mktemp=$(command -v mktemp)
+mkdir "$CASE_DIR/mktemp-bin" "$CASE_DIR/cwd"
+cat >"$CASE_DIR/mktemp-bin/mktemp" <<MKTEMP_STUB
+#!/usr/bin/env bash
+case "\${!#}" in */freeside-real-work.*) echo 'mktemp: stub refusal' >&2; exit 1 ;; esac
+exec "$real_mktemp" "\$@"
+MKTEMP_STUB
+chmod +x "$CASE_DIR/mktemp-bin/mktemp"
+pushd "$CASE_DIR/cwd" >/dev/null
+PATH="$CASE_DIR/mktemp-bin:$PATH" run_real_work lifecycle
+popd >/dev/null
+assert_rc 1
+assert_contains "mktemp: stub refusal"
+assert_not_exists "$CASE_DIR/cwd/supervision.json"
 
 begin_case "changed migration inputs cannot bypass schema preflight"
 run_real_work lifecycle current ok ok success ok ok clean migration-changed-input
