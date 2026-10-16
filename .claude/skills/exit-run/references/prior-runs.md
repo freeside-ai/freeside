@@ -21,7 +21,7 @@ pattern; a routine run needs no row.
 | #1445 run-113 after #1535, 2026-09-25 | #1445 | gh-imgup#113 to PR #120, merged | Client target | The first passing policy-approved closure proof: `verify-source` receipt, stored authoring, a `propose_site` proposal, a policy approval, and publisher-written `Closes #113`; the merge closed the issue. The first session died at preflight because Claude Code auto-update pruned the pinned judgment CLI. `return_to_agent` worked live for the first time: the feedback run republished onto the same PR. Two clean reviews still passed a PR missing the decision note its repository's AGENTS.md required, because the review rubric only admits defects with a failure path (#1542). The successor publication raised a self-clearing "repair external state" card (#1544). Restore stalled at `registered=false` again. |
 | #1445 run-114 human gate, 2026-09-25 | #1445, #1211 | gh-imgup#114 to PR #121, merged by the owner | Client target | The human-gated proof passed and closed #1445: the PR stayed a draft with `Refs #114` until the closure card was approved on the iPhone, then the publisher wrote `Closes #114`. The first session died at preflight because a review-prompt bump (PR #1546) invalidated the onboarded reviewer digest. The reviewer flagged the missing decision note live (#1542 working), but the adjudicator recommended parking an in-scope fix twice; two Discuss rounds reached `remediate` (#1550). A #1211 sketch exercise afterwards bricked the daemon with a durable stop once its clarified spec was ready (#1556). Restore stalled at `registered=false` a third time, probably because nobody was handed the menu Start step. |
 | Wave 8 exit run 2, 2026-10-12 to 13 | #1613 | gh-imgup#116 to PR #127, merged by the owner | CLI | The pull request waited overnight for its merge, and the run's daemon stopped itself twice meanwhile: a GitHub 500 on the janitor's token mint (#1997), then the backup producer refusing the run's own effect-proposal artifact twelve hours after start (#1996). Stopped, it could not see the merge, recorded no completion, and so could not raise review growth. That stop was the first real stopped-state evidence on an exit run. The first real external review superseded the ready card and reached the Mac as a card, but the adjudicator's batch parked, no remediator ran, and the card offered only discuss and stop (#1989, #1990). The spine drove the Mac client through computer use; the iPhone never connected (#1514), so no phone proof exists. Three owner decisions changed this skill (devlog/2026-10-13-1002-exit-run-owner-decisions.md). |
-| Wave 8 exit run 3, 2026-10-14 to 15 | #1613 | gh-imgup#117, no pull request | CLI | The run reached a second internal review round and the harness's observation deadline expired while the run waited on the review-dispute card; `--resume-session` then refused because the run had not published (#2040, #2041). The per-finding review-dispute decision ran live for the first time, on the internal review, with a remediation and re-review behind it. A retained root's open system-health items hold the next run's admission (#2043), and `inspect` cannot list items on a stopped root (#2042). |
+| Wave 8 exit run 3, 2026-10-14 to 16 | #1613 | gh-imgup#117, no pull request; ended final with `base_advanced` | CLI | The run reached a second internal review round and the harness's observation deadline expired while the run waited on the review-dispute card; `--resume-session` then refused because the run had not published (#2040, #2041). The per-finding review-dispute decision ran live for the first time, on the internal review, with a remediation and re-review behind it. A retained root's open system-health items hold the next run's admission (#2043), and `inspect` cannot list items on a stopped root (#2042). Resumed on 2026-10-16 after those fixes merged: the verifier refused the retained checkpoint on a drifted backup payload map (#2053, fixed in-run), a decline-only final round durably stopped the daemon at publication (#2055, fixed in-run), and the third resume ended final because gh-imgup's `main` had advanced after admission and an unpublished run has no base-advance re-entry (#2058, owner: Required). The first phone-side per-finding decision ran on the iPhone. |
 
 ## Recurring Pitfalls
 
@@ -177,13 +177,26 @@ Look for each of these before and during the run; most have bitten twice.
   if present (never the neighboring key files), to scratch and open the
   copy normally. Copying the database alone, or opening it with
   `?immutable=1`, skips commits still in the WAL after an unclean exit.
-- **The observation deadline counts human time.** `FREESIDE_REAL_RUN_TIMEOUT_SECONDS`
-  runs through holds, the specification approval, and every review-dispute
-  card, and when it expires the harness stops the daemon (#2041). Until that
-  changes, set the budget for the operator's whole afternoon, not the
-  pipeline's, and decide every card promptly: a run interrupted before it
-  publishes cannot be resumed (#2040), and `recover` only restores the
-  supervised daemon.
+- **The observation deadline pauses only at decision gates.** Before
+  #2041 (PR #2046), `FREESIDE_REAL_RUN_TIMEOUT_SECONDS` ran through the
+  specification approval and every review-dispute card, and expired while
+  the operator was away. It now pauses at the specification approval gate
+  and at implementation attention cards such as a review dispute, but it
+  still runs through a hold, and a specification attention card still ends
+  supervision (`docs/production-walkthrough.md`). An admitted run
+  interrupted before it publishes can be resumed (#2040, PR #2051;
+  exercised live on gh-imgup#117); a run interrupted at the specification
+  approval has no implementation admission and still cannot. Decide cards
+  promptly anyway: a run that waits also gives the target's `main` time to
+  move (next item).
+- **The target's `main` must hold still until publication.** The
+  publisher audits the target's base when it decides to publish. A merge to
+  the target's default branch after admission ends an unpublished run final
+  with `base_advanced` (trust rule `target_base_advanced`); only a published
+  candidate re-enters on a base advance. Until #2058 lands, ask the target's
+  maintainers not to merge while the run is open, and check `main` against
+  the run's base before every resume. Run 117 lost its publication to a
+  merge (gh-imgup#128) made the day before its resume.
 - **Watch the items, not the log.** A `review_dispute` card after a re-review
   leaves no daemon log line, and the harness prints its state line once. A
   watch armed on new log lines can miss it; poll the task's attention items
@@ -208,6 +221,25 @@ Look for each of these before and during the run; most have bitten twice.
   upgrade (`runtime-upgrade-inherited` without `runtime-upgrade-started`,
   the second consecutive failed resume) expects `<session>/restore-freesided`
   (`scripts/real-work-lifecycle.sh`, `real_work_restore_supervised`).
+- **Recover before resuming on a new build.** An interrupted upgrade must
+  retry the same build, so `--resume-session` from a `recovery-required`
+  session onto a newer tip refuses at composition, and leaves a second
+  `recovery-required` session behind. A same-build retry from a session
+  whose rig release was verified is accepted; resuming onto a different
+  build needs a completed predecessor (`scripts/real-work-retained.py`,
+  `validate_session`). After an in-run fix merges: install the binary the
+  stopped session's markers select (previous item: `<session>/freesided`
+  for one that started its own upgrade, `<session>/restore-freesided` for
+  one refused at composition before starting it) into the production app
+  (`install-mac-app.sh prod --prod --daemon-path <binary>`,
+  operator-approved), `recover` that session, stop the supervised daemon,
+  then resume on the new tip.
+- **Have a route ready for every parked finding.** A `review_dispute` card
+  lists each finding's routes with none recommended; the adjudicator's lean,
+  confidence, and rationale do not reach the client (#2059), and on run 117
+  every finding was parked as `park_unknown`. The operator will ask which
+  route to take. Read the finding, the target's scope, and its decision-note
+  rules first, and give a recommendation with one line of reason.
 
 ## Mode And Flags Past Trackers Required
 
