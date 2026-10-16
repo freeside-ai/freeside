@@ -24,6 +24,7 @@ import (
 	execfake "github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/inference/fake"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
@@ -1685,6 +1686,78 @@ func TestDispositionAwareReviewSatisfiesReadinessWithoutRereview(t *testing.T) {
 		detail.Requirements[1].ProofRecipeDigest == nil ||
 		detail.Requirements[0].Waiver != nil || detail.Requirements[1].Waiver != nil {
 		t.Fatalf("readiness detail requirements = %#v", detail.Requirements)
+	}
+}
+
+// A round whose only finding is declined completes review, so the forward
+// publication path loads its disposition history without a re-review of the
+// unchanged head (#2055). Before the fix the Wave 8 exit run durably stopped
+// at this load, after authoring the pull request body.
+func TestDeclineOnlyFinalRoundLoadsPublicationDispositionHistory(t *testing.T) {
+	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
+	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
+	f.writePath(t, f.headRoot)
+	f.workflow.findingAdjudicator = newDeterministicFindingAdjudicator(
+		modelRouteEntry(t, f.finding.ID, domain.RouteDecline, domain.ConfidenceHigh))
+	state, err := f.workflow.reconcileFindingAdjudication(
+		f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot)
+	if err != nil || state != productionReviewPassed {
+		t.Fatalf("decline adjudication = %d, %v", state, err)
+	}
+	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo: "owner/repo", RepositoryID: 1,
+		PRExecution:                domain.PRExecutionAuditedSameRepo,
+		CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+		CommitPlan:                 domain.CommitPlanPlanPreferred,
+		MessageRuleset:             domain.MessageRulesetGitHub1,
+		WorkflowAuditDigest:        "sha256:workflow-audit",
+		Review: domain.ReviewSettings{
+			Mode: domain.ReviewFreesideInvoked, ConfigDigest: f.record.ConfigurationDigest,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := domain.ComputeEvidenceSnapshotDigest(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipe := adjudicationDigest("7")
+	authorization, err := domain.NewCandidateAuthorization(domain.CandidateAuthorizationInput{
+		Repo: profile.Repo, BaseSHA: f.record.BaseSHA, HeadSHA: f.task.HeadSHA,
+		ImportResultDigest: adjudicationDigest("8"), VerificationRecipeDigest: recipe,
+		EvidenceSnapshotDigest: evidence, VerificationOutcome: domain.VerificationPassed,
+		TrustProfileDigest: profile.ProfileDigest, InvocationID: "inv-verify-adjudication",
+		CreatedAt: time.Date(2026, 8, 24, 4, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.WriteInternal(f.ctx, func(tx *store.InternalTx) error {
+		if err := tx.RecordTrustProfile(f.ctx, profile, authorization.CreatedAt); err != nil {
+			return err
+		}
+		return tx.RecordCandidateAuthorization(f.ctx, authorization)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	candidate := publish.Candidate{
+		Repo: profile.Repo, BaseRef: "main", BaseSHA: f.record.BaseSHA, HeadSHA: f.task.HeadSHA,
+		RunID: f.task.RunID, RecipeDigest: &recipe,
+		AuthorizationID: &authorization.ID, TrustProfileDigest: &profile.ProfileDigest,
+	}
+	history, err := publish.LoadDispositionHistory(f.ctx, f.store, candidate, f.record.InstructionDigest)
+	if err != nil {
+		t.Fatalf("decline-only final round disposition history = %v", err)
+	}
+	rendered, err := publish.RenderDispositionHistory(history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rendered, string(f.finding.ID)) ||
+		!strings.Contains(rendered, string(domain.ReviewDispositionDeclined)) {
+		t.Fatalf("rendered history omits the declined finding:\n%s", rendered)
 	}
 }
 

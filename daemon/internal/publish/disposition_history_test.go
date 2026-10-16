@@ -1,6 +1,7 @@
 package publish
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -272,6 +273,120 @@ func TestDispositionHistoryFailsClosedOnIncompleteOrStaleRecords(t *testing.T) {
 			test.mutate(&in)
 			if _, err := newDispositionHistory(in, nil); err == nil {
 				t.Fatal("newDispositionHistory accepted inconsistent records")
+			}
+		})
+	}
+}
+
+// finalFindingsRoundInput is a history whose latest review, at the published
+// head, raised one finding that received final disposition `final`.
+func finalFindingsRoundInput(t *testing.T, final domain.ReviewDispositionRecord) dispositionHistoryInput {
+	t.Helper()
+	runID := domain.RunID("run-final-findings")
+	first, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: "review-1", RunID: runID, Round: 1, Admission: fake.RecordAdmission(domain.RoleReviewer, runID, "review-1"),
+		ConfigurationDigest: dispositionDigestA, InstructionDigest: dispositionDigestB,
+		BaseSHA: "base", HeadSHA: "first-head", CompletedAt: time.Date(2026, 8, 11, 1, 0, 0, 0, time.UTC),
+		CompletionEvidence: dispositionDigestC, Outcome: domain.ReviewFindings, FindingIDs: []domain.FindingID{"finding-1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: "review-2", RunID: runID, Round: 2, Admission: fake.RecordAdmission(domain.RoleReviewer, runID, "review-2"),
+		ConfigurationDigest: dispositionDigestA, InstructionDigest: dispositionDigestB,
+		BaseSHA: "base", HeadSHA: "head", CompletedAt: time.Date(2026, 8, 11, 1, 2, 0, 0, time.UTC),
+		CompletionEvidence: dispositionDigestC, Outcome: domain.ReviewFindings, FindingIDs: []domain.FindingID{"finding-2"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finding := func(id domain.FindingID, at time.Time) domain.Finding {
+		return domain.Finding{
+			ID: id, RunID: runID, Source: "codex", Severity: "P3",
+			Location: &domain.FindingLocation{Path: "file.go", StartLine: 1, EndLine: 1}, Message: "message", RawText: "raw",
+			CreatedAt: at,
+		}
+	}
+	final.FindingID, final.RunID, final.Round = "finding-2", runID, 2
+	return dispositionHistoryInput{
+		runID: runID, headSHA: "head", expectedInstructionDigest: dispositionDigestB,
+		reviews: []domain.ReviewRecord{first, second},
+		findings: []domain.Finding{
+			finding("finding-1", time.Date(2026, 8, 11, 1, 0, 30, 0, time.UTC)),
+			finding("finding-2", time.Date(2026, 8, 11, 1, 2, 30, 0, time.UTC)),
+		},
+		dispositions: []domain.ReviewDispositionRecord{
+			{
+				FindingID: "finding-1", RunID: runID, Round: 1,
+				Disposition: domain.ReviewDispositionFixed, Reason: "patched", RemediationInvocationID: second.InvocationID,
+				CreatedAt: time.Date(2026, 8, 11, 1, 1, 0, 0, time.UTC),
+			},
+			final,
+		},
+		readiness: domain.ReadinessVerdict{Class: domain.ReadinessReadyClean, EvaluationSetDigest: dispositionDigestC},
+	}
+}
+
+// A round whose every finding is declined or deferred completes review, so it
+// publishes as the latest round without a re-review of the unchanged head
+// (#2055). The Wave 8 exit run stopped the daemon on exactly this history.
+func TestDispositionHistoryAcceptsFullyDispositionedFinalRound(t *testing.T) {
+	t.Parallel()
+	for _, final := range []domain.ReviewDispositionRecord{
+		{
+			Disposition: domain.ReviewDispositionDeclined, Reason: "no decision to record",
+			AdjudicationDigest: dispositionDigestA, CreatedAt: time.Date(2026, 8, 11, 1, 3, 0, 0, time.UTC),
+		},
+		{
+			Disposition: domain.ReviewDispositionDeferred, Reason: "outside this work unit",
+			AdjudicationDigest: dispositionDigestA, CreatedAt: time.Date(2026, 8, 11, 1, 3, 0, 0, time.UTC),
+		},
+	} {
+		t.Run(string(final.Disposition), func(t *testing.T) {
+			history, err := newDispositionHistory(finalFindingsRoundInput(t, final), nil)
+			if err != nil {
+				t.Fatalf("newDispositionHistory rejected a fully dispositioned final round: %v", err)
+			}
+			rendered, err := RenderDispositionHistory(history)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(rendered, string(final.Reason)) {
+				t.Fatalf("rendered history omits the final round's disposition:\n%s", rendered)
+			}
+		})
+	}
+}
+
+// Accepting a findings round as the latest keeps every other binding: the
+// round must be at the published head and finished by declines or deferrals.
+func TestDispositionHistoryRejectsUnfinishedFinalRound(t *testing.T) {
+	t.Parallel()
+	declined := domain.ReviewDispositionRecord{
+		Disposition: domain.ReviewDispositionDeclined, Reason: "reason",
+		AdjudicationDigest: dispositionDigestA, CreatedAt: time.Date(2026, 8, 11, 1, 3, 0, 0, time.UTC),
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*dispositionHistoryInput)
+	}{
+		{"missing final disposition", func(in *dispositionHistoryInput) { in.dispositions = in.dispositions[:1] }},
+		{"fixed without a later remediation review", func(in *dispositionHistoryInput) {
+			in.dispositions[1] = domain.ReviewDispositionRecord{
+				FindingID: "finding-2", RunID: in.runID, Round: 2,
+				Disposition: domain.ReviewDispositionFixed, Reason: "patched", RemediationInvocationID: "review-1",
+				CreatedAt: time.Date(2026, 8, 11, 1, 3, 0, 0, time.UTC),
+			}
+		}},
+		{"stale latest head", func(in *dispositionHistoryInput) { in.headSHA = "other-head" }},
+		{"unapproved instructions", func(in *dispositionHistoryInput) { in.expectedInstructionDigest = dispositionDigestC }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			in := finalFindingsRoundInput(t, declined)
+			test.mutate(&in)
+			if _, err := newDispositionHistory(in, nil); !errors.Is(err, domain.ErrParentKeyMismatch) {
+				t.Fatalf("newDispositionHistory = %v, want ErrParentKeyMismatch", err)
 			}
 		})
 	}
